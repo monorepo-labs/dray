@@ -5,7 +5,7 @@ import type { BackgroundTask, Bot, PrMark, SessionIndexItem, SessionStatus } fro
 
 /// How long a bot's task sits untouched before the reader hears of it. What
 /// the task can mend itself waits for none of it.
-export const STALL_MS = 5 * 60_000;
+export const STALL_MS = 2 * 60_000;
 
 /// A task of a bot's that has stalled. `ready`: its pull request has been
 /// able to land for [STALL_MS], and the reader merges it from the card. `fix`:
@@ -125,6 +125,15 @@ export function stalledTasks(
 /// Whether a stall belongs in the bot's card: a PR ready to merge, or a task
 /// idle on the reader. The rest are the bot's alone.
 export const onCard = (stall: Stall): boolean => stall.kind !== "fix";
+
+/// Dismissed stalls, by key. A key names one stall, so the list only grows by
+/// what the reader dismisses.
+export const DISMISSED_KEY = "ade.dismissedStalls";
+
+/// The rows the bot's card draws: what is on it and not dismissed. The card
+/// and its notice both count from here, or the notice names rows nobody sees.
+export const cardRows = (stalls: readonly Stall[], dismissed: readonly string[]): Stall[] =>
+  stalls.filter((s) => onCard(s) && !dismissed.includes(s.key));
 
 /// What a card row needs from the reader, as its bot wrote it since the task
 /// last moved: an answer for a waiting task, something to try before a ready

@@ -45,8 +45,9 @@ use std::path::PathBuf;
 /// gone where it was sent. v13 added `add_video`, which an older app reads as a
 /// broken CLI rather than as an app to update. v14 added `share_machines`, and
 /// v15 the assistant verbs, v16 `dray login` and `dray logout`, v17 the
-/// bot verbs, v18 `merge_card`, and v19 `set_need`.
-pub const PROTOCOL_VERSION: u32 = 19;
+/// bot verbs, v18 `merge_card`, v19 `set_need`, v20 `react`, and v21
+/// `add_image`, which an older app would turn into a one-frame video.
+pub const PROTOCOL_VERSION: u32 = 21;
 
 /// Remote MCP (#863), held out of release builds until Dray accounts (#874)
 /// land (#900). Gates `/mcp`, the assistant commands and the CLI's `assistant`
@@ -131,6 +132,8 @@ impl Request {
             | Request::SendToBot(_) => 17,
             Request::MergeCard(_) => 18,
             Request::SetNeed(_) => 19,
+            Request::React(_) => 20,
+            Request::AddImage(_) => 21,
         }
     }
 }
@@ -176,6 +179,9 @@ pub enum Request {
     SendToBot(SendToBot),
     MergeCard(MergeCard),
     SetNeed(SetNeed),
+    React(React),
+    /// `dray image add`: [`AddVideo`]'s fields, filed as the picture it is.
+    AddImage(AddVideo),
 }
 
 /// A merge card for a task's open pull request, posted into `session_id`'s
@@ -196,6 +202,17 @@ pub struct MergeCard {
 pub struct SetNeed {
     pub session_id: String,
     pub need: String,
+}
+
+/// A bot's emoji on the user's newest message in its chat, in place of a reply.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct React {
+    /// The bot's chat: the calling session.
+    pub session_id: String,
+    /// 👀 ✅ 🎉 👍 ❤️ 😂 😢, or the word for one: seen, done, celebrate, like,
+    /// love, laugh, sad.
+    pub emoji: String,
 }
 
 /// A new bot. Shape and hue are picked at random where absent.
@@ -875,6 +892,8 @@ pub enum Response {
     Video { path: String },
     /// The pull request a merge card was posted for, and the task's title.
     MergeCard { number: u64, url: String, title: String },
+    /// The emoji a reaction put on the user's message.
+    Reacted { emoji: String },
     /// The session's live links after the change, whichever verb asked.
     Shared { shares: Vec<SharedPort> },
     /// The session a verb acted on, as it stands after.
@@ -950,6 +969,10 @@ pub struct SessionSummary {
     /// The machine the session runs on, where that is not the one answering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
+    /// That machine did not answer, so the change is held on this one and
+    /// written there once it does. Nothing but the id and machine is known then.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held: bool,
 }
 
 /// One issue a session is tagged with, as the CLI prints it.
@@ -1251,6 +1274,10 @@ mod tests {
         assert_eq!(Envelope::new(card.clone()).v, 18);
         let need = Request::SetNeed(Default::default());
         assert_eq!(Envelope::new(need.clone()).v, 19);
+        let react = Request::React(Default::default());
+        assert_eq!(Envelope::new(react.clone()).v, 20);
+        let image = Request::AddImage(AddVideo { session_id: "s".into(), path: "/a.png".into(), name: None });
+        assert_eq!(Envelope::new(image.clone()).v, 21);
         let newest = old
             .iter()
             .chain(&drafts)
@@ -1261,7 +1288,7 @@ mod tests {
             .chain(&assistants)
             .chain(&link)
             .chain(&bots)
-            .chain([&card, &need])
+            .chain([&card, &need, &react, &image])
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));

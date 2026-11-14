@@ -70,6 +70,7 @@ pub mod bots;
 pub mod drafts;
 pub mod projects;
 pub mod remote_reports;
+pub mod held_flags;
 #[cfg(feature = "desktop")]
 pub mod quit;
 #[cfg(feature = "desktop")]
@@ -535,6 +536,17 @@ async fn session_index_item(session_id: &str) -> Result<Option<SessionIndexItem>
     Ok(store::get_session_index_item(session_id).await?)
 }
 
+/// Whether settling or deleting this session leaves its hidden children
+/// running: a bot's task does. Asked before the act by a client holding a
+/// child on another server, which the act here cannot reach.
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn session_keeps_children(session_id: &str) -> Result<bool, Fail> {
+    Ok(match store::get_session_index_item(session_id).await? {
+        Some(item) => bots::keeps_children(&item).await,
+        None => false,
+    })
+}
+
 /// What removing this session's worktree would cost, for the dialog that asks.
 ///
 /// Answers for a session with no worktree too — an all-zero, `exists: false`
@@ -618,14 +630,25 @@ async fn set_session_flags(
             }
         }
     }
+    // A bot's task is the exception: its sub-tasks keep running and report to
+    // whatever above it is still live.
+    let mut adopted = Vec::new();
     if let Some(archived) = archived {
+        let keeps = match &updated {
+            Some(item) => bots::keeps_children(item).await,
+            None => false,
+        };
         for id in settling.clone() {
-            settling.extend(store::archive_hidden_descendants(&id, archived).await?);
+            if keeps && id == session_id {
+                adopted = store::readopt(&id, None).await?;
+            } else {
+                settling.extend(store::archive_hidden_descendants(&id, archived).await?);
+            }
         }
     }
     // The answer reaches the caller alone, and a server has other clients.
     // Ahead of the stop, which can take seconds.
-    orchestration::announce_change(&settling, &sink).await;
+    orchestration::announce_change(&[settling.as_slice(), adopted.as_slice()].concat(), &sink).await;
     if archived == Some(true) {
         for id in &settling {
             if let Err(e) = manager().settle(id).await {
@@ -642,8 +665,46 @@ async fn set_session_flags(
 #[cfg_attr(feature = "desktop", tauri::command)]
 async fn delete_session(
     session_id: &str,
+    sink: Sink,
 ) -> Result<bool, Fail> {
-    Ok(manager().delete(session_id).await?)
+    // A bot's task leaves its sub-tasks running, adopted by what is live above
+    // it. Adopted first, while the parent's title is still there to name.
+    let keeps = match store::get_session_index_item(session_id).await? {
+        Some(item) => bots::keeps_children(&item).await,
+        None => false,
+    };
+    let adopted = match keeps {
+        true => store::readopt(session_id, Some(session_id)).await?,
+        false => Vec::new(),
+    };
+    // Its tasks on other machines are tracked here under its id, not adopted.
+    #[cfg(any(feature = "serve", feature = "desktop"))]
+    let remote = match keeps {
+        true => match store::get_session_index_item(session_id).await? {
+            Some(item) => match store::live_ancestor(&item).await? {
+                Some(above) => remote_reports::retarget(session_id, &above.session_id).await?,
+                None => Vec::new(),
+            },
+            None => Vec::new(),
+        },
+        false => Vec::new(),
+    };
+    let deleted = manager().delete(session_id, !keeps).await;
+    // A delete that failed before the entry went leaves the parent live, and
+    // its children back under it. One that failed after keeps the adoption.
+    let survived = deleted.is_err() && store::get_session_index_item(session_id).await.ok().flatten().is_some();
+    let adopted = match (survived, keeps) {
+        (true, true) => {
+            #[cfg(any(feature = "serve", feature = "desktop"))]
+            if let Err(e) = remote_reports::reparent(&remote, session_id).await {
+                eprintln!("could not put {session_id}'s remote tasks back: {e:#}");
+            }
+            store::readopt(session_id, None).await.unwrap_or(adopted)
+        }
+        _ => adopted,
+    };
+    orchestration::announce_change(&adopted, &sink).await;
+    Ok(deleted?)
 }
 
 /// Copies a session onto `fork_id`, to be carried on separately from the one it
@@ -977,6 +1038,8 @@ pub fn run() {
             cef::browser_nav,
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_layout,
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            cef::browser_pins,
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_shutter_ready,
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]

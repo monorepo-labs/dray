@@ -191,7 +191,6 @@ export default function ModelSelector({
   onReloadModels,
   onSeedProvider,
   loadingModels,
-  inTitlebar = false,
 }: {
   /// The server the composer sends to, whose installs the picker marks.
   server: ServerId;
@@ -231,9 +230,6 @@ export default function ModelSelector({
   /// fresh read lands. A provider never visited seeds nothing and waits.
   onSeedProvider: (provider: string) => void;
   loadingModels: boolean;
-  /// Drawn at the titlebar's right end (a bot's chat), so its tooltip opens
-  /// below it and the menu lines up on its right edge instead of running off.
-  inTitlebar?: boolean;
 }) {
   // Controlled so a click on a submenu trigger can close the whole menu; Radix
   // otherwise keeps the parent open for the submenu it just opened on hover.
@@ -483,7 +479,7 @@ export default function ModelSelector({
               // `aria-disabled`, never `disabled`: a disabled button opens no
               // tooltip, and the tooltip is where the reason lives.
               aria-disabled={modelLocked}
-              className={`gap-1 px-1.5 text-ui text-muted-foreground aria-disabled:opacity-50 ${inTitlebar ? "max-w-64 min-w-0" : ""}`}
+              className="gap-1 px-1.5 text-ui text-muted-foreground aria-disabled:opacity-50"
             >
               <AgentIcon harness={harness} brand className="size-3.5" />
               {/* Effort is a qualifier on the model, not part of its name, so it's
@@ -492,11 +488,7 @@ export default function ModelSelector({
                   draw, so the placeholder stands in. pi is the one harness
                   that reaches this: Dray names no default for it, and the
                   spawn omits the flag so pi's own settings decide. */}
-              {/* Capped and truncated in the titlebar, where a gateway's
-                  `vendor/model` name would otherwise push the tabs out. */}
-              <span className="min-w-0 truncate">
-                {selected?.label ?? (isUnsetModel(modelId) ? "Select Model" : modelId)}
-              </span>
+              <span>{selected?.label ?? (isUnsetModel(modelId) ? "Select Model" : modelId)}</span>
               {effort && (
                 <span className="text-muted-foreground/60">{EFFORT_LABELS[effort]}</span>
               )}
@@ -516,7 +508,7 @@ export default function ModelSelector({
             its own chord there, so listing both here made a tooltip that read
             as a menu of shortcuts — hence `max-w-none`, which the default
             `max-w-xs` would wrap. */}
-        <TooltipContent side={inTitlebar ? "bottom" : "top"} className="max-w-none whitespace-nowrap">
+        <TooltipContent side="top" className="max-w-none whitespace-nowrap">
           {modelLocked ? (
             "Model can't be changed mid-turn"
           ) : (
@@ -529,7 +521,7 @@ export default function ModelSelector({
       </Tooltip>
 
       <DropdownMenuContent
-        align={inTitlebar ? "end" : "start"}
+        align="start"
         // Fixed, not `min-w`: the base class sizes the menu to
         // `--radix-dropdown-menu-trigger-width`, so the trigger's own label set
         // the width — and fx's gateway names a model by its vendor too

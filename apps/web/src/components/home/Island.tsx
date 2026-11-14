@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { AppleGlyph } from "@/components/AppleGlyph";
 import { IslandOrb } from "@/components/home/IslandOrb";
 import { Flash, MessagesPanel, Play } from "@/components/home/IslandMotion";
-import { Section, Title } from "@/components/home/Section";
+import { GRID, Section, Tile, Title } from "@/components/home/Section";
 import s from "@/components/home/island.module.css";
 
 // A hand-drawn loop under the orb, overshooting its start.
@@ -13,9 +13,9 @@ const LOOP_PATH =
 export function Island() {
   return (
     <Section id="island" className="py-20">
-      <Title lead="Talk to your sessions">from any app.</Title>
-      <div className="mt-20 grid grid-cols-1 gap-[2px] lg:grid-cols-2">
-        <Card label="Dictation" caption="Tap Control and talk, and your words land in the session. Hold Shift to circle what you mean, or drag out a screenshot.">
+      <Title lead="Talk to your sessions from any app." />
+      <div className={`${GRID} lg:grid-cols-2`}>
+        <Card caption="Tap Control and talk. Hold Shift to circle what you mean, or drag out a screenshot.">
           <Scene>
             <IslandOrb size={120} lightBackdrop="#F4F4F5" className="absolute top-[130px] left-[179.5px]" />
             {/* ⇧ to draw: a loop, then a dragged region, one after the other. */}
@@ -41,13 +41,11 @@ export function Island() {
           </Scene>
         </Card>
 
-        <Card label="Messages" caption="Read a session's latest turns from whatever app you're in, and reply without switching.">
+        <Card caption="Read and reply to a session from any app.">
           <MessagesPanel />
         </Card>
 
-        <Card
-          label="Waiting and done"
-          caption="When a session needs you or finishes, a pill hangs from the notch. Nothing opens until you want it to."
+        <Card caption="When a session needs you or finishes, a pill hangs from the notch."
         >
           <div aria-hidden="true">
             <div className="absolute inset-x-0 top-0 flex h-[30px] items-center justify-between bg-[#FFFFFF0F] px-3.5 text-[12px] leading-4 text-[#FFFFFF99] light:bg-[#0000000A] light:text-[#000000A6]">
@@ -100,13 +98,11 @@ export function Island() {
           </div>
         </Card>
 
-        <Card
-          label="Questions and permissions"
-          caption="Answer questions and approve tool calls at the notch or above the Dock, with number keys and Return."
+        <Card caption="Answer questions and approve tool calls at the notch."
         >
           <div
             aria-hidden="true"
-            className={`absolute bottom-[132px] left-1/2 flex w-[400px] max-w-[calc(100%-32px)] -translate-x-1/2 origin-bottom flex-col gap-2.5 rounded-[20px] bg-black px-4 py-3.5 text-[13px] leading-[18px] shadow-[0_4px_12px_#00000059] ${s.ask}`}
+            className={`absolute bottom-[156px] lg:bottom-[132px] left-1/2 flex w-[400px] max-w-[calc(100%-32px)] -translate-x-1/2 origin-bottom flex-col gap-2.5 rounded-[20px] bg-black px-4 py-3.5 text-[13px] leading-[18px] shadow-[0_4px_12px_#00000059] ${s.ask}`}
           >
             <div className="font-medium text-white">How should uploads retry?</div>
             <div className="flex flex-col gap-1.5">
@@ -133,7 +129,7 @@ export function Island() {
           {/* The next card in line: a tool call held for approval. Options are the CLI's, Allow once first and Deny last. */}
           <div
             aria-hidden="true"
-            className={`absolute bottom-[132px] left-1/2 flex w-[400px] max-w-[calc(100%-32px)] -translate-x-1/2 origin-bottom flex-col gap-2.5 rounded-[20px] bg-black px-4 py-3.5 text-[13px] leading-[18px] shadow-[0_4px_12px_#00000059] ${s.perm}`}
+            className={`absolute bottom-[156px] lg:bottom-[132px] left-1/2 flex w-[400px] max-w-[calc(100%-32px)] -translate-x-1/2 origin-bottom flex-col gap-2.5 rounded-[20px] bg-black px-4 py-3.5 text-[13px] leading-[18px] shadow-[0_4px_12px_#00000059] ${s.perm}`}
           >
             <div className="flex flex-col gap-1.5">
               <div className="truncate">
@@ -160,15 +156,14 @@ export function Island() {
   );
 }
 
-/// One 479×480 tile: art above, a mono label and a caption pinned to the foot.
-function Card({ label, caption, children }: { label: string; caption: string; children: ReactNode }) {
+/// One 480-tall tile on the page's shared card, playing its art only while in view.
+/// The art is placed absolutely in the tile's own 480 box, so the height holds on phones too.
+function Card({ caption, children }: { caption: string; children: ReactNode }) {
   return (
-    <Play className="relative h-[480px] overflow-clip bg-[#FFFFFF1A] light:bg-[#F4F4F5]">
-      {children}
-      <div className="absolute inset-x-6 bottom-6 flex flex-col gap-3">
-        <h3 className="w-max font-mono text-[11px] leading-[14px] tracking-[0.06em] text-[#7C7C7C] uppercase">{label}</h3>
-        <p className="max-w-[431px] text-[15px] leading-[22px] text-[#FFFFFFB3] light:text-[#3F3F46]">{caption}</p>
-      </div>
+    <Play>
+      <Tile title={caption} className="h-[504px] lg:h-[480px]">
+        {children}
+      </Tile>
     </Play>
   );
 }

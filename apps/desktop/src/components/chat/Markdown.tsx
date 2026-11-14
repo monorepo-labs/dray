@@ -4,6 +4,7 @@ import { Streamdown, type Components, type ThemeInput } from "streamdown";
 
 import FileLink from "@/components/chat/FileLink";
 import { MarkdownTable } from "@/components/chat/MarkdownTable";
+import ProofImage from "@/components/chat/ProofImage";
 import VideoPlayer from "@/components/chat/VideoPlayer";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { createSharedCodePlugin, streamingCodePlugin } from "@/lib/codePlugin";
@@ -16,6 +17,7 @@ import { openLink } from "@/lib/openLink";
 import {
   FILE_LINK_CLASS,
   FILE_PATH_CLASS,
+  LOCAL_IMAGE_CLASS,
   REHYPE_PLUGINS,
   REHYPE_PLUGINS_WITH_FILE_PATHS,
 } from "@/lib/markdownPlugins";
@@ -233,9 +235,11 @@ function MarkdownImpl({
 /// asset protocol lets a video be read from. Any home, since `DRAY_HOME` moves
 /// it; one that holds no video draws no player.
 const RECORDING = /\/browser(-dev)?\/recordings\/[^/]+\/[^/]+\.mp4$/;
+/// A screenshot `dray image add` filed there, under the extension it gave it.
+const SCREENSHOT = /\/browser(-dev)?\/recordings\/[^/]+\/[^/]+\.(png|jpg)$/;
 
 /// Every `span` in the rendered markdown, passed through untouched unless
-/// `rehypeFilePaths` marked it.
+/// `rehypeFilePaths` or `rehypeLocalImages` marked it.
 ///
 /// A pass-through rather than a narrow override, because `span` is an ordinary
 /// element in markdown output and taking it over wholesale would swallow
@@ -245,8 +249,9 @@ function FilePathSpan({
   title,
   children,
   "data-line": dataLine,
+  "data-alt": dataAlt,
   ...props
-}: React.ComponentProps<"span"> & { "data-line"?: string }) {
+}: React.ComponentProps<"span"> & { "data-line"?: string; "data-alt"?: string }) {
   // The path rides `title`, since a converted markdown link's text is its own
   // label rather than the path. Re-checked here rather than trusted: the class
   // is a plain attribute, and raw HTML in agent output can carry one.
@@ -255,6 +260,14 @@ function FilePathSpan({
   // one thing the prose does not carry; inert without one, since a path
   // resolved against wherever the app happens to run opens the wrong file.
   const { cwd, sessionId } = useChatSession();
+  if (classes.includes(LOCAL_IMAGE_CLASS) && title) {
+    const path = absolutePath(title, cwd);
+    const label = <span className="text-muted-foreground">{dataAlt || title}</span>;
+    if (!path) return label;
+    return (
+      <ProofImage path={qualify(path, serverOfSession(sessionId))} alt={dataAlt} fallback={label} />
+    );
+  }
   if (classes.includes(FILE_PATH_CLASS) && title && (isFilePath(title) || isRelativePath(title))) {
     const path = absolutePath(title, cwd);
     const line = Number(dataLine);
@@ -285,15 +298,26 @@ function FilePathSpan({
         {body}
       </FileLink>
     );
-    if (!RECORDING.test(path)) return link;
-    // A recording plays where the agent names it, so
-    // checking its work is watching, not finding a file.
-    return (
-      <>
-        {link}
-        <VideoPlayer src={fileSrc(qualify(path, serverOfSession(sessionId)))} />
-      </>
-    );
+    const qualified = qualify(path, serverOfSession(sessionId));
+    // A recording plays and a screenshot shows where the agent names it, so
+    // checking its work is looking, not finding a file.
+    if (RECORDING.test(path)) {
+      return (
+        <>
+          {link}
+          <VideoPlayer src={fileSrc(qualified)} />
+        </>
+      );
+    }
+    if (SCREENSHOT.test(path)) {
+      return (
+        <>
+          {link}
+          <ProofImage path={qualified} />
+        </>
+      );
+    }
+    return link;
   }
 
   return (

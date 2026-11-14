@@ -6,7 +6,8 @@ import type { JsonValue } from "@/types/serde_json/JsonValue";
 /// One row of a bot's chat. A bot is talked to like a person, so its chat draws
 /// the conversation and the tasks it started, never the tool calls between.
 export type BotItem =
-  | { kind: "user"; event: AgentEvent }
+  /// `reaction` is the bot's emoji on it, the newest where it reacted twice.
+  | { kind: "user"; event: AgentEvent; reaction?: string }
   | { kind: "assistant"; event: AgentEvent }
   /// An error, or a turn that failed: drawn as the transcript draws them, since
   /// a bot turn that fails before answering otherwise ends with no word why.
@@ -330,6 +331,7 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
   const sends = new Map<string, ReturnType<typeof sentMessages>>();
   const items: BotItem[] = [];
   const undone = undoneLessons(events);
+  const reactions = reactionsOf(events);
   // Inside a turn Dray's review opened, whose words are for nobody: told to
   // write no reply, the bot sometimes explains itself anyway.
   let review = false;
@@ -342,7 +344,7 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       // reply carries what it said, so the chat names who wrote and folds the rest.
       if (p.from?.botId) items.push({ kind: "botMessage", event, botId: p.from.botId, title: p.from.title });
       else if (p.from) items.push({ kind: "report", event, sessionId: p.from.sessionId, title: p.from.title });
-      else if (!p.kickoff) items.push({ kind: "user", event });
+      else if (!p.kickoff) items.push({ kind: "user", event, reaction: reactions.get(event.id) });
     } else if (p.type === "assistant_text") {
       if (hasText(p.text) && !review) items.push({ kind: "assistant", event });
     } else if (p.type === "error") {
@@ -404,6 +406,16 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
   return items;
 }
 
+/// The bot's reaction on each message it reacted to, by message id. Read whole
+/// before the rows, since a reaction lands after its message; the newest wins.
+function reactionsOf(events: readonly AgentEvent[]): Map<string, string> {
+  const reactions = new Map<string, string>();
+  for (const { payload } of events) {
+    if (payload.type === "reaction") reactions.set(payload.messageId, payload.emoji);
+  }
+  return reactions;
+}
+
 const lessonKey = (commit: string, path: string) => `${commit}\0${path}`;
 
 const LESSON_KINDS: Record<string, string> = { instructions: "Rule", skill: "Skill", memory: "Memory" };
@@ -431,7 +443,8 @@ function undoneLessons(events: readonly AgentEvent[]): Set<string> {
 /// by item key: the bot's reply to the task's last report, everything it did
 /// before the next message came in. The report itself stays folded, since the
 /// reply already says what it held. A stall nudge is Dray's, not the task's, so
-/// it is skipped. With no reply to point at, the line that started the task.
+/// it is skipped. Empty where there is no reply to point at, and the card opens
+/// the task instead.
 export function taskContext(items: readonly BotItem[], sessionId: string): Set<string> {
   let at = items.length - 1;
   for (; at >= 0; at--) {
@@ -450,9 +463,7 @@ export function taskContext(items: readonly BotItem[], sessionId: string): Set<s
     if (item.kind === "user" || item.kind === "report" || item.kind === "botMessage") break;
     keys.add(itemKey(item));
   }
-  if (keys.size > 0) return keys;
-  const started = items.find((i) => i.kind === "task" && i.sessionId === sessionId);
-  return new Set(started ? [itemKey(started)] : []);
+  return keys;
 }
 
 /// An item's React key, as the chat draws it.

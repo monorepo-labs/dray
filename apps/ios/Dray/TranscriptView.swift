@@ -11,6 +11,8 @@ struct TranscriptView: View {
     @State private var bannerHeight: CGFloat = 0
     /// How many of a bot chat's earlier sessions are drawn above this one.
     @State private var earlier = 0
+    /// Whether new rows scroll into view: dropped by the reader scrolling up (`FollowsBottom`).
+    @State private var following = true
 
     private var item: SessionItem? { store.items[key] }
     private var busy: Bool { item?.busy ?? false }
@@ -25,7 +27,7 @@ struct TranscriptView: View {
         let segments = segments(bot)
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 28) {
+                VStack(alignment: .leading, spacing: 28) {
                     if store.transcripts[segments[0]]?.olderBefore != nil || hidden(bot, segments) != nil { older(bot, segments) }
                     if transcript == nil {
                         placeholder
@@ -78,10 +80,17 @@ struct TranscriptView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .contentMargins(.top, bannerHeight, for: .scrollContent)
-            // Opens on the newest turn: a scrollTo on appear lands in a lazy stack's estimate and draws blank.
+            // Opens on the newest turn. The stack is eager on purpose: a lazy one scrolled
+            // to its end by estimate, and when the read replaced what the cache drew with
+            // less, the view sat past the new end, blank until the reader swiped.
             .defaultScrollAnchor(.bottom)
+            .modifier(FollowsBottom(following: $following))
             // The newest row, not the count, or loading earlier turns would jump to the end.
             .onChange(of: "\(turns.last?.id ?? "")|\(turns.last?.work.last?.newestId ?? "")|\(turns.last?.completed ?? false)|\(asks.count)|\(busy)|\(bot == nil ? "" : transcript?.events.last?.id ?? "")") {
+                if following { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onChange(of: store.sends[key]) {
+                following = true
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
         }
@@ -303,7 +312,8 @@ struct OrbLine: View {
     var body: some View {
         HStack(spacing: Theme.Space.s) {
             Orb(activity)
-            Text(label).font(Theme.Font.subhead).foregroundStyle(Theme.secondary).shimmer()
+            // A running tool's label can be a whole script: one line, cut short.
+            Text(label).font(Theme.Font.subhead).foregroundStyle(Theme.secondary).lineLimit(1).shimmer()
         }
         .accessibilityElement(children: .combine)
         .transition(.opacity)
@@ -432,6 +442,8 @@ struct UserBubble: View {
     var images: [ImageRef] = []
     /// Typed into a running turn and not yet read by it: held back, dimmed.
     var queued = false
+    /// A bot's emoji on this message, drawn on the bubble's corner.
+    var reaction: String? = nil
 
     var body: some View {
         VStack(alignment: .trailing, spacing: Theme.Space.xs) {
@@ -448,6 +460,12 @@ struct UserBubble: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+                    .overlay(alignment: .topLeading) {
+                        if let reaction { ReactionBadge(emoji: reaction).offset(x: -12, y: -16) }
+                    }
+                    .padding(.top, reaction == nil ? 0 : 12)
+            } else if let reaction {
+                ReactionBadge(emoji: reaction)
             }
             if queued {
                 Text("Queued").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
@@ -456,6 +474,22 @@ struct UserBubble: View {
         .opacity(queued ? 0.55 : 1)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 48)
+    }
+}
+
+/// A bot's reaction, as a messenger draws one: a round chip a step lighter than the
+/// page, with a hairline edge. The desktop's `ReactionBadge`.
+struct ReactionBadge: View {
+    let emoji: String
+
+    var body: some View {
+        let labels = ["👀": "Seen", "✅": "Done", "🎉": "Celebrating", "👍": "Like", "❤️": "Love", "😂": "Laughing", "😢": "Sad"]
+        Text(emoji)
+            .font(.system(size: 15))
+            .frame(width: 28, height: 28)
+            .background(Theme.well, in: .circle)
+            .overlay(Circle().strokeBorder(Theme.border, lineWidth: 0.5))
+            .accessibilityLabel("Bot reacted: \(labels[emoji] ?? emoji)")
     }
 }
 
@@ -663,6 +697,10 @@ struct MarkdownText: View {
                 }
             }
             ForEach(recordingPaths(in: text), id: \.self) { RecordingPlayer(path: $0) }
+            ForEach(screenshotPaths(in: text), id: \.self) { path in
+                let ref = ImageRef(path: path, url: nil, mimeType: nil)
+                ImageButton(ref: ref) { InlineImage(ref: ref) }
+            }
         }
         .tint(Theme.link)
         .textSelection(.enabled)
@@ -700,5 +738,28 @@ struct TranscriptSkeleton: View {
             Capsule().fill(Theme.raised).frame(width: g.size.width * width, height: 12)
         }
         .frame(height: 12)
+    }
+}
+
+/// The desktop chat's pin (`AT_BOTTOM_PX` in Chat.tsx): new rows follow while the
+/// view is within 40pt of the end. Only a scroll the reader made drops it, since
+/// rows landing push the end away too; coming back to the end raises it again.
+/// iOS 17 has no scroll phase to tell the two apart, so there it always follows.
+struct FollowsBottom: ViewModifier {
+    @Binding var following: Bool
+    @State private var reading = false
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content
+                .onScrollPhaseChange { _, phase in reading = phase == .interacting || phase == .decelerating }
+                .onScrollGeometryChange(for: CGFloat.self) { g in
+                    g.contentSize.height + g.contentInsets.bottom - g.containerSize.height - g.contentOffset.y
+                } action: { _, left in
+                    if left < 40 { following = true } else if reading { following = false }
+                }
+        } else {
+            content
+        }
     }
 }

@@ -59,9 +59,7 @@ export type PanelTab = (typeof PANEL_TABS)[number];
 
 export const PANEL_LABELS: Record<PanelTab, string> = {
   changes: "Changes",
-  // The session's browser lives here. Always drawn, unlike PR or Docs: its
-  // empty state is a URL bar, which is a place to start rather than a
-  // sentence saying there is nothing.
+  // A bot's task tab alone: its pages are its own, and no row lists them.
   browser: "Browser",
   // A bot's children: the work it handed off, waiting, running or done.
   tasks: "Tasks",
@@ -108,6 +106,7 @@ export function tabOrder({
   more,
   plan,
   tasks,
+  browser,
 }: {
   pr: boolean;
   /// At least one markdown file is open in the pane — see
@@ -125,11 +124,13 @@ export function tabOrder({
   /// in place of PR and Changes: a bot's folder holds its notes, not work to
   /// review or land. Its tasks' PRs show on their rows in the Tasks tab.
   tasks?: boolean;
+  /// A task lit in a bot's row. Everywhere else pages live in the titlebar's
+  /// row and in splits; a task's own browser has no row, so it keeps a tab
+  /// here, and with no page open its empty state is a place to start.
+  browser?: boolean;
 }): readonly PanelTab[] {
-  // Browser always: with no page open its empty state is a URL bar, the
-  // session's recent pages and its local servers — a place to start.
   const tabs: PanelTab[] = tasks ? ["tasks"] : pr ? ["pr", "changes"] : ["changes"];
-  tabs.push("browser");
+  if (browser) tabs.push("browser");
   // After Changes, which is what keeps Issue immediately before More.
   if (docs) tabs.push("docs");
   // Immediately before More wherever it is drawn, so the row's order is the

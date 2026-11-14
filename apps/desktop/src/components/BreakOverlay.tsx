@@ -134,10 +134,10 @@ function PickedCard() {
   return <BreakCard text={pick.text} Scene={pick.Scene} Title={DialogPrimitive.Title} />;
 }
 
-const LOCK_MS = 30_000;
+const LOCK_MS = 10_000;
 
-/// The way out, held shut for the break's first 30 seconds, so the break is at
-/// least half taken before it can be skipped. The minute's own countdown above
+/// The way out, held shut for the break's first 10 seconds, so a break can't be
+/// dismissed on reflex before it has been read. The minute's own countdown above
 /// says time is running; a second number here read as a timer to wait out.
 function BackButton({ onClick }: { onClick: () => void }) {
   const left = useSecondsLeft(LOCK_MS);

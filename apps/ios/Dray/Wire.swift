@@ -123,6 +123,12 @@ func parseDate(_ s: String) -> Date? {
     return d
 }
 
+/// How long ago, as the sidebar says it: now, 4m, 1h, 3d.
+func shortAge(_ date: Date, now: Date = .now) -> String {
+    let s = Int(now.timeIntervalSince(date))
+    return s < 60 ? "now" : s < 3600 ? "\(s / 60)m" : s < 86400 ? "\(s / 3600)h" : "\(s / 86400)d"
+}
+
 /// The server's first frame: what it can do and what it runs.
 struct Welcome: Decodable {
     let dictation: Bool?
@@ -161,6 +167,8 @@ struct SessionItem: Codable, Hashable {
     let created: String?
     /// A bot task's one line to the reader, written by its bot (`dray session need`).
     let need: Need?
+    /// The nearest live session above a bot's sub-task while the task that started it is settled or deleted.
+    let adoptedBy: String?
 
     var busy: Bool { status == "in_progress" }
     var project: String { (projectPath as NSString).lastPathComponent }
@@ -179,8 +187,11 @@ struct Bot: Codable, Hashable {
     let path: String
     /// Absent for a bot made before there was a pick, which draws the face its id seeds.
     let avatar: BotAvatar?
-    /// Dray Bot's first words, drawn before its chat has a session.
+    /// Marks Dray Bot, whose chat opens on a greeting before it has a session.
     var welcome: String? = nil
+    /// That greeting as the server words it now: the welcome, then the
+    /// question for the user's name while no bot knows it. Absent from an older server.
+    var greeting: [String]? = nil
 }
 
 /// `bot_previews`' answer per chat: its newest reply and how many came since the reader last wrote.
@@ -406,6 +417,8 @@ enum Payload: Decodable {
     /// Lessons a bot turn filed, one per file, and one taken back.
     case learned(commit: String, files: [Lesson])
     case learnedUndone(commit: String, path: String)
+    /// A bot's emoji on a message the user typed, in place of a reply.
+    case reaction(messageId: String, emoji: String)
     case error(String)
     case other(String)
 
@@ -465,6 +478,9 @@ enum Payload: Decodable {
             case "learned_undone":
                 self = .learnedUndone(commit: try c.decode(String.self, forKey: "commit"),
                                       path: try c.decode(String.self, forKey: "path"))
+            case "reaction":
+                self = .reaction(messageId: try c.decode(String.self, forKey: "messageId"),
+                                 emoji: try c.decode(String.self, forKey: "emoji"))
             default:
                 self = .other(type)
             }

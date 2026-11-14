@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { CrewRow } from "@/lib/crew";
 import {
   STALL_MS,
+  cardRows,
   compactAge,
   fixAskDone,
   fixLine,
@@ -46,8 +47,8 @@ function pr(over: Partial<PrMark> = {}): PrMark {
 }
 
 describe("stalledTasks", () => {
-  it("waits five minutes before calling an idle task stalled", () => {
-    expect(STALL_MS).toBe(5 * 60_000);
+  it("waits two minutes before calling an idle task stalled", () => {
+    expect(STALL_MS).toBe(2 * 60_000);
     const rows = [row("a")];
     expect(stalledTasks(rows, () => undefined, new Map(), T0 + STALL_MS - 1, fresh)).toEqual([]);
     const [s] = stalledTasks(rows, () => undefined, new Map(), T0 + STALL_MS, fresh);
@@ -130,6 +131,16 @@ describe("stalledTasks", () => {
     expect(needLine(stall({ text: "Pick one", at: new Date(T0 - 1000).toISOString() }))).toBeUndefined();
     expect(onCard(stalledTasks([row("a")], () => pr(), new Map(), T0 + STALL_MS, fresh)[0])).toBe(true);
     expect(onCard(stalledTasks([row("a")], () => pr({ mergeable: "CONFLICTING" }), new Map(), T0, fresh)[0])).toBe(false);
+  });
+
+  it("counts the card's rows alone: no fix, nothing dismissed", () => {
+    const rows = [row("a"), row("b"), row("c")];
+    const prs: Record<string, PrMark> = { b: pr({ mergeable: "CONFLICTING" }), c: pr({ checksState: "FAILING" }) };
+    const stalls = stalledTasks([...rows, row("d")], (r) => prs[r.item.sessionId], new Map(), T0 + STALL_MS, fresh);
+    expect(stalls).toHaveLength(4);
+    const waiting = stalls.filter((s) => s.kind === "waiting");
+    expect(cardRows(stalls, []).map((s) => s.row.item.sessionId)).toEqual(["a", "d"]);
+    expect(cardRows(stalls, [waiting[0].key])).toEqual([waiting[1]]);
   });
 
   it("hands each stall to the banner once", () => {

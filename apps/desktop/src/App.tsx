@@ -98,6 +98,8 @@ import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/Merg
 import { cardRepos } from "@/lib/mergeCard";
 import BotWelcome from "@/components/chat/BotWelcome";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
+import SplitPanes, { cardOrder, SplitFile } from "@/components/SplitPanes";
+import { pruneSplits, removeSplit, useLitGroup, useSplitGroups, useSplitPanes, useSplitWeight } from "@/lib/splitPanes";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
   closePane,
@@ -134,6 +136,7 @@ import {
   forgetOpenFilesUnder,
   openFilesFor,
   useOpenFiles,
+  type FilesScope,
 } from "@/hooks/useOpenFiles";
 import BotAvatar from "@/components/BotAvatar";
 import Orb from "@/components/Orb";
@@ -165,7 +168,7 @@ import { checkChangelog, markChangelogSeen, type Release } from "@/lib/changelog
 import WhatsNewCard from "@/components/WhatsNewCard";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { useSessionIssues } from "@/hooks/useIssues";
-import { useSessions } from "@/hooks/useSessions";
+import { sessionsAnswered, useSessions } from "@/hooks/useSessions";
 import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailability";
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import ServerOfflineNotice from "@/components/composer/ServerOfflineNotice";
@@ -198,7 +201,7 @@ import { changeRange, lastToolResult } from "@/lib/changes";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
-import { botAt, botBrowser, botChat, botEntries, botSession, inBotTree, listenForBots, readPreviews, refreshBots, serverOfBot, useBots } from "@/lib/bots";
+import { botAt, botBrowser, botChat, botEntries, botSession, greetingOf, inBotTree, listenForBots, readPreviews, refreshBots, serverOfBot, useBots } from "@/lib/bots";
 import NewBotDialog from "@/components/NewBotDialog";
 import AgentIcon from "@/components/AgentIcon";
 import ModelSelector from "@/components/composer/ModelSelector";
@@ -246,10 +249,13 @@ import {
 import { worktreeNoticeDetail } from "@/lib/worktree";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import { useHandoffConfig } from "@/hooks/useHandoffConfig";
-import { buildTranscript, sessionMedia } from "@/lib/transcript";
+import { buildTranscript, runningRuns, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 import { onUnhandledEscape } from "@/lib/escape";
 import { playSwipeTick } from "@/lib/tick";
+
+/// What a project filter reopens when the reader comes back to it.
+type FilterPick = { session: string } | { bot: string } | null;
 
 /// Commits only with its Suspense siblings, so its layout effect says the lazy
 /// settings page is drawn, before paint.
@@ -921,6 +927,10 @@ function App() {
     () => buildTranscript(selectedSession?.events ?? [], busy, liveTaskIds),
     [selectedSession?.events, busy, liveTaskIds],
   );
+  const panelRuns = useMemo(
+    () => runningRuns(subagents, selectedSubagentId),
+    [subagents, selectedSubagentId],
+  );
 
   // A bot's folder is a git repository only for its own history, which Dray
   // commits — so no Commit button, no branch and no pull request lookup.
@@ -1197,14 +1207,6 @@ function App() {
   // `setOnScreen` takes the whole set rather than adding to it — two callers
   // would each wipe the other's.
   // A bot chat's earlier sessions are drawn with it, so they are on screen too.
-  const onScreenKey = [mainGroup ? memberKey : earlierIds.join("\n"), crewShown].filter(Boolean).join("\n");
-  useEffect(() => {
-    const ids = [...new Set(onScreenKey.split("\n").filter(Boolean))];
-    setOnScreen(ids);
-    ids.forEach((id) => void ensureLoaded(id));
-    // Both are rebuilt every render; the key is what changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onScreenKey]);
 
   // Every row the column would draw a card for, for `announce` alone — see
   // `crewSeen`. Wider than `crewShown` on purpose: that one loads and
@@ -1297,6 +1299,7 @@ function App() {
   );
   const [newBotOpen, setNewBotOpen] = useState(false);
   const [botToDelete, setBotToDelete] = useState<Bot | null>(null);
+  const [botToEdit, setBotToEdit] = useState<Bot | null>(null);
   // A bot clicked while the settled list was up, opened once the active side lands.
   const [botWaiting, setBotWaiting] = useState<Bot | null>(null);
   const openBot = (bot: Bot) => {
@@ -1316,6 +1319,39 @@ function App() {
     );
   };
   const [openedUnread, setOpenedUnread] = useState<string | null>(null);
+
+  // A launch opens on the first bot rather than the new-task page (#1076),
+  // once the live index is in so its chat is found rather than a new one
+  // aimed at its folder. Only while the reader has gone nowhere yet.
+  const launchNav = useRef<number | null>(navGen.current);
+  useEffect(() => {
+    if (launchNav.current === null) return;
+    if (navGen.current !== launchNav.current || selectedSessionId || settingsOpen || issuesOpen) {
+      launchNav.current = null;
+      return;
+    }
+    const first = bots[0];
+    // The first bot's own server must have sent its sessions: a remote one's
+    // land apart from This Mac's, and opened early its chat reads as none.
+    if (indexSide !== false || !first || !sessionsAnswered(serverOfBot(first))) return;
+    launchNav.current = null;
+    openBot(first);
+    // `openBot` is rebuilt every render; the bots and each index landing are what this waits on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bots, indexSide, sessionIndexItems, selectedSessionId, settingsOpen, issuesOpen]);
+
+  // After a delete, the first bot left, else the new-task page (#1076). Run
+  // once the list without it has landed, so the bot opened is one still here.
+  const [botDeleted, setBotDeleted] = useState<string | null>(null);
+  useEffect(() => {
+    if (!botDeleted || bots.some((b) => b.id === botDeleted)) return;
+    setBotDeleted(null);
+    const first = bots[0];
+    if (first) openBot(first);
+    else goToSession(handleNewSession);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [botDeleted, bots]);
+
   useEffect(() => {
     if (!botWaiting || archivedShown) return;
     setBotWaiting(null);
@@ -1441,7 +1477,9 @@ function App() {
   // The header's way back from a hidden session, which has no sidebar row. The
   // loaded side first, else asked of the backend: with the sidebar on the other
   // side of the settled split the parent is not in the list, and still exists.
-  const hiddenParentId = selectedSession?.hidden ? selectedSession.parentSessionId : null;
+  const hiddenParentId = selectedSession?.hidden
+    ? (sessionIndexItems.find((i) => i.sessionId === selectedSession.sessionId)?.adoptedBy ?? selectedSession.parentSessionId)
+    : null;
   const loadedParent = sessionIndexItems.find((i) => i.sessionId === hiddenParentId);
   const [fetchedParent, setFetchedParent] = useState<SessionIndexItem | null>(null);
   useEffect(() => {
@@ -1619,17 +1657,12 @@ function App() {
       if (move) setPanelOpen(move === "restore");
     }
   }, [viewTab, setPanelOpen, panelOpen, panelKey, autoHidePanel]);
-  const expandBrowser = () => setViewTab("browser");
-  const collapseBrowser = () => {
-    setViewTab("chat");
-    showPanel("browser");
-  };
 
   // A live background task counts even where no run is built for it yet, and a
   // task list counts on its own — the tab is a catch-all, so any one of its
   // sections having something is enough to draw it.
   const hasMoreTab =
-    subagents.length > 0 ||
+    panelRuns.length > 0 ||
     backgroundTasks.length > 0 ||
     sessionTodos !== null ||
     sessionAttachments.length > 0;
@@ -1765,6 +1798,7 @@ function App() {
     more: hasMoreTab,
     plan: hasPlanTab,
     tasks: !!selectedBot,
+    browser: !!strip?.lit,
   });
 
   // One rule, read rather than written back: an explicit pick wins wherever it
@@ -1874,15 +1908,21 @@ function App() {
   // opens a PR and then spends minutes on CI no longer hides it until the turn
   // ends. Marks for any session, since a row's glyph is on screen whichever is
   // selected; the panel and the handoff row for the selected one alone.
+  const indexRef = useRef(sessionIndexItems);
+  indexRef.current = sessionIndexItems;
   useEffect(
     () =>
       repoChanged.subscribe(({ sessionId, pullRequest }) => {
-        if (pullRequest) prMarks.refreshAfterWrite();
+        if (pullRequest) {
+          const repo = indexRef.current.find((i) => i.sessionId === sessionId)?.projectPath;
+          if (repo) prMarks.refreshRepo(repo);
+          else prMarks.refreshAfterWrite();
+        }
         if (sessionId !== selectedSessionId) return;
         refreshWorkStatus();
         if (pullRequest) pullRequests.refresh();
       }),
-    [selectedSessionId, prMarks.refreshAfterWrite, pullRequests.refresh, refreshWorkStatus],
+    [selectedSessionId, prMarks.refreshRepo, prMarks.refreshAfterWrite, pullRequests.refresh, refreshWorkStatus],
   );
 
   // A doc arriving on screen is re-read, because the watcher behind `DocsPanel`
@@ -2363,7 +2403,7 @@ function App() {
     // without this a space switch is the one way out of a filter that forgets
     // what was open in it. Nothing is restored: the effect below closes a
     // transcript that falls outside the space being entered.
-    filterSelection.current[projectFilter ?? ""] = selectedSessionId;
+    filterSelection.current[projectFilter ?? ""] = currentPick();
     filterGen.current++;
     setProjectFilter(null);
 
@@ -2389,7 +2429,19 @@ function App() {
   /// from a previous run would open a transcript nobody asked for on the first
   /// switch after launch, so the entry is written on the way out of a filter
   /// and nowhere else.
-  const filterSelection = useRef<Record<string, string | null>>({});
+  const filterSelection = useRef<Record<string, FilterPick>>({});
+  /// What is open, as a filter remembers it. A bot by its id rather than its
+  /// chat's: a bot with no chat yet has no session to name, and an agent
+  /// switch moves its chat to a new one. A settled chat is no longer the bot's,
+  /// so it is remembered as itself.
+  const currentPick = (): FilterPick => {
+    const settled = sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.archived;
+    const bot = selectedSessionId
+      ? !settled && selectedBotId
+      : projectPath && botAt(bots, projectPath)?.id;
+    if (bot) return { bot };
+    return selectedSessionId ? { session: selectedSessionId } : null;
+  };
   /// Bumped at every filter move, at call time, so a read across an await can
   /// tell the filter moved under it. Rendered state is a render behind.
   const filterGen = useRef(0);
@@ -2406,7 +2458,8 @@ function App() {
   /// delete that *failed*.
   const forgetFilterSelection = (sessionId: string) => {
     for (const key of Object.keys(filterSelection.current)) {
-      if (filterSelection.current[key] === sessionId) filterSelection.current[key] = null;
+      const pick = filterSelection.current[key];
+      if (pick && "session" in pick && pick.session === sessionId) filterSelection.current[key] = null;
     }
   };
 
@@ -2429,7 +2482,7 @@ function App() {
     // A selection made since the last step ends the run, so it is kept.
     const run = filterNav.current;
     if (!run || run.nav !== navGen.current) {
-      filterSelection.current[projectFilter ?? ""] = selectedSessionId;
+      filterSelection.current[projectFilter ?? ""] = currentPick();
     }
     const gen = ++filterGen.current;
     setProjectFilter(next);
@@ -2449,11 +2502,19 @@ function App() {
   };
 
   const openFilterSession = (next: string | null) => {
-    const remembered = filterSelection.current[next ?? ""] ?? null;
+    const pick = filterSelection.current[next ?? ""] ?? null;
+    // A bot is no project and the sidebar draws it under every filter. Not
+    // while the settled list is up, which has no bots and `openBot` would leave.
+    const bot = pick && "bot" in pick && !archivedShown ? bots.find((b) => b.id === pick.bot) : undefined;
+    if (bot) return openBot(bot);
+    const remembered = pick && "session" in pick ? pick.session : null;
+    // A task lit in a bot's row is restorable under any filter, like the bot.
     const restorable =
       remembered &&
       sessionIndexItems.some(
-        (i) => i.sessionId === remembered && (!next || sameProject(i.projectPath, next)),
+        (i) =>
+          i.sessionId === remembered &&
+          (!next || sameProject(i.projectPath, next) || inBotTree(bots, sessionIndexItems, remembered)),
       );
     goToSession(() => {
       if (restorable) void handleSelectSessionIndexItem(remembered);
@@ -2472,7 +2533,7 @@ function App() {
   /// only where no filter or space switch landed during the read — everything
   /// below is the click-time render's, and would undo that switch.
   const openFromNotice = async (sessionId: string) => {
-    const previous = selectedSessionId;
+    const previous = currentPick();
     const gen = filterGen.current;
     const selecting = handleSelectSessionIndexItem(sessionId);
     // Past this select's own move, so any later one is somebody else's.
@@ -2507,7 +2568,9 @@ function App() {
     const nav = ++navGen.current;
     const gen = filterGen.current;
     const item = await indexItem(id);
-    const parent = item?.hidden && item.parentSessionId ? await indexItem(item.parentSessionId) : null;
+    // A bot's sub-task whose parent is settled or deleted opens where it was adopted.
+    const up = item?.hidden ? (item.adoptedBy ?? item.parentSessionId) : null;
+    const parent = up ? await indexItem(up) : null;
     if (nav !== navGen.current || gen !== filterGen.current) return;
     await openFromNotice(parent?.sessionId ?? id);
   };
@@ -2693,9 +2756,13 @@ function App() {
       // one moment the worktree behind it is provably spare. Asked
       // after the flag write lands, so the question is about a task
       // that is already settled rather than a condition of settling it.
+      // A bot's task is never asked about: its tree is the bot's working copy,
+      // hidden from the reader, and the bot settles its own with
+      // `--delete-worktree` anyway.
       const item = sessionIndexItems.find((i) => i.sessionId === sessionId);
       if (item?.worktreeName) {
-        void askAboutWorktree(sessionId, item.worktreeName, item.title, "notice");
+        if (inBotTree(bots, sessionIndexItems, sessionId)) removeWorktree(sessionId, "asked");
+        else void askAboutWorktree(sessionId, item.worktreeName, item.title, "notice");
       }
     }
     // Settling the open session leaves nothing to look at but the
@@ -3047,6 +3114,35 @@ function App() {
     selectedSession ?? sessionIndexItems.find((i) => i.sessionId === selectedSessionId) ?? null;
   // The session whose row the titlebar draws: the bot's chat over its lit task.
   const rowSession = stripOwner ?? shownSession;
+  // The lit group's panes beside the main view. A task's transcript in one
+  // is on screen the way a grid pane's is.
+  const rowSplits = useSplitPanes(issuesOpen ? null : (rowSession?.sessionId ?? null));
+  const rowGroups = useSplitGroups(issuesOpen ? null : (rowSession?.sessionId ?? null));
+  const litGroup = useLitGroup(issuesOpen ? null : (rowSession?.sessionId ?? null));
+  const mainGrow = useSplitWeight(rowSession?.sessionId ?? null, litGroup?.lead ?? null);
+  const splitTasks = rowSplits.filter((k) => k.startsWith("task:")).map((k) => k.slice("task:".length));
+  // A pane whose tab went — a page the agent closed, a task or pick shut —
+  // goes with it.
+  const rowPages = useBrowserTabs(rowSession ? browserOf(rowSession.sessionId) : null);
+  useEffect(() => {
+    if (!rowSession || rowGroups.length === 0) return;
+    const tasksOpen = strip ? (taskTabs[strip.bot] ?? []) : null;
+    const picksOpen = strip ? (pickTabs[strip.bot] ?? []) : null;
+    pruneSplits(rowSession.sessionId, (key) => {
+      if (key.startsWith("page:")) return !rowPages || rowPages.some((p) => `page:${p.id}` === key);
+      if (key.startsWith("task:")) return !tasksOpen || tasksOpen.some((t) => `task:${t.sessionId}` === key);
+      if (key.startsWith("pick:")) return !picksOpen || picksOpen.some((t) => `pick:${t.id}` === key);
+      return true;
+    });
+  });
+  const onScreenKey = [mainGroup ? memberKey : earlierIds.join("\n"), crewShown, ...splitTasks].filter(Boolean).join("\n");
+  useEffect(() => {
+    const ids = [...new Set(onScreenKey.split("\n").filter(Boolean))];
+    setOnScreen(ids);
+    ids.forEach((id) => void ensureLoaded(id));
+    // Both are rebuilt every render; the key is what changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onScreenKey]);
   // The way back from a hidden session, where its bot's row is not drawn.
   const crumb = strip ? undefined : hiddenParent;
   // Off the index, never the snapshot: `session_changed` writes only there.
@@ -3055,7 +3151,7 @@ function App() {
   const newBot = !shownSession && projectPath ? botAt(bots, projectPath) : undefined;
   // A bot whose empty chat opens on a welcome (Dray Bot) draws as a chat
   // already under way: the welcome in the transcript, the composer below it.
-  const welcomeBot = newBot?.welcome ? newBot : undefined;
+  const welcomeBot = newBot && greetingOf(newBot).length > 0 ? newBot : undefined;
   // In a bot's chat `@` lists the other bots instead of files: those on its
   // own server, the only ones `dray bot send` reaches from there.
   const composerBot = selectedBot ?? newBot;
@@ -3101,7 +3197,8 @@ function App() {
       const found = await indexItem(id);
       let at = found;
       for (let hops = 0; at?.parentSessionId && hops < 8; hops++) {
-        const parent = await indexItem(at.parentSessionId);
+        // A deleted parent is bridged by the session that adopted the task.
+        const parent = (await indexItem(at.parentSessionId)) ?? (at.adoptedBy ? await indexItem(at.adoptedBy) : null);
         if (parent && botAt(bots, parent.cwd)?.id === bot.id) {
           task = found ?? undefined;
           break;
@@ -3171,18 +3268,10 @@ function App() {
     if (!task) return;
     const { item } = task;
     if (task.busy || !(await setSessionFlags(item.sessionId, { archived: true }))) return;
-    if (!item.worktreeName || item.worktreeRemoved) return;
-    // The tree goes without a word only where it holds nothing
-    // the merge did not take; anything else is the settle notice's
-    // question, never a silent delete.
-    const left = await invoke<WorktreeDisposition>("worktree_disposition", { sessionId: item.sessionId }).catch(
-      () => null,
-    );
-    if (left && (!left.exists || (left.changedFiles === 0 && left.unpushedCommits === 0))) {
-      removeWorktree(item.sessionId, "tidy");
-    } else {
-      void askAboutWorktree(item.sessionId, item.worktreeName, item.title, "notice");
-    }
+    // The merge landed the work, so whatever the tree still holds is leftover:
+    // asking here put a "Delete worktree?" notice on every merge with a stray file.
+    // "asked" so a refused delete still says so rather than orphaning the tree.
+    if (item.worktreeName && !item.worktreeRemoved) removeWorktree(item.sessionId, "asked");
   };
 
   const cardsReread = useRef(new Set<string>());
@@ -3238,7 +3327,7 @@ function App() {
   /// A lit Diff or Files pick: the view on the picked session, its side
   /// column led by the picker. Keyed on tab and target, so a repick or another
   /// pick of the same kind opens fresh rather than on the last one's place.
-  const pickBody = (tab: (typeof litPick) & object, bot: string) => {
+  const pickBody = (tab: (typeof litPick) & object, bot: string, watchScope?: FilesScope, shown = true) => {
     const options: PickOption[] = [
       ...(tab.kind === "files" ? [bot] : []),
       ...botTasks.map((t) => t.sessionId),
@@ -3275,7 +3364,7 @@ function App() {
       <ChangesView
         key={key}
         cwd={item.cwd}
-        active={!issuesOpen}
+        active={!issuesOpen && shown}
         revision={revision}
         writeRevision={writeRevision}
         busy={status === "in_progress"}
@@ -3286,60 +3375,53 @@ function App() {
         key={key}
         sessionId={pickFilesKey(tab)}
         cwd={item.cwd}
-        active={!issuesOpen}
+        active={!issuesOpen && shown}
         revision={revision}
         picker={picker}
+        watchScope={watchScope}
       />
     );
   };
 
+  // What a split pane draws, by the key its tab had in the row; `shown` while
+  // its group is lit.
+  const splitBody = (key: string, shown: boolean) => {
+    if (!rowSession) return null;
+    if (key.startsWith("page:")) {
+      return (
+        <BrowserPane
+          sessionId={browserOf(rowSession.sessionId)}
+          tab={Number(key.slice("page:".length))}
+          active={!issuesOpen && shown}
+          onClose={() => removeSplit(rowSession.sessionId, key)}
+        />
+      );
+    }
+    if (key === "changes") {
+      return (
+        <ChangesView
+          cwd={rowSession.cwd}
+          active={!issuesOpen && shown}
+          revision={turnRevision}
+          writeRevision={writeRevision}
+          busy={busy}
+        />
+      );
+    }
+    if (key.startsWith("file:")) {
+      return <SplitFile sessionId={rowSession.sessionId} path={key.slice("file:".length)} />;
+    }
+    if (key.startsWith("task:")) {
+      // Read here; the composer sends to the main view's session.
+      return <Chat {...paneState(key.slice("task:".length))} {...paneChat} crowded active={false} />;
+    }
+    const pick = strip && pickTabs[strip.bot]?.find((t) => `pick:${t.id}` === key);
+    // Its own watcher, since the lit pick in the main view holds `"pick"`.
+    return pick && strip ? pickBody(pick, strip.bot, key as `pick:${string}`, shown) : null;
+  };
+
   // Pages with no tabs for the strip: the sheet reaches up behind the header.
   const tallSheet = issuesOpen || !shownSession;
-
-  // The composer is drawn under the transcript alone; a bot's chat moves its
-  // pickers into the titlebar, so they show and hide with it.
-  const composerShown = !(issuesOpen || (shownSession && viewTab !== "chat"));
-  // Not on a settled chat, whose composer is the Unsettle bar alone.
-  const toolbarInTitlebar = composerShown && !!composerBot && !selectedSession?.archived;
-  const composerToolbar = (inTitlebar: boolean) => (
-    <ComposerToolbar
-      server={activeServer}
-      harness={harness}
-      onHarnessChange={setHarness}
-      models={models}
-      modelId={modelId}
-      effort={effort}
-      fast={fast}
-      onFastChange={setFast}
-      fastNote={fastNote}
-      onModelChange={handleModelChange}
-      onRefreshModels={refreshModels}
-      onReloadModels={reloadModels}
-      onSeedProvider={seedFxModels}
-      loadingModels={loadingModels}
-      permissionMode={permissionMode}
-      onPermissionModeChange={setPermissionMode}
-      projects={spaceProjects}
-      projectPath={projectPath}
-      onSelectProject={handleSelectProject}
-      onAttachProject={handleAttachProject}
-      branches={branches}
-      branch={branch}
-      onSelectBranch={handleSelectBranch}
-      pendingBranch={pendingBranch}
-      onConfirmBranchSwitch={(stash) => pendingBranch && runCheckout(pendingBranch, stash)}
-      onCancelBranchSwitch={() => setPendingBranch(null)}
-      useWorktree={useWorktree}
-      onToggleWorktree={() => setUseWorktree((v) => !v)}
-      onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
-      contextUsage={contextUsage}
-      isNewSession={!selectedSessionId}
-      agentSwitch={!!selectedBot}
-      bot={newBot}
-      inTitlebar={inTitlebar}
-      busy={busy}
-    />
-  );
 
   return (
     <TooltipProvider>
@@ -3358,6 +3440,15 @@ function App() {
       panelLeft={panelSide === "left"}
       panelOpen={issuesOpen ? !!pickedIssue : !!shownSession && panelShown}
       overlay={singleDrop && <DropZone region={singleDrop.region} label={singleDrop.label} />}
+      beside={<SplitPanes sessionId={issuesOpen ? null : (rowSession?.sessionId ?? null)} body={splitBody} />}
+      mainCard={
+        litGroup && {
+          key: litGroup.lead,
+          grow: mainGrow,
+          order: cardOrder(litGroup.keys.indexOf(litGroup.lead)),
+          minWidth: litGroup.lead === "chat" || litGroup.lead.startsWith("task:") ? CHAT_MIN : undefined,
+        }
+      }
       // Chat's alone, and not a `TabBody` — the other views answer questions
       // about a repository rather than about a conversation, and a split is
       // already several conversations side by side, where a crew beside one
@@ -3384,6 +3475,13 @@ function App() {
           onNewBot={() => {
             goToSession(handleNewSession);
             setBotServer(LOCAL);
+            setBotToEdit(null);
+            setNewBotOpen(true);
+          }}
+          // Left where it is: Edit changes only the name and face, never the
+          // picker the composer shares with New bot.
+          onEditBot={(bot) => {
+            setBotToEdit(bot);
             setNewBotOpen(true);
           }}
           onDeleteBot={setBotToDelete}
@@ -3633,8 +3731,6 @@ function App() {
           {/* Keeps the far end at the far end on pages with no tab row. */}
           {(issuesOpen || !shownSession) && <div className="min-w-0 flex-1" />}
 
-          {toolbarInTitlebar && <div className="shrink-0">{composerToolbar(true)}</div>}
-
 
           {issuesOpen
             ? // Only once something is open to close. Nothing on this page can
@@ -3764,10 +3860,7 @@ function App() {
               <BrowserPane
                 sessionId={browserSession ?? shownSession.sessionId}
                 active={panelShown && activeTab === "browser"}
-                mode="panel"
-                fullOpen={fullBrowserOpen}
-                onExpand={expandBrowser}
-                onCollapse={collapseBrowser}
+                panel
               />
               </MountOnce>
             </TabBody>
@@ -3792,7 +3885,7 @@ function App() {
                 media={sessionAttachments}
                 sessionId={shownSession.sessionId}
                 subagents={{
-                  runs: subagents,
+                  runs: panelRuns,
                   selectedId: selectedSubagentId,
                   resultByCallId,
                   live: busy || backgroundTasks.length > 0,
@@ -3852,7 +3945,7 @@ function App() {
         // `shownSession`, like the rest of the layout: gated on the snapshot,
         // the composer came up under Files or Diff for as long as a transcript
         // took to load.
-        !composerShown ? null : (
+        issuesOpen || (shownSession && viewTab !== "chat") ? null : (
         <ChatInput
           onSend={(message, attachments) => void sendFromComposer(message, attachments)}
           commands={slashCommands}
@@ -3991,8 +4084,46 @@ function App() {
               />
             )
           }
-          toolbar={toolbarInTitlebar ? undefined : composerToolbar(false)}
-          attachInCard={toolbarInTitlebar}
+          toolbar={
+            <ComposerToolbar
+              server={activeServer}
+              harness={harness}
+              onHarnessChange={setHarness}
+              models={models}
+              modelId={modelId}
+              effort={effort}
+              fast={fast}
+              onFastChange={setFast}
+              fastNote={fastNote}
+              onModelChange={handleModelChange}
+              onRefreshModels={refreshModels}
+              onReloadModels={reloadModels}
+              onSeedProvider={seedFxModels}
+              loadingModels={loadingModels}
+              permissionMode={permissionMode}
+              onPermissionModeChange={setPermissionMode}
+              projects={spaceProjects}
+              projectPath={projectPath}
+              onSelectProject={handleSelectProject}
+              onAttachProject={handleAttachProject}
+              branches={branches}
+              branch={branch}
+              onSelectBranch={handleSelectBranch}
+              pendingBranch={pendingBranch}
+              onConfirmBranchSwitch={(stash) =>
+                pendingBranch && runCheckout(pendingBranch, stash)
+              }
+              onCancelBranchSwitch={() => setPendingBranch(null)}
+              useWorktree={useWorktree}
+              onToggleWorktree={() => setUseWorktree((v) => !v)}
+              onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
+              contextUsage={contextUsage}
+              isNewSession={!selectedSessionId}
+              agentSwitch={!!selectedBot}
+              bot={newBot}
+              busy={busy}
+            />
+          }
         />
         )
       }
@@ -4045,8 +4176,8 @@ function App() {
             loads it. One already loaded keeps drawing what it has. */}
         {offlineServer && !selectedSession ? (
           <TranscriptSkeleton still={offlineServer.status !== "connecting"} />
-        ) : welcomeBot?.welcome && !selectedSessionId ? (
-          <BotWelcome text={welcomeBot.welcome} />
+        ) : welcomeBot && !selectedSessionId ? (
+          <BotWelcome messages={greetingOf(welcomeBot)} />
         ) : (
           <Chat
             {...paneState(selectedSessionId ?? "")}
@@ -4068,6 +4199,10 @@ function App() {
               />
             }
             botFocus={botFocus}
+            onBotFocusMissed={(id) => {
+              setStallFocus(null);
+              void openTask(id);
+            }}
             unread={!!selectedSessionId && openedUnread === selectedSessionId}
             crowded={!collapsed && (panelShown || (crewDrawn && crewBeside) || (issuesOpen && !!pickedIssue))}
             // Its own chords only while the chat tab is on screen.
@@ -4104,8 +4239,6 @@ function App() {
           <BrowserPane
             sessionId={browserSession ?? selectedSession.sessionId}
             active={fullBrowserOpen}
-            mode="full"
-            onCollapse={collapseBrowser}
           />
           </MountOnce>
         </TabBody>
@@ -4218,6 +4351,8 @@ function App() {
     {serverUpdateDialog}
     <NewBotDialog
       open={newBotOpen}
+      // Kept through the close, so the title does not flip to New bot as it fades.
+      editing={botToEdit}
       onOpenChange={(open) => {
         setNewBotOpen(open);
         if (!open) setBotServer(null);
@@ -4274,6 +4409,7 @@ function App() {
                 const server = serverOfBot(bot);
                 await invoke("delete_bot", { id: bot.id }, server).catch((e) => setError(String(e)));
                 await refreshBots(server);
+                setBotDeleted(bot.id);
               })();
             }}
           >

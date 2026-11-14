@@ -26,7 +26,7 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use dray_proto::{
     encode_line, CreateDraft, CreateSession, DraftSummary, Envelope, StartDraft, IssueInput, IssueLink, LinkIssues, ListSessions, Request,
-    Response, SendMessage, SendToBot, SessionSummary, MAX_LINE, OLDEST_SPOKEN, PROTOCOL_VERSION,
+    Response, SendMessage, SendToBot, SessionSummary, SetAside, MAX_LINE, OLDEST_SPOKEN, PROTOCOL_VERSION,
 };
 use std::path::Path;
 use tokio::{
@@ -422,13 +422,26 @@ async fn handle(stream: UnixStream, app: &Sink) -> Result<()> {
 /// bounce on to a third machine.
 async fn route(request: Request, app: &Sink) -> Result<Response> {
     if let Request::OnMachine(on) = request {
-        return on_machine(&on.machine, *on.request).await;
+        return on_machine(&on.machine, *on.request, app).await;
     }
     #[cfg(any(feature = "serve", feature = "desktop"))]
     if let Some(id) = session_named(&request) {
         if store::get_session_index_item(id).await?.is_none() {
+            // Where this server already knows the machine — a bot's task
+            // started there, or a flag held for it — asked straight, since a
+            // sweep cannot find one whose machine is down and set-aside holds
+            // it then (#1050).
+            if let Request::SetAside(aside) = &request {
+                let known = match crate::held_flags::machine_of(id).await {
+                    Some(machine) => Some(machine),
+                    None => crate::remote_reports::machine_of(id).await,
+                };
+                if let Some(machine) = known {
+                    return elsewhere::set_aside(&machine, aside.clone(), app).await;
+                }
+            }
             if let Some(machine) = elsewhere::locate(id).await {
-                return on_machine(&machine, request).await;
+                return on_machine(&machine, request, app).await;
             }
         }
     }
@@ -449,7 +462,8 @@ fn session_named(request: &Request) -> Option<&str> {
         Request::Browser(r) => Some(&r.session_id),
         Request::MergeCard(r) => Some(&r.session_id),
         Request::SetNeed(r) => Some(&r.session_id),
-        // Never `AddVideo`: its path is this machine's, and forwarded it would
+        Request::React(r) => Some(&r.session_id),
+        // Never `AddVideo` or `AddImage`: its path is this machine's, and forwarded it would
         // name a file the other machine does not have, or a different one.
         _ => None,
     }
@@ -478,7 +492,7 @@ fn this_machine_only(request: &Request) -> bool {
 }
 
 #[cfg(any(feature = "serve", feature = "desktop"))]
-async fn on_machine(machine: &str, request: Request) -> Result<Response> {
+async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Response> {
     if this_machine_only(&request) {
         bail!("`dray machine` and `dray server` act on this machine alone — drop --machine");
     }
@@ -488,6 +502,14 @@ async fn on_machine(machine: &str, request: Request) -> Result<Response> {
         };
         return elsewhere::list_everywhere(list).await;
     }
+    if let Request::SetAside(aside) = request {
+        return elsewhere::set_aside(machine, aside, app).await;
+    }
+    // Read before the send, since a flush landing during it empties the file.
+    let held_at_send = match &request {
+        Request::SendMessage(send) => crate::held_flags::list().await.into_iter().find(|h| h.session_id == send.session_id),
+        _ => None,
+    };
     let creates = matches!(request, Request::CreateSession(_));
     if machine == elsewhere::CLOUD && !creates {
         bail!("only `dray session new` takes --machine cloud — a cloud task's own machine is named on its row");
@@ -520,12 +542,29 @@ async fn on_machine(machine: &str, request: Request) -> Result<Response> {
             crate::remote_reports::track(&saved.id, &session.session_id, &caller.session.session_id).await?;
         }
     }
+    // A message brings a set-aside session back, so a flag held from before
+    // it must not stay put away. Dropped behind any flush writing it, and
+    // undone there where that flush may have landed after the message.
+    if let (Some(held), Response::Sent { .. }) = (held_at_send, &response) {
+        let released = crate::held_flags::release(&held.session_id, &held.at).await?;
+        if released == crate::held_flags::Released::Held {
+            crate::held_flags::announce(app, Vec::new()).await;
+        }
+        // Only a flag the flush wrote: a newer choice, held or written
+        // directly, is the reader's and stands.
+        if held.aside && released == crate::held_flags::Released::Landed {
+            let back = elsewhere::prepare(Request::SetAside(SetAside { session_id: held.session_id, aside: false })).await?;
+            if let Err(e) = elsewhere::forward(machine, &back).await {
+                eprintln!("[held flags] could not bring back after a send: {e:#}");
+            }
+        }
+    }
     Ok(response)
 }
 
 /// A build with no serve wire has no client half to reach one with.
 #[cfg(not(any(feature = "serve", feature = "desktop")))]
-async fn on_machine(_machine: &str, _request: Request) -> Result<Response> {
+async fn on_machine(_machine: &str, _request: Request, _app: &Sink) -> Result<Response> {
     bail!("this build reaches no other machines")
 }
 
@@ -729,7 +768,10 @@ mod elsewhere {
     /// Runs a prepared request on `machine`, a name or an id, and marks every
     /// session it answers with as that machine's.
     pub async fn forward(machine: &str, forward: &Forward) -> Result<Response> {
-        let saved = machines::on(machine).await.map_err(anyhow::Error::msg)?;
+        forward_to(&machines::on(machine).await.map_err(anyhow::Error::msg)?, forward).await
+    }
+
+    async fn forward_to(saved: &machines::Saved, forward: &Forward) -> Result<Response> {
         let answer = machines::call(&saved, "orchestrate", serde_json::to_value(forward)?).await.map_err(|e| {
             match e.starts_with("unknown command") {
                 true => anyhow!("{}'s Dray server is too old to take dray requests — update it", saved.name),
@@ -746,6 +788,46 @@ mod elsewhere {
             row.machine = Some(saved.name.clone());
         }
         Ok(response)
+    }
+
+    /// `dray session set-aside` for a session on `machine`, a name or an id:
+    /// written there, or held here when that machine does not answer (#1050).
+    /// A machine turned off is held for too — turning it back on lands it.
+    pub async fn set_aside(machine: &str, aside: SetAside, app: &Sink) -> Result<Response> {
+        let saved = machines::find(&machines::load().await, machine).map_err(anyhow::Error::msg)?;
+        // An older flag held here is superseded either way. Dropped first, and
+        // behind any flush writing it, so this write lands after it.
+        if crate::held_flags::unhold(&aside.session_id).await?.is_some() {
+            crate::held_flags::announce(app, Vec::new()).await;
+        }
+        if !saved.off {
+            let forward = prepare(Request::SetAside(aside.clone())).await?;
+            match tokio::time::timeout(machines::SWEEP, forward_to(&saved, &forward)).await {
+                Ok(Ok(response)) => return Ok(response),
+                // A server too old for `orchestrate` still takes the flush's
+                // `set_session_flags`, so it is held like any other.
+                Ok(Err(e)) => eprintln!("[set aside] holding for {}: {e:#}", saved.name),
+                Err(_) => eprintln!("[set aside] holding for {}: no answer", saved.name),
+            }
+        }
+        let held = crate::held_flags::hold(&saved.id, &aside.session_id, aside.aside, None).await?;
+        crate::held_flags::announce(app, Vec::new()).await;
+        Ok(Response::Session {
+            session: SessionSummary {
+                session_id: held.session_id.clone(),
+                title: held.session_id,
+                cwd: String::new(),
+                project_path: String::new(),
+                branch: None,
+                worktree_name: None,
+                status: "idle".into(),
+                modified: held.at,
+                parent_session_id: None,
+                hidden: false,
+                machine: Some(saved.name),
+                held: true,
+            },
+        })
     }
 
     /// Fills in what only this machine's index knows before a request leaves:
@@ -889,8 +971,20 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::ListDrafts(list) => list_drafts(list).await,
         Request::RemoveDraft(draft) => remove_draft(&draft.id, app).await,
         Request::StartDraft(start) => start_draft(start, None, app).await,
-        Request::AddVideo(video) => add_video(video).await,
+        Request::AddVideo(video) => add_video(video, false).await,
+        Request::AddImage(image) => add_video(image, true).await,
         Request::MergeCard(card) => post_merge_card(card, app).await,
+        Request::React(react) => {
+            let chat = store::get_session_index_item(&react.session_id)
+                .await?
+                .with_context(|| format!("no session {}", react.session_id))?;
+            let payload = crate::bots::react::reaction(&chat.session_id, &chat.cwd, &react.emoji).await?;
+            let emoji = crate::bots::react::emoji(&react.emoji).unwrap_or_default().to_string();
+            // Logged, not posted: a reaction is the bot saying nothing, so its
+            // turn stays a silent one and raises no Done.
+            manager().log_event(&chat.session_id, chat.harness, payload, app).await?;
+            Ok(Response::Reacted { emoji })
+        }
         Request::SetNeed(need) => {
             let text = Some(need.need.trim().to_string()).filter(|t| !t.is_empty());
             crate::store::set_session_need(&need.session_id, text)
@@ -1304,14 +1398,20 @@ async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
     Ok(answered(crate::headless::automation::run(&request.session_id, request.action).await))
 }
 
-/// Files a video for a session's chat. The folder is worked out here because
-/// only the server knows its home, and it is the one the session's delete sweeps.
-async fn add_video(request: dray_proto::AddVideo) -> Result<Response> {
+/// Files a video, or for `image` a screenshot, for a session's chat. The folder
+/// is worked out here because only the server knows its home, and it is the
+/// one the session's delete sweeps.
+async fn add_video(request: dray_proto::AddVideo, image: bool) -> Result<Response> {
     let dray_proto::AddVideo { session_id, path, name } = request;
     store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
     let dir = store::get_home_app_dir().await?.join("browser/recordings").join(&session_id);
     let filed = tokio::task::spawn_blocking(move || {
-        crate::recording::add(Path::new(&path), &dir, name.as_deref())
+        let source = Path::new(&path);
+        // Without this a video handed to `dray image add` would be filed as one.
+        if image && !crate::recording::is_image(source) {
+            return Err(format!("{path} is not a PNG or JPEG"));
+        }
+        crate::recording::add(source, &dir, name.as_deref())
     })
     .await?;
     Ok(match filed {
@@ -1409,9 +1509,17 @@ impl CardTask {
 /// oldest first: the card is posted in the last, and a card in any of them
 /// counts. A normal task's is `parent` itself. A bot's task goes to the bot's
 /// chat, since Start fresh settles the session that started it, and an agent
-/// switch leaves earlier sessions on screen in the same conversation. Empty
-/// where there is none.
+/// switch leaves earlier sessions on screen in the same conversation. A bot's
+/// sub-task goes to the task that started it, or once that is settled, the
+/// nearest live session above it. Empty where there is none.
 async fn card_chat(parent: SessionIndexItem) -> Result<Vec<SessionIndexItem>> {
+    let parent = match parent.archived && bots::bot_at(&parent.cwd).await.is_none() && bots::in_bot_tree(&parent).await {
+        true => match store::live_from(&parent).await? {
+            Some(live) => live,
+            None => return Ok(Vec::new()),
+        },
+        false => parent,
+    };
     Ok(match bots::bot_at(&parent.cwd).await {
         Some(bot) => bots::chat_sessions(&bot.path).await?,
         None if parent.archived => Vec::new(),
@@ -1441,7 +1549,16 @@ pub async fn auto_merge_card(
 ) -> Result<Option<String>, crate::Fail> {
     let _held = POSTING_CARD.lock().await;
 
-    let Some(parent) = store::get_session_index_item(&session_id).await? else {
+    // A deleted parent is bridged by the task's adoption, as its reports are.
+    let adopted_by = match store::get_session_index_item(&task_id).await? {
+        Some(task) => task.adopted_by,
+        None => None,
+    };
+    let mut parent = store::get_session_index_item(&session_id).await?;
+    if let (None, Some(by)) = (&parent, adopted_by) {
+        parent = store::get_session_index_item(&by).await?;
+    }
+    let Some(parent) = parent else {
         return Ok(None);
     };
     let sessions = card_chat(parent).await?;
@@ -2165,7 +2282,13 @@ pub async fn nudge_bot(
     let task = store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
     let chat = bots::bot_chat_of(&task).await;
     let owed = chat.is_none() && crate::remote_reports::owed(&session_id).await;
-    let Some(route) = nudge_route(&task, chat.as_ref(), owed) else { return Ok(false) };
+    // A sub-task's nudge goes where its reports do: the task that started it
+    // while that is live, else the nearest live session above it.
+    let to = match &chat {
+        Some(chat) if chat.session_id != task.session_id => store::live_ancestor(&task).await?.or(Some(chat.clone())),
+        _ => chat,
+    };
+    let Some(route) = nudge_route(&task, to.as_ref(), owed) else { return Ok(false) };
     // A need written while the PR waited on review would outlive the review
     // on the ready row, since approving a PR does not move its task.
     if ready.is_some() && problem.is_none() && task.need.is_some() {
@@ -2197,8 +2320,9 @@ pub async fn nudge_bot(
     Ok(true)
 }
 
-/// Where a stall nudge goes: into the bot's chat on this server, or into the
-/// outbox for a bot on another machine, which `owed` says the task reports to.
+/// Where a stall nudge goes: into the bot's chat or the live task above it on
+/// this server, or into the outbox for a bot on another machine, which `owed`
+/// says the task reports to.
 #[derive(Debug, PartialEq)]
 enum NudgeRoute {
     Chat(String),
@@ -2262,19 +2386,22 @@ pub fn report_to_parent(
         if child.archived {
             return Ok(());
         }
-        let Some(parent) = store::get_session_index_item(&parent_id).await? else {
+        if store::tree_parent(&child).await?.is_none() {
             // A bot's task started from another machine: its bot's server
             // collects this, since this one rarely holds a way back to it.
             if crate::remote_reports::owed(&child_id).await {
                 crate::remote_reports::keep(&child_id, &parent_id, &child.title, text).await?;
             }
             return Ok(());
-        };
-        if parent.archived || !crate::bots::in_bot_tree(&child).await {
+        }
+        if !crate::bots::in_bot_tree(&child).await {
             return Ok(());
         }
+        // The parent while it is live; once it is settled or deleted, the
+        // nearest live session above it, up to the bot's chat.
+        let Some(to) = store::live_ancestor(&child).await? else { return Ok(()) };
         let Some(from) = sender(Some(&child_id)).await else { return Ok(()) };
-        deliver_report(parent_id, text, from, app).await
+        deliver_report(to.session_id, text, from, app).await
     })
 }
 
@@ -2477,6 +2604,7 @@ fn summarize(item: SessionIndexItem) -> SessionSummary {
         parent_session_id: item.parent_session_id,
         hidden: item.hidden,
         machine: None,
+        held: false,
     }
 }
 

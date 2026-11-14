@@ -375,7 +375,11 @@ machine?: string,
 /**
  * `owner/name`, set with `machine`.
  */
-repo?: string, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
+repo?: string, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "reaction", 
+/**
+ * The `user_message` event reacted to, always in this same session.
+ */
+messageId: string, emoji: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
 /**
  * HTTP status, where the harness knew one. 529 (overloaded) and 500
  * are the only two observed.
@@ -604,11 +608,17 @@ path: string, created: string,
  */
 avatar?: BotAvatar | null, 
 /**
- * What its chat opens on before any session exists, drawn by the app,
- * and written to the log as the chat's first message when one starts.
- * Dray Bot's alone; a bot made with New bot greets with a real turn.
+ * Marks a bot whose chat opens on a welcome, drawn by the app and written
+ * to the log when a session starts. Dray Bot's alone; a bot made with New
+ * bot greets with a real turn. The words drawn are `greeting`'s.
  */
-welcome?: string | null, };
+welcome?: string | null, 
+/**
+ * The messages its chat opens on, worked out by `list_bots` on every read
+ * and never saved: the welcome in today's words, then the question for
+ * the user's name while no bot knows it. Empty with no welcome.
+ */
+greeting?: Array<string>, };
 
 /**
  * A Blobatar face: which silhouette and which hue. Strings and degrees rather
@@ -2048,7 +2058,14 @@ continueOff: boolean,
  * with `dray session need`. Drawn only while `at` is no older than
  * `modified`, so the task moving clears it without a write.
  */
-need?: TaskNeed, };
+need?: TaskNeed, 
+/**
+ * The nearest live session above a bot's sub-task while the task that
+ * started it is settled or deleted, written by [`readopt`]. A bot's task outlives its parent
+ * task, and a client holding the index's active side alone cannot walk
+ * through a settled parent to find the bot.
+ */
+adoptedBy?: string, };
 
 /**
  * Session-level facts, known at startup.
@@ -2211,7 +2228,14 @@ continueOff: boolean,
  * with `dray session need`. Drawn only while `at` is no older than
  * `modified`, so the task moving clears it without a write.
  */
-need?: TaskNeed, };
+need?: TaskNeed, 
+/**
+ * The nearest live session above a bot's sub-task while the task that
+ * started it is settled or deleted, written by [`readopt`]. A bot's task outlives its parent
+ * task, and a client holding the index's active side alone cannot walk
+ * through a settled parent to find the bot.
+ */
+adoptedBy?: string, };
 
 /**
  * Driven by [`StatusTracker`](crate::session::StatusTracker). `Completed`

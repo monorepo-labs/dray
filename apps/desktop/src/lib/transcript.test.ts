@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTranscript, drawsSameTurn, isToolGroup, segmentMedia, segmentWork, sessionMedia, type Turn } from "@/lib/transcript";
+import { buildTranscript, drawsSameTurn, isToolGroup, runningRuns, segmentMedia, segmentWork, sessionMedia, type Turn } from "@/lib/transcript";
 import type { AgentEvent, AgentEventPayload, ToolResult } from "@/types/events";
 
 /// Only the envelope fields `buildTranscript` orders and keys by are filled;
@@ -457,6 +457,36 @@ describe("subagent runs", () => {
     );
 
     expect(subagents[0].taskId).toBeNull();
+  });
+
+  /// The Background Tasks list is for what is running now. The run the reader
+  /// has open stays, or a click on a finished run's chat row opens onto nothing.
+  it("lists only running runs, plus the open one", () => {
+    const completed = (seq: number, toolUseId: string, taskId: string) =>
+      lifecycle(seq, toolUseId, {
+        type: "subagent_completed",
+        agentId: taskId,
+        status: "completed",
+        summary: null,
+        usage: null,
+      } as AgentEventPayload);
+    const { subagents } = buildTranscript(
+      [
+        callStarted(0, "toolu_1"),
+        started(1, "toolu_1", "task-a"),
+        completed(2, "toolu_1", "task-a"),
+        callStarted(3, "toolu_2"),
+        started(4, "toolu_2", "task-b"),
+        completed(5, "toolu_2", "task-b"),
+        callStarted(6, "toolu_3"),
+        started(7, "toolu_3", "task-c"),
+      ],
+      true,
+      new Set(["task-c"]),
+    );
+
+    expect(runningRuns(subagents, null).map((r) => r.id)).toEqual(["toolu_3"]);
+    expect(runningRuns(subagents, "toolu_1").map((r) => r.id)).toEqual(["toolu_3", "toolu_1"]);
   });
 });
 

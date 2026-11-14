@@ -113,6 +113,8 @@ type ChatProps = {
   botFooter?: ReactNode;
   /// A task picked from that card, scrolled to. See [BotTranscript]'s `focus`.
   botFocus?: { sessionId: string; at: number } | null;
+  /// That pick found nothing to scroll to, with the whole chat read back.
+  onBotFocusMissed?: (sessionId: string) => void;
 };
 
 const NO_EARLIER: SessionSnapshot[] = [];
@@ -237,6 +239,7 @@ export default function Chat({
   unread = false,
   botFooter,
   botFocus,
+  onBotFocusMissed,
 }: ChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -706,13 +709,29 @@ export default function Chat({
   // A task picked from the bot's "Waiting on you" card: the bot's reply about
   // it, at the top of the pane, once the lit block is laid out. The pin drops
   // as a jump to a turn's does. A reply above what is loaded is read back to,
-  // a page at a time, until it is drawn or the chat runs out.
+  // a page at a time, until it is drawn or the chat runs out; run out, the
+  // pick is handed back, and the card opens the task instead.
   const focusedAt = useRef<number | null>(null);
+  const focusUnpinned = useRef(false);
   useEffect(() => {
     if (!botFocus || focusedAt.current === botFocus.at) return;
     if (!contentRef.current?.querySelector("[data-bot-focus]")) {
-      if (drawFrom > 0) holdWindow(ALL_HELD);
-      else if (oldest?.olderBefore != null) loadOlder(oldest.sessionId, FOCUS_PAGE_TURNS);
+      if (more || drawFrom > 0) {
+        // Unpinned first: pinned, the window growing re-takes the bottom, and
+        // that scroll reads as the reader at the end and lets the window go.
+        focusUnpinned.current ||= followRef.current;
+        followRef.current = false;
+        if (drawFrom > 0) holdWindow(ALL_HELD);
+        else if (oldest?.olderBefore != null) loadOlder(oldest.sessionId, FOCUS_PAGE_TURNS);
+        return;
+      }
+      focusedAt.current = botFocus.at;
+      if (focusUnpinned.current && scrollRef.current) {
+        followRef.current = true;
+        pin(scrollRef.current);
+      }
+      focusUnpinned.current = false;
+      onBotFocusMissed?.(botFocus.sessionId);
       return;
     }
     const frame = requestAnimationFrame(() => {
@@ -720,6 +739,7 @@ export default function Chat({
       const node = contentRef.current?.querySelector<HTMLElement>("[data-bot-focus]");
       if (!scroller || !node) return;
       focusedAt.current = botFocus.at;
+      focusUnpinned.current = false;
       const top = node.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
       const to = Math.max(top - JUMP_PAD_PX, 0);
       followRef.current = false;
@@ -728,7 +748,7 @@ export default function Chat({
       scroller.scrollTo({ top: to, behavior: to < scroller.clientHeight ? "auto" : "smooth" });
     });
     return () => cancelAnimationFrame(frame);
-  }, [botFocus, oldestKey]);
+  }, [botFocus, oldestKey, more]);
 
   useEffect(() => () => cancelAnimationFrame(spyFrame.current), []);
 

@@ -2,6 +2,7 @@ import { preload } from "react-dom";
 import { DownloadButton } from "@/components/DownloadButton";
 import { Hero as AppWindow } from "@/components/illustrations/Hero";
 import { SponsorLink } from "@/components/SponsorLink";
+import { LABEL } from "./Section";
 import h from "./hero.module.css";
 import { HeroBackdrop } from "./HeroBackdrop";
 import { SiteNav } from "./SiteNav";
@@ -17,15 +18,15 @@ export function Hero() {
 
   return (
     <>
-    <header id="hero" className="relative overflow-clip bg-black px-5 pb-14 sm:px-8 sm:pb-10 light:bg-[linear-gradient(#FFFFFF_900px,#F4F4F2_900px)]">
+    <header id="hero" className="relative overflow-clip bg-black px-5 pb-14 sm:px-8 sm:pb-10 light:bg-white">
       <HeroBackdrop />
 
       <div className="relative mx-auto w-full max-w-[960px]">
         <SiteNav />
 
-        <div className="pt-16 sm:pt-[101px] lg:ml-[102px] lg:max-w-[756px]">
+        <div className="pt-16 sm:pt-[133px] lg:ml-[102px] lg:max-w-[756px]">
           <h1 className="font-inter text-[36px] leading-[40px] font-normal tracking-[-0.03em] text-balance text-white sm:text-[46px] light:text-[#0A0A0A] sm:leading-[46px]">
-            Run every agent harness in one app.
+            Work on dozens of coding tasks without getting overwhelmed.
           </h1>
           <div className="mt-8 flex flex-wrap items-start justify-between gap-4 pr-5">
             <DownloadButton from="hero" className="inline-flex h-10 items-center gap-2 rounded-[6px] bg-white px-4 text-[14px] leading-5 font-medium text-[#0B0B0F] shadow-[inset_0_-1px_0_#4D4C4C,0_1px_2px_#00000040,0_10px_28px_-10px_#00000099] transition-opacity hover:opacity-90 [&>svg]:-mt-0.5 light:bg-[#0A0A0A] light:text-white light:shadow-[inset_0_-1px_0_#000,0_1px_2px_#00000040]" />
@@ -33,7 +34,7 @@ export function Hero() {
           </div>
         </div>
 
-        <div className="relative mt-20 lg:rounded-[12px] lg:shadow-[0_2px_50px_12px_#0000004D] light:lg:shadow-[0_20px_60px_-20px_#00000040]">
+        <div className="relative mt-12 lg:rounded-[12px] lg:shadow-[0_2px_50px_12px_#0000004D] light:lg:shadow-[0_20px_60px_-20px_#00000040]">
           {/* The live window wants a desktop's width; a phone gets a still of
               it instead of a sideways-scrolling miniature. */}
           <div className={`relative max-sm:hidden ${h.liveCursor}`}>
@@ -65,7 +66,7 @@ export function Hero() {
     </header>
     {/* A phone's hero is shorter than the blue field, so the credit would land
         on the blue; it sits under the hero instead, on the next band's fill. */}
-    <div className="bg-black px-5 pt-10 sm:hidden light:bg-[#F4F4F2]">
+    <div className="bg-black px-5 pt-10 sm:hidden light:bg-white">
       <Sponsor />
     </div>
     </>
@@ -77,7 +78,7 @@ export function Hero() {
 function Sponsor({ className = "" }: { className?: string }) {
   return (
     <div className={`group flex flex-col items-center gap-3 ${className}`}>
-      <p className="text-[11px] leading-4 font-medium tracking-[0.14em] text-[#A1A1A1] uppercase">Sponsored by</p>
+      <p className={`${LABEL} text-[#A1A1A1]`}>Sponsored by</p>
       <div className="flex items-center gap-2.5 text-[14px] leading-5">
         <span className="relative size-7 shrink-0">
           <img

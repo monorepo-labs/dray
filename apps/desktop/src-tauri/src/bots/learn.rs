@@ -506,6 +506,7 @@ mod tests {
             created: String::new(),
             avatar: None,
             welcome: None,
+            greeting: Vec::new(),
         };
         (bot, dir)
     }

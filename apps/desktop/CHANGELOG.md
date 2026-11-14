@@ -19,6 +19,58 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.5 · 2026-11-14
+
+### New
+
+- **Edit a bot.** Edit… in a bot's menu changes its name and face.
+- **Split groups.** Split panes form a group you can close and resize,
+  and the tab row draws the group as one tab.
+
+### Improved
+
+- Dray opens on your first bot.
+- A bot's Tasks tab puts what needs you first, then PRs ready to merge.
+- A task's own sub-tasks keep running after it settles, and report to
+  the nearest task or bot still open.
+- Bots react less: 👍 for an ok, 👀 only when looking into something.
+
+### Fixed
+
+- PR status that failed to load, often on a spent GitHub rate limit,
+  now retries, so a new PR always shows up.
+
+## 0.30.4 · 2026-11-14 · notify
+
+### New
+
+- **Split panes.** Drag a tab from a session's tab row into the main
+  view to open it beside the chat. Pages, Diff, Files and bot tasks all
+  split.
+- **Video proof from tasks.** A bot's task ends visible work with a
+  short recording, and the bot passes it on so it plays in its chat.
+- **Bots react.** A bot with nothing to say puts 👀, ✅ or 🎉 on your
+  message instead of replying.
+- **Waiting cards in the Island.** Hover a bot's "waiting on you" pill
+  to see each task's card, and merge a ready PR from there.
+
+### Improved
+
+- A bot task waiting on you shows after 2 minutes, not 5.
+- Clicking a "Waiting on you" row scrolls to the task's last reply;
+  ⌘-click opens the task.
+- The background tasks list shows only tasks still running.
+- The sidebar remembers which bot you had open under each project
+  filter, and hides the filter row when no project is attached.
+- Esc leaves Settled or Drafts for the active list.
+- A task whose server is offline can still be set aside.
+- I'm back unlocks after 10 seconds, not 30.
+
+### Fixed
+
+- Scrolling a page sideways in the browser no longer switches tabs.
+- Hidden tasks stay hidden under a project filter.
+
 ## 0.30.3 · 2026-11-13
 
 ### New

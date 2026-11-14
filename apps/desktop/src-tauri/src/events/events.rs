@@ -456,6 +456,15 @@ pub enum AgentEventPayload {
         path: String,
     },
 
+    /// A bot's emoji on a message the user typed, in place of a reply. Drawn
+    /// as a badge on that message's bubble; a later one on the same message
+    /// replaces it, so 👀 can turn into ✅ once the work is done.
+    Reaction {
+        /// The `user_message` event reacted to, always in this same session.
+        message_id: String,
+        emoji: String,
+    },
+
     /// The agent moved the checkout's git state or a pull request mid-turn —
     /// Claude Code's `vcs_state_changed` and `code_change_published`. Tells the
     /// handoff row, and with `pull_request` the PR tab and sidebar marks, to

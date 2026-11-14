@@ -3,7 +3,8 @@ import Foundation
 /// One thing a bot's chat draws: the conversation, not the work. The desktop's
 /// `botItems` in `botTranscript.ts`; keep the two in step.
 enum BotItem: Identifiable {
-    case user(id: String, text: String, images: [ImageRef], ts: String?)
+    /// `reaction`: the bot's emoji on it, the newest where it reacted twice.
+    case user(id: String, text: String, images: [ImageRef], reaction: String?, ts: String?)
     case assistant(id: String, text: String, ts: String?)
     /// A failed turn's sentence, or an error the harness raised.
     case notice(id: String, text: String, ts: String?)
@@ -20,7 +21,7 @@ enum BotItem: Identifiable {
 
     var id: String {
         switch self {
-        case .user(let id, _, _, _), .assistant(let id, _, _), .notice(let id, _, _), .card(let id, _, _),
+        case .user(let id, _, _, _, _), .assistant(let id, _, _), .notice(let id, _, _), .card(let id, _, _),
              .task(let id, _, _), .sent(let id, _, _), .botMessage(let id, _, _, _, _), .botSent(let id, _, _, _),
              .learned(let id, _, _, _, _): id
         }
@@ -28,7 +29,7 @@ enum BotItem: Identifiable {
 
     var ts: String? {
         switch self {
-        case .user(_, _, _, let ts), .assistant(_, _, let ts), .notice(_, _, let ts), .card(_, _, let ts),
+        case .user(_, _, _, _, let ts), .assistant(_, _, let ts), .notice(_, _, let ts), .card(_, _, let ts),
              .task(_, _, let ts), .sent(_, _, let ts), .botMessage(_, _, _, _, let ts), .botSent(_, _, _, let ts),
              .learned(_, _, _, _, let ts): ts
         }
@@ -61,6 +62,9 @@ func botItems(_ events: [AgentEvent]) -> [BotItem] {
     let main = events.filter { $0.subagent == nil }
     var undone = Set<String>()
     for e in main { if case .learnedUndone(let commit, let path) = e.payload { undone.insert("\(commit)\0\(path)") } }
+    // Read whole first, since a reaction lands after its message; the newest wins.
+    var reactions: [String: String] = [:]
+    for e in main { if case .reaction(let messageId, let emoji) = e.payload { reactions[messageId] = emoji } }
 
     var items: [BotItem] = []
     var starts = Set<String>()
@@ -76,7 +80,7 @@ func botItems(_ events: [AgentEvent]) -> [BotItem] {
             } else if fromId != nil {
                 continue
             } else if !kickoff {
-                items.append(.user(id: e.id, text: text, images: images, ts: e.ts))
+                items.append(.user(id: e.id, text: text, images: images, reaction: reactions[e.id], ts: e.ts))
             }
         case .assistantText(let text):
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !review {

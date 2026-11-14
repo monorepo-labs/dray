@@ -8,8 +8,6 @@ import {
   Folder,
   ExternalLink,
   Globe,
-  Maximize2,
-  Minimize2,
   Plus,
   RotateCcw,
   RotateCw,
@@ -25,25 +23,32 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import AgentBeam from "@/components/browser/AgentBeam";
 import Favicon, { hostOf } from "@/components/browser/Favicon";
 import GlobeFilledIcon from "@/components/icons/GlobeFilledIcon";
-import RecordingNotice from "@/components/browser/RecordingNotice";
-import { useTurnNewTab, type TurnKind } from "@/components/layout/ViewTabs";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import TabMenu from "@/components/browser/TabMenu";
 import { ContextMenuTrigger } from "@/components/ui/context-menu";
+import { useDragReorder } from "@/hooks/useDragReorder";
+import RecordingNotice from "@/components/browser/RecordingNotice";
+import { useTurnNewTab, type TurnKind } from "@/components/layout/ViewTabs";
 import Spinner from "@/components/ui/spinner";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopied } from "@/hooks/useCopied";
-import { useDragReorder } from "@/hooks/useDragReorder";
 import {
+  activateBlankTab,
   activateTab,
-  claimPresenter,
-  releaseAfterPaint,
+  closeBlankTab,
   closeTab,
+  moveTab,
+  setPendingTab,
+  useParkedTabs,
+  claimPin,
+  claimPresenter,
+  pinStillPainted,
+  releasePin,
+  usePinStill,
+  releaseAfterPaint,
   downloadChromium,
   listLocalServers,
-  moveTab,
   navigate,
   normalizeUrl,
   openDevTools,
@@ -56,13 +61,9 @@ import {
   pickElement,
   removeCustomDevice,
   saveCustomDevice,
-  setPendingTab,
   setUrlDraft,
   useOpeningUrl,
-  activateBlankTab,
-  closeBlankTab,
   useBlankTabs,
-  useParkedTabs,
   setResponsive,
   useOpenError,
   useResponsive,
@@ -128,60 +129,74 @@ function useHistory(sessionId: string, when: boolean): BrowserVisit[] {
   return read?.sessionId === sessionId ? read.visits : [];
 }
 
-/// The session's browser: tab strip, URL bar, navigation, and the page.
-///
-/// Two mounts of one component. The right panel's Browser tab is where it
-/// lives; the main column's is the full view, reached by the expand button,
-/// and while that is open the panel says so instead of drawing a second copy.
+/// The session's browser: URL bar, navigation, and the page. Its tabs are
+/// the titlebar's own row (`ViewTabs`).
 ///
 /// The page is a native view Chromium draws into the window above the
 /// webview; nothing here renders it. The stage below reports its rect and
-/// Rust moves the view onto it. The full view outranks the panel, so should
-/// both ever be on screen the page lands in the full view.
+/// Rust moves the view onto it.
 export default function BrowserPane({
   sessionId,
   active,
-  mode,
-  fullOpen = false,
-  onExpand,
-  onCollapse,
+  tab,
+  onClose,
+  panel = false,
 }: {
   sessionId: string;
   active: boolean;
-  mode: "panel" | "full";
-  /// The full view is showing, so the panel mount stands aside.
-  fullOpen?: boolean;
-  onExpand?: () => void;
-  onCollapse?: () => void;
+  /// In the side panel: a bot's task tab, whose pages no row lists, so the
+  /// pane draws its own strip.
+  panel?: boolean;
+  /// A split pane's one tab, drawn whatever the strip has active. Such a
+  /// pane has no device sizes: those are the session's, and its main view's.
+  tab?: number;
+  /// A split pane's close, at the URL bar's far end: the pane has no header.
+  onClose?: () => void;
 }) {
+  const pinned = tab !== undefined;
   const tabs = useBrowserTabs(sessionId) ?? [];
-  const pending = usePendingTab(sessionId);
-  const current = pending ? null : (tabs.find((t) => t.active) ?? null);
-  const viewport = useViewport(sessionId);
+  const pending = usePendingTab(sessionId) && !pinned;
+  const current = pinned
+    ? (tabs.find((t) => t.id === tab) ?? null)
+    : pending
+      ? null
+      : (tabs.find((t) => t.active) ?? null);
+  const sessionViewport = useViewport(sessionId);
+  const viewport = pinned ? null : sessionViewport;
   // Responsive with no size typed is a flag; with one, it is a viewport.
-  const responsive = useResponsive(sessionId) || viewport?.preset === "responsive";
-  const snapshot = useBrowserSnapshot(sessionId);
-  const recorded = useRecordedTab(sessionId);
+  const sessionResponsive = useResponsive(sessionId);
+  const responsive = !pinned && (sessionResponsive || viewport?.preset === "responsive");
   const key = useId();
+  const sessionSnapshot = useBrowserSnapshot(sessionId);
+  const pinStill = usePinStill(key);
+  const snapshot: BrowserSnapshot | null = pinned
+    ? pinStill?.url
+      ? { sessionId, url: pinStill.url }
+      : null
+    : sessionSnapshot;
+  const onSnapshotPainted = (of: BrowserSnapshot) =>
+    pinned ? pinStill && pinStillPainted(key, pinStill) : snapshotPainted(of);
+  const recorded = useRecordedTab(sessionId);
   const stageRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
-  const standingAside = mode === "panel" && fullOpen;
   // The empty state stands in for the page: nothing open, or a new tab
   // waiting for its first URL.
   const empty = !current;
 
   useEffect(() => {
     const stage = stageRef.current;
-    if (!active || standingAside || !stage || empty) {
-      releaseAfterPaint(key);
+    const release = () => (pinned ? releasePin(key) : releaseAfterPaint(key));
+    if (!active || !stage || empty) {
+      release();
       return;
     }
-    const priority = mode === "full" ? 2 : 1;
     // The device frame is the page when one is set; the native view cannot
     // be clipped by the DOM, so the frame is sized to fit the stage below.
     const report = () => {
-      const target = frameRef.current ?? stage;
-      claimPresenter(key, { priority, sessionId, rect: target.getBoundingClientRect() });
+      const rect = (frameRef.current ?? stage).getBoundingClientRect();
+      if (tab !== undefined) claimPin(key, { sessionId, tab, rect });
+      // The main column outranks the panel, should both ever be on screen.
+      else claimPresenter(key, { priority: panel ? 1 : 2, sessionId, rect });
     };
     report();
     const observer = new ResizeObserver(report);
@@ -196,9 +211,9 @@ export default function BrowserPane({
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", report);
-      releaseAfterPaint(key);
+      release();
     };
-  }, [sessionId, key, active, mode, standingAside, empty, viewport]);
+  }, [sessionId, key, active, empty, viewport, pinned, tab, panel]);
 
   // The page's size in responsive mode, which is what Save keeps. In page
   // pixels: the view is placed in window points, so the app's own zoom
@@ -216,31 +231,17 @@ export default function BrowserPane({
     const observer = new ResizeObserver(read);
     observer.observe(stage);
     return () => observer.disconnect();
-  }, [standingAside]);
-
-  if (standingAside) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center text-ui text-muted-foreground">
-        <span>Open in the full view.</span>
-        {onCollapse && (
-          <Button variant="outline" size="sm" onClick={onCollapse}>
-            Bring it back here
-          </Button>
-        )}
-      </div>
-    );
-  }
+  }, []);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <Chrome
         sessionId={sessionId}
-        tabs={tabs}
         current={current}
         pending={pending}
-        mode={mode}
-        onExpand={onExpand}
-        onCollapse={onCollapse}
+        tab={tab}
+        onClose={onClose}
+        tabs={panel ? tabs : null}
       />
       {!empty &&
         (responsive ? (
@@ -260,8 +261,12 @@ export default function BrowserPane({
           viewport && !empty && "flex items-start justify-center overflow-hidden bg-surface-raised p-3",
         )}
       >
-        {empty ? (
-          <EmptyState sessionId={sessionId} active={active} turnable={mode === "full"} />
+        {empty && pinned ? (
+          <div className="flex h-full items-center justify-center text-ui text-muted-foreground">
+            This page was closed.
+          </div>
+        ) : empty ? (
+          <EmptyState sessionId={sessionId} active={active} />
         ) : viewport ? (
           // Clamped to the stage on both axes rather than scrolled or scaled:
           // the page is a native view the DOM can neither clip nor shrink,
@@ -276,10 +281,10 @@ export default function BrowserPane({
               height: `min(${viewport.height / zoomLevel()}px, 100%)`,
             }}
           >
-            <Snapshot of={snapshot} />
+            <Snapshot of={snapshot} onPainted={onSnapshotPainted} />
           </div>
         ) : (
-          <Snapshot of={snapshot} />
+          <Snapshot of={snapshot} onPainted={onSnapshotPainted} />
         )}
         {current && current.id === recorded && <RecordingNotice since={recordingStart(sessionId)} />}
       </div>
@@ -297,7 +302,7 @@ export default function BrowserPane({
 /// construction and anything drawn on top is a flash where there was none.
 /// A screenshot is not an event the reader has to be told about — they
 /// asked for it, and the file lands in the transcript.
-function Snapshot({ of }: { of: BrowserSnapshot | null }) {
+function Snapshot({ of, onPainted }: { of: BrowserSnapshot | null; onPainted: (of: BrowserSnapshot) => void }) {
   if (!of?.url) return null;
   return (
     <img
@@ -308,7 +313,7 @@ function Snapshot({ of }: { of: BrowserSnapshot | null }) {
         void e.currentTarget
           .decode()
           .catch(() => undefined)
-          .then(() => snapshotPainted(of));
+          .then(() => onPainted(of));
       }}
     />
   );
@@ -356,43 +361,46 @@ function LoadBar({ loading }: { loading: boolean }) {
 /// all but the same colour in dark, where `--background` is the step.
 function Chrome({
   sessionId,
-  tabs,
   current,
   pending,
-  mode,
-  onExpand,
-  onCollapse,
+  tab,
+  onClose,
+  tabs,
 }: {
   sessionId: string;
-  tabs: BrowserTab[];
   current: BrowserTab | null;
   pending: boolean;
-  mode: "panel" | "full";
-  onExpand?: () => void;
-  onCollapse?: () => void;
+  /// The pages, where the pane draws its own strip of them; null elsewhere.
+  tabs: BrowserTab[] | null;
+  /// A split pane's tab: every control acts on it, and the session-wide ones
+  /// (picker, device sizes) are left to the main view.
+  tab?: number;
+  onClose?: () => void;
 }) {
+  const pinned = tab !== undefined;
   const openError = useOpenError(sessionId);
   const inputRef = useRef<HTMLInputElement>(null);
   const picking = usePicking(sessionId);
-  // Only the recorded tab is held, and only from closing: the agent drives its
-  // own tab (`DRIVEN`), so the reader switching tabs moves nothing it films.
-  const recorded = useRecordedTab(sessionId);
   const opening = useOpeningUrl(sessionId);
   const url = current?.url ?? opening ?? "";
   const loading = current ? current.loading : opening !== null;
   const blanks = useBlankTabs(sessionId);
+  const panel = tabs !== null;
+  // Only the recorded tab is held, and only from closing: the agent drives its
+  // own tab (`DRIVEN`), so the reader switching tabs moves nothing it films.
+  const recorded = useRecordedTab(sessionId);
   const parkedPages = useParkedTabs(sessionId);
-  const draftKey = `${sessionId}:${blanks.active !== null ? `blank:${blanks.active}` : `page:${current?.id}`}`;
-  // Per tab, as a browser's are: each new tab keeps what was typed into it.
-  const draft = useUrlDraft(draftKey);
-  const setDraft = (value: string | null) => setUrlDraft(draftKey, value);
   const reorder = useDragReorder(
-    tabs,
+    tabs ?? [],
     (tab) => tab.id,
     (tab, _delta, to) => moveTab(sessionId, tab.id, to),
     "x",
   );
-
+  const newTab = () => setPendingTab(sessionId, true);
+  const draftKey = `${sessionId}:${blanks.active !== null && !pinned ? `blank:${blanks.active}` : `page:${current?.id}`}`;
+  // Per tab, as a browser's are: each new tab keeps what was typed into it.
+  const draft = useUrlDraft(draftKey);
+  const setDraft = (value: string | null) => setUrlDraft(draftKey, value);
   // A new tab is for typing into.
   useEffect(() => {
     if (pending) inputRef.current?.focus();
@@ -416,21 +424,16 @@ function Chrome({
   const open = (raw: string, newTab: boolean) => {
     const target = normalizeUrl(raw);
     if (!target) return;
-    void openInBrowser(sessionId, target, newTab, blanks.active)
+    void (pinned ? openInBrowser(sessionId, target, false, null, tab) : openInBrowser(sessionId, target, newTab, blanks.active))
       .then(() => trackBrowserOpen(target))
       .catch(() => undefined);
   };
 
-  const newTab = () => {
-    setPendingTab(sessionId, true);
-  };
-
-  const swap = mode === "panel" ? onExpand : onCollapse;
-
   return (
     <div className="shrink-0">
-      {/* The full view's tabs are the titlebar's own row (`ViewTabs`). */}
-      {mode === "panel" && (tabs.length > 0 || blanks.ids.length > 0) && (
+      {/* Its own strip only in the side panel, where a bot's task keeps its
+          pages: everywhere else they are tabs of the titlebar's row. */}
+      {panel && (tabs.length > 0 || blanks.ids.length > 0) && (
         // Scrolls, but draws no bar: a strip of tabs is read by its tabs, and
         // a bar under them takes the height the tabs' own bottom edge needs.
         <div
@@ -528,7 +531,7 @@ function Chrome({
           className={TOOL_BTN}
           aria-label="Back"
           disabled={!current?.canGoBack}
-          onClick={() => void navigate(sessionId, "back")}
+          onClick={() => void navigate(sessionId, "back", tab)}
         >
           <ArrowLeft className="size-3.5" />
         </Button>
@@ -538,7 +541,7 @@ function Chrome({
           className={TOOL_BTN}
           aria-label="Forward"
           disabled={!current?.canGoForward}
-          onClick={() => void navigate(sessionId, "forward")}
+          onClick={() => void navigate(sessionId, "forward", tab)}
         >
           <ArrowRight className="size-3.5" />
         </Button>
@@ -552,6 +555,7 @@ function Chrome({
             void navigate(
               sessionId,
               current?.loading ? "stop" : e.shiftKey ? "hard_reload" : "reload",
+              tab,
             )
           }
         >
@@ -649,7 +653,7 @@ function Chrome({
             </ul>
           )}
         </form>
-        {PICKER && (
+        {PICKER && !pinned && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -669,61 +673,32 @@ function Chrome({
             </TooltipContent>
           </Tooltip>
         )}
-        <DeviceMenu sessionId={sessionId} disabled={!current} />
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className={TOOL_BTN}
-              aria-label="Developer tools"
-              disabled={!current}
-              onClick={() => void openDevTools(sessionId)}
-            >
-              <Bug className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side={TIP_SIDE}>
-            Developer tools
-            <KbdGroup>
-              <Kbd>⌥</Kbd>
-              <Kbd>⌘</Kbd>
-              <Kbd>I</Kbd>
-            </KbdGroup>
-          </TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className={TOOL_BTN}
-              aria-label="Open in system browser"
-              disabled={!current}
-              onClick={() => void openUrl(url).catch(console.error)}
-            >
-              <ExternalLink className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side={TIP_SIDE}>Open in system browser</TooltipContent>
-        </Tooltip>
-        {swap && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className={TOOL_BTN}
-                onClick={swap}
-                aria-label={mode === "panel" ? "Open full view" : "Back to the panel"}
-              >
-                {mode === "panel" ? <Maximize2 className="size-3.5" /> : <Minimize2 className="size-3.5" />}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side={TIP_SIDE}>
-              {mode === "panel" ? "Open full view" : "Back to the panel"}
-            </TooltipContent>
-          </Tooltip>
+        {!pinned && <DeviceMenu sessionId={sessionId} disabled={!current} />}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={TOOL_BTN}
+          aria-label="Developer tools"
+          disabled={!current}
+          onClick={() => void openDevTools(sessionId, tab)}
+        >
+          <Bug className="size-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={TOOL_BTN}
+          aria-label="Open in system browser"
+          disabled={!current}
+          onClick={() => void openUrl(url).catch(console.error)}
+        >
+          <ExternalLink className="size-3.5" />
+        </Button>
+        {/* No tooltip: a cross says what it does. */}
+        {onClose && (
+          <Button variant="ghost" size="icon-sm" className={TOOL_BTN} onClick={onClose} aria-label="Close pane">
+            <X className="size-3.5" />
+          </Button>
         )}
       </div>
       {openError && (
@@ -1104,18 +1079,17 @@ function SizeBar({ sessionId, viewport }: { sessionId: string; viewport: Viewpor
 /// own marked. Polled while on screen, since a server starting is the
 /// moment the list is looked at.
 ///
-/// `turnable`: the blank is a tab of the row, so it can become Diff or Files.
 /// The panel's is not, and has no row slot to turn.
-function EmptyState({ sessionId, active, turnable }: { sessionId: string; active: boolean; turnable: boolean }) {
+function EmptyState({ sessionId, active }: { sessionId: string; active: boolean }) {
   const chromium = useChromium();
   // Nothing to open pages with yet: the download stands where the page would.
   // Diff and Files need no Chromium, so the cards stay above it.
   if (chromium && chromium.state !== "ready") {
-    return <ChromiumState status={chromium} cards={turnable && <TurnCards sessionId={sessionId} />} />;
+    return <ChromiumState status={chromium} cards={<TurnCards sessionId={sessionId} />} />;
   }
   // Keyed, so one session's servers and its share in flight are never drawn
   // under another: the list is read on a timer and a failed read keeps the old.
-  return <Servers key={sessionId} sessionId={sessionId} active={active} turnable={turnable} />;
+  return <Servers key={sessionId} sessionId={sessionId} active={active} />;
 }
 
 /// Chromium is fetched after install (see chromium.rs), and this is where the
@@ -1178,7 +1152,7 @@ function TurnCards({ sessionId }: { sessionId: string }) {
   );
 }
 
-function Servers({ sessionId, active, turnable }: { sessionId: string; active: boolean; turnable: boolean }) {
+function Servers({ sessionId, active }: { sessionId: string; active: boolean }) {
   const [servers, setServers] = useState<LocalServer[]>([]);
   const recent = useHistory(sessionId, active).slice(0, RECENT);
   // Each read is a `ps` and two `lsof`s, and both mounts of this pane stay
@@ -1238,7 +1212,7 @@ function Servers({ sessionId, active, turnable }: { sessionId: string; active: b
   return (
     <div className="flex h-full items-center justify-center p-8 text-ui">
       <div className="flex w-full max-w-sm flex-col gap-4">
-        {turnable && <TurnCards sessionId={sessionId} />}
+        <TurnCards sessionId={sessionId} />
         {servers.length > 0 && (
           <section className="flex flex-col gap-1.5">
             <h3 className="px-2 pb-1 text-muted-foreground">

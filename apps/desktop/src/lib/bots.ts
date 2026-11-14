@@ -143,7 +143,9 @@ export function botOf(
   for (let hops = 0; at && hops < 8; hops++) {
     const bot = botAt(list, at.cwd);
     if (bot) return bot;
-    at = at.parentSessionId ? byId.get(at.parentSessionId) : undefined;
+    // A settled or deleted parent is not held: the adoption bridges it.
+    const parent: SessionIndexItem | undefined = at.parentSessionId ? byId.get(at.parentSessionId) : undefined;
+    at = parent ?? (at.adoptedBy ? byId.get(at.adoptedBy) : undefined);
   }
   return undefined;
 }
@@ -174,6 +176,13 @@ export function botEntries(
     const session = botSession(items, bot);
     return { bot, session, preview: session && previews[session.sessionId] };
   });
+}
+
+/// The messages a bot's chat opens on before it has a session: Dray Bot's
+/// welcome, then the question for the reader's name while no bot knows it. A
+/// server from before the greeting sends the welcome alone.
+export function greetingOf(bot: Bot): string[] {
+  return bot.greeting ?? (bot.welcome ? [bot.welcome] : []);
 }
 
 /// One line of a reply for an inbox row: markdown marks and line breaks out.

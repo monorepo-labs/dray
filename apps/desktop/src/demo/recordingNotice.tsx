@@ -142,13 +142,13 @@ function Demo() {
 
         <RightPanel
           open
-          tabs={tabOrder({ pr: false, docs: false, issue: false, more: false })}
+          tabs={tabOrder({ pr: false, docs: false, issue: false, more: false, browser: true })}
           tab="browser"
           onTabChange={() => {}}
           cwd="/Users/you/code/acme"
         >
           <TabBody active>
-            <BrowserPane sessionId={SESSION} active mode="panel" />
+            <BrowserPane sessionId={SESSION} active panel />
           </TabBody>
         </RightPanel>
       </div>

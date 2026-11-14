@@ -1859,7 +1859,12 @@ impl SessionManager {
     /// living at the project root while its files sat in a directory nothing
     /// pointed at any more.
     pub async fn remove_worktree(&self, session_id: &str) -> Result<SessionIndexItem> {
-        let (relocated, existed) = self.remove_tree(session_id).await?;
+        // A bot's task's sub-tasks outlive it, worktrees and all.
+        let with_children = match get_session_index_item(session_id).await? {
+            Some(item) => !crate::bots::keeps_children(&item).await,
+            None => true,
+        };
+        let (relocated, existed) = self.remove_tree(session_id, with_children).await?;
 
         // Reported here and not at the command, since only this side can tell a
         // deletion from a tidy-up — and only on the explicit route: `delete`
@@ -1875,7 +1880,7 @@ impl SessionManager {
 
     /// [`Self::remove_worktree`]'s work, answering whether the tree was still
     /// there.
-    async fn remove_tree(&self, session_id: &str) -> Result<(SessionIndexItem, bool)> {
+    async fn remove_tree(&self, session_id: &str, with_children: bool) -> Result<(SessionIndexItem, bool)> {
         let item = get_session_index_item(session_id)
             .await?
             .with_context(|| format!("no session {session_id}"))?;
@@ -1888,9 +1893,13 @@ impl SessionManager {
         // screen offers to remove its tree: it goes with this one. First, and a
         // refusal stops here — this session's own button is then still there to
         // retry with, where a child failing after it had nowhere to be retried.
-        for child in crate::store::hidden_children(session_id).await? {
+        let children = match with_children {
+            true => crate::store::hidden_children(session_id).await?,
+            false => Vec::new(),
+        };
+        for child in children {
             if child.worktree_name.is_some() {
-                Box::pin(self.remove_tree(&child.session_id)).await.with_context(|| {
+                Box::pin(self.remove_tree(&child.session_id, true)).await.with_context(|| {
                     format!("could not remove the worktree of hidden session \"{}\"", child.title)
                 })?;
             }
@@ -1994,12 +2003,19 @@ impl SessionManager {
     ///
     /// The child goes first and its lock is released before the disk work, so a
     /// dying process can't append one last event to a file we just removed.
-    pub async fn delete(&self, session_id: &str) -> Result<bool> {
+    ///
+    /// `with_children` false leaves its hidden children be: a bot's task's
+    /// sub-tasks outlive it ([`crate::bots::keeps_children`]).
+    pub async fn delete(&self, session_id: &str, with_children: bool) -> Result<bool> {
         // A hidden child is listed nowhere on screen, so it goes with
         // it. Here rather than in the frontend, which holds one side of the
         // settled split and can miss a child sitting on the other.
-        for child in crate::store::hidden_children(session_id).await? {
-            Box::pin(self.delete(&child.session_id)).await?;
+        let children = match with_children {
+            true => crate::store::hidden_children(session_id).await?,
+            false => Vec::new(),
+        };
+        for child in children {
+            Box::pin(self.delete(&child.session_id, true)).await?;
         }
 
         self.settle(session_id).await?;
@@ -3279,16 +3295,17 @@ async fn deliver_prompt(
 
     // A bot whose chat opens on a welcome (Dray Bot) has it written down as
     // the chat's first message, ahead of the prompt that started the session,
-    // so the chat reads after a restart as it did before the first send. Only
-    // logged: the agent is not given it.
-    if let Some(welcome) = crate::bots::take_welcome(session_id) {
+    // so the chat reads after a restart as it did before the first send. One
+    // event per message, each its own bubble. The agent is handed the same
+    // words in the hidden lead-in, never as a turn of its own.
+    for text in crate::bots::take_welcome(session_id).unwrap_or_default() {
         let event = AgentEvent::mint(
             session_id.to_string(),
             harness,
             seq.fetch_add(1, Relaxed),
             None,
             None,
-            AgentEventPayload::AssistantText { block: None, text: welcome },
+            AgentEventPayload::AssistantText { block: None, text },
         );
         app.emit("agent_event", &event)?;
         append_session_event(session_id, event).await?;
@@ -3546,6 +3563,7 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
     // the parent's session, which must not hold this one's read loop up.
     let mut silent_bot_turn = false;
     let mut bot_turn = None;
+    let mut ask_name = false;
     if agent_event.subagent.is_none() {
         match &agent_event.payload {
             AgentEventPayload::AssistantText { text, .. } if crate::events::has_text(text) => {
@@ -3566,9 +3584,10 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                     && *status == TurnStatus::Success
                     && crate::bots::bot_at(ctx.session_cwd).await.is_some();
                 report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
+                ask_name = crate::bots::take_name_ask(ctx.session_id) && *status == TurnStatus::Success;
                 // Awaited, not spawned: the queued flush below would start the
                 // next turn, which could overwrite this one's notes unsaved.
-                bot_turn = crate::bots::commit_turn(ctx.session_cwd, notes).await;
+                bot_turn = crate::bots::commit_turn(ctx.session_cwd, notes, app).await;
             }
             _ => {}
         }
@@ -3695,6 +3714,19 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
 
     if let Err(err) = append_session_event(ctx.session_id, agent_event).await {
         eprintln!("[write err] {err}");
+    }
+
+    // A new bot's greeting, then Dray's question for the user's name as a
+    // message of its own (#1076), ahead of anything the turn learned.
+    if ask_name {
+        let text = crate::bots::ASK_NAME.to_string();
+        let payload = AgentEventPayload::AssistantText { block: None, text };
+        let seq = ctx.flush_seq.fetch_add(1, Relaxed);
+        let event = AgentEvent::mint(ctx.session_id.to_string(), ctx.harness, seq, None, None, payload);
+        app.emit("agent_event", &event).ok();
+        if let Err(err) = append_session_event(ctx.session_id, event).await {
+            eprintln!("[name ask write err] {err}");
+        }
     }
 
     // After the turn's close in the log, so its "Learned" rows draw under the

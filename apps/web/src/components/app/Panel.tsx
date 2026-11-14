@@ -23,8 +23,10 @@ export default function Panel({
   width = 460,
   className,
 }: {
+  /// None draws no row at all: a bot's pane is its task list alone, and a
+  /// lone tab would only name what is under it.
   tabs: string[];
-  active: string;
+  active?: string;
   counts?: Record<string, number>;
   onSelect?: (tab: string) => void;
   children: ReactNode;
@@ -36,35 +38,37 @@ export default function Panel({
       className={cx("relative flex shrink-0 flex-col", className)}
       style={{ width }}
     >
-      <div className="flex h-[34px] shrink-0 items-center gap-0.5 overflow-hidden px-2 pt-1.5">
-        <div className="flex h-full min-w-0 items-center gap-0.5">
-          {tabs.map((tab) => {
-            const Tab = onSelect ? "button" : "span";
-            return (
-              <Tab
-                key={tab}
-                {...(onSelect && { type: "button" as const, onClick: () => onSelect(tab) })}
-                className={cx(
-                  "rounded-md px-2 py-1 text-ui",
-                  tab === active
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : cx("text-muted-foreground", onSelect && "hover:text-foreground"),
-                  onSelect && "transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-                )}
-              >
-                {tab}
-                {!!counts?.[tab] && <span className="ml-1 text-muted-foreground">{counts[tab]}</span>}
-              </Tab>
-            );
-          })}
-          <Keys caps={["⌘", "⌥", "[ ]"]} className={cx("ml-1.5 shrink-0 opacity-50", HINT_KEYS)} />
+      {tabs.length > 0 && (
+        <div className="flex h-[34px] shrink-0 items-center gap-0.5 overflow-hidden px-2 pt-1.5">
+          <div className="flex h-full min-w-0 items-center gap-0.5">
+            {tabs.map((tab) => {
+              const Tab = onSelect ? "button" : "span";
+              return (
+                <Tab
+                  key={tab}
+                  {...(onSelect && { type: "button" as const, onClick: () => onSelect(tab) })}
+                  className={cx(
+                    "rounded-md px-2 py-1 text-ui",
+                    tab === active
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                      : cx("text-muted-foreground", onSelect && "hover:text-foreground"),
+                    onSelect && "transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                  )}
+                >
+                  {tab}
+                  {!!counts?.[tab] && <span className="ml-1 text-muted-foreground">{counts[tab]}</span>}
+                </Tab>
+              );
+            })}
+            <Keys caps={["⌘", "⌥", "[ ]"]} className={cx("ml-1.5 shrink-0 opacity-50", HINT_KEYS)} />
+          </div>
+          <div className="ml-auto flex shrink-0 items-center">
+            <span className="grid size-7 place-items-center text-muted-foreground/60">
+              <RefreshCw className="size-3" />
+            </span>
+          </div>
         </div>
-        <div className="ml-auto flex shrink-0 items-center">
-          <span className="grid size-7 place-items-center text-muted-foreground/60">
-            <RefreshCw className="size-3" />
-          </span>
-        </div>
-      </div>
+      )}
       {children}
     </aside>
   );
