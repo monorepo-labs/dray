@@ -79,6 +79,8 @@ Two things repo-wide on purpose. Release pipelines live in root `.github/workflo
 
 **A server links to an org by device code** (#874 stage 2): `/api/link` hands out a code, `/link` approves it, `/api/link/token` gives the polling server **its own** credential, stored hashed as `server.tokenHash`. The credential lives on the row, so deleting the row — unlinking anywhere — is what revokes it. The server runs the flow, not its client ([org_link.rs](apps/desktop/src-tauri/src/org_link.rs), `org_link_*` on the serve wire, `dray login`/`logout` over the socket), so the app's sign-in can start the same one. It keeps the credential in `<home>/org-link.json` and rechecks it at most once a minute, forgetting it on a 401. `DRAY_ACCOUNT_URL` points a server at a local site.
 
+**An assistant's MCP sign-in goes through drayhq.com** (#874 stage 3, MCP-PLAN.md's *Signing in through drayhq.com*): the server pushes the flow under that credential, `/connect/<id>` checks `server_access` joined to `member`, and an Ed25519 JWT from Better Auth's `jwt` plugin comes back, checked against `/api/auth/jwks`. Every `/mcp` call asks `/api/mcp/access` again, so the allow list bites at once — anything that moves a person off a server's list or out of an org cuts their assistants off on the next call.
+
 `apps/web` share design language with app but **no code** — no import cross line. One read does: the site's changelog page parses `apps/desktop/CHANGELOG.md` at build ([changelog.ts](apps/web/src/lib/changelog.ts)). First component genuinely wanted in both = reason to create `packages/ui`, nothing before.
 
 ## Design direction

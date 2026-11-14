@@ -56,3 +56,41 @@ export async function unlinkServer(serverId: string): Promise<string | null> {
   revalidatePath("/app/[slug]/servers", "page");
   return null;
 }
+
+/// Puts a member on a server's allow list or takes them off. Taking someone
+/// off cuts their connected assistants off on the server's next MCP call.
+export async function setServerAccess(serverId: string, userId: string, allowed: boolean): Promise<string | null> {
+  let orgId: string;
+  try {
+    orgId = await authorize(serverId);
+  } catch (e) {
+    return (e as Error).message;
+  }
+  if (allowed) {
+    // Written through the membership join, so only a member of the server's
+    // org lands on its list.
+    const { rowCount } = await pool.query(
+      `insert into server_access (id, "serverId", "userId")
+       select $1, s.id, m."userId" from server s
+         join member m on m."organizationId" = s."organizationId" and m."userId" = $3
+        where s.id = $2 and s."organizationId" = $4
+       on conflict ("serverId", "userId") do nothing`,
+      [crypto.randomUUID(), serverId, userId, orgId],
+    );
+    if (!rowCount) {
+      const { rowCount: member } = await pool.query(
+        `select 1 from member where "organizationId" = $1 and "userId" = $2`,
+        [orgId, userId],
+      );
+      if (!member) return "They're no longer in this org.";
+    }
+  } else {
+    await pool.query(
+      `delete from server_access a using server s
+        where a."serverId" = s.id and s.id = $1 and s."organizationId" = $2 and a."userId" = $3`,
+      [serverId, orgId, userId],
+    );
+  }
+  revalidatePath("/app/[slug]/servers", "page");
+  return null;
+}

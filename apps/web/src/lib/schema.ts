@@ -5,7 +5,8 @@ import type { BetterAuthPlugin } from "better-auth";
 /// whole. Nothing here adds endpoints; the rows are read and written with SQL.
 ///
 /// `server` is a Dray server linked to an org. `serverAccess` is its allow
-/// list: who may connect an assistant to it. A row there says nothing about
+/// list: who may connect an assistant to it, checked at sign-in and again by
+/// the server on every MCP call. A row there says nothing about
 /// membership, so a check must also find the user in `member` — removing
 /// someone from an org leaves their rows behind on purpose.
 export const drayTables = {
@@ -63,6 +64,27 @@ export const drayTables = {
           references: { model: "user", field: "id", onDelete: "cascade" },
         },
         denied: { type: "boolean", required: true, defaultValue: false },
+      },
+    },
+    // An assistant's MCP sign-in, pushed here by the server with its own
+    // credential before the browser arrives at /connect/<id>. Pushing is what
+    // makes `returnUrl` trustworthy: only the server could have named it.
+    // Deleted when answered.
+    mcpSignIn: {
+      modelName: "mcp_sign_in",
+      fields: {
+        serverId: {
+          type: "string",
+          required: true,
+          references: { model: "server", field: "id", onDelete: "cascade" },
+        },
+        returnUrl: { type: "string", required: true },
+        // The server's own handle on its waiting flow, signed into the
+        // assertion as `nonce` so it can't be spent on another.
+        state: { type: "string", required: true },
+        client: { type: "string", required: true },
+        redirectHost: { type: "string", required: true },
+        expiresAt: { type: "date", required: true },
       },
     },
     serverAccess: {

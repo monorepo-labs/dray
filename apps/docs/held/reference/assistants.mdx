@@ -9,19 +9,25 @@ Every Dray server speaks MCP, the protocol AI assistants use to reach other apps
 
 Each machine is its own connector: your Mac, and each Linux server you run.
 
+## Before you start
+
+**The server must be linked to an org** at drayhq.com. Run `dray login` on it and approve the code. An assistant can't sign in to a server that isn't linked.
+
+**Only people on the server's allow list can connect an assistant.** Whoever linked it is on it already. To add someone, an org owner or admin opens drayhq.com → **Servers** → **Access** on that server and ticks them.
+
 ## Connect one
 
 **Where:** Settings → Servers → a server's `⋯` menu → **Connect an assistant…**. This Mac has one too.
 
 <Steps>
-  <Step title="Get a URL and a code">
+  <Step title="Get the URL">
     The dialog shows the connector URL (`https://….opentunnel.xyz/mcp`) and a one-time code like `ABCD-EFGH`. If Remote access is off, this turns it on first. The first time takes about 30 seconds.
   </Step>
   <Step title="Add the connector">
     In the assistant, add a custom connector and paste the URL. In Grok, open grok.com/connectors → **New Connector** → **Custom**; in Grok Bot, ask it to "add a custom MCP server" with the URL. In Claude, use Settings → Connectors → **Add custom connector**. In ChatGPT, turn on developer mode and create an app with the URL.
   </Step>
-  <Step title="Sign in with the code">
-    The assistant opens a Dray page asking for the code. Type it and press **Connect**. The code works once, for 10 minutes.
+  <Step title="Sign in">
+    The assistant opens a Dray page. Press **Continue with drayhq.com**, sign in with Google, choose **Full access** or **Read only**, and press **Allow**. Or open **Use a pairing code** and type the code from the dialog. A code works once, for 10 minutes.
   </Step>
 </Steps>
 
@@ -50,7 +56,7 @@ A session started this way shows in your sidebar like any other. It uses the sam
 
 When an agent stops to ask for permission, the assistant sees the card the next time it checks, asks you, and answers it. It is told never to answer for you.
 
-**Read only.** Turn on **Read only** in the dialog, or pass `--read-only`, and the assistant can list and read sessions but not start, message or stop them.
+**Read only.** Choose **Read only** on drayhq.com, turn it on in the dialog for a code, or pass `--read-only`, and the assistant can list and read sessions but not start, message or stop them.
 
 ## See and sign out assistants
 
@@ -67,6 +73,8 @@ What to know:
 
 - **It needs Remote access.** The assistant runs in its company's cloud, not on your phone, so it reaches your machine through Remote access's public address. **Stop remote access** cuts every assistant off until you turn it back on.
 - **A Mac must be awake.** Same as Remote access.
+- **Access is checked on every call.** Take someone off the allow list, or out of the org, and their assistants stop working within seconds. Unlink the server and every assistant stops.
+- **drayhq.com being down doesn't stop you at once.** An assistant signed in with drayhq.com keeps working for up to 10 minutes while the site can't be reached.
 - **Sign-in lasts while it is used.** An assistant stays signed in as long as it uses the connector at least once every 30 days.
 - **The code is not the server's token.** An assistant never gets the token that gives full access to the server. Sign out one assistant without touching the others or your paired phones.
 - **The assistant can't watch live.** It checks in when you ask it, or while it waits on a session. It is not told when a session finishes.
