@@ -33,7 +33,7 @@ struct TranscriptView: View {
         let segments = segments(bot)
         let chat = bot == nil ? [] : chatItems(segments)
         let complete = store.transcripts[segments[0]]?.olderBefore == nil && hidden(bot, segments) == nil
-        let chatMark = "\(chat.count)|\(chat.first?.id ?? "")|\(complete)"
+        let chatMark = "\(chat.count)|\(chat.first?.id ?? "")|\(complete)|\(store.serverRead.contains(key))"
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
@@ -222,7 +222,7 @@ struct TranscriptView: View {
         if unreadUpTo == nil {
             // Taken once the server's read lands, never off the cache alone: replies it
             // brings count as unread, and later ones don't.
-            guard !store.waiting.contains(key), let last = items.last?.id else { return }
+            guard store.serverRead.contains(key), let last = items.last?.id else { return }
             unreadUpTo = last
         }
         guard let upTo = unreadUpTo else { return }

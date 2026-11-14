@@ -79,6 +79,8 @@ final class Store {
     private(set) var loadErrors: [UUID: String] = [:]
     /// A transcript that could not be read with nothing of it held yet.
     private(set) var transcriptErrors: [SessionKey: String] = [:]
+    /// Transcripts the server has answered for since they were held, not just the cache.
+    private(set) var serverRead: Set<SessionKey> = []
     /// An older page that could not be read; the newer turns stay on screen.
     private(set) var olderErrors: [SessionKey: String] = [:]
     private(set) var tasks: [SessionKey: Int] = [:]
@@ -110,7 +112,7 @@ final class Store {
     @ObservationIgnored private var kept: SessionKey?
     @ObservationIgnored private var downSince: [UUID: Date] = [:]
     /// Transcripts opened while their server was down, read once it connects.
-    @ObservationIgnored private(set) var waiting: Set<SessionKey> = []
+    @ObservationIgnored private var waiting: Set<SessionKey> = []
     @ObservationIgnored private var listSaving = false
 
     init() {
@@ -181,6 +183,7 @@ final class Store {
         let gone = Set([id] + servers.filter { $0.via?.parent == id }.map(\.id))
         drop(id)
         for key in transcripts.keys where gone.contains(key.server) { transcripts[key] = nil }
+        serverRead = serverRead.filter { !gone.contains($0.server) }
         servers.removeAll { $0.id == id }
         for server in gone { try? FileManager.default.removeItem(at: Cache.folder(server)) }
     }
@@ -694,6 +697,7 @@ final class Store {
     /// grew by every event its session sent, and a day of them stayed in memory.
     func dropTranscripts(keeping kept: SessionKey?) {
         transcripts = transcripts.filter { $0.key == kept }
+        serverRead = serverRead.filter { $0 == kept }
         transcriptErrors = [:]
         olderErrors = [:]
         drops += 1
@@ -756,6 +760,7 @@ final class Store {
             for e in snap.events + live { t.append(e) }
             transcripts[key] = t
             transcriptErrors[key] = nil
+            serverRead.insert(key)
         } catch {
             transcriptErrors[key] = error.localizedDescription
         }
