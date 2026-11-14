@@ -2756,9 +2756,13 @@ function App() {
       // one moment the worktree behind it is provably spare. Asked
       // after the flag write lands, so the question is about a task
       // that is already settled rather than a condition of settling it.
+      // A bot's task is never asked about: its tree is the bot's working copy,
+      // hidden from the reader, and the bot settles its own with
+      // `--delete-worktree` anyway.
       const item = sessionIndexItems.find((i) => i.sessionId === sessionId);
       if (item?.worktreeName) {
-        void askAboutWorktree(sessionId, item.worktreeName, item.title, "notice");
+        if (inBotTree(bots, sessionIndexItems, sessionId)) removeWorktree(sessionId, "asked");
+        else void askAboutWorktree(sessionId, item.worktreeName, item.title, "notice");
       }
     }
     // Settling the open session leaves nothing to look at but the
@@ -3264,18 +3268,10 @@ function App() {
     if (!task) return;
     const { item } = task;
     if (task.busy || !(await setSessionFlags(item.sessionId, { archived: true }))) return;
-    if (!item.worktreeName || item.worktreeRemoved) return;
-    // The tree goes without a word only where it holds nothing
-    // the merge did not take; anything else is the settle notice's
-    // question, never a silent delete.
-    const left = await invoke<WorktreeDisposition>("worktree_disposition", { sessionId: item.sessionId }).catch(
-      () => null,
-    );
-    if (left && (!left.exists || (left.changedFiles === 0 && left.unpushedCommits === 0))) {
-      removeWorktree(item.sessionId, "tidy");
-    } else {
-      void askAboutWorktree(item.sessionId, item.worktreeName, item.title, "notice");
-    }
+    // The merge landed the work, so whatever the tree still holds is leftover:
+    // asking here put a "Delete worktree?" notice on every merge with a stray file.
+    // "asked" so a refused delete still says so rather than orphaning the tree.
+    if (item.worktreeName && !item.worktreeRemoved) removeWorktree(item.sessionId, "asked");
   };
 
   const cardsReread = useRef(new Set<string>());
