@@ -169,9 +169,11 @@ fn video_paths(text: &str) -> Vec<(&str, &str, &str)> {
 mod collect {
     use super::*;
     use crate::{events::MessageSender, machines, sink::Sink};
+    use anyhow::Context;
     use serde_json::json;
     use std::{
         collections::HashMap,
+        path::Path,
         time::{Duration, Instant},
     };
 
@@ -183,7 +185,8 @@ mod collect {
     const BACKOFF_CAP: Duration = Duration::from_secs(300);
     /// A proof video is short; a copy taking longer is holding up the report.
     const VIDEO_FETCH: Duration = Duration::from_secs(120);
-    const MAX_VIDEO: u64 = 500 << 20;
+    const MAX_VIDEOS: usize = 3;
+    const CHAT_BUDGET: u64 = 1 << 30;
 
     /// A task on another machine whose reports belong to a bot chat here.
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -250,6 +253,7 @@ mod collect {
             by_machine.entry(&remote.machine).or_default().push(remote);
         }
         let now = Instant::now();
+        let mut rounds = Vec::new();
         for (id, mine) in by_machine {
             let Some(saved) = machines.iter().find(|m| m.id == id) else {
                 // Removed, token and all: nothing will ever reach it again.
@@ -259,56 +263,83 @@ mod collect {
             if saved.off || backoff.get(id).is_some_and(|(at, _)| now < *at) {
                 continue;
             }
-            // The rule a local task's report follows: a settled chat takes
-            // none. The task's server is told, or it keeps them for nobody.
-            let (mut open, mut closed) = (Vec::new(), Vec::new());
-            for remote in mine {
-                let parent = store::get_session_index_item(&remote.parent).await.ok().flatten();
-                match parent.is_none_or(|p| p.archived) {
-                    true => closed.push(remote.child.clone()),
-                    false => open.push(remote),
-                }
-            }
-            let children: Vec<String> = open.iter().map(|r| r.child.clone()).collect();
-            match ask(saved, &children, &[], &closed).await {
-                Ok(taken) => {
-                    backoff.remove(id);
-                    untrack(&closed).await;
-                    // Only this machine's own tasks: an answer naming another
-                    // machine's is not its to close.
-                    let gone: Vec<String> = taken.gone.into_iter().filter(|c| children.contains(c)).collect();
-                    untrack(&gone).await;
-                    let mut acked = Vec::new();
-                    for report in taken.reports {
-                        // Into the chat this server tracked the task under, never
-                        // one the answer names: that machine holds no token here,
-                        // so it must not pick which chat runs a turn.
-                        let Some(remote) = open.iter().find(|r| r.child == report.child) else { continue };
-                        let text = fetch_videos(saved, &report.text).await;
-                        if deliver(&report, text, &remote.parent, &saved.name, app).await {
-                            acked.push(report.id);
-                        }
-                    }
-                    if !acked.is_empty() {
-                        // Lost, the reports come again next poll: a bot reading
-                        // one twice beats a bot never reading it.
-                        if let Err(e) = ask(saved, &[], &acked, &[]).await {
-                            eprintln!("[remote reports ack err] {}: {e}", saved.name);
-                        }
-                    }
-                }
-                // A server from before #958 keeps no reports to collect.
-                Err(e) if e.contains("unknown command") => {
-                    untrack(&closed).await;
-                    untrack(&children).await;
+            rounds.push(async move { (saved, collect_from(saved, mine, app).await) });
+        }
+        // Side by side, so a machine slow to answer or to hand over a video
+        // holds up no other machine's reports.
+        for (saved, outcome) in futures_util::future::join_all(rounds).await {
+            match outcome {
+                Ok(()) => {
+                    backoff.remove(&saved.id);
                 }
                 Err(e) => {
-                    let wait = backoff.get(id).map_or(POLL, |(_, w)| (*w * 2).min(BACKOFF_CAP));
-                    backoff.insert(id.to_string(), (now + wait, wait));
+                    let wait = backoff.get(&saved.id).map_or(POLL, |(_, w)| (*w * 2).min(BACKOFF_CAP));
+                    backoff.insert(saved.id.clone(), (now + wait, wait));
                     eprintln!("[remote reports err] {}: {e}", saved.name);
                 }
             }
         }
+    }
+
+    /// One machine's round. Err where it failed to answer, so it backs off.
+    async fn collect_from(saved: &machines::Saved, mine: Vec<&Remote>, app: &Sink) -> Result<(), String> {
+        // The rule a local task's report follows: a settled chat takes
+        // none. The task's server is told, or it keeps them for nobody.
+        let (mut open, mut closed) = (Vec::new(), Vec::new());
+        for remote in mine {
+            let parent = store::get_session_index_item(&remote.parent).await.ok().flatten();
+            match parent.is_none_or(|p| p.archived) {
+                true => closed.push(remote.child.clone()),
+                false => open.push(remote),
+            }
+        }
+        let children: Vec<String> = open.iter().map(|r| r.child.clone()).collect();
+        let taken = match ask(saved, &children, &[], &closed).await {
+            Ok(taken) => taken,
+            // A server from before #958 keeps no reports to collect.
+            Err(e) if e.contains("unknown command") => {
+                untrack(&closed).await;
+                untrack(&children).await;
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
+        untrack(&closed).await;
+        // Only this machine's own tasks: an answer naming another
+        // machine's is not its to close.
+        let gone: Vec<String> = taken.gone.into_iter().filter(|c| children.contains(c)).collect();
+        untrack(&gone).await;
+        let mut by_child: HashMap<String, Vec<Report>> = HashMap::new();
+        for report in taken.reports {
+            by_child.entry(report.child.clone()).or_default().push(report);
+        }
+        // Each task's reports in turn order, the tasks side by side, so one
+        // copying a video holds up no other.
+        let runs = open.iter().filter_map(|remote| {
+            let reports = by_child.remove(&remote.child)?;
+            Some(async move {
+                let mut acked = Vec::new();
+                for report in reports {
+                    // Into the chat this server tracked the task under, never
+                    // one the answer names: that machine holds no token here,
+                    // so it must not pick which chat runs a turn.
+                    let text = fetch_videos(saved, &remote.parent, &report.text).await;
+                    if deliver(&report, text, &remote.parent, &saved.name, app).await {
+                        acked.push(report.id);
+                    }
+                }
+                acked
+            })
+        });
+        let acked: Vec<String> = futures_util::future::join_all(runs).await.into_iter().flatten().collect();
+        if !acked.is_empty() {
+            // Lost, the reports come again next poll: a bot reading
+            // one twice beats a bot never reading it.
+            if let Err(e) = ask(saved, &[], &acked, &[]).await {
+                eprintln!("[remote reports ack err] {}: {e}", saved.name);
+            }
+        }
+        Ok(())
     }
 
     async fn ask(saved: &machines::Saved, children: &[String], ack: &[String], forget: &[String]) -> Result<Taken, String> {
@@ -343,7 +374,11 @@ mod collect {
     /// A report's videos sit on the task's machine, where the bot's chat
     /// cannot play them, so each is copied here and the report names the copy.
     /// One that fails to copy keeps its far path: the bot can still say where it is.
-    async fn fetch_videos(saved: &machines::Saved, text: &str) -> String {
+    ///
+    /// The copies go under the bot chat's own recordings, deleted with it, and
+    /// the far machine's text picks what is fetched, so a report copies at
+    /// most [`MAX_VIDEOS`] and a chat holds at most [`CHAT_BUDGET`] bytes of them.
+    async fn fetch_videos(saved: &machines::Saved, parent: &str, text: &str) -> String {
         let videos = video_paths(text);
         if videos.is_empty() {
             return text.to_string();
@@ -355,25 +390,46 @@ mod collect {
                 return text.to_string();
             }
         };
+        let dir = match store::get_home_app_dir().await {
+            Ok(home) => home.join("browser/recordings").join(parent),
+            Err(e) => {
+                eprintln!("[remote reports video err] {e:#}");
+                return text.to_string();
+            }
+        };
+        let mut left = CHAT_BUDGET.saturating_sub(dir_size(&dir).await);
         let mut out = text.to_string();
-        for (path, folder, file) in videos {
-            match fetch_video(&base, &token, path, folder, file).await {
-                Ok(local) => out = out.replace(path, &local.to_string_lossy()),
+        for (path, folder, file) in videos.into_iter().take(MAX_VIDEOS) {
+            // The far folder in the name: two tasks can each film a `demo.mp4`.
+            let local = dir.join(format!("{folder}-{file}"));
+            match fetch_video(&base, &token, path, &local, &mut left).await {
+                Ok(()) => out = out.replace(path, &local.to_string_lossy()),
                 Err(e) => eprintln!("[remote reports video err] {}: {path}: {e:#}", saved.name),
             }
         }
         out
     }
 
-    /// Into `browser/recordings/<folder>/<file>` here, the far layout kept, so
-    /// a report delivered twice finds its copy already made.
-    async fn fetch_video(base: &str, token: &str, path: &str, folder: &str, file: &str) -> anyhow::Result<PathBuf> {
-        let dir = store::get_home_app_dir().await?.join("browser/recordings").join(folder);
-        let local = dir.join(file);
-        if tokio::fs::try_exists(&local).await.unwrap_or(false) {
-            return Ok(local);
+    /// Bytes in the files directly under `dir`, which is all a chat's
+    /// recordings folder holds.
+    async fn dir_size(dir: &Path) -> u64 {
+        let Ok(mut entries) = tokio::fs::read_dir(dir).await else { return 0 };
+        let mut size = 0;
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            size += entry.metadata().await.map_or(0, |m| m.len());
         }
-        tokio::fs::create_dir_all(&dir).await?;
+        size
+    }
+
+    /// Copies `path` on the far machine to `local`, spending from `left`. A
+    /// copy already there is a report delivered twice, and costs nothing.
+    async fn fetch_video(base: &str, token: &str, path: &str, local: &Path, left: &mut u64) -> anyhow::Result<()> {
+        if tokio::fs::try_exists(local).await.unwrap_or(false) {
+            return Ok(());
+        }
+        let dir = local.parent().context("no folder")?;
+        let file = local.file_name().context("no name")?.to_string_lossy();
+        tokio::fs::create_dir_all(dir).await?;
         let mut response = crate::http()
             .get(format!("{base}/file"))
             .query(&[("path", path)])
@@ -385,23 +441,30 @@ mod collect {
         // Built under a hidden name, which the player never matches, so a cut
         // download leaves no player on half a video.
         let part = dir.join(format!(".{file}.part"));
-        let written: anyhow::Result<()> = async {
+        let budget = *left;
+        let written: anyhow::Result<u64> = async {
             let mut out = tokio::fs::File::create(&part).await?;
             let mut size = 0u64;
             while let Some(chunk) = response.chunk().await? {
                 size += chunk.len() as u64;
-                anyhow::ensure!(size <= MAX_VIDEO, "larger than {} MB", MAX_VIDEO >> 20);
+                anyhow::ensure!(size <= budget, "over the chat's {} MB of copied videos", CHAT_BUDGET >> 20);
                 tokio::io::AsyncWriteExt::write_all(&mut out, &chunk).await?;
             }
             tokio::io::AsyncWriteExt::flush(&mut out).await?;
-            tokio::fs::rename(&part, &local).await?;
-            Ok(())
+            tokio::fs::rename(&part, local).await?;
+            Ok(size)
         }
         .await;
-        if written.is_err() {
-            tokio::fs::remove_file(&part).await.ok();
+        match written {
+            Ok(size) => {
+                *left -= size;
+                Ok(())
+            }
+            Err(e) => {
+                tokio::fs::remove_file(&part).await.ok();
+                Err(e)
+            }
         }
-        written.map(|()| local)
     }
 }
 
