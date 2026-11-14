@@ -65,4 +65,9 @@ final class RecordingTests: XCTestCase {
         ```
         """)
     }
+
+    func testHidesOnlyWholePaths() {
+        let text = "Shot /tmp/a.png, backup [old](/tmp/a.png.bak) and /tmp/a.png.bak"
+        XCTAssertEqual(hiding(["/tmp/a.png"], in: text), "Shot, backup [old](/tmp/a.png.bak) and /tmp/a.png.bak")
+    }
 }

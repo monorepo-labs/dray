@@ -179,10 +179,14 @@ func hiding(_ paths: [String], in text: String) -> String {
     return fencedLines(text).compactMap { line, code -> String? in
         let original = String(line)
         if code || original.trimmingCharacters(in: .whitespaces).wholeMatch(of: imageLine) != nil { return original }
-        var out = original
+        // Whole tokens only, bounded the way the finders bound them, so `/a.png`
+        // never takes a bite out of `/a.png.bak`.
+        let out = original
             .replacing(/!?\[[^\]]*\]\(<?([^)\s>]+)>?(?:\s+"[^"]*")?\)/) { named.contains(String($0.1)) ? "" : String($0.0) }
             .replacing(/`([^`]+)`/) { named.contains(String($0.1)) ? "" : String($0.0) }
-        for path in paths { out = out.replacingOccurrences(of: path, with: "") }
+            .replacing(#/(^|[\s"'(<>\[=:])(\/[^\s"'`()<>]*[^\s"'`()<>\].,;:!?])(?=$|[\s"'`()<>\],;:!?]|\.(?:$|\s))/#) {
+                named.contains(String($0.2)) ? String($0.1) : String($0.0)
+            }
         guard out != original else { return out }
         guard out.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
         // Indent is left alone: a list item's nesting reads off it.
