@@ -64,7 +64,7 @@ type Rec = Record<string, unknown>;
 
 /// Qualifies the path fields of a project, index item or snapshot, and of
 /// a send's or fork's `snapshot`. Events inside are left as the agent wrote them.
-function qualifyRecord(value: unknown, server: ServerId): unknown {
+export function qualifyRecord(value: unknown, server: ServerId): unknown {
   if (Array.isArray(value)) return value.map((v) => qualifyRecord(v, server));
   if (!value || typeof value !== "object") return value;
   const out: Rec = { ...(value as Rec) };
@@ -173,6 +173,13 @@ export const APP_COMMANDS = new Set([
   "upload_attachment",
   "resume_boat",
   "extend_boat",
+  "cloud_info",
+  "set_cloud_key",
+  "set_cloud_on",
+  "start_cloud_machine",
+  "drop_cloud_machine",
+  "save_cloud_transcript",
+  "cloud_transcript",
   "paste_attachments",
   "read_file",
   "browser_open",
@@ -183,6 +190,7 @@ export const APP_COMMANDS = new Set([
   "browser_move",
   "browser_nav",
   "browser_layout",
+  "browser_pins",
   "browser_shutter_ready",
   "browser_devtools",
   "browser_pick",

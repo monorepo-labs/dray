@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 
+import { hasText } from "@/lib/botTranscript";
 import { channel } from "@/lib/channel";
 
 export type StreamingBlock = {
@@ -94,7 +95,7 @@ export function useStreamingKind(
     const block = sessionId ? shown[sessionId] : undefined;
     if (!block) return null;
     if (block.type === "tool_use") return block.name ? "tool" : null;
-    if (!block.text) return null;
+    if (!hasText(block.text)) return null;
     return block.type === "thinking" ? "thinking" : "text";
   });
 }

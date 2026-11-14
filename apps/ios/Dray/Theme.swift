@@ -47,6 +47,9 @@ enum Theme {
     static let accent = Color(hex: 0xE5C057)
     /// `--accent-add`: added lines, an open PR, an unread session.
     static let add = Color(hex: 0x09BB83)
+    /// A bot row's unread count: the desktop's dark `oklch(0.55 0.2 25)`, deeper
+    /// than `destructive`, which is too pale under white text.
+    static let unread = Color(hex: 0xCC272E)
     /// `--destructive`: removed lines, failures.
     static let destructive = Color(hex: 0xFF6467)
     /// `--accent-merged`: a merged PR.

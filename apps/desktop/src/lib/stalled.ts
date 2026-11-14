@@ -5,7 +5,7 @@ import type { BackgroundTask, Bot, PrMark, SessionIndexItem, SessionStatus } fro
 
 /// How long a bot's task sits untouched before the reader hears of it. What
 /// the task can mend itself waits for none of it.
-export const STALL_MS = 5 * 60_000;
+export const STALL_MS = 2 * 60_000;
 
 /// A task of a bot's that has stalled. `ready`: its pull request has been
 /// able to land for [STALL_MS], and the reader merges it from the card. `fix`:

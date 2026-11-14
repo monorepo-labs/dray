@@ -217,6 +217,12 @@ mod collect {
         store::write_atomic(&tracked_path().await?, serde_json::to_string_pretty(&list)?).await
     }
 
+    /// The machine a bot's task here was started on, for a verb that must
+    /// reach it while that machine does not answer.
+    pub async fn machine_of(child: &str) -> Option<String> {
+        load().await.into_iter().find(|r| r.child == child).map(|r| r.machine)
+    }
+
     async fn untrack(children: &[String]) {
         if children.is_empty() {
             return;
@@ -470,7 +476,7 @@ mod collect {
 }
 
 #[cfg(any(feature = "serve", feature = "desktop"))]
-pub use collect::{run, track};
+pub use collect::{machine_of, run, track};
 
 #[cfg(test)]
 mod tests {

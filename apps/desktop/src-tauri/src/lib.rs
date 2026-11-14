@@ -70,6 +70,7 @@ pub mod bots;
 pub mod drafts;
 pub mod projects;
 pub mod remote_reports;
+pub mod held_flags;
 #[cfg(feature = "desktop")]
 pub mod quit;
 #[cfg(feature = "desktop")]
@@ -87,8 +88,12 @@ pub mod org_link;
 // Every server reaches other machines on its own (#760).
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod machines;
+#[cfg(any(feature = "serve", feature = "desktop"))]
+pub mod cloud_machine;
 #[cfg(feature = "desktop")]
 pub mod boat;
+#[cfg(feature = "desktop")]
+pub mod cloud;
 #[cfg(feature = "desktop")]
 pub mod servers;
 pub mod session;
@@ -946,6 +951,13 @@ pub fn run() {
             servers::upload_attachment,
             servers::resume_boat,
             servers::extend_boat,
+            servers::cloud_info,
+            servers::set_cloud_key,
+            servers::set_cloud_on,
+            servers::start_cloud_machine,
+            servers::drop_cloud_machine,
+            servers::save_cloud_transcript,
+            servers::cloud_transcript,
             attachments::paste_attachments,
             // Here and not on the server: a video plays through this
             // webview's asset protocol, which only this process can widen.
@@ -966,6 +978,8 @@ pub fn run() {
             cef::browser_nav,
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_layout,
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            cef::browser_pins,
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_shutter_ready,
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]

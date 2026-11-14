@@ -80,6 +80,10 @@ static PURGE_TOKEN: AtomicU64 = AtomicU64::new(0);
 const PURGE_AFTER: Duration = Duration::from_secs(5);
 /// Which session is on screen and where. `None` shows nothing.
 static LAYOUT: Mutex<Option<(String, Layout)>> = Mutex::new(None);
+/// Tabs split out beside the chat, each on its own rect, all on screen at
+/// once. Apart from `LAYOUT`, which follows its session's active tab, since
+/// a split pane holds one tab whatever the strip has active.
+static PINNED: Mutex<Vec<(i32, Layout)>> = Mutex::new(Vec::new());
 /// Tab ids. Not CEF's `identifier()`, which a woken tab would come back
 /// under a new one of, renaming it under the strip and `dray browser tab`.
 static NEXT_TAB: AtomicI32 = AtomicI32::new(1);
@@ -143,6 +147,11 @@ struct Layout {
     width: f64,
     height: f64,
     visible: bool,
+    /// Which bottom corners meet the sheet's rounded edge, `(left, right)`.
+    /// A corner against a neighbouring pane stays square, or the two feet
+    /// leave a notch between them.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    foot: (bool, bool),
 }
 
 /// One tab as the frontend sees it.
@@ -902,7 +911,28 @@ fn create_tab(session: &str, url: &str, activate: bool, tab: Option<i32>) -> Res
 /// is visible. The only tab the reader counts as seeing.
 fn shown_tab() -> Option<i32> {
     let presented = LAYOUT.lock().unwrap().clone();
-    presented.filter(|(_, l)| l.visible).and_then(|(session, _)| active_id(&session))
+    let id = presented.filter(|(_, l)| l.visible).and_then(|(session, _)| active_id(&session))?;
+    // A native view has one frame, so a tab split out is drawn there alone.
+    (!PINNED.lock().unwrap().iter().any(|(p, _)| *p == id)).then_some(id)
+}
+
+/// Every tab on screen and where: the presented one and the split panes'.
+/// Pinned tabs on Mac alone, since an X11 tab lives in the one frame `x11.rs`
+/// keeps for the pane.
+fn shown_tabs() -> Vec<(i32, Layout)> {
+    let mut shown: Vec<(i32, Layout)> = Vec::new();
+    let pinned = PINNED.lock().unwrap().clone();
+    if let (Some(id), Some((_, mut layout))) = (shown_tab(), LAYOUT.lock().unwrap().clone()) {
+        // A split pane starting at its right edge (past a hairline) squares it.
+        let right = layout.x + layout.width;
+        if pinned.iter().any(|(_, p)| (p.x - right).abs() < 4.0) {
+            layout.foot.1 = false;
+        }
+        shown.push((id, layout));
+    }
+    #[cfg(target_os = "macos")]
+    shown.extend(pinned);
+    shown
 }
 
 /// Moves the presented session's active tab onto the frontend's rect and
@@ -914,12 +944,16 @@ fn shown_tab() -> Option<i32> {
 /// active: the reader may switch to it meanwhile, and the pane's cover can
 /// land after the switch, which would put that layout squeezed into the pane.
 fn apply_layout() {
-    let shown = shown_tab().filter(|&id| !automation::off_pane(id));
-    if let Some(id) = shown {
+    let placed: Vec<(i32, Layout)> =
+        shown_tabs().into_iter().filter(|(id, _)| !automation::off_pane(*id)).collect();
+    for &(id, _) in &placed {
         touch(id);
         wake(id);
     }
-    let layout = LAYOUT.lock().unwrap().as_ref().map(|(_, l)| *l);
+    #[cfg(target_os = "linux")]
+    let shown = placed.first().map(|(id, _)| *id);
+    #[cfg(target_os = "linux")]
+    let layout = placed.first().map(|(_, l)| *l);
     let views: Vec<(i32, usize, Browser)> = TABS
         .lock()
         .unwrap()
@@ -930,11 +964,13 @@ fn apply_layout() {
     let warm: Vec<i32> = {
         let mut warm = WARM.lock().unwrap();
         warm.retain(|w| views.iter().any(|(id, ..)| id == w));
-        if let Some(id) = shown {
+        for &(id, _) in placed.iter().rev() {
             warm.retain(|&w| w != id);
             warm.push_front(id);
-            warm.truncate(WARM_TABS);
         }
+        // Never fewer than the tabs on screen, or a split pane's view would
+        // fall out of the list it is drawn from.
+        warm.truncate(WARM_TABS.max(placed.len()));
         warm.iter().copied().collect()
     };
     #[cfg(target_os = "linux")]
@@ -971,7 +1007,8 @@ fn apply_layout() {
     #[cfg(target_os = "macos")]
     for (id, view, browser) in views {
         let view: &NSView = unsafe { &*(view as *const NSView) };
-        let show = shown == Some(id);
+        let layout = placed.iter().find(|(p, _)| *p == id).map(|(_, l)| *l);
+        let show = layout.is_some();
         if show {
             if let (Some(layout), Some(parent)) = (layout, unsafe { view.superview() }) {
                 let parent_height = parent.bounds().size.height;
@@ -981,7 +1018,9 @@ fn apply_layout() {
                 );
                 view.setFrame(frame);
             }
-            round_foot(view);
+            if let Some(layout) = layout {
+                round_foot(view, layout.foot);
+            }
             if let Some(host) = browser.host() {
                 host.notify_move_or_resize_started();
             }
@@ -1009,10 +1048,10 @@ fn apply_layout() {
 /// takes the sheet's radius on the two bottom corners; the top sits under the
 /// URL row and stays square. Mac alone: an X window has no corner radius.
 #[cfg(target_os = "macos")]
-fn round_foot(view: &NSView) {
-    /// `kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner`: the bottom two,
-    /// since an `NSView`'s layer has its origin at the bottom.
-    const BOTTOM: usize = 1 | 2;
+fn round_foot(view: &NSView, (left, right): (bool, bool)) {
+    // `kCALayerMinXMinYCorner` and `kCALayerMaxXMinYCorner`: the bottom two,
+    // since an `NSView`'s layer has its origin at the bottom.
+    let corners: usize = if left { 1 } else { 0 } | if right { 2 } else { 0 };
     view.setWantsLayer(true);
     unsafe {
         let layer: *mut AnyObject = msg_send![view, layer];
@@ -1020,7 +1059,7 @@ fn round_foot(view: &NSView) {
             return;
         }
         let _: () = msg_send![layer, setCornerRadius: 8.0f64];
-        let _: () = msg_send![layer, setMaskedCorners: BOTTOM];
+        let _: () = msg_send![layer, setMaskedCorners: corners];
         let _: () = msg_send![layer, setMasksToBounds: Bool::YES];
     }
 }
@@ -1072,7 +1111,7 @@ fn wake(id: i32) {
 /// on screen, one still loading, one recording, picking, being driven or
 /// mid-screenshot, and either half of a live popup pair. Main thread.
 fn sweep() {
-    if let Some(id) = shown_tab() {
+    for (id, _) in shown_tabs() {
         touch(id);
     }
     if automation::capturing() {
@@ -2298,7 +2337,35 @@ async fn await_shutter(shot: u64) {
 /// top-left. `visible: false` hides every tab.
 #[tauri::command]
 pub fn browser_layout(session_id: String, x: f64, y: f64, width: f64, height: f64, visible: bool) -> Result<(), String> {
-    *LAYOUT.lock().unwrap() = Some((session_id, Layout { x, y, width, height, visible }));
+    *LAYOUT.lock().unwrap() = Some((session_id, Layout { x, y, width, height, visible, foot: (true, true) }));
+    on_main(apply_layout)
+}
+
+/// One split pane's tab and where, in the same CSS pixels as `browser_layout`.
+#[derive(serde::Deserialize)]
+pub struct Pin {
+    tab: i32,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    /// The pane is the last one, so its right foot meets the sheet's corner.
+    #[serde(default)]
+    edge: bool,
+}
+
+/// The tabs split out beside the chat, the whole set each time; empty takes
+/// every one off screen. A tab here is drawn here and nowhere else, even
+/// while it is its session's active tab.
+#[tauri::command]
+pub fn browser_pins(pins: Vec<Pin>) -> Result<(), String> {
+    *PINNED.lock().unwrap() = pins
+        .into_iter()
+        .map(|p| {
+            let foot = (false, p.edge);
+            (p.tab, Layout { x: p.x, y: p.y, width: p.width, height: p.height, visible: true, foot })
+        })
+        .collect();
     on_main(apply_layout)
 }
 
@@ -2323,9 +2390,18 @@ pub fn browser_shutter_ready(shot: u64) {
 /// cannot be made is the caller's error, not a log line: the pane leaves
 /// its pending tab standing otherwise, with nothing to say why.
 #[tauri::command]
-pub fn browser_open(session_id: String, url: String, new_tab: bool) -> Result<(), String> {
-    let tab = if new_tab { None } else { active_id(&session_id) };
+pub fn browser_open(session_id: String, url: String, new_tab: bool, tab: Option<i32>) -> Result<(), String> {
+    let tab = if new_tab { None } else { reader_tab(&session_id, tab) };
     load(session_id, url, tab)
+}
+
+/// The tab a reader's control acts on: a split pane names its own, anything
+/// else means the active one. A tab of another session is never taken.
+fn reader_tab(session: &str, tab: Option<i32>) -> Option<i32> {
+    match tab {
+        Some(id) => (session_of(id).as_deref() == Some(session)).then_some(id),
+        None => active_id(session),
+    }
 }
 
 /// Loads `url` in `tab`, or in a new tab where that is `None` or has no
@@ -2468,8 +2544,8 @@ pub fn browser_close(session_id: String, id: i32) -> Result<(), String> {
 
 /// Back, forward, reload or stop, on the active tab.
 #[tauri::command]
-pub fn browser_nav(session_id: String, action: String) -> Result<(), String> {
-    go(active_id(&session_id), action)
+pub fn browser_nav(session_id: String, action: String, tab: Option<i32>) -> Result<(), String> {
+    go(reader_tab(&session_id, tab), action)
 }
 
 fn go(tab: Option<i32>, action: String) -> Result<(), String> {
@@ -2486,9 +2562,9 @@ fn go(tab: Option<i32>, action: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn browser_devtools(session_id: String) -> Result<(), String> {
+pub fn browser_devtools(session_id: String, tab: Option<i32>) -> Result<(), String> {
     on_main(move || {
-        if let Some(browser) = active_id(&session_id).and_then(browser_of) {
+        if let Some(browser) = reader_tab(&session_id, tab).and_then(browser_of) {
             open_devtools(&browser);
         }
     })
@@ -2555,7 +2631,7 @@ pub fn close_session(session_id: &str) {
 /// past that the pane hides over nothing, as it did before. The tab is read
 /// after the wait, so the picture is of the tab up when it is taken.
 #[tauri::command]
-pub async fn browser_snapshot(session_id: String) -> Result<String, String> {
+pub async fn browser_snapshot(session_id: String, tab: Option<i32>) -> Result<String, String> {
     // Not while the shutter is open, and that exception is the whole reason
     // a shot can be covered by the page rather than by a blank. The lock is
     // held for the length of a shot, so a cover asked for inside one would
@@ -2572,7 +2648,7 @@ pub async fn browser_snapshot(session_id: String) -> Result<String, String> {
         )
     };
     // The reader's tab, never the agent's: this is the still the pane covers itself with.
-    let tab = active_id(&session_id).ok_or("no tab is open")?;
+    let tab = reader_tab(&session_id, tab).ok_or("no tab is open")?;
     // `innerWidth`, not the layout viewport's `clientWidth`: that one stops
     // at the scrollbar, and a picture a scrollbar short of the view is
     // stretched across it. The clip is in page coordinates, hence the

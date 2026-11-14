@@ -13,6 +13,7 @@ import WorktreeToggle from "@/components/composer/WorktreeToggle";
 import { Button } from "@/components/ui/button";
 import type { ServerId } from "@/lib/transport";
 import ShortcutKeys from "@/components/ShortcutKeys";
+import { onCloud, useCloud, useCloudPicks } from "@/lib/cloud";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { botPicksStance } from "@/lib/permission";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -137,6 +138,11 @@ export default function ComposerToolbar({
   bot,
   busy,
 }: ComposerToolbarProps) {
+  useCloud();
+  useCloudPicks();
+  // Placement picks the checkout, so a branch checked out here would be one
+  // the task never runs on.
+  const cloud = onCloud(projects, projectPath);
   return (
     <div className="flex min-w-0 items-center gap-0.5 px-1">
       {/* No radius override: `icon-sm` already carries the app's rounded-square,
@@ -194,12 +200,13 @@ export default function ComposerToolbar({
               picked — and a worktree has nothing to fork from. */}
           {projectPath && (
             <>
-              <WorktreeToggle on={useWorktree} onToggle={onToggleWorktree} />
+              {/* A cloud task always runs in a worktree, so there is nothing to toggle. */}
+              {!cloud && <WorktreeToggle on={useWorktree} onToggle={onToggleWorktree} />}
 
               {/* A worktree forks from the remote's default branch no matter
                   what is checked out, so offering a branch here would promise
                   something the CLI doesn't honour. State the real base instead. */}
-              {useWorktree ? (
+              {useWorktree || cloud ? (
                 branches?.defaultBase && (
                   <span className="truncate px-1.5 text-ui text-muted-foreground/60">
                     from {branches.defaultBase}

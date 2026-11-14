@@ -1731,12 +1731,13 @@ pub async fn last_reply(session_id: &str) -> Result<(Option<String>, u32)> {
     // The count stops at the reader's own last message; the preview reads on
     // past it, or a turn still running would blank the row.
     let mut counting = true;
-    for event in page.events.into_iter().rev() {
-        if event.subagent.is_some() {
+    let review = crate::bots::learn::in_review(&page.events);
+    for (event, review) in page.events.into_iter().zip(review).rev() {
+        if event.subagent.is_some() || review {
             continue;
         }
         match event.payload {
-            AgentEventPayload::AssistantText { text, .. } if !text.trim().is_empty() => {
+            AgentEventPayload::AssistantText { text, .. } if crate::events::has_text(&text) => {
                 since += u32::from(counting);
                 last.get_or_insert(text);
             }

@@ -216,6 +216,11 @@ final class Connection {
     /// Calls a server command, with arguments named as the desktop's `invoke` names them.
     /// `timeout` is how long a silent socket may hold the call.
     func call<T: Decodable>(_ cmd: String, _ args: [String: JSON] = [:], as: T.Type = T.self, timeout: Duration = .seconds(60)) async throws -> T {
+        try await decodeReply(try await callRaw(cmd, args, timeout: timeout))
+    }
+
+    /// The reply frame whole, for a caller that keeps it: the store files a transcript's read as it came.
+    func callRaw(_ cmd: String, _ args: [String: JSON] = [:], timeout: Duration = .seconds(60)) async throws -> Data {
         guard connected, let t = task else { throw DrayError("Not connected") }
         let id = nextId
         nextId += 1
@@ -232,8 +237,13 @@ final class Connection {
                 self.waiting.removeValue(forKey: id)?.resume(throwing: DrayError("The server took too long to answer \(cmd)"))
             }
         }
-        return try JSONDecoder().decode(Reply<T>.self, from: data).ok
+        return data
     }
+}
+
+/// Off the main thread: a session's tail runs to megabytes, and decoding it there held the screen.
+func decodeReply<T: Decodable>(_ data: Data, as: T.Type = T.self) async throws -> T {
+    try await Task.detached(priority: .userInitiated) { try JSONDecoder().decode(Reply<T>.self, from: data).ok }.value
 }
 
 extension Connection {

@@ -5,6 +5,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   AUTO_EXTEND_MINUTES,
+  BOAT_STOP_WARNINGS,
   countdown,
   durationLabel,
   WARN_MINUTES,
@@ -215,6 +216,8 @@ export default function BoatWarnings({ busy }: { busy: (server: string) => boole
   const offer = useSyncExternalStore(offerChanged.subscribe, () => showOffer);
   // By deadline, so an extend that runs out later warns again.
   const [dismissed, setDismissed] = useState<string[]>([]);
+  // After every hook: auto-extend keeps running, silently, with the cards off.
+  if (!BOAT_STOP_WARNINGS) return null;
   const up = servers.flatMap((server) => {
     const stopsAt = server.boat?.warning ? server.boat.stopsAt : null;
     const handled = auto && busy(server.id) && !autoFailed[`${server.id}:${stopsAt}`];

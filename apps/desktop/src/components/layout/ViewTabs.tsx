@@ -3,7 +3,7 @@ import {
   DocumentPlusIcon,
 } from "@heroicons/react/16/solid";
 import { Folder, Plus, Server, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 
 import AgentBeam from "@/components/browser/AgentBeam";
 import BotAvatar from "@/components/BotAvatar";
@@ -57,12 +57,23 @@ import {
   markClosedSlot,
   moveKey,
   moveLastClosed,
+  movedTo,
   popClosedTab,
   pushClosedTab,
   reconcile,
   type TabKey,
 } from "@/lib/tabOrder";
 import BranchButton from "@/components/layout/BranchButton";
+import { IS_MAC } from "@/lib/platform";
+import {
+  addSplit,
+  isSplit,
+  setPaneHeads,
+  setSplitDrag,
+  splitTarget,
+  useSplitPanes,
+  type PaneHead,
+} from "@/lib/splitPanes";
 import { cn } from "@/lib/utils";
 
 /// Which view fills the main column.
@@ -91,6 +102,36 @@ let closeActive: (() => boolean) | null = null;
 /// the lit tab cannot be closed, so the caller can fall through.
 export function closeActiveTab(): boolean {
   return closeActive?.() ?? false;
+}
+
+export type TurnKind = "changes" | "files";
+
+/// What the new-tab page may turn its blank into, set by the row since the
+/// row's order and its Diff/Files state live here. Keyed on the browser it
+/// lists, `kinds` comma-joined so the snapshot only moves when they do.
+// ponytail: one row mounted, one slot, same as `closeActive`.
+let turnSlot: { browserId: string; kinds: string; turn: (kind: TurnKind) => void } | null = null;
+const turnListeners = new Set<() => void>();
+function setTurnSlot(next: typeof turnSlot) {
+  const moved = next?.browserId !== turnSlot?.browserId || next?.kinds !== turnSlot?.kinds;
+  turnSlot = next;
+  if (moved) for (const l of turnListeners) l();
+}
+
+/// The views a blank tab of `browserId`'s can become, and the call that
+/// turns the one on screen into one of them in its own slot.
+export function useTurnNewTab(browserId: string): { kinds: TurnKind[]; turn: (kind: TurnKind) => void } {
+  const kinds = useSyncExternalStore(
+    (l) => {
+      turnListeners.add(l);
+      return () => turnListeners.delete(l);
+    },
+    () => (turnSlot?.browserId === browserId ? turnSlot.kinds : ""),
+  );
+  return {
+    kinds: kinds ? (kinds.split(",") as TurnKind[]) : [],
+    turn: (kind) => turnSlot?.turn(kind),
+  };
 }
 
 /// Which of Diff and Files the reader has put in a session's row. Both start
@@ -135,7 +176,8 @@ export type PickTabsProps = {
   /// Diff has a task to show. Files always has the bot's own folder.
   canDiff: boolean;
   onPick: (id: string) => void;
-  onAdd: (kind: "changes" | "files") => void;
+  /// Answers the new pick's id, or null where there was nothing to pick.
+  onAdd: (kind: "changes" | "files") => string | null;
   onClose: (id: string) => void;
   /// ⌘⇧T: back in the row on the same session, unlit. Answers the new id.
   onReopen: (kind: "changes" | "files", target: string) => string;
@@ -403,7 +445,48 @@ export default function ViewTabs({
     ...byKey.keys(),
   ]);
   orders.set(sessionId, order);
-  const items = order.map((key) => byKey.get(key)!);
+  // A tab split out keeps its slot in `order`, so closing its pane puts it
+  // back where it was; it is only left out of what is drawn.
+  const splits = useSplitPanes(sessionId);
+  const items = order.map((key) => byKey.get(key)!).filter((item) => !isSplit(sessionId, item.key));
+
+  // The panes draw the same icon and label their tab did.
+  useLayoutEffect(() => {
+    const heads = new Map<TabKey, PaneHead>();
+    for (const key of splits) {
+      const item = byKey.get(key);
+      const pick = key.startsWith("pick:") ? picks?.items.find((p) => `pick:${p.id}` === key) : undefined;
+      if (item) heads.set(key, { icon: item.icon, label: item.label });
+      else if (pick)
+        heads.set(key, {
+          icon: pick.kind === "changes" ? <DocumentPlusIcon className={MARK} /> : FOLDER,
+          label: pick.title,
+        });
+    }
+    setPaneHeads(sessionId, heads);
+  });
+
+  // Out of the row into a pane right of the main view. The tab on screen
+  // hands the view to its neighbour first, as closing it would.
+  const splitOut = (item: Item) => {
+    if (item.active) {
+      const at = items.indexOf(item);
+      [items[at - 1], items[at + 1], ...items].find((t) => t && t !== item)?.pick();
+    }
+    let key = item.key;
+    if (key.startsWith("page:")) {
+      const page = pages.find((p) => `page:${p.id}` === key);
+      const heir = pages.find((p) => p !== page && !isSplit(sessionId, `page:${p.id}`));
+      if (page?.active && heir) void activateTab(browserId, heir.id);
+    } else if (key.startsWith("pickfile:")) {
+      key = `pick:${key.split(":")[1]}`;
+    }
+    addSplit(sessionId, key);
+  };
+  // The chat is what the panes sit beside, a blank has no page to show, and
+  // Files with nothing open is a tree whose clicks belong to the main view.
+  const splittable = (item: Item) =>
+    /^(page:|changes$|file:|task:|pick:|pickfile:)/.test(item.key) && (IS_MAC || !item.key.startsWith("page:"));
 
   const drag = useDragReorder(
     items,
@@ -411,11 +494,19 @@ export default function ViewTabs({
     (item, _, to) => {
       orders.set(
         sessionId,
-        moveKey(orders.get(sessionId) ?? order, item.key, to),
+        movedTo(orders.get(sessionId) ?? order, items, item.key, to),
       );
       bump();
     },
     "x",
+    {
+      over: (item, at) => {
+        const target = at && splittable(item) ? splitTarget(at.x, at.y, splits.length) : null;
+        setSplitDrag(target ? { sessionId, key: item.key, label: target === "room" ? "Split right" : null } : null);
+        return target === "room";
+      },
+      drop: splitOut,
+    },
   );
 
   // The row is pushed right to start where the sheet does. Worked
@@ -521,6 +612,35 @@ export default function ViewTabs({
     };
   });
 
+  // The new-tab page's Diff and Files cards. The blank on screen becomes the
+  // view in its own slot; a view the row already holds is lit instead of
+  // doubled, and the blank simply goes.
+  const turn = (kind: TurnKind) => {
+    const blank = blanks.active;
+    if (blank === null) return;
+    let key: TabKey | null = null;
+    if (picks) {
+      const id = picks.onAdd(kind);
+      if (!id) return;
+      key = `pick:${id}`;
+    } else {
+      if (kind === "changes" ? !shown.changes : !shown.files && files.length === 0) {
+        setShown(kind, true);
+        key = kind;
+      }
+      onChange(kind);
+    }
+    closeBlankTab(browserId, blank, false);
+    if (key) {
+      const at = `blank:${blank}`;
+      orders.set(sessionId, (orders.get(sessionId) ?? order).map((k) => (k === at ? key : k)));
+    }
+    bump();
+  };
+  const turnKinds = picks && !picks.canDiff ? "files" : "changes,files";
+  useEffect(() => setTurnSlot({ browserId, kinds: turnKinds, turn }));
+  useEffect(() => () => setTurnSlot(null), []);
+
   // What + can still add. With Diff and Files both in the row it is a plain
   // new-tab button, the one thing left to offer.
   // A bot's row offers Diff and Files every time, each a new pick; its own
@@ -531,10 +651,10 @@ export default function ViewTabs({
           key: "changes",
           icon: <DocumentPlusIcon className={MARK} />,
           label: "Diff",
-          add: () => picks.onAdd("changes"),
+          add: () => void picks.onAdd("changes"),
           disabled: !picks.canDiff,
         },
-        { key: "files", icon: FOLDER, label: "Files", add: () => picks.onAdd("files"), disabled: false },
+        { key: "files", icon: FOLDER, label: "Files", add: () => void picks.onAdd("files"), disabled: false },
       ]
     : [
     !shown.changes && {

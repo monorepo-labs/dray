@@ -23,7 +23,9 @@ import {
   refreshOpenFiles,
   useOpenFiles,
   useOpenFilesWatcher,
+  type FilesScope,
 } from "@/hooks/useOpenFiles";
+import { useSplitPanes } from "@/lib/splitPanes";
 import { cn } from "@/lib/utils";
 
 type Side = "left" | "right";
@@ -61,7 +63,10 @@ export default function FilesView({
   active,
   revision,
   picker,
+  watchScope,
 }: {
+  /// A split pick's own watcher, so it takes none from the pick in the main view.
+  watchScope?: FilesScope;
   /// A bot-row tab's choice of session, the list's first row (#892). Such a
   /// tab is not its session's own Files view, so opening a file here must not
   /// flip that session's view to it.
@@ -75,7 +80,7 @@ export default function FilesView({
   revision: string;
 }) {
   const { open, active: activePath } = useOpenFiles(sessionId);
-  useOpenFilesWatcher(sessionId, picker ? "pick" : "files");
+  useOpenFilesWatcher(sessionId, watchScope ?? (picker ? "pick" : "files"));
 
   const [side, setSide] = useLocalStorage<Side>(SIDE_KEY, DEFAULT_SIDE);
   const [shown, setShown] = useLocalStorage<boolean>(SHOWN_KEY, true);
@@ -134,8 +139,11 @@ export default function FilesView({
   // the Docs panel's chips are stepped with. Clamped rather than wrapped, and
   // given up inside a text field — the filter box is one, and ⌘⇧← selects to
   // the start of a line there.
+  const split = useSplitPanes(picker ? null : sessionId);
   const step = (delta: number) => {
-    const next = open[open.findIndex((it) => it.path === activePath) + delta];
+    // A split file is a pane's, not the row's, so the chord steps past it.
+    const row = open.filter((it) => !split.includes(`file:${it.path}`));
+    const next = row[row.findIndex((it) => it.path === activePath) + delta];
     if (next) activateFile(sessionId, next.path);
   };
   const chord = { enabled: active, skipInTextField: true };

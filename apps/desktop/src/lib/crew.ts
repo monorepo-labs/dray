@@ -116,8 +116,16 @@ export function crewSeen(rows: CrewRow[], drawn: boolean): string[] {
 /// session surfaces through its cards beside that parent and the bot's Tasks
 /// tab. One whose parent is missing stays listed, since it would surface
 /// nowhere. Settled ones too: unsettling the parent lists them again.
-export function inSidebar(items: SessionIndexItem[], bots: readonly Bot[] = []): SessionIndexItem[] {
-  const ids = new Set(items.map((i) => i.sessionId));
+///
+/// `all` is every session held, which is where the parent is looked for: a
+/// bot's chat sits in the bot's folder, so a project filter on `items` drops it
+/// and its tasks would read as orphans.
+export function inSidebar(
+  items: SessionIndexItem[],
+  bots: readonly Bot[] = [],
+  all: readonly SessionIndexItem[] = items,
+): SessionIndexItem[] {
+  const ids = new Set(all.map((i) => i.sessionId));
   return items.filter(
     (i) =>
       !(i.hidden && i.parentSessionId && ids.has(i.parentSessionId)) &&

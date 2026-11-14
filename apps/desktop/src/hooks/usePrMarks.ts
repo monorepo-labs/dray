@@ -26,7 +26,7 @@ const FRESH_MS = 120_000;
 const OPEN_POLL_MS = 30_000;
 
 /// The background poll's gap, for repos whose marks drive something off
-/// screen: a bot's stalled tasks, judged every minute against a 5-minute
+/// screen: a bot's stalled tasks, judged every minute against a 2-minute
 /// stall, and a problem its task can mend on the first read after the task
 /// last moved. Slow, since every `gh` here spends the same hourly budget as the
 /// agents' own.
@@ -371,6 +371,22 @@ export function usePrMarks(
       },
       [byRepo],
     ),
+    /// Draws a PR merged on `merge_pr` succeeding, until the next read: waiting
+    /// for that read drew the Merge button again for a beat. Only until it,
+    /// since a merge queue answers success with the PR still open.
+    markMerged: useCallback((repoPath: string, number: number) => {
+      // A read issued before the merge would put it back open.
+      generation += 1;
+      const prs = numbered.get(repoPath);
+      const pr = prs?.get(number);
+      if (!prs || !pr) return;
+      const all = new Map(prs).set(number, { ...pr, state: "MERGED" });
+      numbered.set(repoPath, all);
+      cache.set(repoPath, marksByBranch([...all.values()]));
+      // The read that would have told the panel now finds nothing changed.
+      branchChanged.emit({ repo: repoPath, branch: pr.headRefName });
+      setByRepo(new Map(cache));
+    }, []),
     /// Re-reads every repo currently on screen. Called when a turn ends — that
     /// is when a pull request appears.
     refresh: useCallback(() => void load(true), [load]),

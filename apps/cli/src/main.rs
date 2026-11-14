@@ -46,8 +46,8 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 
-    /// Run this on another machine, as `dray machine ls` names it. `session ls` also takes `all`. A session id finds its
-    /// machine on its own.
+    /// Run this on another machine, as `dray machine ls` names it. `session ls` also takes `all`, and `session new`
+    /// takes `cloud` for a fresh Dray Cloud machine. A session id finds its machine on its own.
     #[arg(long, global = true, value_name = "NAME")]
     machine: Option<String>,
 }
@@ -513,6 +513,12 @@ fn session(command: SessionCommand) -> Result<(), String> {
         }
     };
     match send(request)? {
+        // Its machine did not answer, so all that is known is the id.
+        Response::Session { session } if session.held => {
+            let machine = session.machine.as_deref().unwrap_or("its machine");
+            eprintln!("{said} {}. {machine} is not reachable, so it lands there once it is.", session.session_id);
+            Ok(())
+        }
         Response::Session { session } => {
             eprintln!("{said} \"{}\".", session.title);
             Ok(())

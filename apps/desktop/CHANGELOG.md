@@ -19,6 +19,30 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.3 · 2026-11-13
+
+### New
+
+- **Bots learn from corrections.** When you correct a bot or a task
+  fails, it writes the lesson where it will be used next time: a rule,
+  a skill or a memory. Each lesson shows in the chat with View diff and
+  Undo.
+- **Bots hear what you did.** A bot is told which of its tasks you
+  merged, settled, stopped or deleted since its last turn.
+- New tab page has Diff and Files cards.
+
+### Improved
+
+- Long-open bot chats stay fast by keeping only recent turns drawn.
+- Bots stay quiet on task progress and can answer with lists and
+  tables.
+- A bot can end a turn without a reply, and blank replies no longer
+  draw.
+- Links in a bot's chat open as tabs in the bot's row.
+- Stalled tasks on another machine now reach their bot.
+- Merging goes straight to the merged row with no flash.
+- Boat sandbox stop warnings are off.
+
 ## 0.30.2 · 2026-11-13
 
 ### New

@@ -26,6 +26,7 @@ export function ItemTab({
   active = false,
   plain = false,
   fixed = false,
+  trailing,
   onClick,
 }: {
   icon?: ReactNode;
@@ -34,6 +35,8 @@ export function ItemTab({
   plain?: boolean;
   /// Sized by its own label rather than by the row.
   fixed?: boolean;
+  /// After the label: the server mark on a task running on another machine.
+  trailing?: ReactNode;
   /// Makes the tab a button. Hover lifts an inactive label to full strength,
   /// as the app's strip does.
   onClick?: () => void;
@@ -63,6 +66,7 @@ export function ItemTab({
       >
         {label}
       </span>
+      {trailing}
     </Tab>
   );
 }
