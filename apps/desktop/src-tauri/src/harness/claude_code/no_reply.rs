@@ -72,7 +72,7 @@ pub fn response(request_id: &str, message: &Value) -> Value {
             },
             {
                 "name": REACT,
-                "description": "Reacts to the user's newest message with an emoji instead of replying, and ends your turn with no reply: 👀 seen or on it, ✅ done, 🎉 celebrate, 👍 ok or agreed, ❤️ thanks, 😂 funny, 😢 sorry to hear. Call it once; its result closes the turn, so write nothing and call nothing after it.",
+                "description": "Reacts to the user's newest message with an emoji instead of replying, and ends your turn with no reply: 👍 got it or on it (a task started or told, an ok or go-ahead), 👀 looking into it (investigating or checking), ✅ done, 🎉 celebrate, ❤️ thanks, 😂 funny, 😢 sorry to hear. Call it once; its result closes the turn, so write nothing and call nothing after it.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {"emoji": {"type": "string", "enum": crate::bots::react::EMOJI.map(|(e, _)| e)}},
