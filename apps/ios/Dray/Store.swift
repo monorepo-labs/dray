@@ -463,7 +463,8 @@ final class Store {
     }
 
     /// A bot's tasks at any depth under any of its chat's sessions, newest
-    /// created first at each level; settled ones drop with everything under them (`crewRows`).
+    /// created first at each level; settled ones drop, and a sub-task of one
+    /// hangs under the session that adopted it (`crewRows`).
     /// Every live server's, since `--machine` puts a task on another one, which
     /// still names the bot's session as its parent; ids are UUIDs, so they join across servers.
     func botTasks(_ chat: [SessionKey]) -> [SessionKey] {
@@ -474,8 +475,14 @@ final class Store {
             if let held = copies[item.sessionId], serverState[held.key.server] == .connected { continue }
             copies[item.sessionId] = (key, item)
         }
+        let live = Set(items.filter { $0.value.archived != true }.map(\.key.id))
         var kids: [String: [(key: SessionKey, item: SessionItem)]] = [:]
-        for copy in copies.values { if let p = copy.item.parentSessionId { kids[p, default: []].append(copy) } }
+        for copy in copies.values {
+            let parent = copy.item.parentSessionId
+            if let p = parent.flatMap({ live.contains($0) ? $0 : nil }) ?? copy.item.adoptedBy ?? parent {
+                kids[p, default: []].append(copy)
+            }
+        }
         var out: [SessionKey] = []
         var seen = Set(chat.map(\.id))
         func walk(_ ids: [String]) {

@@ -70,6 +70,14 @@ describe("inBotTree", () => {
     expect(inBotTree([bot], items, "grand")).toBe(true);
     expect(inBotTree([bot], items, "other")).toBe(false);
   });
+
+  it("crosses a settled parent through the adoption", () => {
+    const items = [
+      item("chat"),
+      item("sub", { cwd: "/repo/wt2", parentSessionId: "settled", adoptedBy: "chat" }),
+    ];
+    expect(inBotTree([bot], items, "sub")).toBe(true);
+  });
 });
 
 describe("botBrowser", () => {

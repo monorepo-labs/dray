@@ -167,6 +167,8 @@ struct SessionItem: Codable, Hashable {
     let created: String?
     /// A bot task's one line to the reader, written by its bot (`dray session need`).
     let need: Need?
+    /// The nearest live session above a bot's sub-task while the task that started it is settled or deleted.
+    let adoptedBy: String?
 
     var busy: Bool { status == "in_progress" }
     var project: String { (projectPath as NSString).lastPathComponent }

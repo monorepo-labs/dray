@@ -1075,12 +1075,16 @@ pub(crate) async fn bot_chat_of(item: &SessionIndexItem) -> Option<SessionIndexI
         if bots.iter().any(|b| same_dir(&b.path, &item.cwd)) {
             return Some(item);
         }
-        at = match item.parent_session_id {
-            Some(id) => crate::store::get_session_index_item(&id).await.ok().flatten(),
-            None => None,
-        };
+        at = crate::store::tree_parent(&item).await.ok().flatten();
     }
     None
+}
+
+/// Whether `item` is a bot's task, whose sub-tasks outlive it: settling or
+/// deleting it leaves them running, adopted by the nearest live ancestor, where
+/// any other session's hidden children go with it.
+pub async fn keeps_children(item: &SessionIndexItem) -> bool {
+    bot_at(&item.cwd).await.is_none() && in_bot_tree(item).await
 }
 
 /// `base` with the bot's own block added where `cwd` is a bot's folder, or the

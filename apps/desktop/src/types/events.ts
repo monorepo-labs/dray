@@ -2058,7 +2058,14 @@ continueOff: boolean,
  * with `dray session need`. Drawn only while `at` is no older than
  * `modified`, so the task moving clears it without a write.
  */
-need?: TaskNeed, };
+need?: TaskNeed, 
+/**
+ * The nearest live session above a bot's sub-task while the task that
+ * started it is settled or deleted, written by [`readopt`]. A bot's task outlives its parent
+ * task, and a client holding the index's active side alone cannot walk
+ * through a settled parent to find the bot.
+ */
+adoptedBy?: string, };
 
 /**
  * Session-level facts, known at startup.
@@ -2221,7 +2228,14 @@ continueOff: boolean,
  * with `dray session need`. Drawn only while `at` is no older than
  * `modified`, so the task moving clears it without a write.
  */
-need?: TaskNeed, };
+need?: TaskNeed, 
+/**
+ * The nearest live session above a bot's sub-task while the task that
+ * started it is settled or deleted, written by [`readopt`]. A bot's task outlives its parent
+ * task, and a client holding the index's active side alone cannot walk
+ * through a settled parent to find the bot.
+ */
+adoptedBy?: string, };
 
 /**
  * Driven by [`StatusTracker`](crate::session::StatusTracker). `Completed`

@@ -1781,11 +1781,12 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         flush_held_flags(machine: String) => ok(crate::held_flags::flush_now(machine, sink).await);
         rename_session(session_id: String, title: String) => crate::rename_session(session_id, title, sink).await;
         delete_session(session_id: String) => crate::bots::reader_did(
-            &session_id, Some(crate::bots::Act::Deleted), crate::delete_session(&session_id),
+            &session_id, Some(crate::bots::Act::Deleted), crate::delete_session(&session_id, sink),
         ).await;
         fork_session(session_id: String, fork_id: String, worktree: bool) =>
             crate::fork_session(&session_id, &fork_id, worktree).await;
         session_index_item(session_id: String) => crate::session_index_item(&session_id).await;
+        session_keeps_children(session_id: String) => crate::session_keeps_children(&session_id).await;
         // `dray --machine` from an agent on the Mac that added this machine.
         orchestrate(
             line: String, origin: Option<String>, caller: Option<crate::orchestration::Caller>,

@@ -1509,9 +1509,17 @@ impl CardTask {
 /// oldest first: the card is posted in the last, and a card in any of them
 /// counts. A normal task's is `parent` itself. A bot's task goes to the bot's
 /// chat, since Start fresh settles the session that started it, and an agent
-/// switch leaves earlier sessions on screen in the same conversation. Empty
-/// where there is none.
+/// switch leaves earlier sessions on screen in the same conversation. A bot's
+/// sub-task goes to the task that started it, or once that is settled, the
+/// nearest live session above it. Empty where there is none.
 async fn card_chat(parent: SessionIndexItem) -> Result<Vec<SessionIndexItem>> {
+    let parent = match parent.archived && bots::bot_at(&parent.cwd).await.is_none() && bots::in_bot_tree(&parent).await {
+        true => match store::live_from(&parent).await? {
+            Some(live) => live,
+            None => return Ok(Vec::new()),
+        },
+        false => parent,
+    };
     Ok(match bots::bot_at(&parent.cwd).await {
         Some(bot) => bots::chat_sessions(&bot.path).await?,
         None if parent.archived => Vec::new(),
@@ -1541,7 +1549,16 @@ pub async fn auto_merge_card(
 ) -> Result<Option<String>, crate::Fail> {
     let _held = POSTING_CARD.lock().await;
 
-    let Some(parent) = store::get_session_index_item(&session_id).await? else {
+    // A deleted parent is bridged by the task's adoption, as its reports are.
+    let adopted_by = match store::get_session_index_item(&task_id).await? {
+        Some(task) => task.adopted_by,
+        None => None,
+    };
+    let mut parent = store::get_session_index_item(&session_id).await?;
+    if let (None, Some(by)) = (&parent, adopted_by) {
+        parent = store::get_session_index_item(&by).await?;
+    }
+    let Some(parent) = parent else {
         return Ok(None);
     };
     let sessions = card_chat(parent).await?;
@@ -2265,7 +2282,13 @@ pub async fn nudge_bot(
     let task = store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
     let chat = bots::bot_chat_of(&task).await;
     let owed = chat.is_none() && crate::remote_reports::owed(&session_id).await;
-    let Some(route) = nudge_route(&task, chat.as_ref(), owed) else { return Ok(false) };
+    // A sub-task's nudge goes where its reports do: the task that started it
+    // while that is live, else the nearest live session above it.
+    let to = match &chat {
+        Some(chat) if chat.session_id != task.session_id => store::live_ancestor(&task).await?.or(Some(chat.clone())),
+        _ => chat,
+    };
+    let Some(route) = nudge_route(&task, to.as_ref(), owed) else { return Ok(false) };
     // A need written while the PR waited on review would outlive the review
     // on the ready row, since approving a PR does not move its task.
     if ready.is_some() && problem.is_none() && task.need.is_some() {
@@ -2297,8 +2320,9 @@ pub async fn nudge_bot(
     Ok(true)
 }
 
-/// Where a stall nudge goes: into the bot's chat on this server, or into the
-/// outbox for a bot on another machine, which `owed` says the task reports to.
+/// Where a stall nudge goes: into the bot's chat or the live task above it on
+/// this server, or into the outbox for a bot on another machine, which `owed`
+/// says the task reports to.
 #[derive(Debug, PartialEq)]
 enum NudgeRoute {
     Chat(String),
@@ -2362,19 +2386,22 @@ pub fn report_to_parent(
         if child.archived {
             return Ok(());
         }
-        let Some(parent) = store::get_session_index_item(&parent_id).await? else {
+        if store::tree_parent(&child).await?.is_none() {
             // A bot's task started from another machine: its bot's server
             // collects this, since this one rarely holds a way back to it.
             if crate::remote_reports::owed(&child_id).await {
                 crate::remote_reports::keep(&child_id, &parent_id, &child.title, text).await?;
             }
             return Ok(());
-        };
-        if parent.archived || !crate::bots::in_bot_tree(&child).await {
+        }
+        if !crate::bots::in_bot_tree(&child).await {
             return Ok(());
         }
+        // The parent while it is live; once it is settled or deleted, the
+        // nearest live session above it, up to the bot's chat.
+        let Some(to) = store::live_ancestor(&child).await? else { return Ok(()) };
         let Some(from) = sender(Some(&child_id)).await else { return Ok(()) };
-        deliver_report(parent_id, text, from, app).await
+        deliver_report(to.session_id, text, from, app).await
     })
 }
 

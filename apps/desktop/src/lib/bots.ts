@@ -143,7 +143,9 @@ export function botOf(
   for (let hops = 0; at && hops < 8; hops++) {
     const bot = botAt(list, at.cwd);
     if (bot) return bot;
-    at = at.parentSessionId ? byId.get(at.parentSessionId) : undefined;
+    // A settled or deleted parent is not held: the adoption bridges it.
+    const parent: SessionIndexItem | undefined = at.parentSessionId ? byId.get(at.parentSessionId) : undefined;
+    at = parent ?? (at.adoptedBy ? byId.get(at.adoptedBy) : undefined);
   }
   return undefined;
 }
