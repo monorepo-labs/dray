@@ -658,7 +658,12 @@ pub async fn island_done(session_id: String, note: Option<String>) -> Result<(),
 async fn island_done_mac(session_id: String, note: String) -> Result<(), String> {
     let dir = island_done_dir().ok_or("no home directory")?;
     tokio::fs::create_dir_all(&dir).await.map_err(|err| format!("could not reach the island: {err}"))?;
-    tokio::fs::write(dir.join(&session_id), note).await.map_err(|err| format!("could not reach the island: {err}"))?;
+    // Written beside the inbox and moved in whole, so the island never reads a
+    // note half-written and takes it for an empty file, a finished turn.
+    let tmp = dir.with_file_name(format!("{session_id}.tmp"));
+    let reach = |err: std::io::Error| format!("could not reach the island: {err}");
+    tokio::fs::write(&tmp, note).await.map_err(reach)?;
+    tokio::fs::rename(&tmp, dir.join(&session_id)).await.map_err(reach)?;
     tokio::process::Command::new("notifyutil").args(["-p", "com.yogesh.dray.island.done"]).output().await.ok();
     Ok(())
 }

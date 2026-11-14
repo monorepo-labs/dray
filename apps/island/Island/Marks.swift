@@ -310,7 +310,8 @@ struct DonePill: View {
                         .font(.system(size: 13, weight: .semibold))
                     // Several are a count alone; their titles wait for the pointer.
                     if items.count == 1, let first = items.first {
-                        DoneTitle(title: first.title, cap: 240)
+                        // A note takes the room "Done" left, so the title gives it back to fit the pill's window.
+                        DoneTitle(title: first.title, cap: first.note == nil ? 240 : 160)
                         OpenInAppButton(chord: true) { openInApp(first.key) }
                     }
                 }
@@ -321,7 +322,7 @@ struct DonePill: View {
                         VStack(spacing: 0) {
                             ForEach(items, id: \.key) { item in
                                 HStack(spacing: 8) {
-                                    Button { open(item.key) } label: { DoneTitle(title: item.title, cap: 240) }
+                                    Button { open(item.key) } label: { DoneTitle(title: item.title, cap: item.note == nil ? 240 : 120) }
                                         .buttonStyle(.plain)
                                     if let note = item.note {
                                         Text(note).font(.system(size: 12)).foregroundStyle(StatusDot.waiting).lineLimit(1)
