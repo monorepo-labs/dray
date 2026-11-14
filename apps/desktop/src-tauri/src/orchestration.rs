@@ -462,6 +462,7 @@ fn session_named(request: &Request) -> Option<&str> {
         Request::Browser(r) => Some(&r.session_id),
         Request::MergeCard(r) => Some(&r.session_id),
         Request::SetNeed(r) => Some(&r.session_id),
+        Request::React(r) => Some(&r.session_id),
         // Never `AddVideo` or `AddImage`: its path is this machine's, and forwarded it would
         // name a file the other machine does not have, or a different one.
         _ => None,
@@ -973,6 +974,17 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::AddVideo(video) => add_video(video, false).await,
         Request::AddImage(image) => add_video(image, true).await,
         Request::MergeCard(card) => post_merge_card(card, app).await,
+        Request::React(react) => {
+            let chat = store::get_session_index_item(&react.session_id)
+                .await?
+                .with_context(|| format!("no session {}", react.session_id))?;
+            let payload = crate::bots::react::reaction(&chat.session_id, &chat.cwd, &react.emoji).await?;
+            let emoji = crate::bots::react::emoji(&react.emoji).unwrap_or_default().to_string();
+            // Logged, not posted: a reaction is the bot saying nothing, so its
+            // turn stays a silent one and raises no Done.
+            manager().log_event(&chat.session_id, chat.harness, payload, app).await?;
+            Ok(Response::Reacted { emoji })
+        }
         Request::SetNeed(need) => {
             let text = Some(need.need.trim().to_string()).filter(|t| !t.is_empty());
             crate::store::set_session_need(&need.session_id, text)

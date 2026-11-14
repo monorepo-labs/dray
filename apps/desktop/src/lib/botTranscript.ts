@@ -6,7 +6,8 @@ import type { JsonValue } from "@/types/serde_json/JsonValue";
 /// One row of a bot's chat. A bot is talked to like a person, so its chat draws
 /// the conversation and the tasks it started, never the tool calls between.
 export type BotItem =
-  | { kind: "user"; event: AgentEvent }
+  /// `reaction` is the bot's emoji on it, the newest where it reacted twice.
+  | { kind: "user"; event: AgentEvent; reaction?: string }
   | { kind: "assistant"; event: AgentEvent }
   /// An error, or a turn that failed: drawn as the transcript draws them, since
   /// a bot turn that fails before answering otherwise ends with no word why.
@@ -330,6 +331,7 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
   const sends = new Map<string, ReturnType<typeof sentMessages>>();
   const items: BotItem[] = [];
   const undone = undoneLessons(events);
+  const reactions = reactionsOf(events);
   // Inside a turn Dray's review opened, whose words are for nobody: told to
   // write no reply, the bot sometimes explains itself anyway.
   let review = false;
@@ -342,7 +344,7 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       // reply carries what it said, so the chat names who wrote and folds the rest.
       if (p.from?.botId) items.push({ kind: "botMessage", event, botId: p.from.botId, title: p.from.title });
       else if (p.from) items.push({ kind: "report", event, sessionId: p.from.sessionId, title: p.from.title });
-      else if (!p.kickoff) items.push({ kind: "user", event });
+      else if (!p.kickoff) items.push({ kind: "user", event, reaction: reactions.get(event.id) });
     } else if (p.type === "assistant_text") {
       if (hasText(p.text) && !review) items.push({ kind: "assistant", event });
     } else if (p.type === "error") {
@@ -402,6 +404,16 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
     }
   }
   return items;
+}
+
+/// The bot's reaction on each message it reacted to, by message id. Read whole
+/// before the rows, since a reaction lands after its message; the newest wins.
+function reactionsOf(events: readonly AgentEvent[]): Map<string, string> {
+  const reactions = new Map<string, string>();
+  for (const { payload } of events) {
+    if (payload.type === "reaction") reactions.set(payload.messageId, payload.emoji);
+  }
+  return reactions;
 }
 
 const lessonKey = (commit: string, path: string) => `${commit}\0${path}`;

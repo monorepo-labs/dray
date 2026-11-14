@@ -212,6 +212,7 @@ function sameItem(x: BotRow, y: BotRow): boolean {
       x.items.every((t, i) => itemKey(t) === itemKey(y.items[i]))
     );
   }
+  if (x.kind === "user") return y.kind === "user" && x.event === y.event && x.reaction === y.reaction;
   if ("event" in x) return "event" in y && x.event === y.event;
   if (x.kind === "learned") return y.kind === "learned" && x.key === y.key && x.undone === y.undone;
   return rowKey(x) === rowKey(y);
@@ -260,6 +261,17 @@ const ChatRow = memo(function ChatRow({ item, time, tight, isNew, bots, taskOf, 
         <StartedLine
           party={{ id: item.sessionId, title: taskOf?.(item.sessionId)?.title ?? "Task" }}
           onOpen={(alone) => onOpenSession(item.sessionId, alone)}
+        />
+      ) : item.kind === "user" && item.event.payload.type === "user_message" ? (
+        <UserMessage
+          eventId={item.event.id}
+          text={item.event.payload.text}
+          images={item.event.payload.images}
+          issues={item.event.payload.issues}
+          cwd={item.event.payload.cwd}
+          reaction={item.reaction}
+          onOpenSession={onOpenSession}
+          onOpenBot={onOpenBot}
         />
       ) : item.kind === "assistant" ? (
         <BotBubble tight={tight}>

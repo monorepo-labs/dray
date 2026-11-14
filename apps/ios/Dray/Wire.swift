@@ -406,6 +406,8 @@ enum Payload: Decodable {
     /// Lessons a bot turn filed, one per file, and one taken back.
     case learned(commit: String, files: [Lesson])
     case learnedUndone(commit: String, path: String)
+    /// A bot's emoji on a message the user typed, in place of a reply.
+    case reaction(messageId: String, emoji: String)
     case error(String)
     case other(String)
 
@@ -465,6 +467,9 @@ enum Payload: Decodable {
             case "learned_undone":
                 self = .learnedUndone(commit: try c.decode(String.self, forKey: "commit"),
                                       path: try c.decode(String.self, forKey: "path"))
+            case "reaction":
+                self = .reaction(messageId: try c.decode(String.self, forKey: "messageId"),
+                                 emoji: try c.decode(String.self, forKey: "emoji"))
             default:
                 self = .other(type)
             }
