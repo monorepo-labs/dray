@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import UIKit
 
 /// `transcription.rs`'s `TranscribeOutcome`. An unknown kind reads as a failure naming it.
 enum TranscribeOutcome: Decodable {
@@ -162,12 +163,22 @@ final class Dictations {
     }
 
     /// The file goes once the server has answered, whatever it said; a send
-    /// that never reached it keeps the file for Retry.
+    /// that never reached it keeps the file for Retry. Leaving the app keeps
+    /// it running for the system's grace; a send cut off by suspension goes
+    /// again once the app is back, since the server dropped the reply with the socket.
     private func send(_ store: Store, _ server: UUID, _ draft: SessionKey, _ url: URL) async {
         let run = UUID()
         pending[draft] = run
         phase[draft] = .transcribing
+        var suspended = false
+        var grace = UIBackgroundTaskIdentifier.invalid
+        grace = UIApplication.shared.beginBackgroundTask(withName: "Dictation") {
+            suspended = true
+            UIApplication.shared.endBackgroundTask(grace)
+            grace = .invalid
+        }
         defer {
+            if grace != .invalid { UIApplication.shared.endBackgroundTask(grace) }
             if pending[draft] == run {
                 pending[draft] = nil
                 phase[draft] = nil
@@ -190,6 +201,16 @@ final class Dictations {
             guard pending[draft] == run else {
                 try? FileManager.default.removeItem(at: url)
                 return
+            }
+            if suspended || UIApplication.shared.applicationState == .background {
+                // Polled: a suspended app spends nothing on it.
+                while UIApplication.shared.applicationState != .active { try? await Task.sleep(for: .seconds(1)) }
+                for _ in 0..<40 where !store.canDictate(server) { try? await Task.sleep(for: .milliseconds(500)) }
+                guard pending[draft] == run else {
+                    try? FileManager.default.removeItem(at: url)
+                    return
+                }
+                if store.canDictate(server) { return await send(store, server, draft, url) }
             }
             kept[draft] = url
             notes[draft] = "Couldn't transcribe: \(error.localizedDescription)"
