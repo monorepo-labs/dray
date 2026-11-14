@@ -5,28 +5,44 @@ struct TranscriptView: View {
     @Environment(Store.self) private var store
     let key: SessionKey
     @State private var fixing = false
+    @State private var showingTasks = false
+    @Environment(\.openTask) private var openTask
     /// The floating banner's height, kept clear above the first row so it never sits on "Load earlier".
     @State private var bannerHeight: CGFloat = 0
+    /// How many of a bot chat's earlier sessions are drawn above this one.
+    @State private var earlier = 0
+    /// Whether new rows scroll into view: dropped by the reader scrolling up (`FollowsBottom`).
+    @State private var following = true
 
     private var item: SessionItem? { store.items[key] }
     private var busy: Bool { item?.busy ?? false }
 
     var body: some View {
         let transcript = store.transcripts[key]
-        let turns = buildTurns(transcript?.events ?? [], busy: busy)
+        let bot = store.bot(key)
+        // A bot's chat draws the conversation alone, so its turns are never built.
+        let turns = bot == nil ? buildTurns(transcript?.events ?? [], busy: busy) : []
+        let botTasks = bot.map { store.botTasks(store.botChat(key.server, $0)) } ?? []
         let asks = store.asks[key] ?? []
+        let segments = segments(bot)
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 28) {
-                    if transcript?.olderBefore != nil { older }
+                VStack(alignment: .leading, spacing: 28) {
+                    if store.transcripts[segments[0]]?.olderBefore != nil || hidden(bot, segments) != nil { older(bot, segments) }
                     if transcript == nil {
                         placeholder
-                    } else if turns.isEmpty && !busy && (store.queued[key] ?? []).isEmpty {
+                    } else if bot == nil && turns.isEmpty && !busy && (store.queued[key] ?? []).isEmpty {
                         // A session made elsewhere can have no turns yet; blank would read as still loading.
                         EmptyState(title: "No messages yet", message: "Send one to start this session.") {
                             Image(systemName: "bubble.left").font(.largeTitle).foregroundStyle(Theme.tertiary)
                         }
                         .frame(minHeight: 420)
+                    }
+                    if bot != nil {
+                        ForEach(Array(segments.enumerated()), id: \.element) { i, segment in
+                            if i > 0 { SwitchLine(harness: store.items[segment]?.harness) }
+                            if let events = store.transcripts[segment]?.events { BotChatRows(key: segment, events: events) }
+                        }
                     }
                     ForEach(turns) { TurnView(turn: $0) }
                     ForEach(store.queued[key] ?? [], id: \.id) { q in
@@ -43,12 +59,18 @@ struct TranscriptView: View {
                         }
                         .font(Theme.Font.footnote)
                     }
-                    if busy {
+                    if busy, bot != nil {
+                        // A review's turn draws nothing, its orb included.
+                        if !inReviewTurn(transcript?.events ?? []) {
+                            OrbLine(activity: .working, label: currentTool(transcript?.events ?? []) ?? "Working")
+                        }
+                    } else if busy {
                         WorkingLine()
                     } else if let n = store.tasks[key], n > 0 {
                         OrbLine(activity: .background, label: n == 1 ? "1 background task running" : "\(n) background tasks running")
                     }
                     ForEach(asks) { AskCard(key: key, event: $0) }
+                    if bot != nil { StalledCard(tasks: botTasks) }
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(.horizontal, Theme.Space.l)
@@ -58,10 +80,17 @@ struct TranscriptView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .contentMargins(.top, bannerHeight, for: .scrollContent)
-            // Opens on the newest turn: a scrollTo on appear lands in a lazy stack's estimate and draws blank.
+            // Opens on the newest turn. The stack is eager on purpose: a lazy one scrolled
+            // to its end by estimate, and when the read replaced what the cache drew with
+            // less, the view sat past the new end, blank until the reader swiped.
             .defaultScrollAnchor(.bottom)
+            .modifier(FollowsBottom(following: $following))
             // The newest row, not the count, or loading earlier turns would jump to the end.
-            .onChange(of: "\(turns.last?.id ?? "")|\(turns.last?.work.last?.newestId ?? "")|\(turns.last?.completed ?? false)|\(asks.count)|\(busy)") {
+            .onChange(of: "\(turns.last?.id ?? "")|\(turns.last?.work.last?.newestId ?? "")|\(turns.last?.completed ?? false)|\(asks.count)|\(busy)|\(bot == nil ? "" : transcript?.events.last?.id ?? "")") {
+                if following { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onChange(of: store.sends[key]) {
+                following = true
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
         }
@@ -77,15 +106,46 @@ struct TranscriptView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) { title }
+            if bot != nil {
+                // The PR button's place: a bot has no PR, and its tasks are what the list leaves out.
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showingTasks = true } label: { Image(systemName: "checklist") }
+                        .accessibilityLabel("Tasks")
+                }
+            }
         }
-        .modifier(LocalServersButton(key: key))
+        .modifier(LocalServersButton(key: key, shown: bot == nil))
         .task { await store.open(key) }
         .prPanel(key)
+        .sheet(isPresented: $showingTasks) { BotTasksSheet(tasks: botTasks) { openTask?($0) } }
         .sheet(isPresented: $fixing) { SettingsView(focus: key.server) }
     }
 
     /// The session's title over where it runs: its project and its machine, never the branch.
-    private var title: some View {
+    @ViewBuilder private var title: some View {
+        if let bot = store.bot(key) {
+            // A bot's folder is no project: its face and name, and where it runs.
+            VStack(spacing: 1) {
+                HStack(spacing: 6) {
+                    BotFace(bot: bot, size: 20)
+                    Text(bot.name).font(Theme.Font.headline).foregroundStyle(Theme.text).lineLimit(1)
+                }
+                HStack(spacing: 4) {
+                    ServerIcon().frame(width: 11, height: 11)
+                    Text(store.name(of: key.server))
+                }
+                .font(Theme.Font.footnote)
+                .foregroundStyle(Theme.tertiary)
+                .lineLimit(1)
+            }
+            .frame(maxWidth: 240)
+            .accessibilityElement(children: .combine)
+        } else {
+            taskTitle
+        }
+    }
+
+    private var taskTitle: some View {
         VStack(spacing: 1) {
             Text(item?.title.isEmpty == false ? item!.title : "Untitled")
                 .font(Theme.Font.headline)
@@ -94,7 +154,8 @@ struct TranscriptView: View {
             if let item {
                 HStack(spacing: 10) {
                     HStack(spacing: 4) {
-                        Image(systemName: "folder.fill").font(.system(size: 11))
+                        // Boxed like the server glyph beside it: a symbol at a font size draws larger than 11pt.
+                        Image(systemName: "folder.fill").resizable().scaledToFit().frame(width: 11, height: 11)
                         Text(item.project)
                     }
                     HStack(spacing: 4) {
@@ -122,20 +183,46 @@ struct TranscriptView: View {
             }
             .frame(minHeight: 420)
         } else {
-            Orb(.loading, size: 32, label: "Loading")
-                .frame(maxWidth: .infinity, minHeight: 320)
+            TranscriptSkeleton()
         }
     }
 
+    /// A bot chat's sessions on screen, oldest first: this one, and the earlier ones an agent
+    /// switch left, each drawn only once the one after it is read back to its start (`drawnSegments`).
+    private func segments(_ bot: Bot?) -> [SessionKey] {
+        guard let bot else { return [key] }
+        let chat = store.botChat(key.server, bot)
+        guard let i = chat.firstIndex(of: key) else { return [key] }
+        return Array(chat[max(0, i - earlier)...i])
+    }
+
+    /// The session an agent switch left just above what is drawn, if any.
+    private func hidden(_ bot: Bot?, _ segments: [SessionKey]) -> SessionKey? {
+        guard let bot else { return nil }
+        let chat = store.botChat(key.server, bot)
+        return chat.firstIndex(of: segments[0]).flatMap { $0 > 0 ? chat[$0 - 1] : nil }
+    }
+
     /// Earlier turns are paged in by asking, so the screen never jumps under a reader mid-sentence.
-    @ViewBuilder private var older: some View {
+    /// Past the top session's start, the next ask draws the session before it.
+    @ViewBuilder private func older(_ bot: Bot?, _ segments: [SessionKey]) -> some View {
+        let top = segments[0]
         HStack {
-            if let error = store.olderErrors[key] {
+            if let error = store.olderErrors[top] {
                 Text("Couldn't load earlier messages. \(sentence(error))")
                     .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
                 Spacer(minLength: Theme.Space.s)
             }
-            Button(store.olderErrors[key] == nil ? "Load earlier" : "Retry") { Task { await store.loadOlder(key) } }
+            Button(store.olderErrors[top] == nil ? "Load earlier" : "Retry") {
+                Task {
+                    if store.transcripts[top]?.olderBefore != nil {
+                        await store.loadOlder(top)
+                    } else if let before = hidden(bot, segments) {
+                        await store.load(before)
+                        earlier += 1
+                    }
+                }
+            }
                 .font(Theme.Font.footnoteStrong)
                 .foregroundStyle(Theme.secondary)
                 .padding(.horizontal, Theme.Space.m)
@@ -225,7 +312,8 @@ struct OrbLine: View {
     var body: some View {
         HStack(spacing: Theme.Space.s) {
             Orb(activity)
-            Text(label).font(Theme.Font.subhead).foregroundStyle(Theme.secondary).shimmer()
+            // A running tool's label can be a whole script: one line, cut short.
+            Text(label).font(Theme.Font.subhead).foregroundStyle(Theme.secondary).lineLimit(1).shimmer()
         }
         .accessibilityElement(children: .combine)
         .transition(.opacity)
@@ -461,7 +549,6 @@ struct ToolRow: View {
                     }
                     if let summary {
                         Text(summary.split(separator: "\n").first.map(String.init) ?? summary)
-                            .font(Theme.Font.footnote)
                             .foregroundStyle(Theme.tertiary)
                             .lineLimit(1)
                     }
@@ -515,7 +602,7 @@ struct GroupRow: View {
                         .foregroundStyle(Theme.secondary)
                         .shimmer(pending)
                         .layoutPriority(1)
-                    if let target { Text(target).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary).lineLimit(1) }
+                    if let target { Text(target).foregroundStyle(Theme.tertiary).lineLimit(1) }
                     if calls.count > targets { Text("\(calls.count) calls").foregroundStyle(Theme.tertiary).layoutPriority(1) }
                     if added + removed > 0 { ChangeCount(added: added, removed: removed) }
                     Chevron(open: open)
@@ -589,5 +676,62 @@ struct MarkdownText: View {
         }
         .tint(Theme.link)
         .textSelection(.enabled)
+    }
+}
+
+/// A transcript's shape while its first read is out with nothing cached: two
+/// turns of grey bars, a prompt on the right and an answer under it.
+struct TranscriptSkeleton: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            turn(prompt: 180, lines: [1, 0.92, 0.6])
+            turn(prompt: 120, lines: [0.85, 1, 0.95, 0.4])
+        }
+        .shimmer()
+        .accessibilityElement()
+        .accessibilityLabel("Loading")
+    }
+
+    private func turn(prompt: CGFloat, lines: [CGFloat]) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
+                .fill(Theme.raised)
+                .frame(width: prompt, height: 40)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            bar(width: 0.4).opacity(0.6)
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, w in bar(width: w) }
+            }
+        }
+    }
+
+    private func bar(width: CGFloat) -> some View {
+        GeometryReader { g in
+            Capsule().fill(Theme.raised).frame(width: g.size.width * width, height: 12)
+        }
+        .frame(height: 12)
+    }
+}
+
+/// The desktop chat's pin (`AT_BOTTOM_PX` in Chat.tsx): new rows follow while the
+/// view is within 40pt of the end. Only a scroll the reader made drops it, since
+/// rows landing push the end away too; coming back to the end raises it again.
+/// iOS 17 has no scroll phase to tell the two apart, so there it always follows.
+struct FollowsBottom: ViewModifier {
+    @Binding var following: Bool
+    @State private var reading = false
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content
+                .onScrollPhaseChange { _, phase in reading = phase == .interacting || phase == .decelerating }
+                .onScrollGeometryChange(for: CGFloat.self) { g in
+                    g.contentSize.height + g.contentInsets.bottom - g.containerSize.height - g.contentOffset.y
+                } action: { _, left in
+                    if left < 40 { following = true } else if reading { following = false }
+                }
+        } else {
+            content
+        }
     }
 }

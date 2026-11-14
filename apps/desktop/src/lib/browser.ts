@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react";
 
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { channel } from "@/lib/channel";
+import { SPLIT_HOST } from "@/lib/splitPanes";
 import { pushClosedTab } from "@/lib/tabOrder";
 import type { BrowserVisit } from "@/lib/history";
 import type { ChromiumStatus } from "@/types/events";
@@ -113,8 +114,10 @@ function start() {
     // hide and nothing to wait for. Answered before `present`, which in
     // that case does no work and would leave the shot waiting on a hide
     // that is never going to happen.
-    // Nor where the shot is of a tab the reader is not on.
-    if (on && (!shown || winner?.sessionId !== sessionId || !hiding())) shutterReady(shot);
+    // Nor where the shot is of a tab the reader is not on. A split pane on
+    // the shot tab answers once its own still is up, in `presentPins`.
+    const pinned = [...pins.values()].some((p) => shotCovers(p.sessionId, p.tab));
+    if (on && !pinned && (!shown || winner?.sessionId !== sessionId || !hiding())) shutterReady(shot);
     present();
     notify();
   });
@@ -208,14 +211,20 @@ const OPEN_SURFACES = '[data-radix-popper-content-wrapper], [data-slot$="-overla
 /// view back under the menu that stays.
 function judgeOcclusion() {
   if (!modalOpen || occluded) return;
-  const view = presenter()?.rect;
-  if (!view) return;
+  // Every view on screen, split panes' too: one hides them all, each behind
+  // its own still, which is the page pixel for pixel.
+  const views = [presenter()?.rect, ...[...pins.values()].map((p) => p.rect)].filter(
+    (r): r is DOMRectReadOnly => !!r,
+  );
+  if (views.length === 0) return;
   const open = [...document.querySelectorAll(OPEN_SURFACES)];
   occluded =
     open.length === 0 ||
     open.some((el) => {
       const r = el.getBoundingClientRect();
-      return r.left < view.right && r.right > view.left && r.top < view.bottom && r.bottom > view.top;
+      return views.some(
+        (view) => r.left < view.right && r.right > view.left && r.top < view.bottom && r.bottom > view.top,
+      );
     });
   present();
 }
@@ -261,8 +270,23 @@ export function clearOpenError(sessionId: string) {
 
 /// `fromBlank` is the blank tab the URL was typed into, which the page
 /// replaces when it arrives.
-export function openInBrowser(sessionId: string, url: string, newTab = false, fromBlank?: number | null) {
+export function openInBrowser(
+  sessionId: string,
+  url: string,
+  newTab = false,
+  fromBlank?: number | null,
+  /// A split pane's own tab, loaded in place of the active one.
+  tab?: number,
+) {
   openErrors.delete(sessionId);
+  if (tab !== undefined) {
+    notify();
+    return invoke("browser_open", { sessionId, url, newTab: false, tab }).catch((e: unknown) => {
+      openErrors.set(sessionId, String(e));
+      notify();
+      throw e;
+    });
+  }
   if (fromBlank != null) submitted.set(sessionId, fromBlank);
   // A page loading into a tab already there draws its address from Rust at
   // once; one that has to be made first has no tab to draw it on yet.
@@ -317,12 +341,17 @@ export function closeTab(sessionId: string, id: number) {
   return invoke("browser_close", { sessionId, id });
 }
 
-export function navigate(sessionId: string, action: "back" | "forward" | "reload" | "stop" | "hard_reload") {
-  return invoke("browser_nav", { sessionId, action });
+/// `tab` is a split pane's own; without it the active tab is meant.
+export function navigate(
+  sessionId: string,
+  action: "back" | "forward" | "reload" | "stop" | "hard_reload",
+  tab?: number,
+) {
+  return invoke("browser_nav", { sessionId, action, tab });
 }
 
-export function openDevTools(sessionId: string) {
-  return invoke("browser_devtools", { sessionId });
+export function openDevTools(sessionId: string, tab?: number) {
+  return invoke("browser_devtools", { sessionId, tab });
 }
 
 // --- Picking an element ------------------------------------------------------
@@ -556,10 +585,12 @@ export function activateBlankTab(sessionId: string, id: number) {
   }
 }
 
-export function closeBlankTab(sessionId: string, id: number) {
+/// `remember: false` is a blank turned into another view: it was never
+/// closed, so ⌘⇧T has nothing to bring back.
+export function closeBlankTab(sessionId: string, id: number, remember = true) {
   const b = blanks.get(sessionId) ?? NO_BLANKS;
   const page = parked.get(sessionId)?.[id];
-  pushClosedTab(sessionId, { key: `blank:${id}`, page });
+  if (remember) pushClosedTab(sessionId, { key: `blank:${id}`, page });
   if (page) setParked(sessionId, id, null);
   drafts.delete(`${sessionId}:blank:${id}`);
   if (b.active === id) openErrors.delete(sessionId);
@@ -791,6 +822,16 @@ export function setSuggesting(on: boolean) {
   present();
 }
 
+/// A tab is held over the main view to split it out. The drop zone is DOM,
+/// so every page hides behind its still while it is up.
+let dropping = false;
+
+export function setDropping(on: boolean) {
+  if (on === dropping) return;
+  dropping = on;
+  present();
+}
+
 /// The pages a session's browser visited, newest first; empty where the
 /// read fails or this build has no browser.
 export function browserHistory(sessionId: string): Promise<BrowserVisit[]> {
@@ -803,7 +844,7 @@ export function browserHistory(sessionId: string): Promise<BrowserVisit[]> {
 /// all agree about it — they each asked `occluded` separately before, which
 /// left a shot drawing a still nothing would hide behind.
 function hiding(): boolean {
-  if (occluded || suggesting) return true;
+  if (occluded || suggesting || dropping) return true;
   const winner = presenter();
   if (!winner) return false;
   const active = tabsBySession.get(winner.sessionId)?.find((t) => t.active)?.id;
@@ -874,6 +915,7 @@ function presenter(): Claim | null {
 }
 
 function present() {
+  presentPins();
   const winner = presenter();
   if (winner && modalOpen && occluded === null && !shown) return;
   // A shot hides the view the same way a modal does, and only for the
@@ -937,6 +979,140 @@ function present() {
       // before: the whole point is that the reflow happens off screen.
       .then(() => shutterReady(covering));
   }
+}
+
+// --- Split panes -------------------------------------------------------------
+
+/// A split pane's tab and the rect it is drawn on. Every pin is on screen at
+/// once, unlike the claims above, of which one wins.
+type Pin = { sessionId: string; tab: number; rect: DOMRectReadOnly };
+const pins = new Map<string, Pin>();
+/// A pane's still while its view is off screen, keyed like `pins`. `painted`
+/// once the picture is up, which is when the view may go.
+type PinStill = { url: string | null; painted: boolean };
+const pinStills = new Map<string, PinStill>();
+const pinCapturing = new Set<string>();
+let pinsSent = 0;
+// Rust holds the pins past a reload of this page, which forgets the panes;
+// left there, a page from the last load stays on screen over whatever loads.
+void invoke("browser_pins", { pins: [] }).catch(() => undefined);
+
+/// A shot under way lays out `tab` of `sessionId`.
+function shotCovers(sessionId: string, tab: number): boolean {
+  return [...shooting.values()].some((s) => s.sessionId === sessionId && (s.tab === null || s.tab === tab));
+}
+
+/// The pane's view goes off screen for the same reasons the main one does.
+function pinHidden(p: Pin): boolean {
+  return !!occluded || suggesting || dropping || shotCovers(p.sessionId, p.tab);
+}
+
+/// A split pane says "this tab is drawn here". `null` withdraws it.
+export function claimPin(key: string, pin: Pin | null) {
+  if (pin) pins.set(key, pin);
+  else {
+    pins.delete(key);
+    pinStills.delete(key);
+  }
+  presentPins();
+  judgeSoon();
+}
+
+/// Withdraws a pin two frames on, unless the pane claimed again meanwhile:
+/// an effect re-running drops and makes its claim in one go, and the view
+/// would otherwise blink off between the two.
+export function releasePin(key: string) {
+  const held = pins.get(key);
+  if (!held) return;
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      if (pins.get(key) === held) claimPin(key, null);
+    }),
+  );
+}
+
+export function usePinStill(key: string): PinStill | null {
+  return useSyncExternalStore(subscribe, () => pinStills.get(key) ?? null);
+}
+
+/// The pane's picture has decoded: two frames on so it has painted, then the
+/// view may go.
+export function pinStillPainted(key: string, of: PinStill) {
+  if (pinStills.get(key) !== of) return;
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      if (pinStills.get(key) !== of) return;
+      pinStills.set(key, { ...of, painted: true });
+      notify();
+      presentPins();
+    }),
+  );
+}
+
+/// The same capture the main view hides behind, per pane.
+function capturePin(key: string, p: Pin) {
+  pinCapturing.add(key);
+  const timeout = new Promise<null>((r) => setTimeout(() => r(null), 400));
+  void Promise.race([invoke<string>("browser_snapshot", { sessionId: p.sessionId, tab: p.tab }), timeout])
+    .catch(() => null)
+    .then((url) => {
+      pinCapturing.delete(key);
+      const now = pins.get(key);
+      if (!now || !pinHidden(now)) return;
+      // No picture: the view still goes, over nothing.
+      pinStills.set(key, { url, painted: !url });
+      notify();
+      if (!url) presentPins();
+    });
+}
+
+/// Sends every pin that should be on screen. A pane that must hide keeps its
+/// view up until its still has painted, then drops it; one coming back drops
+/// its still only once the view is over it again.
+function presentPins() {
+  const placed: Pin[] = [];
+  for (const [key, p] of pins) {
+    if (p.rect.width <= 0 || p.rect.height <= 0) continue;
+    if (!pinHidden(p)) {
+      placed.push(p);
+      continue;
+    }
+    if (pinStills.get(key)?.painted) continue;
+    placed.push(p);
+    if (!pinCapturing.has(key) && !pinStills.has(key)) capturePin(key, p);
+  }
+  // `present` runs on every claim and modal change; with no pane, once is enough.
+  const shooting = [...pins.values()].some((p) => shotCovers(p.sessionId, p.tab));
+  if (placed.length === 0 && pinsSent === 0 && !shooting) return;
+  pinsSent = placed.length;
+  const covering = shot;
+  const z = zoomLevel();
+  // The last pane's right foot is the sheet's corner and is rounded with it.
+  const right = document.querySelector(`[${SPLIT_HOST}]`)?.getBoundingClientRect().right;
+  void invoke("browser_pins", {
+    pins: placed.map((p) => ({
+      tab: p.tab,
+      x: p.rect.left * z,
+      y: p.rect.top * z,
+      width: p.rect.width * z,
+      height: p.rect.height * z,
+      edge: right !== undefined && Math.abs(p.rect.right - right) < 2,
+    })),
+  })
+    .catch(() => undefined)
+    .then(() => {
+      let dropped = false;
+      for (const key of pinStills.keys()) {
+        const p = pins.get(key);
+        if (p && !pinHidden(p)) {
+          pinStills.delete(key);
+          dropped = true;
+        }
+      }
+      if (dropped) notify();
+      // Every pane a shot lays out is off screen now, so it may proceed.
+      if (shooting &&!placed.some((p) => shotCovers(p.sessionId, p.tab))) shutterReady(covering);
+    });
 }
 
 /// Tells shot `of` the page is covered. Also the answer when there is

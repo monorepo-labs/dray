@@ -212,6 +212,12 @@ Opens on the newest turns (`turns: 8`), pages older ones in on scroll to top.
 A reconnect re-reads the open session's tail and appends what it does not hold,
 matched on event id, never `seq`.
 
+New rows follow only while the reader is within 40pt of the end, the
+desktop's pin: a scroll up leaves them where they are, coming back or sending
+follows again (`FollowsBottom`, iOS 18; iOS 17 always follows). The stack is
+a `VStack`, not lazy: a lazy one's height estimates left a chat opened from
+the cache scrolled past its end, blank, once the read drew less.
+
 ## Pairing
 
 A connect line is `<address> <64-hex token>`, what `dray server tunnel on`

@@ -46,8 +46,8 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 
-    /// Run this on another machine, as `dray machine ls` names it. `session ls` also takes `all`. A session id finds its
-    /// machine on its own.
+    /// Run this on another machine, as `dray machine ls` names it. `session ls` also takes `all`, and `session new`
+    /// takes `cloud` for a fresh Dray Cloud machine. A session id finds its machine on its own.
     #[arg(long, global = true, value_name = "NAME")]
     machine: Option<String>,
 }

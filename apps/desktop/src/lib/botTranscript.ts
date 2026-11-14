@@ -1,6 +1,6 @@
 import { stripSenderPrefix } from "@/lib/relay";
 import { drawsFailure } from "@/lib/transcript";
-import type { AgentEvent, Harness } from "@/types/events";
+import type { AgentEvent, Harness, LearnedFile } from "@/types/events";
 import type { JsonValue } from "@/types/serde_json/JsonValue";
 
 /// One row of a bot's chat. A bot is talked to like a person, so its chat draws
@@ -22,7 +22,10 @@ export type BotItem =
   /// `botId` is the one the CLI printed, absent from a send made before it did.
   | { kind: "botSent"; key: string; bot: string; botId?: string; text: string; ts: string }
   /// Where the chat moved to another agent: one session ends and the next begins.
-  | { kind: "switch"; key: string; harness: Harness; ts: string };
+  | { kind: "switch"; key: string; harness: Harness; ts: string }
+  /// One file a turn changed in the bot's instructions, skills or memory, with
+  /// whether the reader has since undone it.
+  | { kind: "learned"; key: string; sessionId: string; commit: string; file: LearnedFile; undone: boolean; ts: string };
 
 /// One session of a bot's chat. An agent switch starts a new one, and the chat
 /// draws them all in order.
@@ -36,6 +39,25 @@ export function drawnSegments<T extends { olderBefore?: number | null }>(segment
   let from = segments.length - 1;
   while (from > 0 && segments[from].olderBefore == null) from--;
   return segments.slice(Math.max(from, 0));
+}
+
+/// Where a bot chat draws from when it shows its last `turns` turns: the index of
+/// the main-thread message opening the oldest of them, or 0 with fewer held. A
+/// turn is cut only there, so a task's `dray session new` and the id it printed
+/// never land on opposite sides of the cut. A queued message is no cut: it
+/// lands inside a running turn, between a call and its result.
+export function lastTurns(events: readonly AgentEvent[], turns: number): number {
+  for (let i = events.length - 1; i > 0; i--) {
+    const { subagent, payload } = events[i];
+    if (!subagent && payload.type === "user_message" && !payload.queued && --turns === 0) return i;
+  }
+  return 0;
+}
+
+/// Where a bot chat drawing from `from` draws from once it grows by `turns`
+/// turns above it, or 0 at the start of what is held.
+export function earlierTurns(events: readonly AgentEvent[], from: number, turns: number): number {
+  return lastTurns(events.slice(0, from), turns);
 }
 
 /// The rows of a bot's whole chat, its sessions oldest first, with a line where
@@ -291,6 +313,13 @@ export function botRows(items: readonly BotItem[]): BotRow[] {
   return rows;
 }
 
+/// Whether `text` holds anything a reader could see: whitespace and format
+/// characters (zero-width spaces and joiners) alone are no reply. Keep in step
+/// with `has_text` in events.rs, which decides Done, unread and the preview.
+export function hasText(text: string): boolean {
+  return !/^[\p{White_Space}\p{Cf}]*$/u.test(text);
+}
+
 /// The rows of a bot's chat, in log order.
 ///
 /// A task is found by its `dray session new` call and named by the id that
@@ -300,21 +329,38 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
   const starts = new Set<string>();
   const sends = new Map<string, ReturnType<typeof sentMessages>>();
   const items: BotItem[] = [];
+  const undone = undoneLessons(events);
+  // Inside a turn Dray's review opened, whose words are for nobody: told to
+  // write no reply, the bot sometimes explains itself anyway.
+  let review = false;
   for (const event of events) {
     if (event.subagent) continue;
     const p = event.payload;
     if (p.type === "user_message") {
+      review = !!p.kickoff && p.text.startsWith(REVIEW);
       // A task's report-back is the bot's input, not the reader's: the bot's
       // reply carries what it said, so the chat names who wrote and folds the rest.
       if (p.from?.botId) items.push({ kind: "botMessage", event, botId: p.from.botId, title: p.from.title });
       else if (p.from) items.push({ kind: "report", event, sessionId: p.from.sessionId, title: p.from.title });
       else if (!p.kickoff) items.push({ kind: "user", event });
     } else if (p.type === "assistant_text") {
-      if (p.text.trim()) items.push({ kind: "assistant", event });
+      if (hasText(p.text) && !review) items.push({ kind: "assistant", event });
     } else if (p.type === "error") {
       items.push({ kind: "notice", event });
     } else if (p.type === "merge_card") {
       items.push({ kind: "card", event });
+    } else if (p.type === "learned") {
+      for (const file of p.files) {
+        items.push({
+          kind: "learned",
+          key: `${event.id}:${file.path}`,
+          sessionId: event.sessionId,
+          commit: p.commit,
+          file,
+          undone: undone.has(lessonKey(p.commit, file.path)),
+          ts: event.ts,
+        });
+      }
     } else if (p.type === "turn_completed" && drawsFailure(p)) {
       // The harness says the failure twice, as text and on the turn; the red
       // row wins, as in the transcript.
@@ -358,11 +404,35 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
   return items;
 }
 
+const lessonKey = (commit: string, path: string) => `${commit}\0${path}`;
+
+const LESSON_KINDS: Record<string, string> = { instructions: "Rule", skill: "Skill", memory: "Memory" };
+
+/// The grey word a Learned line opens with: Rule, New skill, Removed memory.
+/// A kind a later server adds reads as a plain Lesson rather than nothing.
+export function lessonKind(file: LearnedFile): string {
+  const kind = LESSON_KINDS[file.kind] ?? "Lesson";
+  if (file.change === "added") return `New ${kind.toLowerCase()}`;
+  if (file.change === "removed") return `Removed ${kind.toLowerCase()}`;
+  return kind;
+}
+
+/// Every lesson the reader undid, by commit and path. Read whole before the
+/// rows, since the undo lands after the row it takes back.
+function undoneLessons(events: readonly AgentEvent[]): Set<string> {
+  const undone = new Set<string>();
+  for (const { payload } of events) {
+    if (payload.type === "learned_undone") undone.add(lessonKey(payload.commit, payload.path));
+  }
+  return undone;
+}
+
 /// What a stalled task's row in the "Waiting on you" card scrolls the chat to,
 /// by item key: the bot's reply to the task's last report, everything it did
 /// before the next message came in. The report itself stays folded, since the
 /// reply already says what it held. A stall nudge is Dray's, not the task's, so
-/// it is skipped. With no reply to point at, the line that started the task.
+/// it is skipped. Empty where there is no reply to point at, and the card opens
+/// the task instead.
 export function taskContext(items: readonly BotItem[], sessionId: string): Set<string> {
   let at = items.length - 1;
   for (; at >= 0; at--) {
@@ -381,13 +451,25 @@ export function taskContext(items: readonly BotItem[], sessionId: string): Set<s
     if (item.kind === "user" || item.kind === "report" || item.kind === "botMessage") break;
     keys.add(itemKey(item));
   }
-  if (keys.size > 0) return keys;
-  const started = items.find((i) => i.kind === "task" && i.sessionId === sessionId);
-  return new Set(started ? [itemKey(started)] : []);
+  return keys;
 }
 
 /// An item's React key, as the chat draws it.
 export const itemKey = (item: BotItem): string => ("key" in item ? item.key : item.event.id);
+
+/// How Dray opens every review it sends (`learn::REVIEW`).
+const REVIEW = "Review:";
+
+/// Whether the turn now open was started by Dray's review, whose reply is
+/// hidden, so nothing it streams may draw a bubble either.
+export function inReviewTurn(events: readonly AgentEvent[]): boolean {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const { payload, subagent } = events[i];
+    if (subagent || payload.type !== "user_message") continue;
+    return !!payload.kickoff && payload.text.startsWith(REVIEW);
+  }
+  return false;
+}
 
 /// How `nudge_bot` opens every nudge it sends.
 const NUDGE = "Stall nudge:";

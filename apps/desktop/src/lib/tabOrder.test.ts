@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { forgetClosedTabs, moveKey, popClosedTab, pushClosedTab, reconcile } from "./tabOrder";
+import { forgetClosedTabs, moveKey, movedTo, popClosedTab, pushClosedTab, reconcile } from "./tabOrder";
 
 describe("forgetClosedTabs", () => {
   it("drops a deleted task's tab from its bot's closed list", () => {
@@ -57,5 +57,17 @@ describe("reconcile", () => {
 describe("moveKey", () => {
   it("moves a key to the index the drag answered", () => {
     expect(moveKey(["a", "b", "c"], "a", 2)).toEqual(["b", "c", "a"]);
+  });
+});
+
+describe("movedTo", () => {
+  const drawn = (keys: string[]) => keys.map((key) => ({ key }));
+
+  it("counts a drop among the drawn tabs, past a split one hidden between", () => {
+    const order = ["chat", "page:1", "file:a", "changes"];
+    // page:1 is split out, so the row draws chat, file:a, changes.
+    const row = drawn(["chat", "file:a", "changes"]);
+    expect(movedTo(order, row, "file:a", 2)).toEqual(["chat", "page:1", "changes", "file:a"]);
+    expect(movedTo(order, row, "changes", 0)).toEqual(["changes", "chat", "page:1", "file:a"]);
   });
 });

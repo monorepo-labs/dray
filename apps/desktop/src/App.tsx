@@ -98,6 +98,8 @@ import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/Merg
 import { cardRepos } from "@/lib/mergeCard";
 import BotWelcome from "@/components/chat/BotWelcome";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
+import SplitPanes, { SplitFile } from "@/components/SplitPanes";
+import { pruneSplits, useSplitPanes } from "@/lib/splitPanes";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
   closePane,
@@ -125,7 +127,7 @@ import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { closeActiveTab, ItemTab, type ViewTab } from "@/components/layout/ViewTabs";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { attachmentKey, clearAttachments, pickAttachments, restoreAttachments } from "@/hooks/useAttachments";
+import { attachmentKey, clearAttachments, pickAttachments, readAttachments, restoreAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
 import {
@@ -134,6 +136,7 @@ import {
   forgetOpenFilesUnder,
   openFilesFor,
   useOpenFiles,
+  type FilesScope,
 } from "@/hooks/useOpenFiles";
 import BotAvatar from "@/components/BotAvatar";
 import Orb from "@/components/Orb";
@@ -170,8 +173,10 @@ import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailabil
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import ServerOfflineNotice from "@/components/composer/ServerOfflineNotice";
 import BoatNotice from "@/components/composer/BoatNotice";
+import { CloudFailedNotice, CloudNotice } from "@/components/composer/CloudNotice";
 import BoatWarnings from "@/components/BoatWarnings";
 import { boatAsleep, restoreHeld } from "@/lib/boat";
+import { onCloud, setCloudFailure, useCloud, useCloudFailure, useCloudPicks, usePlacing } from "@/lib/cloud";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout, nextCheckout } from "@/lib/projectGroups";
 import { serverConnected, serverName, useServers } from "@/lib/servers";
@@ -246,7 +251,11 @@ import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import { useHandoffConfig } from "@/hooks/useHandoffConfig";
 import { buildTranscript, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
+import { onUnhandledEscape } from "@/lib/escape";
 import { playSwipeTick } from "@/lib/tick";
+
+/// What a project filter reopens when the reader comes back to it.
+type FilterPick = { session: string } | { bot: string } | null;
 
 /// Commits only with its Suspense siblings, so its layout effect says the lazy
 /// settings page is drawn, before paint.
@@ -369,6 +378,25 @@ function App() {
     if (openDraftId && !drafts.some((d) => d.id === openDraftId)) setOpenDraftId(null);
   }, [drafts, openDraftId]);
   const composerKey = selectedSessionId ?? (openDraftId ? draftKey(openDraftId) : null);
+  // Esc takes the sidebar back to the active list, the way the toggles do —
+  // closing the open draft with its view. Last in line for the key, so
+  // anything else on screen that answers Escape keeps it.
+  useEffect(
+    () =>
+      onUnhandledEscape(() => {
+        if (draftsShown) {
+          setOpenDraftId(null);
+          setDraftsShown(false);
+          return true;
+        }
+        if (archivedRequested) {
+          setShowArchived(false);
+          return true;
+        }
+        return false;
+      }),
+    [draftsShown, archivedRequested, setShowArchived],
+  );
 
   useEffect(
     () =>
@@ -455,6 +483,18 @@ function App() {
     }
   };
 
+  /// Sends what a failed cloud step left in the composer, as Enter would.
+  const retryCloud = () => {
+    const trayKey = attachmentKey(selectedSessionId, composerCwd);
+    const text = readDraft(composerKey).trim();
+    const attachments = readAttachments(trayKey);
+    setCloudFailure(null);
+    if (!text && !attachments.length) return;
+    writeDraft(composerKey, "");
+    clearAttachments(trayKey);
+    void sendFromComposer(text, attachments);
+  };
+
   // ⌘S inside a draft has nothing to do, so the "Changes auto-saved" hint
   // lights up for a moment to say why.
   const [draftNudge, setDraftNudge] = useState(false);
@@ -506,11 +546,19 @@ function App() {
   // The open session's server, while it cannot be reached. Shown in place of
   // the error a read or send would raise, and cleared by the reconnect itself.
   const allServers = useServers();
+  // A cloud machine is neither: it is Dray's own, and a send wakes it.
   const offlineServer = allServers.find(
-    (s) => !!selectedSessionId && s.id === activeServer && s.status !== "connected",
+    (s) => !!selectedSessionId && s.id === activeServer && s.status !== "connected" && !s.cloud,
   );
   // Stopped or waking, which a send can do something about, unlike offline.
-  const sleepingBoat = allServers.find((s) => s.id === activeServer && boatAsleep(s));
+  const sleepingBoat = allServers.find((s) => s.id === activeServer && boatAsleep(s) && !s.cloud);
+  const placing = usePlacing();
+  const cloudFailure = useCloudFailure();
+  useCloud();
+  useCloudPicks();
+  // A new task bound for Cloud runs wherever placement puts it, so an agent
+  // missing from the picked checkout's machine says nothing about it.
+  const cloudTask = !selectedSessionId && onCloud(projects, projectPath);
   useEffect(restoreHeld, []);
   // A turn or a background task on that server, which auto-extend keeps alive.
   // Read off the live maps, which hold every session whatever the sidebar
@@ -1155,14 +1203,6 @@ function App() {
   // `setOnScreen` takes the whole set rather than adding to it — two callers
   // would each wipe the other's.
   // A bot chat's earlier sessions are drawn with it, so they are on screen too.
-  const onScreenKey = [mainGroup ? memberKey : earlierIds.join("\n"), crewShown].filter(Boolean).join("\n");
-  useEffect(() => {
-    const ids = [...new Set(onScreenKey.split("\n").filter(Boolean))];
-    setOnScreen(ids);
-    ids.forEach((id) => void ensureLoaded(id));
-    // Both are rebuilt every render; the key is what changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onScreenKey]);
 
   // Every row the column would draw a card for, for `announce` alone — see
   // `crewSeen`. Wider than `crewShown` on purpose: that one loads and
@@ -1225,8 +1265,8 @@ function App() {
   // Every server's list is first read with its projects, in `readServer`.
   useEffect(() => listenForBots(), []);
   const searchedSessions = useMemo(
-    () => filterSessions(inSidebar(visibleSessions, bots), search),
-    [visibleSessions, bots, search],
+    () => filterSessions(inSidebar(visibleSessions, bots, sessionIndexItems), search),
+    [visibleSessions, bots, sessionIndexItems, search],
   );
   // Off every session held, not the space-filtered list: a bot is no project and
   // belongs to no space, so filtering would hide its chat and open a new one.
@@ -1592,15 +1632,25 @@ function App() {
     sessionTodos !== null ||
     sessionAttachments.length > 0;
 
+  const taskSources = useRef({ crew, sessionIndexItems });
+  taskSources.current = { crew, sessionIndexItems };
+  const taskTitles = useMemo(
+    () => sessionIndexItems.map((i) => `${i.sessionId}${i.title}`).join("\n"),
+    [sessionIndexItems],
+  );
   // A task a bot started, named in the bot's chat. Takes an id prefix, as
-  // `dray session send` does, so a message the bot sent finds its task.
+  // `dray session send` does, so a message the bot sent finds its task. A new
+  // function only when a session or a title changes: every row of a bot's chat
+  // is redrawn when it does, and `crew` moves on every status change.
   const taskOf = useCallback(
     (id: string) => {
+      const { crew, sessionIndexItems } = taskSources.current;
       const match = (sessionId: string) => sessionId === id || (id.length >= 8 && sessionId.startsWith(id));
       const item = crew.find((r) => match(r.item.sessionId))?.item ?? sessionIndexItems.find((i) => match(i.sessionId));
       return item && { sessionId: item.sessionId, title: item.title };
     },
-    [crew, sessionIndexItems],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [taskTitles],
   );
 
   const earlierLoaded = sessions.filter((s) => earlierIds.includes(s.sessionId));
@@ -2211,9 +2261,10 @@ function App() {
 
   // A link in the transcript opens as a new tab in the browser of the chat it
   // was clicked in and flips the main column to the Browser view, leaving the
-  // side panel alone. In a bot's row the main column is the row's, so there
-  // it opens in the side panel instead, beside that chat — the bot's or the
-  // lit task's. ⌘-click, or no session to hold one, goes to the system browser.
+  // side panel alone — in a bot chat too, where that tab joins the bot's row.
+  // A task lit in a bot's row is the exception: the row's tabs are the bot's,
+  // so its link opens in the side panel, in the task's own browser. ⌘-click,
+  // or no session to hold one, goes to the system browser.
   useEffect(() => {
     setLinkOpener((url, { external }) => {
       if (!selectedSessionId || !browserSession) {
@@ -2224,14 +2275,14 @@ function App() {
       // then the reader may be on another session whose pane must stay put.
       const sessionId = selectedSessionId;
       const browser = browserSession;
-      const inBotRow = !!selectedBotId || rowOf(sessionId) !== sessionId;
+      const inTaskTab = rowOf(sessionId) !== sessionId;
       const gen = navGen.current;
       void reachableUrl(sessionId, url).then(
         (reached) => {
           if (external) return void openUrl(reached).catch(console.error);
           void openInBrowser(browser, reached, true)
             .then(() => {
-              if (inBotRow) showPanel("browser", sessionId);
+              if (inTaskTab) showPanel("browser", sessionId);
               else setBrowserWanted(sessionId);
               trackBrowserOpen(reached);
             })
@@ -2249,7 +2300,7 @@ function App() {
       );
     });
     return () => setLinkOpener(null);
-  }, [selectedSessionId, browserSession, selectedBotId, rowOf, showPanel, navGen, setError]);
+  }, [selectedSessionId, browserSession, rowOf, showPanel, navGen, setError]);
 
   // An element picked in the page lands in that session's draft, and the
   // composer is brought on screen to show it — off the full view and onto
@@ -2310,7 +2361,7 @@ function App() {
     // without this a space switch is the one way out of a filter that forgets
     // what was open in it. Nothing is restored: the effect below closes a
     // transcript that falls outside the space being entered.
-    filterSelection.current[projectFilter ?? ""] = selectedSessionId;
+    filterSelection.current[projectFilter ?? ""] = currentPick();
     filterGen.current++;
     setProjectFilter(null);
 
@@ -2336,7 +2387,19 @@ function App() {
   /// from a previous run would open a transcript nobody asked for on the first
   /// switch after launch, so the entry is written on the way out of a filter
   /// and nowhere else.
-  const filterSelection = useRef<Record<string, string | null>>({});
+  const filterSelection = useRef<Record<string, FilterPick>>({});
+  /// What is open, as a filter remembers it. A bot by its id rather than its
+  /// chat's: a bot with no chat yet has no session to name, and an agent
+  /// switch moves its chat to a new one. A settled chat is no longer the bot's,
+  /// so it is remembered as itself.
+  const currentPick = (): FilterPick => {
+    const settled = sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.archived;
+    const bot = selectedSessionId
+      ? !settled && selectedBotId
+      : projectPath && botAt(bots, projectPath)?.id;
+    if (bot) return { bot };
+    return selectedSessionId ? { session: selectedSessionId } : null;
+  };
   /// Bumped at every filter move, at call time, so a read across an await can
   /// tell the filter moved under it. Rendered state is a render behind.
   const filterGen = useRef(0);
@@ -2353,7 +2416,8 @@ function App() {
   /// delete that *failed*.
   const forgetFilterSelection = (sessionId: string) => {
     for (const key of Object.keys(filterSelection.current)) {
-      if (filterSelection.current[key] === sessionId) filterSelection.current[key] = null;
+      const pick = filterSelection.current[key];
+      if (pick && "session" in pick && pick.session === sessionId) filterSelection.current[key] = null;
     }
   };
 
@@ -2376,7 +2440,7 @@ function App() {
     // A selection made since the last step ends the run, so it is kept.
     const run = filterNav.current;
     if (!run || run.nav !== navGen.current) {
-      filterSelection.current[projectFilter ?? ""] = selectedSessionId;
+      filterSelection.current[projectFilter ?? ""] = currentPick();
     }
     const gen = ++filterGen.current;
     setProjectFilter(next);
@@ -2396,11 +2460,19 @@ function App() {
   };
 
   const openFilterSession = (next: string | null) => {
-    const remembered = filterSelection.current[next ?? ""] ?? null;
+    const pick = filterSelection.current[next ?? ""] ?? null;
+    // A bot is no project and the sidebar draws it under every filter. Not
+    // while the settled list is up, which has no bots and `openBot` would leave.
+    const bot = pick && "bot" in pick && !archivedShown ? bots.find((b) => b.id === pick.bot) : undefined;
+    if (bot) return openBot(bot);
+    const remembered = pick && "session" in pick ? pick.session : null;
+    // A task lit in a bot's row is restorable under any filter, like the bot.
     const restorable =
       remembered &&
       sessionIndexItems.some(
-        (i) => i.sessionId === remembered && (!next || sameProject(i.projectPath, next)),
+        (i) =>
+          i.sessionId === remembered &&
+          (!next || sameProject(i.projectPath, next) || inBotTree(bots, sessionIndexItems, remembered)),
       );
     goToSession(() => {
       if (restorable) void handleSelectSessionIndexItem(remembered);
@@ -2419,7 +2491,7 @@ function App() {
   /// only where no filter or space switch landed during the read — everything
   /// below is the click-time render's, and would undo that switch.
   const openFromNotice = async (sessionId: string) => {
-    const previous = selectedSessionId;
+    const previous = currentPick();
     const gen = filterGen.current;
     const selecting = handleSelectSessionIndexItem(sessionId);
     // Past this select's own move, so any later one is somebody else's.
@@ -2921,7 +2993,7 @@ function App() {
   useHotkey("worktree.toggle", () => setUseWorktree((v) => !v), {
     // A worktree has nothing to fork from until a project is picked, which is
     // the same condition the toggle itself is drawn under.
-    enabled: composingNewSession && projectPath !== null,
+    enabled: composingNewSession && projectPath !== null && !cloudTask,
   });
   // No accelerator: Shift+Tab on its own, and the model gets it because the
   // model is the pick reached for most often. The CLI spends this chord on
@@ -2994,6 +3066,32 @@ function App() {
     selectedSession ?? sessionIndexItems.find((i) => i.sessionId === selectedSessionId) ?? null;
   // The session whose row the titlebar draws: the bot's chat over its lit task.
   const rowSession = stripOwner ?? shownSession;
+  // Tabs the row split out beside the main view. A task's transcript in one
+  // is on screen the way a grid pane's is.
+  const rowSplits = useSplitPanes(issuesOpen ? null : (rowSession?.sessionId ?? null));
+  const splitTasks = rowSplits.filter((k) => k.startsWith("task:")).map((k) => k.slice("task:".length));
+  // A pane whose tab went — a page the agent closed, a task or pick shut —
+  // goes with it.
+  const rowPages = useBrowserTabs(rowSession ? browserOf(rowSession.sessionId) : null);
+  useEffect(() => {
+    if (!rowSession || rowSplits.length === 0) return;
+    const tasksOpen = strip ? (taskTabs[strip.bot] ?? []) : null;
+    const picksOpen = strip ? (pickTabs[strip.bot] ?? []) : null;
+    pruneSplits(rowSession.sessionId, (key) => {
+      if (key.startsWith("page:")) return !rowPages || rowPages.some((p) => `page:${p.id}` === key);
+      if (key.startsWith("task:")) return !tasksOpen || tasksOpen.some((t) => `task:${t.sessionId}` === key);
+      if (key.startsWith("pick:")) return !picksOpen || picksOpen.some((t) => `pick:${t.id}` === key);
+      return true;
+    });
+  });
+  const onScreenKey = [mainGroup ? memberKey : earlierIds.join("\n"), crewShown, ...splitTasks].filter(Boolean).join("\n");
+  useEffect(() => {
+    const ids = [...new Set(onScreenKey.split("\n").filter(Boolean))];
+    setOnScreen(ids);
+    ids.forEach((id) => void ensureLoaded(id));
+    // Both are rebuilt every render; the key is what changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onScreenKey]);
   // The way back from a hidden session, where its bot's row is not drawn.
   const crumb = strip ? undefined : hiddenParent;
   // Off the index, never the snapshot: `session_changed` writes only there.
@@ -3111,6 +3209,7 @@ function App() {
   ) => {
     // From the repo root: a task's worktree may already be gone.
     await invoke("merge_pr", { cwd: projectPath, number, method });
+    prMarks.markMerged(projectPath, number);
     prMarks.refreshAfterWrite();
     // Landed, so the task is done — unless it is still working,
     // which settling would kill mid-turn.
@@ -3184,7 +3283,7 @@ function App() {
   /// A lit Diff or Files pick: the view on the picked session, its side
   /// column led by the picker. Keyed on tab and target, so a repick or another
   /// pick of the same kind opens fresh rather than on the last one's place.
-  const pickBody = (tab: (typeof litPick) & object, bot: string) => {
+  const pickBody = (tab: (typeof litPick) & object, bot: string, watchScope?: FilesScope) => {
     const options: PickOption[] = [
       ...(tab.kind === "files" ? [bot] : []),
       ...botTasks.map((t) => t.sessionId),
@@ -3235,8 +3334,45 @@ function App() {
         active={!issuesOpen}
         revision={revision}
         picker={picker}
+        watchScope={watchScope}
       />
     );
+  };
+
+  // What a split pane draws, by the key its tab had in the row.
+  const splitBody = (key: string) => {
+    if (!rowSession) return null;
+    if (key.startsWith("page:")) {
+      return (
+        <BrowserPane
+          sessionId={browserOf(rowSession.sessionId)}
+          tab={Number(key.slice("page:".length))}
+          mode="full"
+          active={!issuesOpen}
+        />
+      );
+    }
+    if (key === "changes") {
+      return (
+        <ChangesView
+          cwd={rowSession.cwd}
+          active={!issuesOpen}
+          revision={turnRevision}
+          writeRevision={writeRevision}
+          busy={busy}
+        />
+      );
+    }
+    if (key.startsWith("file:")) {
+      return <SplitFile sessionId={rowSession.sessionId} path={key.slice("file:".length)} />;
+    }
+    if (key.startsWith("task:")) {
+      // Read here; the composer sends to the main view's session.
+      return <Chat {...paneState(key.slice("task:".length))} {...paneChat} crowded active={false} />;
+    }
+    const pick = strip && pickTabs[strip.bot]?.find((t) => `pick:${t.id}` === key);
+    // Its own watcher, since the lit pick in the main view holds `"pick"`.
+    return pick && strip ? pickBody(pick, strip.bot, key as `pick:${string}`) : null;
   };
 
   // Pages with no tabs for the strip: the sheet reaches up behind the header.
@@ -3259,6 +3395,7 @@ function App() {
       panelLeft={panelSide === "left"}
       panelOpen={issuesOpen ? !!pickedIssue : !!shownSession && panelShown}
       overlay={singleDrop && <DropZone region={singleDrop.region} label={singleDrop.label} />}
+      beside={<SplitPanes sessionId={issuesOpen ? null : (rowSession?.sessionId ?? null)} body={splitBody} />}
       // Chat's alone, and not a `TabBody` — the other views answer questions
       // about a repository rather than about a conversation, and a split is
       // already several conversations side by side, where a crew beside one
@@ -3509,10 +3646,11 @@ function App() {
                         // The task last at work, which is most often the one
                         // the reader came to look at.
                         const target = newestSession(botTasks) ?? (kind === "files" ? strip.bot : null);
-                        if (!target) return;
+                        if (!target) return null;
                         const id = crypto.randomUUID();
                         setPickTabs((prev) => addPickTab(prev, strip.bot, { id, kind, target }));
                         showPick(strip.bot, strip.owner, id);
+                        return id;
                       },
                       onClose: (id) => {
                         forgetOpenFilesUnder(`pick:${id}:`);
@@ -3828,7 +3966,7 @@ function App() {
           notice={
             sleepingBoat ? null : offlineServer ? (
               <ServerOfflineNotice server={offlineServer} />
-            ) : !selectedSessionId && missingAgent ? (
+            ) : !selectedSessionId && missingAgent && !cloudTask ? (
               <AgentMissingNotice agent={missingAgent} />
             ) : loggedOutAgent && authTurn && selectedSession ? (
               <LoginExpiredNotice
@@ -3840,7 +3978,15 @@ function App() {
             ) : null
           }
           pending={
-            sleepingBoat ? (
+            cloudFailure && cloudFailure.sessionId === selectedSessionId ? (
+              <CloudFailedNotice
+                message={cloudFailure.message}
+                onRetry={retryCloud}
+                onDismiss={() => setCloudFailure(null)}
+              />
+            ) : placing && !selectedSessionId ? (
+              <CloudNotice step={placing} />
+            ) : sleepingBoat ? (
               <BoatNotice server={sleepingBoat} />
             ) : selectedBot && selectedSession && harness !== selectedSession.harness ? (
               // A bot chat picked onto another agent: the send moves it there.
@@ -3996,6 +4142,10 @@ function App() {
               />
             }
             botFocus={botFocus}
+            onBotFocusMissed={(id) => {
+              setStallFocus(null);
+              void openTask(id);
+            }}
             unread={!!selectedSessionId && openedUnread === selectedSessionId}
             crowded={!collapsed && (panelShown || (crewDrawn && crewBeside) || (issuesOpen && !!pickedIssue))}
             // Its own chords only while the chat tab is on screen.

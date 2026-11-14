@@ -19,6 +19,7 @@ pub mod commands;
 pub mod control;
 pub mod mapper;
 pub mod models;
+pub mod no_reply;
 pub mod permissions;
 use permissions::PendingPermissions;
 
@@ -106,8 +107,16 @@ pub async fn init(
 
     // Orchestration calls raise no consent card. An additive allow rule, not a
     // whitelist — everything else still routes through `can_use_tool` exactly
-    // as before.
-    args.extend(["--allowedTools", ALLOWED_TOOLS]);
+    // as before. A bot's silent-turn tool rides along: a card for it would ask
+    // the user to approve the bot saying nothing.
+    let bot = crate::bots::bot_at(session_cwd).await.is_some();
+    let allowed = if bot { format!("{ALLOWED_TOOLS},{}", no_reply::TOOL_NAME) } else { ALLOWED_TOOLS.into() };
+    args.extend(["--allowedTools", &allowed]);
+
+    let mcp_config = no_reply::mcp_config();
+    if bot {
+        args.extend(["--mcp-config", &mcp_config]);
+    }
 
     // Three ways in, and the fork is the only one naming two ids: it resumes the
     // parent's conversation but records it under this session's own id. Verified
@@ -147,6 +156,9 @@ pub async fn init(
     // the release app's sidebar.
     if let Some(endpoint) = crate::orchestration::child_endpoint() {
         command.env("DRAY_ENDPOINT", endpoint);
+    }
+    if bot {
+        command.env(no_reply::TERMINAL_TOOLS_ENV, no_reply::TOOL_NAME);
     }
 
     let mut child = command
@@ -307,6 +319,18 @@ async fn read_stdout(
                 continue;
             }
         };
+
+        if let ClaudeCodeEvent::ControlRequest {
+            request_id,
+            request: parser::ControlRequest::McpMessage { message },
+        } = &claude_event
+        {
+            let reply = no_reply::response(request_id, message);
+            if let Err(err) = crate::session::write_line(&stdin, &reply).await {
+                eprintln!("[claude mcp reply err] {err}");
+            }
+            continue;
+        }
 
         // A control request the CLI is blocked on, of a subtype this build
         // can't put to the user. Refused from here rather than left alone:

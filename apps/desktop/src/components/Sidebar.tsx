@@ -61,7 +61,7 @@ import { basename, isToday, relativeTime } from "@/lib/format";
 import { groupName, members, type SplitGroup } from "@/lib/groups";
 import { sessionBranch } from "@/lib/pr";
 import { checkoutsOf, groupProjects, keyOfPath, leadPath, soleServer } from "@/lib/projectGroups";
-import { offlineLine, projectLabel, serverConnected, serverName, useServers } from "@/lib/servers";
+import { offlineLine, projectLabel, serverName, shownOffline, useServers } from "@/lib/servers";
 import { LOCAL, serverOfPath } from "@/lib/transport";
 import { useResizable } from "@/components/ResizeHandle";
 import { useJumpDigit } from "@/lib/digitChords";
@@ -1174,7 +1174,7 @@ export default function Sidebar({
   // Read for the re-render alone: a server dropping or coming back moves the
   // dimming on its rows and headings.
   useServers();
-  const offline = (path: string) => !serverConnected(serverOfPath(path));
+  const offline = (path: string) => shownOffline(serverOfPath(path));
   // A heading stands for every checkout of its project. It names a machine only
   // where there is just one to name, and dims only once all of them are gone.
   const headingServer = (path: string) => {
@@ -1218,6 +1218,15 @@ export default function Sidebar({
         : archivedShown
           ? "Nothing settled yet."
           : "No tasks yet.";
+
+  // The filter is where project grouping went. With no project attached it has
+  // nothing to filter, so it goes — unless something it controls is still in
+  // force: a stored filter still narrows the list, and its toggles are the only
+  // way back from drafts or settled, `archivedShown` included since it lags the
+  // request until the read lands. The empty text goes with it, under the bots
+  // "No tasks yet." is a line about nothing.
+  const filterShown =
+    projects.length > 0 || projectFilter !== null || draftsShown || archivedRequested || archivedShown;
 
   const asideRef = useRef<HTMLElement>(null);
   // The step ticks for itself, in `App`, where the chords land too.
@@ -1362,8 +1371,7 @@ export default function Sidebar({
         })}
       </div>}
 
-      {/* The filter is where project grouping went. */}
-      <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
+      {filterShown && <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
         <ProjectFilter
           projects={projects}
           value={projectFilter}
@@ -1413,7 +1421,7 @@ export default function Sidebar({
             </TooltipContent>
           </Tooltip>
         </div>
-      </div>
+      </div>}
 
       {/* With classic scrollbars the reserved gutter is the right-hand spacing,
           and the rows balance the track's extra width with `pr-0.5`. Overlay
@@ -1430,7 +1438,8 @@ export default function Sidebar({
         onScroll={more ? openMore : undefined}
       >
         {runs.length === 0 ? (
-          <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
+          // A typed query still gets its answer: silence there reads as broken.
+          (filterShown || search.trim()) && <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
         ) : (
           runs.flatMap((group, index) => {
             // A project heading is drawn only where the list spans projects:

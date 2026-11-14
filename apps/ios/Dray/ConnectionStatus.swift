@@ -146,9 +146,10 @@ struct HealthBanner: View {
                 .foregroundStyle(health.needsYou ? Theme.accent : Theme.text)
             }
         }
-        .padding(.vertical, Theme.Space.m)
+        .padding(.vertical, floating ? Theme.Space.s : Theme.Space.m)
         .padding(.horizontal, 14)
-        .frame(minHeight: 64)
+        // Small over a session: a note, not a wall between the reader and the transcript.
+        .frame(minHeight: floating ? 0 : 64)
         .background { if floating { glass } else { RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous).fill(Theme.card) } }
         .transition(.move(edge: .top).combined(with: .opacity))
     }
@@ -174,8 +175,11 @@ struct SessionBanner: View {
     let fix: () -> Void
 
     var body: some View {
+        // Only once the server is really lost: a reconnect after the app comes back says nothing.
         Group {
-            if !store.online {
+            if !store.lost.contains(server) {
+                EmptyView()
+            } else if !store.online {
                 HealthBanner(health: .offline("The task keeps running on \(store.name(of: server))."), floating: true)
             } else if let health = store.health(server) {
                 HealthBanner(health: health, floating: true, retry: { Task { await store.retry(server) } }, fix: fix)
@@ -183,7 +187,7 @@ struct SessionBanner: View {
         }
         .padding(.horizontal, Theme.Space.l)
         .padding(.top, 10)
-        .animation(Theme.motion, value: store.online)
+        .animation(Theme.motion, value: store.lost.contains(server))
     }
 }
 

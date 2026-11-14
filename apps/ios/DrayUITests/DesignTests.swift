@@ -135,7 +135,7 @@ final class DesignTests: XCTestCase {
         app.buttons["Cancel"].tap()
         app.buttons["Discard"].tap()
 
-        app.descendants(matching: .any)["orb"].press(forDuration: 0.6)
+        app.descendants(matching: .any)["orb"].tap()
         app.tap()  // lets the interruption monitor answer the microphone prompt
         let stop = app.buttons["Done"]
         if stop.waitForExistence(timeout: 10) {
@@ -153,7 +153,7 @@ final class DesignTests: XCTestCase {
         XCTAssertTrue(orb.waitForExistence(timeout: 15))
         sleep(2)
         snap(app, "35-dock-failed-load")
-        orb.press(forDuration: 0.6)
+        orb.tap()
         if app.buttons["Done"].waitForExistence(timeout: 10) {
             sleep(2)
             snap(app, "36-dock-recording")

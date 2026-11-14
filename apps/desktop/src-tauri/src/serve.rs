@@ -141,6 +141,9 @@ pub async fn run(port: u16) -> Result<()> {
     }
     let sink = Sink::new(|event, payload| HUB.publish(event, &payload));
     let home = start_core(sink.clone()).await?;
+    if let Some(sandbox) = crate::cloud_machine::boat_id().await {
+        tokio::spawn(crate::cloud_machine::heartbeat(home.clone(), sandbox));
+    }
 
     let (token, token_path) = mint_token().await?;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -1750,7 +1753,11 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
             permission_mode, fast, &cwd, branch.as_deref(), use_worktree,
             worktree_name.as_deref(), base_ref.as_deref(), is_new_session, sink,
         ).await;
-        interrupt_session(session_id: String) => crate::interrupt_session(&session_id, sink).await;
+        // The reader's own stop, settle and delete are noted for the task's bot
+        // here, on the client wire: `dray` is how the bot does each itself.
+        interrupt_session(session_id: String) => crate::bots::reader_did(
+            &session_id, Some(crate::bots::Act::Stopped), crate::interrupt_session(&session_id, sink),
+        ).await;
         stop_task(session_id: String, task_id: String) => crate::stop_task(&session_id, &task_id).await;
         cancel_queued(session_id: String) => crate::cancel_queued(&session_id, sink).await;
         respond_permission(session_id: String, request_id: String, option_id: String) =>
@@ -1759,7 +1766,11 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
             crate::answer_questions(&session_id, &request_id, answers, sink).await;
         mark_session_read(session_id: String, read: bool) => crate::mark_session_read(&session_id, read, sink).await;
         set_session_flags(session_id: String, archived: Option<bool>, pinned: Option<bool>, hidden: Option<bool>, aside: Option<bool>) =>
-            crate::set_session_flags(&session_id, archived, pinned, hidden, aside, sink).await;
+            crate::bots::reader_did(
+                &session_id,
+                (archived == Some(true)).then_some(crate::bots::Act::Settled),
+                crate::set_session_flags(&session_id, archived, pinned, hidden, aside, sink),
+            ).await;
         // Set aside on a row whose own server is down (#1050).
         held_session_flags() => ok(crate::held_flags::list().await);
         hold_session_flags(machine: String, session_id: String, aside: bool, pinned: Option<bool>) =>
@@ -1769,7 +1780,9 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
             crate::held_flags::release_and_announce(session_id, at, sink).await;
         flush_held_flags(machine: String) => ok(crate::held_flags::flush_now(machine, sink).await);
         rename_session(session_id: String, title: String) => crate::rename_session(session_id, title, sink).await;
-        delete_session(session_id: String) => crate::delete_session(&session_id).await;
+        delete_session(session_id: String) => crate::bots::reader_did(
+            &session_id, Some(crate::bots::Act::Deleted), crate::delete_session(&session_id),
+        ).await;
         fork_session(session_id: String, fork_id: String, worktree: bool) =>
             crate::fork_session(&session_id, &fork_id, worktree).await;
         session_index_item(session_id: String) => crate::session_index_item(&session_id).await;
@@ -1872,6 +1885,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         start_bot(id: String, harness: crate::session::Harness, model: crate::models::ModelId, effort: Option<crate::models::Effort>, permission_mode: crate::events::ApprovalPolicy, fast: bool) =>
             crate::bots::start_bot(id, harness, model, effort, permission_mode, fast, sink).await;
         delete_bot(id: String) => crate::bots::delete_bot(id, sink).await;
+        bot_learned_diff(session_id: String, commit: String, path: String) => crate::bots::bot_learned_diff(session_id, commit, path).await;
+        bot_undo_learned(session_id: String, commit: String, path: String) => crate::bots::bot_undo_learned(session_id, commit, path, sink).await;
 
         // Assistants signed in to `/mcp`.
         mcp_pair(read_only: bool, replaces: Option<String>) => crate::mcp::pair(sink, read_only, replaces).await;
