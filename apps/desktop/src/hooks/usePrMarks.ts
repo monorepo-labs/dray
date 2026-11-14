@@ -321,7 +321,11 @@ export function usePrMarks(
         for (const path of tries) {
           // A late answer from a key given up on is judged by `answeredAt`.
           const timeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ATTEMPT_MS));
-          if (await Promise.race([read(path), timeout])) return;
+          const attempt = read(path);
+          if (await Promise.race([attempt, timeout])) return;
+          // This load is drawn before a read it gave up on lands, so that read
+          // draws its own answer, or a PR it found stays off screen.
+          void attempt.then((landed) => landed && setByRepo(new Map(cache)));
         }
       }),
     );
