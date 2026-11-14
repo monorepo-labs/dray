@@ -98,6 +98,59 @@ pub async fn unhold(session_id: &str) -> anyhow::Result<Option<Held>> {
     Ok(Some(held))
 }
 
+/// Flags a flush wrote lately, by session and the time they were held. What
+/// [`release`] reads to tell a flag that landed during a send from one that
+/// was dropped or replaced.
+static LANDED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+fn note_landed(held: &Held) {
+    let mut landed = LANDED.lock().unwrap_or_else(|e| e.into_inner());
+    landed.push((held.session_id.clone(), held.at.clone()));
+    let over = landed.len().saturating_sub(64);
+    landed.drain(..over);
+}
+
+/// What became of a flag held when a send went out.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Released {
+    /// Still held, and dropped now: it never reached the server.
+    Held,
+    /// A flush wrote it to the server, possibly after the send landed.
+    Landed,
+    /// The reader chose again since; that newer flag stays held.
+    Newer,
+    /// Dropped some other way.
+    Gone,
+}
+
+/// Settles the flag held at `at` once a message has reached its session,
+/// behind any flush writing it.
+pub async fn release(session_id: &str, at: &str) -> anyhow::Result<Released> {
+    let Some(machine) = machine_of(session_id).await else { return Ok(took_landed(session_id, at)) };
+    let lock = machine_lock(&machine);
+    let _writing = lock.lock().await;
+    match list().await.into_iter().find(|h| h.session_id == session_id) {
+        Some(held) if held.at == at => {
+            edit(|list| list.retain(|h| h.session_id != session_id)).await?;
+            Ok(Released::Held)
+        }
+        Some(_) => Ok(Released::Newer),
+        None => Ok(took_landed(session_id, at)),
+    }
+}
+
+fn took_landed(session_id: &str, at: &str) -> Released {
+    let mut landed = LANDED.lock().unwrap_or_else(|e| e.into_inner());
+    match landed.iter().position(|(s, a)| s == session_id && a == at) {
+        Some(i) => {
+            landed.remove(i);
+            Released::Landed
+        }
+        None => Released::Gone,
+    }
+}
+
 #[cfg(any(feature = "serve", feature = "desktop"))]
 mod flush {
     use super::*;
@@ -160,6 +213,15 @@ mod flush {
         Ok(dropped)
     }
 
+    /// The serve command `release_held_flag`.
+    pub async fn release_and_announce(session_id: String, at: String, sink: Sink) -> Result<Released, String> {
+        let released = release(&session_id, &at).await.map_err(|e| format!("{e:#}"))?;
+        if released == Released::Held {
+            announce(&sink, Vec::new()).await;
+        }
+        Ok(released)
+    }
+
     /// Runs for the life of the server. A file read per tick while nothing is
     /// held.
     pub async fn run(sink: Sink) {
@@ -219,6 +281,7 @@ mod flush {
                                 if !item.is_null() {
                                     landed.push(Landed { server: id.clone(), item });
                                 }
+                                note_landed(&held);
                                 done.push(held);
                             }
                             Err(e) => {
@@ -249,7 +312,7 @@ mod flush {
 }
 
 #[cfg(any(feature = "serve", feature = "desktop"))]
-pub use flush::{announce, flush_now, hold_and_announce, run, unhold_and_announce};
+pub use flush::{announce, flush_now, hold_and_announce, release_and_announce, run, unhold_and_announce};
 
 #[cfg(test)]
 mod tests {
@@ -271,5 +334,21 @@ mod tests {
         // Bringing back takes no pin, and says none.
         let back = Held { pinned: None, aside: false, ..held };
         assert!(serde_json::to_value(&back).unwrap().get("pinned").is_none());
+    }
+
+    /// A send's undo goes only where the flush wrote that very flag, and once.
+    #[test]
+    fn only_the_flag_a_flush_wrote_reads_as_landed() {
+        let held = Held {
+            machine: "m".into(),
+            session_id: "landed-test".into(),
+            aside: true,
+            pinned: None,
+            at: "2026-11-14T00:00:00Z".into(),
+        };
+        note_landed(&held);
+        assert_eq!(took_landed("landed-test", "2026-11-14T00:00:01Z"), Released::Gone);
+        assert_eq!(took_landed("landed-test", &held.at), Released::Landed);
+        assert_eq!(took_landed("landed-test", &held.at), Released::Gone);
     }
 }

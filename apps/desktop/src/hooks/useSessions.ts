@@ -24,7 +24,7 @@ import {
 import { hiddenChildren, leftToParent } from "@/lib/crew";
 import { repoChanged } from "@/lib/prSync";
 import { dropHeld, dropHeldAsks, heldFor, holdEarlyEvent, isAsk } from "@/lib/earlyEvents";
-import { flushHeld, heldFlagFor, holdFlags, onLanded, overlayHeld, settleAfterSend, unholdFlags, useHeldFlags } from "@/lib/heldFlags";
+import { flushHeld, heldFlagFor, holdFlags, noteFlagWrite, onLanded, overlayHeld, settleAfterSend, unholdFlags, useHeldFlags } from "@/lib/heldFlags";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { lockedMidTurn } from "@/lib/liveControls";
@@ -871,6 +871,7 @@ const handleSendMsg = async (
   // Kept until the send lands: one that fails before reaching the server —
   // a sandbox that will not resume — leaves the reader's pick standing.
   const heldAtSend = sessionId ? heldFlagFor(sessionId) : undefined;
+  const sentAt = Date.now();
 
   const existing = sessionId ? selected : undefined;
   // The backend reads the recorded cwd on resume, so this only has to be right
@@ -1048,7 +1049,7 @@ const handleSendMsg = async (
       isNewSession,
     });
     if (heldAtSend) {
-      void settleAfterSend(heldAtSend).catch((e) => console.error("could not settle a held flag", e));
+      void settleAfterSend(heldAtSend, sentAt).catch((e) => console.error("could not settle a held flag", e));
     }
 
     // A turn was already running, so the prompt is held rather than sent. It
@@ -1582,6 +1583,7 @@ const setSessionFlags = async (
 ): Promise<boolean> => {
   const fail = failUnlessLeft();
   const server = serverOfSession(sessionId);
+  noteFlagWrite(sessionId);
   // Set aside or brought back while the session's server is down: held on
   // this Mac and written there once it answers (#1050). Settle is never held,
   // since it stops a child only that server can reach.

@@ -1765,6 +1765,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         hold_session_flags(machine: String, session_id: String, aside: bool, pinned: Option<bool>) =>
             crate::held_flags::hold_and_announce(machine, session_id, aside, pinned, sink).await;
         unhold_session_flags(session_id: String) => crate::held_flags::unhold_and_announce(session_id, sink).await;
+        release_held_flag(session_id: String, at: String) =>
+            crate::held_flags::release_and_announce(session_id, at, sink).await;
         flush_held_flags(machine: String) => ok(crate::held_flags::flush_now(machine, sink).await);
         rename_session(session_id: String, title: String) => crate::rename_session(session_id, title, sink).await;
         delete_session(session_id: String) => crate::delete_session(&session_id).await;

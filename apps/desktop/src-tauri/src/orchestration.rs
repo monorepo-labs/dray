@@ -521,13 +521,16 @@ async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Respo
         }
     }
     // A message brings a set-aside session back, so a flag held from before
-    // it must not stay put away. Dropped behind any flush writing it, then
-    // undone there in case that flush landed after the message.
+    // it must not stay put away. Dropped behind any flush writing it, and
+    // undone there where that flush may have landed after the message.
     if let (Some(held), Response::Sent { .. }) = (held_at_send, &response) {
-        if crate::held_flags::unhold(&held.session_id).await?.is_some() {
+        let released = crate::held_flags::release(&held.session_id, &held.at).await?;
+        if released == crate::held_flags::Released::Held {
             crate::held_flags::announce(app, Vec::new()).await;
         }
-        if held.aside {
+        // Only a flag the flush wrote: a newer choice, held or written
+        // directly, is the reader's and stands.
+        if held.aside && released == crate::held_flags::Released::Landed {
             let back = elsewhere::prepare(Request::SetAside(SetAside { session_id: held.session_id, aside: false })).await?;
             if let Err(e) = elsewhere::forward(machine, &back).await {
                 eprintln!("[held flags] could not bring back after a send: {e:#}");

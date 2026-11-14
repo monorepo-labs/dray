@@ -101,12 +101,21 @@ export async function unholdFlags(sessionId: string): Promise<void> {
   await invoke("unhold_session_flags", { sessionId }, LOCAL);
 }
 
-/// A message reached a session that had a flag held: the message brought it
-/// back, so the hold goes, and a Set aside a flush landed during the send is
-/// undone there.
-export async function settleAfterSend(was: HeldFlag): Promise<void> {
-  await unholdFlags(was.sessionId).catch(() => {});
-  if (!was.aside) return;
+/// Each session's flags written last from here, so a send's undo below never
+/// lands over a choice the reader made while it was out.
+const lastWrite = new Map<string, number>();
+
+export const noteFlagWrite = (sessionId: string) => void lastWrite.set(sessionId, Date.now());
+
+type Released = "held" | "landed" | "newer" | "gone";
+
+/// A message reached a session that had a flag held when it went out: the
+/// message brought it back, so the hold goes. A Set aside that a flush wrote
+/// meanwhile may have landed after the message, so it is undone there —
+/// unless the reader has set flags on the session since.
+export async function settleAfterSend(was: HeldFlag, sentAt: number): Promise<void> {
+  const released = await invoke<Released>("release_held_flag", { sessionId: was.sessionId, at: was.at }, LOCAL);
+  if (released !== "landed" || !was.aside || (lastWrite.get(was.sessionId) ?? 0) > sentAt) return;
   await invoke("set_session_flags", { sessionId: was.sessionId, aside: false }, serverOfSession(was.sessionId));
 }
 
