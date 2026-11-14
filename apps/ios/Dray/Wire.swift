@@ -185,8 +185,11 @@ struct Bot: Codable, Hashable {
     let path: String
     /// Absent for a bot made before there was a pick, which draws the face its id seeds.
     let avatar: BotAvatar?
-    /// Dray Bot's first words, drawn before its chat has a session.
+    /// Marks Dray Bot, whose chat opens on a greeting before it has a session.
     var welcome: String? = nil
+    /// That greeting as the server words it now: the welcome, then the
+    /// question for the user's name while no bot knows it. Absent from an older server.
+    var greeting: [String]? = nil
 }
 
 /// `bot_previews`' answer per chat: its newest reply and how many came since the reader last wrote.

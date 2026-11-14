@@ -608,11 +608,17 @@ path: string, created: string,
  */
 avatar?: BotAvatar | null, 
 /**
- * What its chat opens on before any session exists, drawn by the app,
- * and written to the log as the chat's first message when one starts.
- * Dray Bot's alone; a bot made with New bot greets with a real turn.
+ * Marks a bot whose chat opens on a welcome, drawn by the app and written
+ * to the log when a session starts. Dray Bot's alone; a bot made with New
+ * bot greets with a real turn. The words drawn are `greeting`'s.
  */
-welcome?: string | null, };
+welcome?: string | null, 
+/**
+ * The messages its chat opens on, worked out by `list_bots` on every read
+ * and never saved: the welcome in today's words, then the question for
+ * the user's name while no bot knows it. Empty with no welcome.
+ */
+greeting?: Array<string>, };
 
 /**
  * A Blobatar face: which silhouette and which hue. Strings and degrees rather

@@ -55,7 +55,7 @@ struct BotListRow: View {
                     if item?.busy == true && !asking {
                         TypingDots().frame(height: 20, alignment: .leading)
                     } else {
-                        Text(previewLine(preview?.text ?? bot.welcome ?? ""))
+                        Text(previewLine(preview?.text ?? bot.greeting?.last ?? bot.welcome ?? ""))
                             .font(Theme.Font.subhead)
                             .foregroundStyle(Theme.secondary)
                             .lineLimit(1)

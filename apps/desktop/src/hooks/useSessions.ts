@@ -1335,6 +1335,10 @@ const handleNewBotSession = (path: string) => {
 const handleNewSession = () => {
   selectionRequestRef.current = null;
   setSelectedSessionId(null);
+  // A bot opened before its first chat aimed the composer at its folder, and a
+  // new task left there would be that bot's chat again. Its own caller,
+  // `handleNewBotSession`, aims it back after this.
+  setProjectPath((path) => (isBotPath(path) ? (lastSelected(projects)?.path ?? null) : path));
   // The slot is one value for the whole app, so a failure left in it follows
   // the reader out of the session it happened in. It reports the reader's own
   // last action failing, and leaving a session is leaving that action behind —

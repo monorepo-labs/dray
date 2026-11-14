@@ -1885,6 +1885,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         start_bot(id: String, harness: crate::session::Harness, model: crate::models::ModelId, effort: Option<crate::models::Effort>, permission_mode: crate::events::ApprovalPolicy, fast: bool) =>
             crate::bots::start_bot(id, harness, model, effort, permission_mode, fast, sink).await;
         delete_bot(id: String) => crate::bots::delete_bot(id, sink).await;
+        edit_bot(id: String, name: String, avatar: crate::bots::BotAvatar) => crate::bots::edit_bot(id, name, avatar, sink).await;
         bot_learned_diff(session_id: String, commit: String, path: String) => crate::bots::bot_learned_diff(session_id, commit, path).await;
         bot_undo_learned(session_id: String, commit: String, path: String) => crate::bots::bot_undo_learned(session_id, commit, path, sink).await;
 

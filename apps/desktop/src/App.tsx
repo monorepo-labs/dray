@@ -201,7 +201,7 @@ import { changeRange, lastToolResult } from "@/lib/changes";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
-import { botAt, botBrowser, botChat, botEntries, botSession, inBotTree, listenForBots, readPreviews, refreshBots, serverOfBot, useBots } from "@/lib/bots";
+import { botAt, botBrowser, botChat, botEntries, botSession, greetingOf, inBotTree, listenForBots, readPreviews, refreshBots, serverOfBot, useBots } from "@/lib/bots";
 import NewBotDialog from "@/components/NewBotDialog";
 import AgentIcon from "@/components/AgentIcon";
 import ModelSelector from "@/components/composer/ModelSelector";
@@ -1299,6 +1299,7 @@ function App() {
   );
   const [newBotOpen, setNewBotOpen] = useState(false);
   const [botToDelete, setBotToDelete] = useState<Bot | null>(null);
+  const [botToEdit, setBotToEdit] = useState<Bot | null>(null);
   // A bot clicked while the settled list was up, opened once the active side lands.
   const [botWaiting, setBotWaiting] = useState<Bot | null>(null);
   const openBot = (bot: Bot) => {
@@ -1318,6 +1319,36 @@ function App() {
     );
   };
   const [openedUnread, setOpenedUnread] = useState<string | null>(null);
+
+  // A launch opens on the first bot rather than the new-task page (#1076),
+  // once the live index is in so its chat is found rather than a new one
+  // aimed at its folder. Only while the reader has gone nowhere yet.
+  const launchNav = useRef<number | null>(navGen.current);
+  useEffect(() => {
+    if (launchNav.current === null) return;
+    if (navGen.current !== launchNav.current || selectedSessionId || settingsOpen || issuesOpen) {
+      launchNav.current = null;
+      return;
+    }
+    if (indexSide !== false || bots.length === 0) return;
+    launchNav.current = null;
+    openBot(bots[0]);
+    // `openBot` is rebuilt every render; the bots and the index landing are what this waits on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bots, indexSide, selectedSessionId, settingsOpen, issuesOpen]);
+
+  // After a delete, the first bot left, else the new-task page (#1076). Run
+  // once the list without it has landed, so the bot opened is one still here.
+  const [botDeleted, setBotDeleted] = useState<string | null>(null);
+  useEffect(() => {
+    if (!botDeleted || bots.some((b) => b.id === botDeleted)) return;
+    setBotDeleted(null);
+    const first = bots[0];
+    if (first) openBot(first);
+    else goToSession(handleNewSession);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [botDeleted, bots]);
+
   useEffect(() => {
     if (!botWaiting || archivedShown) return;
     setBotWaiting(null);
@@ -3103,7 +3134,7 @@ function App() {
   const newBot = !shownSession && projectPath ? botAt(bots, projectPath) : undefined;
   // A bot whose empty chat opens on a welcome (Dray Bot) draws as a chat
   // already under way: the welcome in the transcript, the composer below it.
-  const welcomeBot = newBot?.welcome ? newBot : undefined;
+  const welcomeBot = newBot && greetingOf(newBot).length > 0 ? newBot : undefined;
   // In a bot's chat `@` lists the other bots instead of files: those on its
   // own server, the only ones `dray bot send` reaches from there.
   const composerBot = selectedBot ?? newBot;
@@ -3434,6 +3465,13 @@ function App() {
           onNewBot={() => {
             goToSession(handleNewSession);
             setBotServer(LOCAL);
+            setBotToEdit(null);
+            setNewBotOpen(true);
+          }}
+          // Left where it is: Edit changes only the name and face, never the
+          // picker the composer shares with New bot.
+          onEditBot={(bot) => {
+            setBotToEdit(bot);
             setNewBotOpen(true);
           }}
           onDeleteBot={setBotToDelete}
@@ -4128,8 +4166,8 @@ function App() {
             loads it. One already loaded keeps drawing what it has. */}
         {offlineServer && !selectedSession ? (
           <TranscriptSkeleton still={offlineServer.status !== "connecting"} />
-        ) : welcomeBot?.welcome && !selectedSessionId ? (
-          <BotWelcome text={welcomeBot.welcome} />
+        ) : welcomeBot && !selectedSessionId ? (
+          <BotWelcome messages={greetingOf(welcomeBot)} />
         ) : (
           <Chat
             {...paneState(selectedSessionId ?? "")}
@@ -4303,6 +4341,8 @@ function App() {
     {serverUpdateDialog}
     <NewBotDialog
       open={newBotOpen}
+      // Kept through the close, so the title does not flip to New bot as it fades.
+      editing={botToEdit}
       onOpenChange={(open) => {
         setNewBotOpen(open);
         if (!open) setBotServer(null);
@@ -4359,6 +4399,7 @@ function App() {
                 const server = serverOfBot(bot);
                 await invoke("delete_bot", { id: bot.id }, server).catch((e) => setError(String(e)));
                 await refreshBots(server);
+                setBotDeleted(bot.id);
               })();
             }}
           >

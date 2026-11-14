@@ -176,6 +176,13 @@ export function botEntries(
   });
 }
 
+/// The messages a bot's chat opens on before it has a session: Dray Bot's
+/// welcome, then the question for the reader's name while no bot knows it. A
+/// server from before the greeting sends the welcome alone.
+export function greetingOf(bot: Bot): string[] {
+  return bot.greeting ?? (bot.welcome ? [bot.welcome] : []);
+}
+
 /// One line of a reply for an inbox row: markdown marks and line breaks out.
 export function previewLine(text: string): string {
   return text
