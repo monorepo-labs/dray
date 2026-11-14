@@ -184,13 +184,13 @@ pub struct SessionIndexItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub need: Option<TaskNeed>,
-    /// Where a bot's sub-task hangs while the task that started it is settled
-    /// or deleted, written by [`readopt`]. A bot's task outlives its parent
+    /// The nearest live session above a bot's sub-task while the task that
+    /// started it is settled or deleted, written by [`readopt`]. A bot's task outlives its parent
     /// task, and a client holding the index's active side alone cannot walk
     /// through a settled parent to find the bot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub adopted: Option<Adoption>,
+    pub adopted_by: Option<String>,
     /// Every key this build does not know, carried through untouched.
     ///
     /// The index is rewritten **whole**, and `INDEX_LOCK` is an in-process
@@ -222,16 +222,6 @@ pub struct TaskNeed {
     pub text: String,
     /// RFC3339, when the bot wrote it.
     pub at: String,
-}
-
-/// See [`SessionIndexItem::adopted`].
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, TS)]
-#[ts(export, export_to = "events.ts")]
-pub struct Adoption {
-    /// The nearest live ancestor, which takes the session's reports.
-    pub by: String,
-    /// The title of the session that started it, which the Tasks tab names.
-    pub from: String,
 }
 
 /// Writes or clears a task's need line. `None` where the session is unknown.
@@ -739,7 +729,7 @@ impl SessionIndexItem {
             continue_at: None,
             continue_off: false,
             need: None,
-            adopted: None,
+            adopted_by: None,
             unknown: Default::default(),
         }
     }
@@ -834,7 +824,7 @@ impl SessionIndexItem {
             continue_at: None,
             continue_off: false,
             need: None,
-            adopted: None,
+            adopted_by: None,
             unknown: Default::default(),
         }
     }
@@ -1164,7 +1154,7 @@ pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>
     Ok(update_item(session_id, |item| {
         item.parent_session_id = None;
         // Or the walk would still find a way up through it.
-        item.adopted = None;
+        item.adopted_by = None;
         // No parent to surface beside, so a hidden session would show nowhere.
         item.hidden = false;
         item.clone()
@@ -1207,7 +1197,7 @@ fn tree_parent_in<'a>(items: &'a [SessionIndexItem], item: &SessionIndexItem) ->
     let find = |id: &str| items.iter().find(|i| i.session_id == id && i.session_id != item.session_id);
     match item.parent_session_id.as_deref().and_then(find) {
         Some(parent) => Some(parent),
-        None => item.adopted.as_ref().and_then(|a| find(&a.by)),
+        None => item.adopted_by.as_deref().and_then(find),
     }
 }
 
@@ -1233,24 +1223,20 @@ fn live_from_in<'a>(
     None
 }
 
-/// What `item`'s [`Adoption`] should read: none while its parent is live, else
-/// the nearest live ancestor and the parent's title. A deleted parent's title
-/// lives only on the adoption already written, so that one is carried on.
-fn adoption_in(items: &[SessionIndexItem], item: &SessionIndexItem, gone: Option<&str>) -> Option<Adoption> {
+/// What `item`'s [`SessionIndexItem::adopted_by`] should read: none while its
+/// parent is live, else the nearest live ancestor. A deleted parent is crossed
+/// by the adoption already written.
+fn adoption_in(items: &[SessionIndexItem], item: &SessionIndexItem, gone: Option<&str>) -> Option<String> {
     let parent = item.parent_session_id.as_deref().and_then(|id| items.iter().find(|i| i.session_id == id));
-    let (from, start) = match parent {
+    let start = match parent {
         Some(p) if live(p, gone) => return None,
-        Some(p) => (p.title.clone(), tree_parent_in(items, p)),
-        None => {
-            let held = item.adopted.as_ref()?;
-            (held.from.clone(), items.iter().find(|i| i.session_id == held.by))
-        }
+        Some(p) => tree_parent_in(items, p),
+        None => items.iter().find(|i| Some(i.session_id.as_str()) == item.adopted_by.as_deref()),
     };
-    let by = live_from_in(items, start?, gone)?;
-    Some(Adoption { by: by.session_id.clone(), from })
+    Some(live_from_in(items, start?, gone)?.session_id.clone())
 }
 
-/// Rewrites [`SessionIndexItem::adopted`] on every session below
+/// Rewrites [`SessionIndexItem::adopted_by`] on every session below
 /// `root`, after `root` was settled, unsettled, or is about to be deleted
 /// (`gone`). Answers the ids whose entry changed, for the caller to announce.
 pub async fn readopt(root: &str, gone: Option<&str>) -> Result<Vec<String>> {
@@ -1281,8 +1267,8 @@ fn readopt_in(sessions: &mut [SessionIndexItem], root: &str, gone: Option<&str>)
             // Settled ones too: a settled child is still the step its own
             // live children's walk takes up to the bot.
             let next = adoption_in(&sessions, &sessions[k], gone);
-            if next != sessions[k].adopted {
-                sessions[k].adopted = next;
+            if next != sessions[k].adopted_by {
+                sessions[k].adopted_by = next;
                 changed.push(sessions[k].session_id.clone());
             }
         }
@@ -2402,12 +2388,12 @@ mod tests {
         item
     }
 
-    fn adopted<'a>(items: &'a [SessionIndexItem], id: &str) -> Option<&'a Adoption> {
-        items.iter().find(|i| i.session_id == id)?.adopted.as_ref()
+    fn adopted<'a>(items: &'a [SessionIndexItem], id: &str) -> Option<&'a str> {
+        items.iter().find(|i| i.session_id == id)?.adopted_by.as_deref()
     }
 
-    /// bot → task → sub → subsub. Settling the task hands `sub` to the bot,
-    /// named after the task; `subsub` still has a live parent and stays put.
+    /// bot → task → sub → subsub. Settling the task hands `sub` to the bot;
+    /// `subsub` still has a live parent and stays put.
     #[test]
     fn a_settled_parent_hands_its_sub_task_to_the_nearest_live_ancestor() {
         let mut items = vec![
@@ -2418,7 +2404,7 @@ mod tests {
         ];
         items[1].archived = true;
         assert_eq!(readopt_in(&mut items, "task", None), ["sub"]);
-        assert_eq!(adopted(&items, "sub"), Some(&Adoption { by: "bot".into(), from: "task title".into() }));
+        assert_eq!(adopted(&items, "sub"), Some("bot"));
         assert_eq!(adopted(&items, "subsub"), None);
         assert_eq!(live_ancestor_in(&items, "sub"), Some("bot"));
         assert_eq!(live_ancestor_in(&items, "subsub"), Some("sub"));
@@ -2431,7 +2417,7 @@ mod tests {
     }
 
     /// The task is deleted after its sub-task was adopted: the adoption is the
-    /// only bridge left to the bot, and the title it carries is the only name.
+    /// only bridge left to the bot.
     #[test]
     fn a_deleted_parent_is_bridged_by_the_adoption() {
         let mut items = vec![
@@ -2441,17 +2427,17 @@ mod tests {
             tree_item("sub", Some("task")),
         ];
         assert_eq!(readopt_in(&mut items, "task", Some("task")), ["sub"]);
-        assert_eq!(adopted(&items, "sub"), Some(&Adoption { by: "mid".into(), from: "task title".into() }));
+        assert_eq!(adopted(&items, "sub"), Some("mid"));
         items.retain(|i| i.session_id != "task");
         assert_eq!(live_ancestor_in(&items, "sub"), Some("mid"));
         let sub = items.iter().find(|i| i.session_id == "sub").unwrap();
         assert_eq!(tree_parent_in(&items, sub).map(|p| p.session_id.as_str()), Some("mid"));
 
         // `mid` settled next: the walk crosses the missing task through the
-        // adoption, and keeps the deleted task's name.
+        // adoption.
         items[1].archived = true;
         assert_eq!(readopt_in(&mut items, "mid", None), ["sub"]);
-        assert_eq!(adopted(&items, "sub"), Some(&Adoption { by: "bot".into(), from: "task title".into() }));
+        assert_eq!(adopted(&items, "sub"), Some("bot"));
     }
 
     /// bot → task → settled child → live grandchild, then the task deleted:
@@ -2468,7 +2454,7 @@ mod tests {
         items[2].archived = true;
         readopt_in(&mut items, "task", Some("task"));
         items.retain(|i| i.session_id != "task");
-        assert_eq!(adopted(&items, "child").map(|a| a.by.as_str()), Some("bot"));
+        assert_eq!(adopted(&items, "child"), Some("bot"));
         assert_eq!(live_ancestor_in(&items, "grand"), Some("bot"));
     }
 

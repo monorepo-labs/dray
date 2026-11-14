@@ -65,7 +65,7 @@ describe("inBotTree", () => {
   it("crosses a settled parent through the adoption", () => {
     const items = [
       item("chat"),
-      item("sub", { cwd: "/repo/wt2", parentSessionId: "settled", adopted: { by: "chat", from: "t" } }),
+      item("sub", { cwd: "/repo/wt2", parentSessionId: "settled", adoptedBy: "chat" }),
     ];
     expect(inBotTree([bot], items, "sub")).toBe(true);
   });

@@ -1444,7 +1444,7 @@ function App() {
   // loaded side first, else asked of the backend: with the sidebar on the other
   // side of the settled split the parent is not in the list, and still exists.
   const hiddenParentId = selectedSession?.hidden
-    ? (sessionIndexItems.find((i) => i.sessionId === selectedSession.sessionId)?.adopted?.by ?? selectedSession.parentSessionId)
+    ? (sessionIndexItems.find((i) => i.sessionId === selectedSession.sessionId)?.adoptedBy ?? selectedSession.parentSessionId)
     : null;
   const loadedParent = sessionIndexItems.find((i) => i.sessionId === hiddenParentId);
   const [fetchedParent, setFetchedParent] = useState<SessionIndexItem | null>(null);
@@ -2533,7 +2533,7 @@ function App() {
     const gen = filterGen.current;
     const item = await indexItem(id);
     // A bot's sub-task whose parent is settled or deleted opens where it was adopted.
-    const up = item?.hidden ? (item.adopted?.by ?? item.parentSessionId) : null;
+    const up = item?.hidden ? (item.adoptedBy ?? item.parentSessionId) : null;
     const parent = up ? await indexItem(up) : null;
     if (nav !== navGen.current || gen !== filterGen.current) return;
     await openFromNotice(parent?.sessionId ?? id);
@@ -3155,7 +3155,7 @@ function App() {
       let at = found;
       for (let hops = 0; at?.parentSessionId && hops < 8; hops++) {
         // A deleted parent is bridged by the session that adopted the task.
-        const parent = (await indexItem(at.parentSessionId)) ?? (at.adopted ? await indexItem(at.adopted.by) : null);
+        const parent = (await indexItem(at.parentSessionId)) ?? (at.adoptedBy ? await indexItem(at.adoptedBy) : null);
         if (parent && botAt(bots, parent.cwd)?.id === bot.id) {
           task = found ?? undefined;
           break;

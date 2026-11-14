@@ -602,8 +602,6 @@ struct BotTasksSheet: View {
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
     let tasks: [SessionKey]
-    /// The bot's chat sessions, whose own tasks carry no started-by mark.
-    let chat: [SessionKey]
     let open: (SessionKey) -> Void
 
     var body: some View {
@@ -661,20 +659,10 @@ struct BotTasksSheet: View {
                     else { BotFace(seed: key.id, size: 22) }
                 }
                 .frame(width: 22, height: 22)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.title.isEmpty ? "Untitled" : item.title)
-                        .font(Theme.Font.body)
-                        .foregroundStyle(asking ? Theme.accent : Theme.text)
-                        .lineLimit(1)
-                    // A sub-task names the task that started it, settled or not.
-                    if let from = store.startedBy(key, chat: chat) {
-                        Label(from.isEmpty ? "Untitled" : from, systemImage: "arrow.turn.down.right")
-                            .font(Theme.Font.footnote.font)
-                            .foregroundStyle(Theme.tertiary)
-                            .lineLimit(1)
-                            .accessibilityLabel("Started by \(from.isEmpty ? "Untitled" : from)")
-                    }
-                }
+                Text(item.title.isEmpty ? "Untitled" : item.title)
+                    .font(Theme.Font.body)
+                    .foregroundStyle(asking ? Theme.accent : Theme.text)
+                    .lineLimit(1)
                 Spacer(minLength: 0)
                 if let pr {
                     if pr.state == "OPEN" && pr.checksState == "RUNNING" { ChecksSpinner().frame(width: 14, height: 14) }

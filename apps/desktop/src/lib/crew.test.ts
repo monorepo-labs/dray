@@ -82,11 +82,9 @@ describe("crewRows", () => {
       item("bot", null),
       item("task", "bot", { created: "2026-09-02T00:00:00Z" }),
       item("sub", "task", { hidden: true }),
-      item("orphan", "settled", { hidden: true, adopted: { by: "bot", from: "Fix login" } }),
+      item("orphan", "settled", { hidden: true, adoptedBy: "bot" }),
     ];
-    const rows = crewRows(items, "bot", quiet);
-    expect(ids(rows)).toEqual(["task", "sub", "orphan"]);
-    expect(rows.map((r) => r.from)).toEqual([undefined, "task", "Fix login"]);
+    expect(ids(crewRows(items, "bot", quiet))).toEqual(["task", "sub", "orphan"]);
   });
 
   it("survives a cycle in the index", () => {
@@ -202,17 +200,17 @@ describe("hidden sessions", () => {
 
   // Its parent task settled, a bot's sub-task belongs to the bot: never loose.
   it("leaves out a hidden child adopted by a listed session", () => {
-    const adopted = [...items, item("sub", "settled-task", { hidden: true, adopted: { by: "a", from: "t" } })];
+    const adopted = [...items, item("sub", "settled-task", { hidden: true, adoptedBy: "a" })];
     expect(inSidebar(adopted).map((i) => i.sessionId)).toEqual(["a", "shown", "orphan"]);
   });
 
   it("lights the adopter of a hidden asker", () => {
-    const adopted = [...items, item("sub", "settled-task", { hidden: true, adopted: { by: "review", from: "t" } })];
+    const adopted = [...items, item("sub", "settled-task", { hidden: true, adoptedBy: "review" })];
     expect([...withHiddenAsks(adopted, new Set(["sub"]))].sort()).toEqual(["a", "review", "sub"]);
   });
 
   it("carries an adopted child along with its adopter", () => {
-    const adopted = [...items, item("sub", "gone-task", { hidden: true, adopted: { by: "a", from: "t" } })];
+    const adopted = [...items, item("sub", "gone-task", { hidden: true, adoptedBy: "a" })];
     expect(hiddenChildren(adopted, "a").map((i) => i.sessionId)).toEqual(["review", "sub"]);
   });
 

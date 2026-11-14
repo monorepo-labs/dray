@@ -63,19 +63,6 @@ canChangeMethod: boolean, };
 export type AccountState = "logged_in" | "logged_out" | "unknown";
 
 /**
- * See [`SessionIndexItem::adopted`].
- */
-export type Adoption = { 
-/**
- * The nearest live ancestor, which takes the session's reports.
- */
-by: string, 
-/**
- * The title of the session that started it, which the Tasks tab names.
- */
-from: string, };
-
-/**
  * One harness's whole answer: can it run here, who is it, and what may be added.
  */
 export type AgentAccounts = { harness: Harness, label: string, 
@@ -2067,12 +2054,12 @@ continueOff: boolean,
  */
 need?: TaskNeed, 
 /**
- * Where a bot's sub-task hangs while the task that started it is settled
- * or deleted, written by [`readopt`]. A bot's task outlives its parent
+ * The nearest live session above a bot's sub-task while the task that
+ * started it is settled or deleted, written by [`readopt`]. A bot's task outlives its parent
  * task, and a client holding the index's active side alone cannot walk
  * through a settled parent to find the bot.
  */
-adopted?: Adoption, };
+adoptedBy?: string, };
 
 /**
  * Session-level facts, known at startup.
@@ -2237,12 +2224,12 @@ continueOff: boolean,
  */
 need?: TaskNeed, 
 /**
- * Where a bot's sub-task hangs while the task that started it is settled
- * or deleted, written by [`readopt`]. A bot's task outlives its parent
+ * The nearest live session above a bot's sub-task while the task that
+ * started it is settled or deleted, written by [`readopt`]. A bot's task outlives its parent
  * task, and a client holding the index's active side alone cannot walk
  * through a settled parent to find the bot.
  */
-adopted?: Adoption, };
+adoptedBy?: string, };
 
 /**
  * Driven by [`StatusTracker`](crate::session::StatusTracker). `Completed`

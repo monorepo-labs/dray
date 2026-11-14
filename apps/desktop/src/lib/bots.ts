@@ -145,7 +145,7 @@ export function botOf(
     if (bot) return bot;
     // A settled or deleted parent is not held: the adoption bridges it.
     const parent: SessionIndexItem | undefined = at.parentSessionId ? byId.get(at.parentSessionId) : undefined;
-    at = parent ?? (at.adopted ? byId.get(at.adopted.by) : undefined);
+    at = parent ?? (at.adoptedBy ? byId.get(at.adoptedBy) : undefined);
   }
   return undefined;
 }

@@ -15,9 +15,6 @@ export type CrewRow = {
   /// No turn running, but a background shell or subagent still is: the same
   /// set the chat's Background Tasks row counts.
   background: boolean;
-  /// The title of the task that started this one, for a sub-task: the Tasks
-  /// tab sorts by state, so nesting alone would not say whose it is.
-  from?: string;
 };
 
 /// The live maps a row is read off.
@@ -59,10 +56,6 @@ export function crewRows(
   }
   const out: CrewRow[] = [];
   const roots = [parentId, ...also];
-  const from = (kid: SessionIndexItem) =>
-    kid.parentSessionId && live.has(kid.parentSessionId)
-      ? roots.includes(kid.parentSessionId) ? undefined : live.get(kid.parentSessionId)?.title
-      : kid.adopted?.from;
   // A cycle in the index costs a short list rather than a hung render.
   const seen = new Set(roots);
   const walk = (ids: readonly string[]) => {
@@ -72,7 +65,7 @@ export function crewRows(
     for (const kid of kids) {
       if (seen.has(kid.sessionId)) continue;
       seen.add(kid.sessionId);
-      out.push({ ...rowState(kid, state), from: from(kid) });
+      out.push(rowState(kid, state));
       walk([kid.sessionId]);
     }
   };
@@ -87,7 +80,7 @@ export function treeParent(
   live: ReadonlyMap<string, SessionIndexItem> | ReadonlySet<string>,
 ): string | null {
   const p = item.parentSessionId;
-  return p && live.has(p) ? p : item.adopted?.by ?? p;
+  return p && live.has(p) ? p : item.adoptedBy ?? p;
 }
 
 /// What a row says about one session.
@@ -193,6 +186,6 @@ export function leftToParent(
 /// reach them — unless `parentId` is a bot's task, whose sub-tasks outlive it.
 export function hiddenChildren(items: SessionIndexItem[], parentId: string): SessionIndexItem[] {
   return items.filter(
-    (i) => i.hidden && (i.parentSessionId === parentId || i.adopted?.by === parentId) && i.sessionId !== parentId,
+    (i) => i.hidden && (i.parentSessionId === parentId || i.adoptedBy === parentId) && i.sessionId !== parentId,
   );
 }

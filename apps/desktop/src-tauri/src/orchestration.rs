@@ -1551,7 +1551,7 @@ pub async fn auto_merge_card(
 
     // A deleted parent is bridged by the task's adoption, as its reports are.
     let adopted_by = match store::get_session_index_item(&task_id).await? {
-        Some(task) => task.adopted.map(|a| a.by),
+        Some(task) => task.adopted_by,
         None => None,
     };
     let mut parent = store::get_session_index_item(&session_id).await?;

@@ -167,17 +167,11 @@ struct SessionItem: Codable, Hashable {
     let created: String?
     /// A bot task's one line to the reader, written by its bot (`dray session need`).
     let need: Need?
-    /// Where a bot's sub-task hangs while the task that started it is settled or deleted.
-    let adopted: Adoption?
+    /// The nearest live session above a bot's sub-task while the task that started it is settled or deleted.
+    let adoptedBy: String?
 
     var busy: Bool { status == "in_progress" }
     var project: String { (projectPath as NSString).lastPathComponent }
-}
-
-/// A sub-task's adopter: the nearest live session above it, and the title of the task that started it.
-struct Adoption: Codable, Hashable {
-    let by: String
-    let from: String
 }
 
 /// A bot task's need: drawn only while written after the task last moved.

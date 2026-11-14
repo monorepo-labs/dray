@@ -479,7 +479,7 @@ final class Store {
         var kids: [String: [(key: SessionKey, item: SessionItem)]] = [:]
         for copy in copies.values {
             let parent = copy.item.parentSessionId
-            if let p = parent.flatMap({ live.contains($0) ? $0 : nil }) ?? copy.item.adopted?.by ?? parent {
+            if let p = parent.flatMap({ live.contains($0) ? $0 : nil }) ?? copy.item.adoptedBy ?? parent {
                 kids[p, default: []].append(copy)
             }
         }
@@ -494,16 +494,6 @@ final class Store {
         }
         walk(chat.reversed().map(\.id))
         return out
-    }
-
-    /// The title of the task that started a bot's sub-task, for the Tasks sheet's
-    /// mark; nil for one the bot's chat started (`CrewRow.from`).
-    func startedBy(_ key: SessionKey, chat: [SessionKey]) -> String? {
-        guard let item = items[key], let p = item.parentSessionId else { return nil }
-        if let parent = items.first(where: { $0.key.id == p && $0.value.archived != true })?.value {
-            return chat.contains(where: { $0.id == p }) ? nil : parent.title
-        }
-        return item.adopted?.from
     }
 
     /// Each bot chat's newest reply and unread count, read off the log's end by its server.
