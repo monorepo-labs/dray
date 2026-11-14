@@ -162,7 +162,7 @@ fn clean_name(text: &str) -> Option<String> {
 
 /// Takes up the name a bot wrote to its [`USER_FILE`] in `commit`, and tells
 /// every other bot's chat.
-async fn learn_user_name(bot: &Bot, commit: &str) {
+async fn learn_user_name(bot: &Bot, commit: &str, sink: &Sink) {
     let dir = Path::new(&bot.path);
     let Ok(changed) = git(dir, &["diff-tree", "--no-commit-id", "--name-only", "-r", commit]).await else {
         return;
@@ -187,6 +187,8 @@ async fn learn_user_name(bot: &Bot, commit: &str) {
     for other in read_list().await.unwrap_or_default().iter().filter(|b| b.id != bot.id) {
         note_bot(&other.path, Note::UserName, format!("The user asked to be called {name}. Call them that from now on."));
     }
+    // Every greeting not yet sent is worded from the name, so open apps read them again.
+    sink.emit(BOTS_CHANGED, ()).ok();
 }
 
 /// Makes Dray Bot once per home, on the app's own server alone. A marker file
@@ -1177,9 +1179,13 @@ async fn start_history(bot: &Bot) -> Result<()> {
 /// Commits what a turn of the bot at `cwd` changed in its folder, where `cwd`
 /// is a bot's, and reads back the lessons in it. Dray does it rather than the
 /// bot, which could forget. `None` where `cwd` is no bot's.
-pub async fn commit_turn(cwd: &str, notes: learn::TurnNotes) -> Option<learn::Turn> {
+pub async fn commit_turn(cwd: &str, notes: learn::TurnNotes, sink: &Sink) -> Option<learn::Turn> {
     let bot = bot_at(cwd).await?;
-    Some(commit_bot_turn(&bot, notes).await)
+    let turn = commit_bot_turn(&bot, notes).await;
+    if let Some(commit) = &turn.commit {
+        learn_user_name(&bot, commit, sink).await;
+    }
+    Some(turn)
 }
 
 async fn commit_bot_turn(bot: &Bot, notes: learn::TurnNotes) -> learn::Turn {
@@ -1209,7 +1215,6 @@ async fn commit_bot_turn(bot: &Bot, notes: learn::TurnNotes) -> learn::Turn {
             Ok((files, oversize)) => (turn.files, turn.oversize) = (files, oversize),
             Err(e) => eprintln!("[bot learn] {e:#}"),
         }
-        learn_user_name(bot, commit).await;
     }
     turn
 }

@@ -3571,7 +3571,7 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                 ask_name = crate::bots::take_name_ask(ctx.session_id) && *status == TurnStatus::Success;
                 // Awaited, not spawned: the queued flush below would start the
                 // next turn, which could overwrite this one's notes unsaved.
-                bot_turn = crate::bots::commit_turn(ctx.session_cwd, notes).await;
+                bot_turn = crate::bots::commit_turn(ctx.session_cwd, notes, app).await;
             }
             _ => {}
         }

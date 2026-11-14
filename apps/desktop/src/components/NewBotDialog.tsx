@@ -78,21 +78,25 @@ export default function NewBotDialog({
     setAvatar(editing.avatar ?? DEFAULT_AVATAR);
   }, [open, editing]);
 
+  const shut = () => {
+    onOpenChange(false);
+    setName("");
+    setAvatar(DEFAULT_AVATAR);
+    setError(null);
+    setMade(null);
+  };
+
+  // Held open while a save or create is in flight: closed and reopened
+  // meanwhile, the old one's finish would close the new opening.
   const close = (next: boolean) => {
-    onOpenChange(next);
-    if (!next) {
-      setName("");
-      setAvatar(DEFAULT_AVATAR);
-      setError(null);
-      setMade(null);
-    }
+    if (next) onOpenChange(true);
+    else if (!busy) shut();
   };
 
   const save = async (bot: Bot) => {
     const at = serverOfBot(bot);
     await invoke<Bot>("edit_bot", { id: bot.id, name: name.trim(), avatar }, at);
     await refreshBots(at);
-    close(false);
   };
 
   const create = async () => {
@@ -102,16 +106,18 @@ export default function NewBotDialog({
       setMade(bot);
       await refreshBots(server);
     }
-    const chat = await invoke<SessionIndexItem>("start_bot", { id: bot.id, ...pick }, serverOfBot(bot));
-    close(false);
-    onStarted(chat);
+    return invoke<SessionIndexItem>("start_bot", { id: bot.id, ...pick }, serverOfBot(bot));
   };
 
   const submit = async () => {
     if (!name.trim() || busy) return;
     setBusy(true);
     try {
-      await (editing ? save(editing) : create());
+      let chat: SessionIndexItem | undefined;
+      if (editing) await save(editing);
+      else chat = await create();
+      shut();
+      if (chat) onStarted(chat);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -194,7 +200,7 @@ export default function NewBotDialog({
         {error && <p className="text-ui text-destructive">{error}</p>}
 
         <div className="flex justify-end gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => close(false)}>
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => close(false)}>
             Cancel
           </Button>
           <Button type="button" size="sm" disabled={!name.trim() || busy} onClick={() => void submit()}>

@@ -168,7 +168,7 @@ import { checkChangelog, markChangelogSeen, type Release } from "@/lib/changelog
 import WhatsNewCard from "@/components/WhatsNewCard";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { useSessionIssues } from "@/hooks/useIssues";
-import { useSessions } from "@/hooks/useSessions";
+import { sessionsAnswered, useSessions } from "@/hooks/useSessions";
 import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailability";
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import ServerOfflineNotice from "@/components/composer/ServerOfflineNotice";
@@ -1330,12 +1330,15 @@ function App() {
       launchNav.current = null;
       return;
     }
-    if (indexSide !== false || bots.length === 0) return;
+    const first = bots[0];
+    // The first bot's own server must have sent its sessions: a remote one's
+    // land apart from This Mac's, and opened early its chat reads as none.
+    if (indexSide !== false || !first || !sessionsAnswered(serverOfBot(first))) return;
     launchNav.current = null;
-    openBot(bots[0]);
-    // `openBot` is rebuilt every render; the bots and the index landing are what this waits on.
+    openBot(first);
+    // `openBot` is rebuilt every render; the bots and each index landing are what this waits on.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bots, indexSide, selectedSessionId, settingsOpen, issuesOpen]);
+  }, [bots, indexSide, sessionIndexItems, selectedSessionId, settingsOpen, issuesOpen]);
 
   // After a delete, the first bot left, else the new-task page (#1076). Run
   // once the list without it has landed, so the bot opened is one still here.
