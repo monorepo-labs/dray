@@ -64,6 +64,7 @@ import {
 } from "@/lib/tabOrder";
 import BranchButton from "@/components/layout/BranchButton";
 import { cn } from "@/lib/utils";
+import type { BotAvatar as BotAvatarPick } from "@/types/events";
 
 /// Which view fills the main column.
 export const VIEW_TABS = ["chat", "browser", "changes", "files"] as const;
@@ -186,7 +187,10 @@ export default function ViewTabs({
   working = false,
   tasks,
   picks,
+  bot,
 }: {
+  /// The bot whose chat this row is: its face stands in for the chat's bubble.
+  bot?: { id: string; avatar?: BotAvatarPick | null };
   /// Whose browser pages the row lists: a bot's tasks share the bot chat's.
   browserId?: string;
   /// A bot chat's Diff and Files picks.
@@ -256,6 +260,8 @@ export default function ViewTabs({
       icon:
         working && own !== "chat" ? (
           <Orb state="working" label="Working" size={16} />
+        ) : bot ? (
+          <BotAvatar seed={bot.id} avatar={bot.avatar} className="block size-4 shrink-0 scale-[1.18]" />
         ) : (
           <ChatBubbleOvalLeftIcon className={MARK} />
         ),

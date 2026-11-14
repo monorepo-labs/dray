@@ -3469,6 +3469,7 @@ function App() {
               working={stripOwner ? statusBySession[stripOwner.sessionId] === "in_progress" : busy}
               branch={prBranch}
               cwd={shownSession.cwd}
+              bot={mainGroup ? undefined : stripBot}
               tasks={
                 strip
                   ? {
