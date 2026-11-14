@@ -1660,12 +1660,14 @@ function App() {
 
   // A live background task counts even where no run is built for it yet, and a
   // task list counts on its own — the tab is a catch-all, so any one of its
-  // sections having something is enough to draw it.
+  // sections having something is enough to draw it. A bot chat's media alone
+  // draws none: it already plays in the chat, and the tab would put a row of
+  // tabs over the task list.
   const hasMoreTab =
     panelRuns.length > 0 ||
     backgroundTasks.length > 0 ||
     sessionTodos !== null ||
-    sessionAttachments.length > 0;
+    (sessionAttachments.length > 0 && !selectedBot);
 
   const taskSources = useRef({ crew, sessionIndexItems });
   taskSources.current = { crew, sessionIndexItems };

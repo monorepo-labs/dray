@@ -1,20 +1,19 @@
 // The whole app on three bots, for a video of what a bot does: Dray, Ops and
-// Docs in the sidebar and nothing else, Dray's chat open with its Tasks tab
-// beside it. Tauri's IPC is mocked and holds the whole story in the page, so
-// it needs no server and plays the same every time.
+// Docs in the sidebar and nothing else, Dray's chat open with its tasks
+// beside it, most of them on a sandbox server. Tauri's IPC is mocked and
+// holds the whole story in the page, so it needs no server and plays the
+// same every time.
 //
 //   /demo/bots-video.html            Press Play (or P) and the story plays
 //   /demo/bots-video.html?pace=1.5   the same, every pause half as long again
 //   /demo/bots-video.html?still      the end state, for a screenshot
 //
-// Record it in a visible window: a hidden tab clamps timers to a second, and
-// the typing crawls.
+// Record it in a visible window: a hidden tab clamps timers to a second.
 //
-// The story: Yogesh asks for the 0.42 changelog, Dray starts a task and
-// messages it, posts the merge card, the card is merged, Yogesh sets a rule
-// and Dray learns it, then the iOS task joins the Cloud PR on "Waiting on
-// you". Messages are typed into the real composer and sent through the real
-// send path.
+// The story, quick on purpose: Yogesh asks for the changelog, Dray starts a
+// task and says nothing, the PR turns ready and its merge card lands with the
+// task's proof video, the card is merged, which settles the task. Then a rule
+// Dray answers with 👍 and learns, and the iOS task joins "Waiting on you".
 
 import { emit } from "@tauri-apps/api/event";
 import { mockConvertFileSrc, mockIPC } from "@tauri-apps/api/mocks";
@@ -29,6 +28,7 @@ import type {
   BotPreview,
   Model,
   PrMark,
+  ServerInfo,
   SessionIndexItem,
 } from "@/types/events";
 
@@ -46,11 +46,19 @@ const yesterday = (h: number, m: number) => {
   return d.toISOString();
 };
 
+const LOCAL = "local";
+/// The machine most tasks run on, drawn as the server glyph on their rows.
+const SANDBOX = "sandbox";
 const REPO = "/Users/yogesh/code/dray";
+/// The same repository's checkout on the sandbox, as that server spells it.
+const SANDBOX_REPO = "/home/dray/dray";
 const BOTS_DIR = "/Users/yogesh/.dray/bots";
+/// Where `dray browser record` and `screenshot` write, so the chat draws a
+/// player and a picture. Served from `demo/bots-video/` by `fileSrc` below.
+const MEDIA = "/Users/yogesh/.dray/browser/recordings/019a7c00-0000-7000-8000-00000000c0de";
 
 const BOTS: Bot[] = [
-  { id: "b0000001", name: "Dray", path: `${BOTS_DIR}/b0000001`, created: yesterday(9, 0), avatar: { shape: "cloud", hue: 80 } },
+  { id: "b0000001", name: "Dray", path: `${BOTS_DIR}/b0000001`, created: yesterday(9, 0), avatar: { shape: "nub", hue: 250 } },
   { id: "b0000002", name: "Ops", path: `${BOTS_DIR}/b0000002`, created: yesterday(9, 5), avatar: { shape: "hexagon", hue: 200 } },
   { id: "b0000003", name: "Docs", path: `${BOTS_DIR}/b0000003`, created: yesterday(9, 8), avatar: { shape: "round", hue: 320 } },
 ];
@@ -92,36 +100,42 @@ function item(sessionId: string, title: string, more: Partial<SessionIndexItem>)
 const botChat = (bot: Bot, sessionId: string, modified: string) =>
   item(sessionId, bot.name, { cwd: bot.path, projectPath: bot.path, modified, created: bot.created });
 
-/// A task of Dray's: hidden, in a worktree of the repo, on its own branch.
-const task = (n: number, title: string, more: Partial<SessionIndexItem> = {}) =>
-  item(id(n), title, {
-    cwd: `${REPO}/.claude/worktrees/task-${n}`,
+/// Each session's server; absent is This Mac.
+const serverOf = new Map<string, string>();
+
+/// A task of Dray's: hidden, in a worktree of the repo, on its own branch, on
+/// the sandbox where `sandbox` says so.
+function task(n: number, title: string, more: Partial<SessionIndexItem> = {}, sandbox = false) {
+  const repo = sandbox ? SANDBOX_REPO : REPO;
+  if (sandbox) serverOf.set(id(n), SANDBOX);
+  return item(id(n), title, {
+    cwd: `${repo}/.claude/worktrees/task-${n}`,
+    projectPath: repo,
     worktreeName: `task-${n}`,
     branch: `worktree-task-${n}`,
     parentSessionId: CHAT,
     hidden: true,
     ...more,
   });
+}
 
 // Tasks by session number, which is also what their branch is named after.
-const SHIKI = 11;
 const FLAKY = 12;
 const ISLAND = 13;
 const SHORTCUTS = 14;
 const IOS = 15;
-const CLOUD = 16;
+const HOMEPAGE = 16;
 const CHANGELOG = 17;
 
 const index: SessionIndexItem[] = [
   botChat(BOTS[0], CHAT, ago(20)),
   { ...botChat(BOTS[1], id(2), ago(34)), status: "completed" },
   botChat(BOTS[2], id(3), ago(95)),
-  task(SHIKI, "Bump Shiki to 3.2", { created: yesterday(18, 41), modified: yesterday(19, 20) }),
-  task(FLAKY, "Fix the flaky worktree test", { created: ago(190), modified: ago(4), status: "in_progress" }),
-  task(ISLAND, "Island: quieter send sound", { created: ago(190), modified: ago(25) }),
+  task(FLAKY, "Fix the flaky worktree test", { created: ago(190), modified: ago(4), status: "in_progress" }, true),
+  task(ISLAND, "Island: quieter send sound", { created: ago(190), modified: ago(25) }, true),
   task(SHORTCUTS, "Settings: search box for shortcuts", { created: ago(190), modified: ago(3), status: "in_progress" }),
-  task(IOS, "iOS: bot chats in the session list", { created: ago(190), modified: ago(1), status: "in_progress" }),
-  task(CLOUD, "Cloud: name the machine in the titlebar", { created: ago(150), modified: ago(40) }),
+  task(IOS, "iOS: bot chats in the session list", { created: ago(190), modified: ago(1), status: "in_progress" }, true),
+  task(HOMEPAGE, "Homepage: bots hero", { created: ago(150), modified: ago(40) }, true),
 ];
 
 const pr = (n: number, number: number, more: Partial<PrMark> = {}): PrMark => ({
@@ -137,13 +151,34 @@ const pr = (n: number, number: number, more: Partial<PrMark> = {}): PrMark => ({
   ...more,
 });
 
+/// The repository's PRs, the same through either checkout: the app reads one
+/// GitHub repo once and shares the answer across its checkouts.
 const marks: PrMark[] = [
-  pr(SHIKI, 1009, { state: "MERGED", mergeable: null, mergeStateStatus: null }),
+  pr(SHORTCUTS, 1013, { isDraft: true, mergeStateStatus: "DRAFT" }),
   pr(FLAKY, 1010, { checksState: "FAILING", mergeStateStatus: "UNSTABLE" }),
   pr(ISLAND, 1011, { checksState: "RUNNING", mergeStateStatus: "BLOCKED" }),
-  pr(SHORTCUTS, 1013, { isDraft: true, mergeStateStatus: "DRAFT" }),
-  pr(CLOUD, 1012),
+  pr(HOMEPAGE, 1012),
 ];
+
+const SANDBOX_INFO: ServerInfo = {
+  id: SANDBOX,
+  name: "sandbox",
+  named: true,
+  url: "ws://sandbox:7317",
+  ssh: null,
+  on: true,
+  status: "connected",
+  stage: null,
+  error: null,
+  fix: null,
+  release: null,
+  beta: false,
+  latest: null,
+  app: false,
+  restarting: false,
+  boat: null,
+  cloud: false,
+};
 
 // ── the chat ──────────────────────────────────────────────────────────────────
 
@@ -178,13 +213,14 @@ const done = () => ({
 /// "Started a new task" line.
 function startTask(n: number, title: string) {
   const call = `call-new-${n}`;
+  const machine = serverOf.has(id(n)) ? ` --machine ${SANDBOX}` : "";
   return [
     {
       type: "tool_call_started",
       callId: call,
       name: "Bash",
       toolType: "shell",
-      input: { command: `dray session new --project ${REPO} --worktree --title "${title}" "$(cat <<'EOF'\n${title}.\nEOF\n)"` },
+      input: { command: `dray session new${machine} --project ${REPO} --title "${title}" "$(cat <<'EOF'\n${title}.\nEOF\n)"` },
     },
     { type: "tool_call_completed", callId: call, result: { text: `${id(n)}\n`, isError: false, structured: null, exitCode: 0, durationMs: 800, images: [] } },
   ];
@@ -202,51 +238,38 @@ function message(n: number, text: string) {
 const report = (n: number, title: string, text: string) =>
   user(`[message from session "${title}" (${id(n)})]\n\n${text}`, { sessionId: id(n), title, machine: null });
 
-// What happened before the video: yesterday's Shiki bump and this morning's
-// four tasks.
+// What happened before the video: this morning's tasks and the homepage
+// hero, whose screenshot is in the chat.
 function history() {
   const log = (payload: object, ts: string) => event(CHAT, payload, ts);
-  let t = yesterday(18, 40);
-  log(user("Shiki 3.2 is out. Bump it, and check the code views still colour right."), t);
-  for (const p of startTask(SHIKI, "Bump Shiki to 3.2")) log(p, t);
-  log(say("On it. The task will run the code-render demo before and after, so we can compare."), t);
-  log(done(), t);
-  t = yesterday(19, 21);
-  log(report(SHIKI, "Bump Shiki to 3.2", "PR #1009 merged. First token on the Edit diff: 41ms → 33ms."), t);
-  log(say("Shiki 3.2 is in (#1009). Code views colour the same and the Edit diff paints about 20% sooner."), t);
-  log(done(), t);
-
-  t = ago(190);
+  let t = ago(190);
   log(
     user(
       "Next up: the flaky worktree test, a quieter send sound on the island, a search box in Settings → Shortcuts, and let's start bot chats on iOS.",
     ),
     t,
   );
-  for (const p of startTask(FLAKY, "Fix the flaky worktree test")) log(p, t);
-  for (const p of startTask(ISLAND, "Island: quieter send sound")) log(p, t);
-  for (const p of startTask(SHORTCUTS, "Settings: search box for shortcuts")) log(p, t);
-  for (const p of startTask(IOS, "iOS: bot chats in the session list")) log(p, t);
-  log(
-    say(
-      "Four tasks going. The flaky test looks like a race in `remove_session_worktree`, so that task checks it first. iOS will need the bot types in its `Codable` models; the island compiles the same files, so I told it to keep both building.",
-    ),
-    t,
-  );
+  for (const n of [FLAKY, ISLAND, SHORTCUTS, IOS]) for (const p of startTask(n, find(id(n))!.title)) log(p, t);
   log(done(), t);
 
   t = ago(150);
-  log(user("Also: Cloud tasks should name their machine in the titlebar."), t);
-  for (const p of startTask(CLOUD, "Cloud: name the machine in the titlebar")) log(p, t);
-  log(say("Started. It's a small one."), t);
+  log(user("And the homepage hero should show a bot at work."), t);
+  for (const p of startTask(HOMEPAGE, "Homepage: bots hero")) log(p, t);
   log(done(), t);
 
-  t = ago(34);
-  event(id(2), say("0.41.2 is out on all three channels. Notarized in 4 minutes."), t);
-  t = ago(95);
-  event(id(3), say("Updated the Spaces page for the new project filter."), t);
+  t = ago(60);
+  log(report(FLAKY, "Fix the flaky worktree test", "Is the race in remove_session_worktree or in git itself?"), t);
+  for (const p of message(FLAKY, "Ours. Hold the slot lock across the remove.")) log(p, t);
+  log(done(), t);
+
+  t = ago(40);
+  log(report(HOMEPAGE, "Homepage: bots hero", "PR #1012 is up."), t);
+  log(say(`The homepage hero is ready for a look.\n\n![The homepage hero](${MEDIA}/homepage.jpg)`), t);
+  log(done(), t);
+
+  event(id(2), say("0.30.4 is out on all three channels. Notarized in 4 minutes."), ago(34));
+  event(id(3), say("Updated the Spaces page for the new project filter."), ago(95));
 }
-history();
 
 /// Each chat's inbox row: its last reply.
 function previews(ids: string[]): Record<string, BotPreview> {
@@ -292,35 +315,50 @@ const AVAILABLE: AgentAvailability[] = [
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /// A pause in the story, scaled by `PACE`; none at all at 0.
 const beat = (ms: number) => (PACE ? sleep(ms * PACE) : Promise.resolve());
-const find = (sid: string) => index.find((i) => i.sessionId === sid);
+function find(sid: string) {
+  return index.find((i) => i.sessionId === sid);
+}
+history();
+
+/// Sends an event from a session's own server, the way the app hears each.
+function announce(sid: string, name: string, payload: unknown) {
+  const server = serverOf.get(sid);
+  void (server ? emit("server_event", { server, event: name, payload }) : emit(name, payload));
+}
 
 /// Writes an index change and tells the app, as the server does.
 function change(sid: string, more: Partial<SessionIndexItem>) {
   const at = index.findIndex((i) => i.sessionId === sid);
   index[at] = { ...index[at], ...more };
-  void emit("session_changed", index[at]);
+  announce(sid, "session_changed", index[at]);
   return index[at];
 }
 
 function setStatus(sid: string, status: SessionIndexItem["status"], modified = new Date().toISOString()) {
   change(sid, { status, modified });
-  void emit("session_status", { sessionId: sid, status, modified });
+  announce(sid, "session_status", { sessionId: sid, status, modified });
 }
 
 /// Appends to a log and sends it live.
 function live(sid: string, payload: object) {
-  void emit("agent_event", event(sid, payload, new Date().toISOString()));
+  const e = event(sid, payload, new Date().toISOString());
+  void emit("agent_event", e);
+  return e;
 }
 
-/// The reader's sends, waiting on the story to take them.
-const sent: ((text: string) => void)[] = [];
+/// The reader's sends, waiting on the story to take them, with the logged
+/// prompt's event so a reaction can name it.
+const sent: ((e: AgentEvent) => void)[] = [];
 
-async function answer(cmd: string, a: Record<string, unknown>): Promise<unknown> {
+async function answer(cmd: string, a: Record<string, unknown>, server: string): Promise<unknown> {
+  const mine = (i: SessionIndexItem) => (serverOf.get(i.sessionId) ?? LOCAL) === server;
   switch (cmd) {
     case "list_bots":
-      return BOTS;
+      return server === LOCAL ? BOTS : [];
+    case "list_servers":
+      return [SANDBOX_INFO];
     case "list_session_index_items":
-      return a.archived ? index.filter((i) => i.archived) : index.filter((i) => !i.archived);
+      return index.filter((i) => mine(i) && !!a.archived === i.archived);
     case "session_index_item":
       return find(String(a.sessionId)) ?? null;
     case "get_session_by_id": {
@@ -334,7 +372,7 @@ async function answer(cmd: string, a: Record<string, unknown>): Promise<unknown>
     case "bot_previews":
       return previews(a.sessionIds as string[]);
     case "pr_marks":
-      return a.cwd === REPO ? marks : [];
+      return a.cwd === (server === LOCAL ? REPO : SANDBOX_REPO) ? marks : [];
     case "list_models":
       return MODELS;
     case "agent_availability":
@@ -345,13 +383,14 @@ async function answer(cmd: string, a: Record<string, unknown>): Promise<unknown>
       return { exists: false, changedFiles: 0, unpushedCommits: 0 };
     case "check_update":
     case "auto_merge_card":
+    case "local_server":
       return null;
     case "nudge_bot":
       return true;
     case "merge_pr": {
-      await beat(1400);
-      const mark = marks.find((m) => m.number === a.number)!;
-      Object.assign(mark, { state: "MERGED", mergeable: null, mergeStateStatus: null });
+      await beat(700);
+      const mark = marks.find((m) => m.number === a.number);
+      if (mark) Object.assign(mark, { state: "MERGED", mergeable: null, mergeStateStatus: null });
       return null;
     }
     case "set_session_flags": {
@@ -366,25 +405,28 @@ async function answer(cmd: string, a: Record<string, unknown>): Promise<unknown>
       // provisional row on the logged prompt, and one landing first is drawn
       // beside it.
       setTimeout(() => {
-        live(sid, user(String(a.prompt)));
+        const e = live(sid, user(String(a.prompt)));
         setStatus(sid, "in_progress");
-        sent.shift()?.(String(a.prompt));
-      }, 150);
+        sent.shift()?.(e);
+      }, 120);
       return { snapshot: null, queued: null, issues: [] };
     }
     case "browser_tabs":
     case "list_open_apps":
     case "list_projects":
-    case "list_servers":
     case "list_drafts":
     case "list_slash_commands":
     case "check_agent_updates":
     case "list_local_servers":
       return [];
+    case "server_caches":
+      return {};
+    case "get_integrations":
+      return { linear: null, github: null };
     default:
       // Writes the app makes in passing — selection, read marks, analytics.
-      if (/^(set_|mark_|track_|notify_|warm_|reconnect_|watch_|island_|configure_)/.test(cmd)) return null;
-      console.info("[bots-video] nothing stubbed for", cmd, a);
+      if (/^(set_|mark_|track_|notify_|warm_|reconnect_|watch_|island_|configure_|save_)/.test(cmd)) return null;
+      console.info("[bots-video] nothing stubbed for", cmd, server, a);
       throw `demo: nothing stubbed for ${cmd}`;
   }
 }
@@ -398,18 +440,25 @@ if (!crypto.randomUUID)
     ) as ReturnType<Crypto["randomUUID"]>;
 
 mockConvertFileSrc("macos");
+// The proof video and screenshot are files in this page's folder.
+const internals = (window as unknown as { __TAURI_INTERNALS__: { convertFileSrc: (p: string) => string } }).__TAURI_INTERNALS__;
+const assetSrc = internals.convertFileSrc;
+internals.convertFileSrc = (path: string) =>
+  path.startsWith(`${MEDIA}/`) ? `/demo/bots-video/${path.slice(MEDIA.length + 1)}` : assetSrc(path);
 mockIPC(
   async (cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
-    return cmd === "server_invoke" ? answer(String(a.cmd), (a.args ?? {}) as Record<string, unknown>) : answer(cmd, a);
+    return cmd === "server_invoke"
+      ? answer(String(a.cmd), (a.args ?? {}) as Record<string, unknown>, String(a.server ?? LOCAL))
+      : answer(cmd, a, LOCAL);
   },
   { shouldMockEvents: true },
 );
 
 // Stalls already nudged and fixes already asked, from an earlier load, would
-// change what the card and the Tasks tab draw. Only this page's own: the app
+// change what the card and the task list draw. Only this page's own: the app
 // on the same origin keeps its history.
-const mine = (key: string) => key.startsWith(id(0).slice(0, 24));
+const ours = (key: string) => key.startsWith(id(0).slice(0, 24));
 // A browser that never ran Dray would otherwise open on "What's new". The feed
 // is answered empty rather than the seen mark moved, which the app on this
 // origin would keep.
@@ -419,11 +468,11 @@ window.fetch = (input, init) =>
     ? Promise.resolve(new Response("[]", { headers: { "content-type": "application/json" } }))
     : realFetch(input, init);
 for (const key of ["ade.nudgedStalls", "ade.dismissedStalls"]) {
-  const kept = (JSON.parse(localStorage.getItem(key) ?? "[]") as string[]).filter((k) => !mine(k));
+  const kept = (JSON.parse(localStorage.getItem(key) ?? "[]") as string[]).filter((k) => !ours(k));
   localStorage.setItem(key, JSON.stringify(kept));
 }
 const asks = JSON.parse(localStorage.getItem("ade.fixAsks") ?? "{}") as Record<string, unknown>;
-localStorage.setItem("ade.fixAsks", JSON.stringify(Object.fromEntries(Object.entries(asks).filter(([k]) => !mine(k)))));
+localStorage.setItem("ade.fixAsks", JSON.stringify(Object.fromEntries(Object.entries(asks).filter(([k]) => !ours(k)))));
 
 // After the mock: the app's modules reach for Tauri as they load.
 const { setMode, setTheme } = await import("@/hooks/useTheme");
@@ -460,7 +509,7 @@ const pointer = document.createElement("div");
 pointer.style.cssText =
   "position:fixed;z-index:9999;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;pointer-events:none;" +
   "background:rgba(255,255,255,.85);box-shadow:0 0 0 2px rgba(0,0,0,.35),0 2px 8px rgba(0,0,0,.4);" +
-  "transition:left .7s cubic-bezier(.3,.7,.3,1),top .7s cubic-bezier(.3,.7,.3,1),transform .12s;left:70%;top:110%";
+  "transition:left .45s cubic-bezier(.3,.7,.3,1),top .45s cubic-bezier(.3,.7,.3,1),transform .1s;left:70%;top:110%";
 
 async function click(el: HTMLElement) {
   if (!PACE) return el.click();
@@ -468,129 +517,129 @@ async function click(el: HTMLElement) {
   const r = el.getBoundingClientRect();
   pointer.style.left = `${r.left + r.width / 2}px`;
   pointer.style.top = `${r.top + r.height / 2}px`;
-  await beat(850);
+  await beat(500);
   pointer.style.transform = "scale(.75)";
-  await beat(120);
+  await beat(100);
   pointer.style.transform = "";
   el.click();
-  await beat(250);
+  await beat(150);
 }
 
-/// Types into the real composer and sends with Enter, so the send goes the
-/// app's own way.
-async function type(text: string) {
+/// Puts the whole message in the real composer at once and sends it with
+/// Enter, so the send goes the app's own way. No typing: the video is short.
+async function send(text: string): Promise<AgentEvent> {
   const editor = await until(() => document.querySelector<HTMLElement>('[contenteditable="true"]'));
-  // A spelling squiggle under "changelog" reads as a bug on camera.
+  // A spelling squiggle reads as a bug on camera.
   editor.spellcheck = false;
   editor.focus();
-  if (!PACE) document.execCommand("insertText", false, text);
-  else
-    for (const ch of text) {
-      document.execCommand("insertText", false, ch);
-      await beat(ch === " " ? 45 : 28 + Math.random() * 30);
-    }
-  await beat(400);
-  const taken = new Promise<string>((r) => sent.push(r));
+  document.execCommand("insertText", false, text);
+  await beat(250);
+  const taken = new Promise<AgentEvent>((r) => sent.push(r));
   editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-  await taken;
+  return taken;
 }
 
-/// The bot replying: works a moment, then each payload lands.
+/// The bot at work: each payload lands after a short beat.
 async function bot(...payloads: object[]) {
   for (const p of payloads) {
-    await beat(p && (p as { type: string }).type === "assistant_text" ? 1600 : 700);
+    await beat(p && (p as { type: string }).type === "assistant_text" ? 700 : 350);
     live(CHAT, p);
   }
 }
 
-async function story() {
-  await type("Can you write the 0.42 changelog? The release goes out today.");
-  await beat(900);
-  await bot(...startTask(CHANGELOG, "Write the 0.42 changelog"));
-  index.push(task(CHANGELOG, "Write the 0.42 changelog", { created: new Date().toISOString(), status: "in_progress" }));
+function story() {
+  return tell().catch((e) => console.info("[bots-video] story stopped:", String(e)));
+}
+
+async function tell() {
+  // Asked, and the task starts with no word from the bot.
+  await send("Write the 0.30.5 changelog for today's release.");
+  index.push(task(CHANGELOG, "Write the 0.30.5 changelog", { created: new Date().toISOString(), status: "in_progress" }));
   void emit("session_created", index.at(-1));
   void emit("session_status", { sessionId: id(CHANGELOG), status: "in_progress", modified: index.at(-1)!.modified });
-  await bot(say("Writing it now. It covers everything merged since 0.41: Shiki 3.2, the sidebar fixes, Cloud machines."), done());
+  await bot(...startTask(CHANGELOG, "Write the 0.30.5 changelog"), done());
   setStatus(CHAT, "completed");
 
-  // The task asks, Dray answers it without bothering the reader.
-  await beat(3500);
-  live(CHAT, report(CHANGELOG, "Write the 0.42 changelog", "Should the iOS work go in? Two PRs touched apps/ios."));
-  setStatus(CHAT, "in_progress");
-  await bot(...message(CHANGELOG, "Leave iOS out. It hasn't shipped yet."));
-  await bot(say("The changelog task asked about iOS. I told it to leave it out, since that hasn't shipped."), done());
-  setStatus(CHAT, "completed");
-
-  // Its PR turns ready and Dray posts the card.
-  await beat(3500);
+  // Its PR turns ready: Dray posts the card, the bot passes on the proof.
+  await beat(1400);
   marks.push(pr(CHANGELOG, 1015));
   setStatus(id(CHANGELOG), "completed");
-  live(CHAT, report(CHANGELOG, "Write the 0.42 changelog", "PR #1015 is up and checks pass."));
+  live(CHAT, report(CHANGELOG, "Write the 0.30.5 changelog", `PR #1015 is up. Checked it on the site: ${MEDIA}/changelog.mp4`));
   setStatus(CHAT, "in_progress");
   await bot(
-    say("The 0.42 changelog is ready."),
     {
       type: "merge_card",
       taskId: id(CHANGELOG),
-      title: "Write the 0.42 changelog",
+      title: "Write the 0.30.5 changelog",
       projectPath: REPO,
-      // Not the task's branch, so the merge leaves the task unsettled: the app
-      // names a settled task "Task" in the chat, which would read as a bug on
-      // camera. Delete this to merge the way the app does.
-      branch: "changelog-0.42",
+      branch: `worktree-task-${CHANGELOG}`,
       number: 1015,
       url: "https://github.com/monorepo-labs/dray/pull/1015",
     },
+    say(`Checked it on the site. 0.30.5 reads right.\n\n${MEDIA}/changelog.mp4`),
     done(),
   );
   setStatus(CHAT, "completed");
 
-  // Merged from the card.
-  await beat(2000);
-  // #1015's own Merge, not the Cloud PR's on "Waiting on you".
-  const card = await until(() =>
-    [...document.querySelectorAll<HTMLElement>("[data-bot-chat] .rounded-r-none")].find((b) => {
-      // The nearest ancestor naming a PR is the button's own row.
+  // The proof plays, then Merge from the card, which settles the task.
+  await beat(600);
+  const video = document.querySelector<HTMLVideoElement>("[data-bot-chat] video");
+  if (video && PACE) {
+    video.muted = true;
+    void video.play().catch(() => {});
+    await beat(3200);
+  }
+  const merge = await until(() =>
+    [...document.querySelectorAll<HTMLElement>("[data-bot-chat] button")].find((b) => {
+      // The nearest ancestor naming a PR is the button's own card.
       let row: HTMLElement | null = b;
       while (row && !/#\d{4}/.test(row.textContent ?? "")) row = row.parentElement;
-      return row?.textContent?.includes("#1015");
+      return row?.textContent?.includes("#1015") && /merge/i.test(b.textContent ?? "");
     }),
   );
-  await click(card);
-  await click(await until(() => [...document.querySelectorAll<HTMLElement>("[data-bot-chat] button")].find((b) => b.textContent?.startsWith("Confirm"))));
+  await click(merge);
+  const confirm = await until(
+    () => [...document.querySelectorAll<HTMLElement>("[data-bot-chat] button")].find((b) => b.textContent?.startsWith("Confirm")),
+    1500,
+  ).catch(() => null);
+  if (confirm) await click(confirm);
   await until(() => marks.find((m) => m.number === 1015)?.state === "MERGED");
   pointer.remove();
-  await beat(2500);
+  await beat(1200);
 
-  // A rule, learned on the spot.
-  await type("Merged. From now on, end every changelog line with its PR number.");
-  await bot(say("Will do. It's a rule now, so every changelog task gets it."), done());
+  // A rule: 👍 in place of a reply, and the lesson as its own line.
+  const asked = await send("From now on, write the changelog for every release without being asked.");
+  await bot({ type: "reaction", messageId: asked.id, emoji: "👍" });
+  await beat(500);
+  live(CHAT, done());
   live(CHAT, {
     type: "learned",
     commit: "4f1c2ab",
-    files: [{ path: "INSTRUCTIONS.md", kind: "instructions", change: "changed", summary: "End every changelog line with its PR number, like (#1015)." }],
+    files: [{ path: "INSTRUCTIONS.md", kind: "instructions", change: "changed", summary: "Write the changelog for every release, unasked." }],
   });
   setStatus(CHAT, "completed");
 
-  // The iOS task stops on a question and joins the Cloud PR, which has sat
-  // on the card at the chat's foot since the start.
-  await beat(4000);
-  setStatus(id(IOS), "completed", ago(7));
-  await beat(1500);
+  // The iOS task stops on a question and joins the homepage PR, which has
+  // sat on "Waiting on you" since the start.
+  await beat(1400);
+  setStatus(id(IOS), "completed", ago(3));
   change(id(IOS), { need: { text: "Should bot chats sit above or below projects in the iOS list?", at: new Date().toISOString() } });
 }
 
-// Opens Dray's chat with its Tasks tab, then plays or jumps to the end.
+// Opens Dray's chat with its tasks beside it, then plays or jumps to the end.
 const row = await until(() => byText("Dray", document.querySelector("aside") ?? document));
+// A server's sessions are read when it says it is up, as on connect.
+void emit("server_event", { server: SANDBOX, event: "live_state", payload: { asks: [], tasks: [] } });
 row.click();
 // The dev build's branch label has no place in a video.
 const badge = [...document.querySelectorAll<HTMLElement>("aside div")].find((el) => /^Dev( · |$)/.test(el.textContent ?? ""));
 if (badge) badge.style.visibility = "hidden";
 await until(() => document.querySelector("[data-bot-chat]"));
-(await until(() => document.querySelector<HTMLElement>('[aria-label="Toggle panel"]'))).click();
 await sleep(300);
-const tasksTab = await until(() => byText("Tasks"), 5000).catch(() => null);
-tasksTab?.click();
+// The pane may already be open on a bot; open it only where the task list is
+// not on screen.
+if (!byText("Homepage: bots hero", document.querySelector("aside:last-of-type") ?? document))
+  (await until(() => document.querySelector<HTMLElement>('[aria-label="Toggle panel"]'))).click();
 
 if (STILL) {
   await story();
