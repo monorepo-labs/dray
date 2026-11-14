@@ -520,6 +520,7 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     crate::auto_continue::rearm(&sink).await;
 
     tokio::spawn(crate::remote_reports::run(sink.clone()));
+    tokio::spawn(crate::held_flags::run(sink.clone()));
     // Agents this server spawns reach it through `dray`, so it serves the
     // socket the desktop app does — under `DRAY_HOME` where that is set.
     tokio::spawn(async move {
@@ -1770,6 +1771,14 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
                 (archived == Some(true)).then_some(crate::bots::Act::Settled),
                 crate::set_session_flags(&session_id, archived, pinned, hidden, aside, sink),
             ).await;
+        // Set aside on a row whose own server is down (#1050).
+        held_session_flags() => ok(crate::held_flags::list().await);
+        hold_session_flags(machine: String, session_id: String, aside: bool, pinned: Option<bool>) =>
+            crate::held_flags::hold_and_announce(machine, session_id, aside, pinned, sink).await;
+        unhold_session_flags(session_id: String) => crate::held_flags::unhold_and_announce(session_id, sink).await;
+        release_held_flag(session_id: String, at: String) =>
+            crate::held_flags::release_and_announce(session_id, at, sink).await;
+        flush_held_flags(machine: String) => ok(crate::held_flags::flush_now(machine, sink).await);
         rename_session(session_id: String, title: String) => crate::rename_session(session_id, title, sink).await;
         delete_session(session_id: String) => crate::bots::reader_did(
             &session_id, Some(crate::bots::Act::Deleted), crate::delete_session(&session_id),

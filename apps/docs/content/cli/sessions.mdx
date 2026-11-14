@@ -109,6 +109,8 @@ dray session unset-aside <id>
 | `set-aside <id>` | Sinks the session to the bottom of the sidebar: started, not wanted now. |
 | `unset-aside <id>` | Takes it out of set-aside. |
 
+Both work on a session whose machine is offline, where this machine knows which one holds it: a task a bot started there, or one named with `--machine`. The change waits here and lands when the machine answers.
+
 These are the same as the sidebar's buttons. Settling a session also settles the hidden sessions it started.
 
 ## Merge card
