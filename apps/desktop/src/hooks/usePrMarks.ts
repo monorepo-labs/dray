@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@/lib/transport";
 
 import { useWindowFocused } from "@/lib/focus";
-import { markDisagrees, pickPrMark, sameMark } from "@/lib/pr";
+import { markDisagrees, marksGaveUp, marksRepo, marksRetryDelay, pickPrMark, sameMark } from "@/lib/pr";
 import { branchChanged, inRepo, panelRead } from "@/lib/prSync";
 import type { PrMark } from "@/types/events";
 
@@ -32,10 +32,8 @@ const OPEN_POLL_MS = 30_000;
 /// agents' own.
 const BACKGROUND_POLL_MS = 5 * 60_000;
 
-/// How long to wait before the single retry a failed post-write read gets — see
-/// `refreshAfterWrite`. Long enough for a `gh` blip or a rate-limit pause to
-/// pass, short enough that the reader has not moved on.
-const WRITE_RETRY_MS = 4_000;
+/// How often repos owed a read are looked at; each waits `marksRetryDelay`.
+const RETRY_TICK_MS = 15_000;
 
 /// Last answer per repo, kept across mounts for [usePullRequest]'s reason —
 /// switching projects changes the argument, and a project flipped away from and
@@ -59,9 +57,27 @@ const askedAt = new Map<string, number>();
 /// not the same fact as "a read will answer for me". One issued before a write
 /// is discarded when it lands — see `generation` — so a later caller that
 /// stands down behind it waits for an answer that never comes.
-const inFlight = new Map<string, { promise: Promise<void>; generation: number }>();
+const inFlight = new Map<string, { promise: Promise<boolean>; generation: number }>();
+
+/// The GitHub repo each key's marks came from — see `marksRepo`. Keys sharing
+/// one are read once and all given the answer, or one repo checked out on this
+/// Mac and on five Boats is six reads per poll against one hourly budget.
+const repoOf = new Map<string, string>();
+
+/// Reads that failed in a row since a key's last good one. A key in here is
+/// retried with backoff until one lands, since nothing else may ever read it
+/// again: the poll reads only repos holding an open PR, and a repo whose reads
+/// all failed holds nothing.
+const failures = new Map<string, { count: number; at: number }>();
 
 const EMPTY: Map<string, PrMark> = new Map();
+
+/// `path` and every key known to name the same GitHub repo.
+function sharing(path: string): string[] {
+  const repo = repoOf.get(path);
+  if (!repo) return [path];
+  return [path, ...[...repoOf].flatMap(([key, r]) => (r === repo && key !== path ? [key] : []))];
+}
 
 /// Bumped by every write against a pull request — see `refreshAfterWrite`.
 ///
@@ -167,7 +183,9 @@ export function usePrMarks(
     });
     if (stale.length === 0 && deferred.length === 0) return;
 
-    const read = async (path: string) => {
+    /// Answers whether the key is dealt with: read, or dropped for a write whose
+    /// own read follows. `false` is a failure, and the caller tries a sibling.
+    const read = async (path: string): Promise<boolean> => {
       // Waits for the slot rather than taking it: two reads of one repo answer
       // the same thing, and letting them overlap makes which one lands last a
       // race.
@@ -190,14 +208,16 @@ export function usePrMarks(
       // cannot drift.
       const startedAt = generation;
 
-      const attempt = (async () => {
+      const attempt = (async (): Promise<boolean> => {
         let answer: Map<string, PrMark>;
         let all: PrMark[];
         const asked = Date.now();
         try {
           all = await invoke<PrMark[]>("pr_marks", { cwd: path });
           answer = marksByBranch(all);
-        } catch {
+        } catch (error) {
+          if (marksGaveUp(error)) failures.delete(path);
+          else failures.set(path, { count: (failures.get(path)?.count ?? 0) + 1, at: Date.now() });
           // A failed read changes nothing at all — it neither writes rows nor
           // stamps, and both halves of that are load-bearing.
           //
@@ -219,7 +239,8 @@ export function usePrMarks(
           // gate `load(false)`, which runs when the visible repo set changes —
           // a project switch, not a render — and the poll reads only the repos
           // holding an open PR, which a repo `gh` cannot answer for never is.
-          return;
+          // What does re-read it is the retry, off `failures`.
+          return false;
         }
 
         // Dropped whole if a write landed while this was out. The `gh` call was
@@ -227,39 +248,59 @@ export function usePrMarks(
         // would not just paint one stale row, it would re-stamp the entry as
         // fresh and suppress the read that corrects it. Leaving the entry
         // unstamped is what makes the next visit refetch.
-        if (generation !== startedAt) return;
+        if (generation !== startedAt) return true;
 
-        const before = cache.get(path);
-        cache.set(path, answer);
-        numbered.set(path, new Map(all.map((pr) => [pr.number, pr])));
-        fetchedAt.set(path, Date.now());
-        askedAt.set(path, asked);
+        const repo = marksRepo(all);
+        if (repo) repoOf.set(path, repo);
+        for (const key of sharing(path)) {
+          failures.delete(key);
+          const before = cache.get(key);
+          cache.set(key, answer);
+          numbered.set(key, new Map(all.map((pr) => [pr.number, pr])));
+          fetchedAt.set(key, Date.now());
+          askedAt.set(key, asked);
 
-        // Tell the panel which branches moved, so its own cache for them is
-        // stale from here and not from its next poll. Compared against the
-        // previous answer rather than emitted for every branch: the poll runs
-        // every 30s while anything is open, and a panel re-read on each would
-        // be the second `gh` per tick this hook exists to avoid. A first read
-        // has nothing to compare and says nothing — the panel reads fresh on
-        // arrival anyway.
-        if (before) {
-          for (const branch of new Set([...before.keys(), ...answer.keys()])) {
-            if (branch === except) continue;
-            if (!sameMark(before.get(branch), answer.get(branch))) {
-              branchChanged.emit({ repo: path, branch });
+          // Tell the panel which branches moved, so its own cache for them is
+          // stale from here and not from its next poll. Compared against the
+          // previous answer rather than emitted for every branch: the poll runs
+          // every 30s while anything is open, and a panel re-read on each would
+          // be the second `gh` per tick this hook exists to avoid. A first read
+          // has nothing to compare and says nothing — the panel reads fresh on
+          // arrival anyway.
+          if (before) {
+            for (const branch of new Set([...before.keys(), ...answer.keys()])) {
+              if (branch === except) continue;
+              if (!sameMark(before.get(branch), answer.get(branch))) {
+                branchChanged.emit({ repo: key, branch });
+              }
             }
           }
         }
+        return true;
       })();
 
       inFlight.set(path, { promise: attempt, generation: startedAt });
-      await attempt;
+      const done = await attempt;
       // Only if it is still ours: a later read may already have claimed the
       // slot while this one was settling.
       if (inFlight.get(path)?.promise === attempt) inFlight.delete(path);
+      return done;
     };
 
-    await Promise.all([...stale, ...deferred].map(read));
+    // One read per GitHub repo, the rest answered by it. Tried in turn rather
+    // than the first alone, since the key read may sit on a stopped Boat while
+    // its siblings can still answer; the one failing least goes first.
+    const groups = new Map<string, string[]>();
+    for (const path of new Set([...stale, ...deferred])) {
+      const group = repoOf.get(path) ?? path;
+      groups.set(group, [...(groups.get(group) ?? []), path]);
+    }
+    await Promise.all(
+      [...groups.values()].map(async (paths) => {
+        const tries = paths.sort((a, b) => (failures.get(a)?.count ?? 0) - (failures.get(b)?.count ?? 0));
+        for (const path of tries) if (await read(path)) return;
+      }),
+    );
 
     setByRepo(new Map(cache));
   }, []);
@@ -342,6 +383,26 @@ export function usePrMarks(
     return () => clearInterval(id);
   }, [backgroundKey, focused, load]);
 
+  // A failed read is tried again until one lands, on the same terms as the
+  // polls: everything on screen while focused, a bot's repos while not. A
+  // read that fails under a spent rate limit was the one that would have
+  // seen a new PR, and with no open mark to poll for nothing else asked again.
+  const owedKey = repoPaths
+    .filter((path) => failures.has(path) && (focused || backgroundPaths.includes(path)))
+    .join("\n");
+  useEffect(() => {
+    if (!owedKey) return;
+    const owed = owedKey.split("\n");
+    const id = setInterval(() => {
+      const due = owed.filter((path) => {
+        const failed = failures.get(path);
+        return failed && Date.now() - failed.at >= marksRetryDelay(failed.count);
+      });
+      if (due.length > 0) void load(true, due);
+    }, RETRY_TICK_MS);
+    return () => clearInterval(id);
+  }, [owedKey, load]);
+
   return {
     /// The pull request a session's row is marked with, or nothing. Takes the
     /// repo *and* the branch, since a branch name says nothing about which
@@ -377,19 +438,35 @@ export function usePrMarks(
     markMerged: useCallback((repoPath: string, number: number) => {
       // A read issued before the merge would put it back open.
       generation += 1;
-      const prs = numbered.get(repoPath);
-      const pr = prs?.get(number);
-      if (!prs || !pr) return;
-      const all = new Map(prs).set(number, { ...pr, state: "MERGED" });
-      numbered.set(repoPath, all);
-      cache.set(repoPath, marksByBranch([...all.values()]));
-      // The read that would have told the panel now finds nothing changed.
-      branchChanged.emit({ repo: repoPath, branch: pr.headRefName });
+      for (const key of sharing(repoPath)) {
+        const prs = numbered.get(key);
+        const pr = prs?.get(number);
+        if (!prs || !pr) continue;
+        const all = new Map(prs).set(number, { ...pr, state: "MERGED" });
+        numbered.set(key, all);
+        cache.set(key, marksByBranch([...all.values()]));
+        // The read that would have told the panel now finds nothing changed.
+        branchChanged.emit({ repo: key, branch: pr.headRefName });
+      }
       setByRepo(new Map(cache));
     }, []),
     /// Re-reads every repo currently on screen. Called when a turn ends — that
     /// is when a pull request appears.
     refresh: useCallback(() => void load(true), [load]),
+    /// Re-reads one repo, for an agent saying it changed a pull request there.
+    /// One repo and not every one on screen: agents push and comment all day,
+    /// across every machine, and each of those re-reading the lot was most of
+    /// what the marks spent. Off screen it only drops the stamp, so arriving
+    /// there reads it.
+    refreshRepo: useCallback(
+      (repoPath: string) => {
+        const keys = sharing(repoPath);
+        for (const key of keys) fetchedAt.delete(key);
+        const shown = keys.filter((key) => pathsRef.current.includes(key));
+        if (shown.length > 0) void load(true, shown);
+      },
+      [load],
+    ),
     /// Same, plus every *off-screen* repo marked due for a re-read.
     ///
     /// For a write — a merge, a reopen — where [refresh] alone is not enough.
@@ -413,27 +490,14 @@ export function usePrMarks(
     /// flight — one issued before the merge, for a repo now off screen — lands
     /// afterwards and stamps its pre-merge answer fresh again, putting the
     /// entry back exactly where clearing it had just taken it from.
+    ///
+    /// A read that fails here is retried with the rest, off `failures`: it is
+    /// the read that would turn a merged mark back into an open one after a
+    /// reopen, and a merged mark is not polled.
     refreshAfterWrite: useCallback(() => {
       generation += 1;
       fetchedAt.clear();
-
-      void (async () => {
-        await load(true);
-
-        // A write's read is the one whose failure does not correct itself. It
-        // is the read that would turn a merged mark back into an open one after
-        // a reopen — and a merged mark is not polled, so if this `gh` call drops
-        // the row stays wrong until a turn ends or the reader switches project.
-        //
-        // Exactly one retry, and only for what is still owed a read: a repo `gh`
-        // can never answer for must not turn a rare write into a standing spawn,
-        // which is what folding this into the poll would have done.
-        const owed = pathsRef.current.filter((path) => !fetchedAt.has(path));
-        if (owed.length === 0) return;
-
-        await new Promise((resolve) => setTimeout(resolve, WRITE_RETRY_MS));
-        await load(true, owed);
-      })();
+      void load(true);
     }, [load]),
   };
 }
