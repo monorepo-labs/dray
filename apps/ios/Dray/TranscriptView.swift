@@ -477,8 +477,8 @@ struct UserBubble: View {
     }
 }
 
-/// A bot's reaction, as a messenger draws one: a round chip in the chat's page
-/// colour with a hairline edge. The desktop's `ReactionBadge`.
+/// A bot's reaction, as a messenger draws one: a round chip a step lighter than the
+/// page, with a hairline edge. The desktop's `ReactionBadge`.
 struct ReactionBadge: View {
     let emoji: String
 
@@ -487,7 +487,7 @@ struct ReactionBadge: View {
         Text(emoji)
             .font(.system(size: 15))
             .frame(width: 28, height: 28)
-            .background(Theme.page, in: .circle)
+            .background(Theme.well, in: .circle)
             .overlay(Circle().strokeBorder(Theme.border, lineWidth: 0.5))
             .accessibilityLabel("Bot reacted: \(labels[emoji] ?? emoji)")
     }

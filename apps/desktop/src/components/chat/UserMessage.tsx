@@ -392,16 +392,16 @@ export default function UserMessage({
 const REACTION_LABELS: Record<string, string> = { "👀": "Seen", "✅": "Done", "🎉": "Celebrating" };
 
 /// A bot's reaction, as a messenger draws one: a round chip on the bubble's
-/// corner on the bot's side, filled with the chat's own page colour and edged
-/// by a hairline. `--background` rather than `--muted`, which turns into a
-/// translucent veil on glass and let the bubble show through.
+/// corner on the bot's side, a step lighter than the chat's page colour and
+/// edged by a hairline. Mixed off `--background` rather than `--muted`, which
+/// turns into a translucent veil on glass and let the bubble show through.
 function ReactionBadge({ emoji, className }: { emoji: string; className?: string }) {
   return (
     <span
       role="img"
       aria-label={`Bot reacted: ${REACTION_LABELS[emoji] ?? emoji}`}
       className={cn(
-        "flex size-7 items-center justify-center rounded-full border-[0.5px] border-border bg-background text-[15px] leading-none select-none",
+        "flex size-7 items-center justify-center rounded-full border-[0.5px] border-border bg-[color-mix(in_oklab,var(--background),white_7%)] text-[15px] leading-none select-none",
         "motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:fade-in motion-safe:duration-200",
         className,
       )}
