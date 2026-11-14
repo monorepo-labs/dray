@@ -48,8 +48,8 @@ export function MiniHome() {
             </div>
           </div>
 
-          <div className="ml-[102px] max-w-[756px] pt-[101px]">
-            <div className="text-[46px] leading-[46px] tracking-[-0.03em] text-white light:text-[#0A0A0A]">Run every agent harness in one app.</div>
+          <div className="ml-[102px] max-w-[756px] pt-[133px]">
+            <div className="text-[46px] leading-[46px] tracking-[-0.03em] text-white light:text-[#0A0A0A]">Work on 100s of coding tasks without getting overwhelmed.</div>
             <div className="mt-8 flex items-start justify-between pr-5">
               <span className="inline-flex h-10 items-center gap-2 rounded-[6px] bg-white px-4 text-[14px] leading-5 font-medium text-[#0B0B0F] light:bg-[#0A0A0A] light:text-white">
                 <AppleGlyph className="-mt-0.5 size-4" />
@@ -70,7 +70,7 @@ export function MiniHome() {
 function Skeleton() {
   const bar = "rounded-full bg-white/[0.07] light:bg-black/[0.07]";
   return (
-    <div className="mt-20 flex h-[600px] flex-col overflow-hidden rounded-[12px] border border-white/10 bg-[#0A0A0A] shadow-[0_2px_50px_12px_#0000004D] light:border-black/10 light:bg-[#F4F4F5] light:shadow-none">
+    <div className="mt-12 flex h-[600px] flex-col overflow-hidden rounded-[12px] border border-white/10 bg-[#0A0A0A] shadow-[0_2px_50px_12px_#0000004D] light:border-black/10 light:bg-[#F4F4F5] light:shadow-none">
       <div className="flex h-10 shrink-0 items-center gap-2 px-4">
         {[0, 1, 2].map((i) => (
           <span key={i} className="size-3 rounded-full bg-white/10 light:bg-black/10" />

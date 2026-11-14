@@ -1,23 +1,34 @@
 "use client";
 
+import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 import { posthog } from "@/lib/posthog";
 import { Section } from "@/components/home/Section";
 
-/// Six questions as native disclosures, all closed to start; the glide is CSS alone.
+/// Six questions as native disclosures, all closed to start, then a row out to
+/// the full FAQ page; the glide is CSS alone.
 export function Faq() {
   return (
     <Section id="faq" className="py-20">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: FAQ_SCHEMA }} />
-      <div className="flex flex-col gap-10 lg:flex-row lg:gap-24">
-        <div className="flex shrink-0 flex-col gap-3 lg:w-72">
+      <div className="flex flex-col gap-10 lg:flex-row lg:gap-14">
+        <div className="flex shrink-0 flex-col gap-3 lg:w-[302px]">
           <h2 className="font-inter text-[28px] leading-[32px] font-light tracking-[-0.03em] text-white sm:text-[36px] sm:leading-[40px] light:text-[#0A0A0A]">
-            Frequently Asked Questions
+            FAQs
           </h2>
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-px">
           {FAQ.map(([q, a]) => (
             <Item key={q} question={q} answer={a} />
           ))}
+          {/* Quieter than the questions: the way out of the list, not one of them. */}
+          <Link
+            href="/faq"
+            className="flex items-center justify-between gap-6 bg-[#FFFFFF0D] px-6 py-5 text-lg leading-6 tracking-[-0.02em] text-white transition-colors hover:bg-[#FFFFFF1A] light:bg-[#FAFAFA] light:text-[#0A0A0A] light:hover:bg-[#F4F4F5]"
+          >
+            More questions
+            <ArrowRight aria-hidden strokeWidth={1.8} className="size-4 shrink-0 text-[#8A8A8A]" />
+          </Link>
         </div>
       </div>
     </Section>
