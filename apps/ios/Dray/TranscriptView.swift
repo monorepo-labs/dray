@@ -117,7 +117,7 @@ struct TranscriptView: View {
         .modifier(LocalServersButton(key: key, shown: bot == nil))
         .task { await store.open(key) }
         .prPanel(key)
-        .sheet(isPresented: $showingTasks) { BotTasksSheet(tasks: botTasks) { openTask?($0) } }
+        .sheet(isPresented: $showingTasks) { BotTasksSheet(server: key.server, tasks: botTasks) { openTask?($0) } }
         .sheet(isPresented: $fixing) { SettingsView(focus: key.server) }
     }
 
