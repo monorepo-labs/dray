@@ -221,14 +221,27 @@ mod collect {
     /// Moves the tasks tracked under `from`, a bot's task about to be deleted,
     /// to `to`, the nearest live session above it: once `from` is gone the
     /// collector would read their parent as closed and drop their reports.
-    pub async fn retarget(from: &str, to: &str) -> anyhow::Result<()> {
+    /// Answers the tasks moved, for [`reparent`] to put back if the delete fails.
+    pub async fn retarget(from: &str, to: &str) -> anyhow::Result<Vec<String>> {
         let _guard = TRACKED.lock().await;
         let mut list = load().await;
-        if !list.iter().any(|r| r.parent == from) {
-            return Ok(());
+        let moved: Vec<String> = list.iter().filter(|r| r.parent == from).map(|r| r.child.clone()).collect();
+        if moved.is_empty() {
+            return Ok(moved);
         }
         for r in list.iter_mut().filter(|r| r.parent == from) {
             r.parent = to.to_string();
+        }
+        store::write_atomic(&tracked_path().await?, serde_json::to_string_pretty(&list)?).await?;
+        Ok(moved)
+    }
+
+    /// Tracks `children` under `parent` again.
+    pub async fn reparent(children: &[String], parent: &str) -> anyhow::Result<()> {
+        let _guard = TRACKED.lock().await;
+        let mut list = load().await;
+        for r in list.iter_mut().filter(|r| children.contains(&r.child)) {
+            r.parent = parent.to_string();
         }
         store::write_atomic(&tracked_path().await?, serde_json::to_string_pretty(&list)?).await
     }
@@ -497,7 +510,7 @@ mod collect {
 }
 
 #[cfg(any(feature = "serve", feature = "desktop"))]
-pub use collect::{machine_of, retarget, run, track};
+pub use collect::{machine_of, reparent, retarget, run, track};
 
 #[cfg(test)]
 mod tests {

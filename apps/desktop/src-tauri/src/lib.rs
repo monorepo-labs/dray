@@ -536,6 +536,17 @@ async fn session_index_item(session_id: &str) -> Result<Option<SessionIndexItem>
     Ok(store::get_session_index_item(session_id).await?)
 }
 
+/// Whether settling or deleting this session leaves its hidden children
+/// running: a bot's task does. Asked before the act by a client holding a
+/// child on another server, which the act here cannot reach.
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn session_keeps_children(session_id: &str) -> Result<bool, Fail> {
+    Ok(match store::get_session_index_item(session_id).await? {
+        Some(item) => bots::keeps_children(&item).await,
+        None => false,
+    })
+}
+
 /// What removing this session's worktree would cost, for the dialog that asks.
 ///
 /// Answers for a session with no worktree too — an all-zero, `exists: false`
@@ -668,19 +679,26 @@ async fn delete_session(
     };
     // Its tasks on other machines are tracked here under its id, not adopted.
     #[cfg(any(feature = "serve", feature = "desktop"))]
-    if keeps {
-        let above = match store::get_session_index_item(session_id).await? {
-            Some(item) => store::live_ancestor(&item).await?,
-            None => None,
-        };
-        if let Some(above) = above {
-            remote_reports::retarget(session_id, &above.session_id).await?;
-        }
-    }
+    let remote = match keeps {
+        true => match store::get_session_index_item(session_id).await? {
+            Some(item) => match store::live_ancestor(&item).await? {
+                Some(above) => remote_reports::retarget(session_id, &above.session_id).await?,
+                None => Vec::new(),
+            },
+            None => Vec::new(),
+        },
+        false => Vec::new(),
+    };
     let deleted = manager().delete(session_id, !keeps).await;
     // A failed delete leaves the parent live, and its children back under it.
     let adopted = match (&deleted, keeps) {
-        (Err(_), true) => store::readopt(session_id, None).await.unwrap_or(adopted),
+        (Err(_), true) => {
+            #[cfg(any(feature = "serve", feature = "desktop"))]
+            if let Err(e) = remote_reports::reparent(&remote, session_id).await {
+                eprintln!("could not put {session_id}'s remote tasks back: {e:#}");
+            }
+            store::readopt(session_id, None).await.unwrap_or(adopted)
+        }
         _ => adopted,
     };
     orchestration::announce_change(&adopted, &sink).await;

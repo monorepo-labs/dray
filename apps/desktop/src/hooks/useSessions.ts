@@ -1735,6 +1735,8 @@ const setSessionFlags = async (
     // An older held flag is superseded, and must not land after this write.
     // Ahead of the count, which only the write's own `finally` takes back.
     if (flags.aside !== undefined) await unholdFlags(sessionId);
+    // Before the write, while the parent's server can still say what it keeps.
+    const away = flags.archived !== undefined ? await childrenElsewhere(sessionId) : [];
     countFlagWrite(machine, 1);
     const updated = await invoke<SessionIndexItem | null>("set_session_flags", {
       sessionId,
@@ -1752,7 +1754,10 @@ const setSessionFlags = async (
     // server walked the whole tree and decided; this list holds one side of
     // it, so each child is read back rather than judged here. Awaited, so a
     // caller that refetches the other side afterwards reads them already moved.
-    if (flags.archived !== undefined) await rereadChildren(sessionId);
+    if (flags.archived !== undefined) {
+      await rereadChildren(sessionId);
+      await Promise.all(away.map((c) => setSessionFlags(c.sessionId, { archived: flags.archived })));
+    }
     return true;
   } catch (e) {
     // Dropped between the check above and the call.
@@ -1992,6 +1997,7 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
   // A stopped machine with nothing else on it is deleted whole, so it is not
   // woken to delete one log first.
   const whole = !!machine && !serverConnected(machine) && (await othersLive(sessionId, machine)) === false;
+  const away = await childrenElsewhere(sessionId);
   try {
     if (!whole) await invoke<boolean>("delete_session", { sessionId });
     if (machine) void (whole ? retireCloudMachine(machine) : retireIfDone(machine));
@@ -2012,7 +2018,8 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
   // Read before the row goes. A hidden child has no row of its own to be
   // deleted from, so it goes with its parent, unless a bot's task left it
   // running: the server decided, so each is asked for after the delete.
-  const children = hiddenChildren(sessionIndexItems, sessionId);
+  const home = homeOf(sessionId);
+  const children = hiddenChildren(sessionIndexItems, sessionId).filter((c) => homeOf(c.sessionId) === home);
   setSessionIndexItems((prev) => prev.filter((i) => i.sessionId !== sessionId));
   setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
   retireStreamingBlock(sessionId);
@@ -2040,7 +2047,26 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
       else if (kept === null) await deleteSession(c.sessionId);
     }),
   );
+  await Promise.all(away.map((c) => deleteSession(c.sessionId)));
   return true;
+};
+
+const homeOf = (sessionId: string) => {
+  const item = sessionIndexItems.find((i) => i.sessionId === sessionId);
+  return item ? serverOfPath(item.cwd) : serverOfSession(sessionId);
+};
+
+/// The hidden children of `parentId` held on another server — a task started
+/// with `--machine --hidden` — which a settle or delete on the parent's server
+/// cannot reach, so the app carries it to them: unless the parent's server says
+/// it keeps them, a bot's task's sub-tasks outliving it. An older server
+/// answers `unknown command`, read as the cascade it always made.
+const childrenElsewhere = async (parentId: string): Promise<SessionIndexItem[]> => {
+  const home = homeOf(parentId);
+  const away = hiddenChildren(sessionIndexItems, parentId).filter((c) => homeOf(c.sessionId) !== home);
+  if (away.length === 0) return [];
+  const keeps = await invoke<boolean>("session_keeps_children", { sessionId: parentId }).catch(() => false);
+  return keeps ? [] : away;
 };
 
 /// Every hidden session held under `parentId`, read back from the server after
