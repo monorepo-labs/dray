@@ -199,6 +199,9 @@ function initial(): Record<BotId, BotState> {
 /// Worktree names for tasks a visitor's message starts.
 const BRANCHES = ["calm-owl-ridge", "quiet-lime-fen", "bold-sage-reef", "bright-moss-bay"];
 
+/// Task tabs the titlebar keeps open beside the chat and the page.
+const TASK_TABS = 3;
+
 /// What a bot says on taking a message it never reads. Written to fit any.
 const TAKEN = [
   "On it. I started a task for that and will post its PR here when it can land.",
@@ -253,7 +256,6 @@ export function useBotScene(selected: string) {
     unread: shown.current === bot && b.view === "chat" ? 0 : b.unread + 1,
   });
 
-  const read = (bot: BotId) => update(bot, (b) => (b.unread ? { ...b, unread: 0 } : b));
 
   /// Lands a PR wherever it is shown: card and Tasks tab share it. Merging
   /// from a bot settles the task, as the app does.
@@ -330,8 +332,14 @@ export function useBotScene(selected: string) {
   };
 
   /// Opens a task in the titlebar, as a tab of its own if it has none yet.
+  /// The newest `TASK_TABS` stay: the drawn strip neither scrolls nor shrinks
+  /// a tab to its icon, so more would push the page's tab out of reach.
   const openTask = (bot: BotId, task: string) =>
-    update(bot, (b) => ({ ...b, tabs: b.tabs.includes(task) ? b.tabs : [...b.tabs, task], view: task }));
+    update(bot, (b) => ({
+      ...b,
+      tabs: b.tabs.includes(task) ? b.tabs : [...b.tabs, task].slice(-TASK_TABS),
+      view: task,
+    }));
 
   const show = (bot: BotId, view: View) =>
     update(bot, (b) => ({ ...b, view, unread: view === "chat" ? 0 : b.unread }));
@@ -340,7 +348,6 @@ export function useBotScene(selected: string) {
     bots,
     merging,
     drafts,
-    read,
     setDraft: (bot: BotId, text: string) => setDrafts((all) => ({ ...all, [bot]: text })),
     send,
     confirm,

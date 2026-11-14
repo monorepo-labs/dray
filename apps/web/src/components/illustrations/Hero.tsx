@@ -32,7 +32,8 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
 
   const open = (id: BotId) => {
     setSelected(id);
-    scene.read(id);
+    // On its chat, which is what reads the replies its badge counts.
+    scene.show(id, "chat");
   };
 
   return (

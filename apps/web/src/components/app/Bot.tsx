@@ -251,7 +251,6 @@ export function VideoPlayer({ src, className }: { src: string; className?: strin
         preload="metadata"
         playsInline
         muted
-        onClick={toggle}
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
         // Back to its first frame at the end, so the play button returns over
@@ -259,18 +258,23 @@ export function VideoPlayer({ src, className }: { src: string; className?: strin
         onEnded={(e) => {
           e.currentTarget.currentTime = 0;
         }}
-        className={cx("block max-w-full cursor-pointer", className)}
+        className={cx("block max-w-full", className)}
       />
-      {!playing && (
-        <button
-          type="button"
-          aria-label="Play"
-          onClick={toggle}
-          className="absolute top-1/2 left-1/2 flex size-12 -translate-1/2 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm"
-        >
-          <Play className="size-5 translate-x-px fill-current" />
-        </button>
-      )}
+      {/* One button over the whole frame, kept while it plays, so pausing is
+          as reachable from the keyboard as playing. The round mark shows only
+          at rest. */}
+      <button
+        type="button"
+        aria-label={playing ? "Pause" : "Play"}
+        onClick={toggle}
+        className="absolute inset-0 flex cursor-pointer items-center justify-center focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+      >
+        {!playing && (
+          <span className="flex size-12 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm">
+            <Play className="size-5 translate-x-px fill-current" />
+          </span>
+        )}
+      </button>
     </span>
   );
 }
