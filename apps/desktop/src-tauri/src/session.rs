@@ -1756,13 +1756,13 @@ impl SessionManager {
     /// never through `send_msg`, so the pick goes out now by the rule a prompt
     /// queued now would take: live on Claude Code, deferred to the flush on fx.
     /// An effort Claude Code cannot move in place waits for the next send.
-    pub async fn carry_pick_to_queue(
-        &self,
-        session_id: &str,
-        model: &ModelId,
-        effort: Option<Effort>,
-        app: &Sink,
-    ) -> Result<()> {
+    ///
+    /// Stance and fast come off `item`, not the child: the queued send wrote
+    /// its own to the index, and on fx they are still pending beside the
+    /// model, so the child's would undo them.
+    pub async fn carry_pick_to_queue(&self, item: &SessionIndexItem, app: &Sink) -> Result<()> {
+        let session_id = item.session_id.as_str();
+        let (model, effort, mode, fast) = (&item.model, item.effort, item.permission_mode, item.fast);
         let Some(slot) = self.sessions.lock().await.get(session_id).cloned() else {
             return Ok(());
         };
@@ -1772,7 +1772,6 @@ impl SessionManager {
             return Ok(());
         }
         let spec = model_spec(s.harness, model).await?;
-        let (mode, fast) = (s.permission_mode, s.fast);
         match &s.stdin {
             Transport::Fx(fx) => fx.defer_controls(DeferredControls { model: spec, effort, mode, fast }),
             _ if s.harness == Harness::ClaudeCode => {

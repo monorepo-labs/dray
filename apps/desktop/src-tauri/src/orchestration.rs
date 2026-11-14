@@ -1429,7 +1429,7 @@ async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
                 .with_context(|| format!("no session {}", set.session_id))?;
             app.emit(SESSION_CHANGED, &item).ok();
             app.emit(SESSION_MODEL_CHANGED, &item).ok();
-            manager().carry_pick_to_queue(&item.session_id, &item.model, item.effort, app).await?;
+            manager().carry_pick_to_queue(&item, app).await?;
             item
         }
         false => item,
