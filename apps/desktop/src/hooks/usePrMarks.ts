@@ -35,6 +35,11 @@ const BACKGROUND_POLL_MS = 5 * 60_000;
 /// How often repos owed a read are looked at; each waits `marksRetryDelay`.
 const RETRY_TICK_MS = 15_000;
 
+/// How long one key's read is waited on before its repo is tried through the
+/// next key: a Boat's `gh` can hang, and neither it nor the socket has a
+/// deadline of its own.
+const ATTEMPT_MS = 20_000;
+
 /// Last answer per repo, kept across mounts for [usePullRequest]'s reason —
 /// switching projects changes the argument, and a project flipped away from and
 /// back to should draw its marks immediately rather than blank and refill.
@@ -53,11 +58,11 @@ const askedAt = new Map<string, number>();
 /// `gh`. The promise rather than a bare flag, because a *forced* read that
 /// collides has to queue behind it rather than be dropped; see `load`.
 ///
-/// It carries the generation it was issued at, because "a read is running" is
-/// not the same fact as "a read will answer for me". One issued before a write
-/// is discarded when it lands — see `generation` — so a later caller that
-/// stands down behind it waits for an answer that never comes.
-const inFlight = new Map<string, { promise: Promise<boolean>; generation: number }>();
+/// It carries the time it was issued at, because "a read is running" is not
+/// the same fact as "a read will answer for me". One issued before a write is
+/// discarded when it lands — see `outdated` — so a later caller that stands
+/// down behind it waits for an answer that never comes.
+const inFlight = new Map<string, { promise: Promise<boolean>; startedAt: number }>();
 
 /// The GitHub repo each key's marks came from — see `marksRepo`. Keys sharing
 /// one are read once and all given the answer, or one repo checked out on this
@@ -79,14 +84,27 @@ function sharing(path: string): string[] {
   return [path, ...[...repoOf].flatMap(([key, r]) => (r === repo && key !== path ? [key] : []))];
 }
 
-/// Bumped by every write against a pull request — see `refreshAfterWrite`.
+/// One clock for reads starting and pull requests changing, so an answer can
+/// be judged against both. A read takes a tick when it starts.
 ///
-/// A read captures this when it starts and checks it before writing what it
-/// got. A `gh` call issued *before* a merge cannot answer for that merge, and
-/// the damaging half is not the stale rows: it is the freshness stamp, which
-/// would tell every later reader the pre-merge answer is current and suppress
-/// the read that would have corrected it.
-let generation = 0;
+/// A `gh` call issued *before* a merge cannot answer for that merge, and the
+/// damaging half is not the stale rows: it is the freshness stamp, which would
+/// tell every later reader the pre-merge answer is current and suppress the
+/// read that would have corrected it.
+let clock = 0;
+/// When every repo last changed under a write — see `refreshAfterWrite`.
+let allChangedAt = 0;
+/// When one repo last changed, for an agent's report — see `refreshRepo`.
+const changedAt = new Map<string, number>();
+/// When the read a key's answer came from started. Keys sharing a repo are
+/// read through different machines, so answers can land out of order, and an
+/// older one landing last would put back a PR list from before the newer.
+const answeredAt = new Map<string, number>();
+
+/// Whether a read started at `startedAt` was issued before `key` last changed.
+function outdated(key: string, startedAt: number): boolean {
+  return startedAt < Math.max(allChangedAt, changedAt.get(key) ?? 0);
+}
 
 /// One repo's answer, narrowed to the one mark each branch draws.
 ///
@@ -176,7 +194,7 @@ export function usePrMarks(
         // nothing scheduled at all — and the entry it would have replaced stays
         // on screen with no stamp and no poll to correct it, since a stale
         // merged mark is exactly what holds `anyOpen` off.
-        if (force || running.generation !== generation) deferred.push(path);
+        if (force || outdated(path, running.startedAt)) deferred.push(path);
         return false;
       }
       return force || Date.now() - (fetchedAt.get(path) ?? 0) >= FRESH_MS;
@@ -206,7 +224,7 @@ export function usePrMarks(
       // attempt has not seen either. One capture serves both the guard below
       // and the slot, so what the slot advertises and what the guard enforces
       // cannot drift.
-      const startedAt = generation;
+      const startedAt = ++clock;
 
       const attempt = (async (): Promise<boolean> => {
         let answer: Map<string, PrMark>;
@@ -227,9 +245,9 @@ export function usePrMarks(
           //
           // Not stamping is what this used to get wrong in the other direction.
           // Reusing the cached answer and stamping it fresh looked harmless and
-          // was not, because `refreshAfterWrite` clears the stamps and bumps the
-          // generation *before* its forced read: that read carries the new
-          // generation, so a failure sails past the guard below and re-certifies
+          // was not, because `refreshAfterWrite` clears the stamps and marks the
+          // change *before* its forced read: that read starts after it, so a
+          // failure sails past the guard below and re-certifies
           // the pre-merge answer the write had just invalidated. The sidebar
           // then holds the old glyph for the full window — and a stale merged
           // mark keeps `anyOpen` false, so the poll that would fix it never
@@ -248,12 +266,14 @@ export function usePrMarks(
         // would not just paint one stale row, it would re-stamp the entry as
         // fresh and suppress the read that corrects it. Leaving the entry
         // unstamped is what makes the next visit refetch.
-        if (generation !== startedAt) return true;
+        if (outdated(path, startedAt)) return true;
 
         const repo = marksRepo(all);
         if (repo) repoOf.set(path, repo);
         for (const key of sharing(path)) {
           failures.delete(key);
+          if (outdated(key, startedAt) || startedAt < (answeredAt.get(key) ?? 0)) continue;
+          answeredAt.set(key, startedAt);
           const before = cache.get(key);
           cache.set(key, answer);
           numbered.set(key, new Map(all.map((pr) => [pr.number, pr])));
@@ -279,7 +299,7 @@ export function usePrMarks(
         return true;
       })();
 
-      inFlight.set(path, { promise: attempt, generation: startedAt });
+      inFlight.set(path, { promise: attempt, startedAt });
       const done = await attempt;
       // Only if it is still ours: a later read may already have claimed the
       // slot while this one was settling.
@@ -298,7 +318,11 @@ export function usePrMarks(
     await Promise.all(
       [...groups.values()].map(async (paths) => {
         const tries = paths.sort((a, b) => (failures.get(a)?.count ?? 0) - (failures.get(b)?.count ?? 0));
-        for (const path of tries) if (await read(path)) return;
+        for (const path of tries) {
+          // A late answer from a key given up on is judged by `answeredAt`.
+          const timeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ATTEMPT_MS));
+          if (await Promise.race([read(path), timeout])) return;
+        }
       }),
     );
 
@@ -437,7 +461,7 @@ export function usePrMarks(
     /// since a merge queue answers success with the PR still open.
     markMerged: useCallback((repoPath: string, number: number) => {
       // A read issued before the merge would put it back open.
-      generation += 1;
+      allChangedAt = ++clock;
       for (const key of sharing(repoPath)) {
         const prs = numbered.get(key);
         const pr = prs?.get(number);
@@ -461,7 +485,12 @@ export function usePrMarks(
     refreshRepo: useCallback(
       (repoPath: string) => {
         const keys = sharing(repoPath);
-        for (const key of keys) fetchedAt.delete(key);
+        // A read already out was asked before the change and must not stamp.
+        const now = ++clock;
+        for (const key of keys) {
+          fetchedAt.delete(key);
+          changedAt.set(key, now);
+        }
         const shown = keys.filter((key) => pathsRef.current.includes(key));
         if (shown.length > 0) void load(true, shown);
       },
@@ -495,7 +524,7 @@ export function usePrMarks(
     /// the read that would turn a merged mark back into an open one after a
     /// reopen, and a merged mark is not polled.
     refreshAfterWrite: useCallback(() => {
-      generation += 1;
+      allChangedAt = ++clock;
       fetchedAt.clear();
       void load(true);
     }, [load]),
