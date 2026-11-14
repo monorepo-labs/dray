@@ -436,7 +436,7 @@ final class Store {
         await loadMarks(server, force: false)
     }
 
-    private func loadBots(_ server: UUID) async {
+    func loadBots(_ server: UUID) async {
         // A server from before bots answers `unknown command`, and holds none.
         guard let list: [Bot] = try? await connections[server]?.call("list_bots") else { return }
         bots[server] = list

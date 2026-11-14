@@ -6,6 +6,7 @@ struct TranscriptView: View {
     let key: SessionKey
     @State private var fixing = false
     @State private var showingTasks = false
+    @State private var editingBot = false
     @Environment(\.openTask) private var openTask
     /// The floating banner's height, kept clear above the first row so it never sits on "Load earlier".
     @State private var bannerHeight: CGFloat = 0
@@ -104,6 +105,8 @@ struct TranscriptView: View {
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { bannerHeight = $0 }
         }
         .navigationBarTitleDisplayMode(.inline)
+        // Every control up there is a chip of its own, so the bar draws no shade behind them.
+        .modifier(BareTopEdge(on: bot != nil))
         .toolbar {
             ToolbarItem(placement: .principal) { title }
             if bot != nil {
@@ -119,27 +122,27 @@ struct TranscriptView: View {
         .prPanel(key)
         .sheet(isPresented: $showingTasks) { BotTasksSheet(tasks: botTasks) { openTask?($0) } }
         .sheet(isPresented: $fixing) { SettingsView(focus: key.server) }
+        .sheet(isPresented: $editingBot) { if let bot { BotSheet(editing: (key.server, bot)) } }
     }
 
-    /// The session's title over where it runs: its project and its machine, never the branch.
+    /// A task's title over where it runs, its project and its machine; a bot's chip.
     @ViewBuilder private var title: some View {
         if let bot = store.bot(key) {
-            // A bot's folder is no project: its face and name, and where it runs.
-            VStack(spacing: 1) {
+            // A bot's folder is no project: its face and name as a chip, which opens the bot.
+            Button { editingBot = true } label: {
                 HStack(spacing: 6) {
-                    BotFace(bot: bot, size: 20)
+                    BotFace(bot: bot, size: 22)
                     Text(bot.name).font(Theme.Font.headline).foregroundStyle(Theme.text).lineLimit(1)
                 }
-                HStack(spacing: 4) {
-                    ServerIcon().frame(width: 11, height: 11)
-                    Text(store.name(of: key.server))
-                }
-                .font(Theme.Font.footnote)
-                .foregroundStyle(Theme.tertiary)
-                .lineLimit(1)
+                .padding(.leading, 10)
+                .padding(.trailing, 16)
+                .frame(height: 44)
+                .glassChip()
             }
+            .buttonStyle(.plain)
             .frame(maxWidth: 240)
-            .accessibilityElement(children: .combine)
+            .accessibilityLabel(bot.name)
+            .accessibilityIdentifier("botChip")
         } else {
             taskTitle
         }
@@ -760,6 +763,30 @@ struct FollowsBottom: ViewModifier {
                 }
         } else {
             content
+        }
+    }
+}
+
+/// Drops the bar's dark shade over scrolled rows where everything in it is glass.
+private struct BareTopEdge: ViewModifier {
+    let on: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content.scrollEdgeEffectHidden(on, for: .top)
+        } else {
+            content.toolbarBackground(on ? .hidden : .automatic, for: .navigationBar)
+        }
+    }
+}
+
+extension View {
+    /// A glass capsule like the back button's, for a control the bar does not wrap itself.
+    @ViewBuilder func glassChip() -> some View {
+        if #available(iOS 26, *) {
+            glassEffect(.regular.interactive(), in: .capsule)
+        } else {
+            background(.ultraThinMaterial, in: Capsule())
         }
     }
 }
