@@ -186,14 +186,17 @@ struct BotSheet: View {
         }
     }
 
-    /// `create_bot`, and where it fails, a bot of this name with no chat yet: one a lost reply already made.
+    /// `create_bot`, and where it fails, the bot of this name that appeared during the call:
+    /// one a lost reply made. A bot there before is a refused name, never adopted.
     private func create(_ name: String, on at: UUID) async throws -> Bot {
+        // Read fresh, not from the cache: a bot missing there would read as new.
+        let before = Set(try await store.call(at, "list_bots", as: [Bot].self).map(\.id))
         do {
             return try await store.call(at, "create_bot", ["name": .string(name), "avatar": avatar.json])
         } catch {
             await store.loadBots(at)
             let orphan = (store.bots[at] ?? []).first {
-                $0.name.lowercased() == name.lowercased() && $0.avatar == avatar && $0.welcome == nil && store.botChat(at, $0).isEmpty
+                !before.contains($0.id) && $0.name.lowercased() == name.lowercased() && store.botChat(at, $0).isEmpty
             }
             guard let orphan else { throw error }
             return orphan
