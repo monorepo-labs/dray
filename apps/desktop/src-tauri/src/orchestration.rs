@@ -1392,7 +1392,8 @@ pub(crate) async fn announce_change(ids: &[String], app: &Sink) {
 /// `dray session model`: the composer's model picker, from outside it. Only the
 /// pick is written, as the picker's is; the session's next send carries it out
 /// through `send_msg`, which compares it against what the child runs and
-/// applies it in place or respawns. A turn already running keeps its model.
+/// applies it in place or respawns. A prompt already queued behind a running
+/// turn bypasses that, so [`SessionManager::carry_pick_to_queue`] covers it.
 async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
     let item = store::get_session_index_item(&set.session_id)
         .await?
@@ -1428,6 +1429,7 @@ async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
                 .with_context(|| format!("no session {}", set.session_id))?;
             app.emit(SESSION_CHANGED, &item).ok();
             app.emit(SESSION_MODEL_CHANGED, &item).ok();
+            manager().carry_pick_to_queue(&item.session_id, &item.model, item.effort, app).await?;
             item
         }
         false => item,

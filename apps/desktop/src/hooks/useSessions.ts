@@ -2236,6 +2236,14 @@ const readServer = (server: ServerId) => {
       answered.add(`${server}:sessions`);
       // A read outlived by a toggle is the side just left.
       if (archived !== showArchivedRef.current) return;
+      // A pick moved while this server was out of reach sent no event here.
+      // The local copy mirrors every send of ours, so a pair that differs was
+      // moved elsewhere — `dray session model` most likely — and wins.
+      const known = new Map(sessionIndexItemsRef.current.map((i) => [i.sessionId, i]));
+      for (const item of items) {
+        const was = known.get(item.sessionId);
+        if (was && (was.model !== item.model || was.effort !== item.effort)) followModelPickRef.current(item);
+      }
       setSessionIndexItems((prev) => mergeFrom(prev, server, items, (i) => i.cwd));
       if (server === LOCAL) setIndexSide(archived);
     })

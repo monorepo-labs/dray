@@ -108,8 +108,8 @@ dray session model <id>                       # print what it runs on
 ```
 
 The composer's model picker, from here. The pick lands from the session's next
-turn — the next message it gets, from you or the user — and a turn already
-running finishes on the model it started with. The model is an alias of the
+turn — the next message it gets, from you or the user, one already waiting
+included — and a running turn is not stopped. The model is an alias of the
 session's own agent; an effort the model lacks is refused with the levels it
 has. A session on another machine is found by its id. Switch a session only
 where the user asked, or one you started yourself, and ask before raising one

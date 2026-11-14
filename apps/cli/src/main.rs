@@ -131,7 +131,7 @@ enum SessionCommand {
     /// Rename a session. Its title stays yours: no generated one replaces it.
     Rename(Rename),
     /// Switch a session's model or effort, like its composer's model picker.
-    /// Takes effect from its next turn; a turn already running keeps its model.
+    /// Takes effect from its next turn, without stopping one that is running.
     /// Without a model or --effort, prints what it runs on.
     Model(ModelArgs),
     /// Stop the turn a session is running, like its Stop button.

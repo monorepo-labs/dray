@@ -1751,6 +1751,40 @@ impl SessionManager {
     /// task held the session `in_progress` — the status follows the turn alone
     /// now, so that fan-out only killed dev servers the reader still wanted.
     /// Per-task stops stay available in the subagent panel for the narrower ask.
+    /// `dray session model` for a prompt already held behind a running turn.
+    /// That prompt opens the next turn but is flushed straight to the child,
+    /// never through `send_msg`, so the pick goes out now by the rule a prompt
+    /// queued now would take: live on Claude Code, deferred to the flush on fx.
+    /// An effort Claude Code cannot move in place waits for the next send.
+    pub async fn carry_pick_to_queue(
+        &self,
+        session_id: &str,
+        model: &ModelId,
+        effort: Option<Effort>,
+        app: &Sink,
+    ) -> Result<()> {
+        let Some(slot) = self.sessions.lock().await.get(session_id).cloned() else {
+            return Ok(());
+        };
+        let mut guard = slot.lock().await;
+        let Some(s) = guard.as_mut() else { return Ok(()) };
+        if !s.status.lock().await.turn_in_flight() || s.queued.lock().await.is_empty() {
+            return Ok(());
+        }
+        let spec = model_spec(s.harness, model).await?;
+        let (mode, fast) = (s.permission_mode, s.fast);
+        match &s.stdin {
+            Transport::Fx(fx) => fx.defer_controls(DeferredControls { model: spec, effort, mode, fast }),
+            _ if s.harness == Harness::ClaudeCode => {
+                apply_live_controls(s, session_id, model, spec.as_ref(), effort, mode, fast, app).await?
+            }
+            // pi and grok steer a prompt into the running turn rather than
+            // holding it here, and so does Codex: nothing of theirs is queued.
+            _ => {}
+        }
+        Ok(())
+    }
+
     pub async fn interrupt(&self, session_id: &str, app: &Sink) -> Result<()> {
         // pi stops off its own desk, for `answer_questions`' reason and one
         // more: the optimistic row the composer draws for a new session puts
