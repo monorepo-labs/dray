@@ -18,7 +18,7 @@ use draft::DraftCommand;
 use dray_proto::{
     encode_line, AddVideo, BrowserAction, MergeCard, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
     LinkIssues, ListSessions, Locator, OnMachine, RenameSession, Request, Response, SendMessage, SessionRef,
-    SessionSummary, SetAside, SetNeed, SettleSession, ShareAction, ShareRequest,
+    React, SessionSummary, SetAside, SetNeed, SettleSession, ShareAction, ShareRequest,
 };
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
@@ -144,6 +144,17 @@ enum SessionCommand {
     /// on you" card in this bot's chat. Cleared when the task moves; no text
     /// clears it now.
     Need(Need),
+    /// React to the user's newest message in this bot's chat instead of
+    /// replying: 👀 seen or on it, ✅ done, 🎉 celebrate, 👍 ok, ❤️ thanks, 😂
+    /// funny, 😢 sorry to hear. End the turn with no text after it.
+    React(ReactArgs),
+}
+
+#[derive(Args)]
+struct ReactArgs {
+    /// 👀 ✅ 🎉 👍 ❤️ 😂 😢, or its word: seen, done, celebrate, like, love,
+    /// laugh, sad.
+    emoji: String,
 }
 
 #[derive(Args)]
@@ -483,6 +494,7 @@ fn session(command: SessionCommand) -> Result<(), String> {
         SessionCommand::Ls(args) => return ls(args),
         SessionCommand::Send(args) => return send_message(args),
         SessionCommand::MergeCard(args) => return merge_card(args),
+        SessionCommand::React(args) => return react(args),
         SessionCommand::Rename(args) => (
             Request::RenameSession(RenameSession { session_id: args.session_id, title: args.title }),
             "Renamed it",
@@ -690,6 +702,18 @@ fn merge_card(args: SessionArg) -> Result<(), String> {
     match send(request)? {
         Response::MergeCard { number, url, title } => {
             eprintln!("Posted a merge card for #{number} \"{title}\": {url}");
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(other)),
+    }
+}
+
+fn react(args: ReactArgs) -> Result<(), String> {
+    let session_id = parent_session_id().ok_or("run this from inside a bot's chat: the reaction goes on its user's message.")?;
+    match send(Request::React(React { session_id, emoji: args.emoji }))? {
+        Response::Reacted { emoji } => {
+            eprintln!("Reacted {emoji} to the user's message. End your turn without writing anything.");
             Ok(())
         }
         Response::Error { message } => Err(message),
