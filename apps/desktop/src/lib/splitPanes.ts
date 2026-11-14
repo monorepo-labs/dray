@@ -198,18 +198,21 @@ export const SPLIT_HOST = "data-split-host";
 /// On each card of a lit split, naming its tab's key: what a gap drag measures.
 export const SPLIT_CARD = "data-split-card";
 
+/// The gap between two cards, `SplitPanes`' `w-1.5`.
+export const SPLIT_GAP = 6;
+
 /// Whether a point over the main view would split a tab out, on which side —
-/// the half it is over — and whether the window has room for one more pane
-/// at `PANE_MIN`.
+/// the half it is over — and whether the host is at least `need` wide: what
+/// the cards after the drop take at their floors, gaps included.
 export function splitTarget(
   x: number,
   y: number,
-  count: number,
+  need: number,
 ): { room: boolean; side: Side } | null {
   const host = document.querySelector(`[${SPLIT_HOST}]`)?.getBoundingClientRect();
   if (!host || x < host.left || x > host.right || y < host.top || y > host.bottom) return null;
   return {
-    room: host.width / (count + 2) >= PANE_MIN,
+    room: host.width >= need,
     side: x < host.left + host.width / 2 ? "left" : "right",
   };
 }

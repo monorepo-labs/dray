@@ -12,6 +12,7 @@ import Favicon, { hostOf } from "@/components/browser/Favicon";
 import FileIcon from "@/components/FileIcon";
 import GlobeFilledIcon from "@/components/icons/GlobeFilledIcon";
 import Orb from "@/components/Orb";
+import { CHAT_MIN } from "@/components/ResizeHandle";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import TabMenu from "@/components/browser/TabMenu";
 import { ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -74,7 +75,9 @@ import {
   removeSplit,
   setLitGroup,
   setPaneHeads,
+  PANE_MIN,
   setSplitDrag,
+  SPLIT_GAP,
   splitTarget,
   useSplitGroups,
   type PaneHead,
@@ -580,7 +583,12 @@ export default function ViewTabs({
     {
       over: (item, at) => {
         const lead = splittable(item) ? leadFor(item) : null;
-        const target = at && lead ? splitTarget(at.x, at.y, (lead.group?.length ?? 1) - 1) : null;
+        const cards = lead ? [...(lead.group?.map((m) => m.key) ?? [lead.key]), item.key] : [];
+        // A chat or task card floors at the chat's width, anything else at a pane's.
+        const need =
+          cards.reduce((w, k) => w + (k === "chat" || k.startsWith("task:") ? CHAT_MIN : PANE_MIN), 0) +
+          (cards.length - 1) * SPLIT_GAP;
+        const target = at && lead ? splitTarget(at.x, at.y, need) : null;
         if (target) dropSide.current = target.side;
         setSplitDrag(
           target
@@ -691,10 +699,18 @@ export default function ViewTabs({
 
   useEffect(() => {
     closeActive = () => {
-      const i = drag.shown.findIndex((item) => item.active && item.close && !item.locked);
+      const i = drag.shown.findIndex((item) => item.active && (item.close || item.group) && !item.locked);
       if (i === -1) return false;
-      closeAt(i);
-      return true;
+      const { key, group } = drag.shown[i];
+      if (!group) {
+        closeAt(i);
+        return true;
+      }
+      // A lit group closes its lead the way the lead's cross does, handing the
+      // main view to the next member rather than to a neighbour in the row.
+      const close = group.find((m) => m.key === key)?.close;
+      close?.();
+      return !!close;
     };
     return () => {
       closeActive = null;
@@ -928,6 +944,8 @@ function GroupTab({
       tabIndex={0}
       onClick={onPick}
       onKeyDown={(e) => {
+        // A member's close button takes its own keys.
+        if (e.target !== e.currentTarget) return;
         if (e.key !== "Enter" && e.key !== " ") return;
         e.preventDefault();
         onPick();
