@@ -800,6 +800,7 @@ final class Store {
             store(key, item)
             let moving = harness.map { $0 != item.harness } ?? false
             var to = key
+            var isNew = false
             if moving {
                 // One id per switch, kept across retries: a switch whose reply was lost already
                 // made its session, and a second would stop the first and send the words twice.
@@ -808,12 +809,19 @@ final class Store {
                 let made: SessionItem? = (try? await c.call("get_session_by_id", ["sessionId": .string(to.id), "turns": 0])) ?? nil
                 if let made {
                     created(key.server, made)
-                    switches[key] = nil
-                    unsent[key] = nil
-                    return to
+                    // The index entry lands before the agent starts, so the session alone proves
+                    // nothing: the words landed only if its log holds them. Else they go to it.
+                    let log: Snapshot? = try await c.call("get_session_by_id", ["sessionId": .string(to.id), "turns": 1])
+                    if log?.events.contains(where: { if case .userMessage = $0.payload { true } else { false } }) == true {
+                        switches[key] = nil
+                        unsent[key] = nil
+                        return to
+                    }
+                } else {
+                    // The desktop's rule: the old agent's turn would be cut off by the switch.
+                    if item.busy { throw DrayError("Wait for this turn to end to switch agent.") }
+                    isNew = true
                 }
-                // The desktop's rule: the old agent's turn would be cut off by the switch.
-                if item.busy { throw DrayError("Wait for this turn to end to switch agent.") }
             }
             let agent = harness ?? item.harness
             let outcome: SendOutcome = try await c.call("send_msg", [
@@ -830,7 +838,7 @@ final class Store {
                 "useWorktree": false,
                 "worktreeName": nil,
                 "baseRef": nil,
-                "isNewSession": .bool(moving),
+                "isNewSession": .bool(isNew),
             ])
             if let snapshot = outcome.snapshot { created(key.server, snapshot) }
             unsent[key] = nil
