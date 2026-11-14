@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTranscript, drawsSameTurn, isToolGroup, runningRuns, segmentMedia, segmentWork, sessionMedia, type Turn } from "@/lib/transcript";
+import { buildTranscript, drawsSameTurn, hiddenInBotChat, isToolGroup, runningRuns, segmentMedia, segmentWork, sessionMedia, type Turn } from "@/lib/transcript";
 import type { AgentEvent, AgentEventPayload, ToolResult } from "@/types/events";
 
 /// Only the envelope fields `buildTranscript` orders and keys by are filled;
@@ -1014,5 +1014,20 @@ describe("segmentMedia", () => {
       ["/archived/a-0.png", false],
       ["/att/mine.png", true],
     ]);
+  });
+
+  it("hiddenInBotChat keeps only media a bot's chat does not draw", () => {
+    const named = "/Users/me/.dray/browser/recordings/s1/named.mp4";
+    const unnamed = "/Users/me/.dray/browser/recordings/s1/unnamed.mp4";
+    const shot = { path: "/shots/tool.png", url: null, mimeType: "image/png" };
+    const mine = { path: "/att/mine.png", url: null, mimeType: "image/png" };
+    const events = [event(0, { type: "assistant_text", block: null, text: `Proof: ${named}` })];
+    const hidden = hiddenInBotChat(events, [
+      { video: named, byYou: false },
+      { video: unnamed, byYou: false },
+      { image: shot, byYou: false },
+      { image: mine, byYou: true },
+    ]);
+    expect(hidden.map((m) => ("video" in m ? m.video : m.image.path))).toEqual([unnamed, "/shots/tool.png"]);
   });
 });

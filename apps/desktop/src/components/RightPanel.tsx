@@ -284,6 +284,10 @@ export default function RightPanel({
           // Padded to sit where a tab's label would, so the pane's first line
           // lands on the same baseline whichever frame it is wearing.
           <span className="px-2 py-1 text-ui font-medium">{heading}</span>
+        ) : tabs.length === 1 && tabs[0] === "tasks" ? (
+          // A bot's pane with nothing beside its task list: the list says what
+          // the pane is, so the strip stays the titlebar it sits in.
+          null
         ) : (
           // A wrapping row clipped to one line, which sheds the keycaps when
           // they stop fitting and never a tab sooner — the CSS answer to a
