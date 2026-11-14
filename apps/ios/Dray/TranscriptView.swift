@@ -71,10 +71,11 @@ struct TranscriptView: View {
                     }
                     ForEach(asks) { AskCard(key: key, event: $0) }
                     if bot != nil { StalledCard(tasks: botTasks) }
-                    Color.clear.frame(height: 1).id("bottom")
+                    // The stack's bottom padding, and what a scroll to the end lands on.
+                    Color.clear.frame(height: Theme.Space.m).id("bottom")
                 }
                 .padding(.horizontal, Theme.Space.l)
-                .padding(.vertical, Theme.Space.m)
+                .padding(.top, Theme.Space.m)
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
             }
@@ -84,8 +85,9 @@ struct TranscriptView: View {
             // to its end by estimate, and when the read replaced what the cache drew with
             // less, the view sat past the new end, blank until the reader swiped.
             .defaultScrollAnchor(.bottom)
-            .modifier(FollowsBottom(following: $following))
-            // The newest row, not the count, or loading earlier turns would jump to the end.
+            .modifier(FollowsBottom(following: $following) { proxy.scrollTo("bottom", anchor: .bottom) })
+            // Before iOS 18 nothing reads the content's size, so the newest row is the cue.
+            // The row, not the count, or loading earlier turns would jump to the end.
             .onChange(of: "\(turns.last?.id ?? "")|\(turns.last?.work.last?.newestId ?? "")|\(turns.last?.completed ?? false)|\(asks.count)|\(busy)|\(bot == nil ? "" : transcript?.events.last?.id ?? "")") {
                 if following { proxy.scrollTo("bottom", anchor: .bottom) }
             }
@@ -741,22 +743,41 @@ struct TranscriptSkeleton: View {
     }
 }
 
-/// The desktop chat's pin (`AT_BOTTOM_PX` in Chat.tsx): new rows follow while the
-/// view is within 40pt of the end. Only a scroll the reader made drops it, since
-/// rows landing push the end away too; coming back to the end raises it again.
-/// iOS 17 has no scroll phase to tell the two apart, so there it always follows.
+/// The desktop chat's pin (`AT_BOTTOM_PX` and the ResizeObserver in Chat.tsx): within
+/// 40pt of the end the view holds the end, whatever moves it. A row landing does, and
+/// so does a picture or a video loading late, a fold opening and the dock growing, none
+/// of which a new row announces. Only a scroll the reader made drops the pin, since each
+/// of those pushes the end away too; coming back to the end raises it again.
+/// iOS 17 reads no scroll geometry, so there the pin never drops and only new rows move the view.
 struct FollowsBottom: ViewModifier {
     @Binding var following: Bool
+    let toEnd: () -> Void
     @State private var reading = false
 
     func body(content: Content) -> some View {
         if #available(iOS 18, *) {
             content
-                .onScrollPhaseChange { _, phase in reading = phase == .interacting || phase == .decelerating }
-                .onScrollGeometryChange(for: CGFloat.self) { g in
-                    g.contentSize.height + g.contentInsets.bottom - g.containerSize.height - g.contentOffset.y
-                } action: { _, left in
-                    if left < 40 { following = true } else if reading { following = false }
+                .onScrollPhaseChange { _, phase in reading = phase != .idle }
+                // The content's height, the room it shows in, and what is left below the view.
+                // Off `visibleRect`, which spans the insets: `containerSize` already has them out,
+                // and taking the dock's off it again read 348pt left at the very end.
+                .onScrollGeometryChange(for: [CGFloat].self) { g in
+                    let end = g.visibleRect.maxY - g.contentInsets.bottom
+                    return [g.contentSize.height, g.visibleRect.height - g.contentInsets.top - g.contentInsets.bottom, g.contentSize.height - end]
+                } action: { old, new in
+                    let resized = old[0] != new[0] || old[1] != new[1]
+                    if new[2] < 40 { following = true } else if reading && !resized { following = false }
+                    // Held there however the view came off it, but never from under a finger.
+                    if following && new[2] > 0.5 && (resized || !reading) { toEnd() }
+                }
+                // About one warm open in fifty of a long chat sat at its top, with the geometry
+                // still and so nothing above to move it. Why is not known; a scroll to the end
+                // a few seconds on took, so one is sent once the push has settled, and again.
+                .task {
+                    for wait in [0.5, 1.0] {
+                        try? await Task.sleep(for: .seconds(wait))
+                        if following { toEnd() }
+                    }
                 }
         } else {
             content
