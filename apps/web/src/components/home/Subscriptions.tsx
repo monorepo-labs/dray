@@ -4,7 +4,7 @@ import { FxGlyph } from "@/components/FxGlyph";
 import { GrokGlyph } from "@/components/GrokGlyph";
 import { OpenAIGlyph } from "@/components/OpenAIGlyph";
 import { PiGlyph } from "@/components/PiGlyph";
-import { Section, Title } from "@/components/home/Section";
+import { CARD, CARD_TEXT, GRID, Section, Title } from "@/components/home/Section";
 
 const AGENTS: [string, ReactNode][] = [
   ["Claude Code", <ClaudeGlyph key="claude" className="size-10" />],
@@ -21,14 +21,14 @@ export function Subscriptions() {
     <Section id="subscriptions" className="py-20">
       <PixelField />
       <Title lead="Bring your own agent subscription." />
-      <div className="relative mt-12 grid grid-cols-2 gap-px sm:grid-cols-3 lg:mt-20 lg:grid-cols-5">
+      <div className={`relative grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 ${GRID}`}>
         {AGENTS.map(([name, glyph]) => (
           <div
             key={name}
-            className="flex h-[132px] flex-col sm:h-[180px] justify-between bg-[#FFFFFF1A] p-6 text-white light:bg-[#F4F4F5] light:text-[#0A0A0A]"
+            className={`flex h-[132px] flex-col justify-between p-6 sm:h-[180px] ${CARD}`}
           >
             {glyph}
-            <span className="text-[17px] leading-6 tracking-[-0.01em]">{name}</span>
+            <span className={CARD_TEXT}>{name}</span>
           </div>
         ))}
       </div>

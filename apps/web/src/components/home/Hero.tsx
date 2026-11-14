@@ -2,6 +2,7 @@ import { preload } from "react-dom";
 import { DownloadButton } from "@/components/DownloadButton";
 import { Hero as AppWindow } from "@/components/illustrations/Hero";
 import { SponsorLink } from "@/components/SponsorLink";
+import { LABEL } from "./Section";
 import h from "./hero.module.css";
 import { HeroBackdrop } from "./HeroBackdrop";
 import { SiteNav } from "./SiteNav";
@@ -25,7 +26,7 @@ export function Hero() {
 
         <div className="pt-16 sm:pt-[133px] lg:ml-[102px] lg:max-w-[756px]">
           <h1 className="font-inter text-[36px] leading-[40px] font-normal tracking-[-0.03em] text-balance text-white sm:text-[46px] light:text-[#0A0A0A] sm:leading-[46px]">
-            Work on 100s of coding tasks without getting overwhelmed.
+            Work on dozens of coding tasks without getting overwhelmed.
           </h1>
           <div className="mt-8 flex flex-wrap items-start justify-between gap-4 pr-5">
             <DownloadButton from="hero" className="inline-flex h-10 items-center gap-2 rounded-[6px] bg-white px-4 text-[14px] leading-5 font-medium text-[#0B0B0F] shadow-[inset_0_-1px_0_#4D4C4C,0_1px_2px_#00000040,0_10px_28px_-10px_#00000099] transition-opacity hover:opacity-90 [&>svg]:-mt-0.5 light:bg-[#0A0A0A] light:text-white light:shadow-[inset_0_-1px_0_#000,0_1px_2px_#00000040]" />
@@ -77,7 +78,7 @@ export function Hero() {
 function Sponsor({ className = "" }: { className?: string }) {
   return (
     <div className={`group flex flex-col items-center gap-3 ${className}`}>
-      <p className="text-[11px] leading-4 font-medium tracking-[0.14em] text-[#A1A1A1] uppercase">Sponsored by</p>
+      <p className={`${LABEL} text-[#A1A1A1]`}>Sponsored by</p>
       <div className="flex items-center gap-2.5 text-[14px] leading-5">
         <span className="relative size-7 shrink-0">
           <img

@@ -50,10 +50,10 @@ export default function Home() {
       <main>
         <Bots />
         <Everywhere />
-        <Features />
-        <Island />
-        <Testimonials />
         <Subscriptions />
+        <Island />
+        <Features />
+        <Testimonials />
         <Faq />
       </main>
       <Closing />

@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { GitPullRequest, Play, X } from "lucide-react";
 import { BotFace } from "@/components/app/Bot";
-import { Section } from "@/components/home/Section";
+import { Section, Tile } from "@/components/home/Section";
 
 // Task names double as face seeds, so one task wears one face in every tile.
 const PROGRESS = "Progress UI";
@@ -15,36 +15,21 @@ const API = "Upload API";
 export function Bots() {
   return (
     <Section id="bots" className="py-20">
-      <div className="grid grid-cols-1 gap-[2px] lg:grid-cols-2">
-        <Tile title="The bot routes your messages to tasks and keeps you informed.">
+      <div className="grid gap-[2px] lg:grid-cols-2">
+        <Tile className="lg:h-[480px]" title="The bot routes your messages to tasks and keeps you informed.">
           <Route />
         </Tile>
-        <Tile title="Merge finished work right from the chat.">
+        <Tile className="lg:h-[480px]" title="Merge finished work right from the chat.">
           <Merge />
         </Tile>
-        <Tile title="Waiting on you catches what you missed.">
+        <Tile className="lg:h-[480px]" title="Waiting on you catches what you missed.">
           <Waiting />
         </Tile>
-        <Tile title="Jump into any task, any time.">
+        <Tile className="lg:h-[480px]" title="Jump into any task, any time.">
           <Tasks />
         </Tile>
       </div>
     </Section>
-  );
-}
-
-/// A 460-tall tile: the drawing in the top 360, the title under it. Titles
-/// start at one height in every tile, however many lines the one beside wraps to.
-function Tile({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col overflow-clip bg-[#FFFFFF1A] lg:h-[460px] light:bg-[#F4F4F5]">
-      <div aria-hidden className="flex shrink-0 flex-col justify-center px-6 py-12 sm:px-10 lg:h-[360px] lg:py-0">
-        {children}
-      </div>
-      <h3 className="px-6 pt-2 pb-6 text-[22px] leading-7 tracking-[-0.02em] text-balance text-white light:text-[#0A0A0A]">
-        {title}
-      </h3>
-    </div>
   );
 }
 

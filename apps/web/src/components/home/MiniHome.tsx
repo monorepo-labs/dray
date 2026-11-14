@@ -49,7 +49,7 @@ export function MiniHome() {
           </div>
 
           <div className="ml-[102px] max-w-[756px] pt-[133px]">
-            <div className="text-[46px] leading-[46px] tracking-[-0.03em] text-white light:text-[#0A0A0A]">Work on 100s of coding tasks without getting overwhelmed.</div>
+            <div className="text-[46px] leading-[46px] tracking-[-0.03em] text-white light:text-[#0A0A0A]">Work on dozens of coding tasks without getting overwhelmed.</div>
             <div className="mt-8 flex items-start justify-between pr-5">
               <span className="inline-flex h-10 items-center gap-2 rounded-[6px] bg-white px-4 text-[14px] leading-5 font-medium text-[#0B0B0F] light:bg-[#0A0A0A] light:text-white">
                 <AppleGlyph className="-mt-0.5 size-4" />
