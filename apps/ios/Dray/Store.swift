@@ -810,18 +810,22 @@ final class Store {
                 if let made {
                     created(key.server, made)
                     // The index entry lands before the agent starts, so the session alone proves
-                    // nothing: the words landed only if its log holds them. Else they go to it.
+                    // nothing: the words landed only if its log holds them.
                     let log: Snapshot? = try await c.call("get_session_by_id", ["sessionId": .string(to.id), "turns": 1])
                     if log?.events.contains(where: { if case .userMessage = $0.payload { true } else { false } }) == true {
                         switches[key] = nil
                         unsent[key] = nil
                         return to
                     }
-                } else {
-                    // The desktop's rule: the old agent's turn would be cut off by the switch.
-                    if item.busy { throw DrayError("Wait for this turn to end to switch agent.") }
-                    isNew = true
+                    // Its agent never started, and Codex cannot resume a thread it never made: a new one.
+                    // ponytail: the empty session stays in the chat as one more "Switched to" line;
+                    // delete_session would tell the bot the reader deleted a task.
+                    to = SessionKey(server: key.server, id: UUID().uuidString.lowercased())
+                    switches[key] = to
                 }
+                // The desktop's rule: the old agent's turn would be cut off by the switch.
+                if item.busy { throw DrayError("Wait for this turn to end to switch agent.") }
+                isNew = true
             }
             let agent = harness ?? item.harness
             let outcome: SendOutcome = try await c.call("send_msg", [
