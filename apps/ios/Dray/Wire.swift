@@ -123,6 +123,12 @@ func parseDate(_ s: String) -> Date? {
     return d
 }
 
+/// How long ago, as the sidebar says it: now, 4m, 1h, 3d.
+func shortAge(_ date: Date, now: Date = .now) -> String {
+    let s = Int(now.timeIntervalSince(date))
+    return s < 60 ? "now" : s < 3600 ? "\(s / 60)m" : s < 86400 ? "\(s / 3600)h" : "\(s / 86400)d"
+}
+
 /// The server's first frame: what it can do and what it runs.
 struct Welcome: Decodable {
     let dictation: Bool?

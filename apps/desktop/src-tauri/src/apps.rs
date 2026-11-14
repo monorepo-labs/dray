@@ -636,9 +636,14 @@ pub async fn island_running() -> bool {
 /// bot's "2 tasks waiting on you". A Darwin notification carries no payload,
 /// so each event is a file named for its session in `island_done_dir`, holding the
 /// note: the island deletes only the files it read, where a shared list read
-/// and then cleared would drop one written between the two.
+/// and then cleared would drop one written between the two. `rows` are the bot
+/// card's rows a noted pill grows into under the pointer.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn island_done(session_id: String, note: Option<String>) -> Result<(), String> {
+pub async fn island_done(
+    session_id: String,
+    note: Option<String>,
+    rows: Option<serde_json::Value>,
+) -> Result<(), String> {
     // The id names a file, so nothing that could step out of the directory.
     if session_id.is_empty() || !session_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err("not a session id".into());
@@ -646,16 +651,18 @@ pub async fn island_done(session_id: String, note: Option<String>) -> Result<(),
     // Linux's island is this app's child, and hears it on the pipe it holds.
     // It has no note to draw, so a noted one is refused and the banner goes.
     #[cfg(all(feature = "desktop", target_os = "linux"))]
+    let _ = rows;
+    #[cfg(all(feature = "desktop", target_os = "linux"))]
     return match note {
         None => crate::island::done(&session_id),
         Some(_) => Err("Dray Island here shows finished sessions alone".into()),
     };
     #[cfg(not(all(feature = "desktop", target_os = "linux")))]
-    island_done_mac(session_id, note.unwrap_or_default()).await
+    island_done_mac(session_id, note.unwrap_or_default(), rows).await
 }
 
 #[cfg(not(all(feature = "desktop", target_os = "linux")))]
-async fn island_done_mac(session_id: String, note: String) -> Result<(), String> {
+async fn island_done_mac(session_id: String, note: String, rows: Option<serde_json::Value>) -> Result<(), String> {
     let dir = island_done_dir().ok_or("no home directory")?;
     tokio::fs::create_dir_all(&dir).await.map_err(|err| format!("could not reach the island: {err}"))?;
     // Written beside the inbox and moved in whole, so the island never reads a
@@ -671,9 +678,18 @@ async fn island_done_mac(session_id: String, note: String) -> Result<(), String>
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let reach = |err: std::io::Error| format!("could not reach the island: {err}");
+    // Beside the inbox, not in it, so an island that reads no rows never takes
+    // them for an event; moved in before the event, so they are there when it is read.
+    if let (true, Some(rows)) = (current, rows) {
+        let waiting = dir.with_file_name("waiting");
+        tokio::fs::create_dir_all(&waiting).await.map_err(reach)?;
+        let staged = dir.with_file_name(format!("{session_id}.{stamp}-{n}.rows"));
+        tokio::fs::write(&staged, rows.to_string()).await.map_err(reach)?;
+        tokio::fs::rename(&staged, waiting.join(format!("{session_id}.json"))).await.map_err(reach)?;
+    }
     let name = if current { format!("{session_id}.{stamp}-{n}") } else { session_id };
     let tmp = dir.with_file_name(&name);
-    let reach = |err: std::io::Error| format!("could not reach the island: {err}");
     tokio::fs::write(&tmp, note).await.map_err(reach)?;
     tokio::fs::rename(&tmp, dir.join(&name)).await.map_err(reach)?;
     tokio::process::Command::new("notifyutil").args(["-p", "com.yogesh.dray.island.done"]).output().await.ok();

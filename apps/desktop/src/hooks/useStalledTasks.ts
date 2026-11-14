@@ -156,8 +156,19 @@ export function useStalledTasks({
       const { chatId } = entry;
       const body = `${shown.length} ${shown.length === 1 ? "task" : "tasks"} waiting on you`;
       const banner = () => notifyOS(chatId, "asking", bot.name, body);
+      // The card's rows, which the island's pill grows into under the pointer
+      // (`WaitingTask` in the island).
+      const rows = shown.map((s) => ({
+        id: s.row.item.sessionId,
+        title: s.row.item.title,
+        projectPath: s.row.item.projectPath,
+        modified: s.row.item.modified,
+        need: needLine(s) ?? null,
+        ready: s.kind === "ready",
+        pr: s.pr ?? null,
+      }));
       void islandOn("done", chatId).then((on) =>
-        on ? invoke("island_done", { sessionId: chatId, note: body }).catch(banner) : banner(),
+        on ? invoke("island_done", { sessionId: chatId, note: body, rows }).catch(banner) : banner(),
       );
     }
   }, [bots, byBot]);

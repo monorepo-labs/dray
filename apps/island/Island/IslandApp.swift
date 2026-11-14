@@ -409,10 +409,13 @@ final class Delegate: NSObject, NSApplicationDelegate {
         .appendingPathComponent("Library/Caches/com.yogesh.dray.island/done")
     /// This island's pid, which `island_reads_events` in apps.rs matches against the running one.
     static let eventsMarker = doneDir.deletingLastPathComponent().appendingPathComponent("events-pid")
+    /// A bot chat's waiting tasks, `<id>.json`, beside the inbox so an island that reads none never takes one for an event.
+    static let waitingDir = doneDir.deletingLastPathComponent().appendingPathComponent("waiting")
 
     /// Takes the sessions Dray dropped, oldest first, deleting only the files
     /// read, so one landing meanwhile waits for its own notification. A file's
     /// text is what the pill says in place of "Done"; empty, it is a finished turn.
+    /// A note's rows, where Dray sent them, wait in `waitingDir`.
     func sessionsDone() {
         let fm = FileManager.default
         let files = (try? fm.contentsOfDirectory(at: Self.doneDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
@@ -422,7 +425,13 @@ final class Delegate: NSObject, NSApplicationDelegate {
             try? fm.removeItem(at: file)
             // `<id>.<n>`, one file per event; a bare id is an older Dray's.
             let id = String(file.lastPathComponent.prefix { $0 != "." })
-            composer?.finished(id, note: note.isEmpty ? nil : note)
+            var rows: [WaitingTask]?
+            if !note.isEmpty {
+                let held = Self.waitingDir.appendingPathComponent("\(id).json")
+                rows = (try? Data(contentsOf: held)).flatMap { try? JSONDecoder().decode([WaitingTask].self, from: $0) }
+                try? fm.removeItem(at: held)
+            }
+            composer?.finished(id, note: note.isEmpty ? nil : note, rows: rows?.isEmpty == true ? nil : rows)
         }
     }
 

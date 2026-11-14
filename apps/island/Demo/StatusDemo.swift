@@ -94,6 +94,8 @@ private struct Case: Identifiable {
     /// The session the panel is pinned to, when open on no card.
     var pinned: String? = nil
     var bots: [Bot] = []
+    /// The newest done session's waiting tasks, as Dray hands them over with its note.
+    var waiting: [WaitingTask] = []
 }
 
 private let sections: [(String, [Case])] = [
@@ -106,6 +108,10 @@ private let sections: [(String, [Case])] = [
         Case(name: "Five sessions done at once", items: [s1, s2, s3, s4, s5], done: [s1, s2, s3, s4, s5].map(\.sessionId)),
         Case(name: "A card waiting and a session done", note: "The card outranks the news; the done pill shows once it is answered.",
              items: [s1, s4], asks: [bash(s1)], done: [s4.sessionId]),
+        Case(name: "A bot's tasks waiting on you", note: "Hover grows the bot card's rows; a click opens the task in Dray.",
+             items: [opsChat], done: [opsChat.sessionId], bots: bots, waiting: waitingRows),
+        Case(name: "Waiting beside a session done", items: [opsChat, s4], done: [s4.sessionId, opsChat.sessionId],
+             bots: bots, waiting: waitingRows),
     ]),
     ("Permissions", [
         Case(name: "Run a command", open: true, items: [s1], asks: [bash(s1)]),
@@ -169,6 +175,16 @@ private let bots = [
 ]
 private let botChat = session("b1", "Dray", cwd: bots[0].path)
 private let opsChat = session("b2", "Ops", status: "in_progress", cwd: bots[1].path)
+private let waitingRows = [
+    WaitingTask(id: "019a7d11-0c4e-7a21-8f3b-5e6d7c8b9a01", title: "Sidebar globe icon for Mac remote", projectPath: "/Users/me/dray",
+                modified: stamp(ago: 40 * 60), need: "Try the globe on a remote Mac before merging; the hover was not tested.", ready: true,
+                pr: PrMark(number: 573, headRefName: "worktree-globe", isDraft: false, state: "OPEN", checksState: "CLEAR")),
+    WaitingTask(id: "019a7d11-0c4e-7a21-8f3b-5e6d7c8b9a02", title: "Integrate Devin CLI harness", projectPath: "/Users/me/dray",
+                modified: stamp(ago: 3 * 3600), need: "Which login should it use: your Devin API key, or the one in 1Password?", ready: false, pr: nil),
+    WaitingTask(id: "019a7d11-0c4e-7a21-8f3b-5e6d7c8b9a03", title: "Theme swatches in settings", projectPath: "/Users/me/dray",
+                modified: stamp(ago: 5 * 60), need: nil, ready: false,
+                pr: PrMark(number: 581, headRefName: "worktree-swatches", isDraft: false, state: "OPEN", checksState: "CLEAR")),
+]
 
 private func pr(_ state: String, _ checks: String) -> [String: [String: PrMark]] {
     ["/Users/me/dray": ["worktree-globe": PrMark(number: 573, headRefName: "worktree-globe", isDraft: false, state: state, checksState: checks)]]
@@ -247,10 +263,10 @@ private func decode<T: Decodable>(_ object: [String: Any]) -> T {
 }
 
 /// Now, so the list's three-day cut keeps every seeded session.
-private func stamp() -> String {
+private func stamp(ago: TimeInterval = 0) -> String {
     let f = ISO8601DateFormatter()
     f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return f.string(from: Date())
+    return f.string(from: Date(timeIntervalSinceNow: -ago))
 }
 
 // MARK: Stage
@@ -275,6 +291,10 @@ private struct CaseStage: View {
         if let id = c.pinned { composer.target = .session(SessionKey(server: server, id: id)) }
         composer.listShown = c.listShown
         composer.done = c.done.map { SessionKey(server: server, id: $0) }
+        if !c.waiting.isEmpty, let chat = composer.done.last {
+            composer.notes[chat] = "\(c.waiting.count) tasks waiting on you"
+            composer.waiting[chat] = c.waiting
+        }
         // The app's hide also takes the window away; here the panel just shuts, so Dismiss can be seen to land.
         composer.hide = { [weak composer] in composer?.shown = false }
         _composer = State(initialValue: composer)
