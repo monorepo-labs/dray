@@ -1,7 +1,6 @@
 import { X } from "lucide-react";
 import { lazy, Suspense, useEffect } from "react";
 
-import { DropZone } from "@/components/SplitView";
 import { Button } from "@/components/ui/button";
 import { setDropping } from "@/lib/browser";
 import { useOpenFiles, useOpenFilesWatcher } from "@/hooks/useOpenFiles";
@@ -56,11 +55,15 @@ export default function SplitPanes({
           ))}
       {hint && (
         // The column the drop makes: the last of `lit.length + 2` equal ones.
+        // Drawn as the card it would make, past the gap and with a card's
+        // corners; the task split's square zone is a pane, not a card.
         <div
-          className="pointer-events-none absolute inset-y-0 right-0 z-30"
+          className="pointer-events-none absolute inset-y-0 right-0 z-30 pl-1.5"
           style={{ width: `${100 / (lit.length + 2)}%` }}
         >
-          <DropZone region="center" label={hint} />
+          <div className="flex h-full items-center justify-center rounded-[8px] border border-ring bg-ring/15 text-ui font-medium text-foreground">
+            {hint}
+          </div>
         </div>
       )}
     </>
