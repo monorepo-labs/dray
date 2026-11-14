@@ -109,8 +109,7 @@ struct SwitchLine: View {
     let harness: String?
 
     var body: some View {
-        let names = ["claude_code": "Claude Code", "codex": "Codex", "pi": "pi", "fx": "fx", "grok": "Grok"]
-        Text("Switched to \(harness.map { names[$0] ?? $0 } ?? "another agent")")
+        Text("Switched to \(harness.map { Picks.agentLabels[$0] ?? $0 } ?? "another agent")")
             .font(Theme.Font.footnote)
             .foregroundStyle(Theme.tertiary)
             .frame(maxWidth: .infinity)
@@ -387,7 +386,7 @@ struct MergeCardView: View {
                 Task {
                     let sent = await store.send(task,
                                                 "PR #\(card.number) has merge conflicts with its base branch. Fix them and push.")
-                    if !sent { asked = false }
+                    if sent == nil { asked = false }
                 }
             }
             .font(Theme.Font.pill)

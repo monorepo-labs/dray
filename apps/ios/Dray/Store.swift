@@ -68,6 +68,9 @@ final class Store {
     /// Each repo's PR marks by branch, as `pr_marks` last answered.
     private(set) var marks: [ProjectKey: [String: PrMark]] = [:]
     var drafts: [SessionKey: String] = [:]
+    /// A bot chat's agent and model for its next message, picked in its sheet: the desktop's
+    /// `unsentPicks`. Another agent moves the chat to a new session on that send.
+    var unsent: [SessionKey: AgentPick] = [:]
     /// gh's latest progress line per clone, by server and slug.
     var cloneProgress: [UUID: [String: String]] = [:]
     /// Moves when any client saves a draft (`drafts_changed`) or this one removes one: the list re-reads.
@@ -783,36 +786,46 @@ final class Store {
     /// held copy sent back would undo its change.
     /// `model`, `effort`, `stance` and `fast` are what the reader moved for this reply; each nil keeps
     /// the session's as just re-read, so a change another client made is never undone.
-    func send(_ key: SessionKey, _ text: String, attachments: [String] = [],
-              model: String? = nil, effort: String? = nil, stance: String? = nil, fast: Bool? = nil) async -> Bool {
-        guard let c = connections[key.server] else { return false }
+    /// Sends a reply, answering the session it went to. Another `harness`, in a bot chat, is
+    /// an agent switch: a new session in the bot's folder, which the server hands the chat so far.
+    @discardableResult
+    func send(_ key: SessionKey, _ text: String, attachments: [String] = [], harness: String? = nil,
+              model: String? = nil, effort: String? = nil, stance: String? = nil, fast: Bool? = nil) async -> SessionKey? {
+        guard let c = connections[key.server] else { return nil }
         do {
             let fresh: SessionItem? = try await c.call("get_session_by_id", ["sessionId": .string(key.id), "turns": 0])
             guard let item = fresh else { throw DrayError("Session not found") }
             store(key, item)
+            let moving = harness.map { $0 != item.harness } ?? false
+            // The desktop's rule: the old agent's turn would be cut off by the switch.
+            if moving && item.busy { throw DrayError("Wait for this turn to end to switch agent.") }
+            let to = moving ? SessionKey(server: key.server, id: UUID().uuidString.lowercased()) : key
+            let agent = harness ?? item.harness
             let outcome: SendOutcome = try await c.call("send_msg", [
-                "sessionId": .string(key.id),
+                "sessionId": .string(to.id),
                 "prompt": .string(text),
                 "attachmentPaths": .array(attachments.map { .string($0) }),
-                "harness": .string(item.harness),
-                "model": .string(model ?? item.model),
-                "effort": JSON(effort ?? item.effort),
-                "permissionMode": .string(stance ?? item.permissionMode),
+                "harness": .string(agent),
+                "model": .string(model ?? (moving ? Picks.defaultModel[agent] ?? "" : item.model)),
+                "effort": JSON(moving ? effort : effort ?? item.effort),
+                "permissionMode": .string(Picks.stanceFor(agent, stance ?? item.permissionMode)),
                 "fast": .bool(fast ?? item.fast ?? false),
                 "cwd": .string(item.cwd),
                 "branch": nil,
                 "useWorktree": false,
                 "worktreeName": nil,
                 "baseRef": nil,
-                "isNewSession": false,
+                "isNewSession": .bool(moving),
             ])
+            if let snapshot = outcome.snapshot { created(key.server, snapshot) }
+            unsent[key] = nil
             // By id: the server's `queue_changed` usually lands before this reply.
-            if let q = outcome.queued, !(queued[key]?.contains(q) ?? false) { queued[key, default: []].append(q) }
-            sends[key, default: 0] += 1
-            return true
+            if let q = outcome.queued, !(queued[to]?.contains(q) ?? false) { queued[to, default: []].append(q) }
+            sends[to, default: 0] += 1
+            return to
         } catch {
             lastError = error.localizedDescription
-            return false
+            return nil
         }
     }
 

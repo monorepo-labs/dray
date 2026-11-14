@@ -52,6 +52,26 @@ final class BotSheetTests: XCTestCase {
         XCTAssertTrue(app.buttons["Ranger \(run)"].waitForExistence(timeout: 10), "the rename did not reach the chip")
         sleep(1)
         snap(app, "renamed")
+
+        // The sheet's agent pick moves the chat on the next message, as the desktop's does.
+        chip.tap()
+        let codex = app.buttons["Codex"]
+        guard codex.waitForExistence(timeout: 5) else { return } // this machine has no Codex
+        codex.tap()
+        sleep(2)
+        snap(app, "edit-agent")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.staticTexts["Your next message moves this chat to Codex."].waitForExistence(timeout: 5),
+                      "the dock does not say the chat moves")
+        snap(app, "moving")
+        app.buttons["Keyboard"].tap()
+        let box = app.textViews.firstMatch
+        XCTAssertTrue(box.waitForExistence(timeout: 5), "no reply sheet")
+        box.typeText("Reply with just: hello from codex")
+        app.buttons["Send"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Switched to Codex"].waitForExistence(timeout: 60), "the chat did not move to Codex")
+        sleep(15)
+        snap(app, "switched")
     }
 
     /// A bot (`DRAY_BOT`) whose chat runs longer than the screen: rows scroll under bare chips, no shade.

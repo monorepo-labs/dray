@@ -10,8 +10,6 @@ struct TranscriptView: View {
     @Environment(\.openTask) private var openTask
     /// The floating banner's height, kept clear above the first row so it never sits on "Load earlier".
     @State private var bannerHeight: CGFloat = 0
-    /// How many of a bot chat's earlier sessions are drawn above this one.
-    @State private var earlier = 0
     /// Whether new rows scroll into view: dropped by the reader scrolling up (`FollowsBottom`).
     @State private var following = true
 
@@ -131,10 +129,10 @@ struct TranscriptView: View {
             // A bot's folder is no project: its face and name as a chip, which opens the bot.
             Button { editingBot = true } label: {
                 HStack(spacing: 6) {
-                    BotFace(bot: bot, size: 22)
+                    BotFace(bot: bot, size: 32)
                     Text(bot.name).font(Theme.Font.headline).foregroundStyle(Theme.text).lineLimit(1)
                 }
-                .padding(.leading, 10)
+                .padding(.leading, 6)
                 .padding(.trailing, 16)
                 .frame(height: 44)
                 .glassChip()
@@ -191,12 +189,16 @@ struct TranscriptView: View {
     }
 
     /// A bot chat's sessions on screen, oldest first: this one, and the earlier ones an agent
-    /// switch left, each drawn only once the one after it is read back to its start (`drawnSegments`).
+    /// switch left, each drawn once the one after it is read back to its start (`drawnSegments`)
+    /// and it is held: "Load earlier" reads it, and a switch made here already holds it.
     private func segments(_ bot: Bot?) -> [SessionKey] {
         guard let bot else { return [key] }
         let chat = store.botChat(key.server, bot)
         guard let i = chat.firstIndex(of: key) else { return [key] }
-        return Array(chat[max(0, i - earlier)...i])
+        var start = i
+        while start > 0, let top = store.transcripts[chat[start]], top.olderBefore == nil,
+              store.transcripts[chat[start - 1]] != nil { start -= 1 }
+        return Array(chat[start...i])
     }
 
     /// The session an agent switch left just above what is drawn, if any.
@@ -221,8 +223,8 @@ struct TranscriptView: View {
                     if store.transcripts[top]?.olderBefore != nil {
                         await store.loadOlder(top)
                     } else if let before = hidden(bot, segments) {
+                        // Held once read, which is what draws it (`segments`).
                         await store.load(before)
-                        earlier += 1
                     }
                 }
             }

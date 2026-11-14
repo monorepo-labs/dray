@@ -9,8 +9,10 @@ private let botHues: [(name: String, hue: Double)] = [
 private let defaultAvatar = BotAvatar(shape: "cloud", hue: 250)
 
 /// The desktop's New bot / Edit bot dialog: a face, a name, a shape and a
-/// colour. Editing also says where the bot runs; a new one picks that, and
-/// starts its chat on the new-task dock's agent and model, the bot speaking first.
+/// colour, with the agent and model it runs on. A new bot also picks its machine
+/// and starts its chat on them, the bot speaking first. Editing says where it
+/// runs; its agent and model go with the chat's next message, as the desktop's
+/// bot composer has them, another agent moving the chat to a new session.
 struct BotSheet: View {
     @Environment(Store.self) private var store
     @Environment(NewTask.self) private var task
@@ -27,6 +29,12 @@ struct BotSheet: View {
     @State private var error: String?
     /// A bot made whose chat failed to start: a retry starts that one, never a second bot.
     @State private var made: Bot?
+    @State private var harness = ""
+    @State private var modelId = ""
+    @State private var agents: [AgentAvailability] = []
+    /// The machine `agents` was read from.
+    @State private var agentsOf: UUID?
+    @State private var models: [Model] = []
 
     var body: some View {
         NavigationStack {
@@ -43,14 +51,16 @@ struct BotSheet: View {
                         .accessibilityLabel("Bot name")
                     shapes
                     colours
+                    agentPicks
                     place
                     if let error {
                         Text(sentence(error)).font(Theme.Font.subhead).foregroundStyle(Theme.destructive)
                             .multilineTextAlignment(.center)
                     }
                 }
-                .padding(.horizontal, Theme.Space.xl)
+                .padding(.horizontal, Theme.Space.l)
                 .padding(.top, Theme.Space.l)
+                .padding(.bottom, Theme.Space.xl)
             }
             .navigationTitle(editing == nil ? "New bot" : "Edit bot")
             .navigationBarTitleDisplayMode(.inline)
@@ -59,7 +69,7 @@ struct BotSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(editing == nil ? "Create" : "Save") { Task { await submit() } }
                         .fontWeight(.semibold)
-                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || busy || target == nil)
+                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || busy || target == nil || harness.isEmpty)
                 }
             }
             .background(Theme.card.ignoresSafeArea())
@@ -68,10 +78,73 @@ struct BotSheet: View {
         .presentationBackground(Theme.card)
         .interactiveDismissDisabled(busy)
         .onAppear {
+            // An edit opens on the chat's pick: one waiting for its next message, else what it runs on.
+            let pick = editing.flatMap(chat(of:)).flatMap { key in
+                store.unsent[key] ?? store.items[key].map { AgentPick(harness: $0.harness, model: $0.model) }
+            }
+            harness = pick?.harness ?? task.harness
+            modelId = pick?.model ?? task.modelId
             guard let editing else { return }
             name = editing.bot.name
             avatar = editing.bot.avatar ?? defaultAvatar
         }
+        .task(id: "\(target?.uuidString ?? "")|\(harness)") { await loadPicks() }
+    }
+
+    /// The agents up on the bot's machine, then the picked one's models.
+    private var agentPicks: some View {
+        let up = agents.filter(\.available)
+        return VStack(alignment: .leading, spacing: Theme.Space.l) {
+            if !up.isEmpty {
+                PickSection("Agent") {
+                    ChipRow(focus: harness) {
+                        ForEach(up, id: \.harness) { a in
+                            PickChip(label: a.label, selected: a.harness == harness, harness: a.harness) {
+                                guard a.harness != harness else { return }
+                                harness = a.harness
+                                modelId = ""
+                                models = []
+                            }
+                            .id(a.harness)
+                        }
+                    }
+                }
+            }
+            PickSection("Model", footer: pickNote) {
+                ModelChips(models: models, harness: harness, selected: modelId) { modelId = $0 }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// When an edit's pick lands: with the next message, another agent moving the chat.
+    private var pickNote: String? {
+        guard let editing, let item = chat(of: editing).flatMap({ store.items[$0] }) else { return nil }
+        if harness != item.harness { return "Your next message moves the chat to \(Picks.agentLabels[harness] ?? harness)." }
+        return modelId != item.model ? "Goes with your next message." : nil
+    }
+
+    /// The bot's chat a reply goes to: its newest session. None before its first message.
+    private func chat(of e: (server: UUID, bot: Bot)) -> SessionKey? { store.botChat(e.server, e.bot).last }
+
+    /// Reads the machine's agents once, moves off one it lacks, then reads that agent's
+    /// models and keeps the model pick where the list has it.
+    private func loadPicks() async {
+        guard let at = target else { return }
+        if agentsOf != at {
+            agents = (try? await store.call(at, "agent_availability")) ?? []
+            agentsOf = at
+        }
+        if !agents.contains(where: { $0.harness == harness && $0.available }), let first = agents.first(where: \.available) {
+            harness = first.harness
+            modelId = ""
+            return // the task runs again under the new agent
+        }
+        let asked = harness
+        let read: [Model] = (try? await store.call(at, "list_models", ["harness": .string(asked)])) ?? []
+        guard asked == harness else { return }
+        models = read
+        modelId = Picks.usableModel(read, modelId.isEmpty ? Picks.defaultModel[asked] ?? "" : modelId, asked)
     }
 
     private var shapes: some View {
@@ -151,6 +224,14 @@ struct BotSheet: View {
         do {
             if let editing {
                 let _: Bot = try await store.call(at, "edit_bot", ["id": .string(editing.bot.id), "name": .string(name), "avatar": avatar.json])
+                if let key = chat(of: editing), let item = store.items[key] {
+                    let pick = AgentPick(harness: harness, model: modelId)
+                    store.unsent[key] = pick == AgentPick(harness: item.harness, model: item.model) ? nil : pick
+                } else {
+                    // No chat yet: its first message goes out from the list's dock, on the dock's picks.
+                    task.harness = harness
+                    task.pickModel(modelId)
+                }
                 await store.loadBots(at)
                 Haptic.success()
                 dismiss()
@@ -172,7 +253,7 @@ struct BotSheet: View {
                 if let open = store.botChat(at, bot).last {
                     key = open
                 } else {
-                    let chat = try await store.call(at, "start_bot", await startArgs(bot, on: at), as: SessionItem.self)
+                    let chat = try await store.call(at, "start_bot", startArgs(bot), as: SessionItem.self)
                     store.created(at, chat)
                     key = SessionKey(server: at, id: chat.sessionId)
                 }
@@ -203,23 +284,17 @@ struct BotSheet: View {
         }
     }
 
-    /// The dock's picks where it points at this machine. Elsewhere its agent where that machine
-    /// has it, else the first it has, on that agent's default model.
-    private func startArgs(_ bot: Bot, on at: UUID) async -> [String: JSON] {
-        // An unread model list leaves the pick empty, which is the harness's default too.
-        let here = at == task.server && !task.modelId.isEmpty
-        var harness = task.harness
-        if at != task.server, let agents: [AgentAvailability] = try? await store.call(at, "agent_availability"),
-           !agents.contains(where: { $0.harness == harness && $0.available }), let first = agents.first(where: \.available) {
-            harness = first.harness
-        }
+    /// The picked agent and model; effort, fast mode and stance as the dock has them, where they apply.
+    private func startArgs(_ bot: Bot) -> [String: JSON] {
+        let model = models.first { $0.id == modelId }
+        let asDock = harness == task.harness && modelId == task.modelId
         return [
             "id": .string(bot.id),
             "harness": .string(harness),
-            "model": .string(here ? task.modelId : Picks.defaultModel[harness] ?? ""),
-            "effort": here ? JSON(task.effort) : .null,
+            "model": .string(modelId),
+            "effort": JSON(model.flatMap { Picks.usableEffort($0, asDock ? task.effort : nil) }),
             "permissionMode": .string(Picks.stanceFor(harness, task.stance)),
-            "fast": .bool(here && task.fast && Picks.offersFast(harness, task.model)),
+            "fast": .bool(asDock && task.fast && Picks.offersFast(harness, model)),
         ]
     }
 }
