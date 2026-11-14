@@ -705,22 +705,15 @@ function Chrome({
           <TooltipContent side={TIP_SIDE}>Open in system browser</TooltipContent>
         </Tooltip>
         {swap && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className={TOOL_BTN}
-                onClick={swap}
-                aria-label={mode === "panel" ? "Open full view" : "Back to the panel"}
-              >
-                {mode === "panel" ? <Maximize2 className="size-3.5" /> : <Minimize2 className="size-3.5" />}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side={TIP_SIDE}>
-              {mode === "panel" ? "Open full view" : "Back to the panel"}
-            </TooltipContent>
-          </Tooltip>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className={TOOL_BTN}
+            onClick={swap}
+            aria-label={mode === "panel" ? "Open full view" : "Back to the panel"}
+          >
+            {mode === "panel" ? <Maximize2 className="size-3.5" /> : <Minimize2 className="size-3.5" />}
+          </Button>
         )}
       </div>
       {openError && (
