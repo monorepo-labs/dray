@@ -753,8 +753,9 @@ struct FollowsBottom: ViewModifier {
     @Binding var following: Bool
     let toEnd: () -> Void
     @State private var reading = false
-    /// What resizes put below the view while a finger held it. The reader did not move that
-    /// far, so it comes off the distance they are judged by, and is scrolled away on release.
+    /// What resizes put below a following view while a finger held it. The reader did not move
+    /// that far, so it comes off the distance they are judged by, and is scrolled away on release.
+    /// A reader already off the end is owed none: counted, it raised the pin that far short.
     @State private var grown: CGFloat = 0
 
     func body(content: Content) -> some View {
@@ -774,7 +775,7 @@ struct FollowsBottom: ViewModifier {
                     return [g.contentSize.height, g.visibleRect.height - g.contentInsets.top - g.contentInsets.bottom, g.contentSize.height - end]
                 } action: { old, new in
                     let resized = old[0] != new[0] || old[1] != new[1]
-                    if reading && resized { grown += new[2] - old[2] }
+                    if reading && resized && following { grown += new[2] - old[2] }
                     if new[2] - grown < 40 { following = true } else if reading && !resized { following = false }
                     // Never from under a finger, and never for a move alone: a drag's first
                     // points arrive before its phase does, and a scroll then ends the drag.
