@@ -690,9 +690,11 @@ async fn delete_session(
         false => Vec::new(),
     };
     let deleted = manager().delete(session_id, !keeps).await;
-    // A failed delete leaves the parent live, and its children back under it.
-    let adopted = match (&deleted, keeps) {
-        (Err(_), true) => {
+    // A delete that failed before the entry went leaves the parent live, and
+    // its children back under it. One that failed after keeps the adoption.
+    let survived = deleted.is_err() && store::get_session_index_item(session_id).await.ok().flatten().is_some();
+    let adopted = match (survived, keeps) {
+        (true, true) => {
             #[cfg(any(feature = "serve", feature = "desktop"))]
             if let Err(e) = remote_reports::reparent(&remote, session_id).await {
                 eprintln!("could not put {session_id}'s remote tasks back: {e:#}");
