@@ -1,5 +1,5 @@
 import { pool } from "@/lib/db";
-import { hashSecret, newSecret } from "@/lib/link";
+import { type AppUser, hashSecret, newSecret, userForAppToken } from "@/lib/link";
 
 function refuse(error: string, status = 400) {
   return Response.json({ error }, { status });
@@ -24,9 +24,10 @@ export async function POST(req: Request) {
       organizationId: string | null;
       approvedBy: string | null;
       denied: boolean;
+      signIn: boolean | null;
       expired: boolean;
     }>(
-      `select id, name, "serverId", "serverTokenHash", "organizationId", "approvedBy", denied, "expiresAt" < now() as expired
+      `select id, name, "serverId", "serverTokenHash", "organizationId", "approvedBy", denied, "signIn", "expiresAt" < now() as expired
          from server_link where "deviceCodeHash" = $1 for update`,
       [hashSecret(body.deviceCode)],
     );
@@ -92,12 +93,27 @@ export async function POST(req: Request) {
          from server s join organization o on o.id = s."organizationId" where s.id = $1`,
       [serverId],
     );
+    // The app's sign-in rides the same claim, so only the holder of this
+    // device code, the app's own server, can collect it.
+    let account: { token: string; user: AppUser } | undefined;
+    if (link.signIn) {
+      const appToken = newSecret("dra_");
+      await db.query(`insert into app_session (id, "userId", "tokenHash", name) values ($1, $2, $3, $4)`, [
+        crypto.randomUUID(),
+        link.approvedBy,
+        hashSecret(appToken),
+        link.name,
+      ]);
+      const user = await userForAppToken(appToken, db);
+      if (user) account = { token: appToken, user };
+    }
     await db.query("commit");
     const row = answer.rows[0];
     return Response.json({
       token,
       server: { id: serverId, name: row.name },
       org: { id: row.orgId, name: row.orgName, slug: row.orgSlug },
+      ...(account && { account }),
     });
   } catch (e) {
     await db.query("rollback").catch(() => {});

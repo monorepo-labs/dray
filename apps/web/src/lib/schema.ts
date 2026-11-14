@@ -63,6 +63,26 @@ export const drayTables = {
           references: { model: "user", field: "id", onDelete: "cascade" },
         },
         denied: { type: "boolean", required: true, defaultValue: false },
+        // Asked by the app's own sign-in: approving also signs the approver
+        // in to the app, and the server's claim collects an `app_session`.
+        signIn: { type: "boolean", required: false, defaultValue: false },
+      },
+    },
+    // A desktop app signed in to an account. Its own credential, hashed,
+    // good for saying who you are and nothing else.
+    appSession: {
+      modelName: "app_session",
+      fields: {
+        userId: {
+          type: "string",
+          required: true,
+          index: true,
+          references: { model: "user", field: "id", onDelete: "cascade" },
+        },
+        tokenHash: { type: "string", required: true, unique: true },
+        // The machine the app runs on, as its server named itself.
+        name: { type: "string", required: true },
+        createdAt: { type: "date", required: true, defaultValue: () => new Date() },
       },
     },
     serverAccess: {

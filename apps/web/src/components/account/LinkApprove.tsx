@@ -19,6 +19,7 @@ export function LinkApprove({
   initialOrgId,
   linkedElsewhere,
   currentOrgId,
+  signIn,
 }: {
   code: string;
   name: string;
@@ -28,6 +29,8 @@ export function LinkApprove({
   linkedElsewhere: boolean;
   /// That org, where it is one of the reader's.
   currentOrgId: string | null;
+  /// Started by the app's Sign in, which approving also signs in.
+  signIn: boolean;
 }) {
   const [orgId, setOrgId] = useState(initialOrgId);
   const [outcome, setOutcome] = useState<{ linked: Org } | "cancelled" | null>(null);
@@ -40,15 +43,18 @@ export function LinkApprove({
     return (
       <>
         <h1 className={H1}>Cancelled.</h1>
-        <p className={LEAD}>{name} won&apos;t be linked. You can close this tab.</p>
+        <p className={LEAD}>
+          {signIn ? "You won't be signed in." : `${name} won't be linked.`} You can close this tab.
+        </p>
       </>
     );
   if (outcome)
     return (
       <>
-        <h1 className={H1}>Linked.</h1>
+        <h1 className={H1}>{signIn ? "Signed in." : "Linked."}</h1>
         <p className={LEAD}>
-          {name} joins {outcome.linked.name} in a few seconds. You can close this tab.
+          {signIn ? "Dray signs you in and links " : ""}
+          {name} {signIn ? "to" : "joins"} {outcome.linked.name} in a few seconds. You can close this tab.
         </p>
         <div className="mt-10">
           <Link href={`/app/${outcome.linked.slug}/servers`} className={SECONDARY}>
@@ -61,12 +67,15 @@ export function LinkApprove({
   const row = "flex items-center gap-4 px-4 py-3";
   return (
     <>
-      <h1 className={H1}>Link a server.</h1>
-      <p className={LEAD}>Approve only a code you started yourself.</p>
+      <h1 className={H1}>{signIn ? "Sign in to Dray." : "Link a server."}</h1>
+      <p className={LEAD}>
+        {signIn && "Signs you in to the app on this machine and links it to your org. "}
+        Approve only a code you started yourself.
+      </p>
 
       <dl className={`mt-10 ${ROWS}`}>
         <div className={row}>
-          <dt className={`w-20 shrink-0 ${LABEL}`}>Server</dt>
+          <dt className={`w-20 shrink-0 ${LABEL}`}>{signIn ? "Machine" : "Server"}</dt>
           <dd className="min-w-0 truncate text-[15px]">{name}</dd>
         </div>
         <div className={row}>
@@ -122,7 +131,7 @@ export function LinkApprove({
             })
           }
         >
-          Approve
+          {signIn ? "Sign in" : "Approve"}
         </button>
         <button
           type="button"

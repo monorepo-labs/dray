@@ -774,14 +774,14 @@ function App() {
   // Which tab the *next* open lands on. Reset to Appearance as settings close,
   // so a mic press that sent the reader to Transcription does not leave every
   // later ⌘, opening there too.
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   // Whether that open should land with the new-space field already up. Same
   // reset as the tab, and for the same reason: it describes the way in, not the
   // dialog.
   const [namingSpace, setNamingSpace] = useState(false);
   const closeSettings = useCallback(() => {
     setSettingsOpen(false);
-    setSettingsTab("appearance");
+    setSettingsTab("account");
     setNamingSpace(false);
   }, []);
   const openChangelog = useCallback(() => {

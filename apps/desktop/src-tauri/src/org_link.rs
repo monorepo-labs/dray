@@ -52,6 +52,8 @@ pub struct PendingLink {
     /// `ABCD-EFGH`.
     pub code: String,
     pub expires_in_secs: u64,
+    /// Started by the app's Sign in, which approving also signs in.
+    pub sign_in: bool,
 }
 
 /// Where this server stands, as the app and `dray login` read it.
@@ -95,6 +97,8 @@ struct Pending {
     deadline: Instant,
     /// Tells a poll loop it has been replaced or cancelled.
     generation: u64,
+    /// The site row whose credential this flow sent, which approving re-keys.
+    replaces: Option<String>,
 }
 
 #[derive(Default)]
@@ -208,14 +212,18 @@ async fn recheck(sink: &Sink) -> Option<Held> {
 /// Asks the site for a code and polls it until someone approves, cancels or
 /// it expires, telling clients through [`CHANGED`] each time it moves. A
 /// server already linked sends its credential, so approving moves its row
-/// rather than adding a second.
-pub async fn start(sink: Sink) -> Result<PendingLink, String> {
+/// rather than adding a second. `sign_in` is the app's Sign in, whose
+/// approval also hands over the app's credential ([`crate::dray_account`]).
+pub async fn start(sink: Sink, sign_in: bool) -> Result<PendingLink, String> {
     // Held throughout, so the credential sent is the one on disk when the
     // new flow is published, and a finishing poll can't land in between.
     let _file = FILE.lock().await;
     {
         let memory = memory();
-        if let Some(p) = memory.pending.as_ref().filter(|p| p.deadline > Instant::now() + REUSE_MIN) {
+        // Only a code of the same kind: one from `dray login` would link
+        // without signing in, and a sign-in's would sign in whoever links.
+        let fresh = |p: &&Pending| p.deadline > Instant::now() + REUSE_MIN && p.shown.sign_in == sign_in;
+        if let Some(p) = memory.pending.as_ref().filter(fresh) {
             return Ok(p.shown.clone());
         }
     }
@@ -224,6 +232,9 @@ pub async fn start(sink: Sink) -> Result<PendingLink, String> {
     let mut body = json!({ "name": dray_proto::machine_name() });
     if let Some(held) = held.as_ref().filter(|h| h.site == site) {
         body["token"] = json!(held.token);
+    }
+    if sign_in {
+        body["signIn"] = json!(true);
     }
     let answer = crate::http()
         .post(format!("{site}/api/link"))
@@ -244,6 +255,7 @@ pub async fn start(sink: Sink) -> Result<PendingLink, String> {
         short_url: text("verificationUri")?,
         code: text("userCode")?,
         expires_in_secs: answer["expiresIn"].as_u64().unwrap_or(600),
+        sign_in,
     };
     let interval = Duration::from_secs(answer["interval"].as_u64().unwrap_or(3).max(1));
     let generation = {
@@ -255,6 +267,7 @@ pub async fn start(sink: Sink) -> Result<PendingLink, String> {
             shown: shown.clone(),
             deadline: Instant::now() + Duration::from_secs(shown.expires_in_secs),
             generation: memory.generation,
+            replaces: held.filter(|h| h.site == site).map(|h| h.server_id),
         });
         memory.generation
     };
@@ -267,7 +280,8 @@ pub async fn start(sink: Sink) -> Result<PendingLink, String> {
 enum Poll {
     Wait,
     SlowDown,
-    Linked(Held),
+    /// With the app's credential where the flow was a sign-in.
+    Linked(Held, Option<crate::dray_account::Held>),
     Ended(String),
 }
 
@@ -294,7 +308,11 @@ async fn poll_once(site: &str, device_code: &str) -> Poll {
                 site: site.into(),
             })
         })();
-        return held.map_or_else(|| Poll::Ended(format!("{site} sent a credential this server can't read.")), Poll::Linked);
+        let account = crate::dray_account::from_claim(&body, site);
+        return held.map_or_else(
+            || Poll::Ended(format!("{site} sent a credential this server can't read.")),
+            |held| Poll::Linked(held, account),
+        );
     }
     match body["error"].as_str() {
         Some("authorization_pending") => Poll::Wait,
@@ -308,10 +326,12 @@ async fn poll_once(site: &str, device_code: &str) -> Poll {
 async fn poll(sink: Sink, site: String, generation: u64, mut interval: Duration) {
     loop {
         tokio::time::sleep(interval).await;
-        let (device_code, deadline) = {
+        let (device_code, deadline, sign_in, replaces) = {
             let memory = memory();
             match memory.pending.as_ref() {
-                Some(p) if p.generation == generation => (p.device_code.clone(), p.deadline),
+                Some(p) if p.generation == generation => {
+                    (p.device_code.clone(), p.deadline, p.shown.sign_in, p.replaces.clone())
+                }
                 _ => return,
             }
         };
@@ -330,13 +350,32 @@ async fn poll(sink: Sink, site: String, generation: u64, mut interval: Duration)
         let _file = FILE.lock().await;
         let current = memory().pending.as_ref().is_some_and(|p| p.generation == generation);
         let error = match outcome {
-            Poll::Linked(held) if !current => {
-                // Cancelled while the claim was in flight: the site already
-                // made the link, so take it back rather than drop the credential.
-                revoke(&held).await;
+            Poll::Linked(held, account) if !current => {
+                // Cancelled while the claim was in flight. Where it re-keyed
+                // the row still on disk, revoking would delete the link this
+                // machine had, so keep it. Anything else is taken back: a new
+                // row, or one a newer flow has since moved this machine off.
+                let held_now = read().await.map(|h| h.server_id);
+                if replaces.as_ref() == Some(&held.server_id) && held_now == replaces {
+                    if write(Some(&held)).await.is_ok() {
+                        let _ = sink.emit(CHANGED, ());
+                    }
+                } else {
+                    revoke(&held).await;
+                }
+                if let Some(account) = account {
+                    crate::dray_account::revoke(&account).await;
+                }
                 return;
             }
-            Poll::Linked(held) => write(Some(&held)).await.err(),
+            Poll::Linked(held, account) => match write(Some(&held)).await {
+                Err(e) => Some(e),
+                Ok(()) => match account {
+                    Some(account) => crate::dray_account::save(&sink, account).await.err(),
+                    None if sign_in => Some(format!("Linked, but {site} didn't sign you in.")),
+                    None => None,
+                },
+            },
             Poll::Ended(_) if !current => return,
             Poll::Ended(why) => Some(why),
             Poll::Wait | Poll::SlowDown => unreachable!(),
@@ -364,6 +403,18 @@ async fn revoke(held: &Held) -> bool {
         .send()
         .await;
     answer.is_ok_and(|a| a.status().is_success() || a.status() == reqwest::StatusCode::UNAUTHORIZED)
+}
+
+/// Stops waiting on a code. The site's row expires on its own, and an
+/// approval nobody collects leaves nothing behind.
+pub async fn cancel(sink: Sink) {
+    let _file = FILE.lock().await;
+    {
+        let mut memory = memory();
+        memory.pending = None;
+        memory.error = None;
+    }
+    let _ = sink.emit(CHANGED, ());
 }
 
 /// What `dray logout` reports.
