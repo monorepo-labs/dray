@@ -100,14 +100,17 @@ pub async fn unhold(session_id: &str) -> anyhow::Result<Option<Held>> {
 
 /// Flags a flush wrote lately, by session and the time they were held. What
 /// [`release`] reads to tell a flag that landed during a send from one that
-/// was dropped or replaced.
-static LANDED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+/// was dropped or replaced. Kept by age, never by count, so a burst of other
+/// flags cannot push out one a send still in flight will ask about.
+static LANDED: Mutex<Vec<(String, String, std::time::Instant)>> = Mutex::new(Vec::new());
+
+/// Outlasts any send, a sandbox's 6-minute resume included.
+const LANDED_FOR: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 fn note_landed(held: &Held) {
     let mut landed = LANDED.lock().unwrap_or_else(|e| e.into_inner());
-    landed.push((held.session_id.clone(), held.at.clone()));
-    let over = landed.len().saturating_sub(64);
-    landed.drain(..over);
+    landed.retain(|(_, _, when)| when.elapsed() < LANDED_FOR);
+    landed.push((held.session_id.clone(), held.at.clone(), std::time::Instant::now()));
 }
 
 /// What became of a flag held when a send went out.
@@ -142,7 +145,7 @@ pub async fn release(session_id: &str, at: &str) -> anyhow::Result<Released> {
 
 fn took_landed(session_id: &str, at: &str) -> Released {
     let mut landed = LANDED.lock().unwrap_or_else(|e| e.into_inner());
-    match landed.iter().position(|(s, a)| s == session_id && a == at) {
+    match landed.iter().position(|(s, a, _)| s == session_id && a == at) {
         Some(i) => {
             landed.remove(i);
             Released::Landed
