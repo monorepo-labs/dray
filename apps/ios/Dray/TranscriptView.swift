@@ -22,7 +22,8 @@ struct TranscriptView: View {
         let bot = store.bot(key)
         // A bot's chat draws the conversation alone, so its turns are never built.
         let turns = bot == nil ? buildTurns(transcript?.events ?? [], busy: busy) : []
-        let botTasks = bot.map { store.botTasks(store.botChat(key.server, $0)) } ?? []
+        let botChat = bot.map { store.botChat(key.server, $0) } ?? []
+        let botTasks = bot == nil ? [] : store.botTasks(botChat)
         let asks = store.asks[key] ?? []
         let segments = segments(bot)
         ScrollViewReader { proxy in
@@ -117,7 +118,7 @@ struct TranscriptView: View {
         .modifier(LocalServersButton(key: key, shown: bot == nil))
         .task { await store.open(key) }
         .prPanel(key)
-        .sheet(isPresented: $showingTasks) { BotTasksSheet(tasks: botTasks) { openTask?($0) } }
+        .sheet(isPresented: $showingTasks) { BotTasksSheet(tasks: botTasks, chat: botChat) { openTask?($0) } }
         .sheet(isPresented: $fixing) { SettingsView(focus: key.server) }
     }
 

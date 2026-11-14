@@ -143,9 +143,23 @@ export function botOf(
   for (let hops = 0; at && hops < 8; hops++) {
     const bot = botAt(list, at.cwd);
     if (bot) return bot;
-    at = at.parentSessionId ? byId.get(at.parentSessionId) : undefined;
+    // A settled or deleted parent is not held: the adoption bridges it.
+    const parent: SessionIndexItem | undefined = at.parentSessionId ? byId.get(at.parentSessionId) : undefined;
+    at = parent ?? (at.adopted ? byId.get(at.adopted.by) : undefined);
   }
   return undefined;
+}
+
+/// Whether `sessionId` is a bot's task, whose sub-tasks outlive it: settling or
+/// deleting it leaves them running, where any other session's hidden children
+/// go with it. The server's `keeps_children`.
+export function keepsChildren(
+  list: readonly Bot[],
+  items: readonly SessionIndexItem[],
+  sessionId: string,
+): boolean {
+  const item = items.find((i) => i.sessionId === sessionId);
+  return !!item && !botAt(list, item.cwd) && inBotTree(list, items, sessionId);
 }
 
 /// The session whose browser a bot chat's `sessionId` uses, as the server's

@@ -1859,7 +1859,12 @@ impl SessionManager {
     /// living at the project root while its files sat in a directory nothing
     /// pointed at any more.
     pub async fn remove_worktree(&self, session_id: &str) -> Result<SessionIndexItem> {
-        let (relocated, existed) = self.remove_tree(session_id).await?;
+        // A bot's task's sub-tasks outlive it, worktrees and all.
+        let with_children = match get_session_index_item(session_id).await? {
+            Some(item) => !crate::bots::keeps_children(&item).await,
+            None => true,
+        };
+        let (relocated, existed) = self.remove_tree(session_id, with_children).await?;
 
         // Reported here and not at the command, since only this side can tell a
         // deletion from a tidy-up — and only on the explicit route: `delete`
@@ -1875,7 +1880,7 @@ impl SessionManager {
 
     /// [`Self::remove_worktree`]'s work, answering whether the tree was still
     /// there.
-    async fn remove_tree(&self, session_id: &str) -> Result<(SessionIndexItem, bool)> {
+    async fn remove_tree(&self, session_id: &str, with_children: bool) -> Result<(SessionIndexItem, bool)> {
         let item = get_session_index_item(session_id)
             .await?
             .with_context(|| format!("no session {session_id}"))?;
@@ -1888,9 +1893,13 @@ impl SessionManager {
         // screen offers to remove its tree: it goes with this one. First, and a
         // refusal stops here — this session's own button is then still there to
         // retry with, where a child failing after it had nowhere to be retried.
-        for child in crate::store::hidden_children(session_id).await? {
+        let children = match with_children {
+            true => crate::store::hidden_children(session_id).await?,
+            false => Vec::new(),
+        };
+        for child in children {
             if child.worktree_name.is_some() {
-                Box::pin(self.remove_tree(&child.session_id)).await.with_context(|| {
+                Box::pin(self.remove_tree(&child.session_id, true)).await.with_context(|| {
                     format!("could not remove the worktree of hidden session \"{}\"", child.title)
                 })?;
             }
@@ -1994,12 +2003,19 @@ impl SessionManager {
     ///
     /// The child goes first and its lock is released before the disk work, so a
     /// dying process can't append one last event to a file we just removed.
-    pub async fn delete(&self, session_id: &str) -> Result<bool> {
+    ///
+    /// `with_children` false leaves its hidden children be: a bot's task's
+    /// sub-tasks outlive it ([`crate::bots::keeps_children`]).
+    pub async fn delete(&self, session_id: &str, with_children: bool) -> Result<bool> {
         // A hidden child is listed nowhere on screen, so it goes with
         // it. Here rather than in the frontend, which holds one side of the
         // settled split and can miss a child sitting on the other.
-        for child in crate::store::hidden_children(session_id).await? {
-            Box::pin(self.delete(&child.session_id)).await?;
+        let children = match with_children {
+            true => crate::store::hidden_children(session_id).await?,
+            false => Vec::new(),
+        };
+        for child in children {
+            Box::pin(self.delete(&child.session_id, true)).await?;
         }
 
         self.settle(session_id).await?;

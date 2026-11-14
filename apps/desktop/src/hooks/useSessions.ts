@@ -1,6 +1,6 @@
 import { invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
-import { botsOf, isBotPath, keepBots, refreshBots, useBots } from "@/lib/bots";
+import { botsOf, isBotPath, keepBots, keepsChildren, refreshBots, useBots } from "@/lib/bots";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
 import { indexRow, loadServerCaches, saveServerCache, unreachable, withKept } from "@/lib/serverCache";
 import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
@@ -1749,8 +1749,9 @@ const setSessionFlags = async (
     applyIndexItem(updated);
     // A hidden child is drawn in this session's crew alone, so it goes where
     // the parent goes. Awaited, so a caller that refetches the other side
-    // afterwards reads the children already moved.
-    if (flags.archived !== undefined) {
+    // afterwards reads the children already moved. A bot's task's sub-tasks
+    // stay, adopted by the bot, which the server announces.
+    if (flags.archived !== undefined && !keepsChildren(bots, sessionIndexItems, sessionId)) {
       await Promise.all(
         hiddenChildren(sessionIndexItems, sessionId).map((c) =>
           setSessionFlags(c.sessionId, { archived: flags.archived }),
@@ -2014,8 +2015,8 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
   }
 
   // Read before the row goes. A hidden child has no row of its own to be
-  // deleted from, so it goes with its parent.
-  const children = hiddenChildren(sessionIndexItems, sessionId);
+  // deleted from, so it goes with its parent, unless a bot's task left it running.
+  const children = keepsChildren(bots, sessionIndexItems, sessionId) ? [] : hiddenChildren(sessionIndexItems, sessionId);
   setSessionIndexItems((prev) => prev.filter((i) => i.sessionId !== sessionId));
   setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
   retireStreamingBlock(sessionId);

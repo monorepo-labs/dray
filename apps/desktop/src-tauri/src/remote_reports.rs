@@ -290,17 +290,22 @@ mod collect {
 
     /// One machine's round. Err where it failed to answer, so it backs off.
     async fn collect_from(saved: &machines::Saved, mine: Vec<&Remote>, app: &Sink) -> Result<(), String> {
-        // The rule a local task's report follows: a settled chat takes
-        // none. The task's server is told, or it keeps them for nobody.
+        // The rule a local task's report follows: a settled parent hands its
+        // reports to the nearest live session above it, and with none left,
+        // the task's server is told, or it keeps them for nobody.
         let (mut open, mut closed) = (Vec::new(), Vec::new());
         for remote in mine {
             let parent = store::get_session_index_item(&remote.parent).await.ok().flatten();
-            match parent.is_none_or(|p| p.archived) {
-                true => closed.push(remote.child.clone()),
-                false => open.push(remote),
+            let to = match parent {
+                Some(p) => store::live_from(&p).await.ok().flatten(),
+                None => None,
+            };
+            match to {
+                Some(to) => open.push((remote, to.session_id)),
+                None => closed.push(remote.child.clone()),
             }
         }
-        let children: Vec<String> = open.iter().map(|r| r.child.clone()).collect();
+        let children: Vec<String> = open.iter().map(|(r, _)| r.child.clone()).collect();
         let taken = match ask(saved, &children, &[], &closed).await {
             Ok(taken) => taken,
             // A server from before #958 keeps no reports to collect.
@@ -322,7 +327,7 @@ mod collect {
         }
         // Each task's reports in turn order, the tasks side by side, so one
         // copying a video holds up no other.
-        let runs = open.iter().filter_map(|remote| {
+        let runs = open.iter().filter_map(|(remote, to)| {
             let reports = by_child.remove(&remote.child)?;
             Some(async move {
                 let mut acked = Vec::new();
@@ -330,8 +335,8 @@ mod collect {
                     // Into the chat this server tracked the task under, never
                     // one the answer names: that machine holds no token here,
                     // so it must not pick which chat runs a turn.
-                    let text = fetch_proof(saved, &remote.parent, &report.text).await;
-                    if deliver(&report, text, &remote.parent, &saved.name, app).await {
+                    let text = fetch_proof(saved, to, &report.text).await;
+                    if deliver(&report, text, to, &saved.name, app).await {
                         acked.push(report.id);
                     }
                 }

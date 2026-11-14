@@ -75,6 +75,20 @@ describe("crewRows", () => {
     expect(ids(crewRows(items, "new", quiet, ["old"]))).toEqual(["t2", "t1"]);
   });
 
+  // A bot's task settled with a sub-task still running: the settled task is
+  // on the other side of the index, so the adoption is the only way to the bot.
+  it("lists a sub-task whose parent is settled under the session that adopted it", () => {
+    const items = [
+      item("bot", null),
+      item("task", "bot", { created: "2026-09-02T00:00:00Z" }),
+      item("sub", "task", { hidden: true }),
+      item("orphan", "settled", { hidden: true, adopted: { by: "bot", from: "Fix login" } }),
+    ];
+    const rows = crewRows(items, "bot", quiet);
+    expect(ids(rows)).toEqual(["task", "sub", "orphan"]);
+    expect(rows.map((r) => r.from)).toEqual([undefined, "task", "Fix login"]);
+  });
+
   it("survives a cycle in the index", () => {
     const items = [item("a", null), item("b", "a"), item("c", "b"), item("a", "c")];
     expect(ids(crewRows(items, "a", quiet))).toEqual(["b", "c"]);
@@ -184,6 +198,22 @@ describe("hidden sessions", () => {
     const bot = { id: "b", name: "Ops", path: "/h/bots/b", created: "" };
     const settled = [item("old", null, { cwd: "/h/bots/b", archived: true })];
     expect(inSidebar(settled, [bot]).map((i) => i.sessionId)).toEqual(["old"]);
+  });
+
+  // Its parent task settled, a bot's sub-task belongs to the bot: never loose.
+  it("leaves out a hidden child adopted by a listed session", () => {
+    const adopted = [...items, item("sub", "settled-task", { hidden: true, adopted: { by: "a", from: "t" } })];
+    expect(inSidebar(adopted).map((i) => i.sessionId)).toEqual(["a", "shown", "orphan"]);
+  });
+
+  it("lights the adopter of a hidden asker", () => {
+    const adopted = [...items, item("sub", "settled-task", { hidden: true, adopted: { by: "review", from: "t" } })];
+    expect([...withHiddenAsks(adopted, new Set(["sub"]))].sort()).toEqual(["a", "review", "sub"]);
+  });
+
+  it("carries an adopted child along with its adopter", () => {
+    const adopted = [...items, item("sub", "gone-task", { hidden: true, adopted: { by: "a", from: "t" } })];
+    expect(hiddenChildren(adopted, "a").map((i) => i.sessionId)).toEqual(["review", "sub"]);
   });
 
   it("leaves a settled hidden child out of the settled list too", () => {

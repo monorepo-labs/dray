@@ -15,6 +15,9 @@ export type CrewRow = {
   /// No turn running, but a background shell or subagent still is: the same
   /// set the chat's Background Tasks row counts.
   background: boolean;
+  /// The title of the task that started this one, for a sub-task: the Tasks
+  /// tab sorts by state, so nesting alone would not say whose it is.
+  from?: string;
 };
 
 /// The live maps a row is read off.
@@ -34,25 +37,32 @@ type Live = {
 /// sidebar's own ordering moves a row every time its turn ends.
 ///
 /// Archived sessions are dropped, with everything under them: a settled
-/// session is one the reader has finished with.
+/// session is one the reader has finished with. A bot's task is the exception:
+/// its sub-tasks outlive it, and hang under the session that adopted them.
 export function crewRows(
   items: SessionIndexItem[],
   parentId: string | null,
-  live: Live,
+  state: Live,
   /// More sessions whose children count as the parent's: a bot chat's earlier
   /// sessions, from before it switched agent, whose tasks are still its own.
   also: readonly string[] = [],
 ): CrewRow[] {
   if (!parentId) return [];
+  const live = new Map(items.filter((i) => !i.archived).map((i) => [i.sessionId, i]));
   const byParent = new Map<string, SessionIndexItem[]>();
   for (const i of items) {
-    if (i.archived || !i.parentSessionId || i.parentSessionId === i.sessionId) continue;
-    const siblings = byParent.get(i.parentSessionId) ?? [];
+    const parent = treeParent(i, live);
+    if (i.archived || !parent || parent === i.sessionId) continue;
+    const siblings = byParent.get(parent) ?? [];
     siblings.push(i);
-    byParent.set(i.parentSessionId, siblings);
+    byParent.set(parent, siblings);
   }
   const out: CrewRow[] = [];
   const roots = [parentId, ...also];
+  const from = (kid: SessionIndexItem) =>
+    kid.parentSessionId && live.has(kid.parentSessionId)
+      ? roots.includes(kid.parentSessionId) ? undefined : live.get(kid.parentSessionId)?.title
+      : kid.adopted?.from;
   // A cycle in the index costs a short list rather than a hung render.
   const seen = new Set(roots);
   const walk = (ids: readonly string[]) => {
@@ -62,12 +72,22 @@ export function crewRows(
     for (const kid of kids) {
       if (seen.has(kid.sessionId)) continue;
       seen.add(kid.sessionId);
-      out.push(rowState(kid, live));
+      out.push({ ...rowState(kid, state), from: from(kid) });
       walk([kid.sessionId]);
     }
   };
   walk(roots);
   return out;
+}
+
+/// The session `item` hangs under: its parent while that is live, else the
+/// one that adopted it when the parent was settled or deleted.
+export function treeParent(
+  item: SessionIndexItem,
+  live: ReadonlyMap<string, SessionIndexItem> | ReadonlySet<string>,
+): string | null {
+  const p = item.parentSessionId;
+  return p && live.has(p) ? p : item.adopted?.by ?? p;
 }
 
 /// What a row says about one session.
@@ -114,8 +134,10 @@ export function crewSeen(rows: CrewRow[], drawn: boolean): string[] {
 /// and a bot's ongoing chat, which the Bots section draws. A bot's *settled*
 /// chats stay, since the settled list is the only way back to one. A hidden
 /// session surfaces through its cards beside that parent and the bot's Tasks
-/// tab. One whose parent is missing stays listed, since it would surface
-/// nowhere. Settled ones too: unsettling the parent lists them again.
+/// tab. A bot's sub-task whose parent is settled counts the session that
+/// adopted it as its parent. One whose parent is missing stays listed, since
+/// it would surface nowhere. Settled ones too: unsettling the parent lists
+/// them again.
 ///
 /// `all` is every session held, which is where the parent is looked for: a
 /// bot's chat sits in the bot's folder, so a project filter on `items` drops it
@@ -128,7 +150,7 @@ export function inSidebar(
   const ids = new Set(all.map((i) => i.sessionId));
   return items.filter(
     (i) =>
-      !(i.hidden && i.parentSessionId && ids.has(i.parentSessionId)) &&
+      !(i.hidden && ids.has(treeParent(i, ids) ?? "")) &&
       !(!i.archived && botAt(bots, i.cwd)),
   );
 }
@@ -145,9 +167,11 @@ export function withHiddenAsks(
   for (const id of asking) {
     let at = byId.get(id);
     // `out` doubles as the cycle guard: a parent already marked stops the walk.
-    while (at?.hidden && at.parentSessionId && !out.has(at.parentSessionId)) {
-      out.add(at.parentSessionId);
-      at = byId.get(at.parentSessionId);
+    let up = at && treeParent(at, byId);
+    while (at?.hidden && up && !out.has(up)) {
+      out.add(up);
+      at = byId.get(up);
+      up = at && treeParent(at, byId);
     }
   }
   return out;
@@ -164,8 +188,11 @@ export function leftToParent(
   return !!item?.hidden && (kind === "completed" || kind === "pr");
 }
 
-/// The hidden sessions `parentId` started directly. Settle, delete and worktree
-/// removal carry on to these, since nothing else on screen can reach them.
+/// The hidden sessions `parentId` started directly, or adopted. Settle, delete
+/// and worktree removal carry on to these, since nothing else on screen can
+/// reach them — unless `parentId` is a bot's task, whose sub-tasks outlive it.
 export function hiddenChildren(items: SessionIndexItem[], parentId: string): SessionIndexItem[] {
-  return items.filter((i) => i.hidden && i.parentSessionId === parentId && i.sessionId !== parentId);
+  return items.filter(
+    (i) => i.hidden && (i.parentSessionId === parentId || i.adopted?.by === parentId) && i.sessionId !== parentId,
+  );
 }

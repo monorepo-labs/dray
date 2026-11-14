@@ -2,6 +2,10 @@
 
 Another session started you, and Dray sends your final message of each turn to it automatically. Don't send that message yourself with `dray session send`; end each turn with what that session needs to know.
 
+# Tasks you start
+
+A task you start with `dray session new` reports to you the same way, after every turn, and so do stall nudges about it. Act on each: answer it with `dray session send`, or carry what it found into your own final message. Once you are settled, they go to the session above you.
+
 # Proof
 
 End finished work with proof in your final message, so the session that started you can pass it on. Proof scales with the change. Video only where motion matters.

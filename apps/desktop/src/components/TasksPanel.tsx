@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Ellipsis } from "lucide-react";
+import { Check, ChevronDown, CornerDownRight, Ellipsis } from "lucide-react";
 import { useId, useState, useSyncExternalStore } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
@@ -294,7 +294,21 @@ function TaskRow({
         {/* {status?.key === "conflict" && pr && <FixConflicts onFix={() => onFixConflicts(row, pr)} />} */}
         </span>
         {/* Under the title, past the face's 20px and the 8px gap. */}
-        {fixing && <span className="-mt-1 truncate pb-1.5 pl-7 text-ui text-foreground/50">{fixing}</span>}
+        {(fixing || row.from !== undefined) && (
+          <span className="-mt-1 flex min-w-0 flex-col pb-1.5 pl-7">
+            {row.from !== undefined && (
+              <span
+                className="flex min-w-0 items-center gap-1 text-[12px] text-muted-foreground/70"
+                title={`Started by ${row.from || "Untitled"}`}
+              >
+                <CornerDownRight aria-hidden className="size-3 shrink-0" />
+                <span className="sr-only">Started by</span>
+                <span className="truncate">{row.from || "Untitled"}</span>
+              </span>
+            )}
+            {fixing && <span className="truncate text-ui text-foreground/50">{fixing}</span>}
+          </span>
+        )}
       </div>
     </RowMenu>
   );
