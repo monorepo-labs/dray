@@ -392,15 +392,17 @@ export default function UserMessage({
 const REACTION_LABELS: Record<string, string> = { "👀": "Seen", "✅": "Done", "🎉": "Celebrating" };
 
 /// A bot's reaction, as a messenger draws one: a round chip on the bubble's
-/// corner on the bot's side. The page-coloured ring cuts it out of the bubble,
-/// which in a bot chat is a saturated fill the chip would otherwise run into.
+/// corner on the bot's side, in the bot bubble's grey since the bot put it
+/// there. Opaque, unlike that bubble, so the reader's fill can't show through.
+/// `--card` was tried and vanished into the dark page. The page-coloured ring
+/// cuts it out of the bubble it overlaps.
 function ReactionBadge({ emoji, className }: { emoji: string; className?: string }) {
   return (
     <span
       role="img"
       aria-label={`Bot reacted: ${REACTION_LABELS[emoji] ?? emoji}`}
       className={cn(
-        "flex size-7 items-center justify-center rounded-full bg-card text-[15px] leading-none shadow-(--shadow-card) ring-2 ring-background select-none",
+        "flex size-7 items-center justify-center rounded-full bg-muted text-[15px] leading-none shadow-(--shadow-card) ring-2 ring-background select-none",
         "motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:fade-in motion-safe:duration-200",
         className,
       )}
