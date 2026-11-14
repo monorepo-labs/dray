@@ -314,8 +314,9 @@ dray session react 👀   # or ✅ 🎉 👍 ❤️ 😂 😢; also seen, done, 
 ```
 
 A bot only. Puts the emoji on the user's newest message in your chat, in place
-of a reply: 👀 seen or on it, ✅ done, 🎉 celebrate, 👍 ok or agreed, ❤️ thanks,
-😂 funny, 😢 sorry to hear. A new one on the same message replaces the old. End
+of a reply: 👍 got it (an ok or go-ahead), 👀 looking into it (investigating or
+checking), ✅ done, 🎉 celebrate, ❤️ thanks, 😂 funny, 😢 sorry to hear. Never
+react to starting or messaging a task: the chat already shows that row. A new one on the same message replaces the old. End
 your turn without writing anything after it.
 
 ## Saving work for later
