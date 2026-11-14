@@ -70,6 +70,15 @@ final class Dictations {
     /// The transcription each draft is waiting on. Cancel clears it, so an
     /// answer landing after that is dropped rather than written in.
     @ObservationIgnored private var pending: [SessionKey: UUID] = [:]
+    /// Times the app has left the screen. A send that saw this move was cut off
+    /// by leaving, though the socket's error may only land once it is back.
+    @ObservationIgnored private var leaves = 0
+
+    init() {
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.leaves += 1 }
+        }
+    }
 
     func state(_ draft: SessionKey) -> Dictation { phase[draft] ?? .idle }
 
@@ -170,10 +179,9 @@ final class Dictations {
         let run = UUID()
         pending[draft] = run
         phase[draft] = .transcribing
-        var suspended = false
+        let left = leaves
         var grace = UIBackgroundTaskIdentifier.invalid
         grace = UIApplication.shared.beginBackgroundTask(withName: "Dictation") {
-            suspended = true
             UIApplication.shared.endBackgroundTask(grace)
             grace = .invalid
         }
@@ -202,7 +210,7 @@ final class Dictations {
                 try? FileManager.default.removeItem(at: url)
                 return
             }
-            if suspended || UIApplication.shared.applicationState == .background {
+            if leaves != left {
                 // Polled: a suspended app spends nothing on it.
                 while UIApplication.shared.applicationState != .active { try? await Task.sleep(for: .seconds(1)) }
                 for _ in 0..<40 where !store.canDictate(server) { try? await Task.sleep(for: .milliseconds(500)) }
