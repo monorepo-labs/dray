@@ -24,7 +24,9 @@ type SubagentPanelProps = {
   onStopTask: (taskId: string) => void;
 };
 
-/// Every subagent in the session, one row each, expanding in place. A section
+/// The session's running subagents and background commands, one row each,
+/// expanding in place. Finished ones are dropped before they get here — see
+/// `runningRuns`. A section
 /// of [MorePanel](./MorePanel.tsx), which draws it only where there are runs —
 /// so there is no empty state here.
 ///

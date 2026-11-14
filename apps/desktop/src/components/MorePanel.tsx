@@ -9,8 +9,8 @@ import type { SessionMedia } from "@/lib/transcript";
 import { fileSrc, qualify, serverOfSession } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 
-/// The catch-all tab: a task list at the top, the session's subagent runs under
-/// it. Sections rather than tabs of their own, because the tab row cannot grow
+/// The catch-all tab: a task list at the top, the session's running background
+/// tasks under it. Sections rather than tabs of their own, because the tab row cannot grow
 /// one per answer the reader merely *checks* — and neither of these is
 /// something they work in.
 ///

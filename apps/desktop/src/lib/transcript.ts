@@ -968,6 +968,15 @@ function build(
   };
 }
 
+/// The runs the Background Tasks list draws: the ones still running, plus the
+/// one the reader has open. The list is for seeing what is going on and
+/// stopping it, so a finished run drops off. The open one stays, or a click on
+/// a finished run's chat row opens the tab onto nothing, and a run finishing
+/// while the reader reads it would vanish from under them.
+export function runningRuns(runs: SubagentRun[], openId: string | null): SubagentRun[] {
+  return runs.filter((run) => !run.done || run.id === openId);
+}
+
 /// What a turn draws from: the turn and the maps its rows look calls up in.
 type TurnView = {
   turn: Turn;
