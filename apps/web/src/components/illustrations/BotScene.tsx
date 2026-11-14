@@ -60,7 +60,8 @@ type Task = {
 type BotState = {
   items: Item[];
   tasks: Task[];
-  working: boolean;
+  /// Replies still owed, one per message sent: the dots run until the last.
+  pending: number;
   unread: number;
   time: string;
   dismissed: boolean;
@@ -96,7 +97,7 @@ function initial(): Record<BotId, BotState> {
         },
         { id: sid(11), title: "Bump Shiki to 3.2", pr: { number: 1009, state: "merged" } },
       ],
-      working: false,
+      pending: 0,
       unread: 0,
       time: "2m",
       dismissed: false,
@@ -109,7 +110,7 @@ function initial(): Record<BotId, BotState> {
         { kind: "bot", text: "0.41.2 is out on all three channels. Notarized in 4 minutes." },
       ],
       tasks: [{ id: sid(31), title: "Release 0.41.2" }],
-      working: false,
+      pending: 0,
       unread: 1,
       time: "34m",
       dismissed: false,
@@ -122,7 +123,7 @@ function initial(): Record<BotId, BotState> {
         { kind: "bot", text: "Updated the Spaces page for the new project filter." },
       ],
       tasks: [{ id: sid(41), title: "Docs: Spaces page for the project filter", pr: { number: 1007, state: "merged" } }],
-      working: false,
+      pending: 0,
       unread: 0,
       time: "1h",
       dismissed: false,
@@ -147,12 +148,18 @@ function titleOf(prompt: string): string {
 /// The bots' side of the hero: their rows, chats and Tasks tabs, and the two
 /// things a visitor can do there — merge a PR, and send a bot a message,
 /// which it answers by starting a task that later posts its own PR.
-export function useBotScene() {
+/// `selected` is read when a reply lands, which is after the render that
+/// sent it, so a reply arriving in a chat the visitor left counts as unread.
+export function useBotScene(selected: string) {
   const [bots, setBots] = useState(initial);
   const [merging, setMerging] = useState<ReadonlySet<number>>(new Set());
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const sent = useRef(0);
+  const shown = useRef(selected);
+  useEffect(() => {
+    shown.current = selected;
+  }, [selected]);
 
   useEffect(() => {
     const live = timers.current;
@@ -169,6 +176,14 @@ export function useBotScene() {
 
   const update = (bot: BotId, fn: (state: BotState) => BotState) =>
     setBots((all) => ({ ...all, [bot]: fn(all[bot]) }));
+
+  /// A bot's reply: unread unless its chat is on screen.
+  const reply = (bot: BotId, b: BotState, items: Item[]): BotState => ({
+    ...b,
+    items: [...b.items, ...items],
+    time: "now",
+    unread: shown.current === bot ? 0 : b.unread + 1,
+  });
 
   const read = (bot: BotId) => update(bot, (b) => (b.unread ? { ...b, unread: 0 } : b));
 
@@ -194,7 +209,7 @@ export function useBotScene() {
     const task = sid(60 + n);
     const title = titleOf(prompt);
     setDrafts((all) => ({ ...all, [bot]: "" }));
-    update(bot, (b) => ({ ...b, items: [...b.items, { kind: "you", text: prompt }], working: true, time: "now" }));
+    update(bot, (b) => ({ ...b, items: [...b.items, { kind: "you", text: prompt }], pending: b.pending + 1, time: "now" }));
     later(900, () =>
       update(bot, (b) => ({
         ...b,
@@ -203,15 +218,13 @@ export function useBotScene() {
       })),
     );
     later(2200, () =>
-      update(bot, (b) => ({ ...b, items: [...b.items, { kind: "bot", text: TAKEN[n % TAKEN.length] }], working: false })),
+      update(bot, (b) => ({ ...reply(bot, b, [{ kind: "bot", text: TAKEN[n % TAKEN.length] }]), pending: b.pending - 1 })),
     );
     // Its PR turns ready a while later, and the bot posts the card.
     later(6500, () =>
       update(bot, (b) => ({
-        ...b,
-        items: [...b.items, { kind: "bot", text: `${title} is ready.` }, { kind: "card", task }],
+        ...reply(bot, b, [{ kind: "bot", text: `${title} is ready.` }, { kind: "card", task }]),
         tasks: b.tasks.map((t) => (t.id === task ? { ...t, working: false, pr: { number: 1046 + n, state: "open" } } : t)),
-        time: "now",
       })),
     );
   };
@@ -252,7 +265,7 @@ export function BotRows({
         avatar={bot.avatar}
         time={state.time}
         preview={last?.kind === "bot" ? last.text : ""}
-        working={state.working}
+        working={state.pending > 0}
         unread={state.unread}
         active={selected === bot.id}
         onClick={() => onOpen(bot.id)}
@@ -321,7 +334,7 @@ export function BotChat({ scene, bot }: { scene: BotScene; bot: BotId }) {
               }
             }
           })}
-          {state.working && (
+          {state.pending > 0 && (
             <div className="flex items-center gap-2">
               <Orb />
               <span className="shimmer-text min-w-0 truncate text-chat">Working</span>
@@ -378,7 +391,7 @@ export function BotTasks({ scene, bot }: { scene: BotScene; bot: BotId }) {
   const tasks = scene.bots[bot].tasks.filter((t) => !t.settled);
   const runs = [tasks.filter((t) => t.working), tasks.filter((t) => !t.working)].filter((run) => run.length);
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-1 py-2">
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto px-1 py-2">
       {runs.map((run, i) => (
         <Fragment key={i}>
           {i > 0 && <TaskBreak />}

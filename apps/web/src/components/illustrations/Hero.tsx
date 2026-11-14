@@ -116,7 +116,7 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
   const [view, setView] = useState<"chat" | "browser">("chat");
   const [panelTab, setPanelTab] = useState("PR");
   const [botTab, setBotTab] = useState("Tasks");
-  const scene = useBotScene();
+  const scene = useBotScene(selected);
   const [speedrunRead, setSpeedrunRead] = useState(false);
   const [checksPassed, setChecksPassed] = useState(false);
   const [merge, setMerge] = useState<MergeState>("open");
@@ -131,7 +131,7 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
 
   // Counted from the PR session's first opening, not the page's: it no longer
   // opens there, and a check that passed unseen is a moment lost.
-  const prSeen = selected === "background" || checksPassed;
+  const [prSeen, setPrSeen] = useState(false);
   useEffect(() => {
     if (!prSeen) return;
     const t = setTimeout(() => setChecksPassed(true), 3000);
@@ -144,6 +144,7 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
     setStarted((list) => list.map((t) => (t.id === id ? { ...t, unread: false } : t)));
     setView("chat");
     if (id === "speedrun") setSpeedrunRead(true);
+    if (id === "background") setPrSeen(true);
     if (BOTS.some((b) => b.id === id)) scene.read(id as BotId);
   };
 
