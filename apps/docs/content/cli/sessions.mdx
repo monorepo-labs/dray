@@ -51,7 +51,7 @@ The worktree starts at `origin/<default branch>`, not at the branch you are on. 
 dray --machine cloud session new "Fix the login redirect loop"
 ```
 
-`--machine cloud` starts the session on a fresh Dray Cloud machine. It works only on `session new`. Dray Cloud has to be on in Settings → Servers, and the app has to be open. The project needs a GitHub remote: Dray clones that repository onto the machine and runs the session in a worktree. It can take a few minutes. In the app the machine is called Cloud. `dray session ls` names it `cloud-…`, and later `--machine` flags take that name. Settling the session deletes the machine.
+`--machine cloud` starts the session on a fresh Dray Cloud machine. It works only on `session new`. Dray Cloud has to be on in Settings → Servers, and the app has to be open. The project needs a GitHub remote: Dray clones that repository onto the machine and runs the session in a worktree. It can take a few minutes. In the app the machine is called Cloud. `dray --machine all session ls` names it `cloud-…`, and later `--machine` flags take that name. Settling the session deletes the machine.
 
 A start that fails says why, and a machine that never got a session is deleted.
 
