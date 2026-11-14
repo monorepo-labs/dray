@@ -2342,9 +2342,13 @@ function App() {
   const filterSelection = useRef<Record<string, FilterPick>>({});
   /// What is open, as a filter remembers it. A bot by its id rather than its
   /// chat's: a bot with no chat yet has no session to name, and an agent
-  /// switch moves its chat to a new one.
+  /// switch moves its chat to a new one. A settled chat is no longer the bot's,
+  /// so it is remembered as itself.
   const currentPick = (): FilterPick => {
-    const bot = selectedSessionId ? selectedBotId : projectPath && botAt(bots, projectPath)?.id;
+    const settled = sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.archived;
+    const bot = selectedSessionId
+      ? !settled && selectedBotId
+      : projectPath && botAt(bots, projectPath)?.id;
     if (bot) return { bot };
     return selectedSessionId ? { session: selectedSessionId } : null;
   };
