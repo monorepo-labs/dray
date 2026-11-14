@@ -99,6 +99,23 @@ struct TranscriptView: View {
         .onChange(of: asks.count) { old, new in if new > old { Haptic.warning() } }
         .safeAreaInset(edge: .bottom, spacing: 0) { ReplyDock(key: key) }
         .overlay(alignment: .top) {
+            // The bar draws no shade here, so rows fade out under the clock rather than sit on it.
+            if bot != nil {
+                // Spans the status bar and the bar under it: this view starts where they end,
+                // so its distance from the screen's top is their height. Ignoring the safe area
+                // instead reads an inset of zero.
+                GeometryReader { g in
+                    let top = g.frame(in: .global).minY
+                    LinearGradient(stops: [.init(color: Theme.page, location: 0), .init(color: Theme.page.opacity(0.9), location: 0.4),
+                                           .init(color: Theme.page.opacity(0), location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: top)
+                        .offset(y: -top)
+                }
+                .allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .top) {
             SessionBanner(server: key.server) { fixing = true }
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { bannerHeight = $0 }
         }

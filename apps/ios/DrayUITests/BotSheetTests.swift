@@ -74,6 +74,46 @@ final class BotSheetTests: XCTestCase {
         snap(app, "switched")
     }
 
+    /// Two servers paired: New bot's "Runs on" is a menu of both, and picking one reads its agents.
+    func testNewBotPicksServer() throws {
+        guard let url = env["DRAY_URL"], let token = env["DRAY_TOKEN"], let url2 = env["DRAY_URL2"], let token2 = env["DRAY_TOKEN2"] else {
+            throw XCTSkip("set TEST_RUNNER_DRAY_URL, _TOKEN, _URL2 and _TOKEN2")
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["-servers", ""]
+        app.launch()
+        var link = URLComponents(string: "dray://connect")!
+        link.queryItems = [.init(name: "url", value: url), .init(name: "token", value: token), .init(name: "name", value: "Test Mac")]
+        app.open(link.url!)
+        XCTAssertTrue(app.buttons["Add"].waitForExistence(timeout: 10), "the link opened no add sheet")
+        app.buttons["Add"].tap()
+        let newBot = app.buttons["New bot"]
+        XCTAssertTrue(newBot.waitForExistence(timeout: 20), "no New bot button")
+        // Typed in, not a second link: opening one relaunched the app, which drops the first server.
+        app.buttons["Settings"].tap()
+        app.staticTexts["Add server"].tap()
+        for (field, text) in [("Address", url2), ("Token", token2), ("Name", "Second Box")] {
+            app.textFields[field].tap()
+            app.textFields[field].typeText(text)
+        }
+        app.buttons["Add"].tap()
+        XCTAssertTrue(app.staticTexts["Second Box"].waitForExistence(timeout: 10), "the second server was not added")
+        sleep(3)
+        app.buttons["Done"].tap()
+        sleep(1)
+        newBot.tap()
+        let server = app.buttons["Server"]
+        XCTAssertTrue(server.waitForExistence(timeout: 5), "no server picker with two servers up")
+        server.tap()
+        let second = app.buttons["Second Box"]
+        XCTAssertTrue(second.waitForExistence(timeout: 5), "the menu does not list the second server")
+        snap(app, "server-menu")
+        second.tap()
+        sleep(2)
+        XCTAssertTrue(app.staticTexts["Second Box"].exists, "the pick did not land")
+        snap(app, "server-picked")
+    }
+
     /// A bot (`DRAY_BOT`) whose chat runs longer than the screen: rows scroll under bare chips, no shade.
     func testHeaderOverScrolledChat() throws {
         guard let url = env["DRAY_URL"], let token = env["DRAY_TOKEN"], let bot = env["DRAY_BOT"] else {
