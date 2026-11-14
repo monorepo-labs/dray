@@ -244,7 +244,7 @@ import {
 import { worktreeNoticeDetail } from "@/lib/worktree";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import { useHandoffConfig } from "@/hooks/useHandoffConfig";
-import { buildTranscript, sessionMedia } from "@/lib/transcript";
+import { buildTranscript, runningRuns, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 import { playSwipeTick } from "@/lib/tick";
 
@@ -878,6 +878,10 @@ function App() {
     // in-flight call would show in the panel as one that never finished.
     () => buildTranscript(selectedSession?.events ?? [], busy, liveTaskIds),
     [selectedSession?.events, busy, liveTaskIds],
+  );
+  const panelRuns = useMemo(
+    () => runningRuns(subagents, selectedSubagentId),
+    [subagents, selectedSubagentId],
   );
 
   // A bot's folder is a git repository only for its own history, which Dray
@@ -1587,7 +1591,7 @@ function App() {
   // task list counts on its own — the tab is a catch-all, so any one of its
   // sections having something is enough to draw it.
   const hasMoreTab =
-    subagents.length > 0 ||
+    panelRuns.length > 0 ||
     backgroundTasks.length > 0 ||
     sessionTodos !== null ||
     sessionAttachments.length > 0;
@@ -3690,7 +3694,7 @@ function App() {
                 media={sessionAttachments}
                 sessionId={shownSession.sessionId}
                 subagents={{
-                  runs: subagents,
+                  runs: panelRuns,
                   selectedId: selectedSubagentId,
                   resultByCallId,
                   live: busy || backgroundTasks.length > 0,
