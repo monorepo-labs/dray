@@ -18,20 +18,6 @@ func recordingPaths(in text: String) -> [String] {
     }
 }
 
-// A screenshot `dray image add` filed in the same folder, the desktop's
-// `SCREENSHOT`: drawn where it is named, like a recording.
-private let screenshotPattern = #/(?:^|[\s"'`(<>\[=:])(\/[^\s"'`()<>]*\/browser(?:-dev)?\/recordings\/[^\/\s"'`()<>]+\/[^\/\s"'`()<>]+\.(?:png|jpg))/#
-    .anchorsMatchLineEndings()
-
-/// Every screenshot a message names, once each, in the order it names them.
-func screenshotPaths(in text: String) -> [String] {
-    var seen = Set<String>()
-    return text.matches(of: screenshotPattern).compactMap { match in
-        let path = String(match.output.1)
-        return seen.insert(path).inserted ? path : nil
-    }
-}
-
 /// The token rides the query, where the images send a header: AVPlayer has no
 /// documented way to set one, and `/file` takes either.
 @MainActor func recordingURL(_ path: String, on server: Connection) -> URL? {

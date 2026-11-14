@@ -130,11 +130,17 @@ extension Turn {
             }
         }
         func shown(_ text: String) -> [Shot] {
-            markdownBlocks(text).compactMap {
+            let images: [Shot] = markdownBlocks(text).compactMap {
                 guard case .image(let alt, let url) = $0 else { return nil }
                 let ref = ImageRef(path: nil, url: url, mimeType: nil)
                 return Shot(ref: ref, verb: "Image", target: alt.isEmpty ? fileName(ref) : alt)
             }
+            // `MarkdownText` draws these after the blocks, so they page in that order too.
+            let named = screenshotPaths(in: text).map { path in
+                let ref = ImageRef(path: path, url: nil, mimeType: nil)
+                return Shot(ref: ref, verb: "Image", target: fileName(ref))
+            }
+            return images + named
         }
         var out = attached(prompt?.images ?? [])
         for item in work {
