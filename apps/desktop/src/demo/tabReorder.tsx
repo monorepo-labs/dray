@@ -200,7 +200,7 @@ function Demo() {
         <section className="flex max-w-md flex-col gap-2">
           <h2 className="text-ui text-muted-foreground">Browser pane</h2>
           <div id="browser-tabs" className="h-40 overflow-hidden rounded-lg border border-border bg-card">
-            <BrowserPane sessionId={SESSION} active mode="panel" />
+            <BrowserPane sessionId={SESSION} active panel />
           </div>
         </section>
       </div>

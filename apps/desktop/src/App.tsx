@@ -98,8 +98,8 @@ import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/Merg
 import { cardRepos } from "@/lib/mergeCard";
 import BotWelcome from "@/components/chat/BotWelcome";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
-import SplitPanes, { SplitFile } from "@/components/SplitPanes";
-import { pruneSplits, useSplitPanes } from "@/lib/splitPanes";
+import SplitPanes, { cardOrder, SplitFile } from "@/components/SplitPanes";
+import { pruneSplits, removeSplit, useLitGroup, useSplitGroups, useSplitPanes, useSplitWeight } from "@/lib/splitPanes";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
   closePane,
@@ -1621,11 +1621,6 @@ function App() {
       if (move) setPanelOpen(move === "restore");
     }
   }, [viewTab, setPanelOpen, panelOpen, panelKey, autoHidePanel]);
-  const expandBrowser = () => setViewTab("browser");
-  const collapseBrowser = () => {
-    setViewTab("chat");
-    showPanel("browser");
-  };
 
   // A live background task counts even where no run is built for it yet, and a
   // task list counts on its own — the tab is a catch-all, so any one of its
@@ -1767,6 +1762,7 @@ function App() {
     more: hasMoreTab,
     plan: hasPlanTab,
     tasks: !!selectedBot,
+    browser: !!strip?.lit,
   });
 
   // One rule, read rather than written back: an explicit pick wins wherever it
@@ -3070,15 +3066,18 @@ function App() {
     selectedSession ?? sessionIndexItems.find((i) => i.sessionId === selectedSessionId) ?? null;
   // The session whose row the titlebar draws: the bot's chat over its lit task.
   const rowSession = stripOwner ?? shownSession;
-  // Tabs the row split out beside the main view. A task's transcript in one
+  // The lit group's panes beside the main view. A task's transcript in one
   // is on screen the way a grid pane's is.
   const rowSplits = useSplitPanes(issuesOpen ? null : (rowSession?.sessionId ?? null));
+  const rowGroups = useSplitGroups(issuesOpen ? null : (rowSession?.sessionId ?? null));
+  const litGroup = useLitGroup(issuesOpen ? null : (rowSession?.sessionId ?? null));
+  const mainGrow = useSplitWeight(rowSession?.sessionId ?? null, litGroup?.lead ?? null);
   const splitTasks = rowSplits.filter((k) => k.startsWith("task:")).map((k) => k.slice("task:".length));
   // A pane whose tab went — a page the agent closed, a task or pick shut —
   // goes with it.
   const rowPages = useBrowserTabs(rowSession ? browserOf(rowSession.sessionId) : null);
   useEffect(() => {
-    if (!rowSession || rowSplits.length === 0) return;
+    if (!rowSession || rowGroups.length === 0) return;
     const tasksOpen = strip ? (taskTabs[strip.bot] ?? []) : null;
     const picksOpen = strip ? (pickTabs[strip.bot] ?? []) : null;
     pruneSplits(rowSession.sessionId, (key) => {
@@ -3287,7 +3286,7 @@ function App() {
   /// A lit Diff or Files pick: the view on the picked session, its side
   /// column led by the picker. Keyed on tab and target, so a repick or another
   /// pick of the same kind opens fresh rather than on the last one's place.
-  const pickBody = (tab: (typeof litPick) & object, bot: string, watchScope?: FilesScope) => {
+  const pickBody = (tab: (typeof litPick) & object, bot: string, watchScope?: FilesScope, shown = true) => {
     const options: PickOption[] = [
       ...(tab.kind === "files" ? [bot] : []),
       ...botTasks.map((t) => t.sessionId),
@@ -3324,7 +3323,7 @@ function App() {
       <ChangesView
         key={key}
         cwd={item.cwd}
-        active={!issuesOpen}
+        active={!issuesOpen && shown}
         revision={revision}
         writeRevision={writeRevision}
         busy={status === "in_progress"}
@@ -3335,7 +3334,7 @@ function App() {
         key={key}
         sessionId={pickFilesKey(tab)}
         cwd={item.cwd}
-        active={!issuesOpen}
+        active={!issuesOpen && shown}
         revision={revision}
         picker={picker}
         watchScope={watchScope}
@@ -3343,16 +3342,17 @@ function App() {
     );
   };
 
-  // What a split pane draws, by the key its tab had in the row.
-  const splitBody = (key: string) => {
+  // What a split pane draws, by the key its tab had in the row; `shown` while
+  // its group is lit.
+  const splitBody = (key: string, shown: boolean) => {
     if (!rowSession) return null;
     if (key.startsWith("page:")) {
       return (
         <BrowserPane
           sessionId={browserOf(rowSession.sessionId)}
           tab={Number(key.slice("page:".length))}
-          mode="full"
-          active={!issuesOpen}
+          active={!issuesOpen && shown}
+          onClose={() => removeSplit(rowSession.sessionId, key)}
         />
       );
     }
@@ -3360,7 +3360,7 @@ function App() {
       return (
         <ChangesView
           cwd={rowSession.cwd}
-          active={!issuesOpen}
+          active={!issuesOpen && shown}
           revision={turnRevision}
           writeRevision={writeRevision}
           busy={busy}
@@ -3376,7 +3376,7 @@ function App() {
     }
     const pick = strip && pickTabs[strip.bot]?.find((t) => `pick:${t.id}` === key);
     // Its own watcher, since the lit pick in the main view holds `"pick"`.
-    return pick && strip ? pickBody(pick, strip.bot, key as `pick:${string}`) : null;
+    return pick && strip ? pickBody(pick, strip.bot, key as `pick:${string}`, shown) : null;
   };
 
   // Pages with no tabs for the strip: the sheet reaches up behind the header.
@@ -3400,6 +3400,14 @@ function App() {
       panelOpen={issuesOpen ? !!pickedIssue : !!shownSession && panelShown}
       overlay={singleDrop && <DropZone region={singleDrop.region} label={singleDrop.label} />}
       beside={<SplitPanes sessionId={issuesOpen ? null : (rowSession?.sessionId ?? null)} body={splitBody} />}
+      mainCard={
+        litGroup && {
+          key: litGroup.lead,
+          grow: mainGrow,
+          order: cardOrder(litGroup.keys.indexOf(litGroup.lead)),
+          minWidth: litGroup.lead === "chat" || litGroup.lead.startsWith("task:") ? CHAT_MIN : undefined,
+        }
+      }
       // Chat's alone, and not a `TabBody` — the other views answer questions
       // about a repository rather than about a conversation, and a split is
       // already several conversations side by side, where a crew beside one
@@ -3804,10 +3812,7 @@ function App() {
               <BrowserPane
                 sessionId={browserSession ?? shownSession.sessionId}
                 active={panelShown && activeTab === "browser"}
-                mode="panel"
-                fullOpen={fullBrowserOpen}
-                onExpand={expandBrowser}
-                onCollapse={collapseBrowser}
+                panel
               />
               </MountOnce>
             </TabBody>
@@ -4186,8 +4191,6 @@ function App() {
           <BrowserPane
             sessionId={browserSession ?? selectedSession.sessionId}
             active={fullBrowserOpen}
-            mode="full"
-            onCollapse={collapseBrowser}
           />
           </MountOnce>
         </TabBody>

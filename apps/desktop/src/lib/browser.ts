@@ -4,7 +4,6 @@ import { useSyncExternalStore } from "react";
 
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { channel } from "@/lib/channel";
-import { SPLIT_HOST } from "@/lib/splitPanes";
 import { pushClosedTab } from "@/lib/tabOrder";
 import type { BrowserVisit } from "@/lib/history";
 import type { ChromiumStatus } from "@/types/events";
@@ -1087,8 +1086,6 @@ function presentPins() {
   pinsSent = placed.length;
   const covering = shot;
   const z = zoomLevel();
-  // The last pane's right foot is the sheet's corner and is rounded with it.
-  const right = document.querySelector(`[${SPLIT_HOST}]`)?.getBoundingClientRect().right;
   void invoke("browser_pins", {
     pins: placed.map((p) => ({
       tab: p.tab,
@@ -1096,7 +1093,6 @@ function presentPins() {
       y: p.rect.top * z,
       width: p.rect.width * z,
       height: p.rect.height * z,
-      edge: right !== undefined && Math.abs(p.rect.right - right) < 2,
     })),
   })
     .catch(() => undefined)

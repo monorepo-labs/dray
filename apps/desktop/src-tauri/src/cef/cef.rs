@@ -147,11 +147,6 @@ struct Layout {
     width: f64,
     height: f64,
     visible: bool,
-    /// Which bottom corners meet the sheet's rounded edge, `(left, right)`.
-    /// A corner against a neighbouring pane stays square, or the two feet
-    /// leave a notch between them.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    foot: (bool, bool),
 }
 
 /// One tab as the frontend sees it.
@@ -922,12 +917,7 @@ fn shown_tab() -> Option<i32> {
 fn shown_tabs() -> Vec<(i32, Layout)> {
     let mut shown: Vec<(i32, Layout)> = Vec::new();
     let pinned = PINNED.lock().unwrap().clone();
-    if let (Some(id), Some((_, mut layout))) = (shown_tab(), LAYOUT.lock().unwrap().clone()) {
-        // A split pane starting at its right edge (past a hairline) squares it.
-        let right = layout.x + layout.width;
-        if pinned.iter().any(|(_, p)| (p.x - right).abs() < 4.0) {
-            layout.foot.1 = false;
-        }
+    if let (Some(id), Some((_, layout))) = (shown_tab(), LAYOUT.lock().unwrap().clone()) {
         shown.push((id, layout));
     }
     #[cfg(target_os = "macos")]
@@ -1018,9 +1008,7 @@ fn apply_layout() {
                 );
                 view.setFrame(frame);
             }
-            if let Some(layout) = layout {
-                round_foot(view, layout.foot);
-            }
+            round_foot(view);
             if let Some(host) = browser.host() {
                 host.notify_move_or_resize_started();
             }
@@ -1048,10 +1036,10 @@ fn apply_layout() {
 /// takes the sheet's radius on the two bottom corners; the top sits under the
 /// URL row and stays square. Mac alone: an X window has no corner radius.
 #[cfg(target_os = "macos")]
-fn round_foot(view: &NSView, (left, right): (bool, bool)) {
-    // `kCALayerMinXMinYCorner` and `kCALayerMaxXMinYCorner`: the bottom two,
-    // since an `NSView`'s layer has its origin at the bottom.
-    let corners: usize = if left { 1 } else { 0 } | if right { 2 } else { 0 };
+fn round_foot(view: &NSView) {
+    /// `kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner`: the bottom two,
+    /// since an `NSView`'s layer has its origin at the bottom.
+    const BOTTOM: usize = 1 | 2;
     view.setWantsLayer(true);
     unsafe {
         let layer: *mut AnyObject = msg_send![view, layer];
@@ -1059,7 +1047,7 @@ fn round_foot(view: &NSView, (left, right): (bool, bool)) {
             return;
         }
         let _: () = msg_send![layer, setCornerRadius: 8.0f64];
-        let _: () = msg_send![layer, setMaskedCorners: corners];
+        let _: () = msg_send![layer, setMaskedCorners: BOTTOM];
         let _: () = msg_send![layer, setMasksToBounds: Bool::YES];
     }
 }
@@ -2337,7 +2325,7 @@ async fn await_shutter(shot: u64) {
 /// top-left. `visible: false` hides every tab.
 #[tauri::command]
 pub fn browser_layout(session_id: String, x: f64, y: f64, width: f64, height: f64, visible: bool) -> Result<(), String> {
-    *LAYOUT.lock().unwrap() = Some((session_id, Layout { x, y, width, height, visible, foot: (true, true) }));
+    *LAYOUT.lock().unwrap() = Some((session_id, Layout { x, y, width, height, visible }));
     on_main(apply_layout)
 }
 
@@ -2349,9 +2337,6 @@ pub struct Pin {
     y: f64,
     width: f64,
     height: f64,
-    /// The pane is the last one, so its right foot meets the sheet's corner.
-    #[serde(default)]
-    edge: bool,
 }
 
 /// The tabs split out beside the chat, the whole set each time; empty takes
@@ -2361,10 +2346,7 @@ pub struct Pin {
 pub fn browser_pins(pins: Vec<Pin>) -> Result<(), String> {
     *PINNED.lock().unwrap() = pins
         .into_iter()
-        .map(|p| {
-            let foot = (false, p.edge);
-            (p.tab, Layout { x: p.x, y: p.y, width: p.width, height: p.height, visible: true, foot })
-        })
+        .map(|p| (p.tab, Layout { x: p.x, y: p.y, width: p.width, height: p.height, visible: true }))
         .collect();
     on_main(apply_layout)
 }

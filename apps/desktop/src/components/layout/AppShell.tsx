@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { DROP_ATTR } from "@/lib/dragSession";
 import { cn } from "@/lib/utils";
 import { EMPTY_VIEW } from "@/lib/groups";
-import { SPLIT_HOST } from "@/lib/splitPanes";
+import { SPLIT_CARD, SPLIT_HOST } from "@/lib/splitPanes";
 
 type AppShellProps = {
   sidebar: ReactNode;
@@ -42,9 +42,13 @@ type AppShellProps = {
   /// go on the empty state opens the session whole and the zone has to say so
   /// where the pointer is.
   overlay?: ReactNode;
-  /// Split panes, right of the main view at full height, so the composer
-  /// stays under the view it sends from.
+  /// Split panes, cards right of the main one at full height, so the
+  /// composer stays under the view it sends from. Draws its own cards.
   beside?: ReactNode;
+  /// The main card's place in a lit split: its tab's key, its share of the
+  /// width (which dragging a gap beside it moves), its CSS `order` among the
+  /// panes, and its floor where it is the chat.
+  mainCard?: { key: string; grow: number; order: number; minWidth?: number } | null;
   children: ReactNode;
 };
 
@@ -65,6 +69,7 @@ export default function AppShell({
   centered = false,
   overlay,
   beside,
+  mainCard,
   children,
 }: AppShellProps) {
   // A card of its own beside the sheet, with the frame showing between. Kept
@@ -118,7 +123,18 @@ export default function AppShell({
           />
           <div className="flex min-h-0 min-w-0 flex-1">
             {panelLeft && panelCard}
-            <Sheet className="flex-1" tall={tall}>
+            {/* The main card and its panes, measured together for room. */}
+            <div className="relative flex min-h-0 min-w-0 flex-1" {...{ [SPLIT_HOST]: "" }}>
+            <Sheet
+              className="flex-1"
+              tall={tall}
+              style={
+                mainCard
+                  ? { flexGrow: mainCard.grow, order: mainCard.order, minWidth: mainCard.minWidth }
+                  : undefined
+              }
+              {...(mainCard && { [SPLIT_CARD]: mainCard.key })}
+            >
         {/* `min-w-0` is load-bearing: without it a wide code block in the transcript
           sets the flex item's floor and pushes the sidebar off-screen. */}
         <div className="flex min-w-0 flex-1 flex-col">
@@ -145,7 +161,7 @@ export default function AppShell({
             // The crew runs the full height beside both, so its rows get the
             // composer's band too rather than stopping short of it at a line
             // nothing else on screen is drawn to.
-            <div className="relative flex min-h-0 flex-1" {...{ [SPLIT_HOST]: "" }}>
+            <div className="relative flex min-h-0 flex-1">
               <div className="flex min-w-0 flex-1 flex-col">
                 {/* `flex flex-col` so the view tabs' bodies, which size themselves
                   with `flex-1` the way the right panel's do, have a column to
@@ -156,12 +172,13 @@ export default function AppShell({
                 {crewStacked && crew}
                 <div className="shrink-0">{footer}</div>
               </div>
-              {beside}
               {!crewStacked && crew}
             </div>
           )}
         </div>
             </Sheet>
+            {beside}
+            </div>
             {!panelLeft && panelCard}
           </div>
           <div className="h-2 shrink-0 bg-surface-frame" />
@@ -180,19 +197,24 @@ export default function AppShell({
 /// scrim alone, since 7% of black over a dark row is nothing. The scrim is what
 /// paints the corner's outside: the clip leaves bare glass there, lighter than
 /// the frame around it, and nothing can make glass darker but a fill.
-function Sheet({
+export function Sheet({
   className,
   tall = false,
+  style,
   children,
+  ...attrs
 }: {
   className?: string;
+  style?: React.CSSProperties;
+  /// `data-*` attributes, put on the card's outer box.
+  [attr: `data-${string}`]: string;
   /// Reaching up behind the header: its contents start below it all the same.
   tall?: boolean;
   children: ReactNode;
 }) {
   const corner = "pointer-events-none absolute z-20 size-2";
   return (
-    <div className={cn("relative flex min-h-0 min-w-0", className)}>
+    <div className={cn("relative flex min-h-0 min-w-0", className)} style={style} {...attrs}>
       {/* Its own box over the panes rather than a shadow on them, which would
           clip at their edge. Inert, so every click passes through. */}
       <span
