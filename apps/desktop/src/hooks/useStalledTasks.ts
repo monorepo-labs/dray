@@ -4,8 +4,18 @@ import { pruneFixAsks, recordFixAsk } from "@/hooks/useFixAsks";
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import type { CrewRow } from "@/lib/crew";
 import { isWindowFocused } from "@/lib/focus";
+import { islandOn } from "@/lib/island";
 import { notifyOS } from "@/lib/notify";
-import { botCrews, freshStalls, needLine, onCard, stalledTasks, type Stall } from "@/lib/stalled";
+import {
+  botCrews,
+  cardRows,
+  DISMISSED_KEY,
+  freshStalls,
+  needLine,
+  onCard,
+  stalledTasks,
+  type Stall,
+} from "@/lib/stalled";
 import { invoke } from "@/lib/transport";
 import type { BackgroundTask, Bot, PrMark, SessionIndexItem, SessionStatus } from "@/types/events";
 
@@ -28,9 +38,10 @@ const NUDGE_HOLD_MS = 60_000;
 /// that puts it on the card; or a ready PR, which gets a need line only where
 /// the task asked the reader to try something before merging.
 ///
-/// Read for every bot rather than the one on screen, since the banner is for a
+/// Read for every bot rather than the one on screen, since the notice is for a
 /// bot the reader is not looking at: once new card rows land while the window
-/// is in the background, one banner per bot says how many. Each bot's first
+/// is in the background, one notice per bot says how many rows its card draws.
+/// Dray Island shows it while it runs, a banner otherwise. Each bot's first
 /// read, once its chat is found, is taken in silence, or every row already
 /// standing would raise one.
 export function useStalledTasks({
@@ -137,12 +148,17 @@ export function useStalledTasks({
     for (const bot of bots) {
       const entry = byBot.get(bot.id);
       if (!entry) continue;
-      const fresh = freshStalls(seen.current, entry.card);
+      const shown = cardRows(entry.card, readLocalStorage<string[]>(DISMISSED_KEY, []));
+      const fresh = freshStalls(seen.current, shown);
       const first = !seeded.current.has(bot.id);
       seeded.current.add(bot.id);
       if (first || fresh.length === 0 || isWindowFocused()) continue;
-      const n = entry.card.length;
-      notifyOS(entry.chatId, "asking", bot.name, `${n} ${n === 1 ? "task" : "tasks"} waiting on you`);
+      const { chatId } = entry;
+      const body = `${shown.length} ${shown.length === 1 ? "task" : "tasks"} waiting on you`;
+      const banner = () => notifyOS(chatId, "asking", bot.name, body);
+      void islandOn("done", chatId).then((on) =>
+        on ? invoke("island_done", { sessionId: chatId, note: body }).catch(banner) : banner(),
+      );
     }
   }, [bots, byBot]);
 

@@ -287,7 +287,8 @@ struct BoatExtendChoices: View {
 struct DonePill: View {
     let notch: Bool
     let notchHeight: CGFloat
-    let items: [(key: SessionKey, title: String)]
+    /// `note` stands in for "Done": what a bot's tasks wait on, drawn yellow as the app's rail draws waiting.
+    let items: [(key: SessionKey, title: String, note: String?)]
     var glowing = false
     let open: (SessionKey) -> Void
     let openInApp: (SessionKey) -> Void
@@ -297,15 +298,20 @@ struct DonePill: View {
     private static let row: CGFloat = 26
 
     var body: some View {
-        PillShell(notch: notch, notchHeight: notchHeight, glow: glowing ? StatusDot.unread : nil) {
+        // Yellow wins where both apply, as on the app's rail.
+        let waiting = items.contains { $0.note != nil }
+        let tint = waiting ? StatusDot.waiting : StatusDot.unread
+        PillShell(notch: notch, notchHeight: notchHeight, glow: glowing ? tint : nil) {
             // One structure, open or shut, so the pill grows rather than swapping layouts.
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    Circle().fill(StatusDot.unread).frame(width: 6, height: 6)
-                    Text(items.count == 1 ? "Done" : "\(items.count) tasks done").font(.system(size: 13, weight: .semibold))
+                    Circle().fill(tint).frame(width: 6, height: 6)
+                    Text(items.count == 1 ? items[0].note ?? "Done" : waiting ? "\(items.count) updates" : "\(items.count) tasks done")
+                        .font(.system(size: 13, weight: .semibold))
                     // Several are a count alone; their titles wait for the pointer.
                     if items.count == 1, let first = items.first {
-                        DoneTitle(title: first.title, cap: 240)
+                        // A note takes the room "Done" left, so the title gives it back to fit the pill's window.
+                        DoneTitle(title: first.title, cap: first.note == nil ? 240 : 160)
                         OpenInAppButton(chord: true) { openInApp(first.key) }
                     }
                 }
@@ -316,8 +322,11 @@ struct DonePill: View {
                         VStack(spacing: 0) {
                             ForEach(items, id: \.key) { item in
                                 HStack(spacing: 8) {
-                                    Button { open(item.key) } label: { DoneTitle(title: item.title, cap: 240) }
+                                    Button { open(item.key) } label: { DoneTitle(title: item.title, cap: item.note == nil ? 240 : 120) }
                                         .buttonStyle(.plain)
+                                    if let note = item.note {
+                                        Text(note).font(.system(size: 12)).foregroundStyle(StatusDot.waiting).lineLimit(1)
+                                    }
                                     Spacer(minLength: 0)
                                     OpenInAppButton { openInApp(item.key) }
                                 }
