@@ -596,8 +596,9 @@ struct StalledCard: View {
 
 // MARK: Tasks
 
-/// A bot's tasks, which the list leaves out: waiting first, then working, then
-/// idle, set-aside ones last and faded. A tap opens one over the bot's chat.
+/// A bot's tasks, which the list leaves out, in the desktop Tasks tab's order:
+/// waiting on the reader, a PR ready to merge, one about to be, idle, then
+/// working, set-aside ones last and faded. A tap opens one over the bot's chat.
 struct BotTasksSheet: View {
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -635,12 +636,17 @@ struct BotTasksSheet: View {
     }
 
     private var ordered: [SessionKey] {
+        // The PR wins over working, since merging is what the reader came for.
         func rank(_ key: SessionKey) -> Int {
-            guard let item = store.items[key] else { return 4 }
-            if item.aside == true { return 3 }
+            guard let item = store.items[key] else { return 7 }
+            if item.aside == true { return 6 }
             if store.isAsking(key) { return 0 }
-            if item.busy || (store.tasks[key] ?? 0) > 0 { return 1 }
-            return 2
+            if let pr = store.prMark(key, item), pr.state == "OPEN", !pr.isDraft {
+                if verdictOf(pr) == .ready { return 1 }
+                if ["checksRunning", "needsReview", "unknown"].contains(prStatus(pr)) { return 2 }
+            }
+            if item.busy || (store.tasks[key] ?? 0) > 0 { return 4 }
+            return 3
         }
         return tasks.enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }.map(\.element)
     }
