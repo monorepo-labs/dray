@@ -461,9 +461,9 @@ struct UserBubble: View {
                     .padding(.vertical, 10)
                     .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
                     .overlay(alignment: .bottomLeading) {
-                        if let reaction { ReactionBadge(emoji: reaction).offset(x: 8, y: 18) }
+                        if let reaction { ReactionBadge(emoji: reaction).offset(x: 6, y: 24) }
                     }
-                    .padding(.bottom, reaction == nil ? 0 : 14)
+                    .padding(.bottom, reaction == nil ? 0 : 20)
             } else if let reaction {
                 ReactionBadge(emoji: reaction)
             }
@@ -485,10 +485,11 @@ struct ReactionBadge: View {
     var body: some View {
         let labels = ["👀": "Seen", "✅": "Done", "🎉": "Celebrating"]
         Text(emoji)
-            .font(.system(size: 15))
-            .frame(width: 28, height: 28)
-            .background(Theme.card, in: .circle)
+            .font(.system(size: 19))
+            .frame(width: 36, height: 36)
+            .background(Theme.tile, in: .circle)
             .overlay(Circle().stroke(Theme.page, lineWidth: 2))
+            .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
             .accessibilityLabel("Bot reacted: \(labels[emoji] ?? emoji)")
     }
 }

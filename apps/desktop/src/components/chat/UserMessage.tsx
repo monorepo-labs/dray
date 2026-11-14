@@ -162,7 +162,7 @@ export default function UserMessage({
         <div
           className={cn(
             "user-bubble max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground shadow-(--shadow-card)",
-            reaction && "relative mb-3",
+            reaction && "relative mb-5",
           )}
           // The colour rides in and App.css paints it — a palette that fills
           // this bubble has to answer differently to one that doesn't, and only
@@ -365,7 +365,7 @@ export default function UserMessage({
               );
             })}
           </ClampedBody>
-          {reaction && <ReactionBadge emoji={reaction} className="absolute -bottom-4 left-2" />}
+          {reaction && <ReactionBadge emoji={reaction} className="absolute -bottom-6 left-1.5" />}
         </div>
       )}
       {/* A message of images alone has no bubble to sit on. */}
@@ -402,7 +402,7 @@ function ReactionBadge({ emoji, className }: { emoji: string; className?: string
       role="img"
       aria-label={`Bot reacted: ${REACTION_LABELS[emoji] ?? emoji}`}
       className={cn(
-        "flex size-7 items-center justify-center rounded-full bg-muted text-[15px] leading-none shadow-(--shadow-card) ring-2 ring-background select-none",
+        "flex size-9 items-center justify-center rounded-full bg-muted text-[19px] leading-none shadow-[0_1px_3px_rgb(0_0_0/0.3)] ring-2 ring-background select-none",
         "motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:fade-in motion-safe:duration-200",
         className,
       )}
