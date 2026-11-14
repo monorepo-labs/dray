@@ -3,20 +3,32 @@ import { lazy, Suspense, useEffect } from "react";
 
 import { DropZone } from "@/components/SplitView";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { setDropping } from "@/lib/browser";
 import { useOpenFiles, useOpenFilesWatcher } from "@/hooks/useOpenFiles";
 import { Sheet } from "@/components/layout/AppShell";
-import { removeSplit, usePaneHead, useSplitDrag, useSplitGroups, useSplitPanes } from "@/lib/splitPanes";
+import {
+  removeSplit,
+  setSplitWeights,
+  SPLIT_CARD,
+  SPLIT_HOST,
+  usePaneHead,
+  useSplitDrag,
+  useSplitGroups,
+  useSplitPanes,
+  useSplitWeight,
+} from "@/lib/splitPanes";
 import { cn } from "@/lib/utils";
 import type { TabKey } from "@/lib/tabOrder";
 
 const FileViewer = lazy(() => import("@/components/files/FileViewer"));
 
-/// The panes of a session's split groups, each a card right of the main one
-/// with its tab's own icon and title over it. Only the lit group's are drawn;
-/// the rest hide rather than unmount, so a pane keeps its scroll. Equal
-/// widths, and the drop that would make one too narrow is refused.
+/// The narrowest a drag between two cards leaves either.
+const CARD_MIN = 200;
+
+/// The panes of a session's split groups, each a card right of the main one.
+/// Only the lit group's are drawn; the rest hide rather than unmount, so a
+/// pane keeps its scroll. Equal widths until the gaps between are dragged,
+/// and the drop that would make one too narrow is refused.
 export default function SplitPanes({
   sessionId,
   body,
@@ -39,22 +51,9 @@ export default function SplitPanes({
       {sessionId &&
         groups
           .flatMap((g) => g.slice(1))
-          .map((key) => {
-            const shown = lit.includes(key);
-            return (
-              <div key={key} className={cn("flex min-w-0 flex-1", !shown && "hidden")}>
-                <div className="w-1.5 shrink-0 bg-surface-frame" />
-                <Sheet className="flex-1">
-                  <div className="flex min-w-0 flex-1 flex-col">
-                    <PaneHeader sessionId={sessionId} paneKey={key} onClose={() => removeSplit(sessionId, key)} />
-                    <div className="flex min-h-0 flex-1 flex-col">
-                      <Suspense fallback={null}>{body(key, shown)}</Suspense>
-                    </div>
-                  </div>
-                </Sheet>
-              </div>
-            );
-          })}
+          .map((key) => (
+            <Pane key={key} sessionId={sessionId} paneKey={key} shown={lit.includes(key)} body={body} />
+          ))}
       {hint && (
         // The column the drop makes: the last of `lit.length + 2` equal ones.
         <div
@@ -68,21 +67,94 @@ export default function SplitPanes({
   );
 }
 
+function Pane({
+  sessionId,
+  paneKey,
+  shown,
+  body,
+}: {
+  sessionId: string;
+  paneKey: TabKey;
+  shown: boolean;
+  body: (key: TabKey, shown: boolean) => React.ReactNode;
+}) {
+  const grow = useSplitWeight(sessionId, paneKey);
+  return (
+    <div
+      className={cn("flex min-w-0 flex-1", !shown && "hidden")}
+      style={{ flexGrow: grow }}
+      {...{ [SPLIT_CARD]: paneKey }}
+    >
+      <Gap sessionId={sessionId} paneKey={paneKey} />
+      <Sheet className="flex-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* A page closes from its own URL bar. */}
+          {!paneKey.startsWith("page:") && (
+            <PaneHeader sessionId={sessionId} paneKey={paneKey} onClose={() => removeSplit(sessionId, paneKey)} />
+          )}
+          <div className="flex min-h-0 flex-1 flex-col">
+            <Suspense fallback={null}>{body(paneKey, shown)}</Suspense>
+          </div>
+        </div>
+      </Sheet>
+    </div>
+  );
+}
+
+/// The frame between a card and the one left of it, dragged to trade width
+/// between the two. Every card on screen is set to its measured width first,
+/// so the rest hold still and keep their shares as the window resizes.
+function Gap({ sessionId, paneKey }: { sessionId: string; paneKey: TabKey }) {
+  const start = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const host = e.currentTarget.closest(`[${SPLIT_HOST}]`);
+    const cards = [...(host?.querySelectorAll<HTMLElement>(`[${SPLIT_CARD}]`) ?? [])].filter(
+      (card) => card.offsetWidth > 0,
+    );
+    const at = cards.findIndex((card) => card.getAttribute(SPLIT_CARD) === paneKey);
+    if (at < 1) return;
+    e.preventDefault();
+    const keyOf = (card: HTMLElement) => card.getAttribute(SPLIT_CARD)!;
+    const widths = cards.map((card) => card.getBoundingClientRect().width);
+    setSplitWeights(sessionId, cards.map((card, i) => [keyOf(card), widths[i]]));
+    const [left, right] = [keyOf(cards[at - 1]), paneKey];
+    const pair = widths[at - 1] + widths[at];
+    const x0 = e.clientX;
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => {
+      const l = Math.min(Math.max(widths[at - 1] + ev.clientX - x0, CARD_MIN), pair - CARD_MIN);
+      setSplitWeights(sessionId, [
+        [left, l],
+        [right, pair - l],
+      ]);
+    };
+    const end = () => {
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", end);
+      el.removeEventListener("pointercancel", end);
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
+  };
+  return (
+    <div className="relative w-1.5 shrink-0 bg-surface-frame">
+      {/* Wider than the gap it sits in, so it is not a 6px target. */}
+      <div onPointerDown={start} className="absolute inset-y-0 -inset-x-1 z-30 cursor-col-resize" />
+    </div>
+  );
+}
+
 function PaneHeader({ sessionId, paneKey, onClose }: { sessionId: string; paneKey: TabKey; onClose: () => void }) {
   const head = usePaneHead(sessionId, paneKey);
   return (
     <div className="flex h-8 shrink-0 items-center gap-2 border-b border-hairline px-3 text-ui text-muted-foreground">
       {head?.icon}
       <span className="min-w-0 truncate">{head?.label ?? ""}</span>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button variant="ghost" size="icon-xs" className="ml-auto shrink-0" aria-label="Close pane" onClick={onClose}>
-            <X />
-          </Button>
-        </TooltipTrigger>
-        {/* Beside the button, never below it: a page's native view would draw over it there. */}
-        <TooltipContent side="left">Back to the tab row</TooltipContent>
-      </Tooltip>
+      <Button variant="ghost" size="icon-xs" className="ml-auto shrink-0" aria-label="Close pane" onClick={onClose}>
+        <X />
+      </Button>
     </div>
   );
 }

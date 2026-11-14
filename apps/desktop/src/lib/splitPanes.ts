@@ -59,6 +59,10 @@ export function useSplitPanes(sessionId: string | null): TabKey[] {
 }
 
 /// Called from the row, which alone knows which tab is lit.
+export function useLitLead(sessionId: string | null): TabKey | null {
+  return useSyncExternalStore(subscribe, () => (sessionId ? (lit.get(sessionId) ?? null) : null));
+}
+
 export function setLitGroup(sessionId: string, lead: TabKey | null) {
   if ((lit.get(sessionId) ?? null) === lead) return;
   lit.set(sessionId, lead);
@@ -88,7 +92,25 @@ export function addSplit(sessionId: string, lead: TabKey, key: TabKey) {
   const at = rest.findIndex((g) => g[0] === lead);
   if (at === -1) rest.push([lead, key]);
   else rest[at] = [...rest[at], key];
+  // Equal again: a card dropped in beside dragged ones would get a share
+  // measured in different units.
+  for (const k of rest[at === -1 ? rest.length - 1 : at]) weights.get(sessionId)?.delete(k);
   save(sessionId, rest);
+}
+
+/// Each card's share of the split's width, by its tab's key. Absent is 1;
+/// a drag sets every card on screen to its width in pixels.
+const weights = new Map<string, Map<TabKey, number>>();
+
+export function useSplitWeight(sessionId: string | null, key: TabKey | null): number {
+  return useSyncExternalStore(subscribe, () => (sessionId && key ? weights.get(sessionId)?.get(key) : undefined) ?? 1);
+}
+
+export function setSplitWeights(sessionId: string, next: [TabKey, number][]) {
+  const held = weights.get(sessionId) ?? new Map<TabKey, number>();
+  for (const [key, w] of next) held.set(key, w);
+  weights.set(sessionId, held);
+  notify();
 }
 
 /// Takes `key` out of its group, back to its own tab.
@@ -134,6 +156,8 @@ export function useSplitDrag(): SplitDrag | null {
 
 /// The element the main view and its panes share, measured for room.
 export const SPLIT_HOST = "data-split-host";
+/// On each card of a lit split, naming its tab's key: what a gap drag measures.
+export const SPLIT_CARD = "data-split-card";
 
 /// Whether a point over the main view would split a tab out, and so whether
 /// the window has room for one more pane at `PANE_MIN`.

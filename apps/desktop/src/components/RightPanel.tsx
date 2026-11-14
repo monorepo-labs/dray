@@ -46,7 +46,6 @@ export function PanelToggle({ onToggle }: { onToggle: () => void }) {
 /// see `tabOrder`.
 export const PANEL_TABS = [
   "changes",
-  "browser",
   "tasks",
   "more",
   "pr",
@@ -59,10 +58,6 @@ export type PanelTab = (typeof PANEL_TABS)[number];
 
 export const PANEL_LABELS: Record<PanelTab, string> = {
   changes: "Changes",
-  // The session's browser lives here. Always drawn, unlike PR or Docs: its
-  // empty state is a URL bar, which is a place to start rather than a
-  // sentence saying there is nothing.
-  browser: "Browser",
   // A bot's children: the work it handed off, waiting, running or done.
   tasks: "Tasks",
   // A catch-all, and named as one on purpose. What is in it — the task list,
@@ -126,10 +121,8 @@ export function tabOrder({
   /// review or land. Its tasks' PRs show on their rows in the Tasks tab.
   tasks?: boolean;
 }): readonly PanelTab[] {
-  // Browser always: with no page open its empty state is a URL bar, the
-  // session's recent pages and its local servers — a place to start.
+  // Pages live in the titlebar's row and in splits, never here.
   const tabs: PanelTab[] = tasks ? ["tasks"] : pr ? ["pr", "changes"] : ["changes"];
-  tabs.push("browser");
   // After Changes, which is what keeps Issue immediately before More.
   if (docs) tabs.push("docs");
   // Immediately before More wherever it is drawn, so the row's order is the

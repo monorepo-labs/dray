@@ -1,19 +1,15 @@
 import React, { useState } from "react";
 import ReactDOM from "react-dom/client";
 
-import BrowserPane from "@/components/browser/BrowserPane";
 import FileTabs from "@/components/files/FileTabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
 import type { OpenFile } from "@/hooks/useOpenFiles";
 import "../App.css";
 
-/// Dragging tabs along the browser pane's strip and the Files view's strip.
-///
-/// Both strips are the real components. The browser's tab order lives in Rust,
-/// so the bridge is stubbed here to answer `browser_move` the way the app does:
-/// reorder, then publish `browser_tabs`. `browser_open` answers right-click
-/// Duplicate tab the same way: a new active tab at the end.
+/// Dragging tabs along the Files view's strip, the real component. The
+/// browser's pages are tabs of the titlebar's row now, with no strip of their
+/// own; the stub that answered its moves is still here, harmless.
 const SESSION = "demo-session";
 
 let tabs = ["Acme", "Pricing", "Docs", "Changelog", "Blog", "Careers"].map(
@@ -103,14 +99,6 @@ async function dragCheck(): Promise<string> {
   const frame = () => new Promise((r) => requestAnimationFrame(r));
   const cases: [string, string, (tabs: HTMLElement[]) => number, number][] = [
     ["files, past two", "#file-tabs", (tabs) => tabs[2].getBoundingClientRect().right - 5, 0],
-    ["browser, past one", "#browser-tabs", (tabs) => tabs[1].getBoundingClientRect().right - 5, 0],
-    // Held at the strip's edge, so it has to scroll to go further.
-    [
-      "browser, held at the edge",
-      "#browser-tabs",
-      (tabs) => tabs[0].parentElement!.getBoundingClientRect().right - 5,
-      60,
-    ],
   ];
   const out: string[] = [];
   for (const [name, root, target, hold] of cases) {
@@ -140,16 +128,6 @@ async function dragCheck(): Promise<string> {
   return out.join("\n");
 }
 
-/// Right-clicks the browser strip's third tab, opening its real menu, for an
-/// agent whose browser verbs have no right button.
-function rightClickTab() {
-  const tab = document.querySelectorAll<HTMLElement>("#browser-tabs [role=tab]")[2];
-  const r = tab.getBoundingClientRect();
-  tab.dispatchEvent(
-    new MouseEvent("contextmenu", { bubbles: true, button: 2, clientX: r.left + 10, clientY: r.bottom }),
-  );
-}
-
 function Demo() {
   const [check, setCheck] = useState("");
   const [files, setFiles] = useState(FILES);
@@ -174,13 +152,6 @@ function Demo() {
           >
             Run drag check
           </button>
-          <button
-            type="button"
-            onClick={rightClickTab}
-            className="rounded-md border border-border px-3 py-1.5 text-sm"
-          >
-            Right-click a browser tab
-          </button>
           <pre id="drag-check" className="text-xs text-muted-foreground">
             {check}
           </pre>
@@ -195,12 +166,6 @@ function Demo() {
               onClose={(path) => setFiles((open) => open.filter((f) => f.path !== path))}
               onMove={move}
             />
-          </div>
-        </section>
-        <section className="flex max-w-md flex-col gap-2">
-          <h2 className="text-ui text-muted-foreground">Browser pane</h2>
-          <div id="browser-tabs" className="h-40 overflow-hidden rounded-lg border border-border bg-card">
-            <BrowserPane sessionId={SESSION} active mode="panel" />
           </div>
         </section>
       </div>

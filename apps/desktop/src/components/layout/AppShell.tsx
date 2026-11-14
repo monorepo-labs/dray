@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { DROP_ATTR } from "@/lib/dragSession";
 import { cn } from "@/lib/utils";
 import { EMPTY_VIEW } from "@/lib/groups";
-import { SPLIT_HOST } from "@/lib/splitPanes";
+import { SPLIT_CARD, SPLIT_HOST } from "@/lib/splitPanes";
 
 type AppShellProps = {
   sidebar: ReactNode;
@@ -45,6 +45,9 @@ type AppShellProps = {
   /// Split panes, cards right of the main one at full height, so the
   /// composer stays under the view it sends from. Draws its own cards.
   beside?: ReactNode;
+  /// The main card's place in a lit split: its tab's key and its share of the
+  /// width, which dragging the gap beside it moves.
+  mainCard?: { key: string; grow: number } | null;
   children: ReactNode;
 };
 
@@ -65,6 +68,7 @@ export default function AppShell({
   centered = false,
   overlay,
   beside,
+  mainCard,
   children,
 }: AppShellProps) {
   // A card of its own beside the sheet, with the frame showing between. Kept
@@ -120,7 +124,12 @@ export default function AppShell({
             {panelLeft && panelCard}
             {/* The main card and its panes, measured together for room. */}
             <div className="relative flex min-h-0 min-w-0 flex-1" {...{ [SPLIT_HOST]: "" }}>
-            <Sheet className="flex-1" tall={tall}>
+            <Sheet
+              className="flex-1"
+              tall={tall}
+              style={mainCard ? { flexGrow: mainCard.grow } : undefined}
+              {...(mainCard && { [SPLIT_CARD]: mainCard.key })}
+            >
         {/* `min-w-0` is load-bearing: without it a wide code block in the transcript
           sets the flex item's floor and pushes the sidebar off-screen. */}
         <div className="flex min-w-0 flex-1 flex-col">
@@ -186,16 +195,21 @@ export default function AppShell({
 export function Sheet({
   className,
   tall = false,
+  style,
   children,
+  ...attrs
 }: {
   className?: string;
+  style?: React.CSSProperties;
+  /// `data-*` attributes, put on the card's outer box.
+  [attr: `data-${string}`]: string;
   /// Reaching up behind the header: its contents start below it all the same.
   tall?: boolean;
   children: ReactNode;
 }) {
   const corner = "pointer-events-none absolute z-20 size-2";
   return (
-    <div className={cn("relative flex min-h-0 min-w-0", className)}>
+    <div className={cn("relative flex min-h-0 min-w-0", className)} style={style} {...attrs}>
       {/* Its own box over the panes rather than a shadow on them, which would
           clip at their edge. Inert, so every click passes through. */}
       <span

@@ -99,7 +99,7 @@ import { cardRepos } from "@/lib/mergeCard";
 import BotWelcome from "@/components/chat/BotWelcome";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import SplitPanes, { SplitFile } from "@/components/SplitPanes";
-import { pruneSplits, useSplitGroups, useSplitPanes } from "@/lib/splitPanes";
+import { pruneSplits, removeSplit, useLitLead, useSplitGroups, useSplitPanes, useSplitWeight } from "@/lib/splitPanes";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
   closePane,
@@ -1576,6 +1576,7 @@ function App() {
   // sessions, and its pages live on the oldest, as the server routes them.
   const browserOf = (id: string) => botBrowser(bots, sessionIndexItems, id) ?? id;
   const browserSession = selectedSessionId ? browserOf(selectedSessionId) : null;
+  const rowBrowser = selectedSessionId ? browserOf(rowOf(selectedSessionId)) : null;
   const browserTabs = useBrowserTabs(browserSession);
   const blankTabs = useBlankTabs(browserSession ?? "");
   const pendingBrowserTab = blankTabs.active !== null;
@@ -1586,11 +1587,13 @@ function App() {
   const [browserWanted, setBrowserWanted] = useState<string | null>(null);
   useEffect(() => {
     if (!browserWanted) return;
-    if (browserWanted !== selectedSessionId) return setBrowserWanted(null);
+    // Or the row it was asked of, while a task's link selects its bot.
+    if (!selectedSessionId || (browserWanted !== selectedSessionId && browserWanted !== rowOf(selectedSessionId)))
+      return setBrowserWanted(null);
     if (!browserTabs?.some((tab) => tab.active)) return;
     setViewTabs((prev) => ({ ...prev, [browserWanted]: "browser" }));
     setBrowserWanted(null);
-  }, [browserWanted, browserTabs, selectedSessionId]);
+  }, [browserWanted, browserTabs, selectedSessionId, rowOf]);
   // The main column's Browser view is the panel's browser expanded. Arriving
   // on it closes the pane, whatever tab the pane was on: the reader came for
   // the full width. ⌘E brings it back beside the page, and leaving gives back
@@ -1621,11 +1624,6 @@ function App() {
       if (move) setPanelOpen(move === "restore");
     }
   }, [viewTab, setPanelOpen, panelOpen, panelKey, autoHidePanel]);
-  const expandBrowser = () => setViewTab("browser");
-  const collapseBrowser = () => {
-    setViewTab("chat");
-    showPanel("browser");
-  };
 
   // A live background task counts even where no run is built for it yet, and a
   // task list counts on its own — the tab is a catch-all, so any one of its
@@ -2266,19 +2264,19 @@ function App() {
   // A link in the transcript opens as a new tab in the browser of the chat it
   // was clicked in and flips the main column to the Browser view, leaving the
   // side panel alone — in a bot chat too, where that tab joins the bot's row.
-  // A task lit in a bot's row is the exception: the row's tabs are the bot's,
-  // so its link opens in the side panel, in the task's own browser. ⌘-click,
-  // or no session to hold one, goes to the system browser.
+  // A task lit in a bot's row opens its link in the bot's browser and lights
+  // it in that row, the row's tabs being the bot's. ⌘-click, or no session to
+  // hold one, goes to the system browser.
   useEffect(() => {
     setLinkOpener((url, { external }) => {
-      if (!selectedSessionId || !browserSession) {
+      if (!selectedSessionId || !rowBrowser) {
         void openUrl(url).catch(console.error);
         return;
       }
       // The session is named outright: the read lands after an await, and by
       // then the reader may be on another session whose pane must stay put.
       const sessionId = selectedSessionId;
-      const browser = browserSession;
+      const browser = rowBrowser;
       const inTaskTab = rowOf(sessionId) !== sessionId;
       const gen = navGen.current;
       void reachableUrl(sessionId, url).then(
@@ -2286,8 +2284,8 @@ function App() {
           if (external) return void openUrl(reached).catch(console.error);
           void openInBrowser(browser, reached, true)
             .then(() => {
-              if (inTaskTab) showPanel("browser", sessionId);
-              else setBrowserWanted(sessionId);
+              if (inTaskTab) void handleSelectSessionIndexItem(rowOf(sessionId));
+              setBrowserWanted(rowOf(sessionId));
               trackBrowserOpen(reached);
             })
             .catch(() => {
@@ -2304,7 +2302,7 @@ function App() {
       );
     });
     return () => setLinkOpener(null);
-  }, [selectedSessionId, browserSession, rowOf, showPanel, navGen, setError]);
+  }, [selectedSessionId, rowBrowser, rowOf, handleSelectSessionIndexItem, navGen, setError]);
 
   // An element picked in the page lands in that session's draft, and the
   // composer is brought on screen to show it — off the full view and onto
@@ -2877,7 +2875,6 @@ function App() {
     if (fileShown && activeFile) return closeFile(selectedSessionId, activeFile);
     if (fullBrowserOpen) return closeBrowserTab();
     if (gridShown) return closeSessionPane(selectedSessionId);
-    if (panelShown && activeTab === "browser") closeBrowserTab();
   };
   // Bound only where it has something to close: `useHotkey` claims every chord
   // it matches, and a ⌘W that eats the key and does nothing is worse than one
@@ -2885,8 +2882,7 @@ function App() {
   const hasCloseTarget =
     rowTabOnScreen ||
     fileShown ||
-    ((fullBrowserOpen || (panelShown && activeTab === "browser")) &&
-      (pendingBrowserTab || !!hasBrowserTabs)) ||
+    (fullBrowserOpen && (pendingBrowserTab || !!hasBrowserTabs)) ||
     gridShown;
   useHotkey("tab.close", closeTabOrPane, { enabled: hasCloseTarget });
   // ⌘E for the right pane against ⌘B for the left.
@@ -2918,7 +2914,7 @@ function App() {
   //
   // The browser reloads its page. A press inside the page never gets here —
   // Chromium has the key, and cef.rs reloads there.
-  const browserShown = fullBrowserOpen || (panelShown && activeTab === "browser");
+  const browserShown = fullBrowserOpen;
   useHotkey("panel.refresh", () => {
     // "Re-read what I am looking at", the same rule the session case follows:
     // the pane wins where one is open, and the list has it otherwise.
@@ -2944,9 +2940,8 @@ function App() {
     if (pendingBrowserTab) setPendingTab(browserSession, false);
     if (!next.active) void activateTab(browserSession, next.id);
   };
-  // The Diff view and an open file step their own strip on this chord, and the
-  // main column's row wins over a browser sitting beside it in the panel.
-  const browserStep = { enabled: browserShown && viewTab !== "changes" && !fileShown, skipInTextField: true };
+  // An open file steps its own strip on this chord.
+  const browserStep = { enabled: browserShown && !fileShown, skipInTextField: true };
   useHotkey("subtab.prev", () => stepBrowserTab(-1), browserStep);
   useHotkey("subtab.next", () => stepBrowserTab(1), browserStep);
   // ⌘T lives in `ViewTabs`: a new tab from anywhere the row is drawn.
@@ -3074,6 +3069,8 @@ function App() {
   // is on screen the way a grid pane's is.
   const rowSplits = useSplitPanes(issuesOpen ? null : (rowSession?.sessionId ?? null));
   const rowGroups = useSplitGroups(issuesOpen ? null : (rowSession?.sessionId ?? null));
+  const litLead = useLitLead(issuesOpen ? null : (rowSession?.sessionId ?? null));
+  const mainGrow = useSplitWeight(rowSession?.sessionId ?? null, litLead);
   const splitTasks = rowSplits.filter((k) => k.startsWith("task:")).map((k) => k.slice("task:".length));
   // A pane whose tab went — a page the agent closed, a task or pick shut —
   // goes with it.
@@ -3353,8 +3350,8 @@ function App() {
         <BrowserPane
           sessionId={browserOf(rowSession.sessionId)}
           tab={Number(key.slice("page:".length))}
-          mode="full"
           active={!issuesOpen && shown}
+          onClose={() => removeSplit(rowSession.sessionId, key)}
         />
       );
     }
@@ -3402,6 +3399,7 @@ function App() {
       panelOpen={issuesOpen ? !!pickedIssue : !!shownSession && panelShown}
       overlay={singleDrop && <DropZone region={singleDrop.region} label={singleDrop.label} />}
       beside={<SplitPanes sessionId={issuesOpen ? null : (rowSession?.sessionId ?? null)} body={splitBody} />}
+      mainCard={litLead && rowSplits.length > 0 ? { key: litLead, grow: mainGrow } : null}
       // Chat's alone, and not a `TabBody` — the other views answer questions
       // about a repository rather than about a conversation, and a split is
       // already several conversations side by side, where a crew beside one
@@ -3801,18 +3799,6 @@ function App() {
               />
               </MountOnce>
             </TabBody>
-            <TabBody active={activeTab === "browser"}>
-              <MountOnce when={panelShown && activeTab === "browser"}>
-              <BrowserPane
-                sessionId={browserSession ?? shownSession.sessionId}
-                active={panelShown && activeTab === "browser"}
-                mode="panel"
-                fullOpen={fullBrowserOpen}
-                onExpand={expandBrowser}
-                onCollapse={collapseBrowser}
-              />
-              </MountOnce>
-            </TabBody>
             <TabBody active={activeTab === "tasks"}>
               <TasksPanel
                 rows={crew}
@@ -4188,8 +4174,6 @@ function App() {
           <BrowserPane
             sessionId={browserSession ?? selectedSession.sessionId}
             active={fullBrowserOpen}
-            mode="full"
-            onCollapse={collapseBrowser}
           />
           </MountOnce>
         </TabBody>

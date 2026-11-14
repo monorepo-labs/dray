@@ -205,7 +205,7 @@ type Item = {
   /// The remote server the tab's session runs on; absent for This Mac.
   machine?: string;
   /// A split group, drawn as one tab: its members, lead first.
-  group?: { key: TabKey; icon: React.ReactNode; label: string }[];
+  group?: Member[];
 };
 
 /// The titlebar as a browser's tab strip.
@@ -464,6 +464,31 @@ export default function ViewTabs({
       ? { icon: pick.kind === "changes" ? <DocumentPlusIcon className={MARK} /> : FOLDER, label: pick.title }
       : null;
   };
+  // A member closed from its group's tab closes the tab itself. The lead
+  // hands the main view to the next member first, as closing a lit tab hands
+  // it to its neighbour.
+  const memberClose = (group: TabKey[], key: TabKey, lit: boolean) => {
+    const item = byKey.get(key);
+    const pick = key.startsWith("pick:") ? picks?.items.find((p) => `pick:${p.id}` === key) : undefined;
+    const close =
+      item && !item.locked
+        ? item.close
+        : pick &&
+          (() => {
+            pushClosedTab(sessionId, { key, pick: { kind: pick.kind, target: pick.target } });
+            picks?.onClose(pick.id);
+          });
+    if (!close) return undefined;
+    return () => {
+      removeSplit(sessionId, key);
+      const next = group.find((k) => k !== key);
+      if (lit && key === group[0] && next) {
+        if (byKey.has(next)) byKey.get(next)!.pick();
+        else if (next.startsWith("pick:")) picks?.onPick(next.slice(5));
+      }
+      close();
+    };
+  };
   const items = order.flatMap((key): Item[] => {
     const item = byKey.get(key)!;
     if (isSplit(sessionId, key)) return [];
@@ -471,7 +496,7 @@ export default function ViewTabs({
     if (!group) return [item];
     const members = group.flatMap((k) => {
       const head = headOf(k);
-      return head ? [{ key: k, ...head }] : [];
+      return head ? [{ key: k, ...head, close: memberClose(group, k, item.active) }] : [];
     });
     return [{ key, icon: item.icon, label: item.label, active: item.active, pick: item.pick, group: members }];
   });
@@ -843,6 +868,8 @@ export default function ViewTabs({
   );
 }
 
+type Member = { key: TabKey; icon: React.ReactNode; label: string; close?: () => void };
+
 /// A split group as one tab: a rounded outline holding its members side by
 /// side, each its icon and title, icons alone once a member's slot is too
 /// narrow for a word. Picking any part of it picks the group.
@@ -855,7 +882,7 @@ function GroupTab({
   held,
   gliding,
 }: {
-  members: { key: TabKey; icon: React.ReactNode; label: string }[];
+  members: Member[];
   active: boolean;
   onPick: () => void;
   onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => void;
@@ -892,12 +919,31 @@ function GroupTab({
       {members.map((m) => (
         <span
           key={m.key}
-          className="@container flex h-full min-w-0 flex-1 items-center justify-center gap-1.5 px-2 @[64px]:justify-start"
+          className={cn(
+            "group/member @container flex h-full min-w-0 flex-1 items-center justify-center gap-1.5 pl-2 @[64px]:justify-start",
+            m.close ? "pr-1" : "pr-2",
+          )}
         >
           {m.icon}
           <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap mask-[linear-gradient(to_right,black_calc(100%-1.25rem),transparent)] @max-[64px]:hidden">
             {m.label}
           </span>
+          {/* On hover alone, the way a background tab's cross is. */}
+          {m.close && (
+            <button
+              type="button"
+              aria-label={`Close ${m.label}`}
+              // Or the press starts dragging the group.
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                m.close?.();
+              }}
+              className="shrink-0 cursor-pointer rounded-sm p-0.5 text-muted-foreground opacity-0 transition-colors group-hover/member:opacity-100 hover:text-foreground @max-[64px]:hidden"
+            >
+              <X className="size-3" strokeWidth={2} />
+            </button>
+          )}
         </span>
       ))}
     </div>

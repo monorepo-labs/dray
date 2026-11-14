@@ -8,9 +8,6 @@ import {
   Folder,
   ExternalLink,
   Globe,
-  Maximize2,
-  Minimize2,
-  Plus,
   RotateCcw,
   RotateCw,
   Share2,
@@ -22,32 +19,23 @@ import {
 import { DocumentPlusIcon } from "@heroicons/react/16/solid";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
-import AgentBeam from "@/components/browser/AgentBeam";
 import Favicon, { hostOf } from "@/components/browser/Favicon";
-import GlobeFilledIcon from "@/components/icons/GlobeFilledIcon";
 import RecordingNotice from "@/components/browser/RecordingNotice";
 import { useTurnNewTab, type TurnKind } from "@/components/layout/ViewTabs";
-import ShortcutKeys from "@/components/ShortcutKeys";
-import TabMenu from "@/components/browser/TabMenu";
-import { ContextMenuTrigger } from "@/components/ui/context-menu";
 import Spinner from "@/components/ui/spinner";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopied } from "@/hooks/useCopied";
-import { useDragReorder } from "@/hooks/useDragReorder";
 import {
-  activateTab,
   claimPin,
   claimPresenter,
   pinStillPainted,
   releasePin,
   usePinStill,
   releaseAfterPaint,
-  closeTab,
   downloadChromium,
   listLocalServers,
-  moveTab,
   navigate,
   normalizeUrl,
   openDevTools,
@@ -60,13 +48,9 @@ import {
   pickElement,
   removeCustomDevice,
   saveCustomDevice,
-  setPendingTab,
   setUrlDraft,
   useOpeningUrl,
-  activateBlankTab,
-  closeBlankTab,
   useBlankTabs,
-  useParkedTabs,
   setResponsive,
   useOpenError,
   useResponsive,
@@ -132,35 +116,25 @@ function useHistory(sessionId: string, when: boolean): BrowserVisit[] {
   return read?.sessionId === sessionId ? read.visits : [];
 }
 
-/// The session's browser: tab strip, URL bar, navigation, and the page.
-///
-/// Two mounts of one component. The right panel's Browser tab is where it
-/// lives; the main column's is the full view, reached by the expand button,
-/// and while that is open the panel says so instead of drawing a second copy.
+/// The session's browser: URL bar, navigation, and the page. Its tabs are
+/// the titlebar's own row (`ViewTabs`).
 ///
 /// The page is a native view Chromium draws into the window above the
 /// webview; nothing here renders it. The stage below reports its rect and
-/// Rust moves the view onto it. The full view outranks the panel, so should
-/// both ever be on screen the page lands in the full view.
+/// Rust moves the view onto it.
 export default function BrowserPane({
   sessionId,
   active,
-  mode,
-  fullOpen = false,
-  onExpand,
-  onCollapse,
   tab,
+  onClose,
 }: {
   sessionId: string;
   active: boolean;
-  mode: "panel" | "full";
-  /// The full view is showing, so the panel mount stands aside.
-  fullOpen?: boolean;
-  onExpand?: () => void;
-  onCollapse?: () => void;
   /// A split pane's one tab, drawn whatever the strip has active. Such a
   /// pane has no device sizes: those are the session's, and its main view's.
   tab?: number;
+  /// A split pane's close, at the URL bar's far end: the pane has no header.
+  onClose?: () => void;
 }) {
   const pinned = tab !== undefined;
   const tabs = useBrowserTabs(sessionId) ?? [];
@@ -188,7 +162,6 @@ export default function BrowserPane({
   const recorded = useRecordedTab(sessionId);
   const stageRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
-  const standingAside = mode === "panel" && fullOpen;
   // The empty state stands in for the page: nothing open, or a new tab
   // waiting for its first URL.
   const empty = !current;
@@ -196,17 +169,16 @@ export default function BrowserPane({
   useEffect(() => {
     const stage = stageRef.current;
     const release = () => (pinned ? releasePin(key) : releaseAfterPaint(key));
-    if (!active || standingAside || !stage || empty) {
+    if (!active || !stage || empty) {
       release();
       return;
     }
-    const priority = mode === "full" ? 2 : 1;
     // The device frame is the page when one is set; the native view cannot
     // be clipped by the DOM, so the frame is sized to fit the stage below.
     const report = () => {
       const rect = (frameRef.current ?? stage).getBoundingClientRect();
       if (tab !== undefined) claimPin(key, { sessionId, tab, rect });
-      else claimPresenter(key, { priority, sessionId, rect });
+      else claimPresenter(key, { priority: 2, sessionId, rect });
     };
     report();
     const observer = new ResizeObserver(report);
@@ -223,7 +195,7 @@ export default function BrowserPane({
       window.removeEventListener("resize", report);
       release();
     };
-  }, [sessionId, key, active, mode, standingAside, empty, viewport, pinned, tab]);
+  }, [sessionId, key, active, empty, viewport, pinned, tab]);
 
   // The page's size in responsive mode, which is what Save keeps. In page
   // pixels: the view is placed in window points, so the app's own zoom
@@ -241,32 +213,16 @@ export default function BrowserPane({
     const observer = new ResizeObserver(read);
     observer.observe(stage);
     return () => observer.disconnect();
-  }, [standingAside]);
-
-  if (standingAside) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center text-ui text-muted-foreground">
-        <span>Open in the full view.</span>
-        {onCollapse && (
-          <Button variant="outline" size="sm" onClick={onCollapse}>
-            Bring it back here
-          </Button>
-        )}
-      </div>
-    );
-  }
+  }, []);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <Chrome
         sessionId={sessionId}
-        tabs={tabs}
         current={current}
         pending={pending}
-        mode={mode}
-        onExpand={onExpand}
-        onCollapse={onCollapse}
         tab={tab}
+        onClose={onClose}
       />
       {!empty &&
         (responsive ? (
@@ -291,7 +247,7 @@ export default function BrowserPane({
             This page was closed.
           </div>
         ) : empty ? (
-          <EmptyState sessionId={sessionId} active={active} turnable={mode === "full"} />
+          <EmptyState sessionId={sessionId} active={active} />
         ) : viewport ? (
           // Clamped to the stage on both axes rather than scrolled or scaled:
           // the page is a native view the DOM can neither clip nor shrink,
@@ -386,48 +342,31 @@ function LoadBar({ loading }: { loading: boolean }) {
 /// all but the same colour in dark, where `--background` is the step.
 function Chrome({
   sessionId,
-  tabs,
   current,
   pending,
-  mode,
-  onExpand,
-  onCollapse,
   tab,
+  onClose,
 }: {
   sessionId: string;
-  tabs: BrowserTab[];
   current: BrowserTab | null;
   pending: boolean;
-  mode: "panel" | "full";
-  onExpand?: () => void;
-  onCollapse?: () => void;
   /// A split pane's tab: every control acts on it, and the session-wide ones
-  /// (picker, device sizes, the panel swap) are left to the main view.
+  /// (picker, device sizes) are left to the main view.
   tab?: number;
+  onClose?: () => void;
 }) {
   const pinned = tab !== undefined;
   const openError = useOpenError(sessionId);
   const inputRef = useRef<HTMLInputElement>(null);
   const picking = usePicking(sessionId);
-  // Only the recorded tab is held, and only from closing: the agent drives its
-  // own tab (`DRIVEN`), so the reader switching tabs moves nothing it films.
-  const recorded = useRecordedTab(sessionId);
   const opening = useOpeningUrl(sessionId);
   const url = current?.url ?? opening ?? "";
   const loading = current ? current.loading : opening !== null;
   const blanks = useBlankTabs(sessionId);
-  const parkedPages = useParkedTabs(sessionId);
   const draftKey = `${sessionId}:${blanks.active !== null && !pinned ? `blank:${blanks.active}` : `page:${current?.id}`}`;
   // Per tab, as a browser's are: each new tab keeps what was typed into it.
   const draft = useUrlDraft(draftKey);
   const setDraft = (value: string | null) => setUrlDraft(draftKey, value);
-  const reorder = useDragReorder(
-    tabs,
-    (tab) => tab.id,
-    (tab, _delta, to) => moveTab(sessionId, tab.id, to),
-    "x",
-  );
-
   // A new tab is for typing into.
   useEffect(() => {
     if (pending) inputRef.current?.focus();
@@ -456,92 +395,8 @@ function Chrome({
       .catch(() => undefined);
   };
 
-  const newTab = () => {
-    setPendingTab(sessionId, true);
-  };
-
-  const swap = pinned ? undefined : mode === "panel" ? onExpand : onCollapse;
-
   return (
     <div className="shrink-0">
-      {/* The full view's tabs are the titlebar's own row (`ViewTabs`). */}
-      {mode === "panel" && (tabs.length > 0 || blanks.ids.length > 0) && (
-        // Scrolls, but draws no bar: a strip of tabs is read by its tabs, and
-        // a bar under them takes the height the tabs' own bottom edge needs.
-        <div
-          ref={reorder.list}
-          className="flex h-7.5 items-end gap-1 overflow-x-auto bg-sidebar px-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-        >
-          {reorder.shown.map((tab, i) => (
-            <TabButton
-              key={tab.id}
-              onPointerDown={(e) => reorder.start(e, i)}
-              transform={reorder.offset(i)}
-              held={reorder.drag?.from === i}
-              gliding={!!reorder.drag && reorder.drag.from !== i}
-              active={tab.active && !pending}
-              // The active tab joins the URL row, so it wears the same colour.
-              paint={tab.active && !pending && tab.background ? tint(tab.background) : undefined}
-              title={tab.error ? `${tab.error} — ${tab.url}` : tab.url}
-              icon={<Favicon tab={tab} />}
-              overlay={<AgentBeam tab={tab.id} top />}
-              label={tab.error ? "Can't reach page" : tab.title || hostOf(tab.url)}
-              locked={tab.id === recorded}
-              onPick={() => {
-                setPendingTab(sessionId, false);
-                if (!tab.active) void activateTab(sessionId, tab.id);
-              }}
-              onClose={() => void closeTab(sessionId, tab.id)}
-              onDuplicate={
-                tab.url
-                  ? () => {
-                      setPendingTab(sessionId, false);
-                      void openInBrowser(sessionId, tab.url, true).catch(() => undefined);
-                    }
-                  : undefined
-              }
-            />
-          ))}
-          {blanks.ids.map((id) => (
-            <TabButton
-              key={`blank:${id}`}
-              active={blanks.active === id}
-              // No page under it, so no fill: the URL row it joins is bare too.
-              paint={{ ["--card" as string]: "transparent" }}
-              title={parkedPages[id]?.url ?? "New tab"}
-              icon={
-                parkedPages[id] ? (
-                  <Favicon tab={parkedPages[id]} />
-                ) : (
-                  <GlobeFilledIcon className="size-4 shrink-0 text-muted-foreground" />
-                )
-              }
-              label={parkedPages[id] ? parkedPages[id].title || hostOf(parkedPages[id].url) : "New tab"}
-              onPick={() =>
-                blanks.active === id ? inputRef.current?.focus() : activateBlankTab(sessionId, id)
-              }
-              onClose={() => closeBlankTab(sessionId, id)}
-            />
-          ))}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="mb-0.5 shrink-0"
-                aria-label="New tab"
-                onClick={newTab}
-              >
-                <Plus className="size-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side={TIP_SIDE}>
-              New tab
-              <ShortcutKeys ids={["browser.newTab"]} />
-            </TooltipContent>
-          </Tooltip>
-        </div>
-      )}
       {/* The page's own colour where it has reported one, the way a browser
           tints its toolbar; bare with no page at all. */}
       <div
@@ -743,23 +598,11 @@ function Chrome({
           </TooltipTrigger>
           <TooltipContent side={TIP_SIDE}>Open in system browser</TooltipContent>
         </Tooltip>
-        {swap && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className={TOOL_BTN}
-                onClick={swap}
-                aria-label={mode === "panel" ? "Open full view" : "Back to the panel"}
-              >
-                {mode === "panel" ? <Maximize2 className="size-3.5" /> : <Minimize2 className="size-3.5" />}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side={TIP_SIDE}>
-              {mode === "panel" ? "Open full view" : "Back to the panel"}
-            </TooltipContent>
-          </Tooltip>
+        {/* No tooltip: a cross says what it does. */}
+        {onClose && (
+          <Button variant="ghost" size="icon-sm" className={TOOL_BTN} onClick={onClose} aria-label="Close pane">
+            <X className="size-3.5" />
+          </Button>
         )}
       </div>
       {openError && (
@@ -769,106 +612,6 @@ function Chrome({
   );
 }
 
-function TabButton({
-  active,
-  title,
-  icon,
-  label,
-  locked = false,
-  onPick,
-  onClose,
-  onDuplicate,
-  onPointerDown,
-  transform,
-  held = false,
-  gliding = false,
-  paint,
-  overlay,
-}: {
-  active: boolean;
-  title: string;
-  icon: React.ReactNode;
-  /// Drawn over the whole tab, out of the row's flow: the agent's beam.
-  overlay?: React.ReactNode;
-  label: string;
-  /// Not closed, while a recording films it.
-  locked?: boolean;
-  onPick: () => void;
-  onClose: () => void;
-  /// Right-click Duplicate tab, on real tabs only.
-  onDuplicate?: () => void;
-  /// Drag-to-reorder, on real tabs only.
-  onPointerDown?: (e: React.PointerEvent<HTMLDivElement>) => void;
-  transform?: string;
-  /// The tab in hand, mid-drag.
-  held?: boolean;
-  /// A tab sliding aside for the one in hand.
-  gliding?: boolean;
-  /// The page's colour, from `tint`, on the tab joined to the URL row.
-  paint?: React.CSSProperties;
-}) {
-  return (
-    <TabMenu onDuplicate={locked ? undefined : onDuplicate}>
-    <ContextMenuTrigger asChild disabled={!onDuplicate || locked}>
-    <div
-      role="tab"
-      aria-selected={active}
-      tabIndex={0}
-      title={title}
-      onClick={onPick}
-      onKeyDown={(e) => e.key === "Enter" && onPick()}
-      onPointerDown={onPointerDown}
-      style={{ ...paint, transform }}
-      className={cn(
-        "group/tab relative flex h-7 w-40 min-w-0 shrink-0 cursor-default items-center gap-1.5 rounded-t-md px-2 text-ui",
-        active
-          ? "browser-tab-active bg-card text-foreground [--tab-edge:color-mix(in_oklab,var(--foreground)_10%,transparent)]"
-          : held
-              ? "bg-card/50 text-foreground"
-              : "text-muted-foreground hover:text-foreground",
-        // The one in hand tracks the pointer and draws over the tabs it
-        // passes; only those making room glide.
-        held && "z-10",
-        gliding && "transition-transform duration-150 ease-out",
-      )}
-    >
-      {/* The outline, stopping where the foot's curve takes over: the flares
-          carry it round into the toolbar, as Chrome's tab does. */}
-      {active && (
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-0 bottom-2 rounded-t-md border-x border-t border-(--tab-edge)"
-        />
-      )}
-      {overlay}
-      {icon}
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      {!locked && <button
-        type="button"
-        aria-label="Close tab"
-        className="rounded p-0.5 opacity-0 hover:bg-muted group-hover/tab:opacity-100"
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-      >
-        <X className="size-3" />
-      </button>}
-    </div>
-    </ContextMenuTrigger>
-    </TabMenu>
-  );
-}
-
-/// Device size, picked where the button is: a native `<select>` laid over the
-/// icon, so the menu is macOS's own. That is the point of it — an in-app menu
-/// lands on the page, and the page is a native view nothing in the DOM draws
-/// over, so opening one swapped the page for a picture of it (a flash) and a
-/// pick made behind that picture came back with the view at a stale size.
-/// A native menu is drawn above everything and touches neither.
-///
-/// Default clears everything and draws no bar; Responsive fills the pane the
-/// same way but puts the bar up, so its size can be saved as a device.
 function DeviceMenu({ sessionId, disabled }: { sessionId: string; disabled: boolean }) {
   const viewport = useViewport(sessionId);
   const responsive = useResponsive(sessionId);
@@ -1140,18 +883,17 @@ function SizeBar({ sessionId, viewport }: { sessionId: string; viewport: Viewpor
 /// own marked. Polled while on screen, since a server starting is the
 /// moment the list is looked at.
 ///
-/// `turnable`: the blank is a tab of the row, so it can become Diff or Files.
 /// The panel's is not, and has no row slot to turn.
-function EmptyState({ sessionId, active, turnable }: { sessionId: string; active: boolean; turnable: boolean }) {
+function EmptyState({ sessionId, active }: { sessionId: string; active: boolean }) {
   const chromium = useChromium();
   // Nothing to open pages with yet: the download stands where the page would.
   // Diff and Files need no Chromium, so the cards stay above it.
   if (chromium && chromium.state !== "ready") {
-    return <ChromiumState status={chromium} cards={turnable && <TurnCards sessionId={sessionId} />} />;
+    return <ChromiumState status={chromium} cards={<TurnCards sessionId={sessionId} />} />;
   }
   // Keyed, so one session's servers and its share in flight are never drawn
   // under another: the list is read on a timer and a failed read keeps the old.
-  return <Servers key={sessionId} sessionId={sessionId} active={active} turnable={turnable} />;
+  return <Servers key={sessionId} sessionId={sessionId} active={active} />;
 }
 
 /// Chromium is fetched after install (see chromium.rs), and this is where the
@@ -1214,7 +956,7 @@ function TurnCards({ sessionId }: { sessionId: string }) {
   );
 }
 
-function Servers({ sessionId, active, turnable }: { sessionId: string; active: boolean; turnable: boolean }) {
+function Servers({ sessionId, active }: { sessionId: string; active: boolean }) {
   const [servers, setServers] = useState<LocalServer[]>([]);
   const recent = useHistory(sessionId, active).slice(0, RECENT);
   // Each read is a `ps` and two `lsof`s, and both mounts of this pane stay
@@ -1274,7 +1016,7 @@ function Servers({ sessionId, active, turnable }: { sessionId: string; active: b
   return (
     <div className="flex h-full items-center justify-center p-8 text-ui">
       <div className="flex w-full max-w-sm flex-col gap-4">
-        {turnable && <TurnCards sessionId={sessionId} />}
+        <TurnCards sessionId={sessionId} />
         {servers.length > 0 && (
           <section className="flex flex-col gap-1.5">
             <h3 className="px-2 pb-1 text-muted-foreground">
