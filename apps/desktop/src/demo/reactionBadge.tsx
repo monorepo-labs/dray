@@ -5,8 +5,8 @@ import { BotBubble } from "@/components/chat/BotTranscript";
 import UserMessage from "@/components/chat/UserMessage";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
-import { setMode, setTheme } from "@/hooks/useTheme";
-import { THEMES } from "@/lib/theme";
+import { setMode, setTheme, useTheme } from "@/hooks/useTheme";
+import { hasLightMode, THEMES } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import "../App.css";
 
@@ -195,6 +195,9 @@ function Slice({ take }: { take: Take }) {
 }
 
 function Demo() {
+  // The picked palette, in both of its modes; a dark-only one shows dark alone.
+  const { theme } = useTheme();
+  const modes = hasLightMode(theme) ? (["light", "dark"] as const) : (["dark"] as const);
   return (
     // Clear of the theme bar on the left, which would cover the last row.
     <main className="mx-auto flex max-w-[1800px] flex-col gap-5 pt-6 pr-6 pb-48 pl-56">
@@ -208,10 +211,10 @@ function Demo() {
               {take.note}
             </p>
             <div className="grid grid-cols-2 gap-2">
-              {(["light", "dark"] as const).map((mode) => (
+              {modes.map((mode) => (
                 <div
                   key={mode}
-                  data-theme="default"
+                  data-theme={theme}
                   data-mode={mode}
                   className="rounded-xl border border-border bg-background p-4 text-foreground"
                 >
