@@ -103,25 +103,31 @@ export default function Sidebar({
 
       {bots && <div className="mt-4 flex flex-col gap-px px-2">{bots}</div>}
 
-      {/* The filter is where project grouping went; drafts and the settled
-          list are the two glyphs beside it. */}
-      <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
-        <span className="flex items-center gap-1 pl-1 text-ui text-muted-foreground">All Projects</span>
-        <span className="flex items-center gap-0.5 text-muted-foreground">
-          <span className="grid size-6 place-items-center">
-            <CircleDashed className="size-3" />
-          </span>
-          <span className="grid size-6 place-items-center">
-            <CheckCheck className="size-3" />
-          </span>
-        </span>
-      </div>
+      {/* No task rows, no filter: the app drops it with no project attached,
+          where it has nothing to filter. */}
+      {children && (
+        <>
+          {/* The filter is where project grouping went; drafts and the settled
+              list are the two glyphs beside it. */}
+          <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
+            <span className="flex items-center gap-1 pl-1 text-ui text-muted-foreground">All Projects</span>
+            <span className="flex items-center gap-0.5 text-muted-foreground">
+              <span className="grid size-6 place-items-center">
+                <CircleDashed className="size-3" />
+              </span>
+              <span className="grid size-6 place-items-center">
+                <CheckCheck className="size-3" />
+              </span>
+            </span>
+          </div>
 
-      {/* `pr-2` where the app has `pr-0`: there the scrollbar gutter is the
-          right-hand spacing, and a drawing has no scrollbar. */}
-      <div className="flex min-h-0 flex-1 flex-col gap-px overflow-hidden pt-2 pb-3 pl-2 pr-2">
-        {children}
-      </div>
+          {/* `pr-2` where the app has `pr-0`: there the scrollbar gutter is the
+              right-hand spacing, and a drawing has no scrollbar. */}
+          <div className="flex min-h-0 flex-1 flex-col gap-px overflow-hidden pt-2 pb-3 pl-2 pr-2">
+            {children}
+          </div>
+        </>
+      )}
     </aside>
   );
 }

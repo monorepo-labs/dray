@@ -1,13 +1,16 @@
 "use client";
 
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Blobatar } from "@blobatar/react";
 import { useGaze } from "@blobatar/react/gaze";
 import { idle } from "blobatar/expression";
 import "blobatar/motion.css";
 import "blobatar/gaze.css";
-import { ArrowUp, ChevronDown, CircleDashed, GitMerge, GitPullRequest, GitPullRequestDraft, Mic, Plus, X } from "lucide-react";
+import { ChevronDown, CircleDashed, GitMerge, GitPullRequest, GitPullRequestDraft, Play, Server, X } from "lucide-react";
 
+import { ClaudeGlyph } from "@/components/ClaudeGlyph";
+
+import { Composer } from "./Chat";
 import { cx } from "./Window";
 
 /// A face's pick, as the app stores it: a shape by name and a hue in degrees.
@@ -226,6 +229,52 @@ export function BotBubble({ tight = false, children }: { tight?: boolean; childr
   );
 }
 
+/// A recording a bot sent, played inline under its words. The app's
+/// `VideoPlayer` cut to its play button: a click on the frame plays or
+/// pauses, and no control bar sits over the work it shows.
+export function VideoPlayer({ src, className }: { src: string; className?: string }) {
+  const video = useRef<HTMLVideoElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const toggle = () => {
+    const v = video.current;
+    if (v) void (v.paused ? v.play() : v.pause());
+  };
+
+  return (
+    // `isolate`, or WebKit composites the video on a layer the radius does
+    // not clip.
+    <span className="relative isolate mt-1.5 block w-fit max-w-full overflow-hidden rounded-xl border border-border">
+      <video
+        ref={video}
+        // `#t` paints the first frame as a thumbnail; `metadata` alone paints nothing.
+        src={`${src}#t=0.001`}
+        preload="metadata"
+        playsInline
+        muted
+        onClick={toggle}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        // Back to its first frame at the end, so the play button returns over
+        // a picture of the start rather than of the last scroll.
+        onEnded={(e) => {
+          e.currentTarget.currentTime = 0;
+        }}
+        className={cx("block max-w-full cursor-pointer", className)}
+      />
+      {!playing && (
+        <button
+          type="button"
+          aria-label="Play"
+          onClick={toggle}
+          className="absolute top-1/2 left-1/2 flex size-12 -translate-1/2 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm"
+        >
+          <Play className="size-5 translate-x-px fill-current" />
+        </button>
+      )}
+    </span>
+  );
+}
+
 /// The time a run of messages began, centred and quiet.
 export function TimeLabel({ children }: { children: ReactNode }) {
   return <p className="self-center pt-2 text-[12px] text-muted-foreground/70">{children}</p>;
@@ -252,34 +301,13 @@ function PartyChip({ id, title, onClick }: { id: string; title: string; onClick?
   );
 }
 
-/// A task the bot started, or one it wrote to: a line naming it, never a
-/// tool call. Whether it is still working is the Tasks tab's to say.
-export function TaskLine({
-  verb,
-  id,
-  title,
-  onClick,
-}: {
-  verb: "Started a new task" | "Messaged";
-  id: string;
-  title: string;
-  onClick?: () => void;
-}) {
+/// A task the bot started: a line naming it, never a tool call. Whether it
+/// is still working is the Tasks tab's to say.
+export function TaskLine({ id, title, onClick }: { id: string; title: string; onClick?: () => void }) {
   return (
     <div className="flex max-w-full items-center gap-0.5 self-start text-ui text-muted-foreground">
-      <span className="shrink-0">{verb}</span>
+      <span className="shrink-0">Started a new task</span>
       <PartyChip id={id} title={title} onClick={onClick} />
-    </div>
-  );
-}
-
-/// What a turn taught the bot, one file a line: the kind in grey, the
-/// summary plain beside it.
-export function LearnedLine({ kind, summary }: { kind: string; summary: string }) {
-  return (
-    <div className="flex max-w-full min-w-0 items-baseline gap-2 self-start text-ui">
-      <span className="shrink-0 text-muted-foreground">{kind}</span>
-      <span className="min-w-0 truncate text-foreground/80">{summary}</span>
     </div>
   );
 }
@@ -437,24 +465,9 @@ export function WaitingCard({ onDismiss, children }: { onDismiss?: () => void; c
   );
 }
 
-/// One task on the card: face, title, PR and how long it has sat; under
-/// them, the line its bot wrote for what it needs.
-export function WaitingRow({
-  id,
-  title,
-  pr,
-  age,
-  need,
-  merge,
-}: {
-  id: string;
-  title: string;
-  pr?: Pr;
-  age: string;
-  need?: string;
-  /// Merge's control, where the PR can land.
-  merge?: ReactNode;
-}) {
+/// One task on the card: face, title and how long it has sat; under them,
+/// the line its bot wrote for what it needs.
+export function WaitingRow({ id, title, age, need }: { id: string; title: string; age: string; need?: string }) {
   const [hovered, setHovered] = useState(false);
   return (
     <div
@@ -466,13 +479,7 @@ export function WaitingRow({
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="flex items-center gap-2">
           <span className="min-w-0 truncate text-ui text-foreground">{title}</span>
-          {pr && (
-            <span className="flex shrink-0 items-center gap-0.5 text-[12px] text-accent-add tabular-nums">
-              <PrIcon pr={pr} className="text-current" />#{pr.number}
-            </span>
-          )}
-          <span className="ml-auto flex shrink-0 items-center gap-2">{merge}</span>
-          <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">{age}</span>
+          <span className="ml-auto shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">{age}</span>
         </span>
         {need && <span className="min-w-0 truncate text-ui text-foreground/70">{need}</span>}
       </span>
@@ -481,49 +488,54 @@ export function WaitingRow({
 }
 
 /// One of the bot's tasks on its Tasks tab: the face, or the orb while it
-/// works; the title, yellow while it waits on the reader; the PR and, where
-/// it can land, Merge.
+/// works; the title; the server mark where it runs on another machine; its
+/// PR. A click opens the task.
 export function TaskRow({
   id,
   title,
   working,
-  asking = false,
+  machine = false,
   pr,
-  fixing,
-  merge,
+  onOpen,
 }: {
   id: string;
   title: string;
   /// Stands in for the face while the task works.
   working?: ReactNode;
-  asking?: boolean;
+  machine?: boolean;
   pr?: Pr;
-  /// What it was asked to mend on its PR, and for how long.
-  fixing?: string;
-  merge?: ReactNode;
+  onOpen?: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
   return (
-    <div
+    <button
+      type="button"
+      onClick={onOpen}
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
-      className="group flex w-full flex-col rounded-md px-2 text-left text-ui text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+      className="group flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-ui text-muted-foreground outline-none hover:bg-muted/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <span className="flex h-8 items-center gap-2">
-        <span className="flex size-5 shrink-0 items-center justify-center">
-          {working ?? <BotFace seed={id} follow={hovered} className="block size-5 scale-[1.18]" />}
-        </span>
-        <span className={cx("min-w-0 flex-1 truncate", asking && "text-accent-command")}>{title}</span>
-        {pr && (
-          <span className="flex shrink-0 items-center gap-1 rounded px-0.5 text-[12px] text-muted-foreground tabular-nums">
-            {pr.running ? <ChecksRunning /> : <PrIcon pr={pr} />}
-            <span>#{pr.number}</span>
-          </span>
-        )}
-        {merge}
+      <span className="flex size-5 shrink-0 items-center justify-center">
+        {working ?? <BotFace seed={id} follow={hovered} className="block size-5 scale-[1.18]" />}
       </span>
-      {fixing && <span className="-mt-1 truncate pb-1.5 pl-7 text-ui text-foreground/50">{fixing}</span>}
-    </div>
+      <span className="min-w-0 flex-1 truncate">{title}</span>
+      {machine && <MachineMark />}
+      {pr && (
+        <span className="flex shrink-0 items-center gap-1 rounded px-0.5 text-[12px] text-muted-foreground tabular-nums">
+          {pr.running ? <ChecksRunning /> : <PrIcon pr={pr} />}
+          <span>#{pr.number}</span>
+        </span>
+      )}
+    </button>
+  );
+}
+
+/// The server glyph on a task that runs on another machine.
+export function MachineMark({ className }: { className?: string }) {
+  return (
+    <span aria-label="Runs on another machine" className={cx("flex shrink-0 text-muted-foreground", className)}>
+      <Server className="size-3" />
+    </span>
   );
 }
 
@@ -532,8 +544,8 @@ export function TaskBreak() {
   return <div aria-hidden className="h-4 shrink-0" />;
 }
 
-/// A bot's composer: no row under it, since its pickers sit in the
-/// titlebar, and + inside the card, left of the text. Enter sends.
+/// A bot's composer: the same one a task has, the model and stance row under
+/// it, with a box the visitor types in. Enter sends.
 export function BotComposer({
   value,
   onChange,
@@ -546,53 +558,34 @@ export function BotComposer({
   placeholder?: string;
 }) {
   return (
-    <form
-      className="px-4 pb-4"
-      onSubmit={(event) => {
-        event.preventDefault();
-        onSend();
-      }}
-    >
-      <div className="mx-auto max-w-3xl">
-        <div className="relative rounded-2xl border border-edge-surface bg-composer backdrop-blur-xl">
-          <div className="flex items-end gap-1 px-3 py-3">
-            <span className="grid size-7 shrink-0 place-items-center text-muted-foreground">
-              <Plus className="size-4" />
-            </span>
-            <textarea
-              rows={1}
-              aria-label="Message the bot"
-              value={value}
-              spellCheck={false}
-              onChange={(event) => onChange(event.target.value)}
-              onKeyDown={(event) => {
-                // An IME's Enter picks a character; it is not a send.
-                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  onSend();
-                }
-              }}
-              placeholder={placeholder}
-              // `select-text` undoes the window's `select-none`, which Safari
-              // reads as "this field takes no typing".
-              className="field-sizing-content select-text max-h-28 min-w-0 flex-1 resize-none bg-transparent px-1 py-1 text-prompt text-foreground outline-none placeholder:text-muted-foreground"
-            />
-            <div className="flex shrink-0 items-center gap-1">
-              <span className="grid size-7 place-items-center text-muted-foreground">
-                <Mic className="size-4" />
-              </span>
-              <button
-                type="submit"
-                aria-label="Send"
-                className="grid size-7 place-items-center rounded-full bg-primary text-primary-foreground transition-opacity disabled:opacity-50"
-                disabled={!value.trim()}
-              >
-                <ArrowUp strokeWidth={2} className="size-4" />
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </form>
+    <Composer
+      mic
+      agent={<ClaudeGlyph className="size-3.5" />}
+      model="Opus 5.5"
+      effort="High"
+      mode="Auto"
+      context={0.18}
+      onSend={{ send: onSend, disabled: !value.trim() }}
+      editor={
+        <textarea
+          rows={1}
+          aria-label="Message the bot"
+          value={value}
+          spellCheck={false}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            // An IME's Enter picks a character; it is not a send.
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              onSend();
+            }
+          }}
+          placeholder={placeholder}
+          // `select-text` undoes the window's `select-none`, which Safari
+          // reads as "this field takes no typing".
+          className="field-sizing-content block max-h-28 w-full resize-none bg-transparent px-1 py-1 text-prompt text-foreground outline-none select-text placeholder:text-muted-foreground"
+        />
+      }
+    />
   );
 }

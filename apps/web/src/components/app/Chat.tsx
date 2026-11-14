@@ -166,9 +166,15 @@ export function Composer({
   context = 0.3,
   trailing,
   radius = "rounded-2xl",
+  editor,
+  onSend,
   className,
 }: {
   placeholder?: string;
+  /// A real input in the text's place, for a composer the visitor types in.
+  editor?: ReactNode;
+  /// Makes Send a button; disabled while the box is empty is the caller's to say.
+  onSend?: { send: () => void; disabled: boolean };
   /// Text already in the box, drawn in the prose colour where the placeholder
   /// is muted. A slot rather than a string, since a tag in it is a chip.
   value?: ReactNode;
@@ -204,9 +210,11 @@ export function Composer({
               one row read correctly at both heights. */}
           <div className="flex items-end gap-1 px-3 py-3">
             <div className="relative min-w-0 flex-1">
-              <div className={cx("px-1 py-1 text-prompt", value ? "text-foreground" : "text-muted-foreground")}>
-                {value ?? placeholder}
-              </div>
+              {editor ?? (
+                <div className={cx("px-1 py-1 text-prompt", value ? "text-foreground" : "text-muted-foreground")}>
+                  {value ?? placeholder}
+                </div>
+              )}
             </div>
 
             <div className="flex shrink-0 items-center gap-1">
@@ -218,11 +226,23 @@ export function Composer({
               )}
               {/* The one filled button that keeps `--primary`, and the one round
                   control in a row of rounded squares. */}
-              <span className="grid size-7 place-items-center rounded-full bg-primary text-primary-foreground">
-                <span className="grid size-4 place-items-center">
+              {onSend ? (
+                <button
+                  type="button"
+                  aria-label="Send"
+                  onClick={onSend.send}
+                  disabled={onSend.disabled}
+                  className="grid size-7 place-items-center rounded-full bg-primary text-primary-foreground transition-opacity disabled:opacity-50"
+                >
                   <ArrowUp strokeWidth={2} className="size-4" />
+                </button>
+              ) : (
+                <span className="grid size-7 place-items-center rounded-full bg-primary text-primary-foreground">
+                  <span className="grid size-4 place-items-center">
+                    <ArrowUp strokeWidth={2} className="size-4" />
+                  </span>
                 </span>
-              </span>
+              )}
             </div>
           </div>
         </div>
