@@ -24,7 +24,7 @@ import {
 import { hiddenChildren, leftToParent } from "@/lib/crew";
 import { repoChanged } from "@/lib/prSync";
 import { dropHeld, dropHeldAsks, heldFor, holdEarlyEvent, isAsk } from "@/lib/earlyEvents";
-import { flushHeld, holdFlags, onLanded, overlayHeld, unholdFlags, useHeldFlags } from "@/lib/heldFlags";
+import { flushHeld, heldFlagFor, holdFlags, onLanded, overlayHeld, settleAfterSend, unholdFlags, useHeldFlags } from "@/lib/heldFlags";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { lockedMidTurn } from "@/lib/liveControls";
@@ -868,9 +868,9 @@ const handleSendMsg = async (
   // The unsent pick this send carries. A later edit made while it is out
   // replaces the map entry, and must survive this send landing.
   const sentPick = sessionId ? unsentPicks.current.get(sessionId) : undefined;
-  // The send brings a set-aside session back, so a flag held for its server
-  // must not land after it and put the session away again.
-  if (sessionId) unholdFlags(sessionId);
+  // Kept until the send lands: one that fails before reaching the server —
+  // a sandbox that will not resume — leaves the reader's pick standing.
+  const heldAtSend = sessionId ? heldFlagFor(sessionId) : undefined;
 
   const existing = sessionId ? selected : undefined;
   // The backend reads the recorded cwd on resume, so this only has to be right
@@ -1047,6 +1047,9 @@ const handleSendMsg = async (
       baseRef: isNewSession && worktree ? baseRef : null,
       isNewSession,
     });
+    if (heldAtSend) {
+      void settleAfterSend(heldAtSend).catch((e) => console.error("could not settle a held flag", e));
+    }
 
     // A turn was already running, so the prompt is held rather than sent. It
     // draws as pending until the backend hands it to the CLI, which arrives as
@@ -1596,6 +1599,8 @@ const setSessionFlags = async (
     }
   }
   try {
+    // An older held flag is superseded, and must not land after this write.
+    if (flags.aside !== undefined) await unholdFlags(sessionId);
     const updated = await invoke<SessionIndexItem | null>("set_session_flags", {
       sessionId,
       archived: flags.archived ?? null,
@@ -1607,8 +1612,6 @@ const setSessionFlags = async (
     // not happen like any other.
     if (!updated) return false;
     applyIndexItem(updated);
-    // Written there, so an older flag held for it would only undo this.
-    if (flags.aside !== undefined) unholdFlags(sessionId);
     // A hidden child is drawn in this session's crew alone, so it goes where
     // the parent goes. Awaited, so a caller that refetches the other side
     // afterwards reads the children already moved.

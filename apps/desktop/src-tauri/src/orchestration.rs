@@ -504,8 +504,9 @@ async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Respo
     if let Request::SetAside(aside) = request {
         return elsewhere::set_aside(machine, aside, app).await;
     }
-    let sends = match &request {
-        Request::SendMessage(send) => Some(send.session_id.clone()),
+    // Read before the send, since a flush landing during it empties the file.
+    let held_at_send = match &request {
+        Request::SendMessage(send) => crate::held_flags::list().await.into_iter().find(|h| h.session_id == send.session_id),
         _ => None,
     };
     let creates = matches!(request, Request::CreateSession(_));
@@ -520,9 +521,18 @@ async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Respo
         }
     }
     // A message brings a set-aside session back, so a flag held from before
-    // it must not land after and put it away again.
-    if let (Some(id), Response::Sent { .. }) = (sends, &response) {
-        crate::held_flags::unhold(&id).await?;
+    // it must not stay put away. Dropped behind any flush writing it, then
+    // undone there in case that flush landed after the message.
+    if let (Some(held), Response::Sent { .. }) = (held_at_send, &response) {
+        if crate::held_flags::unhold(&held.session_id).await?.is_some() {
+            crate::held_flags::announce(app, Vec::new()).await;
+        }
+        if held.aside {
+            let back = elsewhere::prepare(Request::SetAside(SetAside { session_id: held.session_id, aside: false })).await?;
+            if let Err(e) = elsewhere::forward(machine, &back).await {
+                eprintln!("[held flags] could not bring back after a send: {e:#}");
+            }
+        }
     }
     Ok(response)
 }
@@ -718,17 +728,17 @@ mod elsewhere {
     /// A machine turned off is held for too — turning it back on lands it.
     pub async fn set_aside(machine: &str, aside: SetAside, app: &Sink) -> Result<Response> {
         let saved = machines::find(&machines::load().await, machine).map_err(anyhow::Error::msg)?;
+        // An older flag held here is superseded either way. Dropped first, and
+        // behind any flush writing it, so this write lands after it.
+        if crate::held_flags::unhold(&aside.session_id).await?.is_some() {
+            crate::held_flags::announce(app, Vec::new()).await;
+        }
         if !saved.off {
             let forward = prepare(Request::SetAside(aside.clone())).await?;
             match tokio::time::timeout(machines::SWEEP, forward_to(&saved, &forward)).await {
-                Ok(Ok(response)) => {
-                    // Written there, so an older flag held here is moot.
-                    if matches!(response, Response::Session { .. }) && crate::held_flags::unhold(&aside.session_id).await? {
-                        crate::held_flags::announce(app, Vec::new()).await;
-                    }
-                    return Ok(response);
-                }
-                Ok(Err(e)) if e.to_string().contains("too old") => return Err(e),
+                Ok(Ok(response)) => return Ok(response),
+                // A server too old for `orchestrate` still takes the flush's
+                // `set_session_flags`, so it is held like any other.
                 Ok(Err(e)) => eprintln!("[set aside] holding for {}: {e:#}", saved.name),
                 Err(_) => eprintln!("[set aside] holding for {}: no answer", saved.name),
             }

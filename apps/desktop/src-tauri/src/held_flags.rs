@@ -12,7 +12,11 @@
 
 use crate::{events::now_rfc3339, store};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, LazyLock, Mutex},
+};
 
 /// One session's flag, waiting on its server.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -74,10 +78,24 @@ pub async fn hold(machine: &str, session_id: &str, aside: bool, pinned: Option<b
     Ok(held)
 }
 
-/// Drops what is held for `session_id`: a message brought it back, or its
-/// server took the flag directly. Answers whether anything was held.
-pub async fn unhold(session_id: &str) -> anyhow::Result<bool> {
-    edit(|list| list.retain(|h| h.session_id != session_id)).await
+/// Held for as long as a flush is writing to that machine, so a change made
+/// meanwhile waits and lands after the flag it supersedes, never before it.
+static MACHINES: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = LazyLock::new(Default::default);
+
+fn machine_lock(machine: &str) -> Arc<tokio::sync::Mutex<()>> {
+    MACHINES.lock().unwrap_or_else(|e| e.into_inner()).entry(machine.to_string()).or_default().clone()
+}
+
+/// Drops what is held for `session_id`, once any flush writing it has
+/// finished, so the caller's own write to that server lands last. Answers
+/// what was held, landed meanwhile or not: a flag that did land may need
+/// undoing by the caller.
+pub async fn unhold(session_id: &str) -> anyhow::Result<Option<Held>> {
+    let Some(held) = list().await.into_iter().find(|h| h.session_id == session_id) else { return Ok(None) };
+    let lock = machine_lock(&held.machine);
+    let _writing = lock.lock().await;
+    edit(|list| list.retain(|h| h.session_id != session_id)).await?;
+    Ok(Some(held))
 }
 
 #[cfg(any(feature = "serve", feature = "desktop"))]
@@ -85,11 +103,7 @@ mod flush {
     use super::*;
     use crate::{machines, sink::Sink};
     use serde_json::{json, Value};
-    use std::{
-        collections::HashMap,
-        sync::{LazyLock, Mutex},
-        time::{Duration, Instant},
-    };
+    use std::time::{Duration, Instant};
 
     /// How often a held flag is tried while nothing says its server is back.
     const POLL: Duration = Duration::from_secs(30);
@@ -98,9 +112,6 @@ mod flush {
     const BACKOFF_CAP: Duration = Duration::from_secs(300);
 
     static BACKOFF: LazyLock<Mutex<HashMap<String, (Instant, Duration)>>> = LazyLock::new(Default::default);
-    /// One flush at a time, so a reconnect's and the timer's never write one
-    /// flag twice or announce it landed twice.
-    static FLUSHING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// What `held_flags_changed` carries: everything still held, and the rows
     /// a flush just wrote, as their servers answered them.
@@ -141,9 +152,9 @@ mod flush {
     }
 
     /// The serve command `unhold_session_flags`.
-    pub async fn unhold_and_announce(session_id: String, sink: Sink) -> Result<bool, String> {
+    pub async fn unhold_and_announce(session_id: String, sink: Sink) -> Result<Option<Held>, String> {
         let dropped = unhold(&session_id).await.map_err(|e| format!("{e:#}"))?;
-        if dropped {
+        if dropped.is_some() {
             announce(&sink, Vec::new()).await;
         }
         Ok(dropped)
@@ -168,64 +179,72 @@ mod flush {
     }
 
     /// Writes each held flag to its server, `only` that machine's where given.
+    /// A reconnect's flush and the timer's can overlap; each machine's lock
+    /// and the re-read under it keep one flag from being written twice.
     async fn flush(sink: &Sink, only: Option<&str>) {
-        let _flushing = FLUSHING.lock().await;
-        let list = list().await;
-        if list.is_empty() {
+        let mut ids: Vec<String> = list().await.into_iter().map(|h| h.machine).collect();
+        ids.sort();
+        ids.dedup();
+        ids.retain(|id| only.is_none_or(|m| m == id));
+        if ids.is_empty() {
             return;
         }
         let machines = machines::load().await;
-        let mut by_machine: HashMap<&str, Vec<&Held>> = HashMap::new();
-        for held in list.iter().filter(|h| only.is_none_or(|m| m == h.machine)) {
-            by_machine.entry(&held.machine).or_default().push(held);
-        }
-        let now = Instant::now();
-        let mut done: Vec<Held> = Vec::new();
         let mut landed = Vec::new();
-        for (id, mine) in by_machine {
-            let Some(saved) = machines.iter().find(|m| m.id == id) else {
+        let mut moved = false;
+        for id in ids {
+            let lock = machine_lock(&id);
+            let _writing = lock.lock().await;
+            let mine: Vec<Held> = list().await.into_iter().filter(|h| h.machine == id).collect();
+            let mut done: Vec<Held> = Vec::new();
+            match machines.iter().find(|m| m.id == id) {
                 // Removed, token and all: nothing will ever reach it again.
-                done.extend(mine.into_iter().cloned());
-                continue;
-            };
-            let waiting = BACKOFF.lock().unwrap_or_else(|e| e.into_inner()).get(id).is_some_and(|(at, _)| now < *at);
-            if saved.off || waiting {
-                continue;
-            }
-            for held in mine {
-                let args = json!({ "sessionId": held.session_id, "aside": held.aside, "pinned": held.pinned });
-                let answer = tokio::time::timeout(machines::SWEEP, machines::call(saved, "set_session_flags", args))
-                    .await
-                    .unwrap_or_else(|_| Err(format!("{} did not answer in time", saved.name)));
-                match answer {
-                    Ok(item) => {
-                        BACKOFF.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
-                        // Null is a session that server no longer has: nothing
-                        // left to write it to.
-                        if !item.is_null() {
-                            landed.push(Landed { server: id.to_string(), item });
-                        }
-                        done.push(held.clone());
+                None => done = mine,
+                Some(saved) => {
+                    let now = Instant::now();
+                    let waiting = BACKOFF.lock().unwrap_or_else(|e| e.into_inner()).get(&id).is_some_and(|(at, _)| now < *at);
+                    if saved.off || waiting {
+                        continue;
                     }
-                    Err(e) => {
-                        let mut backoff = BACKOFF.lock().unwrap_or_else(|e| e.into_inner());
-                        let wait = backoff.get(id).map_or(POLL, |(_, w)| (*w * 2).min(BACKOFF_CAP));
-                        backoff.insert(id.to_string(), (now + wait, wait));
-                        eprintln!("[held flags err] {}: {e}", saved.name);
-                        break;
+                    for held in mine {
+                        let args = json!({ "sessionId": held.session_id, "aside": held.aside, "pinned": held.pinned });
+                        let answer = tokio::time::timeout(machines::SWEEP, machines::call(saved, "set_session_flags", args))
+                            .await
+                            .unwrap_or_else(|_| Err(format!("{} did not answer in time", saved.name)));
+                        match answer {
+                            Ok(item) => {
+                                BACKOFF.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+                                // Null is a session that server no longer has:
+                                // nothing left to write it to.
+                                if !item.is_null() {
+                                    landed.push(Landed { server: id.clone(), item });
+                                }
+                                done.push(held);
+                            }
+                            Err(e) => {
+                                let mut backoff = BACKOFF.lock().unwrap_or_else(|e| e.into_inner());
+                                let wait = backoff.get(&id).map_or(POLL, |(_, w)| (*w * 2).min(BACKOFF_CAP));
+                                backoff.insert(id.clone(), (now + wait, wait));
+                                eprintln!("[held flags err] {}: {e}", saved.name);
+                                break;
+                            }
+                        }
                     }
                 }
             }
+            if done.is_empty() {
+                continue;
+            }
+            // Only the flag as it was sent: one pressed again meanwhile is
+            // newer than what landed, and goes on the next flush.
+            match edit(|list| list.retain(|h| !done.contains(h))).await {
+                Ok(_) => moved = true,
+                Err(e) => eprintln!("[held flags err] {e:#}"),
+            }
         }
-        if done.is_empty() {
-            return;
+        if moved {
+            announce(sink, landed).await;
         }
-        // Only the flag as it was sent: one pressed again meanwhile is newer
-        // than what landed, and goes on the next flush.
-        if let Err(e) = edit(|list| list.retain(|h| !done.contains(h))).await {
-            eprintln!("[held flags err] {e:#}");
-        }
-        announce(sink, landed).await;
     }
 }
 
