@@ -275,10 +275,13 @@ private func stamp(ago: TimeInterval = 0) -> String {
 /// strip of Dock, at the panel's own size.
 private struct CaseStage: View {
     let placement: Placement
+    /// Room for a done pill grown into waiting cards, which hover opens without opening the panel.
+    let shut: CGFloat
     @State private var composer: Composer
 
     init(_ c: Case, placement: Placement) {
         self.placement = placement
+        shut = c.waiting.isEmpty ? 150 : 300
         let store = Store()
         let server = UUID()
         store.seed(server, items: c.items, asks: c.asks, prs: c.prs)
@@ -324,7 +327,7 @@ private struct CaseStage: View {
                 .environment(composer.store)
                 .frame(width: Composer.width + 48, height: 680)
         }
-        .frame(width: Composer.width + 48, height: composer.shown ? 680 : 150,
+        .frame(width: Composer.width + 48, height: composer.shown ? 680 : shut,
                alignment: placement == .notch ? .top : .bottom)
         .background(Color(white: 0.22), in: RoundedRectangle(cornerRadius: 12))
         .clipShape(RoundedRectangle(cornerRadius: 12))

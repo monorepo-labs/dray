@@ -427,9 +427,13 @@ final class Delegate: NSObject, NSApplicationDelegate {
             let id = String(file.lastPathComponent.prefix { $0 != "." })
             var rows: [WaitingTask]?
             if !note.isEmpty {
+                // Moved aside before the read, so a newer notice's rows landing meanwhile are never deleted unread.
                 let held = Self.waitingDir.appendingPathComponent("\(id).json")
-                rows = (try? Data(contentsOf: held)).flatMap { try? JSONDecoder().decode([WaitingTask].self, from: $0) }
-                try? fm.removeItem(at: held)
+                let taken = Self.waitingDir.appendingPathComponent("\(id).\(UUID().uuidString).taken")
+                if (try? fm.moveItem(at: held, to: taken)) != nil {
+                    rows = (try? Data(contentsOf: taken)).flatMap { try? JSONDecoder().decode([WaitingTask].self, from: $0) }
+                    try? fm.removeItem(at: taken)
+                }
             }
             composer?.finished(id, note: note.isEmpty ? nil : note, rows: rows?.isEmpty == true ? nil : rows)
         }

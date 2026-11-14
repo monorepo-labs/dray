@@ -486,8 +486,8 @@ final class Composer {
         // A bot's turn ending beside its waiting notice must not turn the notice into "Done".
         let kept = note ?? notes[key]
         let keptRows = rows ?? waiting[key]
-        done.removeAll { $0 == key }
-        done.append(key)
+        // One assignment: removed and appended apart, `done` read empty between and let go of the hover.
+        done = done.filter { $0 != key } + [key]
         notes[key] = kept
         waiting[key] = keptRows
         if shown || !attention.isEmpty { unseenDone.insert(key) } else { unseenDone.remove(key) }
@@ -541,8 +541,10 @@ final class Composer {
     func mergeWaiting(_ chat: SessionKey, _ task: WaitingTask, method: String) async -> String? {
         guard let pr = task.pr else { return nil }
         let key = taskKey(chat, task.id)
+        // The app names a remote task's repo `dray://<machine>/<path>`; its own server wants the path.
+        let cwd = store.items[key]?.projectPath ?? task.projectPath.replacing(/^dray:\/\/[^\/]+/, with: "")
         store.lastError = nil
-        guard await store.mergeTask(key.server, taskId: task.id, cwd: task.projectPath, number: pr.number,
+        guard await store.mergeTask(key.server, taskId: task.id, cwd: cwd, number: pr.number,
                                     branch: pr.headRefName, method: method)
         else { return store.lastError ?? "Couldn't merge." }
         waiting[chat]?.removeAll { $0.id == task.id }
