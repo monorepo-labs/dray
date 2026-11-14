@@ -2761,7 +2761,7 @@ function App() {
       // `--delete-worktree` anyway.
       const item = sessionIndexItems.find((i) => i.sessionId === sessionId);
       if (item?.worktreeName) {
-        if (inBotTree(bots, sessionIndexItems, sessionId)) removeWorktree(sessionId, "tidy");
+        if (inBotTree(bots, sessionIndexItems, sessionId)) removeWorktree(sessionId, "asked");
         else void askAboutWorktree(sessionId, item.worktreeName, item.title, "notice");
       }
     }
@@ -3270,7 +3270,8 @@ function App() {
     if (task.busy || !(await setSessionFlags(item.sessionId, { archived: true }))) return;
     // The merge landed the work, so whatever the tree still holds is leftover:
     // asking here put a "Delete worktree?" notice on every merge with a stray file.
-    if (item.worktreeName && !item.worktreeRemoved) removeWorktree(item.sessionId, "tidy");
+    // "asked" so a refused delete still says so rather than orphaning the tree.
+    if (item.worktreeName && !item.worktreeRemoved) removeWorktree(item.sessionId, "asked");
   };
 
   const cardsReread = useRef(new Set<string>());
