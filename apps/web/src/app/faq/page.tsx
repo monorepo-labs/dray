@@ -105,7 +105,7 @@ const GROUPS: { title: string; entries: FaqEntry[] }[] = [
       },
       {
         q: "Do my sessions keep running when I quit Dray?",
-        a: "Yes. On a Mac your sessions run in a background server, so quitting the app leaves them working. Choose Quit and stop sessions to stop them too.",
+        a: "Yes. On a Mac your sessions run in a background server, so quitting the app leaves them working. Choose Quit completely to stop them too.",
       },
       {
         q: "Can I run agents on my other machines?",
