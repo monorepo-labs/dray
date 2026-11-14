@@ -13,6 +13,9 @@ enum MarkdownBlock {
     case image(alt: String, url: String)
 }
 
+/// A line holding one markdown image and nothing else.
+private let imageLine = /!\[([^\]]*)\]\(<?([^)\s>]+)>?(?:\s+"[^"]*")?\)/
+
 /// `| a | b |` → ["a", "b"]; `\|` is a pipe inside a cell, not a border.
 private func cells(_ line: String) -> [String] {
     var s = Substring(line.replacingOccurrences(of: "\\|", with: "\u{0}"))
@@ -68,7 +71,7 @@ func markdownBlocks(_ text: String) -> [MarkdownBlock] {
         }
         if !table.isEmpty { flush() }
         let indent = (line.prefix { $0 == " " }.count) / 2
-        if let m = trimmed.wholeMatch(of: /!\[([^\]]*)\]\(<?([^)\s>]+)>?(?:\s+"[^"]*")?\)/) {
+        if let m = trimmed.wholeMatch(of: imageLine) {
             flush()
             out.append(.image(alt: String(m.1), url: String(m.2)))
         } else if let m = trimmed.firstMatch(of: /^(#{1,6})\s+(.+)$/) {
@@ -136,22 +139,56 @@ struct MarkdownTable: View {
     }
 }
 
-// A screenshot `dray image add` filed beside a session's recordings, the
-// desktop's `SCREENSHOT`: drawn where a reply names it, and paged in its turn's
-// gallery. Here rather than beside `recordingPaths`, since the island compiles
-// this file and `Transcript.swift`'s gallery reads it.
-private let screenshotPattern = #/(?:^|[\s"'`(<>\[=:])(\/[^\s"'`()<>]*\/browser(?:-dev)?\/recordings\/[^\/\s"'`()<>]+\/[^\/\s"'`()<>]+\.(?:png|jpg))/#
-    .anchorsMatchLineEndings()
+// An image file a reply names by its absolute path — a `dray image add`
+// screenshot, a file the agent wrote: drawn where the reply names it, and paged
+// in its turn's gallery. Here rather than beside `recordingPaths`, since the
+// island compiles this file and `Transcript.swift`'s gallery reads it. A `//`
+// start is a URL's host, not a path.
+private let imagePattern = #/(?:^|[\s"'`(<>\[=:])(\/[^\/\s"'`()<>][^\s"'`()<>]*\.(?:png|jpe?g|gif|webp))(?=$|[\s"'`()<>\],;:!?]|\.(?:$|\s))/#
+    .ignoresCase()
 
-/// Every screenshot a message names, once each, in the order it names them.
-/// One written as a markdown image is left out: that block draws it already.
-func screenshotPaths(in text: String) -> [String] {
+/// Each line, and whether it is code: inside a fence, or the fence itself.
+private func fencedLines(_ text: String) -> [(line: Substring, code: Bool)] {
+    var fenced = false
+    return text.split(separator: "\n", omittingEmptySubsequences: false).map { line in
+        if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") { fenced.toggle(); return (line, true) }
+        return (line, fenced)
+    }
+}
+
+/// Every image path a message names outside code, once each, in the order it
+/// names them. One written as a markdown image line is left out: that block draws it already.
+func imagePaths(in text: String) -> [String] {
     var seen = Set(markdownBlocks(text).compactMap { block -> String? in
         guard case .image(_, let url) = block else { return nil }
         return url
     })
-    return text.matches(of: screenshotPattern).compactMap { match in
+    return fencedLines(text).filter { !$0.code }.flatMap { $0.line.matches(of: imagePattern) }.compactMap { match in
         let path = String(match.output.1)
         return seen.insert(path).inserted ? path : nil
     }
+}
+
+/// The text with `paths` taken out — bare, in a code span, or as a markdown
+/// link or inline image — since the picture or player drawn for each names it
+/// already. Code and a markdown image line stay whole, and a line left with no
+/// words goes.
+func hiding(_ paths: [String], in text: String) -> String {
+    guard !paths.isEmpty else { return text }
+    let named = Set(paths)
+    return fencedLines(text).compactMap { line, code -> String? in
+        let original = String(line)
+        if code || original.trimmingCharacters(in: .whitespaces).wholeMatch(of: imageLine) != nil { return original }
+        var out = original
+            .replacing(/!?\[[^\]]*\]\(<?([^)\s>]+)>?(?:\s+"[^"]*")?\)/) { named.contains(String($0.1)) ? "" : String($0.0) }
+            .replacing(/`([^`]+)`/) { named.contains(String($0.1)) ? "" : String($0.0) }
+        for path in paths { out = out.replacingOccurrences(of: path, with: "") }
+        guard out != original else { return out }
+        guard out.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
+        // Indent is left alone: a list item's nesting reads off it.
+        return out.replacing(/\ +([.,;:!?])/) { String($0.1) }
+            .replacing(/([:,;])[.,;:]+/) { String($0.1) }
+            .replacing(/(\S) {2,}/) { "\($0.1) " }
+            .replacing(/\ +$/, with: "")
+    }.joined(separator: "\n")
 }
