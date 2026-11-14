@@ -169,6 +169,10 @@ const lastProjects = new Map<ServerId, Project[]>();
 /// good cache is how a quick quit would lose it.
 const answered = new Set<string>();
 
+/// Whether `server` has sent its session list this run, so a bot's chat on it
+/// can be told apart from a bot with none yet.
+export const sessionsAnswered = (server: ServerId): boolean => answered.has(`${server}:sessions`);
+
 /// Per session, how many index entries have landed. A server's replies and
 /// events leave on separate queues, so a read can answer after a newer change
 /// and has to be able to tell.
@@ -1335,6 +1339,13 @@ const handleNewBotSession = (path: string) => {
 const handleNewSession = () => {
   selectionRequestRef.current = null;
   setSelectedSessionId(null);
+  // A bot opened before its first chat aimed the composer at its folder, and a
+  // new task left there would be that bot's chat again. Judged as "not a
+  // project" rather than "a bot's", since a bot just deleted is no longer in
+  // the list that says so. `handleNewBotSession` aims it back after this.
+  setProjectPath((path) =>
+    path && !projects.some((p) => p.path === path) ? (lastSelected(projects)?.path ?? null) : path,
+  );
   // The slot is one value for the whole app, so a failure left in it follows
   // the reader out of the session it happened in. It reports the reader's own
   // last action failing, and leaving a session is leaving that action behind —

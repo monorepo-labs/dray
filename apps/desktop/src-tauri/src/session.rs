@@ -3279,16 +3279,17 @@ async fn deliver_prompt(
 
     // A bot whose chat opens on a welcome (Dray Bot) has it written down as
     // the chat's first message, ahead of the prompt that started the session,
-    // so the chat reads after a restart as it did before the first send. Only
-    // logged: the agent is not given it.
-    if let Some(welcome) = crate::bots::take_welcome(session_id) {
+    // so the chat reads after a restart as it did before the first send. One
+    // event per message, each its own bubble. The agent is handed the same
+    // words in the hidden lead-in, never as a turn of its own.
+    for text in crate::bots::take_welcome(session_id).unwrap_or_default() {
         let event = AgentEvent::mint(
             session_id.to_string(),
             harness,
             seq.fetch_add(1, Relaxed),
             None,
             None,
-            AgentEventPayload::AssistantText { block: None, text: welcome },
+            AgentEventPayload::AssistantText { block: None, text },
         );
         app.emit("agent_event", &event)?;
         append_session_event(session_id, event).await?;
@@ -3546,6 +3547,7 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
     // the parent's session, which must not hold this one's read loop up.
     let mut silent_bot_turn = false;
     let mut bot_turn = None;
+    let mut ask_name = false;
     if agent_event.subagent.is_none() {
         match &agent_event.payload {
             AgentEventPayload::AssistantText { text, .. } if crate::events::has_text(text) => {
@@ -3566,9 +3568,10 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                     && *status == TurnStatus::Success
                     && crate::bots::bot_at(ctx.session_cwd).await.is_some();
                 report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
+                ask_name = crate::bots::take_name_ask(ctx.session_id) && *status == TurnStatus::Success;
                 // Awaited, not spawned: the queued flush below would start the
                 // next turn, which could overwrite this one's notes unsaved.
-                bot_turn = crate::bots::commit_turn(ctx.session_cwd, notes).await;
+                bot_turn = crate::bots::commit_turn(ctx.session_cwd, notes, app).await;
             }
             _ => {}
         }
@@ -3695,6 +3698,19 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
 
     if let Err(err) = append_session_event(ctx.session_id, agent_event).await {
         eprintln!("[write err] {err}");
+    }
+
+    // A new bot's greeting, then Dray's question for the user's name as a
+    // message of its own (#1076), ahead of anything the turn learned.
+    if ask_name {
+        let text = crate::bots::ASK_NAME.to_string();
+        let payload = AgentEventPayload::AssistantText { block: None, text };
+        let seq = ctx.flush_seq.fetch_add(1, Relaxed);
+        let event = AgentEvent::mint(ctx.session_id.to_string(), ctx.harness, seq, None, None, payload);
+        app.emit("agent_event", &event).ok();
+        if let Err(err) = append_session_event(ctx.session_id, event).await {
+            eprintln!("[name ask write err] {err}");
+        }
     }
 
     // After the turn's close in the log, so its "Learned" rows draw under the
