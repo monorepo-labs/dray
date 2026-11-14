@@ -1163,6 +1163,8 @@ pub async fn take_continue_at(session_id: &str, at: &str) -> Result<Option<(Sess
 pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>, Fail> {
     Ok(update_item(session_id, |item| {
         item.parent_session_id = None;
+        // Or the walk would still find a way up through it.
+        item.adopted = None;
         // No parent to surface beside, so a hidden session would show nowhere.
         item.hidden = false;
         item.clone()
@@ -1248,7 +1250,7 @@ fn adoption_in(items: &[SessionIndexItem], item: &SessionIndexItem, gone: Option
     Some(Adoption { by: by.session_id.clone(), from })
 }
 
-/// Rewrites [`SessionIndexItem::adopted`] on every unsettled session below
+/// Rewrites [`SessionIndexItem::adopted`] on every session below
 /// `root`, after `root` was settled, unsettled, or is about to be deleted
 /// (`gone`). Answers the ids whose entry changed, for the caller to announce.
 pub async fn readopt(root: &str, gone: Option<&str>) -> Result<Vec<String>> {
@@ -1276,9 +1278,8 @@ fn readopt_in(sessions: &mut [SessionIndexItem], root: &str, gone: Option<&str>)
                 continue;
             }
             queue.push_back(sessions[k].session_id.clone());
-            if sessions[k].archived {
-                continue;
-            }
+            // Settled ones too: a settled child is still the step its own
+            // live children's walk takes up to the bot.
             let next = adoption_in(&sessions, &sessions[k], gone);
             if next != sessions[k].adopted {
                 sessions[k].adopted = next;
@@ -2451,6 +2452,24 @@ mod tests {
         items[1].archived = true;
         assert_eq!(readopt_in(&mut items, "mid", None), ["sub"]);
         assert_eq!(adopted(&items, "sub"), Some(&Adoption { by: "bot".into(), from: "task title".into() }));
+    }
+
+    /// bot → task → settled child → live grandchild, then the task deleted:
+    /// the settled child keeps a bridge too, or the grandchild's walk stops at
+    /// it with no way on to the bot.
+    #[test]
+    fn a_settled_middle_keeps_the_bridge_for_what_runs_below_it() {
+        let mut items = vec![
+            tree_item("bot", None),
+            tree_item("task", Some("bot")),
+            tree_item("child", Some("task")),
+            tree_item("grand", Some("child")),
+        ];
+        items[2].archived = true;
+        readopt_in(&mut items, "task", Some("task"));
+        items.retain(|i| i.session_id != "task");
+        assert_eq!(adopted(&items, "child").map(|a| a.by.as_str()), Some("bot"));
+        assert_eq!(live_ancestor_in(&items, "grand"), Some("bot"));
     }
 
     /// Nothing live above it — the bot's chat settled too — is no adoption.

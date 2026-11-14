@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { botAt, botBrowser, botChat, botNamed, botSession, inBotTree, keepsChildren, previewLine } from "@/lib/bots";
+import { botAt, botBrowser, botChat, botNamed, botSession, inBotTree, previewLine } from "@/lib/bots";
 import type { Bot, SessionIndexItem } from "@/types/events";
 
 const bot: Bot = { id: "b", name: "Ops", path: "/h/bots/b", created: "" };
@@ -68,20 +68,6 @@ describe("inBotTree", () => {
       item("sub", { cwd: "/repo/wt2", parentSessionId: "settled", adopted: { by: "chat", from: "t" } }),
     ];
     expect(inBotTree([bot], items, "sub")).toBe(true);
-  });
-});
-
-describe("keepsChildren", () => {
-  const items = [
-    item("chat"),
-    item("task", { cwd: "/repo/wt", parentSessionId: "chat" }),
-    item("other", { cwd: "/repo" }),
-  ];
-
-  it("is true of a bot's task alone: its chat and other sessions settle their children", () => {
-    expect(keepsChildren([bot], items, "task")).toBe(true);
-    expect(keepsChildren([bot], items, "chat")).toBe(false);
-    expect(keepsChildren([bot], items, "other")).toBe(false);
   });
 });
 

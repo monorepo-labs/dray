@@ -218,6 +218,21 @@ mod collect {
         store::write_atomic(&tracked_path().await?, serde_json::to_string_pretty(&list)?).await
     }
 
+    /// Moves the tasks tracked under `from`, a bot's task about to be deleted,
+    /// to `to`, the nearest live session above it: once `from` is gone the
+    /// collector would read their parent as closed and drop their reports.
+    pub async fn retarget(from: &str, to: &str) -> anyhow::Result<()> {
+        let _guard = TRACKED.lock().await;
+        let mut list = load().await;
+        if !list.iter().any(|r| r.parent == from) {
+            return Ok(());
+        }
+        for r in list.iter_mut().filter(|r| r.parent == from) {
+            r.parent = to.to_string();
+        }
+        store::write_atomic(&tracked_path().await?, serde_json::to_string_pretty(&list)?).await
+    }
+
     /// The machine a bot's task here was started on, for a verb that must
     /// reach it while that machine does not answer.
     pub async fn machine_of(child: &str) -> Option<String> {
@@ -482,7 +497,7 @@ mod collect {
 }
 
 #[cfg(any(feature = "serve", feature = "desktop"))]
-pub use collect::{machine_of, run, track};
+pub use collect::{machine_of, retarget, run, track};
 
 #[cfg(test)]
 mod tests {

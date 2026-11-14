@@ -150,18 +150,6 @@ export function botOf(
   return undefined;
 }
 
-/// Whether `sessionId` is a bot's task, whose sub-tasks outlive it: settling or
-/// deleting it leaves them running, where any other session's hidden children
-/// go with it. The server's `keeps_children`.
-export function keepsChildren(
-  list: readonly Bot[],
-  items: readonly SessionIndexItem[],
-  sessionId: string,
-): boolean {
-  const item = items.find((i) => i.sessionId === sessionId);
-  return !!item && !botAt(list, item.cwd) && inBotTree(list, items, sessionId);
-}
-
 /// The session whose browser a bot chat's `sessionId` uses, as the server's
 /// `bots::browser_owner` resolves it: the chat's oldest session, since an
 /// agent switch adds a newer one and the pages must outlive it (#878). A

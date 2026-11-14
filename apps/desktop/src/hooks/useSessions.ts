@@ -1,6 +1,6 @@
 import { invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
-import { botsOf, isBotPath, keepBots, keepsChildren, refreshBots, useBots } from "@/lib/bots";
+import { botsOf, isBotPath, keepBots, refreshBots, useBots } from "@/lib/bots";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
 import { indexRow, loadServerCaches, saveServerCache, unreachable, withKept } from "@/lib/serverCache";
 import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
@@ -1748,16 +1748,11 @@ const setSessionFlags = async (
     if (!updated) return false;
     applyIndexItem(updated);
     // A hidden child is drawn in this session's crew alone, so it goes where
-    // the parent goes. Awaited, so a caller that refetches the other side
-    // afterwards reads the children already moved. A bot's task's sub-tasks
-    // stay, adopted by the bot, which the server announces.
-    if (flags.archived !== undefined && !keepsChildren(bots, sessionIndexItems, sessionId)) {
-      await Promise.all(
-        hiddenChildren(sessionIndexItems, sessionId).map((c) =>
-          setSessionFlags(c.sessionId, { archived: flags.archived }),
-        ),
-      );
-    }
+    // the parent goes — or stays, a bot's task's sub-task being adopted. The
+    // server walked the whole tree and decided; this list holds one side of
+    // it, so each child is read back rather than judged here. Awaited, so a
+    // caller that refetches the other side afterwards reads them already moved.
+    if (flags.archived !== undefined) await rereadChildren(sessionId);
     return true;
   } catch (e) {
     // Dropped between the check above and the call.
@@ -2015,8 +2010,9 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
   }
 
   // Read before the row goes. A hidden child has no row of its own to be
-  // deleted from, so it goes with its parent, unless a bot's task left it running.
-  const children = keepsChildren(bots, sessionIndexItems, sessionId) ? [] : hiddenChildren(sessionIndexItems, sessionId);
+  // deleted from, so it goes with its parent, unless a bot's task left it
+  // running: the server decided, so each is asked for after the delete.
+  const children = hiddenChildren(sessionIndexItems, sessionId);
   setSessionIndexItems((prev) => prev.filter((i) => i.sessionId !== sessionId));
   setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
   retireStreamingBlock(sessionId);
@@ -2035,8 +2031,36 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
   if (selectedSessionId === sessionId) {
     handleNewSession();
   }
-  await Promise.all(children.map((c) => deleteSession(c.sessionId)));
+  await Promise.all(
+    children.map(async (c) => {
+      const kept = await invoke<SessionIndexItem | null>("session_index_item", { sessionId: c.sessionId }).catch(
+        () => undefined,
+      );
+      if (kept) applyIndexItem(kept);
+      else if (kept === null) await deleteSession(c.sessionId);
+    }),
+  );
   return true;
+};
+
+/// Every hidden session held under `parentId`, read back from the server after
+/// a settle there: it settled them with the parent or left a bot's task's
+/// sub-tasks running, and the index it judged by is whole where this list is not.
+const rereadChildren = async (parentId: string) => {
+  const seen = new Set([parentId]);
+  const ids: string[] = [];
+  for (let at = [parentId]; at.length; ) {
+    at = at.flatMap((id) => hiddenChildren(sessionIndexItems, id).map((c) => c.sessionId)).filter((id) => !seen.has(id));
+    at.forEach((id) => seen.add(id));
+    ids.push(...at);
+  }
+  await Promise.all(
+    ids.map((id) =>
+      invoke<SessionIndexItem | null>("session_index_item", { sessionId: id })
+        .then((item) => item && applyIndexItem(item))
+        .catch((err) => console.error("could not reread", id, err)),
+    ),
+  );
 };
 
 // Refetched on every toggle rather than filtered from one cached list: the two

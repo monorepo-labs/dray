@@ -666,6 +666,17 @@ async fn delete_session(
         true => store::readopt(session_id, Some(session_id)).await?,
         false => Vec::new(),
     };
+    // Its tasks on other machines are tracked here under its id, not adopted.
+    #[cfg(any(feature = "serve", feature = "desktop"))]
+    if keeps {
+        let above = match store::get_session_index_item(session_id).await? {
+            Some(item) => store::live_ancestor(&item).await?,
+            None => None,
+        };
+        if let Some(above) = above {
+            remote_reports::retarget(session_id, &above.session_id).await?;
+        }
+    }
     let deleted = manager().delete(session_id, !keeps).await;
     // A failed delete leaves the parent live, and its children back under it.
     let adopted = match (&deleted, keeps) {
