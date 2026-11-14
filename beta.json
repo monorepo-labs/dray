@@ -1,23 +1,23 @@
 {
-  "version": "0.30.3",
-  "notes": "### New\n\n- **Bots learn from corrections.** When you correct a bot or a task\n  fails, it writes the lesson where it will be used next time: a rule,\n  a skill or a memory. Each lesson shows in the chat with View diff and\n  Undo.\n- **Bots hear what you did.** A bot is told which of its tasks you\n  merged, settled, stopped or deleted since its last turn.\n- New tab page has Diff and Files cards.\n\n### Improved\n\n- Long-open bot chats stay fast by keeping only recent turns drawn.\n- Bots stay quiet on task progress and can answer with lists and\n  tables.\n- A bot can end a turn without a reply, and blank replies no longer\n  draw.\n- Links in a bot's chat open as tabs in the bot's row.\n- Stalled tasks on another machine now reach their bot.\n- Merging goes straight to the merged row with no flash.\n- Boat sandbox stop warnings are off.",
-  "pub_date": "2026-11-13T13:27:47.690Z",
+  "version": "0.30.4",
+  "notes": "### New\n\n- **Split panes.** Drag a tab from a session's tab row into the main\n  view to open it beside the chat. Pages, Diff, Files and bot tasks all\n  split.\n- **Video proof from tasks.** A bot's task ends visible work with a\n  short recording, and the bot passes it on so it plays in its chat.\n- **Bots react.** A bot with nothing to say puts 👀, ✅ or 🎉 on your\n  message instead of replying.\n- **Waiting cards in the Island.** Hover a bot's \"waiting on you\" pill\n  to see each task's card, and merge a ready PR from there.\n\n### Improved\n\n- A bot task waiting on you shows after 2 minutes, not 5.\n- Clicking a \"Waiting on you\" row scrolls to the task's last reply;\n  ⌘-click opens the task.\n- The background tasks list shows only tasks still running.\n- The sidebar remembers which bot you had open under each project\n  filter, and hides the filter row when no project is attached.\n- Esc leaves Settled or Drafts for the active list.\n- A task whose server is offline can still be set aside.\n- I'm back unlocks after 10 seconds, not 30.\n\n### Fixed\n\n- Scrolling a page sideways in the browser no longer switches tabs.\n- Hidden tasks stay hidden under a project filter.",
+  "pub_date": "2026-11-14T10:01:39.233Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdLTnozVnB1UHJWOFBwKzVuYlBXdVFVaEY1LzkxL0NVeUhGOHVOWWJmTEc3cmo0TnoyeFgwbVluL0xrNFBDZHRFV3ZjS1cvYzZaZVVSYkFaZ3JRaUFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTc2NDUyCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4zCk9VVmRiZWhXQWk3TjVuTEtqdHNxbnNScVptRWJQQkZITlN2UTYrT2NUYm1jR2VtUmJnYVZXVHlQUWpGYU9iV1RmQlZaQ1haL2plN0lESFdvVFFqNkRnPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.3/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdSQVU3SzZWRC9SSWUzcXI3SXZnVnlUcHpmZ3Z2QkY0eERSRzVOdjUvRUtZQlMyVm5oS0ppQ3ZGQWx1UktHZjI3WDhzcDNUSmo0Tm1mUWZwNGpoeUE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjUwNDg5CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC40CnFwa2pucXhtQXl2bzllZGtySThkM3I0MEJKQk5UUWxETjAxWmw5czFoMzBnK1ZMRDlHTWgzT1VLMDh1UzVHTkRaZ0t2ZXFEU05SeFBLVjB5Sk9DckN3PT0K",
+      "url": "https://downloads.drayhq.com/v0.30.4/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdLTnozVnB1UHJWOFBwKzVuYlBXdVFVaEY1LzkxL0NVeUhGOHVOWWJmTEc3cmo0TnoyeFgwbVluL0xrNFBDZHRFV3ZjS1cvYzZaZVVSYkFaZ3JRaUFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTc2NDUyCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4zCk9VVmRiZWhXQWk3TjVuTEtqdHNxbnNScVptRWJQQkZITlN2UTYrT2NUYm1jR2VtUmJnYVZXVHlQUWpGYU9iV1RmQlZaQ1haL2plN0lESFdvVFFqNkRnPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.3/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdSQVU3SzZWRC9SSWUzcXI3SXZnVnlUcHpmZ3Z2QkY0eERSRzVOdjUvRUtZQlMyVm5oS0ppQ3ZGQWx1UktHZjI3WDhzcDNUSmo0Tm1mUWZwNGpoeUE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjUwNDg5CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC40CnFwa2pucXhtQXl2bzllZGtySThkM3I0MEJKQk5UUWxETjAxWmw5czFoMzBnK1ZMRDlHTWgzT1VLMDh1UzVHTkRaZ0t2ZXFEU05SeFBLVjB5Sk9DckN3PT0K",
+      "url": "https://downloads.drayhq.com/v0.30.4/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdLTnozVnB1UHJWOFBwKzVuYlBXdVFVaEY1LzkxL0NVeUhGOHVOWWJmTEc3cmo0TnoyeFgwbVluL0xrNFBDZHRFV3ZjS1cvYzZaZVVSYkFaZ3JRaUFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTc2NDUyCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4zCk9VVmRiZWhXQWk3TjVuTEtqdHNxbnNScVptRWJQQkZITlN2UTYrT2NUYm1jR2VtUmJnYVZXVHlQUWpGYU9iV1RmQlZaQ1haL2plN0lESFdvVFFqNkRnPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.3/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdSQVU3SzZWRC9SSWUzcXI3SXZnVnlUcHpmZ3Z2QkY0eERSRzVOdjUvRUtZQlMyVm5oS0ppQ3ZGQWx1UktHZjI3WDhzcDNUSmo0Tm1mUWZwNGpoeUE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjUwNDg5CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC40CnFwa2pucXhtQXl2bzllZGtySThkM3I0MEJKQk5UUWxETjAxWmw5czFoMzBnK1ZMRDlHTWgzT1VLMDh1UzVHTkRaZ0t2ZXFEU05SeFBLVjB5Sk9DckN3PT0K",
+      "url": "https://downloads.drayhq.com/v0.30.4/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdLTnozVnB1UHJWOFBwKzVuYlBXdVFVaEY1LzkxL0NVeUhGOHVOWWJmTEc3cmo0TnoyeFgwbVluL0xrNFBDZHRFV3ZjS1cvYzZaZVVSYkFaZ3JRaUFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTc2NDUyCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4zCk9VVmRiZWhXQWk3TjVuTEtqdHNxbnNScVptRWJQQkZITlN2UTYrT2NUYm1jR2VtUmJnYVZXVHlQUWpGYU9iV1RmQlZaQ1haL2plN0lESFdvVFFqNkRnPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.3/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdSQVU3SzZWRC9SSWUzcXI3SXZnVnlUcHpmZ3Z2QkY0eERSRzVOdjUvRUtZQlMyVm5oS0ppQ3ZGQWx1UktHZjI3WDhzcDNUSmo0Tm1mUWZwNGpoeUE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjUwNDg5CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC40CnFwa2pucXhtQXl2bzllZGtySThkM3I0MEJKQk5UUWxETjAxWmw5czFoMzBnK1ZMRDlHTWgzT1VLMDh1UzVHTkRaZ0t2ZXFEU05SeFBLVjB5Sk9DckN3PT0K",
+      "url": "https://downloads.drayhq.com/v0.30.4/Dray_universal.app.tar.gz"
     }
   }
 }
