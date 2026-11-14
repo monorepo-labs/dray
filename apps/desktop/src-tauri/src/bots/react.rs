@@ -38,9 +38,10 @@ pub async fn reaction(session_id: &str, cwd: &str, said: &str) -> Result<AgentEv
         let known: Vec<_> = EMOJI.iter().map(|(e, word)| format!("{e} ({word})")).collect();
         bail!("no reaction \"{said}\": pick one of {}", known.join(", "));
     };
-    let events = crate::store::list_session_events(session_id).await?;
-    let message_id = target(&events).context("the user has sent no message in this chat to react to")?;
-    Ok(AgentEventPayload::Reaction { message_id: message_id.to_string(), emoji: emoji.to_string() })
+    let message_id = crate::store::find_newest(session_id, |events| target(events).map(str::to_string))
+        .await?
+        .context("the user has sent no message in this chat to react to")?;
+    Ok(AgentEventPayload::Reaction { message_id, emoji: emoji.to_string() })
 }
 
 #[cfg(test)]
