@@ -1,6 +1,6 @@
 ---
 title: Sessions and the sidebar
-description: Find sessions in the sidebar, read its marks and groups, pin, settle, set aside, fork, rename and delete sessions, and move between them from the keyboard.
+description: Find sessions in the sidebar, read its marks and groups, pin, settle, set aside, fork, rename and delete sessions, open a tab beside the chat, and move between them from the keyboard.
 sidebar:
   order: 5
 ---
@@ -16,8 +16,8 @@ From the top:
 - **New Task** (`⌘N`) opens the new-task composer.
 - **Issues** (`⌘I`) opens the issues page.
 - **Search** (`⌘F`) filters the list by title. `Esc` clears it.
-- The **project filter** names the project the list shows, starting at **All Projects**. Click it to step to the next project, or swipe on the sidebar with two fingers on a Mac trackpad. `⌘⌥←` and `⌘⌥→` step it too.
-- Two buttons beside the filter switch the list: **Show drafts** (dashed circle) and **Show settled** (double tick). Each turns into **Show active** while its view is up.
+- The **project filter** names the project the list shows, starting at **All Projects**. Click it to step to the next project, or swipe on the sidebar with two fingers on a Mac trackpad. `⌘⌥←` and `⌘⌥→` step it too. With no project attached, the row is hidden. It stays while Drafts or Settled is open, so you can get back, and it stays while a project filter is still selected. Coming back to a filter returns to the bot or session you had open there, until you quit.
+- Two buttons beside the filter switch the list: **Show drafts** (dashed circle) and **Show settled** (double tick). Each turns into **Show active** while its view is up. With either view up, `Esc` returns to the active list, unless a menu, the search field or the composer takes the key first. Leaving Drafts also closes the draft you had open.
 
 `⌘B` hides and shows the sidebar.
 
@@ -104,6 +104,12 @@ Fork is disabled while the session's turn is running. If the original takes anot
 Dray titles a session from its first prompt, then replaces that with a short title the agent's cheapest model writes. Grok titles its own sessions.
 
 To rename, double-click the session's title in the tab row above the transcript, or press `⏎` on it. `⏎` saves, `Esc` cancels.
+
+## Open a tab beside the chat
+
+Drag a tab from the row above the transcript and drop it on the chat. The drop offers **Split left** or **Split right**, and that tab opens beside the chat. Diff, a browser page, an open file and a bot's task all split. A browser page splits on a Mac. Drop more tabs the same way while there is room. A drop that would make a pane too narrow does nothing.
+
+The row draws the open panes as one tab. Hold `⌥` and drag a member of that tab to reorder the panes. Drag the gap between panes to resize them. The X on a pane, labelled **Close pane**, puts its tab back in the row.
 
 ## Delete a session
 
