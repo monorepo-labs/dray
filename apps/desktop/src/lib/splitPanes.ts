@@ -2,19 +2,25 @@ import { useSyncExternalStore } from "react";
 
 import type { TabKey } from "@/lib/tabOrder";
 
-/// A session's split groups, keyed by the row's session. Each is its lead —
-/// the tab whose view the main column draws — then the tabs dragged out right
-/// of it, left to right. The row draws a group as one tab in the lead's slot;
-/// the others keep their own slots in the row's order, so a pane closed puts
-/// its tab back where it was. In memory, like the row's order.
-const groups = new Map<string, TabKey[][]>();
+/// One split group. `lead` is the tab whose view the main column draws;
+/// `keys` is every member, the lead among them, left to right as the cards
+/// sit. The row draws a group as one tab in the lead's slot; the others keep
+/// their own slots in the row's order, so a pane closed puts its tab back
+/// where it was.
+export type SplitGroup = { lead: TabKey; keys: TabKey[] };
+export type Side = "left" | "right";
+
+/// A session's split groups, keyed by the row's session. In memory, like the
+/// row's order.
+const groups = new Map<string, SplitGroup[]>();
 /// The lead of the group whose tab is lit, published by the row.
 const lit = new Map<string, TabKey | null>();
 /// What a pane's header draws, published by the row that knows it.
 export type PaneHead = { icon: React.ReactNode; label: string };
 const heads = new Map<string, Map<TabKey, PaneHead>>();
-/// A tab held over the main view: the drop that would split it out.
-export type SplitDrag = { sessionId: string; key: TabKey; label: string | null };
+/// A tab held over the main view: the drop that would split it out, and on
+/// which side.
+export type SplitDrag = { sessionId: string; key: TabKey; label: string | null; side: Side };
 let drag: SplitDrag | null = null;
 
 /// The narrowest a pane gets, the main view included. A drop that would
@@ -30,27 +36,38 @@ function subscribe(l: () => void) {
   return () => listeners.delete(l);
 }
 
-const NONE: TabKey[][] = [];
+const NONE: SplitGroup[] = [];
 const EMPTY: TabKey[] = [];
 
-export function splitGroupsOf(sessionId: string): TabKey[][] {
+export function splitGroupsOf(sessionId: string): SplitGroup[] {
   return groups.get(sessionId) ?? NONE;
 }
 
-export function useSplitGroups(sessionId: string | null): TabKey[][] {
+export function useSplitGroups(sessionId: string | null): SplitGroup[] {
   return useSyncExternalStore(subscribe, () => (sessionId ? splitGroupsOf(sessionId) : NONE));
 }
 
-/// The lit group's panes, lead left out: what is drawn beside the main view.
-// Per group array, which is replaced on every change: a store snapshot must
-// be the same object until something moves.
-const tails = new WeakMap<TabKey[], TabKey[]>();
+/// Every tab sitting behind a lead, out of the row.
+export const membersOf = (group: SplitGroup) => group.keys.filter((k) => k !== group.lead);
 
-export function splitPanesOf(sessionId: string): TabKey[] {
+export function litGroupOf(sessionId: string): SplitGroup | null {
   const lead = lit.get(sessionId);
-  const group = splitGroupsOf(sessionId).find((g) => g[0] === lead);
+  return splitGroupsOf(sessionId).find((g) => g.lead === lead) ?? null;
+}
+
+export function useLitGroup(sessionId: string | null): SplitGroup | null {
+  return useSyncExternalStore(subscribe, () => (sessionId ? litGroupOf(sessionId) : null));
+}
+
+// Per group object, which is replaced on every change: a store snapshot must
+// be the same object until something moves.
+const tails = new WeakMap<SplitGroup, TabKey[]>();
+
+/// The lit group's panes, lead left out: what is drawn beside the main view.
+export function splitPanesOf(sessionId: string): TabKey[] {
+  const group = litGroupOf(sessionId);
   if (!group) return EMPTY;
-  if (!tails.has(group)) tails.set(group, group.slice(1));
+  if (!tails.has(group)) tails.set(group, membersOf(group));
   return tails.get(group)!;
 }
 
@@ -59,10 +76,6 @@ export function useSplitPanes(sessionId: string | null): TabKey[] {
 }
 
 /// Called from the row, which alone knows which tab is lit.
-export function useLitLead(sessionId: string | null): TabKey | null {
-  return useSyncExternalStore(subscribe, () => (sessionId ? (lit.get(sessionId) ?? null) : null));
-}
-
 export function setLitGroup(sessionId: string, lead: TabKey | null) {
   if ((lit.get(sessionId) ?? null) === lead) return;
   lit.set(sessionId, lead);
@@ -75,27 +88,50 @@ const covers = (member: TabKey, key: TabKey) =>
 /// Whether `key` sits in a group behind its lead, so out of the row: a pick's
 /// own files go with the pick.
 export function isSplit(sessionId: string, key: TabKey): boolean {
-  return splitGroupsOf(sessionId).some((g) => g.slice(1).some((m) => covers(m, key)));
+  return splitGroupsOf(sessionId).some((g) => membersOf(g).some((m) => covers(m, key)));
 }
 
-function save(sessionId: string, next: TabKey[][]) {
-  // A group of one is just its tab again.
-  groups.set(sessionId, next.filter((g) => g.length > 1));
+/// Writes `next`, keeping each group's lead among its keys — a lead gone
+/// hands the group to its leftmost card — and dissolving a group of one,
+/// which is just its tab again.
+function save(sessionId: string, next: SplitGroup[]) {
+  groups.set(
+    sessionId,
+    next
+      .filter((g) => g.keys.length > 1)
+      .map((g) => (g.keys.includes(g.lead) ? g : { lead: g.keys[0], keys: g.keys })),
+  );
   notify();
 }
 
-/// Puts `key` right of `lead`'s group, or makes one of the two. Out of any
-/// group it was in first.
-export function addSplit(sessionId: string, lead: TabKey, key: TabKey) {
+/// Puts `key` at `side`'s end of `lead`'s group, or makes one of the two.
+/// Out of any group it was in first.
+export function addSplit(sessionId: string, lead: TabKey, key: TabKey, side: Side = "right") {
   if (lead === key) return;
-  const rest = splitGroupsOf(sessionId).map((g) => g.filter((m) => m !== key));
-  const at = rest.findIndex((g) => g[0] === lead);
-  if (at === -1) rest.push([lead, key]);
-  else rest[at] = [...rest[at], key];
+  const rest = splitGroupsOf(sessionId).map((g) => ({ ...g, keys: g.keys.filter((m) => m !== key) }));
+  let group = rest.find((g) => g.lead === lead);
+  if (!group) {
+    group = { lead, keys: [lead] };
+    rest.push(group);
+  }
+  group.keys = side === "left" ? [key, ...group.keys] : [...group.keys, key];
   // Equal again: a card dropped in beside dragged ones would get a share
   // measured in different units.
-  for (const k of rest[at === -1 ? rest.length - 1 : at]) weights.get(sessionId)?.delete(k);
+  for (const k of group.keys) weights.get(sessionId)?.delete(k);
   save(sessionId, rest);
+}
+
+/// ⌥-drag inside a group's tab: `key` to place `to` among the cards.
+export function moveInGroup(sessionId: string, lead: TabKey, key: TabKey, to: number) {
+  save(
+    sessionId,
+    splitGroupsOf(sessionId).map((g) => {
+      if (g.lead !== lead) return g;
+      const keys = g.keys.filter((k) => k !== key);
+      keys.splice(to, 0, key);
+      return { ...g, keys };
+    }),
+  );
 }
 
 /// Each card's share of the split's width, by its tab's key. Absent is 1;
@@ -115,17 +151,14 @@ export function setSplitWeights(sessionId: string, next: [TabKey, number][]) {
 
 /// Takes `key` out of its group, back to its own tab.
 export function removeSplit(sessionId: string, key: TabKey) {
-  const now = splitGroupsOf(sessionId);
-  if (!now.some((g) => g.includes(key))) return;
-  save(sessionId, now.map((g) => g.filter((m) => m !== key)));
+  pruneSplits(sessionId, (k) => k !== key);
 }
 
-/// Drops every member `keep` refuses: a page closed, a task gone. A lead
-/// dropped hands the group to the next member.
+/// Drops every member `keep` refuses: a page closed, a task gone.
 export function pruneSplits(sessionId: string, keep: (key: TabKey) => boolean) {
   const now = splitGroupsOf(sessionId);
-  if (now.every((g) => g.every(keep))) return;
-  save(sessionId, now.map((g) => g.filter(keep)));
+  if (now.every((g) => g.keys.every(keep))) return;
+  save(sessionId, now.map((g) => ({ ...g, keys: g.keys.filter(keep) })));
 }
 
 /// Called from the row on every render, so it moves only where a label did:
@@ -145,7 +178,13 @@ export function usePaneHead(sessionId: string, key: TabKey): PaneHead | null {
 }
 
 export function setSplitDrag(next: SplitDrag | null) {
-  if (next?.sessionId === drag?.sessionId && next?.key === drag?.key && next?.label === drag?.label) return;
+  if (
+    next?.sessionId === drag?.sessionId &&
+    next?.key === drag?.key &&
+    next?.label === drag?.label &&
+    next?.side === drag?.side
+  )
+    return;
   drag = next;
   notify();
 }
@@ -159,10 +198,18 @@ export const SPLIT_HOST = "data-split-host";
 /// On each card of a lit split, naming its tab's key: what a gap drag measures.
 export const SPLIT_CARD = "data-split-card";
 
-/// Whether a point over the main view would split a tab out, and so whether
-/// the window has room for one more pane at `PANE_MIN`.
-export function splitTarget(x: number, y: number, count: number): "room" | "full" | null {
+/// Whether a point over the main view would split a tab out, on which side —
+/// the half it is over — and whether the window has room for one more pane
+/// at `PANE_MIN`.
+export function splitTarget(
+  x: number,
+  y: number,
+  count: number,
+): { room: boolean; side: Side } | null {
   const host = document.querySelector(`[${SPLIT_HOST}]`)?.getBoundingClientRect();
   if (!host || x < host.left || x > host.right || y < host.top || y > host.bottom) return null;
-  return host.width / (count + 2) >= PANE_MIN ? "room" : "full";
+  return {
+    room: host.width / (count + 2) >= PANE_MIN,
+    side: x < host.left + host.width / 2 ? "left" : "right",
+  };
 }

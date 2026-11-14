@@ -98,8 +98,8 @@ import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/Merg
 import { cardRepos } from "@/lib/mergeCard";
 import BotWelcome from "@/components/chat/BotWelcome";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
-import SplitPanes, { SplitFile } from "@/components/SplitPanes";
-import { pruneSplits, removeSplit, useLitLead, useSplitGroups, useSplitPanes, useSplitWeight } from "@/lib/splitPanes";
+import SplitPanes, { cardOrder, SplitFile } from "@/components/SplitPanes";
+import { pruneSplits, removeSplit, useLitGroup, useSplitGroups, useSplitPanes, useSplitWeight } from "@/lib/splitPanes";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
   closePane,
@@ -3069,8 +3069,8 @@ function App() {
   // is on screen the way a grid pane's is.
   const rowSplits = useSplitPanes(issuesOpen ? null : (rowSession?.sessionId ?? null));
   const rowGroups = useSplitGroups(issuesOpen ? null : (rowSession?.sessionId ?? null));
-  const litLead = useLitLead(issuesOpen ? null : (rowSession?.sessionId ?? null));
-  const mainGrow = useSplitWeight(rowSession?.sessionId ?? null, litLead);
+  const litGroup = useLitGroup(issuesOpen ? null : (rowSession?.sessionId ?? null));
+  const mainGrow = useSplitWeight(rowSession?.sessionId ?? null, litGroup?.lead ?? null);
   const splitTasks = rowSplits.filter((k) => k.startsWith("task:")).map((k) => k.slice("task:".length));
   // A pane whose tab went — a page the agent closed, a task or pick shut —
   // goes with it.
@@ -3399,7 +3399,14 @@ function App() {
       panelOpen={issuesOpen ? !!pickedIssue : !!shownSession && panelShown}
       overlay={singleDrop && <DropZone region={singleDrop.region} label={singleDrop.label} />}
       beside={<SplitPanes sessionId={issuesOpen ? null : (rowSession?.sessionId ?? null)} body={splitBody} />}
-      mainCard={litLead && rowSplits.length > 0 ? { key: litLead, grow: mainGrow } : null}
+      mainCard={
+        litGroup && {
+          key: litGroup.lead,
+          grow: mainGrow,
+          order: cardOrder(litGroup.keys.indexOf(litGroup.lead)),
+          minWidth: litGroup.lead === "chat" || litGroup.lead.startsWith("task:") ? CHAT_MIN : undefined,
+        }
+      }
       // Chat's alone, and not a `TabBody` — the other views answer questions
       // about a repository rather than about a conversation, and a split is
       // already several conversations side by side, where a crew beside one

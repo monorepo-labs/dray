@@ -45,9 +45,10 @@ type AppShellProps = {
   /// Split panes, cards right of the main one at full height, so the
   /// composer stays under the view it sends from. Draws its own cards.
   beside?: ReactNode;
-  /// The main card's place in a lit split: its tab's key and its share of the
-  /// width, which dragging the gap beside it moves.
-  mainCard?: { key: string; grow: number } | null;
+  /// The main card's place in a lit split: its tab's key, its share of the
+  /// width (which dragging a gap beside it moves), its CSS `order` among the
+  /// panes, and its floor where it is the chat.
+  mainCard?: { key: string; grow: number; order: number; minWidth?: number } | null;
   children: ReactNode;
 };
 
@@ -127,7 +128,11 @@ export default function AppShell({
             <Sheet
               className="flex-1"
               tall={tall}
-              style={mainCard ? { flexGrow: mainCard.grow } : undefined}
+              style={
+                mainCard
+                  ? { flexGrow: mainCard.grow, order: mainCard.order, minWidth: mainCard.minWidth }
+                  : undefined
+              }
               {...(mainCard && { [SPLIT_CARD]: mainCard.key })}
             >
         {/* `min-w-0` is load-bearing: without it a wide code block in the transcript

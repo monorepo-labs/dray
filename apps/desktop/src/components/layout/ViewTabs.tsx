@@ -68,6 +68,8 @@ import { IS_MAC } from "@/lib/platform";
 import {
   addSplit,
   isSplit,
+  membersOf,
+  moveInGroup,
   pruneSplits,
   removeSplit,
   setLitGroup,
@@ -76,6 +78,8 @@ import {
   splitTarget,
   useSplitGroups,
   type PaneHead,
+  type Side,
+  type SplitGroup,
 } from "@/lib/splitPanes";
 import { cn } from "@/lib/utils";
 
@@ -467,7 +471,7 @@ export default function ViewTabs({
   // A member closed from its group's tab closes the tab itself. The lead
   // hands the main view to the next member first, as closing a lit tab hands
   // it to its neighbour.
-  const memberClose = (group: TabKey[], key: TabKey, lit: boolean) => {
+  const memberClose = (group: SplitGroup, key: TabKey, lit: boolean) => {
     const item = byKey.get(key);
     const pick = key.startsWith("pick:") ? picks?.items.find((p) => `pick:${p.id}` === key) : undefined;
     const close =
@@ -481,8 +485,9 @@ export default function ViewTabs({
     if (!close) return undefined;
     return () => {
       removeSplit(sessionId, key);
-      const next = group.find((k) => k !== key);
-      if (lit && key === group[0] && next) {
+      // The store hands a lost lead's group to its leftmost card.
+      const next = group.keys.find((k) => k !== key);
+      if (lit && key === group.lead && next) {
         if (byKey.has(next)) byKey.get(next)!.pick();
         else if (next.startsWith("pick:")) picks?.onPick(next.slice(5));
       }
@@ -492,9 +497,9 @@ export default function ViewTabs({
   const items = order.flatMap((key): Item[] => {
     const item = byKey.get(key)!;
     if (isSplit(sessionId, key)) return [];
-    const group = groups.find((g) => g[0] === key);
+    const group = groups.find((g) => g.lead === key);
     if (!group) return [item];
-    const members = group.flatMap((k) => {
+    const members = group.keys.flatMap((k) => {
       const head = headOf(k);
       return head ? [{ key: k, ...head, close: memberClose(group, k, item.active) }] : [];
     });
@@ -511,7 +516,7 @@ export default function ViewTabs({
   useLayoutEffect(() => {
     const heads = new Map<TabKey, PaneHead>();
     const lit = new Set<TabKey>();
-    for (const key of groups.flatMap((g) => g.slice(1))) {
+    for (const key of groups.flatMap(membersOf)) {
       const head = headOf(key);
       if (head) heads.set(key, head);
       if (memberActive(key)) lit.add(key);
@@ -523,7 +528,7 @@ export default function ViewTabs({
     // A lead whose tab went — a Files stand-in turned file, a page shut —
     // hands its group to the next member. Not while pages are still loading.
     const dead = new Set(
-      groups.map((g) => g[0]).filter((k) => !byKey.has(k) && !(k.startsWith("page:") && loadedPages === null)),
+      groups.map((g) => g.lead).filter((k) => !byKey.has(k) && !(k.startsWith("page:") && loadedPages === null)),
     );
     if (dead.size > 0) pruneSplits(sessionId, (k) => !dead.has(k));
     setLitGroup(sessionId, items.find((item) => item.group && item.active)?.key ?? null);
@@ -538,6 +543,8 @@ export default function ViewTabs({
     const lead = lit === item ? [items[at - 1], items[at + 1], ...items].find((t) => t && t !== item) : lit;
     return lead && !lead.key.startsWith("blank:") ? lead : null;
   };
+  // The side the last hover over the main view picked, read on release.
+  const dropSide = useRef<Side>("right");
   const splitOut = (item: Item) => {
     const lead = leadFor(item);
     if (!lead) return;
@@ -550,7 +557,7 @@ export default function ViewTabs({
     } else if (key.startsWith("pickfile:")) {
       key = `pick:${key.split(":")[1]}`;
     }
-    addSplit(sessionId, lead.key, key);
+    addSplit(sessionId, lead.key, key, dropSide.current);
   };
   // A blank has no page to show; Files with nothing open is a tree whose
   // clicks belong to the main view; a group stays whole.
@@ -574,8 +581,18 @@ export default function ViewTabs({
       over: (item, at) => {
         const lead = splittable(item) ? leadFor(item) : null;
         const target = at && lead ? splitTarget(at.x, at.y, (lead.group?.length ?? 1) - 1) : null;
-        setSplitDrag(target ? { sessionId, key: item.key, label: target === "room" ? "Split right" : null } : null);
-        return target === "room";
+        if (target) dropSide.current = target.side;
+        setSplitDrag(
+          target
+            ? {
+                sessionId,
+                key: item.key,
+                label: target.room ? (target.side === "left" ? "Split left" : "Split right") : null,
+                side: target.side,
+              }
+            : null,
+        );
+        return !!target?.room;
       },
       drop: splitOut,
     },
@@ -772,6 +789,12 @@ export default function ViewTabs({
             members={item.group}
             active={item.active}
             onPick={item.pick}
+            onMove={(key, to) => {
+              moveInGroup(sessionId, item.key, key, to);
+              // Cards of one width trade places with no resize, and a page's
+              // native view is placed again on a resize alone.
+              requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+            }}
             onPointerDown={(e) => drag.start(e, i)}
             transform={drag.offset(i)}
             held={drag.drag?.from === i}
@@ -872,11 +895,14 @@ type Member = { key: TabKey; icon: React.ReactNode; label: string; close?: () =>
 
 /// A split group as one tab: a rounded outline holding its members side by
 /// side, each its icon and title, icons alone once a member's slot is too
-/// narrow for a word. Picking any part of it picks the group.
+/// narrow for a word. Picking any part of it picks the group. A drag moves
+/// the whole group along the row; ⌥-drag on a member moves it among the
+/// others, and its card with it.
 function GroupTab({
   members,
   active,
   onPick,
+  onMove,
   onPointerDown,
   transform,
   held,
@@ -885,14 +911,17 @@ function GroupTab({
   members: Member[];
   active: boolean;
   onPick: () => void;
+  onMove: (key: TabKey, to: number) => void;
   onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => void;
   transform?: string;
   held: boolean;
   gliding: boolean;
 }) {
   const n = members.length;
+  const reorder = useDragReorder(members, (m) => m.key, (m, _delta, to) => onMove(m.key, to), "x");
   return (
     <div
+      ref={reorder.list}
       role="tab"
       aria-selected={active}
       aria-label={members.map((m) => m.label).join(" and ")}
@@ -916,12 +945,21 @@ function GroupTab({
         gliding && "transition-[color,background-color,min-width,transform]",
       )}
     >
-      {members.map((m) => (
+      {reorder.shown.map((m, i) => (
         <span
           key={m.key}
+          onPointerDown={(e) => {
+            if (!e.altKey) return;
+            // Not the row's drag: this one stays inside the group.
+            e.stopPropagation();
+            reorder.start(e, i);
+          }}
+          style={{ transform: reorder.offset(i) }}
           className={cn(
-            "group/member @container flex h-full min-w-0 flex-1 items-center justify-center gap-1.5 pl-2 @[64px]:justify-start",
+            "group/member @container flex h-full min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md pl-2 @[64px]:justify-start",
             m.close ? "pr-1" : "pr-2",
+            reorder.drag?.from === i && "relative z-10 bg-surface-thumb ring-1 ring-hairline",
+            !!reorder.drag && reorder.drag.from !== i && "transition-transform",
           )}
         >
           {m.icon}
