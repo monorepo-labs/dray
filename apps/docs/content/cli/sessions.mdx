@@ -1,6 +1,6 @@
 ---
 title: Sessions
-description: Start, list and message Dray sessions from the command line, with every flag for model, effort, agent, base branch, issues and fast mode.
+description: Start, list and message Dray sessions from the command line, with every flag for model, effort, agent, base branch, issues and fast mode, and start one on Dray Cloud.
 sidebar:
   order: 2
 ---
@@ -44,6 +44,22 @@ dray session new --issue DRA-53 --title "Add the issue panel" "Build the issue p
 Every session made here gets its own git worktree on its own branch, `worktree-<name>`. There is no flag to turn that off and no flag to pick the name. Sessions started this way run at the same time, and two agents in one checkout overwrite each other.
 
 The worktree starts at `origin/<default branch>`, not at the branch you are on. So a plain new session cannot see unpushed work. Pass `--base` to start it from a session's branch or any ref; see [Orchestration](/cli/orchestration#review-with-a-second-model).
+
+### On Dray Cloud
+
+```bash
+dray --machine cloud session new "Fix the login redirect loop"
+```
+
+`--machine cloud` starts the session on a fresh Dray Cloud machine. It works only on `session new`. Dray Cloud has to be on in Settings → Servers, and the app has to be open. The project needs a GitHub remote: Dray clones that repository onto the machine and runs the session in a worktree. It can take a few minutes. In the app the machine is called Cloud. `dray session ls` names it `cloud-…`, and later `--machine` flags take that name. Settling the session deletes the machine.
+
+A start that fails says why, and a machine that never got a session is deleted.
+
+- App closed: `Dray Cloud starts machines through the Dray app — open it and try again`.
+- Dray Cloud off: `Dray Cloud is off. Turn it on in Settings, Servers.`
+- No GitHub remote: `Cloud runs projects with a GitHub remote — pass --project <repo path> for one`.
+- The machine did not start: `couldn't start a cloud machine: …`.
+- The clone failed: `couldn't clone owner/repo onto its cloud machine: …`.
 
 ### What a new session inherits
 
@@ -111,7 +127,7 @@ dray session unset-aside <id>
 
 Both work on a session whose machine is offline, where this machine knows which one holds it: a task a bot started there, or one named with `--machine`. The change waits here and lands when the machine answers.
 
-These are the same as the sidebar's buttons. Settling a session also settles the hidden sessions it started.
+These are the same as the sidebar's buttons. Settling a session also settles the hidden sessions it started. A bot's task is the exception: the tasks it started keep running, and report to the nearest task or bot still open.
 
 ## Merge card
 
@@ -144,7 +160,7 @@ A task whose pull request is ready to merge gets a line only when it asked you t
 dray session react 👀
 ```
 
-Run by a bot when your message needs no words back. It puts one emoji on your newest message in the bot's chat, as a badge on the bubble, and the bot ends its turn without replying:
+Run by a bot when your message needs no words back. It puts one emoji on your newest message in the bot's chat, as a badge on the bubble, and the bot ends its turn without replying. How a bot picks one is under [Bots](/cli/orchestration#bots).
 
 | Emoji | Word | Means |
 |---|---|---|

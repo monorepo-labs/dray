@@ -46,8 +46,12 @@ A bot is one ongoing chat you run everything from. It has its own instructions a
 - **Make one** with **New bot** in the sidebar: a name, a face, a colour, and the agent and model it runs on. Its chat opens with the bot introducing itself; tell it its job in reply. Bots sit above All Projects like an inbox, each with its face and its last message.
 - **It runs in its own folder**, not in a repository, and starts work in any project you name. Its folder holds `INSTRUCTIONS.md` and a `memory` folder, both empty at first. The bot writes down its job from what you tell it and reads it whenever its chat starts. It saves what is worth remembering as one dated file per memory, such as `2026-11-12-release-checklist.md`, and looks through them when it needs to.
 - **What it starts runs hidden.** Those sessions stay out of the sidebar. After every turn one of them ends, Dray sends its last message to the bot, so the bot always knows where its work stands. Their permission and question cards show in the bot's chat.
-- **The Tasks tab** in the bot's right panel lists everything it started, grouped Waiting on you, Working and Done. Click one to look inside.
+- **The Tasks tab** in the bot's right panel lists everything it started, waiting ones first. Click one to look inside.
+- **A reaction instead of a reply.** When your message needs no words back, the bot puts an emoji on it: 👍 when you said ok and nothing else will show, 👀 when it is looking into something itself, ✅ when a small thing is done, and a few more. Starting a task already draws a row, so the bot neither reacts nor replies. The set is under [Reaction](/cli/sessions#reaction).
+- **Proof of visible work.** A task that changes something you can see ends with a short video when something moves, or a screenshot when it does not. The bot puts that in its chat, and it plays there. It records a sandbox, a remote machine or the session's browser, not your own screen, unless you ask.
+- **Waiting on you** sits at the foot of the chat once a task has waited 2 minutes. Click a row to scroll to the bot's reply about that task. With no such reply in the chat, the click opens the task. `⌘`-click, or **Open task** when you hover the row, opens the task as a tab. A pull request that can merge has **Merge**. **Dismiss** hides the card until the task changes and stalls again. The same cards show on [Dray Island](/settings/notifications#dray-island).
 - **Right-click a bot** to start its chat fresh (instructions and memory stay) or to delete it.
+- A bot can start a task on Dray Cloud with `dray --machine cloud session new`. See [On Dray Cloud](/cli/sessions#on-dray-cloud).
 
 Bots live on this Mac.
 
