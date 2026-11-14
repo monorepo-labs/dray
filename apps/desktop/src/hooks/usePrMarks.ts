@@ -26,7 +26,7 @@ const FRESH_MS = 120_000;
 const OPEN_POLL_MS = 30_000;
 
 /// The background poll's gap, for repos whose marks drive something off
-/// screen: a bot's stalled tasks, judged every minute against a 5-minute
+/// screen: a bot's stalled tasks, judged every minute against a 2-minute
 /// stall, and a problem its task can mend on the first read after the task
 /// last moved. Slow, since every `gh` here spends the same hourly budget as the
 /// agents' own.

@@ -98,6 +98,8 @@ import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/Merg
 import { cardRepos } from "@/lib/mergeCard";
 import BotWelcome from "@/components/chat/BotWelcome";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
+import SplitPanes, { SplitFile } from "@/components/SplitPanes";
+import { pruneSplits, useSplitPanes } from "@/lib/splitPanes";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
   closePane,
@@ -134,6 +136,7 @@ import {
   forgetOpenFilesUnder,
   openFilesFor,
   useOpenFiles,
+  type FilesScope,
 } from "@/hooks/useOpenFiles";
 import BotAvatar from "@/components/BotAvatar";
 import Orb from "@/components/Orb";
@@ -246,10 +249,13 @@ import {
 import { worktreeNoticeDetail } from "@/lib/worktree";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import { useHandoffConfig } from "@/hooks/useHandoffConfig";
-import { buildTranscript, sessionMedia } from "@/lib/transcript";
+import { buildTranscript, runningRuns, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 import { onUnhandledEscape } from "@/lib/escape";
 import { playSwipeTick } from "@/lib/tick";
+
+/// What a project filter reopens when the reader comes back to it.
+type FilterPick = { session: string } | { bot: string } | null;
 
 /// Commits only with its Suspense siblings, so its layout effect says the lazy
 /// settings page is drawn, before paint.
@@ -921,6 +927,10 @@ function App() {
     () => buildTranscript(selectedSession?.events ?? [], busy, liveTaskIds),
     [selectedSession?.events, busy, liveTaskIds],
   );
+  const panelRuns = useMemo(
+    () => runningRuns(subagents, selectedSubagentId),
+    [subagents, selectedSubagentId],
+  );
 
   // A bot's folder is a git repository only for its own history, which Dray
   // commits — so no Commit button, no branch and no pull request lookup.
@@ -1197,14 +1207,6 @@ function App() {
   // `setOnScreen` takes the whole set rather than adding to it — two callers
   // would each wipe the other's.
   // A bot chat's earlier sessions are drawn with it, so they are on screen too.
-  const onScreenKey = [mainGroup ? memberKey : earlierIds.join("\n"), crewShown].filter(Boolean).join("\n");
-  useEffect(() => {
-    const ids = [...new Set(onScreenKey.split("\n").filter(Boolean))];
-    setOnScreen(ids);
-    ids.forEach((id) => void ensureLoaded(id));
-    // Both are rebuilt every render; the key is what changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onScreenKey]);
 
   // Every row the column would draw a card for, for `announce` alone — see
   // `crewSeen`. Wider than `crewShown` on purpose: that one loads and
@@ -1629,7 +1631,7 @@ function App() {
   // task list counts on its own — the tab is a catch-all, so any one of its
   // sections having something is enough to draw it.
   const hasMoreTab =
-    subagents.length > 0 ||
+    panelRuns.length > 0 ||
     backgroundTasks.length > 0 ||
     sessionTodos !== null ||
     sessionAttachments.length > 0;
@@ -2363,7 +2365,7 @@ function App() {
     // without this a space switch is the one way out of a filter that forgets
     // what was open in it. Nothing is restored: the effect below closes a
     // transcript that falls outside the space being entered.
-    filterSelection.current[projectFilter ?? ""] = selectedSessionId;
+    filterSelection.current[projectFilter ?? ""] = currentPick();
     filterGen.current++;
     setProjectFilter(null);
 
@@ -2389,7 +2391,19 @@ function App() {
   /// from a previous run would open a transcript nobody asked for on the first
   /// switch after launch, so the entry is written on the way out of a filter
   /// and nowhere else.
-  const filterSelection = useRef<Record<string, string | null>>({});
+  const filterSelection = useRef<Record<string, FilterPick>>({});
+  /// What is open, as a filter remembers it. A bot by its id rather than its
+  /// chat's: a bot with no chat yet has no session to name, and an agent
+  /// switch moves its chat to a new one. A settled chat is no longer the bot's,
+  /// so it is remembered as itself.
+  const currentPick = (): FilterPick => {
+    const settled = sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.archived;
+    const bot = selectedSessionId
+      ? !settled && selectedBotId
+      : projectPath && botAt(bots, projectPath)?.id;
+    if (bot) return { bot };
+    return selectedSessionId ? { session: selectedSessionId } : null;
+  };
   /// Bumped at every filter move, at call time, so a read across an await can
   /// tell the filter moved under it. Rendered state is a render behind.
   const filterGen = useRef(0);
@@ -2406,7 +2420,8 @@ function App() {
   /// delete that *failed*.
   const forgetFilterSelection = (sessionId: string) => {
     for (const key of Object.keys(filterSelection.current)) {
-      if (filterSelection.current[key] === sessionId) filterSelection.current[key] = null;
+      const pick = filterSelection.current[key];
+      if (pick && "session" in pick && pick.session === sessionId) filterSelection.current[key] = null;
     }
   };
 
@@ -2429,7 +2444,7 @@ function App() {
     // A selection made since the last step ends the run, so it is kept.
     const run = filterNav.current;
     if (!run || run.nav !== navGen.current) {
-      filterSelection.current[projectFilter ?? ""] = selectedSessionId;
+      filterSelection.current[projectFilter ?? ""] = currentPick();
     }
     const gen = ++filterGen.current;
     setProjectFilter(next);
@@ -2449,11 +2464,19 @@ function App() {
   };
 
   const openFilterSession = (next: string | null) => {
-    const remembered = filterSelection.current[next ?? ""] ?? null;
+    const pick = filterSelection.current[next ?? ""] ?? null;
+    // A bot is no project and the sidebar draws it under every filter. Not
+    // while the settled list is up, which has no bots and `openBot` would leave.
+    const bot = pick && "bot" in pick && !archivedShown ? bots.find((b) => b.id === pick.bot) : undefined;
+    if (bot) return openBot(bot);
+    const remembered = pick && "session" in pick ? pick.session : null;
+    // A task lit in a bot's row is restorable under any filter, like the bot.
     const restorable =
       remembered &&
       sessionIndexItems.some(
-        (i) => i.sessionId === remembered && (!next || sameProject(i.projectPath, next)),
+        (i) =>
+          i.sessionId === remembered &&
+          (!next || sameProject(i.projectPath, next) || inBotTree(bots, sessionIndexItems, remembered)),
       );
     goToSession(() => {
       if (restorable) void handleSelectSessionIndexItem(remembered);
@@ -2472,7 +2495,7 @@ function App() {
   /// only where no filter or space switch landed during the read — everything
   /// below is the click-time render's, and would undo that switch.
   const openFromNotice = async (sessionId: string) => {
-    const previous = selectedSessionId;
+    const previous = currentPick();
     const gen = filterGen.current;
     const selecting = handleSelectSessionIndexItem(sessionId);
     // Past this select's own move, so any later one is somebody else's.
@@ -3047,6 +3070,32 @@ function App() {
     selectedSession ?? sessionIndexItems.find((i) => i.sessionId === selectedSessionId) ?? null;
   // The session whose row the titlebar draws: the bot's chat over its lit task.
   const rowSession = stripOwner ?? shownSession;
+  // Tabs the row split out beside the main view. A task's transcript in one
+  // is on screen the way a grid pane's is.
+  const rowSplits = useSplitPanes(issuesOpen ? null : (rowSession?.sessionId ?? null));
+  const splitTasks = rowSplits.filter((k) => k.startsWith("task:")).map((k) => k.slice("task:".length));
+  // A pane whose tab went — a page the agent closed, a task or pick shut —
+  // goes with it.
+  const rowPages = useBrowserTabs(rowSession ? browserOf(rowSession.sessionId) : null);
+  useEffect(() => {
+    if (!rowSession || rowSplits.length === 0) return;
+    const tasksOpen = strip ? (taskTabs[strip.bot] ?? []) : null;
+    const picksOpen = strip ? (pickTabs[strip.bot] ?? []) : null;
+    pruneSplits(rowSession.sessionId, (key) => {
+      if (key.startsWith("page:")) return !rowPages || rowPages.some((p) => `page:${p.id}` === key);
+      if (key.startsWith("task:")) return !tasksOpen || tasksOpen.some((t) => `task:${t.sessionId}` === key);
+      if (key.startsWith("pick:")) return !picksOpen || picksOpen.some((t) => `pick:${t.id}` === key);
+      return true;
+    });
+  });
+  const onScreenKey = [mainGroup ? memberKey : earlierIds.join("\n"), crewShown, ...splitTasks].filter(Boolean).join("\n");
+  useEffect(() => {
+    const ids = [...new Set(onScreenKey.split("\n").filter(Boolean))];
+    setOnScreen(ids);
+    ids.forEach((id) => void ensureLoaded(id));
+    // Both are rebuilt every render; the key is what changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onScreenKey]);
   // The way back from a hidden session, where its bot's row is not drawn.
   const crumb = strip ? undefined : hiddenParent;
   // Off the index, never the snapshot: `session_changed` writes only there.
@@ -3238,7 +3287,7 @@ function App() {
   /// A lit Diff or Files pick: the view on the picked session, its side
   /// column led by the picker. Keyed on tab and target, so a repick or another
   /// pick of the same kind opens fresh rather than on the last one's place.
-  const pickBody = (tab: (typeof litPick) & object, bot: string) => {
+  const pickBody = (tab: (typeof litPick) & object, bot: string, watchScope?: FilesScope) => {
     const options: PickOption[] = [
       ...(tab.kind === "files" ? [bot] : []),
       ...botTasks.map((t) => t.sessionId),
@@ -3289,57 +3338,49 @@ function App() {
         active={!issuesOpen}
         revision={revision}
         picker={picker}
+        watchScope={watchScope}
       />
     );
   };
 
+  // What a split pane draws, by the key its tab had in the row.
+  const splitBody = (key: string) => {
+    if (!rowSession) return null;
+    if (key.startsWith("page:")) {
+      return (
+        <BrowserPane
+          sessionId={browserOf(rowSession.sessionId)}
+          tab={Number(key.slice("page:".length))}
+          mode="full"
+          active={!issuesOpen}
+        />
+      );
+    }
+    if (key === "changes") {
+      return (
+        <ChangesView
+          cwd={rowSession.cwd}
+          active={!issuesOpen}
+          revision={turnRevision}
+          writeRevision={writeRevision}
+          busy={busy}
+        />
+      );
+    }
+    if (key.startsWith("file:")) {
+      return <SplitFile sessionId={rowSession.sessionId} path={key.slice("file:".length)} />;
+    }
+    if (key.startsWith("task:")) {
+      // Read here; the composer sends to the main view's session.
+      return <Chat {...paneState(key.slice("task:".length))} {...paneChat} crowded active={false} />;
+    }
+    const pick = strip && pickTabs[strip.bot]?.find((t) => `pick:${t.id}` === key);
+    // Its own watcher, since the lit pick in the main view holds `"pick"`.
+    return pick && strip ? pickBody(pick, strip.bot, key as `pick:${string}`) : null;
+  };
+
   // Pages with no tabs for the strip: the sheet reaches up behind the header.
   const tallSheet = issuesOpen || !shownSession;
-
-  // The composer is drawn under the transcript alone; a bot's chat moves its
-  // pickers into the titlebar, so they show and hide with it.
-  const composerShown = !(issuesOpen || (shownSession && viewTab !== "chat"));
-  // Not on a settled chat, whose composer is the Unsettle bar alone.
-  const toolbarInTitlebar = composerShown && !!composerBot && !selectedSession?.archived;
-  const composerToolbar = (inTitlebar: boolean) => (
-    <ComposerToolbar
-      server={activeServer}
-      harness={harness}
-      onHarnessChange={setHarness}
-      models={models}
-      modelId={modelId}
-      effort={effort}
-      fast={fast}
-      onFastChange={setFast}
-      fastNote={fastNote}
-      onModelChange={handleModelChange}
-      onRefreshModels={refreshModels}
-      onReloadModels={reloadModels}
-      onSeedProvider={seedFxModels}
-      loadingModels={loadingModels}
-      permissionMode={permissionMode}
-      onPermissionModeChange={setPermissionMode}
-      projects={spaceProjects}
-      projectPath={projectPath}
-      onSelectProject={handleSelectProject}
-      onAttachProject={handleAttachProject}
-      branches={branches}
-      branch={branch}
-      onSelectBranch={handleSelectBranch}
-      pendingBranch={pendingBranch}
-      onConfirmBranchSwitch={(stash) => pendingBranch && runCheckout(pendingBranch, stash)}
-      onCancelBranchSwitch={() => setPendingBranch(null)}
-      useWorktree={useWorktree}
-      onToggleWorktree={() => setUseWorktree((v) => !v)}
-      onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
-      contextUsage={contextUsage}
-      isNewSession={!selectedSessionId}
-      agentSwitch={!!selectedBot}
-      bot={newBot}
-      inTitlebar={inTitlebar}
-      busy={busy}
-    />
-  );
 
   return (
     <TooltipProvider>
@@ -3358,6 +3399,7 @@ function App() {
       panelLeft={panelSide === "left"}
       panelOpen={issuesOpen ? !!pickedIssue : !!shownSession && panelShown}
       overlay={singleDrop && <DropZone region={singleDrop.region} label={singleDrop.label} />}
+      beside={<SplitPanes sessionId={issuesOpen ? null : (rowSession?.sessionId ?? null)} body={splitBody} />}
       // Chat's alone, and not a `TabBody` — the other views answer questions
       // about a repository rather than about a conversation, and a split is
       // already several conversations side by side, where a crew beside one
@@ -3633,8 +3675,6 @@ function App() {
           {/* Keeps the far end at the far end on pages with no tab row. */}
           {(issuesOpen || !shownSession) && <div className="min-w-0 flex-1" />}
 
-          {toolbarInTitlebar && <div className="shrink-0">{composerToolbar(true)}</div>}
-
 
           {issuesOpen
             ? // Only once something is open to close. Nothing on this page can
@@ -3792,7 +3832,7 @@ function App() {
                 media={sessionAttachments}
                 sessionId={shownSession.sessionId}
                 subagents={{
-                  runs: subagents,
+                  runs: panelRuns,
                   selectedId: selectedSubagentId,
                   resultByCallId,
                   live: busy || backgroundTasks.length > 0,
@@ -3852,7 +3892,7 @@ function App() {
         // `shownSession`, like the rest of the layout: gated on the snapshot,
         // the composer came up under Files or Diff for as long as a transcript
         // took to load.
-        !composerShown ? null : (
+        issuesOpen || (shownSession && viewTab !== "chat") ? null : (
         <ChatInput
           onSend={(message, attachments) => void sendFromComposer(message, attachments)}
           commands={slashCommands}
@@ -3991,8 +4031,46 @@ function App() {
               />
             )
           }
-          toolbar={toolbarInTitlebar ? undefined : composerToolbar(false)}
-          attachInCard={toolbarInTitlebar}
+          toolbar={
+            <ComposerToolbar
+              server={activeServer}
+              harness={harness}
+              onHarnessChange={setHarness}
+              models={models}
+              modelId={modelId}
+              effort={effort}
+              fast={fast}
+              onFastChange={setFast}
+              fastNote={fastNote}
+              onModelChange={handleModelChange}
+              onRefreshModels={refreshModels}
+              onReloadModels={reloadModels}
+              onSeedProvider={seedFxModels}
+              loadingModels={loadingModels}
+              permissionMode={permissionMode}
+              onPermissionModeChange={setPermissionMode}
+              projects={spaceProjects}
+              projectPath={projectPath}
+              onSelectProject={handleSelectProject}
+              onAttachProject={handleAttachProject}
+              branches={branches}
+              branch={branch}
+              onSelectBranch={handleSelectBranch}
+              pendingBranch={pendingBranch}
+              onConfirmBranchSwitch={(stash) =>
+                pendingBranch && runCheckout(pendingBranch, stash)
+              }
+              onCancelBranchSwitch={() => setPendingBranch(null)}
+              useWorktree={useWorktree}
+              onToggleWorktree={() => setUseWorktree((v) => !v)}
+              onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
+              contextUsage={contextUsage}
+              isNewSession={!selectedSessionId}
+              agentSwitch={!!selectedBot}
+              bot={newBot}
+              busy={busy}
+            />
+          }
         />
         )
       }
@@ -4068,6 +4146,10 @@ function App() {
               />
             }
             botFocus={botFocus}
+            onBotFocusMissed={(id) => {
+              setStallFocus(null);
+              void openTask(id);
+            }}
             unread={!!selectedSessionId && openedUnread === selectedSessionId}
             crowded={!collapsed && (panelShown || (crewDrawn && crewBeside) || (issuesOpen && !!pickedIssue))}
             // Its own chords only while the chat tab is on screen.

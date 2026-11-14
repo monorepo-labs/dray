@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ArrowUp, CornerDownLeft, Paperclip, Plus, Square, X } from "lucide-react";
+import { ArrowUp, CornerDownLeft, Paperclip, Square, X } from "lucide-react";
 
 import AttachmentTray from "@/components/composer/AttachmentTray";
 import BotMentionMenu from "@/components/composer/BotMentionMenu";
@@ -17,9 +17,7 @@ import IssueMentionMenu from "@/components/composer/IssueMentionMenu";
 import RichInput from "@/components/composer/RichInput";
 import SessionMentionMenu from "@/components/composer/SessionMentionMenu";
 import SlashCommandMenu from "@/components/composer/SlashCommandMenu";
-import ShortcutKeys from "@/components/ShortcutKeys";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   addAttachmentPaths,
   attachmentKey,
@@ -126,9 +124,6 @@ type ChatInputProps = {
   /// node rather than the controls' own props, so this component keeps owning
   /// layout and measurement and nothing else.
   toolbar?: ReactNode;
-  /// Draws + inside the card, left of the text, instead of in `toolbar`. A
-  /// bot's chat: its pickers sit in the titlebar, so no row is left under it.
-  attachInCard?: boolean;
   /// The dictate button and, while recording, the level and its two buttons.
   ///
   /// A node like `toolbar`, and for the same reason: the recorder lives in
@@ -261,7 +256,6 @@ export default function ChatInput({
   onCancelRecording,
   queuedCount = 0,
   toolbar,
-  attachInCard = false,
   dictation,
   dictating = false,
   notice,
@@ -284,7 +278,6 @@ export default function ChatInput({
   const [message, setMessage] = useDraft(sessionId);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
-  const attachRef = useRef<HTMLButtonElement | null>(null);
   // Past one line the text takes the card's whole width and the controls drop
   // under it; one line keeps them beside it, so the resting height is unchanged.
   const [stacked, setStacked] = useState(false);
@@ -312,8 +305,7 @@ export default function ChatInput({
       // Two thresholds, or the swap oscillates: text that wraps beside the
       // controls fits on one line without them. Back only once it would fit
       // beside them again — their width, the gap and the box's own padding.
-      const attachWidth = attachRef.current ? attachRef.current.offsetWidth + 4 : 0;
-      const room = box.clientWidth - controlsBox.offsetWidth - attachWidth - 16;
+      const room = box.clientWidth - controlsBox.offsetWidth - 16;
       const was = stackedRef.current;
       const next = was ? !(oneLine && rect.width <= room) : !oneLine;
       if (next === was || swappedFor.current === message) return;
@@ -929,7 +921,7 @@ export default function ChatInput({
         {/* Pulled left by the toolbar's own `px-1` plus the ghost button's 6px
             icon inset, so the `+` glyph — not the button box — lands on the
             same edge as the text below it. */}
-        {isNewTask && toolbar && <div className="-ml-2.5 pb-1.5">{toolbar}</div>}
+        {isNewTask && <div className="-ml-2.5 pb-1.5">{toolbar}</div>}
 
         {/* Directly above the card and with no gap: the row runs on past its own
             reserve and behind the card, which is the opaque thing that hides it.
@@ -1069,31 +1061,7 @@ export default function ChatInput({
                 isNewTask ? "px-0" : "px-3",
               )}
             >
-              {/* Stacked, the text moves ahead of it with `order-first`, so +
-                  drops to the controls' row rather than sitting alone above. */}
-              {attachInCard && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      ref={attachRef}
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => void pickAttachments(attachKey)}
-                      aria-label="Attach files"
-                      className="shrink-0 text-muted-foreground"
-                    >
-                      <Plus />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">
-                    Attach files
-                    <ShortcutKeys ids={["attach"]} />
-                  </TooltipContent>
-                </Tooltip>
-              )}
-
-              <div className={cn("relative min-w-0 flex-1", stacked && "order-first basis-full")}>
+              <div className={cn("relative min-w-0 flex-1", stacked && "basis-full")}>
                 <RichInput
                   // **One editor per session, because the undo stack lives in
                   // the editor.** Kept across a session switch, ⌘Z in the
@@ -1268,7 +1236,7 @@ export default function ChatInput({
             </div>
           )
         ) : (
-          toolbar && <div className="pt-1.5">{toolbar}</div>
+          <div className="pt-1.5">{toolbar}</div>
         )}
       </form>
     </div>

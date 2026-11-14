@@ -70,6 +70,7 @@ pub mod bots;
 pub mod drafts;
 pub mod projects;
 pub mod remote_reports;
+pub mod held_flags;
 #[cfg(feature = "desktop")]
 pub mod quit;
 #[cfg(feature = "desktop")]
@@ -977,6 +978,8 @@ pub fn run() {
             cef::browser_nav,
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_layout,
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            cef::browser_pins,
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_shutter_ready,
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]

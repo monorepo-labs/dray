@@ -250,6 +250,14 @@ impl Render for Workspace {
             .relative()
             .bg(theme.body)
             .track_focus(&self.focus)
+            // With nothing else focused, a card's digits and Return reach it
+            // unclicked, as cardKeys.ts lets them. A focused text field keeps
+            // its own keys: the root is then not the focus itself.
+            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
+                if this.focus.is_focused(window) && crate::cards::forward_key(&e.keystroke, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, _: &NewTask, _, cx| this.new_task(cx)))
             .on_action(cx.listener(|this, _: &NextSession, _, cx| this.step(1, cx)))
             .on_action(cx.listener(|this, _: &PrevSession, _, cx| this.step(-1, cx)))
@@ -412,6 +420,7 @@ fn frame_path(window: gpui::Bounds<Pixels>, sheet: gpui::Bounds<Pixels>) -> Opti
 
 pub fn open(cx: &mut App) {
     let (wire, signals) = Wire::start();
+    install_modules(&wire, cx);
     let bounds = gpui::Bounds::centered(None, gpui::size(px(1200.), px(800.)), cx);
     cx.open_window(
         gpui::WindowOptions {
@@ -436,4 +445,44 @@ pub fn open(cx: &mut App) {
     )
     .expect("open the window");
     cx.activate(true);
+}
+
+/// Startup for the modules the slots draw: markdown's hooks, the cards'
+/// answers over the wire, and the new-task screen.
+fn install_modules(wire: &Wire, cx: &mut App) {
+    crate::markdown::init(cx);
+    // The highlighter runs off the main thread with no `App`, so it takes the
+    // mode the window opens in; a live appearance change keeps the old colours
+    // in fences until the next launch.
+    let mode = Mode::of(cx.window_appearance());
+    crate::markdown::set_code_highlighter(
+        cx,
+        std::sync::Arc::new(move |lang, code| crate::code::fence_highlights(lang.unwrap_or(""), code, mode)),
+    );
+    crate::markdown::set_link_handler(cx, std::sync::Arc::new(|url, _, _, cx| cx.open_url(url)));
+
+    let answers = wire.clone();
+    crate::cards::set_responder(cx, move |answer, cx| {
+        let (cmd, args) = match answer {
+            crate::cards::CardAnswer::Permission { session_id, request_id, option_id } => (
+                "respond_permission",
+                json!({ "sessionId": session_id, "requestId": request_id, "optionId": option_id }),
+            ),
+            crate::cards::CardAnswer::Questions { session_id, request_id, answers } => (
+                "answer_questions",
+                json!({ "sessionId": session_id, "requestId": request_id, "answers": answers }),
+            ),
+        };
+        let reply = answers.invoke(cmd, args);
+        // The card waits on this and takes answers again on `Err`, since the
+        // request is still open server-side.
+        cx.spawn(async move |_| {
+            reply.await.map(drop).map_err(|err| {
+                log::warn!("{cmd} failed: {err}");
+                err.as_str().map(str::to_owned).unwrap_or_else(|| err.to_string())
+            })
+        })
+    });
+
+    crate::new_task::install(dray_core::harness::Harness::ClaudeCode, cx);
 }

@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { DROP_ATTR } from "@/lib/dragSession";
 import { cn } from "@/lib/utils";
 import { EMPTY_VIEW } from "@/lib/groups";
+import { SPLIT_HOST } from "@/lib/splitPanes";
 
 type AppShellProps = {
   sidebar: ReactNode;
@@ -41,6 +42,9 @@ type AppShellProps = {
   /// go on the empty state opens the session whole and the zone has to say so
   /// where the pointer is.
   overlay?: ReactNode;
+  /// Split panes, right of the main view at full height, so the composer
+  /// stays under the view it sends from.
+  beside?: ReactNode;
   children: ReactNode;
 };
 
@@ -60,6 +64,7 @@ export default function AppShell({
   crewStacked = false,
   centered = false,
   overlay,
+  beside,
   children,
 }: AppShellProps) {
   // A card of its own beside the sheet, with the frame showing between. Kept
@@ -140,7 +145,7 @@ export default function AppShell({
             // The crew runs the full height beside both, so its rows get the
             // composer's band too rather than stopping short of it at a line
             // nothing else on screen is drawn to.
-            <div className="flex min-h-0 flex-1">
+            <div className="relative flex min-h-0 flex-1" {...{ [SPLIT_HOST]: "" }}>
               <div className="flex min-w-0 flex-1 flex-col">
                 {/* `flex flex-col` so the view tabs' bodies, which size themselves
                   with `flex-1` the way the right panel's do, have a column to
@@ -151,6 +156,7 @@ export default function AppShell({
                 {crewStacked && crew}
                 <div className="shrink-0">{footer}</div>
               </div>
+              {beside}
               {!crewStacked && crew}
             </div>
           )}

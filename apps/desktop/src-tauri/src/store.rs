@@ -1751,6 +1751,22 @@ pub async fn last_reply(session_id: &str) -> Result<(Option<String>, u32)> {
     Ok((last, since))
 }
 
+/// What `find` picks out of a session's log, read back from the end a few
+/// turns at a time, so a long log is parsed only as far back as the answer.
+pub async fn find_newest<T>(session_id: &str, find: impl Fn(&[AgentEvent]) -> Option<T>) -> Result<Option<T>> {
+    let mut end = None;
+    loop {
+        let page = read_session_page(session_id, end, 8).await?;
+        if let Some(found) = find(&page.events) {
+            return Ok(Some(found));
+        }
+        match page.older_before {
+            Some(before) if end != Some(before) => end = Some(before),
+            _ => return Ok(None),
+        }
+    }
+}
+
 /// Events from one stretch of a session's log, and the byte offset the
 /// stretch starts at — `None` once it reaches the top. An offset stays valid
 /// for the life of the file, since the log is only ever appended to.

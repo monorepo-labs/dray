@@ -261,6 +261,50 @@ body {
   [id$="-lift"] stop:not(:last-child) { stop-opacity: 0.035; }
 }
 
+/* A bot's typing dots, the app's own keyframes. */
+@keyframes typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+/* The working line's label, brightening as it passes: the app's own. */
+.shimmer-text {
+  display: inline-block;
+  animation: shimmer 2s linear infinite;
+  background-image: linear-gradient(
+    90deg,
+    var(--color-muted-foreground) 35%,
+    var(--color-foreground) 50%,
+    var(--color-muted-foreground) 65%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  color: transparent;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-text {
+    animation: none;
+  }
+}
+
 /* Native scrollbars and form controls follow the homepage's scheme. */
 :root[data-scheme="light"]:has([data-home]) {
   color-scheme: light;

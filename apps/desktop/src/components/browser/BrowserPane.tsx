@@ -38,7 +38,11 @@ import { useCopied } from "@/hooks/useCopied";
 import { useDragReorder } from "@/hooks/useDragReorder";
 import {
   activateTab,
+  claimPin,
   claimPresenter,
+  pinStillPainted,
+  releasePin,
+  usePinStill,
   releaseAfterPaint,
   closeTab,
   downloadChromium,
@@ -145,6 +149,7 @@ export default function BrowserPane({
   fullOpen = false,
   onExpand,
   onCollapse,
+  tab,
 }: {
   sessionId: string;
   active: boolean;
@@ -153,16 +158,34 @@ export default function BrowserPane({
   fullOpen?: boolean;
   onExpand?: () => void;
   onCollapse?: () => void;
+  /// A split pane's one tab, drawn whatever the strip has active. Such a
+  /// pane has no device sizes: those are the session's, and its main view's.
+  tab?: number;
 }) {
+  const pinned = tab !== undefined;
   const tabs = useBrowserTabs(sessionId) ?? [];
-  const pending = usePendingTab(sessionId);
-  const current = pending ? null : (tabs.find((t) => t.active) ?? null);
-  const viewport = useViewport(sessionId);
+  const pending = usePendingTab(sessionId) && !pinned;
+  const current = pinned
+    ? (tabs.find((t) => t.id === tab) ?? null)
+    : pending
+      ? null
+      : (tabs.find((t) => t.active) ?? null);
+  const sessionViewport = useViewport(sessionId);
+  const viewport = pinned ? null : sessionViewport;
   // Responsive with no size typed is a flag; with one, it is a viewport.
-  const responsive = useResponsive(sessionId) || viewport?.preset === "responsive";
-  const snapshot = useBrowserSnapshot(sessionId);
-  const recorded = useRecordedTab(sessionId);
+  const sessionResponsive = useResponsive(sessionId);
+  const responsive = !pinned && (sessionResponsive || viewport?.preset === "responsive");
   const key = useId();
+  const sessionSnapshot = useBrowserSnapshot(sessionId);
+  const pinStill = usePinStill(key);
+  const snapshot: BrowserSnapshot | null = pinned
+    ? pinStill?.url
+      ? { sessionId, url: pinStill.url }
+      : null
+    : sessionSnapshot;
+  const onSnapshotPainted = (of: BrowserSnapshot) =>
+    pinned ? pinStill && pinStillPainted(key, pinStill) : snapshotPainted(of);
+  const recorded = useRecordedTab(sessionId);
   const stageRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
   const standingAside = mode === "panel" && fullOpen;
@@ -172,16 +195,18 @@ export default function BrowserPane({
 
   useEffect(() => {
     const stage = stageRef.current;
+    const release = () => (pinned ? releasePin(key) : releaseAfterPaint(key));
     if (!active || standingAside || !stage || empty) {
-      releaseAfterPaint(key);
+      release();
       return;
     }
     const priority = mode === "full" ? 2 : 1;
     // The device frame is the page when one is set; the native view cannot
     // be clipped by the DOM, so the frame is sized to fit the stage below.
     const report = () => {
-      const target = frameRef.current ?? stage;
-      claimPresenter(key, { priority, sessionId, rect: target.getBoundingClientRect() });
+      const rect = (frameRef.current ?? stage).getBoundingClientRect();
+      if (tab !== undefined) claimPin(key, { sessionId, tab, rect });
+      else claimPresenter(key, { priority, sessionId, rect });
     };
     report();
     const observer = new ResizeObserver(report);
@@ -196,9 +221,9 @@ export default function BrowserPane({
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", report);
-      releaseAfterPaint(key);
+      release();
     };
-  }, [sessionId, key, active, mode, standingAside, empty, viewport]);
+  }, [sessionId, key, active, mode, standingAside, empty, viewport, pinned, tab]);
 
   // The page's size in responsive mode, which is what Save keeps. In page
   // pixels: the view is placed in window points, so the app's own zoom
@@ -241,6 +266,7 @@ export default function BrowserPane({
         mode={mode}
         onExpand={onExpand}
         onCollapse={onCollapse}
+        tab={tab}
       />
       {!empty &&
         (responsive ? (
@@ -260,7 +286,11 @@ export default function BrowserPane({
           viewport && !empty && "flex items-start justify-center overflow-hidden bg-surface-raised p-3",
         )}
       >
-        {empty ? (
+        {empty && pinned ? (
+          <div className="flex h-full items-center justify-center text-ui text-muted-foreground">
+            This page was closed.
+          </div>
+        ) : empty ? (
           <EmptyState sessionId={sessionId} active={active} turnable={mode === "full"} />
         ) : viewport ? (
           // Clamped to the stage on both axes rather than scrolled or scaled:
@@ -276,10 +306,10 @@ export default function BrowserPane({
               height: `min(${viewport.height / zoomLevel()}px, 100%)`,
             }}
           >
-            <Snapshot of={snapshot} />
+            <Snapshot of={snapshot} onPainted={onSnapshotPainted} />
           </div>
         ) : (
-          <Snapshot of={snapshot} />
+          <Snapshot of={snapshot} onPainted={onSnapshotPainted} />
         )}
         {current && current.id === recorded && <RecordingNotice since={recordingStart(sessionId)} />}
       </div>
@@ -297,7 +327,7 @@ export default function BrowserPane({
 /// construction and anything drawn on top is a flash where there was none.
 /// A screenshot is not an event the reader has to be told about — they
 /// asked for it, and the file lands in the transcript.
-function Snapshot({ of }: { of: BrowserSnapshot | null }) {
+function Snapshot({ of, onPainted }: { of: BrowserSnapshot | null; onPainted: (of: BrowserSnapshot) => void }) {
   if (!of?.url) return null;
   return (
     <img
@@ -308,7 +338,7 @@ function Snapshot({ of }: { of: BrowserSnapshot | null }) {
         void e.currentTarget
           .decode()
           .catch(() => undefined)
-          .then(() => snapshotPainted(of));
+          .then(() => onPainted(of));
       }}
     />
   );
@@ -362,6 +392,7 @@ function Chrome({
   mode,
   onExpand,
   onCollapse,
+  tab,
 }: {
   sessionId: string;
   tabs: BrowserTab[];
@@ -370,7 +401,11 @@ function Chrome({
   mode: "panel" | "full";
   onExpand?: () => void;
   onCollapse?: () => void;
+  /// A split pane's tab: every control acts on it, and the session-wide ones
+  /// (picker, device sizes, the panel swap) are left to the main view.
+  tab?: number;
 }) {
+  const pinned = tab !== undefined;
   const openError = useOpenError(sessionId);
   const inputRef = useRef<HTMLInputElement>(null);
   const picking = usePicking(sessionId);
@@ -382,7 +417,7 @@ function Chrome({
   const loading = current ? current.loading : opening !== null;
   const blanks = useBlankTabs(sessionId);
   const parkedPages = useParkedTabs(sessionId);
-  const draftKey = `${sessionId}:${blanks.active !== null ? `blank:${blanks.active}` : `page:${current?.id}`}`;
+  const draftKey = `${sessionId}:${blanks.active !== null && !pinned ? `blank:${blanks.active}` : `page:${current?.id}`}`;
   // Per tab, as a browser's are: each new tab keeps what was typed into it.
   const draft = useUrlDraft(draftKey);
   const setDraft = (value: string | null) => setUrlDraft(draftKey, value);
@@ -416,7 +451,7 @@ function Chrome({
   const open = (raw: string, newTab: boolean) => {
     const target = normalizeUrl(raw);
     if (!target) return;
-    void openInBrowser(sessionId, target, newTab, blanks.active)
+    void (pinned ? openInBrowser(sessionId, target, false, null, tab) : openInBrowser(sessionId, target, newTab, blanks.active))
       .then(() => trackBrowserOpen(target))
       .catch(() => undefined);
   };
@@ -425,7 +460,7 @@ function Chrome({
     setPendingTab(sessionId, true);
   };
 
-  const swap = mode === "panel" ? onExpand : onCollapse;
+  const swap = pinned ? undefined : mode === "panel" ? onExpand : onCollapse;
 
   return (
     <div className="shrink-0">
@@ -528,7 +563,7 @@ function Chrome({
           className={TOOL_BTN}
           aria-label="Back"
           disabled={!current?.canGoBack}
-          onClick={() => void navigate(sessionId, "back")}
+          onClick={() => void navigate(sessionId, "back", tab)}
         >
           <ArrowLeft className="size-3.5" />
         </Button>
@@ -538,7 +573,7 @@ function Chrome({
           className={TOOL_BTN}
           aria-label="Forward"
           disabled={!current?.canGoForward}
-          onClick={() => void navigate(sessionId, "forward")}
+          onClick={() => void navigate(sessionId, "forward", tab)}
         >
           <ArrowRight className="size-3.5" />
         </Button>
@@ -552,6 +587,7 @@ function Chrome({
             void navigate(
               sessionId,
               current?.loading ? "stop" : e.shiftKey ? "hard_reload" : "reload",
+              tab,
             )
           }
         >
@@ -649,7 +685,7 @@ function Chrome({
             </ul>
           )}
         </form>
-        {PICKER && (
+        {PICKER && !pinned && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -669,7 +705,7 @@ function Chrome({
             </TooltipContent>
           </Tooltip>
         )}
-        <DeviceMenu sessionId={sessionId} disabled={!current} />
+        {!pinned && <DeviceMenu sessionId={sessionId} disabled={!current} />}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -678,7 +714,7 @@ function Chrome({
               className={TOOL_BTN}
               aria-label="Developer tools"
               disabled={!current}
-              onClick={() => void openDevTools(sessionId)}
+              onClick={() => void openDevTools(sessionId, tab)}
             >
               <Bug className="size-3.5" />
             </Button>

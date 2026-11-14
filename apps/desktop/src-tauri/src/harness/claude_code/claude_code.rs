@@ -107,10 +107,10 @@ pub async fn init(
 
     // Orchestration calls raise no consent card. An additive allow rule, not a
     // whitelist — everything else still routes through `can_use_tool` exactly
-    // as before. A bot's silent-turn tool rides along: a card for it would ask
+    // as before. A bot's silent-turn tools ride along: a card for one would ask
     // the user to approve the bot saying nothing.
     let bot = crate::bots::bot_at(session_cwd).await.is_some();
-    let allowed = if bot { format!("{ALLOWED_TOOLS},{}", no_reply::TOOL_NAME) } else { ALLOWED_TOOLS.into() };
+    let allowed = if bot { format!("{ALLOWED_TOOLS},{}", no_reply::TOOL_NAMES) } else { ALLOWED_TOOLS.into() };
     args.extend(["--allowedTools", &allowed]);
 
     let mcp_config = no_reply::mcp_config();
@@ -158,7 +158,7 @@ pub async fn init(
         command.env("DRAY_ENDPOINT", endpoint);
     }
     if bot {
-        command.env(no_reply::TERMINAL_TOOLS_ENV, no_reply::TOOL_NAME);
+        command.env(no_reply::TERMINAL_TOOLS_ENV, no_reply::TOOL_NAMES);
     }
 
     let mut child = command
@@ -325,7 +325,13 @@ async fn read_stdout(
             request: parser::ControlRequest::McpMessage { message },
         } = &claude_event
         {
-            let reply = no_reply::response(request_id, message);
+            let reply = match no_reply::reaction_asked(message) {
+                Some(said) => {
+                    let reacted = react(&ingest, &seq, &said, app).await;
+                    no_reply::react_response(request_id, message, reacted)
+                }
+                None => no_reply::response(request_id, message),
+            };
             if let Err(err) = crate::session::write_line(&stdin, &reply).await {
                 eprintln!("[claude mcp reply err] {err}");
             }
@@ -395,6 +401,18 @@ async fn read_stdout(
     .await;
 
     Ok(())
+}
+
+/// Puts the bot's `react` call on the user's newest message, through the same
+/// counter and log as the turn it closes. Answers the emoji used, or why not.
+async fn react(ingest: &crate::session::Ingest<'_>, seq: &AtomicU64, said: &str, app: &Sink) -> Result<&'static str, String> {
+    let payload = crate::bots::react::reaction(ingest.session_id, ingest.session_cwd, said)
+        .await
+        .map_err(|e| e.to_string())?;
+    let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let event = crate::events::AgentEvent::mint(ingest.session_id.to_string(), ClaudeCode, n, None, None, payload);
+    crate::session::ingest(ingest, event, app).await;
+    Ok(crate::bots::react::emoji(said).unwrap_or_default())
 }
 
 #[cfg(test)]

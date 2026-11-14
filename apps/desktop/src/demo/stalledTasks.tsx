@@ -14,7 +14,7 @@ import "../App.css";
 /// `stalledTasks` and `onCard` on made-up tasks: two PRs ready to merge, one of
 /// them asking to be tried first, two idle tasks with a question, a PR waiting on review, one idle task the bot answers
 /// itself, two PRs the task can mend (failing checks, a conflict), and three
-/// left out — working, checks running, and idle only ten minutes. The card
+/// left out — working, checks running, and idle only a minute. The card
 /// starts with the ready PRs alone; every stall goes to the bot, listed under
 /// the chat as the nudges the app sends. **Bot writes needs** lands the lines a
 /// bot would write with `dray session need`, which puts the waiting tasks on
@@ -67,7 +67,7 @@ const ROWS: { row: CrewRow; pr?: PrMark; need?: string; answered?: boolean }[] =
   { row: row("7", "Rename the CLI flags", 50 * 60), pr: pr(917, { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }) },
   { row: row("8", "Audit the landing page", 90, true) },
   { row: row("4", "Add dark mode to docs", 60), pr: pr(916, { checksState: "RUNNING", mergeStateStatus: "BLOCKED" }) },
-  { row: row("5", "Draft the onboarding email", 10) },
+  { row: row("5", "Draft the onboarding email", 1) },
 ];
 
 const BOT = "01a1cfc8-demo-stalled-bot";

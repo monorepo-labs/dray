@@ -27,6 +27,7 @@ import {
 import { hiddenChildren, leftToParent } from "@/lib/crew";
 import { repoChanged } from "@/lib/prSync";
 import { dropHeld, dropHeldAsks, heldFor, holdEarlyEvent, isAsk } from "@/lib/earlyEvents";
+import { flushHeld, heldFlagFor, holdFlags, noteFlagWrite, onLanded, overlayHeld, settleAfterSend, unholdFlags, useHeldFlags } from "@/lib/heldFlags";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { lockedMidTurn } from "@/lib/liveControls";
@@ -870,6 +871,10 @@ const handleSendMsg = async (
   // The unsent pick this send carries. A later edit made while it is out
   // replaces the map entry, and must survive this send landing.
   const sentPick = sessionId ? unsentPicks.current.get(sessionId) : undefined;
+  // Kept until the send lands: one that fails before reaching the server —
+  // a sandbox that will not resume — leaves the reader's pick standing.
+  const heldAtSend = sessionId ? heldFlagFor(sessionId) : undefined;
+  const sentAt = Date.now();
 
   const existing = sessionId ? selected : undefined;
   // The backend reads the recorded cwd on resume, so this only has to be right
@@ -1088,6 +1093,9 @@ const handleSendMsg = async (
       baseRef: isNewSession && worktree ? baseRef : null,
       isNewSession,
     });
+    if (heldAtSend) {
+      void settleAfterSend(heldAtSend, sentAt).catch((e) => console.error("could not settle a held flag", e));
+    }
 
     // A turn was already running, so the prompt is held rather than sent. It
     // draws as pending until the backend hands it to the CLI, which arrives as
@@ -1699,6 +1707,24 @@ const setSessionFlags = async (
   flags: { archived?: boolean; pinned?: boolean; hidden?: boolean; aside?: boolean },
 ): Promise<boolean> => {
   const fail = failUnlessLeft();
+  const server = serverOfSession(sessionId);
+  noteFlagWrite(sessionId);
+  // Set aside or brought back while the session's server is down: held on
+  // this Mac and written there once it answers (#1050). Settle is never held,
+  // since it stops a child only that server can reach.
+  const holdable = flags.aside !== undefined && flags.archived === undefined && flags.hidden === undefined;
+  const hold = async () => {
+    await holdFlags(server, sessionId, { aside: flags.aside!, pinned: flags.pinned });
+    return true;
+  };
+  if (holdable && server !== LOCAL && !serverConnected(server)) {
+    try {
+      return await hold();
+    } catch (e) {
+      fail(e);
+      return false;
+    }
+  }
   const machine = cloudMachineOf(sessionId);
   // Its machine is deleted with it, so a stopped one is not woken just to
   // write a flag it is about to lose.
@@ -1706,6 +1732,9 @@ const setSessionFlags = async (
     return retireCloudMachine(machine);
   }
   try {
+    // An older held flag is superseded, and must not land after this write.
+    // Ahead of the count, which only the write's own `finally` takes back.
+    if (flags.aside !== undefined) await unholdFlags(sessionId);
     countFlagWrite(machine, 1);
     const updated = await invoke<SessionIndexItem | null>("set_session_flags", {
       sessionId,
@@ -1730,6 +1759,12 @@ const setSessionFlags = async (
     }
     return true;
   } catch (e) {
+    // Dropped between the check above and the call.
+    if (holdable && server !== LOCAL && !serverConnected(server)) {
+      try {
+        return await hold();
+      } catch {}
+    }
     fail(e);
     return false;
   }
@@ -2768,6 +2803,7 @@ useEffect(() => {
       }
     }
     readServer(server);
+    if (server !== LOCAL) flushHeld(server);
 
     for (const s of sessionsRef.current) {
       if (!ours(s.sessionId)) continue;
@@ -3420,8 +3456,12 @@ useEffect(() => {
   const listenerPromise = listen<SessionIndexItem>("session_changed", (event) => {
     applyIndexItemRef.current(event.payload);
   });
+  // A held flag written once its server came back: the row as that server
+  // answered, in case its own `session_changed` is still on the way.
+  const unlanded = onLanded((item) => applyIndexItemRef.current(item));
 
   return () => {
+    unlanded();
     listenerPromise.then((unlisten) => unlisten());
   };
 }, []);
@@ -3555,6 +3595,10 @@ const paneState = (sessionId: string): PaneState => {
   };
 };
 
+// The rows as drawn: a flag held for a server that is down sits over its row.
+const heldFlags = useHeldFlags();
+const shownIndexItems = useMemo(() => overlayHeld(sessionIndexItems, heldFlags), [sessionIndexItems, heldFlags]);
+
 // What the harness said about fast mode on the newest turn — drawn beside the
 // switch, never folded back into the composer's pick. `fast` is what was asked
 // for; this is what the CLI did with it, and the two disagreeing is the whole
@@ -3602,6 +3646,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems: shownIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
 
 }

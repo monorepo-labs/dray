@@ -6,7 +6,7 @@ import RightPanel, { TabBody, tabOrder } from "@/components/RightPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { Todo } from "@/lib/todos";
-import type { SessionMedia, SubagentRun } from "@/lib/transcript";
+import { runningRuns, type SessionMedia, type SubagentRun } from "@/lib/transcript";
 import type { AgentEvent, ToolResult } from "@/types/events";
 import "../App.css";
 
@@ -364,7 +364,8 @@ function Demo() {
               media={media(mediaCount)}
               sessionId="demo"
               subagents={{
-                runs: picked.runs ?? RUNS,
+                // The finished run is dropped here as App drops it.
+                runs: runningRuns(picked.runs ?? RUNS, null),
                 selectedId: null,
                 resultByCallId: RESULTS,
                 live: true,
