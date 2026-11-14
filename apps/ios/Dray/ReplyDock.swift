@@ -88,6 +88,11 @@ struct ReplyDock: View {
         .animation(Theme.motion, value: hint)
         .animation(Theme.motion, value: connected)
         .onChange(of: phase) { confirming = false }
+        // The bot sheet's pick is the newer word on model and effort; the dock's own would override it.
+        .onChange(of: pick) {
+            model = nil
+            effort = nil
+        }
         .task(id: "\(harness)|\(connected)") {
             guard connected, !harness.isEmpty else { return }
             models = (try? await store.call(key.server, "list_models", ["harness": .string(harness)])) ?? models

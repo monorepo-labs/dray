@@ -131,8 +131,12 @@ struct BotSheet: View {
     /// models and keeps the model pick where the list has it.
     private func loadPicks() async {
         guard let at = target else { return }
+        // Each read is checked against the pick it was for: the task is cancelled when the
+        // server or agent moves, and a late answer must not land on the new one's picks.
         if agentsOf != at {
-            agents = (try? await store.call(at, "agent_availability")) ?? []
+            let read: [AgentAvailability] = (try? await store.call(at, "agent_availability")) ?? []
+            guard !Task.isCancelled, at == target else { return }
+            agents = read
             agentsOf = at
         }
         if !agents.contains(where: { $0.harness == harness && $0.available }), let first = agents.first(where: \.available) {
@@ -142,7 +146,7 @@ struct BotSheet: View {
         }
         let asked = harness
         let read: [Model] = (try? await store.call(at, "list_models", ["harness": .string(asked)])) ?? []
-        guard asked == harness else { return }
+        guard !Task.isCancelled, asked == harness, at == target else { return }
         models = read
         modelId = Picks.usableModel(read, modelId.isEmpty ? Picks.defaultModel[asked] ?? "" : modelId, asked)
     }

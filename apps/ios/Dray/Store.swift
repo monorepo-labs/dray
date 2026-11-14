@@ -71,6 +71,8 @@ final class Store {
     /// A bot chat's agent and model for its next message, picked in its sheet: the desktop's
     /// `unsentPicks`. Another agent moves the chat to a new session on that send.
     var unsent: [SessionKey: AgentPick] = [:]
+    /// The session an agent switch from a chat goes to, minted once and kept until it lands.
+    private var switches: [SessionKey: SessionKey] = [:]
     /// gh's latest progress line per clone, by server and slug.
     var cloneProgress: [UUID: [String: String]] = [:]
     /// Moves when any client saves a draft (`drafts_changed`) or this one removes one: the list re-reads.
@@ -797,9 +799,22 @@ final class Store {
             guard let item = fresh else { throw DrayError("Session not found") }
             store(key, item)
             let moving = harness.map { $0 != item.harness } ?? false
-            // The desktop's rule: the old agent's turn would be cut off by the switch.
-            if moving && item.busy { throw DrayError("Wait for this turn to end to switch agent.") }
-            let to = moving ? SessionKey(server: key.server, id: UUID().uuidString.lowercased()) : key
+            var to = key
+            if moving {
+                // One id per switch, kept across retries: a switch whose reply was lost already
+                // made its session, and a second would stop the first and send the words twice.
+                to = switches[key] ?? SessionKey(server: key.server, id: UUID().uuidString.lowercased())
+                switches[key] = to
+                let made: SessionItem? = (try? await c.call("get_session_by_id", ["sessionId": .string(to.id), "turns": 0])) ?? nil
+                if let made {
+                    created(key.server, made)
+                    switches[key] = nil
+                    unsent[key] = nil
+                    return to
+                }
+                // The desktop's rule: the old agent's turn would be cut off by the switch.
+                if item.busy { throw DrayError("Wait for this turn to end to switch agent.") }
+            }
             let agent = harness ?? item.harness
             let outcome: SendOutcome = try await c.call("send_msg", [
                 "sessionId": .string(to.id),
@@ -819,6 +834,7 @@ final class Store {
             ])
             if let snapshot = outcome.snapshot { created(key.server, snapshot) }
             unsent[key] = nil
+            switches[key] = nil
             // By id: the server's `queue_changed` usually lands before this reply.
             if let q = outcome.queued, !(queued[to]?.contains(q) ?? false) { queued[to, default: []].append(q) }
             sends[to, default: 0] += 1
