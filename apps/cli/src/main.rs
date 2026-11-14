@@ -18,7 +18,7 @@ use draft::DraftCommand;
 use dray_proto::{
     encode_line, AddVideo, BrowserAction, MergeCard, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
     LinkIssues, ListSessions, Locator, OnMachine, RenameSession, Request, Response, SendMessage, SessionRef,
-    React, SessionSummary, SetAside, SetNeed, SettleSession, ShareAction, ShareRequest,
+    React, SessionSummary, SetAside, SetModel, SetNeed, SettleSession, ShareAction, ShareRequest,
 };
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
@@ -130,6 +130,10 @@ enum SessionCommand {
     Send(Send),
     /// Rename a session. Its title stays yours: no generated one replaces it.
     Rename(Rename),
+    /// Switch a session's model or effort, like its composer's model picker.
+    /// Takes effect from its next turn; a turn already running keeps its model.
+    /// Without a model or --effort, prints what it runs on.
+    Model(ModelArgs),
     /// Stop the turn a session is running, like its Stop button.
     Stop(SessionArg),
     /// Settle a finished session: it stops, and leaves the active list.
@@ -172,6 +176,20 @@ struct Need {
     session_id: String,
     /// What it needs, imperative and short: "Pick: keep or drop the rename button".
     need: Option<String>,
+}
+
+#[derive(Args)]
+struct ModelArgs {
+    /// The session, as printed by `dray session ls`.
+    session_id: String,
+    /// A model alias its agent knows, like fable, opus or sonnet on
+    /// claude_code. Without it the model stays and only --effort moves.
+    model: Option<String>,
+    /// low, medium, high, xhigh, max or ultra, where the model has it. Without
+    /// it the session keeps its level if the new model has it, else takes the
+    /// model's own.
+    #[arg(long)]
+    effort: Option<String>,
 }
 
 #[derive(Args)]
@@ -518,6 +536,7 @@ fn session(command: SessionCommand) -> Result<(), String> {
         SessionCommand::Send(args) => return send_message(args),
         SessionCommand::MergeCard(args) => return merge_card(args),
         SessionCommand::React(args) => return react(args),
+        SessionCommand::Model(args) => return set_model(args),
         SessionCommand::Rename(args) => (
             Request::RenameSession(RenameSession { session_id: args.session_id, title: args.title }),
             "Renamed it",
@@ -725,6 +744,26 @@ fn merge_card(args: SessionArg) -> Result<(), String> {
     match send(request)? {
         Response::MergeCard { number, url, title } => {
             eprintln!("Posted a merge card for #{number} \"{title}\": {url}");
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(other)),
+    }
+}
+
+fn set_model(args: ModelArgs) -> Result<(), String> {
+    let asked = args.model.is_some() || args.effort.is_some();
+    let request = SetModel { session_id: args.session_id, model: args.model, effort: args.effort };
+    match send(Request::SetModel(request))? {
+        Response::Model { session, model, effort, changed } => {
+            let at = effort.map(|e| format!(" at {e} effort")).unwrap_or_default();
+            let title = &session.title;
+            let place = on_machine(&session);
+            match (asked, changed) {
+                (false, _) => eprintln!("\"{title}\"{place} runs on {model}{at}."),
+                (true, false) => eprintln!("\"{title}\"{place} is already set to {model}{at}."),
+                (true, true) => eprintln!("\"{title}\"{place} moves to {model}{at} from its next turn."),
+            }
             Ok(())
         }
         Response::Error { message } => Err(message),
@@ -1686,6 +1725,10 @@ mod tests {
             &["dray", "session", "need", SESSION, "Pick: keep or drop the rename button"],
             &["dray", "session", "need", SESSION],
             &["dray", "session", "rename", SESSION, "New name"],
+            &["dray", "session", "model", SESSION, "fable"],
+            &["dray", "session", "model", SESSION, "opus", "--effort", "high"],
+            &["dray", "session", "model", SESSION, "--effort", "low"],
+            &["dray", "session", "model", SESSION],
             &["dray", "share", "start", "5173"],
             &["dray", "share", "ls", "--all", "--json"],
             &["dray", "server", "install", "--tools", "git,gh"],

@@ -51,6 +51,12 @@ pub const SESSION_CREATED: &str = "session_created";
 /// the frontend made those writes and merges what they answered.
 pub const SESSION_CHANGED: &str = "session_changed";
 
+/// `dray session model` moved a session's pick, carrying the entry as it now
+/// stands. Apart from [`SESSION_CHANGED`] because a composer showing that
+/// session has to take the new pick over its own, which no other change to
+/// the entry may make it do.
+pub const SESSION_MODEL_CHANGED: &str = "session_model_changed";
+
 /// Emitted when `dray issue link` or `dray issue unlink` changes what a session
 /// is tagged with, so the panel's Issue tab appears, redraws or goes away
 /// without a reselect.
@@ -463,6 +469,7 @@ fn session_named(request: &Request) -> Option<&str> {
         Request::MergeCard(r) => Some(&r.session_id),
         Request::SetNeed(r) => Some(&r.session_id),
         Request::React(r) => Some(&r.session_id),
+        Request::SetModel(r) => Some(&r.session_id),
         // Never `AddVideo` or `AddImage`: its path is this machine's, and forwarded it would
         // name a file the other machine does not have, or a different one.
         _ => None,
@@ -780,7 +787,9 @@ mod elsewhere {
         })?;
         let mut response: Response = serde_json::from_value(answer)?;
         let rows: Vec<&mut SessionSummary> = match &mut response {
-            Response::Created { session, .. } | Response::Session { session } => vec![session],
+            Response::Created { session, .. } | Response::Session { session } | Response::Model { session, .. } => {
+                vec![session]
+            }
             Response::Listed { sessions } => sessions.iter_mut().collect(),
             _ => vec![],
         };
@@ -995,6 +1004,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         }
         Request::Share(share) => share_port(share).await,
         Request::ListShares(list) => list_shares(list).await,
+        Request::SetModel(set) => set_model(set, app).await,
         Request::RenameSession(rename) => {
             crate::rename_session(rename.session_id.clone(), rename.title, app.clone()).await?;
             answer_session(&rename.session_id).await
@@ -1377,6 +1387,82 @@ pub(crate) async fn announce_change(ids: &[String], app: &Sink) {
             app.emit(SESSION_CHANGED, &item).ok();
         }
     }
+}
+
+/// `dray session model`: the composer's model picker, from outside it. Only the
+/// pick is written, as the picker's is; the session's next send carries it out
+/// through `send_msg`, which compares it against what the child runs and
+/// applies it in place or respawns. A turn already running keeps its model.
+async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
+    let item = store::get_session_index_item(&set.session_id)
+        .await?
+        .with_context(|| format!("no session {}", set.session_id))?;
+    let harness = item.harness;
+    if !harness.names_a_cli() {
+        bail!("this build cannot run that session's agent, {}", harness.label());
+    }
+    let model = match set.model.as_deref() {
+        Some(alias) => resolve_model(Some(alias), None, harness).await?,
+        None => item.model.clone(),
+    };
+    let spec = crate::session::model_spec(harness, &model).await?;
+    if set.model.is_some() && harness == Harness::Codex && spec.is_none() {
+        bail!("{model} is not a Codex model");
+    }
+    let label = spec.as_ref().map_or_else(|| model.to_string(), |m| m.label.clone());
+    // A bare read writes nothing, even where the recorded level is one the
+    // model has since dropped: `send_msg` repairs that on its own.
+    let asked = set.model.is_some() || set.effort.is_some();
+    let effort = match asked {
+        true => {
+            let requested = resolve_effort(set.effort.as_deref(), None, harness)?;
+            effort_for(spec.as_ref(), requested, item.effort, &label, harness)?
+        }
+        false => item.effort,
+    };
+    let changed = model != item.model || effort != item.effort;
+    let item = match changed {
+        true => {
+            let item = store::set_session_pick(&item.session_id, model, effort)
+                .await?
+                .with_context(|| format!("no session {}", set.session_id))?;
+            app.emit(SESSION_CHANGED, &item).ok();
+            app.emit(SESSION_MODEL_CHANGED, &item).ok();
+            item
+        }
+        false => item,
+    };
+    Ok(Response::Model {
+        session: summarize(item),
+        model: label,
+        effort: effort.map(|e| e.as_arg().to_string()),
+        changed,
+    })
+}
+
+/// The level a session runs at once `spec` replaces its model. A level the
+/// model lacks is refused, not dropped, since the caller asked for it by name;
+/// none asked keeps `current` where the model has it, as the picker does
+/// mid-session, else takes the model's own default.
+fn effort_for(
+    spec: Option<&crate::models::Model>,
+    requested: Option<Effort>,
+    current: Option<Effort>,
+    label: &str,
+    harness: Harness,
+) -> Result<Option<Effort>> {
+    Ok(match (spec, requested) {
+        (Some(spec), Some(level)) if !spec.efforts.contains(&level) => {
+            let ladder: Vec<_> = spec.efforts.iter().map(|e| e.as_arg()).collect();
+            match ladder.is_empty() {
+                true => bail!("{label} takes no effort level"),
+                false => bail!("{label} takes effort {}", ladder.join(", ")),
+            }
+        }
+        (None, Some(_)) => bail!("name a model to set an effort on — {} picks its own here", harness.label()),
+        (Some(spec), level) => crate::models::resolve_effort(spec, level.or(current)),
+        (None, None) => current,
+    })
 }
 
 async fn answer_session(id: &str) -> Result<Response> {
@@ -2628,6 +2714,34 @@ mod tests {
             false,
             parent,
         )
+    }
+
+    fn model(efforts: &[&str], default: Option<&str>) -> crate::models::Model {
+        serde_json::from_value(serde_json::json!({
+            "id": "m", "label": "M", "arg": "m", "efforts": efforts, "defaultEffort": default,
+        }))
+        .unwrap()
+    }
+
+    /// `dray session model`'s level: a named one the model lacks is refused
+    /// rather than quietly swapped, and a model switched alone keeps the level
+    /// the session ran at only where the new model has it.
+    #[test]
+    fn a_model_switch_keeps_or_refuses_effort() {
+        let ladder = model(&["low", "medium", "high"], Some("medium"));
+        let flat = model(&[], None);
+        let cc = Harness::ClaudeCode;
+        let pick = |spec, asked, current| effort_for(spec, asked, current, "M", cc);
+
+        assert_eq!(pick(Some(&ladder), Some(Effort::Low), Some(Effort::High)).unwrap(), Some(Effort::Low));
+        assert_eq!(pick(Some(&ladder), None, Some(Effort::High)).unwrap(), Some(Effort::High));
+        assert_eq!(pick(Some(&ladder), None, Some(Effort::Max)).unwrap(), Some(Effort::Medium));
+        assert_eq!(pick(Some(&flat), None, Some(Effort::High)).unwrap(), None);
+        let refused = pick(Some(&ladder), Some(Effort::Max), None).unwrap_err().to_string();
+        assert_eq!(refused, "M takes effort low, medium, high");
+        assert_eq!(pick(Some(&flat), Some(Effort::Low), None).unwrap_err().to_string(), "M takes no effort level");
+        assert!(pick(None, Some(Effort::Low), None).is_err());
+        assert_eq!(pick(None, None, Some(Effort::Low)).unwrap(), Some(Effort::Low));
     }
 
     /// The two harnesses' ladders share their names and not their scale —

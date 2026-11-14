@@ -155,6 +155,24 @@ pub struct SendOutcome {
     pub issues: Vec<IssueRef>,
 }
 
+/// The model `harness` knows as `model`, from whichever table can name it. The
+/// two single-vendor harnesses have one written here; pi, fx, grok and Codex
+/// answer from what the machine last reported, so a model shipped after this
+/// build still spawns.
+///
+/// `None` is legal for pi alone and means "let pi decide" — its own settings
+/// already name a model, and Dray naming one it might have no key for is the
+/// worst possible first run.
+pub async fn model_spec(harness: Harness, model: &ModelId) -> Result<Option<Model>> {
+    Ok(match harness {
+        Harness::Pi => crate::harness::pi::models::find(model).await,
+        Harness::Fx => crate::harness::fx::models::find(model).await,
+        Harness::Grok => crate::harness::grok::models::find(model).await,
+        Harness::Codex => crate::harness::codex::models::find(model).await,
+        _ => Some(find_model(model).with_context(|| format!("unknown model {model}"))?),
+    })
+}
+
 /// Whether a send has to replace the child rather than write to it.
 ///
 /// A **setting change** waits for everything to be idle, background tasks
@@ -875,24 +893,7 @@ impl SessionManager {
         app: &Sink,
     ) -> Result<SendOutcome> {
         let _counted = Sending::enter().await;
-        // Resolved against whichever table can name it. The two single-vendor
-        // harnesses have one written here; pi's list is answered by the machine,
-        // so its models are looked up in what the probe last reported.
-        //
-        // `None` is legal for pi alone and means "let pi decide" — its own
-        // settings already name a model, and Dray naming one it might have no
-        // key for is the worst possible first run.
-        let model_spec = match harness {
-            Harness::Pi => crate::harness::pi::models::find(&model).await,
-            Harness::Fx => crate::harness::fx::models::find(&model).await,
-            // grok's too: its list rides the handshake, so a model xAI shipped
-            // after this build still spawns.
-            Harness::Grok => crate::harness::grok::models::find(&model).await,
-            // Codex's list is the machine's answer too now, with the table
-            // behind it — so a model shipped after this build still spawns.
-            Harness::Codex => crate::harness::codex::models::find(&model).await,
-            _ => Some(find_model(&model).with_context(|| format!("unknown model {model}"))?),
-        };
+        let model_spec = model_spec(harness, &model).await?;
 
         // A model belongs to exactly one harness, and the pair reaches here from
         // two places that each know only half of it — the composer's stored

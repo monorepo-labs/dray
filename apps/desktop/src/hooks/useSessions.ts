@@ -3528,6 +3528,29 @@ useEffect(() => {
   };
 }, []);
 
+// `dray session model` moved a session's pick from outside the composer. An
+// unsent pick held for it here would carry the old model back out on the next
+// send, so it goes, and a composer showing the session takes the new one. Its
+// own event because only this write may override the reader's pick: a
+// `session_changed` row can lag a send the composer already made.
+const followModelPickRef = useRef((_: SessionIndexItem) => {});
+followModelPickRef.current = (item: SessionIndexItem) => {
+  const pick = unsentPicks.current.get(item.sessionId);
+  if (pick) {
+    const { model: _model, effort: _effort, efforts: _efforts, ...rest } = pick;
+    unsentPicks.current.set(item.sessionId, rest);
+  }
+  if (item.sessionId === selectedSessionIdRef.current) restoreSessionControls(item);
+};
+useEffect(() => {
+  const listenerPromise = listen<SessionIndexItem>("session_model_changed", (event) => {
+    followModelPickRef.current(event.payload);
+  });
+  return () => {
+    listenerPromise.then((unlisten) => unlisten());
+  };
+}, []);
+
 // `dray issue link` or `dray issue unlink`, which reach Rust over the
 // orchestration socket without this hook asking for anything — so the Issue tab
 // used to wait on the next send's `SendOutcome.issues`, a reselect or a restart

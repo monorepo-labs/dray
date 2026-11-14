@@ -1484,6 +1484,24 @@ pub async fn set_session_model(
     .await
 }
 
+/// Records a model and effort picked from outside the composer — `dray session
+/// model` — for the session's next send to carry out, as a picker's pick is.
+pub async fn set_session_pick(
+    session_id: &str,
+    model: ModelId,
+    effort: Option<Effort>,
+) -> Result<Option<SessionIndexItem>> {
+    update_item(session_id, |item| {
+        item.model = model;
+        item.effort = effort;
+        // A level a newer build wrote is replaced by this explicit one, or
+        // that build would read its own back over it.
+        item.effort_above = None;
+        item.clone()
+    })
+    .await
+}
+
 /// Moves a session out of the worktree it was running in and back to its
 /// project root, which is what makes it survive the directory being deleted.
 ///
