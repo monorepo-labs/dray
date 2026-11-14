@@ -93,7 +93,7 @@ export type PlaceStep = "starting" | "cloning";
 
 /// What placement reaches, apart so a test can stand in for the machine.
 export type PlaceIo = {
-  start: () => Promise<ServerId>;
+  start: (slug: string) => Promise<ServerId>;
   clone: (server: ServerId, slug: string) => Promise<Project[]>;
   drop: (server: ServerId) => Promise<void>;
 };
@@ -124,7 +124,7 @@ export async function placeTask(
   onStep("starting");
   let server: ServerId;
   try {
-    server = await io.start();
+    server = await io.start(slug);
   } catch (e) {
     throw new CloudError(`Couldn't start a cloud machine: ${reason(e)}`);
   }
@@ -143,7 +143,7 @@ export async function placeTask(
 }
 
 export const cloudIo: PlaceIo = {
-  start: () => invoke<string>("start_cloud_machine", {}, LOCAL),
+  start: (slug) => invoke<string>("start_cloud_machine", { repo: slug }, LOCAL),
   clone: (server, slug) => invoke<Project[]>("clone_github_repo", { slug }, server),
   drop: (server) => invoke<void>("drop_cloud_machine", { id: server }, LOCAL),
 };

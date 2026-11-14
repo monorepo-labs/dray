@@ -11,12 +11,16 @@ const REMOTE = "github.com/octocat/app";
 const project = (path: string, remote: string | null = REMOTE): Project =>
   ({ path, name: "app", space: null, lastSelected: "", remote }) as Project;
 
-function io(over: Partial<Io> = {}): Io & { started: number; clones: string[]; dropped: string[] } {
+function io(over: Partial<Io> = {}): Io & { started: number; repos: string[]; clones: string[]; dropped: string[] } {
   const out = {
     started: 0,
+    repos: [] as string[],
     clones: [] as string[],
     dropped: [] as string[],
-    start: async (): Promise<string> => `c${++out.started}`,
+    start: async (slug: string): Promise<string> => {
+      out.repos.push(slug);
+      return `c${++out.started}`;
+    },
     clone: async (server: string, slug: string) => {
       out.clones.push(`${server}:${slug}`);
       return [project(`dray://${server}/root/dray/app`)];
@@ -38,6 +42,8 @@ describe("placeTask", () => {
     expect(first).toMatchObject({ server: "c1", path: "dray://c1/root/dray/app" });
     expect(second.server).toBe("c2");
     expect(machines.clones).toEqual(["c1:octocat/app", "c2:octocat/app"]);
+    // Each machine is made for its repo, which is what its GitHub token covers.
+    expect(machines.repos).toEqual(["octocat/app", "octocat/app"]);
     expect(steps).toEqual(["starting", "cloning"]);
   });
 

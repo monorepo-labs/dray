@@ -1,10 +1,15 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { after } from "next/server";
 import { boat, BoatError, listByLabel, type Sandbox } from "./boat";
+import { machineLogins } from "./agent-logins";
+import { bind, isSlug, KEY_LABEL, mint, readKey, RepoRefused } from "./github";
+import { GitHubError } from "./github-app";
+import { NotConnected } from "./github-store";
 
 /// Dray Cloud's control plane: one boat sandbox per task, each labelled
-/// `dray=cloud` and listed by label, so nothing here keeps state. The contract
-/// is issue #857.
+/// `dray=cloud` and listed by label, so no machine is kept in a table. The
+/// contract is issue #857; each user's GitHub link and agent logins (#1013)
+/// are the only rows, read at create and at a token mint.
 
 const PORT = 7317;
 const TTL_SECONDS = 900;
@@ -62,8 +67,9 @@ function bearer(req: Request) {
 const error = (status: number, error: string, message?: string) =>
   Response.json(message ? { error, message } : { error }, { status });
 
-type Secrets = { serveToken: string; machineSecret: string };
-type Who = "client" | "machine";
+type Secrets = { serveToken: string; machineSecret: string; keySecret: string };
+/// `key` routes take a machine's own credential and check it themselves.
+type Who = "client" | "machine" | "key";
 
 /// Wraps a route: 404 while `DRAY_CLOUD_KEY` is unset, 401 for the wrong
 /// bearer, and boat's failures turned into an answer. Env is read per request
@@ -77,13 +83,23 @@ export function route<C>(
     if (!key) return new Response(null, { status: 404 });
     const secret = process.env.DRAY_CLOUD_SECRET;
     if (!secret || !process.env.BOAT_API_KEY) return error(500, "misconfigured");
-    const secrets = { serveToken: derive(secret, "serve-token"), machineSecret: derive(secret, "machine") };
-    if (!same(bearer(req), who === "client" ? key : secrets.machineSecret)) {
+    const secrets = {
+      serveToken: derive(secret, "serve-token"),
+      machineSecret: derive(secret, "machine"),
+      keySecret: derive(secret, "machine-key"),
+    };
+    if (who !== "key" && !same(bearer(req), who === "client" ? key : secrets.machineSecret)) {
       return error(401, "unauthorized");
     }
     try {
       return await handler(req, secrets, ctx);
     } catch (e) {
+      // Something the user can fix on GitHub's side, said in full on the task.
+      if (e instanceof NotConnected || e instanceof RepoRefused) return error(409, "github", e.message);
+      if (e instanceof GitHubError) {
+        console.error(`github ${e.status}: ${e.message}`);
+        return error(502, "github_failed", e.message);
+      }
       if (!(e instanceof BoatError)) throw e;
       console.error(`boat ${e.status} ${e.code}: ${e.message}`);
       // A missing sandbox, a state conflict and a start limit mean something
@@ -111,28 +127,54 @@ export async function machines(serveToken: string) {
   return { token: serveToken, machines: all.map((s) => machine(s)) };
 }
 
+/// Who a create is for. Per-user access replaces this with the caller's own
+/// account; until then the one shared key acts for `DRAY_CLOUD_OWNER`, a user
+/// id, and with none set a machine gets no GitHub access of its own.
+const owner = () => process.env.DRAY_CLOUD_OWNER || null;
+
 /// A new machine for one task, created from the saved snapshot. Never shared,
-/// so a task's checkout, agents and memory are its own.
-export async function startMachine(origin: string, secrets: Secrets): Promise<Response> {
-  return Response.json({ machine: await create(origin, secrets.serveToken, secrets.machineSecret) });
+/// so a task's checkout, agents and memory are its own. With `repo`, the
+/// machine is bound to it and to the owner's GitHub link before boat is asked.
+export async function startMachine(req: Request, origin: string, secrets: Secrets): Promise<Response> {
+  const body = await req.json().catch(() => null);
+  const repo = body?.repo;
+  if (repo !== undefined && !isSlug(repo)) return error(400, "invalid_repo");
+  const user = owner();
+  const github = repo && user ? { ...(await bind(user, repo, secrets.keySecret)), repo } : null;
+  const logins = user ? await machineLogins(user) : null;
+  return Response.json({ machine: await create(origin, secrets, github, logins) });
 }
 
-async function create(origin: string, serveToken: string, machineSecret: string) {
+type Bound = Awaited<ReturnType<typeof bind>> & { repo: string };
+
+async function create(
+  origin: string,
+  { serveToken, machineSecret }: Secrets,
+  github: Bound | null,
+  logins: Record<string, unknown> | null,
+) {
+  const cloud: Record<string, unknown> = { url: `${origin}/api/cloud`, secret: machineSecret };
+  if (github) {
+    cloud.key = github.key;
+    cloud.github = { repo: github.repo, author: github.author };
+  }
   const res = await boat<{ sandbox: Sandbox; hostedPorts?: { url?: string; error?: string }[] }>(
     "POST",
     "/sandboxes",
     {
       from: SNAPSHOT,
       noEnv: true,
-      labels: LABEL,
+      labels: github ? { ...LABEL, [KEY_LABEL]: github.nonce } : LABEL,
       ttlSeconds: TTL_SECONDS,
       hostedPorts: [{ port: PORT, public: true, localhost: true }],
       files: [
         { path: ".dray/serve-token", content: serveToken },
         {
           path: ".dray/cloud.json",
-          content: JSON.stringify({ url: `${origin}/api/cloud`, secret: machineSecret }),
+          content: JSON.stringify(cloud),
         },
+        // The user's own agent logins, on their own machine alone.
+        ...(logins ? [{ path: ".dray/agent-logins.json", content: JSON.stringify(logins) }] : []),
       ],
     },
     true,
@@ -217,4 +259,18 @@ export async function heartbeat(req: Request): Promise<Response> {
     }
   }
   return new Response(null, { status: 204 });
+}
+
+/// Trades a machine's credential for an hour-long token on its one repo. The
+/// credential must be signed by this control plane and its sandbox still be
+/// alive, so a deleted machine's copy is dead even if read off its disk.
+export async function githubToken(req: Request, { keySecret }: Secrets): Promise<Response> {
+  const claims = readKey(bearer(req), keySecret);
+  if (!claims) return error(401, "unauthorized");
+  const alive = (await listByLabel(`${KEY_LABEL}=${claims.n}`)).some(
+    (s) => s.labels?.dray === "cloud" && s.state !== "cancelled",
+  );
+  if (!alive) return error(401, "unauthorized");
+  const { token, expiresAt } = await mint(claims);
+  return Response.json({ token, expiresAt, repo: claims.r });
 }
