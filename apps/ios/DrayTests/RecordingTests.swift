@@ -29,4 +29,9 @@ final class RecordingTests: XCTestCase {
         XCTAssertEqual(recordingPaths(in: text), ["/srv/dray/browser/recordings/s1/flow.mp4"])
         XCTAssertEqual(screenshotPaths(in: "/Users/me/Desktop/shot.png"), [])
     }
+
+    func testLeavesAScreenshotWrittenAsAnImageToItsBlock() {
+        let text = "Done.\n\n![After](/srv/dray/browser/recordings/s1/after.png)\n\nAlso /srv/dray/browser/recordings/s1/before.png"
+        XCTAssertEqual(screenshotPaths(in: text), ["/srv/dray/browser/recordings/s1/before.png"])
+    }
 }
