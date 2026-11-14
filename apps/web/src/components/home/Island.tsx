@@ -13,7 +13,7 @@ const LOOP_PATH =
 export function Island() {
   return (
     <Section id="island" className="py-20">
-      <Title lead="Talk to your sessions">from any app.</Title>
+      <Title lead="Talk to your sessions from any app." />
       <div className={`${GRID} lg:grid-cols-2`}>
         <Card caption="Tap Control and talk. Hold Shift to circle what you mean, or drag out a screenshot.">
           <Scene>
