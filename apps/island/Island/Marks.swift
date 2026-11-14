@@ -284,30 +284,45 @@ struct BoatExtendChoices: View {
 /// Sessions finished, in place of Dray's banner, newest first. One names
 /// itself and offers Open in app; several are a count that, under the pointer,
 /// grows a row each, five tall and then scrolling. A title opens the island on it.
+/// A bot's "waiting on you" grows its card's rows under the pointer, as the bot chat draws them;
+/// several bots waiting are one pill counting every task, grouped under each bot.
 struct DonePill: View {
+    @Environment(Store.self) private var store
+    /// `note` stands in for "Done": what a bot's tasks wait on, drawn yellow as the app's rail draws waiting.
+    /// `rows` are those tasks, as the app's card had them when it raised the note.
+    typealias Item = (key: SessionKey, title: String, note: String?, rows: [WaitingTask])
     let notch: Bool
     let notchHeight: CGFloat
-    /// `note` stands in for "Done": what a bot's tasks wait on, drawn yellow as the app's rail draws waiting.
-    let items: [(key: SessionKey, title: String, note: String?)]
+    let items: [Item]
     var glowing = false
     let open: (SessionKey) -> Void
     let openInApp: (SessionKey) -> Void
+    var openTask: (SessionKey, WaitingTask) -> Void = { _, _ in }
+    /// Answers why it failed, or nil once landed.
+    var merge: (SessionKey, WaitingTask, String) async -> String? = { _, _, _ in nil }
     var hover: (Bool) -> Void = { _ in }
-    @State private var expanded = false
+    /// Grown under the pointer; the demo's snapshot draws it grown from the start.
+    @State var expanded = false
+    /// A card drawn on its merge confirm from the start, for the demo's snapshot.
+    var confirming: String? = nil
     @State private var collapse: Task<Void, Never>?
+    @State private var listHeight: CGFloat = 0
     private static let row: CGFloat = 26
 
     var body: some View {
         // Yellow wins where both apply, as on the app's rail.
         let waiting = items.contains { $0.note != nil }
         let tint = waiting ? StatusDot.waiting : StatusDot.unread
+        let cards = items.contains { !$0.rows.isEmpty }
         PillShell(notch: notch, notchHeight: notchHeight, glow: glowing ? tint : nil) {
             // One structure, open or shut, so the pill grows rather than swapping layouts.
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: cards ? 8 : 6) {
                 HStack(spacing: 8) {
                     Circle().fill(tint).frame(width: 6, height: 6)
-                    Text(items.count == 1 ? items[0].note ?? "Done" : waiting ? "\(items.count) updates" : "\(items.count) tasks done")
+                    Text(Self.headline(items, waiting: waiting))
                         .font(.system(size: 13, weight: .semibold))
+                        // White outright: the pills' window takes the system's appearance, and light mode drew it black.
+                        .foregroundStyle(.white)
                     // Several are a count alone; their titles wait for the pointer.
                     if items.count == 1, let first = items.first {
                         // A note takes the room "Done" left, so the title gives it back to fit the pill's window.
@@ -315,36 +330,40 @@ struct DonePill: View {
                         OpenInAppButton(chord: true) { openInApp(first.key) }
                     }
                 }
+                // Centred over the grown list, so its margins match the cards'.
+                .frame(maxWidth: expanded && cards ? .infinity : nil)
                 .contentShape(Rectangle())
                 .onTapGesture { if let first = items.first { open(first.key) } }
                 if expanded {
                     ScrollView {
-                        VStack(spacing: 0) {
+                        VStack(alignment: .leading, spacing: 4) {
                             ForEach(items, id: \.key) { item in
-                                HStack(spacing: 8) {
-                                    Button { open(item.key) } label: { DoneTitle(title: item.title, cap: item.note == nil ? 240 : 120) }
-                                        .buttonStyle(.plain)
-                                    if let note = item.note {
-                                        Text(note).font(.system(size: 12)).foregroundStyle(StatusDot.waiting).lineLimit(1)
-                                    }
-                                    Spacer(minLength: 0)
-                                    OpenInAppButton { openInApp(item.key) }
+                                // One item's own line is the pill's header already.
+                                if items.count > 1 {
+                                    if item.rows.isEmpty { line(item) } else { group(item) }
                                 }
-                                .frame(height: Self.row)
+                                ForEach(item.rows, id: \.id) { task in
+                                    WaitingCard(task: task, open: { openTask(item.key, task) }, merge: { await merge(item.key, task, $0) },
+                                                confirming: confirming == task.id)
+                                }
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        // Cards differ in height, so the list is measured rather than counted.
+                        .onGeometryChange(for: CGFloat.self, of: \.size.height) { listHeight = $0 }
                     }
                     .scrollIndicators(.never)
-                    .frame(height: CGFloat(min(items.count, 5)) * Self.row)
+                    .scrollBounceBehavior(.basedOnSize)
+                    .frame(height: cards ? min(listHeight, 420) : CGFloat(min(items.count, 5)) * Self.row)
                     .transition(.opacity)
                 }
             }
-            .frame(width: expanded ? 360 : nil, alignment: .leading)
+            .frame(width: expanded ? (cards ? 440 : 360) : nil, alignment: .leading)
         }
         .onHover { inside in
             hover(inside)
             collapse?.cancel()
-            guard items.count > 1 else { return }
+            guard items.count > 1 || cards else { return }
             if inside {
                 withAnimation(.spring(duration: 0.3, bounce: 0.12)) { expanded = true }
             } else {
@@ -356,6 +375,175 @@ struct DonePill: View {
                 }
             }
         }
+    }
+
+    /// What one item says: its rows counted while it has them, so a merge here moves the count.
+    private static func headline(_ item: Item) -> String {
+        let n = item.rows.count
+        return n > 0 ? "\(n) \(n == 1 ? "task" : "tasks") waiting on you" : item.note ?? "Done"
+    }
+
+    /// The pill's own line: one item's, every bot's waiting tasks counted as one, else how many updates.
+    private static func headline(_ items: [Item], waiting: Bool) -> String {
+        if items.count == 1 { return headline(items[0]) }
+        if items.allSatisfy({ !$0.rows.isEmpty }) {
+            let n = items.reduce(0) { $0 + $1.rows.count }
+            return "\(n) tasks waiting on you"
+        }
+        return waiting ? "\(items.count) updates" : "\(items.count) tasks done"
+    }
+
+    /// A bot's name and face over its waiting cards, where several bots share the pill.
+    private func group(_ item: Item) -> some View {
+        HStack(spacing: 6) {
+            if let bot = store.bot(item.key) { BotFace(bot: bot, size: 16) }
+            Button { open(item.key) } label: { DoneTitle(title: item.title, cap: 240) }
+                .buttonStyle(.plain)
+            Spacer(minLength: 0)
+            OpenInAppButton { openInApp(item.key) }
+        }
+        .frame(height: Self.row)
+        .padding(.top, item.key == items.first?.key ? 0 : 6)
+    }
+
+    private func line(_ item: Item) -> some View {
+        HStack(spacing: 8) {
+            Button { open(item.key) } label: { DoneTitle(title: item.title, cap: item.note == nil ? 240 : 120) }
+                .buttonStyle(.plain)
+            if item.note != nil {
+                Text(Self.headline(item)).font(.system(size: 12)).foregroundStyle(StatusDot.waiting).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            OpenInAppButton { openInApp(item.key) }
+        }
+        .frame(height: Self.row)
+    }
+}
+
+/// One row of a bot's "Waiting on you" card, as the app hands it over with the notice (`useStalledTasks`).
+struct WaitingTask: Decodable, Hashable {
+    let id: String
+    let title: String
+    let projectPath: String
+    let modified: String
+    /// The line its bot wrote for the reader, where one was written since the task last moved.
+    let need: String?
+    /// Its PR can land, so the card carries Merge.
+    let ready: Bool
+    let pr: PrMark?
+}
+
+/// A waiting task as the bot chat's card draws it: face, title, PR and age, and
+/// under them its bot's line for the reader. A click brings Dray forward on the
+/// task; a ready PR lands from here, Merge then the method.
+struct WaitingCard: View {
+    @Environment(Store.self) private var store
+    let task: WaitingTask
+    let open: () -> Void
+    /// Takes the method; answers why it failed, or nil once landed.
+    let merge: (String) async -> String?
+    @State private var hover = false
+    @State var confirming = false
+    @State private var merging = false
+    @State private var failed: String?
+    /// The app's `--accent-merge`.
+    private static let green = Color(red: 0x23 / 255, green: 0x86 / 255, blue: 0x36 / 255)
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            // Seeded by the task, as the app's row draws it.
+            BotFace(bot: Bot(id: task.id, name: "", path: "", avatar: nil), size: 26)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(task.title.isEmpty ? "Untitled" : task.title).lineLimit(1)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.92))
+                    if let pr = task.pr {
+                        HStack(spacing: 2) {
+                            PrGlyph(mark: pr, size: 12)
+                            Text("#\(pr.number)")
+                        }
+                        .font(.system(size: 12).monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.5))
+                        .fixedSize()
+                    }
+                    Spacer(minLength: 4)
+                    if task.ready, task.pr != nil { mergeControl }
+                    if let at = parseDate(task.modified) {
+                        Text(shortAge(at)).font(.system(size: 11).monospacedDigit()).foregroundStyle(.white.opacity(0.35))
+                    }
+                }
+                .frame(minHeight: 22)
+                if let need {
+                    Text(need).font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                } else if !task.ready {
+                    // The bot is still reading the task; its line lands here.
+                    Capsule().fill(.white.opacity(0.14)).frame(width: 160, height: 9).shimmer().padding(.vertical, 3)
+                }
+                // Drawn, not a tooltip: the pills' window is never key, so a tooltip never shows.
+                if let failed {
+                    Text(failed).font(.system(size: 12)).foregroundStyle(.red.opacity(0.9))
+                        .lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(.white.opacity(hover ? 0.13 : 0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: open)
+        .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.12), value: hover)
+    }
+
+    /// Read live where this island holds the task, since the bot may write it
+    /// after the notice; drawn only while newer than the task's last move (`needLine`).
+    private var need: String? {
+        guard let item = store.items.first(where: { $0.key.id == task.id })?.value else { return task.need }
+        guard let n = item.need, let at = parseDate(n.at), let moved = parseDate(item.modified) else { return nil }
+        return at >= moved ? n.text : nil
+    }
+
+    /// Merge, then the method as the confirm: a repo may allow only some, and the
+    /// pills' window never takes a menu. Squash, the default, is filled in the primary spot, last.
+    @ViewBuilder private var mergeControl: some View {
+        if confirming {
+            Button("Cancel") { confirming = false }
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.55))
+            ForEach(Self.methods, id: \.value) { m in
+                fill(m.label, filled: m.value == "squash") {
+                    confirming = false
+                    merging = true
+                    failed = nil
+                    Task {
+                        failed = await merge(m.value)
+                        merging = false
+                    }
+                }
+            }
+        } else {
+            fill(merging ? "Merging…" : "Merge") { confirming = true }
+                .disabled(merging)
+        }
+    }
+
+    private static let methods = [(value: "rebase", label: "Rebase"), (value: "merge", label: "Merge"), (value: "squash", label: "Squash")]
+
+    private func fill(_ label: String, filled: Bool = true, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .frame(height: 22)
+                .background(filled ? Self.green : .white.opacity(0.14), in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
     }
 }
 
@@ -390,6 +578,7 @@ private struct OpenInAppButton: View {
                 if chord { Text("⌘⏎").foregroundStyle(.white.opacity(0.45)) }
             }
             .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.white)
             .padding(.horizontal, 10)
             .frame(height: 22)
             .background(.white.opacity(hover ? 0.22 : 0.12), in: Capsule())

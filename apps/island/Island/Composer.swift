@@ -416,11 +416,16 @@ final class Composer {
     var done: [SessionKey] = [] {
         didSet {
             notes = notes.filter { done.contains($0.key) }
+            waiting = waiting.filter { done.contains($0.key) }
+            // A pill emptied under the pointer, by a merge or a click, never hears it leave.
+            if done.isEmpty, doneHovered { doneHovered = false }
             pillChanged()
         }
     }
     /// What a session in `done` says in place of "Done": a bot's "2 tasks waiting on you".
     var notes: [SessionKey: String] = [:]
+    /// The tasks behind a bot's note, its card's rows, which the pill grows into under the pointer.
+    var waiting: [SessionKey: [WaitingTask]] = [:]
     /// Held while the pointer is on the pill, so it never goes from under a click.
     var doneHovered = false { didSet { if !doneHovered { startDoneClock() } } }
     @ObservationIgnored private var doneClock = 0
@@ -465,7 +470,7 @@ final class Composer {
     }
 
     /// Dray says a session finished, or with `note` what it waits on, where its banner would have.
-    func finished(_ id: String, note: String? = nil) {
+    func finished(_ id: String, note: String? = nil, rows: [WaitingTask]? = nil) {
         guard let key = store.items.keys.first(where: { $0.id == id }) else {
             // Dray reports a remote session over its own socket, which can be ahead
             // of this island's read of that machine. A pill keyed to a guess opens
@@ -473,16 +478,18 @@ final class Composer {
             Task {
                 for _ in 0..<20 {
                     try? await Task.sleep(for: .milliseconds(500))
-                    if store.items.keys.contains(where: { $0.id == id }) { return finished(id, note: note) }
+                    if store.items.keys.contains(where: { $0.id == id }) { return finished(id, note: note, rows: rows) }
                 }
             }
             return
         }
         // A bot's turn ending beside its waiting notice must not turn the notice into "Done".
         let kept = note ?? notes[key]
-        done.removeAll { $0 == key }
-        done.append(key)
+        let keptRows = rows ?? waiting[key]
+        // One assignment: removed and appended apart, `done` read empty between and let go of the hover.
+        done = done.filter { $0 != key } + [key]
         notes[key] = kept
+        waiting[key] = keptRows
         if shown || !attention.isEmpty { unseenDone.insert(key) } else { unseenDone.remove(key) }
         // Its pill only hangs while the panel is shut, so its clock starts then,
         // and one already running must not clear this with what it was timing.
@@ -522,6 +529,33 @@ final class Composer {
     func openDoneInApp(_ key: SessionKey) {
         done = []
         Task { await showInApp(key) }
+    }
+
+    /// A waiting task's card clicked: Dray comes forward on the task, as the bot chat card's ⌘-click.
+    func openWaiting(_ chat: SessionKey, _ task: WaitingTask) {
+        openDoneInApp(taskKey(chat, task.id))
+    }
+
+    /// Lands a waiting task's PR the bot chat card's way (`Store.mergeTask`), then the task
+    /// settles. Answers why it failed, or nil once landed and its card gone.
+    func mergeWaiting(_ chat: SessionKey, _ task: WaitingTask, method: String) async -> String? {
+        guard let pr = task.pr else { return nil }
+        let key = taskKey(chat, task.id)
+        // The app names a remote task's repo `dray://<machine>/<path>`; its own server wants the path.
+        let cwd = store.items[key]?.projectPath ?? task.projectPath.replacing(/^dray:\/\/[^\/]+/, with: "")
+        store.lastError = nil
+        guard await store.mergeTask(key.server, taskId: task.id, cwd: cwd, number: pr.number,
+                                    branch: pr.headRefName, method: method)
+        else { return store.lastError ?? "Couldn't merge." }
+        waiting[chat]?.removeAll { $0.id == task.id }
+        if waiting[chat]?.isEmpty == true { done.removeAll { $0 == chat } }
+        return nil
+    }
+
+    /// Where a task lives: a copy on a connected server, since a machine paired directly
+    /// and shared too lists it twice; the bot chat's server where this island holds none.
+    private func taskKey(_ chat: SessionKey, _ id: String) -> SessionKey {
+        store.items.keys.first { $0.id == id && store.serverState[$0.server] == .connected } ?? SessionKey(server: chat.server, id: id)
     }
 
     /// The pill drawn while the panel is shut is the done pill, which ⌘⏎ answers. A boat warning is drawn ahead of

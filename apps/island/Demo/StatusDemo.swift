@@ -6,6 +6,15 @@ import SwiftUI
 /// Dock; Replay builds them again, since a done pill's clock runs here too.
 @main
 struct StatusDemo: App {
+    init() {
+        // `--snapshot <dir>`: the grown waiting pill as PNGs, drawn offscreen, then quit.
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--snapshot"), args.indices.contains(i + 1) {
+            let dir = URL(fileURLWithPath: args[i + 1])
+            DispatchQueue.main.async { snapshotWaiting(to: dir) }
+        }
+    }
+
     var body: some Scene {
         WindowGroup("Island states") {
             DemoPage().frame(minWidth: 700, minHeight: 760)
@@ -94,6 +103,8 @@ private struct Case: Identifiable {
     /// The session the panel is pinned to, when open on no card.
     var pinned: String? = nil
     var bots: [Bot] = []
+    /// Bot chats' waiting tasks by session id, as Dray hands them over with its note.
+    var waiting: [String: [WaitingTask]] = [:]
 }
 
 private let sections: [(String, [Case])] = [
@@ -106,6 +117,12 @@ private let sections: [(String, [Case])] = [
         Case(name: "Five sessions done at once", items: [s1, s2, s3, s4, s5], done: [s1, s2, s3, s4, s5].map(\.sessionId)),
         Case(name: "A card waiting and a session done", note: "The card outranks the news; the done pill shows once it is answered.",
              items: [s1, s4], asks: [bash(s1)], done: [s4.sessionId]),
+        Case(name: "A bot's tasks waiting on you", note: "Hover grows the bot card's rows; a click opens the task in Dray.",
+             items: [opsChat], done: [opsChat.sessionId], bots: bots, waiting: [opsChat.sessionId: waitingRows]),
+        Case(name: "Two bots waiting on you", note: "One pill counts every task; hover groups them under each bot.",
+             items: [opsChat, botChat], done: [botChat.sessionId, opsChat.sessionId], bots: bots, waiting: twoBots),
+        Case(name: "Waiting beside a session done", items: [opsChat, s4], done: [s4.sessionId, opsChat.sessionId],
+             bots: bots, waiting: [opsChat.sessionId: waitingRows]),
     ]),
     ("Permissions", [
         Case(name: "Run a command", open: true, items: [s1], asks: [bash(s1)]),
@@ -169,6 +186,18 @@ private let bots = [
 ]
 private let botChat = session("b1", "Dray", cwd: bots[0].path)
 private let opsChat = session("b2", "Ops", status: "in_progress", cwd: bots[1].path)
+private let waitingRows = [
+    WaitingTask(id: "019a7d11-0c4e-7a21-8f3b-5e6d7c8b9a01", title: "Sidebar globe icon for Mac remote", projectPath: "/Users/me/dray",
+                modified: stamp(ago: 40 * 60), need: "Try the globe on a remote Mac before merging; the hover was not tested.", ready: true,
+                pr: PrMark(number: 573, headRefName: "worktree-globe", isDraft: false, state: "OPEN", checksState: "CLEAR")),
+    WaitingTask(id: "019a7d11-0c4e-7a21-8f3b-5e6d7c8b9a02", title: "Integrate Devin CLI harness", projectPath: "/Users/me/dray",
+                modified: stamp(ago: 3 * 3600), need: "Which login should it use: your Devin API key, or the one in 1Password?", ready: false, pr: nil),
+    WaitingTask(id: "019a7d11-0c4e-7a21-8f3b-5e6d7c8b9a03", title: "Theme swatches in settings", projectPath: "/Users/me/dray",
+                modified: stamp(ago: 5 * 60), need: nil, ready: false,
+                pr: PrMark(number: 581, headRefName: "worktree-swatches", isDraft: false, state: "OPEN", checksState: "CLEAR")),
+]
+/// Ops waits on two tasks, Dray Bot on one.
+private let twoBots = [opsChat.sessionId: Array(waitingRows.prefix(2)), botChat.sessionId: [waitingRows[2]]]
 
 private func pr(_ state: String, _ checks: String) -> [String: [String: PrMark]] {
     ["/Users/me/dray": ["worktree-globe": PrMark(number: 573, headRefName: "worktree-globe", isDraft: false, state: state, checksState: checks)]]
@@ -247,10 +276,71 @@ private func decode<T: Decodable>(_ object: [String: Any]) -> T {
 }
 
 /// Now, so the list's three-day cut keeps every seeded session.
-private func stamp() -> String {
+private func stamp(ago: TimeInterval = 0) -> String {
     let f = ISO8601DateFormatter()
     f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return f.string(from: Date())
+    return f.string(from: Date(timeIntervalSinceNow: -ago))
+}
+
+// MARK: Snapshot
+
+/// The waiting pill: one bot's grown, and on its first card's merge confirm; two bots'
+/// shut and grown. Each in an offscreen window: shown without a window on screen or the pointer moved.
+@MainActor private func snapshotWaiting(to dir: URL) {
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let ops = [opsChat.sessionId: Array(waitingRows.prefix(2))]
+    let shots: [(name: String, waiting: [String: [WaitingTask]], grown: Bool, confirming: String?)] = [
+        ("waiting-grown", ops, true, nil), ("waiting-confirm", ops, true, waitingRows[0].id),
+        ("bots-shut", twoBots, false, nil), ("bots-grown", twoBots, true, nil),
+    ]
+    var windows: [NSWindow] = []
+    for shot in shots {
+        let store = Store()
+        let server = UUID()
+        store.seed(server, items: [opsChat, botChat], asks: [])
+        store.seed(home: server, bots: bots)
+        // Newest first, as the pill lists them.
+        let items: [DonePill.Item] = [opsChat, botChat].compactMap { chat in
+            shot.waiting[chat.sessionId].map { rows in
+                (SessionKey(server: server, id: chat.sessionId), store.bot(SessionKey(server: server, id: chat.sessionId))?.name ?? "",
+                 "\(rows.count) tasks waiting on you", rows)
+            }
+        }
+        let pill = DonePill(notch: true, notchHeight: 32, items: items,
+                            open: { _ in }, openInApp: { _ in }, expanded: shot.grown, confirming: shot.confirming)
+            .environment(store)
+            .padding(.horizontal, 36)
+            .padding(.bottom, 24)
+            .background(Color(white: 0.22))
+            .environment(\.colorScheme, .dark)
+        let host = NSHostingView(rootView: pill)
+        let window = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 600, height: 400), styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        window.contentView = host
+        window.orderFrontRegardless()
+        windows.append(window)
+    }
+    // Two passes: the card list measures itself before the pill takes its height.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        for (shot, window) in zip(shots, windows) {
+            guard let host = window.contentView else { continue }
+            window.setContentSize(host.fittingSize)
+            host.layoutSubtreeIfNeeded()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            for (shot, window) in zip(shots, windows) {
+                guard let host = window.contentView,
+                      let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(host.bounds.width * 2),
+                                                 pixelsHigh: Int(host.bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4,
+                                                 hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0,
+                                                 bitsPerPixel: 0) else { continue }
+                rep.size = host.bounds.size
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("\(shot.name).png"))
+            }
+            NSApp.terminate(nil)
+        }
+    }
 }
 
 // MARK: Stage
@@ -259,10 +349,13 @@ private func stamp() -> String {
 /// strip of Dock, at the panel's own size.
 private struct CaseStage: View {
     let placement: Placement
+    /// Room for a done pill grown into waiting cards, which hover opens without opening the panel.
+    let shut: CGFloat
     @State private var composer: Composer
 
     init(_ c: Case, placement: Placement) {
         self.placement = placement
+        shut = c.waiting.isEmpty ? 150 : 300
         let store = Store()
         let server = UUID()
         store.seed(server, items: c.items, asks: c.asks, prs: c.prs)
@@ -275,6 +368,11 @@ private struct CaseStage: View {
         if let id = c.pinned { composer.target = .session(SessionKey(server: server, id: id)) }
         composer.listShown = c.listShown
         composer.done = c.done.map { SessionKey(server: server, id: $0) }
+        for (id, rows) in c.waiting {
+            let chat = SessionKey(server: server, id: id)
+            composer.notes[chat] = "\(rows.count) tasks waiting on you"
+            composer.waiting[chat] = rows
+        }
         // The app's hide also takes the window away; here the panel just shuts, so Dismiss can be seen to land.
         composer.hide = { [weak composer] in composer?.shown = false }
         _composer = State(initialValue: composer)
@@ -304,7 +402,7 @@ private struct CaseStage: View {
                 .environment(composer.store)
                 .frame(width: Composer.width + 48, height: 680)
         }
-        .frame(width: Composer.width + 48, height: composer.shown ? 680 : 150,
+        .frame(width: Composer.width + 48, height: composer.shown ? 680 : shut,
                alignment: placement == .notch ? .top : .bottom)
         .background(Color(white: 0.22), in: RoundedRectangle(cornerRadius: 12))
         .clipShape(RoundedRectangle(cornerRadius: 12))
