@@ -778,7 +778,7 @@ struct PillsView: View {
                          open: { composer.openDone($0) },
                          openInApp: { composer.openDoneInApp($0) },
                          openTask: { composer.openWaiting($0, $1) },
-                         merge: { await composer.mergeWaiting($0, $1) },
+                         merge: { await composer.mergeWaiting($0, $1, method: $2) },
                          hover: { composer.doneHovered = $0 })
                     .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
             }

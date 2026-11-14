@@ -536,14 +536,14 @@ final class Composer {
         openDoneInApp(taskKey(chat, task.id))
     }
 
-    /// Lands a waiting task's PR the bot chat card's way (`Store.mergeTask`): squash, its default,
-    /// then the task settles. Answers why it failed, or nil once landed and its card gone.
-    func mergeWaiting(_ chat: SessionKey, _ task: WaitingTask) async -> String? {
+    /// Lands a waiting task's PR the bot chat card's way (`Store.mergeTask`), then the task
+    /// settles. Answers why it failed, or nil once landed and its card gone.
+    func mergeWaiting(_ chat: SessionKey, _ task: WaitingTask, method: String) async -> String? {
         guard let pr = task.pr else { return nil }
         let key = taskKey(chat, task.id)
         store.lastError = nil
         guard await store.mergeTask(key.server, taskId: task.id, cwd: task.projectPath, number: pr.number,
-                                    branch: pr.headRefName, method: "squash")
+                                    branch: pr.headRefName, method: method)
         else { return store.lastError ?? "Couldn't merge." }
         waiting[chat]?.removeAll { $0.id == task.id }
         if waiting[chat]?.isEmpty == true { done.removeAll { $0 == chat } }

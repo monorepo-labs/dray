@@ -297,7 +297,7 @@ struct DonePill: View {
     let openInApp: (SessionKey) -> Void
     var openTask: (SessionKey, WaitingTask) -> Void = { _, _ in }
     /// Answers why it failed, or nil once landed.
-    var merge: (SessionKey, WaitingTask) async -> String? = { _, _ in nil }
+    var merge: (SessionKey, WaitingTask, String) async -> String? = { _, _, _ in nil }
     var hover: (Bool) -> Void = { _ in }
     @State private var expanded = false
     @State private var collapse: Task<Void, Never>?
@@ -334,7 +334,7 @@ struct DonePill: View {
                                 // One item's own line is the pill's header already.
                                 if items.count > 1 { line(item) }
                                 ForEach(item.rows, id: \.id) { task in
-                                    WaitingCard(task: task, open: { openTask(item.key, task) }, merge: { await merge(item.key, task) })
+                                    WaitingCard(task: task, open: { openTask(item.key, task) }, merge: { await merge(item.key, task, $0) })
                                 }
                             }
                         }
@@ -406,12 +406,13 @@ struct WaitingCard: View {
     @Environment(Store.self) private var store
     let task: WaitingTask
     let open: () -> Void
-    /// Answers why it failed, or nil once landed.
-    let merge: () async -> String?
+    /// Takes the method; answers why it failed, or nil once landed.
+    let merge: (String) async -> String?
     @State private var hover = false
     @State private var confirming = false
     @State private var merging = false
     @State private var failed: String?
+    @AppStorage("island.mergeMethod") private var method = "squash"
     /// The app's `--accent-merge`.
     private static let green = Color(red: 0x23 / 255, green: 0x86 / 255, blue: 0x36 / 255)
 
@@ -447,6 +448,11 @@ struct WaitingCard: View {
                     // The bot is still reading the task; its line lands here.
                     Capsule().fill(.white.opacity(0.14)).frame(width: 160, height: 9).shimmer().padding(.vertical, 3)
                 }
+                // Drawn, not a tooltip: the pills' window is never key, so a tooltip never shows.
+                if let failed {
+                    Text(failed).font(.system(size: 12)).foregroundStyle(.red.opacity(0.9))
+                        .lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .padding(.horizontal, 10)
@@ -456,7 +462,6 @@ struct WaitingCard: View {
         .onTapGesture(perform: open)
         .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.12), value: hover)
-        .help("Open in Dray")
     }
 
     /// Read live where this island holds the task, since the bot may write it
@@ -467,38 +472,42 @@ struct WaitingCard: View {
         return at >= moved ? n.text : nil
     }
 
+    /// Merge, then the method as the confirm: a repo may allow only some, and the
+    /// pills' window never takes a menu. The last one picked is drawn filled.
     @ViewBuilder private var mergeControl: some View {
         if confirming {
             Button("Cancel") { confirming = false }
                 .buttonStyle(.plain)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(0.55))
-            fill("Confirm") {
-                confirming = false
-                merging = true
-                failed = nil
-                Task {
-                    failed = await merge()
-                    merging = false
+            ForEach(Self.methods, id: \.value) { m in
+                fill(m.label, filled: m.value == method) {
+                    method = m.value
+                    confirming = false
+                    merging = true
+                    failed = nil
+                    Task {
+                        failed = await merge(m.value)
+                        merging = false
+                    }
                 }
             }
         } else {
-            if let failed {
-                Text("Failed").font(.system(size: 12)).foregroundStyle(.red).help(failed)
-            }
             fill(merging ? "Merging…" : "Merge") { confirming = true }
                 .disabled(merging)
         }
     }
 
-    private func fill(_ label: String, action: @escaping () -> Void) -> some View {
+    private static let methods = [(value: "squash", label: "Squash"), (value: "merge", label: "Merge"), (value: "rebase", label: "Rebase")]
+
+    private func fill(_ label: String, filled: Bool = true, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 10)
                 .frame(height: 22)
-                .background(Self.green, in: Capsule())
+                .background(filled ? Self.green : .white.opacity(0.14), in: Capsule())
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
