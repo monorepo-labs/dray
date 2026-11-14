@@ -817,6 +817,8 @@ final class Store {
                         unsent[key] = nil
                         return to
                     }
+                    // Still starting: the first send may yet land, and a second session would run it twice.
+                    if made.busy { throw DrayError("The switch is still starting. Try again in a moment.") }
                     // Its agent never started, and Codex cannot resume a thread it never made: a new one.
                     // ponytail: the empty session stays in the chat as one more "Switched to" line;
                     // delete_session would tell the bot the reader deleted a task.
