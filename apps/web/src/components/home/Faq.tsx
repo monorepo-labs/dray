@@ -1,23 +1,34 @@
 "use client";
 
+import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 import { posthog } from "@/lib/posthog";
-import { Section } from "@/components/home/Section";
+import { CARD, CARD_TEXT, Section, TITLE_TYPE } from "@/components/home/Section";
 
-/// Six questions as native disclosures, all closed to start; the glide is CSS alone.
+/// Six questions as native disclosures, all closed to start, then a row out to
+/// the full FAQ page; the glide is CSS alone.
 export function Faq() {
   return (
     <Section id="faq" className="py-20">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: FAQ_SCHEMA }} />
       <div className="flex flex-col gap-10 lg:flex-row lg:gap-24">
         <div className="flex shrink-0 flex-col gap-3 lg:w-72">
-          <h2 className="font-inter text-[28px] leading-[32px] font-light tracking-[-0.03em] text-white sm:text-[36px] sm:leading-[40px] light:text-[#0A0A0A]">
-            Frequently Asked Questions
+          <h2 className={`text-white light:text-[#0A0A0A] ${TITLE_TYPE}`}>
+            FAQs
           </h2>
         </div>
-        <div className="flex min-w-0 flex-1 flex-col gap-px">
+        <div className="flex min-w-0 flex-1 flex-col gap-[2px]">
           {FAQ.map(([q, a]) => (
             <Item key={q} question={q} answer={a} />
           ))}
+          {/* Quieter than the questions: the way out of the list, not one of them. */}
+          <Link
+            href="/faq"
+            className={`flex items-center justify-between gap-6 bg-[#FFFFFF0D] px-6 py-5 transition-colors hover:bg-[#FFFFFF1A] light:bg-[#FAFAFA] light:hover:bg-[#F4F4F5] ${CARD_TEXT}`}
+          >
+            Got more questions?
+            <ArrowRight aria-hidden strokeWidth={1.8} className="size-4 shrink-0 text-[#8A8A8A]" />
+          </Link>
         </div>
       </div>
     </Section>
@@ -69,7 +80,7 @@ function Item({ question, answer }: { question: string; answer: string }) {
     // A shared `name` makes the group exclusive: opening one closes the rest.
     <details
       name="faq"
-      className="group bg-[#FFFFFF1A] px-6 py-5 not-open:hover:bg-[#FFFFFF24] light:bg-[#F4F4F5] light:not-open:hover:bg-[#EBEBEB] light:open:bg-[#1612F8] [interpolate-size:allow-keywords] open:bg-[#1612F8] details-content:h-0 details-content:overflow-clip open:details-content:h-auto motion-safe:transition-colors motion-safe:details-content:transition-[height,content-visibility] motion-safe:details-content:transition-discrete motion-safe:details-content:duration-300 motion-safe:details-content:ease-out"
+      className={`group px-6 py-5 not-open:hover:bg-[#FFFFFF24] light:not-open:hover:bg-[#E7E7E9] light:open:bg-[#1612F8] [interpolate-size:allow-keywords] open:bg-[#1612F8] details-content:h-0 details-content:overflow-clip open:details-content:h-auto motion-safe:transition-colors motion-safe:details-content:transition-[height,content-visibility] motion-safe:details-content:transition-discrete motion-safe:details-content:duration-300 motion-safe:details-content:ease-out ${CARD}`}
     >
       {/* Counted on the click, not on toggle: opening one closes another, and
           that close is no reader's choice. */}
@@ -78,7 +89,7 @@ function Item({ question, answer }: { question: string; answer: string }) {
           posthog.capture("faq_toggle", { question, open: !e.currentTarget.parentElement?.hasAttribute("open") })
         }
         className="flex cursor-pointer list-none items-center justify-between gap-6 [&::-webkit-details-marker]:hidden">
-        <span className="text-lg leading-6 tracking-[-0.02em] text-white light:text-[#0A0A0A] light:group-open:text-white">{question}</span>
+        <span className={`${CARD_TEXT} light:group-open:text-white`}>{question}</span>
         {/* A plus whose upright bar turns flat when open, leaving Paper's minus. */}
         <span aria-hidden className="relative size-[11px] shrink-0 text-[#8A8A8A] group-open:text-white">
           <span className="absolute inset-x-0 top-1/2 h-[1.5px] -translate-y-1/2 bg-current" />

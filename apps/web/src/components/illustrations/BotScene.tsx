@@ -27,9 +27,10 @@ import { AddTab, ChatIcon, ItemTab } from "@/components/app/Tabs";
 import { ClaudeGlyph } from "@/components/ClaudeGlyph";
 import s from "./Hero.module.css";
 
-/// Two bots, faces from the bots-video demo: Dray, and Ops beside it.
+/// Two bots: Dray in the desktop app's default face for it (blue nub,
+/// `bots.rs`), and Ops beside it.
 export const BOTS = [
-  { id: "b0000001", name: "Dray", avatar: { shape: "cloud", hue: 80 } },
+  { id: "b0000001", name: "Dray", avatar: { shape: "nub", hue: 250 } },
   { id: "b0000002", name: "Ops", avatar: { shape: "hexagon", hue: 200 } },
 ] as const satisfies { id: string; name: string; avatar: Avatar }[];
 
