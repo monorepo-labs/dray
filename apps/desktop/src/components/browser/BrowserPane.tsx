@@ -8,6 +8,7 @@ import {
   Folder,
   ExternalLink,
   Globe,
+  Plus,
   RotateCcw,
   RotateCw,
   Share2,
@@ -19,7 +20,13 @@ import {
 import { DocumentPlusIcon } from "@heroicons/react/16/solid";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
+import AgentBeam from "@/components/browser/AgentBeam";
 import Favicon, { hostOf } from "@/components/browser/Favicon";
+import GlobeFilledIcon from "@/components/icons/GlobeFilledIcon";
+import ShortcutKeys from "@/components/ShortcutKeys";
+import TabMenu from "@/components/browser/TabMenu";
+import { ContextMenuTrigger } from "@/components/ui/context-menu";
+import { useDragReorder } from "@/hooks/useDragReorder";
 import RecordingNotice from "@/components/browser/RecordingNotice";
 import { useTurnNewTab, type TurnKind } from "@/components/layout/ViewTabs";
 import Spinner from "@/components/ui/spinner";
@@ -27,6 +34,13 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopied } from "@/hooks/useCopied";
 import {
+  activateBlankTab,
+  activateTab,
+  closeBlankTab,
+  closeTab,
+  moveTab,
+  setPendingTab,
+  useParkedTabs,
   claimPin,
   claimPresenter,
   pinStillPainted,
@@ -126,9 +140,13 @@ export default function BrowserPane({
   active,
   tab,
   onClose,
+  panel = false,
 }: {
   sessionId: string;
   active: boolean;
+  /// In the side panel: a bot's task tab, whose pages no row lists, so the
+  /// pane draws its own strip.
+  panel?: boolean;
   /// A split pane's one tab, drawn whatever the strip has active. Such a
   /// pane has no device sizes: those are the session's, and its main view's.
   tab?: number;
@@ -177,7 +195,8 @@ export default function BrowserPane({
     const report = () => {
       const rect = (frameRef.current ?? stage).getBoundingClientRect();
       if (tab !== undefined) claimPin(key, { sessionId, tab, rect });
-      else claimPresenter(key, { priority: 2, sessionId, rect });
+      // The main column outranks the panel, should both ever be on screen.
+      else claimPresenter(key, { priority: panel ? 1 : 2, sessionId, rect });
     };
     report();
     const observer = new ResizeObserver(report);
@@ -194,7 +213,7 @@ export default function BrowserPane({
       window.removeEventListener("resize", report);
       release();
     };
-  }, [sessionId, key, active, empty, viewport, pinned, tab]);
+  }, [sessionId, key, active, empty, viewport, pinned, tab, panel]);
 
   // The page's size in responsive mode, which is what Save keeps. In page
   // pixels: the view is placed in window points, so the app's own zoom
@@ -222,6 +241,7 @@ export default function BrowserPane({
         pending={pending}
         tab={tab}
         onClose={onClose}
+        tabs={panel ? tabs : null}
       />
       {!empty &&
         (responsive ? (
@@ -345,10 +365,13 @@ function Chrome({
   pending,
   tab,
   onClose,
+  tabs,
 }: {
   sessionId: string;
   current: BrowserTab | null;
   pending: boolean;
+  /// The pages, where the pane draws its own strip of them; null elsewhere.
+  tabs: BrowserTab[] | null;
   /// A split pane's tab: every control acts on it, and the session-wide ones
   /// (picker, device sizes) are left to the main view.
   tab?: number;
@@ -362,6 +385,18 @@ function Chrome({
   const url = current?.url ?? opening ?? "";
   const loading = current ? current.loading : opening !== null;
   const blanks = useBlankTabs(sessionId);
+  const panel = tabs !== null;
+  // Only the recorded tab is held, and only from closing: the agent drives its
+  // own tab (`DRIVEN`), so the reader switching tabs moves nothing it films.
+  const recorded = useRecordedTab(sessionId);
+  const parkedPages = useParkedTabs(sessionId);
+  const reorder = useDragReorder(
+    tabs ?? [],
+    (tab) => tab.id,
+    (tab, _delta, to) => moveTab(sessionId, tab.id, to),
+    "x",
+  );
+  const newTab = () => setPendingTab(sessionId, true);
   const draftKey = `${sessionId}:${blanks.active !== null && !pinned ? `blank:${blanks.active}` : `page:${current?.id}`}`;
   // Per tab, as a browser's are: each new tab keeps what was typed into it.
   const draft = useUrlDraft(draftKey);
@@ -396,6 +431,85 @@ function Chrome({
 
   return (
     <div className="shrink-0">
+      {/* Its own strip only in the side panel, where a bot's task keeps its
+          pages: everywhere else they are tabs of the titlebar's row. */}
+      {panel && (tabs.length > 0 || blanks.ids.length > 0) && (
+        // Scrolls, but draws no bar: a strip of tabs is read by its tabs, and
+        // a bar under them takes the height the tabs' own bottom edge needs.
+        <div
+          ref={reorder.list}
+          className="flex h-7.5 items-end gap-1 overflow-x-auto bg-sidebar px-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        >
+          {reorder.shown.map((tab, i) => (
+            <TabButton
+              key={tab.id}
+              onPointerDown={(e) => reorder.start(e, i)}
+              transform={reorder.offset(i)}
+              held={reorder.drag?.from === i}
+              gliding={!!reorder.drag && reorder.drag.from !== i}
+              active={tab.active && !pending}
+              // The active tab joins the URL row, so it wears the same colour.
+              paint={tab.active && !pending && tab.background ? tint(tab.background) : undefined}
+              title={tab.error ? `${tab.error} — ${tab.url}` : tab.url}
+              icon={<Favicon tab={tab} />}
+              overlay={<AgentBeam tab={tab.id} top />}
+              label={tab.error ? "Can't reach page" : tab.title || hostOf(tab.url)}
+              locked={tab.id === recorded}
+              onPick={() => {
+                setPendingTab(sessionId, false);
+                if (!tab.active) void activateTab(sessionId, tab.id);
+              }}
+              onClose={() => void closeTab(sessionId, tab.id)}
+              onDuplicate={
+                tab.url
+                  ? () => {
+                      setPendingTab(sessionId, false);
+                      void openInBrowser(sessionId, tab.url, true).catch(() => undefined);
+                    }
+                  : undefined
+              }
+            />
+          ))}
+          {blanks.ids.map((id) => (
+            <TabButton
+              key={`blank:${id}`}
+              active={blanks.active === id}
+              // No page under it, so no fill: the URL row it joins is bare too.
+              paint={{ ["--card" as string]: "transparent" }}
+              title={parkedPages[id]?.url ?? "New tab"}
+              icon={
+                parkedPages[id] ? (
+                  <Favicon tab={parkedPages[id]} />
+                ) : (
+                  <GlobeFilledIcon className="size-4 shrink-0 text-muted-foreground" />
+                )
+              }
+              label={parkedPages[id] ? parkedPages[id].title || hostOf(parkedPages[id].url) : "New tab"}
+              onPick={() =>
+                blanks.active === id ? inputRef.current?.focus() : activateBlankTab(sessionId, id)
+              }
+              onClose={() => closeBlankTab(sessionId, id)}
+            />
+          ))}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="mb-0.5 shrink-0"
+                aria-label="New tab"
+                onClick={newTab}
+              >
+                <Plus className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side={TIP_SIDE}>
+              New tab
+              <ShortcutKeys ids={["browser.newTab"]} />
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      )}
       {/* The page's own colour where it has reported one, the way a browser
           tints its toolbar; bare with no page at all. */}
       <div
@@ -594,6 +708,106 @@ function Chrome({
   );
 }
 
+function TabButton({
+  active,
+  title,
+  icon,
+  label,
+  locked = false,
+  onPick,
+  onClose,
+  onDuplicate,
+  onPointerDown,
+  transform,
+  held = false,
+  gliding = false,
+  paint,
+  overlay,
+}: {
+  active: boolean;
+  title: string;
+  icon: React.ReactNode;
+  /// Drawn over the whole tab, out of the row's flow: the agent's beam.
+  overlay?: React.ReactNode;
+  label: string;
+  /// Not closed, while a recording films it.
+  locked?: boolean;
+  onPick: () => void;
+  onClose: () => void;
+  /// Right-click Duplicate tab, on real tabs only.
+  onDuplicate?: () => void;
+  /// Drag-to-reorder, on real tabs only.
+  onPointerDown?: (e: React.PointerEvent<HTMLDivElement>) => void;
+  transform?: string;
+  /// The tab in hand, mid-drag.
+  held?: boolean;
+  /// A tab sliding aside for the one in hand.
+  gliding?: boolean;
+  /// The page's colour, from `tint`, on the tab joined to the URL row.
+  paint?: React.CSSProperties;
+}) {
+  return (
+    <TabMenu onDuplicate={locked ? undefined : onDuplicate}>
+    <ContextMenuTrigger asChild disabled={!onDuplicate || locked}>
+    <div
+      role="tab"
+      aria-selected={active}
+      tabIndex={0}
+      title={title}
+      onClick={onPick}
+      onKeyDown={(e) => e.key === "Enter" && onPick()}
+      onPointerDown={onPointerDown}
+      style={{ ...paint, transform }}
+      className={cn(
+        "group/tab relative flex h-7 w-40 min-w-0 shrink-0 cursor-default items-center gap-1.5 rounded-t-md px-2 text-ui",
+        active
+          ? "browser-tab-active bg-card text-foreground [--tab-edge:color-mix(in_oklab,var(--foreground)_10%,transparent)]"
+          : held
+              ? "bg-card/50 text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+        // The one in hand tracks the pointer and draws over the tabs it
+        // passes; only those making room glide.
+        held && "z-10",
+        gliding && "transition-transform duration-150 ease-out",
+      )}
+    >
+      {/* The outline, stopping where the foot's curve takes over: the flares
+          carry it round into the toolbar, as Chrome's tab does. */}
+      {active && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 bottom-2 rounded-t-md border-x border-t border-(--tab-edge)"
+        />
+      )}
+      {overlay}
+      {icon}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {!locked && <button
+        type="button"
+        aria-label="Close tab"
+        className="rounded p-0.5 opacity-0 hover:bg-muted group-hover/tab:opacity-100"
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+      >
+        <X className="size-3" />
+      </button>}
+    </div>
+    </ContextMenuTrigger>
+    </TabMenu>
+  );
+}
+
+/// Device size, picked where the button is: a native `<select>` laid over the
+/// icon, so the menu is macOS's own. That is the point of it — an in-app menu
+/// lands on the page, and the page is a native view nothing in the DOM draws
+/// over, so opening one swapped the page for a picture of it (a flash) and a
+/// pick made behind that picture came back with the view at a stale size.
+/// A native menu is drawn above everything and touches neither.
+///
+/// Default clears everything and draws no bar; Responsive fills the pane the
+/// same way but puts the bar up, so its size can be saved as a device.
 function DeviceMenu({ sessionId, disabled }: { sessionId: string; disabled: boolean }) {
   const viewport = useViewport(sessionId);
   const responsive = useResponsive(sessionId);

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import ReactDOM from "react-dom/client";
 
 import BrowserPane from "@/components/browser/BrowserPane";
+import RightPanel, { TabBody, tabOrder } from "@/components/RightPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
 import "../App.css";
@@ -139,10 +140,17 @@ function Demo() {
           </div>
         </div>
 
-        {/* A pane's width: the page lives in tabs and splits, not the side panel. */}
-        <div className="flex h-[600px] w-[480px] flex-col overflow-hidden rounded-lg border border-border bg-card">
-          <BrowserPane sessionId={SESSION} active />
-        </div>
+        <RightPanel
+          open
+          tabs={tabOrder({ pr: false, docs: false, issue: false, more: false, browser: true })}
+          tab="browser"
+          onTabChange={() => {}}
+          cwd="/Users/you/code/acme"
+        >
+          <TabBody active>
+            <BrowserPane sessionId={SESSION} active panel />
+          </TabBody>
+        </RightPanel>
       </div>
       <DemoThemeBar />
     </TooltipProvider>

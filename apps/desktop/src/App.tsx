@@ -1576,7 +1576,6 @@ function App() {
   // sessions, and its pages live on the oldest, as the server routes them.
   const browserOf = (id: string) => botBrowser(bots, sessionIndexItems, id) ?? id;
   const browserSession = selectedSessionId ? browserOf(selectedSessionId) : null;
-  const rowBrowser = selectedSessionId ? browserOf(rowOf(selectedSessionId)) : null;
   const browserTabs = useBrowserTabs(browserSession);
   const blankTabs = useBlankTabs(browserSession ?? "");
   const pendingBrowserTab = blankTabs.active !== null;
@@ -1587,13 +1586,11 @@ function App() {
   const [browserWanted, setBrowserWanted] = useState<string | null>(null);
   useEffect(() => {
     if (!browserWanted) return;
-    // Or the row it was asked of, while a task's link selects its bot.
-    if (!selectedSessionId || (browserWanted !== selectedSessionId && browserWanted !== rowOf(selectedSessionId)))
-      return setBrowserWanted(null);
+    if (browserWanted !== selectedSessionId) return setBrowserWanted(null);
     if (!browserTabs?.some((tab) => tab.active)) return;
     setViewTabs((prev) => ({ ...prev, [browserWanted]: "browser" }));
     setBrowserWanted(null);
-  }, [browserWanted, browserTabs, selectedSessionId, rowOf]);
+  }, [browserWanted, browserTabs, selectedSessionId]);
   // The main column's Browser view is the panel's browser expanded. Arriving
   // on it closes the pane, whatever tab the pane was on: the reader came for
   // the full width. ⌘E brings it back beside the page, and leaving gives back
@@ -1765,6 +1762,7 @@ function App() {
     more: hasMoreTab,
     plan: hasPlanTab,
     tasks: !!selectedBot,
+    browser: !!strip?.lit,
   });
 
   // One rule, read rather than written back: an explicit pick wins wherever it
@@ -2264,19 +2262,19 @@ function App() {
   // A link in the transcript opens as a new tab in the browser of the chat it
   // was clicked in and flips the main column to the Browser view, leaving the
   // side panel alone — in a bot chat too, where that tab joins the bot's row.
-  // A task lit in a bot's row opens its link in the bot's browser and lights
-  // it in that row, the row's tabs being the bot's. ⌘-click, or no session to
-  // hold one, goes to the system browser.
+  // A task lit in a bot's row is the exception: the row's tabs are the bot's,
+  // so its link opens in the side panel, in the task's own browser. ⌘-click,
+  // or no session to hold one, goes to the system browser.
   useEffect(() => {
     setLinkOpener((url, { external }) => {
-      if (!selectedSessionId || !rowBrowser) {
+      if (!selectedSessionId || !browserSession) {
         void openUrl(url).catch(console.error);
         return;
       }
       // The session is named outright: the read lands after an await, and by
       // then the reader may be on another session whose pane must stay put.
       const sessionId = selectedSessionId;
-      const browser = rowBrowser;
+      const browser = browserSession;
       const inTaskTab = rowOf(sessionId) !== sessionId;
       const gen = navGen.current;
       void reachableUrl(sessionId, url).then(
@@ -2284,8 +2282,8 @@ function App() {
           if (external) return void openUrl(reached).catch(console.error);
           void openInBrowser(browser, reached, true)
             .then(() => {
-              if (inTaskTab) void handleSelectSessionIndexItem(rowOf(sessionId));
-              setBrowserWanted(rowOf(sessionId));
+              if (inTaskTab) showPanel("browser", sessionId);
+              else setBrowserWanted(sessionId);
               trackBrowserOpen(reached);
             })
             .catch(() => {
@@ -2302,7 +2300,7 @@ function App() {
       );
     });
     return () => setLinkOpener(null);
-  }, [selectedSessionId, rowBrowser, rowOf, handleSelectSessionIndexItem, navGen, setError]);
+  }, [selectedSessionId, browserSession, rowOf, showPanel, navGen, setError]);
 
   // An element picked in the page lands in that session's draft, and the
   // composer is brought on screen to show it — off the full view and onto
@@ -2875,6 +2873,7 @@ function App() {
     if (fileShown && activeFile) return closeFile(selectedSessionId, activeFile);
     if (fullBrowserOpen) return closeBrowserTab();
     if (gridShown) return closeSessionPane(selectedSessionId);
+    if (panelShown && activeTab === "browser") closeBrowserTab();
   };
   // Bound only where it has something to close: `useHotkey` claims every chord
   // it matches, and a ⌘W that eats the key and does nothing is worse than one
@@ -2882,7 +2881,8 @@ function App() {
   const hasCloseTarget =
     rowTabOnScreen ||
     fileShown ||
-    (fullBrowserOpen && (pendingBrowserTab || !!hasBrowserTabs)) ||
+    ((fullBrowserOpen || (panelShown && activeTab === "browser")) &&
+      (pendingBrowserTab || !!hasBrowserTabs)) ||
     gridShown;
   useHotkey("tab.close", closeTabOrPane, { enabled: hasCloseTarget });
   // ⌘E for the right pane against ⌘B for the left.
@@ -2914,7 +2914,7 @@ function App() {
   //
   // The browser reloads its page. A press inside the page never gets here —
   // Chromium has the key, and cef.rs reloads there.
-  const browserShown = fullBrowserOpen;
+  const browserShown = fullBrowserOpen || (panelShown && activeTab === "browser");
   useHotkey("panel.refresh", () => {
     // "Re-read what I am looking at", the same rule the session case follows:
     // the pane wins where one is open, and the list has it otherwise.
@@ -2940,8 +2940,9 @@ function App() {
     if (pendingBrowserTab) setPendingTab(browserSession, false);
     if (!next.active) void activateTab(browserSession, next.id);
   };
-  // An open file steps its own strip on this chord.
-  const browserStep = { enabled: browserShown && !fileShown, skipInTextField: true };
+  // The Diff view and an open file step their own strip on this chord, and the
+  // main column's row wins over a browser sitting beside it in the panel.
+  const browserStep = { enabled: browserShown && viewTab !== "changes" && !fileShown, skipInTextField: true };
   useHotkey("subtab.prev", () => stepBrowserTab(-1), browserStep);
   useHotkey("subtab.next", () => stepBrowserTab(1), browserStep);
   // ⌘T lives in `ViewTabs`: a new tab from anywhere the row is drawn.
@@ -3803,6 +3804,15 @@ function App() {
                 baseline={baseline}
                 onOpenRepo={() => setViewTab("changes")}
                 {...shownChanges}
+              />
+              </MountOnce>
+            </TabBody>
+            <TabBody active={activeTab === "browser"}>
+              <MountOnce when={panelShown && activeTab === "browser"}>
+              <BrowserPane
+                sessionId={browserSession ?? shownSession.sessionId}
+                active={panelShown && activeTab === "browser"}
+                panel
               />
               </MountOnce>
             </TabBody>
