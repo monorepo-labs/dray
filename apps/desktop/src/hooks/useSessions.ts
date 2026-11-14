@@ -2236,6 +2236,14 @@ const readServer = (server: ServerId) => {
       answered.add(`${server}:sessions`);
       // A read outlived by a toggle is the side just left.
       if (archived !== showArchivedRef.current) return;
+      // A pick moved while this server was out of reach sent no event here.
+      // The local copy mirrors every send of ours, so a pair that differs was
+      // moved elsewhere — `dray session model` most likely — and wins.
+      const known = new Map(sessionIndexItemsRef.current.map((i) => [i.sessionId, i]));
+      for (const item of items) {
+        const was = known.get(item.sessionId);
+        if (was && (was.model !== item.model || was.effort !== item.effort)) followModelPickRef.current(item);
+      }
       setSessionIndexItems((prev) => mergeFrom(prev, server, items, (i) => i.cwd));
       if (server === LOCAL) setIndexSide(archived);
     })
@@ -3524,6 +3532,29 @@ useEffect(() => {
 
   return () => {
     unlanded();
+    listenerPromise.then((unlisten) => unlisten());
+  };
+}, []);
+
+// `dray session model` moved a session's pick from outside the composer. An
+// unsent pick held for it here would carry the old model back out on the next
+// send, so it goes, and a composer showing the session takes the new one. Its
+// own event because only this write may override the reader's pick: a
+// `session_changed` row can lag a send the composer already made.
+const followModelPickRef = useRef((_: SessionIndexItem) => {});
+followModelPickRef.current = (item: SessionIndexItem) => {
+  const pick = unsentPicks.current.get(item.sessionId);
+  if (pick) {
+    const { model: _model, effort: _effort, efforts: _efforts, ...rest } = pick;
+    unsentPicks.current.set(item.sessionId, rest);
+  }
+  if (item.sessionId === selectedSessionIdRef.current) restoreSessionControls(item);
+};
+useEffect(() => {
+  const listenerPromise = listen<SessionIndexItem>("session_model_changed", (event) => {
+    followModelPickRef.current(event.payload);
+  });
+  return () => {
     listenerPromise.then((unlisten) => unlisten());
   };
 }, []);
