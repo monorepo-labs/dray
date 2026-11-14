@@ -140,6 +140,30 @@ impl Outbox {
     }
 }
 
+/// The videos a report names: what the chat's player matches
+/// (`RECORDING_IN_TEXT` in transcript.ts), a `.mp4` one folder under a
+/// `browser/recordings` or `browser-dev/recordings`. Each answered as written
+/// and as its (folder, file), names neither starting with `.` so a copy made
+/// from them stays inside this machine's recordings.
+fn video_paths(text: &str) -> Vec<(&str, &str, &str)> {
+    let mut found = Vec::new();
+    for token in text.split(|c: char| c.is_whitespace() || "\"'`()<>".contains(c)) {
+        let Some(start) = token.find('/') else { continue };
+        let Some(end) = token.rfind(".mp4").map(|i| i + 4) else { continue };
+        let Some(path) = token.get(start..end) else { continue };
+        let Some((_, tail)) = path.split_once("/browser/recordings/").or_else(|| path.split_once("/browser-dev/recordings/"))
+        else {
+            continue;
+        };
+        let Some((folder, file)) = tail.split_once('/') else { continue };
+        let named = |s: &str| !s.is_empty() && !s.starts_with('.') && !s.contains('/');
+        if named(folder) && named(file) && !found.iter().any(|(p, _, _)| *p == path) {
+            found.push((path, folder, file));
+        }
+    }
+    found
+}
+
 /// The bot's server's side: collecting from the machines its bots' tasks run on.
 #[cfg(any(feature = "serve", feature = "desktop"))]
 mod collect {
@@ -157,6 +181,9 @@ mod collect {
     /// The longest a machine that fails to answer — a stopped sandbox — waits
     /// between asks, so a dead one costs a login every few minutes, not every poll.
     const BACKOFF_CAP: Duration = Duration::from_secs(300);
+    /// A proof video is short; a copy taking longer is holding up the report.
+    const VIDEO_FETCH: Duration = Duration::from_secs(120);
+    const MAX_VIDEO: u64 = 500 << 20;
 
     /// A task on another machine whose reports belong to a bot chat here.
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -257,7 +284,8 @@ mod collect {
                         // one the answer names: that machine holds no token here,
                         // so it must not pick which chat runs a turn.
                         let Some(remote) = open.iter().find(|r| r.child == report.child) else { continue };
-                        if deliver(&report, &remote.parent, &saved.name, app).await {
+                        let text = fetch_videos(saved, &report.text).await;
+                        if deliver(&report, text, &remote.parent, &saved.name, app).await {
                             acked.push(report.id);
                         }
                     }
@@ -295,14 +323,14 @@ mod collect {
     /// as the task on `machine` so the bot can message it back with
     /// `dray session send`. False where the send failed, so the report is not
     /// acked and comes again next poll.
-    async fn deliver(report: &Report, parent: &str, machine: &str, app: &Sink) -> bool {
+    async fn deliver(report: &Report, text: String, parent: &str, machine: &str, app: &Sink) -> bool {
         let from = MessageSender {
             session_id: report.child.clone(),
             title: report.title.clone(),
             machine: Some(machine.to_string()),
             bot_id: None,
         };
-        let sent = crate::orchestration::deliver_report(parent.to_string(), report.text.clone(), from, app.clone());
+        let sent = crate::orchestration::deliver_report(parent.to_string(), text, from, app.clone());
         match sent.await {
             Ok(()) => true,
             Err(e) => {
@@ -310,6 +338,70 @@ mod collect {
                 false
             }
         }
+    }
+
+    /// A report's videos sit on the task's machine, where the bot's chat
+    /// cannot play them, so each is copied here and the report names the copy.
+    /// One that fails to copy keeps its far path: the bot can still say where it is.
+    async fn fetch_videos(saved: &machines::Saved, text: &str) -> String {
+        let videos = video_paths(text);
+        if videos.is_empty() {
+            return text.to_string();
+        }
+        let (base, token) = match machines::http_reach(saved).await {
+            Ok(reach) => reach,
+            Err(e) => {
+                eprintln!("[remote reports video err] {}: {e}", saved.name);
+                return text.to_string();
+            }
+        };
+        let mut out = text.to_string();
+        for (path, folder, file) in videos {
+            match fetch_video(&base, &token, path, folder, file).await {
+                Ok(local) => out = out.replace(path, &local.to_string_lossy()),
+                Err(e) => eprintln!("[remote reports video err] {}: {path}: {e:#}", saved.name),
+            }
+        }
+        out
+    }
+
+    /// Into `browser/recordings/<folder>/<file>` here, the far layout kept, so
+    /// a report delivered twice finds its copy already made.
+    async fn fetch_video(base: &str, token: &str, path: &str, folder: &str, file: &str) -> anyhow::Result<PathBuf> {
+        let dir = store::get_home_app_dir().await?.join("browser/recordings").join(folder);
+        let local = dir.join(file);
+        if tokio::fs::try_exists(&local).await.unwrap_or(false) {
+            return Ok(local);
+        }
+        tokio::fs::create_dir_all(&dir).await?;
+        let mut response = crate::http()
+            .get(format!("{base}/file"))
+            .query(&[("path", path)])
+            .bearer_auth(token)
+            .timeout(VIDEO_FETCH)
+            .send()
+            .await?
+            .error_for_status()?;
+        // Built under a hidden name, which the player never matches, so a cut
+        // download leaves no player on half a video.
+        let part = dir.join(format!(".{file}.part"));
+        let written: anyhow::Result<()> = async {
+            let mut out = tokio::fs::File::create(&part).await?;
+            let mut size = 0u64;
+            while let Some(chunk) = response.chunk().await? {
+                size += chunk.len() as u64;
+                anyhow::ensure!(size <= MAX_VIDEO, "larger than {} MB", MAX_VIDEO >> 20);
+                tokio::io::AsyncWriteExt::write_all(&mut out, &chunk).await?;
+            }
+            tokio::io::AsyncWriteExt::flush(&mut out).await?;
+            tokio::fs::rename(&part, &local).await?;
+            Ok(())
+        }
+        .await;
+        if written.is_err() {
+            tokio::fs::remove_file(&part).await.ok();
+        }
+        written.map(|()| local)
     }
 }
 
@@ -386,5 +478,33 @@ mod tests {
         let wire = serde_json::to_value(&taken).unwrap();
         assert_eq!(wire["reports"][0]["child"], "a");
         assert_eq!(serde_json::from_value::<Taken>(wire).unwrap(), taken);
+    }
+
+    #[test]
+    fn a_report_names_the_videos_the_chat_plays() {
+        let text = "Done. Video: `/home/u/.dray/browser/recordings/s1/demo.mp4`.\n\
+            Again (/home/u/.dray/browser/recordings/s1/demo.mp4) and \
+            [dev](/x/.dray-dev/browser-dev/recordings/s2/b.mp4)";
+        assert_eq!(
+            video_paths(text),
+            vec![
+                ("/home/u/.dray/browser/recordings/s1/demo.mp4", "s1", "demo.mp4"),
+                ("/x/.dray-dev/browser-dev/recordings/s2/b.mp4", "s2", "b.mp4"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_path_that_could_leave_recordings_is_no_video() {
+        for text in [
+            "/h/browser/recordings/../x.mp4",
+            "/h/browser/recordings/s/.part.mp4",
+            "/h/browser/recordings/s/t/deep.mp4",
+            "/h/browser/recordings/flat.mp4",
+            "/h/shots/s/a.mp4",
+            "/h/browser/recordings/s/a.mov",
+        ] {
+            assert!(video_paths(text).is_empty(), "{text}");
+        }
     }
 }

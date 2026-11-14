@@ -192,7 +192,12 @@ pub async fn relay(id: &str, mut hello: Value) -> Result<Socket, String> {
 
 /// Where shared machine `id` serves `/file` and `/upload`, and its token.
 pub async fn relay_http(id: &str) -> Result<(String, String), String> {
-    let (url, token) = reach(&shared(id).await?).await?;
+    http_reach(&shared(id).await?).await
+}
+
+/// Where `saved` serves `/file` and `/upload`, and its token.
+pub async fn http_reach(saved: &Saved) -> Result<(String, String), String> {
+    let (url, token) = reach(saved).await?;
     let base = match url.strip_prefix("wss://") {
         Some(rest) => format!("https://{rest}"),
         None => url.replacen("ws://", "http://", 1),
