@@ -2,11 +2,14 @@ import { useSyncExternalStore } from "react";
 
 import type { TabKey } from "@/lib/tabOrder";
 
-/// Tabs dragged out of a session's row into panes right of its main view,
-/// left to right, keyed by the row's session. A split tab keeps its place in
-/// the row's order but is not drawn there, so closing the pane puts it back
-/// where it was. In memory, like the row's order.
-const panes = new Map<string, TabKey[]>();
+/// A session's split groups, keyed by the row's session. Each is its lead —
+/// the tab whose view the main column draws — then the tabs dragged out right
+/// of it, left to right. The row draws a group as one tab in the lead's slot;
+/// the others keep their own slots in the row's order, so a pane closed puts
+/// its tab back where it was. In memory, like the row's order.
+const groups = new Map<string, TabKey[][]>();
+/// The lead of the group whose tab is lit, published by the row.
+const lit = new Map<string, TabKey | null>();
 /// What a pane's header draws, published by the row that knows it.
 export type PaneHead = { icon: React.ReactNode; label: string };
 const heads = new Map<string, Map<TabKey, PaneHead>>();
@@ -27,42 +30,80 @@ function subscribe(l: () => void) {
   return () => listeners.delete(l);
 }
 
-const NONE: TabKey[] = [];
+const NONE: TabKey[][] = [];
+const EMPTY: TabKey[] = [];
+
+export function splitGroupsOf(sessionId: string): TabKey[][] {
+  return groups.get(sessionId) ?? NONE;
+}
+
+export function useSplitGroups(sessionId: string | null): TabKey[][] {
+  return useSyncExternalStore(subscribe, () => (sessionId ? splitGroupsOf(sessionId) : NONE));
+}
+
+/// The lit group's panes, lead left out: what is drawn beside the main view.
+// Per group array, which is replaced on every change: a store snapshot must
+// be the same object until something moves.
+const tails = new WeakMap<TabKey[], TabKey[]>();
 
 export function splitPanesOf(sessionId: string): TabKey[] {
-  return panes.get(sessionId) ?? NONE;
+  const lead = lit.get(sessionId);
+  const group = splitGroupsOf(sessionId).find((g) => g[0] === lead);
+  if (!group) return EMPTY;
+  if (!tails.has(group)) tails.set(group, group.slice(1));
+  return tails.get(group)!;
 }
 
 export function useSplitPanes(sessionId: string | null): TabKey[] {
-  return useSyncExternalStore(subscribe, () => (sessionId ? splitPanesOf(sessionId) : NONE));
+  return useSyncExternalStore(subscribe, () => (sessionId ? splitPanesOf(sessionId) : EMPTY));
 }
 
-/// Whether `key` is out of the row: a pick's own files go with the pick.
+/// Called from the row, which alone knows which tab is lit.
+export function setLitGroup(sessionId: string, lead: TabKey | null) {
+  if ((lit.get(sessionId) ?? null) === lead) return;
+  lit.set(sessionId, lead);
+  notify();
+}
+
+const covers = (member: TabKey, key: TabKey) =>
+  member === key || (member.startsWith("pick:") && key.startsWith(`pickfile:${member.slice(5)}:`));
+
+/// Whether `key` sits in a group behind its lead, so out of the row: a pick's
+/// own files go with the pick.
 export function isSplit(sessionId: string, key: TabKey): boolean {
-  return splitPanesOf(sessionId).some((p) => p === key || (p.startsWith("pick:") && key.startsWith(`pickfile:${p.slice(5)}:`)));
+  return splitGroupsOf(sessionId).some((g) => g.slice(1).some((m) => covers(m, key)));
 }
 
-export function addSplit(sessionId: string, key: TabKey) {
-  const now = splitPanesOf(sessionId);
-  if (now.includes(key)) return;
-  panes.set(sessionId, [...now, key]);
+function save(sessionId: string, next: TabKey[][]) {
+  // A group of one is just its tab again.
+  groups.set(sessionId, next.filter((g) => g.length > 1));
   notify();
 }
 
+/// Puts `key` right of `lead`'s group, or makes one of the two. Out of any
+/// group it was in first.
+export function addSplit(sessionId: string, lead: TabKey, key: TabKey) {
+  if (lead === key) return;
+  const rest = splitGroupsOf(sessionId).map((g) => g.filter((m) => m !== key));
+  const at = rest.findIndex((g) => g[0] === lead);
+  if (at === -1) rest.push([lead, key]);
+  else rest[at] = [...rest[at], key];
+  save(sessionId, rest);
+}
+
+/// Takes `key` out of its group, back to its own tab.
 export function removeSplit(sessionId: string, key: TabKey) {
-  const now = splitPanesOf(sessionId);
-  if (!now.includes(key)) return;
-  panes.set(sessionId, now.filter((p) => p !== key));
-  notify();
+  const now = splitGroupsOf(sessionId);
+  if (!now.some((g) => g.includes(key))) return;
+  save(sessionId, now.map((g) => g.filter((m) => m !== key)));
 }
 
-/// Drops every pane `keep` refuses: a page closed, a task gone.
+/// Drops every member `keep` refuses: a page closed, a task gone. A lead
+/// dropped hands the group to the next member.
 export function pruneSplits(sessionId: string, keep: (key: TabKey) => boolean) {
-  const now = splitPanesOf(sessionId);
-  const next = now.filter(keep);
-  if (next.length === now.length) return;
-  panes.set(sessionId, next);
-  notify();
+  const now = splitGroupsOf(sessionId);
+  if (now.every((g) => g.every(keep))) return;
+  save(sessionId, now.map((g) => g.filter(keep)));
 }
 
 /// Called from the row on every render, so it moves only where a label did:

@@ -6,24 +6,28 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { setDropping } from "@/lib/browser";
 import { useOpenFiles, useOpenFilesWatcher } from "@/hooks/useOpenFiles";
-import { removeSplit, usePaneHead, useSplitDrag, useSplitPanes } from "@/lib/splitPanes";
+import { Sheet } from "@/components/layout/AppShell";
+import { removeSplit, usePaneHead, useSplitDrag, useSplitGroups, useSplitPanes } from "@/lib/splitPanes";
+import { cn } from "@/lib/utils";
 import type { TabKey } from "@/lib/tabOrder";
 
 const FileViewer = lazy(() => import("@/components/files/FileViewer"));
 
-/// The tabs a session's row split out, each a column right of the main view
-/// with its tab's own icon and title over it. Equal widths, like the split
-/// view's columns; the drop that would make one too narrow is refused.
+/// The panes of a session's split groups, each a card right of the main one
+/// with its tab's own icon and title over it. Only the lit group's are drawn;
+/// the rest hide rather than unmount, so a pane keeps its scroll. Equal
+/// widths, and the drop that would make one too narrow is refused.
 export default function SplitPanes({
   sessionId,
   body,
 }: {
-  /// The row's session, whose splits these are.
+  /// The row's session, whose groups these are.
   sessionId: string | null;
-  /// What a pane draws, by its tab's key.
-  body: (key: TabKey) => React.ReactNode;
+  /// What a pane draws, by its tab's key; `shown` while its group is lit.
+  body: (key: TabKey, shown: boolean) => React.ReactNode;
 }) {
-  const panes = useSplitPanes(sessionId);
+  const groups = useSplitGroups(sessionId);
+  const lit = useSplitPanes(sessionId);
   const drag = useSplitDrag();
   const hint = sessionId && drag?.sessionId === sessionId ? drag.label : null;
   useEffect(() => {
@@ -33,17 +37,30 @@ export default function SplitPanes({
   return (
     <>
       {sessionId &&
-        panes.map((key) => (
-          <div key={key} className="flex min-w-0 flex-1 flex-col border-l border-hairline-strong">
-            <PaneHeader sessionId={sessionId} paneKey={key} onClose={() => removeSplit(sessionId, key)} />
-            <div className="flex min-h-0 flex-1 flex-col">
-              <Suspense fallback={null}>{body(key)}</Suspense>
-            </div>
-          </div>
-        ))}
+        groups
+          .flatMap((g) => g.slice(1))
+          .map((key) => {
+            const shown = lit.includes(key);
+            return (
+              <div key={key} className={cn("flex min-w-0 flex-1", !shown && "hidden")}>
+                <div className="w-1.5 shrink-0 bg-surface-frame" />
+                <Sheet className="flex-1">
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <PaneHeader sessionId={sessionId} paneKey={key} onClose={() => removeSplit(sessionId, key)} />
+                    <div className="flex min-h-0 flex-1 flex-col">
+                      <Suspense fallback={null}>{body(key, shown)}</Suspense>
+                    </div>
+                  </div>
+                </Sheet>
+              </div>
+            );
+          })}
       {hint && (
-        // The column the drop makes: the last of `panes.length + 2` equal ones.
-        <div className="pointer-events-none absolute inset-y-0 right-0" style={{ width: `${100 / (panes.length + 2)}%` }}>
+        // The column the drop makes: the last of `lit.length + 2` equal ones.
+        <div
+          className="pointer-events-none absolute inset-y-0 right-0 z-30"
+          style={{ width: `${100 / (lit.length + 2)}%` }}
+        >
           <DropZone region="center" label={hint} />
         </div>
       )}

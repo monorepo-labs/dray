@@ -99,7 +99,7 @@ import { cardRepos } from "@/lib/mergeCard";
 import BotWelcome from "@/components/chat/BotWelcome";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import SplitPanes, { SplitFile } from "@/components/SplitPanes";
-import { pruneSplits, useSplitPanes } from "@/lib/splitPanes";
+import { pruneSplits, useSplitGroups, useSplitPanes } from "@/lib/splitPanes";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
   closePane,
@@ -3070,15 +3070,16 @@ function App() {
     selectedSession ?? sessionIndexItems.find((i) => i.sessionId === selectedSessionId) ?? null;
   // The session whose row the titlebar draws: the bot's chat over its lit task.
   const rowSession = stripOwner ?? shownSession;
-  // Tabs the row split out beside the main view. A task's transcript in one
+  // The lit group's panes beside the main view. A task's transcript in one
   // is on screen the way a grid pane's is.
   const rowSplits = useSplitPanes(issuesOpen ? null : (rowSession?.sessionId ?? null));
+  const rowGroups = useSplitGroups(issuesOpen ? null : (rowSession?.sessionId ?? null));
   const splitTasks = rowSplits.filter((k) => k.startsWith("task:")).map((k) => k.slice("task:".length));
   // A pane whose tab went — a page the agent closed, a task or pick shut —
   // goes with it.
   const rowPages = useBrowserTabs(rowSession ? browserOf(rowSession.sessionId) : null);
   useEffect(() => {
-    if (!rowSession || rowSplits.length === 0) return;
+    if (!rowSession || rowGroups.length === 0) return;
     const tasksOpen = strip ? (taskTabs[strip.bot] ?? []) : null;
     const picksOpen = strip ? (pickTabs[strip.bot] ?? []) : null;
     pruneSplits(rowSession.sessionId, (key) => {
@@ -3287,7 +3288,7 @@ function App() {
   /// A lit Diff or Files pick: the view on the picked session, its side
   /// column led by the picker. Keyed on tab and target, so a repick or another
   /// pick of the same kind opens fresh rather than on the last one's place.
-  const pickBody = (tab: (typeof litPick) & object, bot: string, watchScope?: FilesScope) => {
+  const pickBody = (tab: (typeof litPick) & object, bot: string, watchScope?: FilesScope, shown = true) => {
     const options: PickOption[] = [
       ...(tab.kind === "files" ? [bot] : []),
       ...botTasks.map((t) => t.sessionId),
@@ -3324,7 +3325,7 @@ function App() {
       <ChangesView
         key={key}
         cwd={item.cwd}
-        active={!issuesOpen}
+        active={!issuesOpen && shown}
         revision={revision}
         writeRevision={writeRevision}
         busy={status === "in_progress"}
@@ -3335,7 +3336,7 @@ function App() {
         key={key}
         sessionId={pickFilesKey(tab)}
         cwd={item.cwd}
-        active={!issuesOpen}
+        active={!issuesOpen && shown}
         revision={revision}
         picker={picker}
         watchScope={watchScope}
@@ -3343,8 +3344,9 @@ function App() {
     );
   };
 
-  // What a split pane draws, by the key its tab had in the row.
-  const splitBody = (key: string) => {
+  // What a split pane draws, by the key its tab had in the row; `shown` while
+  // its group is lit.
+  const splitBody = (key: string, shown: boolean) => {
     if (!rowSession) return null;
     if (key.startsWith("page:")) {
       return (
@@ -3352,7 +3354,7 @@ function App() {
           sessionId={browserOf(rowSession.sessionId)}
           tab={Number(key.slice("page:".length))}
           mode="full"
-          active={!issuesOpen}
+          active={!issuesOpen && shown}
         />
       );
     }
@@ -3360,7 +3362,7 @@ function App() {
       return (
         <ChangesView
           cwd={rowSession.cwd}
-          active={!issuesOpen}
+          active={!issuesOpen && shown}
           revision={turnRevision}
           writeRevision={writeRevision}
           busy={busy}
@@ -3376,7 +3378,7 @@ function App() {
     }
     const pick = strip && pickTabs[strip.bot]?.find((t) => `pick:${t.id}` === key);
     // Its own watcher, since the lit pick in the main view holds `"pick"`.
-    return pick && strip ? pickBody(pick, strip.bot, key as `pick:${string}`) : null;
+    return pick && strip ? pickBody(pick, strip.bot, key as `pick:${string}`, shown) : null;
   };
 
   // Pages with no tabs for the strip: the sheet reaches up behind the header.

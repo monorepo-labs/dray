@@ -42,8 +42,8 @@ type AppShellProps = {
   /// go on the empty state opens the session whole and the zone has to say so
   /// where the pointer is.
   overlay?: ReactNode;
-  /// Split panes, right of the main view at full height, so the composer
-  /// stays under the view it sends from.
+  /// Split panes, cards right of the main one at full height, so the
+  /// composer stays under the view it sends from. Draws its own cards.
   beside?: ReactNode;
   children: ReactNode;
 };
@@ -118,6 +118,8 @@ export default function AppShell({
           />
           <div className="flex min-h-0 min-w-0 flex-1">
             {panelLeft && panelCard}
+            {/* The main card and its panes, measured together for room. */}
+            <div className="relative flex min-h-0 min-w-0 flex-1" {...{ [SPLIT_HOST]: "" }}>
             <Sheet className="flex-1" tall={tall}>
         {/* `min-w-0` is load-bearing: without it a wide code block in the transcript
           sets the flex item's floor and pushes the sidebar off-screen. */}
@@ -145,7 +147,7 @@ export default function AppShell({
             // The crew runs the full height beside both, so its rows get the
             // composer's band too rather than stopping short of it at a line
             // nothing else on screen is drawn to.
-            <div className="relative flex min-h-0 flex-1" {...{ [SPLIT_HOST]: "" }}>
+            <div className="relative flex min-h-0 flex-1">
               <div className="flex min-w-0 flex-1 flex-col">
                 {/* `flex flex-col` so the view tabs' bodies, which size themselves
                   with `flex-1` the way the right panel's do, have a column to
@@ -156,12 +158,13 @@ export default function AppShell({
                 {crewStacked && crew}
                 <div className="shrink-0">{footer}</div>
               </div>
-              {beside}
               {!crewStacked && crew}
             </div>
           )}
         </div>
             </Sheet>
+            {beside}
+            </div>
             {!panelLeft && panelCard}
           </div>
           <div className="h-2 shrink-0 bg-surface-frame" />
@@ -180,7 +183,7 @@ export default function AppShell({
 /// scrim alone, since 7% of black over a dark row is nothing. The scrim is what
 /// paints the corner's outside: the clip leaves bare glass there, lighter than
 /// the frame around it, and nothing can make glass darker but a fill.
-function Sheet({
+export function Sheet({
   className,
   tall = false,
   children,
