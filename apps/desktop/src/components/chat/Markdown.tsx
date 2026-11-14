@@ -4,6 +4,7 @@ import { Streamdown, type Components, type ThemeInput } from "streamdown";
 
 import FileLink from "@/components/chat/FileLink";
 import { MarkdownTable } from "@/components/chat/MarkdownTable";
+import ProofImage from "@/components/chat/ProofImage";
 import VideoPlayer from "@/components/chat/VideoPlayer";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { createSharedCodePlugin, streamingCodePlugin } from "@/lib/codePlugin";
@@ -233,6 +234,8 @@ function MarkdownImpl({
 /// asset protocol lets a video be read from. Any home, since `DRAY_HOME` moves
 /// it; one that holds no video draws no player.
 const RECORDING = /\/browser(-dev)?\/recordings\/[^/]+\/[^/]+\.mp4$/;
+/// A screenshot `dray image add` filed there, under the extension it gave it.
+const SCREENSHOT = /\/browser(-dev)?\/recordings\/[^/]+\/[^/]+\.(png|jpg)$/;
 
 /// Every `span` in the rendered markdown, passed through untouched unless
 /// `rehypeFilePaths` marked it.
@@ -285,15 +288,26 @@ function FilePathSpan({
         {body}
       </FileLink>
     );
-    if (!RECORDING.test(path)) return link;
-    // A recording plays where the agent names it, so
-    // checking its work is watching, not finding a file.
-    return (
-      <>
-        {link}
-        <VideoPlayer src={fileSrc(qualify(path, serverOfSession(sessionId)))} />
-      </>
-    );
+    const src = () => fileSrc(qualify(path, serverOfSession(sessionId)));
+    // A recording plays and a screenshot shows where the agent names it, so
+    // checking its work is looking, not finding a file.
+    if (RECORDING.test(path)) {
+      return (
+        <>
+          {link}
+          <VideoPlayer src={src()} />
+        </>
+      );
+    }
+    if (SCREENSHOT.test(path)) {
+      return (
+        <>
+          {link}
+          <ProofImage src={src()} path={path} />
+        </>
+      );
+    }
+    return link;
   }
 
   return (

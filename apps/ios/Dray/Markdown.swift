@@ -135,3 +135,23 @@ struct MarkdownTable: View {
         .scrollIndicators(.never)
     }
 }
+
+// A screenshot `dray image add` filed beside a session's recordings, the
+// desktop's `SCREENSHOT`: drawn where a reply names it, and paged in its turn's
+// gallery. Here rather than beside `recordingPaths`, since the island compiles
+// this file and `Transcript.swift`'s gallery reads it.
+private let screenshotPattern = #/(?:^|[\s"'`(<>\[=:])(\/[^\s"'`()<>]*\/browser(?:-dev)?\/recordings\/[^\/\s"'`()<>]+\/[^\/\s"'`()<>]+\.(?:png|jpg))/#
+    .anchorsMatchLineEndings()
+
+/// Every screenshot a message names, once each, in the order it names them.
+/// One written as a markdown image is left out: that block draws it already.
+func screenshotPaths(in text: String) -> [String] {
+    var seen = Set(markdownBlocks(text).compactMap { block -> String? in
+        guard case .image(_, let url) = block else { return nil }
+        return url
+    })
+    return text.matches(of: screenshotPattern).compactMap { match in
+        let path = String(match.output.1)
+        return seen.insert(path).inserted ? path : nil
+    }
+}

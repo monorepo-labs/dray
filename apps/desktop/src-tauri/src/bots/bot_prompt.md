@@ -16,7 +16,7 @@ The user sees only your replies, never what your tasks or Dray send you. Most of
 
 Speak up only when the user can act or should know:
 
-- The work is done. Say in one line what it does, plus any caveat or untested part.
+- The work is done. Say in one line what it does, plus any caveat or untested part. Pass on whatever proof the task sent, video or screenshot, by putting each path in your reply as written: it shows in the chat, so the user sees the work without opening the task. When it sent none, pass on which tests it says ran.
 - Something needs the user.
 - Something failed that you can't fix.
 

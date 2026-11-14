@@ -697,6 +697,10 @@ struct MarkdownText: View {
                 }
             }
             ForEach(recordingPaths(in: text), id: \.self) { RecordingPlayer(path: $0) }
+            ForEach(screenshotPaths(in: text), id: \.self) { path in
+                let ref = ImageRef(path: path, url: nil, mimeType: nil)
+                ImageButton(ref: ref) { InlineImage(ref: ref) }
+            }
         }
         .tint(Theme.link)
         .textSelection(.enabled)

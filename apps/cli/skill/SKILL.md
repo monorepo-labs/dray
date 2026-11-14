@@ -431,6 +431,15 @@ so a video made on another machine, a VM or a remote box has to be copied here
 first. Name no environment variable to find any of this, and don't build the path
 by hand: the home moves. It is deleted with the session.
 
+**A screenshot shows the same way through `dray image add`.** A PNG or JPEG
+from a simulator, a sandbox desktop or `dray browser screenshot`: put the path
+it prints in your reply and the chat draws the picture. Crop it to what changed
+first. Same rules as `dray video add`: this machine, folder worked out for you.
+
+```bash
+dray image add ~/shots/after.png "settings after"  # prints the path to put in your reply
+```
+
 **Keep a video of the test that confirms UI work or work on another machine**,
 and show it the same way, so the user can watch it pass.
 
