@@ -35,6 +35,7 @@ import Window from "@/components/app/Window";
 import { ClaudeGlyph } from "@/components/ClaudeGlyph";
 import { GreptileGlyph } from "@/components/GreptileGlyph";
 import { MiniHome } from "@/components/home/MiniHome";
+import { BOTS, BotChat, BotRows, BotTasks, useBotScene, type BotId } from "./BotScene";
 import { ScaledWindow } from "./ScaledWindow";
 import s from "./Hero.module.css";
 
@@ -104,15 +105,18 @@ const REPLIES: Record<string, string> = {
 type MergeState = "open" | "confirming" | "merging" | "merged";
 
 /// The app, whole, above the fold, and the visitor can touch it. It opens on
-/// a session beside its pull request with the last check still running; the
-/// check passes on its own and from then on nothing moves unless the visitor
-/// does — open another session, answer the one waiting on a question, start a
-/// task, flip the panel's tabs, open the dev server's tab, merge the PR.
-/// `startX` is where a phone's sideways scroll opens; 0 opens on the sidebar.
+/// the Dray bot's chat beside its Tasks tab, where the visitor can merge what
+/// a task left ready or message the bot and watch it start one. Below the bots
+/// sit ordinary sessions: one beside its pull request, whose last check passes
+/// a moment after it is first opened, one waiting on a question, and the new
+/// task page. `startX` is where a phone's sideways scroll opens; 0 opens on
+/// the sidebar.
 export function Hero({ className, startX = 240 }: { className?: string; startX?: number }) {
-  const [selected, setSelected] = useState<string>("background");
+  const [selected, setSelected] = useState<string>(BOTS[0].id);
   const [view, setView] = useState<"chat" | "browser">("chat");
   const [panelTab, setPanelTab] = useState("PR");
+  const [botTab, setBotTab] = useState("Tasks");
+  const scene = useBotScene();
   const [speedrunRead, setSpeedrunRead] = useState(false);
   const [checksPassed, setChecksPassed] = useState(false);
   const [merge, setMerge] = useState<MergeState>("open");
@@ -125,10 +129,14 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
   // started it: a state value captured then would be the session it opened on.
   const selectedRef = useRef(selected);
 
+  // Counted from the PR session's first opening, not the page's: it no longer
+  // opens there, and a check that passed unseen is a moment lost.
+  const prSeen = selected === "background" || checksPassed;
   useEffect(() => {
+    if (!prSeen) return;
     const t = setTimeout(() => setChecksPassed(true), 3000);
     return () => clearTimeout(t);
-  }, []);
+  }, [prSeen]);
 
   const open = (id: string) => {
     selectedRef.current = id;
@@ -136,6 +144,7 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
     setStarted((list) => list.map((t) => (t.id === id ? { ...t, unread: false } : t)));
     setView("chat");
     if (id === "speedrun") setSpeedrunRead(true);
+    if (BOTS.some((b) => b.id === id)) scene.read(id as BotId);
   };
 
   const answerQuestion = (label: string | null) => {
@@ -152,8 +161,8 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
     const prompt = draft.trim();
     if (!prompt) return;
     const id = `task-${Date.now()}`;
-    // Newest three kept, so the list never runs past the sidebar's
-    // foot and takes the scripted sessions with it; scroll it if more matter.
+    // Newest two kept, so the list never runs past the sidebar's foot under
+    // the bots and takes the scripted sessions with it.
     const task = {
       id,
       prompt,
@@ -162,7 +171,7 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
       done: false,
       unread: false,
     };
-    setStarted((list) => [task, ...list].slice(0, 3));
+    setStarted((list) => [task, ...list].slice(0, 2));
     setDraft("");
     open(id);
     setTimeout(
@@ -181,6 +190,7 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
   // comes back with the chat.
   const panelOpen = hasPr && view === "chat";
   const isNew = selected === "new";
+  const bot = BOTS.find((b) => b.id === selected);
   const task = started.find((t) => t.id === selected);
   const title = task?.prompt ?? TITLES[selected as Fixed];
   const linearWorking = answer !== undefined && !tagged;
@@ -194,7 +204,10 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
           // The live list runs by stage, workspace-wide, with no headings:
           // what wants the reader first, then what is idle, then pull
           // requests by how far along they are, then what was set aside.
-          <Sidebar onNewTask={() => open("new")}>
+          <Sidebar
+            onNewTask={() => open("new")}
+            bots={<BotRows scene={scene} selected={selected} onOpen={open} />}
+          >
             <SessionRow
               title={TITLES.linear}
               unread={answer === undefined ? "command" : undefined}
@@ -226,7 +239,6 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
               active={selected === "comments"}
               onClick={() => open("comments")}
             />
-            <SessionRow title="Test run and greeting" trailing="1d" />
             <GroupBreak />
             <SessionRow
               title={TITLES.background}
@@ -238,16 +250,19 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
             <SessionRow title="Settings theme picker" pr={<PrOpenGlyph />} trailing="18h" />
             <GroupBreak />
             <SessionRow title="Draw placed tags as chips" pr={<PrMergedGlyph />} trailing="2d" />
-            <SessionRow title="Clamp long user bubbles" pr={<PrMergedGlyph />} trailing="3d" />
             <GroupBreak />
             {/* Set aside: started, not wanted now, so held back at the foot. */}
             <SessionRow title="Outline view from tree-sitter" trailing="1w" className="opacity-30" />
-            <SessionRow title="Port drafts to SQLite" trailing="2w" className="opacity-30" />
             <TaskHint />
           </Sidebar>
         }
         tabs={
-          isNew ? (
+          bot ? (
+            <>
+              <ItemTab icon={<ChatIcon />} label={bot.name} plain />
+              <AddTab />
+            </>
+          ) : isNew ? (
             <span className="px-2 text-ui text-muted-foreground">New session</span>
           ) : hasPr ? (
             <>
@@ -282,15 +297,30 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
           )
         }
         headerEnd={
+          bot ? (
+            // A bot's chat has no row under its composer: its model picker
+            // sits here, at the titlebar's end.
+            <>
+              <span className="flex h-7 shrink-0 items-center gap-1 px-1.5 text-ui font-medium text-muted-foreground">
+                <ClaudeGlyph className="size-3.5" />
+                <span>Opus 5.5</span>
+                <span className="text-muted-foreground/60">High</span>
+              </span>
+              <PanelToggle />
+            </>
+          ) : (
           <>
             {!isNew && <BranchButton name={task?.branch ?? BRANCHES[selected as Fixed]} />}
             {/* The pull request stands in for the panel toggle, lit while the
                 pane is open on it. */}
             {hasPr ? <ItemTab icon={pr} label="#44" active={panelOpen} fixed /> : <PanelToggle />}
           </>
+          )
         }
         main={
-          isNew ? (
+          bot ? (
+            <BotChat key={bot.id} scene={scene} bot={bot.id} />
+          ) : isNew ? (
             <NewTaskComposer
               value={draft}
               onChange={setDraft}
@@ -345,7 +375,15 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
           )
         }
         panel={
-          panelOpen && (
+          bot ? (
+            <Panel tabs={["Tasks", "Browser"]} active={botTab} onSelect={setBotTab} width={380} refresh={false}>
+              {botTab === "Tasks" ? (
+                <BotTasks scene={scene} bot={bot.id} />
+              ) : (
+                <DevServerPage tab="Dray — Run every agent harness in one app" />
+              )}
+            </Panel>
+          ) : panelOpen && (
             <Panel tabs={["PR", "Changes", "Browser", "More"]} active={panelTab} onSelect={setPanelTab} width={410}>
               {panelTab === "PR" && (
                 <PrBody

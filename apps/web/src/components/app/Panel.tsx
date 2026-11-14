@@ -21,6 +21,7 @@ export default function Panel({
   onSelect,
   children,
   width = 460,
+  refresh = true,
   className,
 }: {
   tabs: string[];
@@ -29,6 +30,8 @@ export default function Panel({
   onSelect?: (tab: string) => void;
   children: ReactNode;
   width?: number;
+  /// The PR's re-read. A bot's Tasks tab has none.
+  refresh?: boolean;
   className?: string;
 }) {
   return (
@@ -59,11 +62,13 @@ export default function Panel({
           })}
           <Keys caps={["⌘", "⌥", "[ ]"]} className={cx("ml-1.5 shrink-0 opacity-50", HINT_KEYS)} />
         </div>
-        <div className="ml-auto flex shrink-0 items-center">
-          <span className="grid size-7 place-items-center text-muted-foreground/60">
-            <RefreshCw className="size-3" />
-          </span>
-        </div>
+        {refresh && (
+          <div className="ml-auto flex shrink-0 items-center">
+            <span className="grid size-7 place-items-center text-muted-foreground/60">
+              <RefreshCw className="size-3" />
+            </span>
+          </div>
+        )}
       </div>
       {children}
     </aside>

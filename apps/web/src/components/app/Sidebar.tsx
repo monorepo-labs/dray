@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { CheckCheck, CircleDashed, CircleDot, Plus, Search } from "lucide-react";
+import { CheckCheck, CircleDashed, CircleDot, MessageCirclePlus, Plus, Search } from "lucide-react";
 
 import { cx } from "./Window";
 
@@ -48,10 +48,14 @@ const STRIP_BUTTON =
 /// beside it is the only thing raised.
 export default function Sidebar({
   children,
+  bots,
   onNewTask,
   className,
 }: {
   children?: ReactNode;
+  /// The bot rows, above the project filter: a bot belongs to no project. No
+  /// heading — the face on a row is what says it is a bot.
+  bots?: ReactNode;
   /// Makes New Task a button, with the hover fill the app's strip has.
   onNewTask?: () => void;
   className?: string;
@@ -89,7 +93,15 @@ export default function Sidebar({
           Search
           <Keys caps={["⌘", "F"]} className="ml-auto" />
         </div>
+        {bots && (
+          <div className={STRIP_BUTTON}>
+            <MessageCirclePlus />
+            New bot
+          </div>
+        )}
       </div>
+
+      {bots && <div className="mt-4 flex flex-col gap-px px-2">{bots}</div>}
 
       {/* The filter is where project grouping went; drafts and the settled
           list are the two glyphs beside it. */}

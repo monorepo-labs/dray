@@ -388,7 +388,7 @@ export function NewTaskComposer({
             }
           }}
           placeholder="Describe a task."
-          className="field-sizing-content max-h-40 w-full resize-none bg-transparent py-1 text-prompt text-foreground outline-none placeholder:text-muted-foreground"
+          className="field-sizing-content select-text max-h-40 w-full resize-none bg-transparent py-1 text-prompt text-foreground outline-none placeholder:text-muted-foreground"
         />
         <div className="flex items-center gap-1 pt-2 text-ui text-muted-foreground/60">
           Press <CornerDownLeft className="size-3" strokeWidth={2} /> to send
