@@ -23,11 +23,13 @@ final class BotSheetTests: XCTestCase {
         XCTAssertTrue(newBot.waitForExistence(timeout: 20), "no New bot button")
         sleep(2)
         snap(app, "list")
+        // Names must differ on a server, and runs against one leave their bots behind.
+        let run = Int(Date().timeIntervalSince1970) % 100_000
         newBot.tap()
         let field = app.textFields["Bot name"]
         XCTAssertTrue(field.waitForExistence(timeout: 5), "no name field")
         field.tap()
-        field.typeText("Scout")
+        field.typeText("Scout \(run)")
         app.buttons["sun"].tap()
         app.buttons["Teal"].tap()
         snap(app, "new-bot")
@@ -42,11 +44,12 @@ final class BotSheetTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Test Mac"].exists, "the sheet does not say where the bot runs")
         snap(app, "edit-bot")
         let name = app.textFields["Bot name"]
-        name.tap()
-        name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 10) + "Ranger")
+        // At the field's far end, so the cursor lands after the centred name.
+        name.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+        name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 20) + "Ranger \(run)")
         app.buttons["Pink"].tap()
         app.buttons["Save"].tap()
-        XCTAssertTrue(app.buttons["Ranger"].waitForExistence(timeout: 10), "the rename did not reach the chip")
+        XCTAssertTrue(app.buttons["Ranger \(run)"].waitForExistence(timeout: 10), "the rename did not reach the chip")
         sleep(1)
         snap(app, "renamed")
     }

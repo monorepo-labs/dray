@@ -138,7 +138,8 @@ struct BotSheet: View {
     private var target: UUID? {
         if let editing { return editing.server }
         if made != nil { return server }
-        return task.connected.first { $0.id == server }?.id ?? task.server
+        // The dock aimed at a bot on a machine that is down answers nil; any machine up will do.
+        return task.connected.first { $0.id == server }?.id ?? task.server ?? task.connected.first?.id
     }
 
     private func submit() async {
@@ -154,18 +155,30 @@ struct BotSheet: View {
                 Haptic.success()
                 dismiss()
             } else {
-                let bot: Bot
+                var bot: Bot
                 if let made { bot = made } else {
-                    bot = try await store.call(at, "create_bot", ["name": .string(name), "avatar": avatar.json])
+                    bot = try await create(name, on: at)
                     made = bot
                     server = at
                 }
-                let chat = try await store.call(at, "start_bot", startArgs(bot, on: at), as: SessionItem.self)
-                store.created(at, chat)
+                // A retry carries what was changed since onto the bot made.
+                if bot.name != name || bot.avatar != avatar {
+                    bot = try await store.call(at, "edit_bot", ["id": .string(bot.id), "name": .string(name), "avatar": avatar.json])
+                    made = bot
+                }
+                // A start whose reply was lost may have opened the chat anyway: open that one, never a second.
                 await store.loadBots(at)
+                let key: SessionKey
+                if let open = store.botChat(at, bot).last {
+                    key = open
+                } else {
+                    let chat = try await store.call(at, "start_bot", await startArgs(bot, on: at), as: SessionItem.self)
+                    store.created(at, chat)
+                    key = SessionKey(server: at, id: chat.sessionId)
+                }
                 Haptic.success()
                 dismiss()
-                onStarted(SessionKey(server: at, id: chat.sessionId))
+                onStarted(key)
             }
         } catch {
             self.error = error.localizedDescription
@@ -173,17 +186,37 @@ struct BotSheet: View {
         }
     }
 
-    /// The dock's picks where it points at this machine; elsewhere its agent on that agent's default model.
-    private func startArgs(_ bot: Bot, on at: UUID) -> [String: JSON] {
+    /// `create_bot`, and where it fails, a bot of this name with no chat yet: one a lost reply already made.
+    private func create(_ name: String, on at: UUID) async throws -> Bot {
+        do {
+            return try await store.call(at, "create_bot", ["name": .string(name), "avatar": avatar.json])
+        } catch {
+            await store.loadBots(at)
+            let orphan = (store.bots[at] ?? []).first {
+                $0.name.lowercased() == name.lowercased() && $0.avatar == avatar && $0.welcome == nil && store.botChat(at, $0).isEmpty
+            }
+            guard let orphan else { throw error }
+            return orphan
+        }
+    }
+
+    /// The dock's picks where it points at this machine. Elsewhere its agent where that machine
+    /// has it, else the first it has, on that agent's default model.
+    private func startArgs(_ bot: Bot, on at: UUID) async -> [String: JSON] {
         // An unread model list leaves the pick empty, which is the harness's default too.
         let here = at == task.server && !task.modelId.isEmpty
+        var harness = task.harness
+        if at != task.server, let agents: [AgentAvailability] = try? await store.call(at, "agent_availability"),
+           !agents.contains(where: { $0.harness == harness && $0.available }), let first = agents.first(where: \.available) {
+            harness = first.harness
+        }
         return [
             "id": .string(bot.id),
-            "harness": .string(task.harness),
-            "model": .string(here ? task.modelId : Picks.defaultModel[task.harness] ?? ""),
+            "harness": .string(harness),
+            "model": .string(here ? task.modelId : Picks.defaultModel[harness] ?? ""),
             "effort": here ? JSON(task.effort) : .null,
-            "permissionMode": .string(Picks.stanceFor(task.harness, task.stance)),
-            "fast": .bool(here && task.fast && Picks.offersFast(task.harness, task.model)),
+            "permissionMode": .string(Picks.stanceFor(harness, task.stance)),
+            "fast": .bool(here && task.fast && Picks.offersFast(harness, task.model)),
         ]
     }
 }
