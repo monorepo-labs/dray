@@ -10,48 +10,32 @@ import { THEMES } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import "../App.css";
 
-/// A bot's reaction on the reader's message. A is the real component; B to F are
-/// takes drawn here on a copy of the bubble. Each shows in light and dark side by
-/// side, each half scoped by its own `data-mode`, so one screenshot judges both.
+/// A bot's reaction on the reader's message. A is the real component; B to H are
+/// takes on its look, drawn here on a copy of the bubble, all on the top-left
+/// corner where A sits. Each shows in light and dark side by side, each half
+/// scoped by its own `data-mode`, so one screenshot judges both.
 
+/// The page colour lifted by `n`% white: opaque, and still the palette's own.
+const lift = (n: number) => `color-mix(in oklab, var(--background), white ${n}%)`;
 const LIFT = "bg-[color-mix(in_oklab,var(--background),white_7%)]";
-const CHIP = "flex items-center justify-center rounded-full leading-none select-none";
+const CHIP = "flex items-center justify-center leading-none select-none";
+const CORNER = "absolute -top-4 -left-3";
 
-/// The reader's bubble as the bot chat draws it, with room for a badge on it,
-/// beside it or under it.
-function Bubble({
-  text,
-  on,
-  beside,
-  under,
-  className,
-}: {
-  text: string;
-  on?: ReactNode;
-  beside?: ReactNode;
-  under?: ReactNode;
-  className?: string;
-}) {
+/// The reader's bubble as the bot chat draws it, a badge on its top-left corner.
+function Bubble({ text, badge }: { text: string; badge: ReactNode }) {
   return (
     <div className="flex justify-end">
-      <div className="flex max-w-[85%] items-end gap-1.5">
-        {beside}
-        <div className="flex min-w-0 flex-col items-start">
-          <div
-            className={cn(
-              "user-bubble relative rounded-xl bg-card px-3 py-2 text-chat text-card-foreground shadow-(--shadow-card)",
-              className,
-            )}
-          >
-            {text}
-            {on}
-          </div>
-          {under}
-        </div>
+      <div className="user-bubble relative mt-3 max-w-[85%] rounded-xl bg-card px-3 py-2 text-chat text-card-foreground shadow-(--shadow-card)">
+        {text}
+        {badge}
       </div>
     </div>
   );
 }
+
+/// A tint per reaction, for take G: seen stays neutral, done goes green,
+/// celebrate goes amber.
+const TINT: Record<string, string> = { "👀": "", "✅": "oklch(0.72 0.17 150)", "🎉": "oklch(0.8 0.16 80)" };
 
 type Take = {
   letter: string;
@@ -63,20 +47,19 @@ type Take = {
 const TAKES: Take[] = [
   {
     letter: "A",
-    name: "Corner chip (current)",
-    note: "28px, a step lighter than the page, 0.5px hairline, on the bottom-left corner.",
+    name: "Hairline chip (current)",
+    note: "28px circle, a step lighter than the page, 0.5px hairline.",
     draw: (text, emoji) => <UserMessage text={text} reaction={emoji} />,
   },
   {
     letter: "B",
-    name: "Top corner",
-    note: "The same chip on the top-left corner, where iMessage puts a tapback.",
+    name: "Bot grey",
+    note: "Filled with the bot bubble's grey, no edge: the bot's colour on the reader's message.",
     draw: (text, emoji) => (
       <Bubble
         text={text}
-        className="mt-3"
-        on={
-          <span className={cn(CHIP, LIFT, "absolute -top-4 -left-3 size-7 border-[0.5px] border-border text-[15px]")}>
+        badge={
+          <span className={cn(CHIP, CORNER, "size-7 rounded-full text-[15px]")} style={{ background: lift(14) }}>
             {emoji}
           </span>
         }
@@ -85,14 +68,13 @@ const TAKES: Take[] = [
   },
   {
     letter: "C",
-    name: "Bare emoji",
-    note: "No chip. The emoji alone on the corner, a soft shadow lifting it off the bubble.",
+    name: "Rounded square",
+    note: "The app's own shape: a small tile with the menu-item radius instead of a circle.",
     draw: (text, emoji) => (
       <Bubble
         text={text}
-        className="mb-2"
-        on={
-          <span className="absolute -bottom-3 left-1.5 text-[18px] leading-none drop-shadow-[0_1px_1.5px_rgb(0_0_0/0.35)] select-none">
+        badge={
+          <span className={cn(CHIP, CORNER, LIFT, "size-7 rounded-md border-[0.5px] border-border text-[15px]")}>
             {emoji}
           </span>
         }
@@ -101,33 +83,14 @@ const TAKES: Take[] = [
   },
   {
     letter: "D",
-    name: "Pill under",
-    note: "A small pill below the bubble, not touching it, as Slack and Discord draw them.",
+    name: "Floating",
+    note: "No edge; a soft shadow straight down lifts it off the bubble.",
     draw: (text, emoji) => (
       <Bubble
         text={text}
-        under={
-          <span className={cn(CHIP, LIFT, "mt-1 ml-1 h-6 gap-1 border-[0.5px] border-border px-2 text-[13px]")}>
-            {emoji}
-          </span>
-        }
-      />
-    ),
-  },
-  {
-    letter: "E",
-    name: "Big chip, ring",
-    note: "36px, lighter grey, a page-coloured ring and a shadow: the reference screenshot.",
-    draw: (text, emoji) => (
-      <Bubble
-        text={text}
-        className="mb-5"
-        on={
+        badge={
           <span
-            className={cn(
-              CHIP,
-              "absolute -bottom-6 left-1.5 size-9 bg-[color-mix(in_oklab,var(--background),white_14%)] text-[19px] shadow-[0_1px_3px_rgb(0_0_0/0.3)] ring-2 ring-background",
-            )}
+            className={cn(CHIP, CORNER, LIFT, "size-7 rounded-full text-[15px] shadow-[0_2px_6px_rgb(0_0_0/0.25)]")}
           >
             {emoji}
           </span>
@@ -136,14 +99,78 @@ const TAKES: Take[] = [
     ),
   },
   {
-    letter: "F",
-    name: "Beside",
-    note: "A chip to the left of the bubble, on the bot's side, level with its last line.",
+    letter: "E",
+    name: "Tapback tail",
+    note: "Two trailing dots running down and out from the chip, as iMessage draws a tapback.",
     draw: (text, emoji) => (
       <Bubble
         text={text}
-        beside={
-          <span className={cn(CHIP, LIFT, "mb-1 size-6 shrink-0 border-[0.5px] border-border text-[13px]")}>
+        badge={
+          <span className={cn(CORNER, "-left-4")}>
+            <span className={cn(CHIP, LIFT, "size-7 rounded-full border-[0.5px] border-border text-[15px]")}>
+              {emoji}
+            </span>
+            <span className={cn(LIFT, "absolute top-[25px] -left-[3px] size-2 rounded-full border-[0.5px] border-border")} />
+            <span className={cn(LIFT, "absolute top-[33px] -left-[7px] size-1 rounded-full border-[0.5px] border-border")} />
+          </span>
+        }
+      />
+    ),
+  },
+  {
+    letter: "F",
+    name: "Ringed in the bubble's blue",
+    note: "Page-coloured chip with a 1.5px ring in the bubble's own fill, tying it to the message.",
+    draw: (text, emoji) => (
+      <Bubble
+        text={text}
+        badge={
+          <span
+            className={cn(CHIP, CORNER, "size-7 rounded-full border-[1.5px] text-[15px]")}
+            style={{ background: lift(7), borderColor: "oklch(0.58 0.17 252)" }}
+          >
+            {emoji}
+          </span>
+        }
+      />
+    ),
+  },
+  {
+    letter: "G",
+    name: "Tinted by meaning",
+    note: "Seen stays neutral; done takes a green wash, celebrate an amber one.",
+    draw: (text, emoji) => {
+      const tint = TINT[emoji];
+      const background = tint ? `color-mix(in oklab, ${lift(7)}, ${tint} 22%)` : lift(7);
+      return (
+        <Bubble
+          text={text}
+          badge={
+            <span
+              className={cn(CHIP, CORNER, "size-7 rounded-full border-[0.5px] border-border text-[15px]")}
+              style={{ background }}
+            >
+              {emoji}
+            </span>
+          }
+        />
+      );
+    },
+  },
+  {
+    letter: "H",
+    name: "Small and quiet",
+    note: "22px, emoji at 12px, the page colour itself: a footnote rather than a badge.",
+    draw: (text, emoji) => (
+      <Bubble
+        text={text}
+        badge={
+          <span
+            className={cn(
+              CHIP,
+              "absolute -top-3 -left-2.5 size-[22px] rounded-full border-[0.5px] border-border bg-background text-[12px]",
+            )}
+          >
             {emoji}
           </span>
         }
@@ -152,7 +179,8 @@ const TAKES: Take[] = [
   },
 ];
 
-/// One take in a slice of chat: a request the bot is on, its reply, a thanks.
+/// One take in a slice of chat: a request the bot is on, its reply, a thanks,
+/// and a small thing it did.
 function Slice({ take }: { take: Take }) {
   return (
     <div className="flex flex-col gap-4" data-bot-chat>
@@ -161,6 +189,7 @@ function Slice({ take }: { take: Take }) {
         <p className="text-chat">Fixed, PR is up.</p>
       </BotBubble>
       {take.draw("Thanks, that's great!", "🎉")}
+      {take.draw("Save that as a rule.", "✅")}
     </div>
   );
 }
@@ -170,7 +199,7 @@ function Demo() {
     // Clear of the theme bar on the left, which would cover the last row.
     <main className="mx-auto flex max-w-[1800px] flex-col gap-5 pt-6 pr-6 pb-48 pl-56">
       <div className="grid grid-cols-2 gap-x-6 gap-y-5">
-        {TAKES.map((take) => (
+        {TAKES.filter((take) => !only || only.includes(take.letter)).map((take) => (
           <section key={take.letter} className="flex flex-col gap-2">
             <p className="text-[13px] text-muted-foreground">
               <span className="font-semibold text-foreground">
@@ -197,8 +226,10 @@ function Demo() {
   );
 }
 
-// `?mode=dark&theme=default` opens on that pick, for a screenshot taken without a click.
+// `?mode=dark&theme=default` opens on that pick, for a screenshot taken without a
+// click; `?takes=ABCD` draws only those.
 const query = new URLSearchParams(location.search);
+const only = query.get("takes")?.toUpperCase();
 const mode = query.get("mode");
 if (mode === "light" || mode === "dark") setMode(mode);
 const theme = THEMES.find((t) => t.id === query.get("theme"));

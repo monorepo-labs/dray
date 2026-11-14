@@ -460,10 +460,10 @@ struct UserBubble: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
-                    .overlay(alignment: .bottomLeading) {
-                        if let reaction { ReactionBadge(emoji: reaction).offset(x: 8, y: 18) }
+                    .overlay(alignment: .topLeading) {
+                        if let reaction { ReactionBadge(emoji: reaction).offset(x: -12, y: -16) }
                     }
-                    .padding(.bottom, reaction == nil ? 0 : 14)
+                    .padding(.top, reaction == nil ? 0 : 12)
             } else if let reaction {
                 ReactionBadge(emoji: reaction)
             }
