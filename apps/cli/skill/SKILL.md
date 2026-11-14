@@ -309,6 +309,14 @@ yourself, write what it needs in one short line. The user sees it on the task's
 row in the "Waiting on you" card at the foot of your chat, and it clears as soon
 as the task moves.
 
+```bash
+dray session react 👀   # or ✅, 🎉; also seen, done, celebrate
+```
+
+A bot only. Puts the emoji on the user's newest message in your chat, in place
+of a reply: 👀 seen or on it, ✅ done, 🎉 celebrate. A new one on the same
+message replaces the old. End your turn without writing anything after it.
+
 ## Saving work for later
 
 ```bash

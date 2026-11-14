@@ -442,6 +442,8 @@ struct UserBubble: View {
     var images: [ImageRef] = []
     /// Typed into a running turn and not yet read by it: held back, dimmed.
     var queued = false
+    /// A bot's emoji on this message, drawn on the bubble's corner.
+    var reaction: String? = nil
 
     var body: some View {
         VStack(alignment: .trailing, spacing: Theme.Space.xs) {
@@ -458,6 +460,12 @@ struct UserBubble: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+                    .overlay(alignment: .bottomLeading) {
+                        if let reaction { ReactionBadge(emoji: reaction).offset(x: 8, y: 18) }
+                    }
+                    .padding(.bottom, reaction == nil ? 0 : 14)
+            } else if let reaction {
+                ReactionBadge(emoji: reaction)
             }
             if queued {
                 Text("Queued").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
@@ -466,6 +474,22 @@ struct UserBubble: View {
         .opacity(queued ? 0.55 : 1)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 48)
+    }
+}
+
+/// A bot's reaction, as a messenger draws one: a round chip whose page-coloured
+/// ring cuts it out of the bubble it sits on. The desktop's `ReactionBadge`.
+struct ReactionBadge: View {
+    let emoji: String
+
+    var body: some View {
+        let labels = ["👀": "Seen", "✅": "Done", "🎉": "Celebrating"]
+        Text(emoji)
+            .font(.system(size: 15))
+            .frame(width: 28, height: 28)
+            .background(Theme.card, in: .circle)
+            .overlay(Circle().stroke(Theme.page, lineWidth: 2))
+            .accessibilityLabel("Bot reacted: \(labels[emoji] ?? emoji)")
     }
 }
 

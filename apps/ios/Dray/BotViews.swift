@@ -176,8 +176,8 @@ private struct BotRowView: View {
             talk(targets)
         case .item(let item):
             switch item {
-            case .user(_, let text, let images, _):
-                UserBubble(text: text, from: nil, images: images)
+            case .user(_, let text, let images, let reaction, _):
+                UserBubble(text: text, from: nil, images: images, reaction: reaction)
             case .assistant(_, let text, _):
                 MarkdownText(text: text)
                     .padding(.horizontal, Theme.Space.m)

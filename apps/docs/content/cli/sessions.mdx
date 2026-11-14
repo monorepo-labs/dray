@@ -136,6 +136,14 @@ Sets what a bot's task needs from you, in one line. It shows on the task's row i
 
 A task whose pull request is ready to merge gets a line only when it asked you to try or check something before merging. Otherwise its row shows **Merge** alone.
 
+## Reaction
+
+```bash
+dray session react 👀
+```
+
+Run by a bot when your message needs no words back. It puts 👀 (seen, on it), ✅ (done) or 🎉 (celebrate) on your newest message in the bot's chat, as a badge on the bubble, and the bot ends its turn without replying. The words `seen`, `done` and `celebrate` work too. A new reaction on the same message replaces the old one. Claude Code bots use a built-in tool for the same thing.
+
 ## Limits
 
 - No flag sets the permission mode, the worktree name, or turns the worktree off.

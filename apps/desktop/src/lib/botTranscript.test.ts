@@ -52,6 +52,18 @@ describe("botItems", () => {
     expect(items[2]).toMatchObject({ kind: "task", sessionId: ID });
   });
 
+  it("puts the bot's newest reaction on the message it names, and draws no row for it", () => {
+    const fix = user("fix the login bug");
+    const thanks = user("thanks!");
+    const react = (target: AgentEvent, emoji: string) =>
+      ev({ type: "reaction", messageId: target.id, emoji } as AgentEventPayload);
+    const items = botItems([fix, react(fix, "👀"), said("Fixed, PR is up."), react(fix, "✅"), thanks, react(thanks, "🎉")]);
+    expect(items.map((i) => i.kind)).toEqual(["user", "assistant", "user"]);
+    expect(items[0]).toMatchObject({ kind: "user", reaction: "✅" });
+    expect(items[2]).toMatchObject({ kind: "user", reaction: "🎉" });
+    expect(botItems([user("hi")])[0]).toMatchObject({ kind: "user", reaction: undefined });
+  });
+
   it("draws no bubble for a reply of whitespace and zero-width characters", () => {
     const items = botItems([user("hi"), said("\u200b"), said(" \ufeff\u200d\n"), said("\u200bok")]);
     expect(items.map((i) => i.kind)).toEqual(["user", "assistant"]);

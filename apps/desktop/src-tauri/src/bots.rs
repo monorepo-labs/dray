@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 use ts_rs::TS;
 
 pub mod learn;
+pub mod react;
 
 use crate::{
     events::ApprovalPolicy,
