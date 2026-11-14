@@ -13,7 +13,9 @@ struct TranscriptView: View {
     @State private var earlier = 0
     /// Whether new rows scroll into view: dropped by the reader scrolling up (`FollowsBottom`).
     @State private var following = true
-    /// A bot chat opened unread: the last item it held once read, bounding the NEW divider.
+    /// A bot chat opened unread, its read done.
+    @State private var openedUnread = false
+    /// The last item it held once read, bounding the NEW divider.
     @State private var unreadUpTo: String?
     /// The reply unread ones begin at; settled once, so reading the chat never moves it.
     @State private var newFrom: String?? = nil
@@ -208,18 +210,25 @@ struct TranscriptView: View {
     private func open() async {
         let unread = store.bot(key) != nil && store.items[key]?.status == "completed"
         await store.open(key)
-        // Taken after the read, so replies it brings count as unread and later ones don't.
-        if unread { unreadUpTo = chat(store.bot(key)).last?.id }
+        openedUnread = unread
         settleUnread()
     }
 
     /// Sets where unread replies begin, once enough of the chat is loaded to say (`unreadStart`).
     private func settleUnread() {
-        guard let upTo = unreadUpTo, newFrom == nil else { return }
+        guard openedUnread, newFrom == nil else { return }
         let bot = store.bot(key)
+        let items = chat(bot)
+        if unreadUpTo == nil {
+            // Taken once the server's read lands, never off the cache alone: replies it
+            // brings count as unread, and later ones don't.
+            guard !store.waiting.contains(key), let last = items.last?.id else { return }
+            unreadUpTo = last
+        }
+        guard let upTo = unreadUpTo else { return }
         let segments = segments(bot)
         let complete = store.transcripts[segments[0]]?.olderBefore == nil && hidden(bot, segments) == nil
-        if let at = unreadStart(chat(bot), upTo: upTo, complete: complete) { newFrom = at }
+        if let at = unreadStart(items, upTo: upTo, complete: complete) { newFrom = at }
     }
 
     /// A bot chat's sessions on screen, oldest first: this one, and the earlier ones an agent

@@ -110,7 +110,7 @@ final class Store {
     @ObservationIgnored private var kept: SessionKey?
     @ObservationIgnored private var downSince: [UUID: Date] = [:]
     /// Transcripts opened while their server was down, read once it connects.
-    @ObservationIgnored private var waiting: Set<SessionKey> = []
+    @ObservationIgnored private(set) var waiting: Set<SessionKey> = []
     @ObservationIgnored private var listSaving = false
 
     init() {
