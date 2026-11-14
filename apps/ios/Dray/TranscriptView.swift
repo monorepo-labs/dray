@@ -753,11 +753,19 @@ struct FollowsBottom: ViewModifier {
     @Binding var following: Bool
     let toEnd: () -> Void
     @State private var reading = false
+    /// What resizes put below the view while a finger held it. The reader did not move that
+    /// far, so it comes off the distance they are judged by, and is scrolled away on release.
+    @State private var grown: CGFloat = 0
 
     func body(content: Content) -> some View {
         if #available(iOS 18, *) {
             content
-                .onScrollPhaseChange { _, phase in reading = phase != .idle }
+                .onScrollPhaseChange { _, phase in
+                    reading = phase != .idle
+                    guard phase == .idle else { return }
+                    if following && grown != 0 { toEnd() }
+                    grown = 0
+                }
                 // The content's height, the room it shows in, and what is left below the view.
                 // Off `visibleRect`, which spans the insets: `containerSize` already has them out,
                 // and taking the dock's off it again read 348pt left at the very end.
@@ -766,9 +774,11 @@ struct FollowsBottom: ViewModifier {
                     return [g.contentSize.height, g.visibleRect.height - g.contentInsets.top - g.contentInsets.bottom, g.contentSize.height - end]
                 } action: { old, new in
                     let resized = old[0] != new[0] || old[1] != new[1]
-                    if new[2] < 40 { following = true } else if reading && !resized { following = false }
-                    // Held there however the view came off it, but never from under a finger.
-                    if following && new[2] > 0.5 && (resized || !reading) { toEnd() }
+                    if reading && resized { grown += new[2] - old[2] }
+                    if new[2] - grown < 40 { following = true } else if reading && !resized { following = false }
+                    // Never from under a finger, and never for a move alone: a drag's first
+                    // points arrive before its phase does, and a scroll then ends the drag.
+                    if following && resized && !reading { toEnd() }
                 }
                 // About one warm open in fifty of a long chat sat at its top, with the geometry
                 // still and so nothing above to move it. Why is not known; a scroll to the end
@@ -776,7 +786,7 @@ struct FollowsBottom: ViewModifier {
                 .task {
                     for wait in [0.5, 1.0] {
                         try? await Task.sleep(for: .seconds(wait))
-                        if following { toEnd() }
+                        if following && !reading { toEnd() }
                     }
                 }
         } else {

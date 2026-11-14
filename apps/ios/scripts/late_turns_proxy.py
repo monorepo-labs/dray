@@ -50,7 +50,8 @@ def append_turn(tag):
                 seq += 2
                 e.update(id=str(uuid.uuid4()), seq=seq, ts=now)
                 e["payload"].update(change)
-                log.write(json.dumps(e) + "\n")
+                # Compact, as the server writes: it counts turns by `"type":"user_message"`, spaceless.
+                log.write(json.dumps(e, separators=(",", ":")) + "\n")
 
 
 async def pipe(reader, writer):

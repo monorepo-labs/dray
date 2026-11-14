@@ -182,22 +182,61 @@ final class OpenAtBottomTests: XCTestCase {
         let app = try connected()
         let chat = try chats()[0]
         open(app, chat)
+        // A row of this run's own to watch, the one label in the chat nothing else carries.
+        let mark = "Last line of \(try land(late))."
+        XCTAssertTrue(app.staticTexts[mark].waitForExistence(timeout: 20), "the first turn never landed")
         assertAtEnd(app, "\(chat), opened")
 
         let scroll = app.scrollViews.firstMatch
         scroll.swipeDown(velocity: .slow)
-        sleep(2)
+        // A picture still loading above the row would move it as surely as a turn pulling the view.
+        var place = top(app, mark)
+        for _ in 0..<20 {
+            sleep(3)
+            let now = top(app, mark)
+            if now == place { break }
+            place = now
+        }
         snap(app, "scrolled up")
         let tag = try land(late)
         XCTAssertTrue(app.staticTexts["Last line of \(tag)."].waitForExistence(timeout: 20), "the turn never landed")
-        // Its media too. Not where a row sits: a picture loading above the reader moves that.
+        // Its media too.
         sleep(8)
         snap(app, "left alone")
-        XCTAssertLessThan(gapAboveOrb(app), 0, "a turn landing pulled the reader to the end")
+        XCTAssertEqual(top(app, mark), place, accuracy: 4, "a turn landing moved the reader off their place")
 
         for _ in 0..<40 where gapAboveOrb(app) < 74 { scroll.swipeUp(velocity: .fast) }
         sleep(2)
         try land(app, late, "\(chat), back at the end")
+    }
+
+    /// A turn landing under a finger is never scrolled to while it holds the view, so it is owed:
+    /// the view takes the end once the finger lifts. Wants `DRAY_LATE`, and the first of `DRAY_CHATS`.
+    func testATurnUnderAFingerIsFollowedOnRelease() throws {
+        guard let late = env["DRAY_LATE"] else { throw XCTSkip("set TEST_RUNNER_DRAY_LATE") }
+        let app = try connected()
+        let chat = try chats()[0]
+        open(app, chat)
+        assertAtEnd(app, "\(chat), opened")
+
+        let tag = try land(late)
+        // Held through the reconnect, the read and its media. Pushed past the end, since a lift
+        // with speed left on it coasts, and coasting away from the end is the reader leaving.
+        // In the page's right margin: a video under the finger takes the touch for itself, and
+        // the left edge belongs to the swipe back.
+        let finger = app.scrollViews.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.4))
+        finger.press(forDuration: 0.1, thenDragTo: finger.withOffset(CGVector(dx: 0, dy: -20)), withVelocity: .slow, thenHoldForDuration: 14)
+        XCTAssertTrue(app.staticTexts["Last line of \(tag)."].exists, "the turn never landed")
+        assertAtEnd(app, "\(chat), a turn landed under a finger")
+    }
+
+    /// Where a text sits, by its label, on screen or off: the stack is eager, so every row has a frame.
+    private func top(_ app: XCUIApplication, _ label: String) -> CGFloat {
+        guard let tree = try? app.scrollViews.firstMatch.snapshot() else { return .nan }
+        func find(_ n: XCUIElementSnapshot) -> XCUIElementSnapshot? {
+            n.elementType == .staticText && n.label == label ? n : n.children.lazy.compactMap(find).first
+        }
+        return find(tree)?.frame.minY ?? .nan
     }
 
     /// A bot's working line names its running tool on one line, however long the
