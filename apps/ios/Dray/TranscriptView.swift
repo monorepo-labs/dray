@@ -513,10 +513,11 @@ struct Thumbnails: View {
 /// A picture in the reading column, at most a screen's width and a little less tall.
 struct InlineImage: View {
     let ref: ImageRef
+    var fallback: String?
 
     var body: some View {
         // Clipped before the frame, so the corners are the picture's and not the column's.
-        RemoteImage(ref: ref)
+        RemoteImage(ref: ref, fallback: fallback)
             .clipShape(.rect(cornerRadius: Theme.Radius.md, style: .continuous))
             .frame(maxWidth: 320, maxHeight: 320, alignment: .leading)
     }
@@ -653,8 +654,10 @@ struct MarkdownText: View {
     let text: String
 
     var body: some View {
+        let recordings = recordingPaths(in: text)
+        let images = imagePaths(in: text)
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(markdownBlocks(text).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(markdownBlocks(hiding(recordings + images, in: text)).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .prose(let s):
                     Text(inlineMarkdown(s)).font(Theme.Font.body).foregroundStyle(Theme.text)
@@ -696,10 +699,10 @@ struct MarkdownText: View {
                     ImageButton(ref: ref) { InlineImage(ref: ref) }
                 }
             }
-            ForEach(recordingPaths(in: text), id: \.self) { RecordingPlayer(path: $0) }
-            ForEach(screenshotPaths(in: text), id: \.self) { path in
+            ForEach(recordings, id: \.self) { RecordingPlayer(path: $0) }
+            ForEach(images, id: \.self) { path in
                 let ref = ImageRef(path: path, url: nil, mimeType: nil)
-                ImageButton(ref: ref) { InlineImage(ref: ref) }
+                ImageButton(ref: ref) { InlineImage(ref: ref, fallback: path) }
             }
         }
         .tint(Theme.link)

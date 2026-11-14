@@ -136,7 +136,7 @@ extension Turn {
                 return Shot(ref: ref, verb: "Image", target: alt.isEmpty ? fileName(ref) : alt)
             }
             // `MarkdownText` draws these after the blocks, so they page in that order too.
-            let named = screenshotPaths(in: text).map { path in
+            let named = imagePaths(in: text).map { path in
                 let ref = ImageRef(path: path, url: nil, mimeType: nil)
                 return Shot(ref: ref, verb: "Image", target: fileName(ref))
             }
