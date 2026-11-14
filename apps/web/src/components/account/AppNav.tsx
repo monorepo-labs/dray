@@ -63,6 +63,9 @@ export function AppNav({ org, orgs, user }: { org: Org; orgs: Org[]; user: User 
           <Link href="/app/account" className={MENU_ITEM}>
             Account settings
           </Link>
+          <Link href="/app/account/billing" className={MENU_ITEM}>
+            Billing
+          </Link>
           <button type="button" onClick={signOut} className={MENU_ITEM}>
             Sign out
           </button>
