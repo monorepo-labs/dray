@@ -19,6 +19,27 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.5 · 2026-11-14
+
+### New
+
+- **Edit a bot.** Edit… in a bot's menu changes its name and face.
+- **Split groups.** Split panes form a group you can close and resize,
+  and the tab row draws the group as one tab.
+
+### Improved
+
+- Dray opens on your first bot.
+- A bot's Tasks tab puts what needs you first, then PRs ready to merge.
+- A task's own sub-tasks keep running after it settles, and report to
+  the nearest task or bot still open.
+- Bots react less: 👍 for an ok, 👀 only when looking into something.
+
+### Fixed
+
+- PR status that failed to load, often on a spent GitHub rate limit,
+  now retries, so a new PR always shows up.
+
 ## 0.30.4 · 2026-11-14 · notify
 
 ### New
