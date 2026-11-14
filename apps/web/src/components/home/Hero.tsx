@@ -18,7 +18,7 @@ export function Hero() {
 
   return (
     <>
-    <header id="hero" className="relative overflow-clip bg-black px-5 pb-14 sm:px-8 sm:pb-10 light:bg-[linear-gradient(#FFFFFF_900px,#F4F4F2_900px)]">
+    <header id="hero" className="relative overflow-clip bg-black px-5 pb-14 sm:px-8 sm:pb-10 light:bg-white">
       <HeroBackdrop />
 
       <div className="relative mx-auto w-full max-w-[960px]">
@@ -66,7 +66,7 @@ export function Hero() {
     </header>
     {/* A phone's hero is shorter than the blue field, so the credit would land
         on the blue; it sits under the hero instead, on the next band's fill. */}
-    <div className="bg-black px-5 pt-10 sm:hidden light:bg-[#F4F4F2]">
+    <div className="bg-black px-5 pt-10 sm:hidden light:bg-white">
       <Sponsor />
     </div>
     </>

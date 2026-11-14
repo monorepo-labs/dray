@@ -19,7 +19,7 @@ const AGENTS: [string, ReactNode][] = [
 export function Subscriptions() {
   return (
     <Section id="subscriptions" className="py-20">
-      <PixelField />
+      <PixelField viewBox="0 0 480 300" className="pointer-events-none absolute top-0 left-[720px] h-[300px] w-[480px] max-lg:hidden" />
       <Title lead="Bring your own agent subscription." />
       <div className={`relative grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 ${GRID}`}>
         {AGENTS.map(([name, glyph]) => (
@@ -31,6 +31,11 @@ export function Subscriptions() {
             <span className={CARD_TEXT}>{name}</span>
           </div>
         ))}
+        {/* Below lg there is no room off the column, so the heart takes the
+            grid's empty last slot instead, cropped to its own pixels. */}
+        <div className={`relative lg:hidden ${CARD}`}>
+          <PixelField viewBox="80 0 360 280" className="absolute inset-0 size-full p-4" />
+        </div>
       </div>
     </Section>
   );
@@ -47,17 +52,11 @@ const PIXELS = [
   [12,8,4],[13,8,4],[14,8,2],[12,9,3],[13,9,3],[14,9,2],[15,9,2],[12,10,3],[13,10,2],[14,10,2],[12,11,2],[12,13,2],[13,13,1],
 ];
 
-/// Placed off the column's right edge on purpose: it bleeds toward the page
-/// edge, and the cards sit over the part that would fall behind them.
-function PixelField() {
+/// The heart: off the column's right edge on wide screens, where it bleeds
+/// toward the page edge and the cards sit over what would fall behind them.
+function PixelField({ viewBox, className }: { viewBox: string; className: string }) {
   return (
-    <svg
-      aria-hidden
-      width="480"
-      height="300"
-      viewBox="0 0 480 300"
-      className="pointer-events-none absolute top-0 left-[720px] max-lg:hidden"
-    >
+    <svg aria-hidden viewBox={viewBox} preserveAspectRatio="xMidYMid meet" className={className}>
       {PIXELS.map(([x, y, s]) => (
         <rect key={`${x}-${y}`} x={x * 20} y={y * 20} width="20" height="20" fill={SHADES[s]} />
       ))}

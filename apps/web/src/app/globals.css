@@ -226,6 +226,15 @@ body {
     0 0 0 1px oklch(0 0 0 / 8%), 0 30px 60px -24px rgba(0, 0, 0, 0.18), 0 10px 24px -12px rgba(0, 0, 0, 0.12);
 }
 
+/* `shadow-window` inlines the theme's dark value when Tailwind builds it, so
+   the variable above never reaches it; the hero's window takes its light drop
+   here instead, softer than the token since it is the largest on the page,
+   and with no border: on white the drop alone outlines it. */
+:root[data-scheme="light"] [data-home] #hero [data-app-window] {
+  border-color: transparent;
+  box-shadow: 0 30px 60px -24px rgba(0, 0, 0, 0.12), 0 10px 24px -12px rgba(0, 0, 0, 0.08);
+}
+
 /* The machines drawing's dark palette mapped to a light one, value for
    value, so the drawing keeps one set of fills. CSS outranks a
    presentation attribute, which is what lets a selector repaint it. */
