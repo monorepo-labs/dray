@@ -461,9 +461,9 @@ struct UserBubble: View {
                     .padding(.vertical, 10)
                     .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
                     .overlay(alignment: .bottomLeading) {
-                        if let reaction { ReactionBadge(emoji: reaction).offset(x: 6, y: 24) }
+                        if let reaction { ReactionBadge(emoji: reaction).offset(x: 8, y: 18) }
                     }
-                    .padding(.bottom, reaction == nil ? 0 : 20)
+                    .padding(.bottom, reaction == nil ? 0 : 14)
             } else if let reaction {
                 ReactionBadge(emoji: reaction)
             }
@@ -477,19 +477,18 @@ struct UserBubble: View {
     }
 }
 
-/// A bot's reaction, as a messenger draws one: a round chip whose page-coloured
-/// ring cuts it out of the bubble it sits on. The desktop's `ReactionBadge`.
+/// A bot's reaction, as a messenger draws one: a round chip in the chat's page
+/// colour with a hairline edge. The desktop's `ReactionBadge`.
 struct ReactionBadge: View {
     let emoji: String
 
     var body: some View {
         let labels = ["👀": "Seen", "✅": "Done", "🎉": "Celebrating"]
         Text(emoji)
-            .font(.system(size: 19))
-            .frame(width: 36, height: 36)
-            .background(Theme.tile, in: .circle)
-            .overlay(Circle().stroke(Theme.page, lineWidth: 2))
-            .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
+            .font(.system(size: 15))
+            .frame(width: 28, height: 28)
+            .background(Theme.page, in: .circle)
+            .overlay(Circle().strokeBorder(Theme.border, lineWidth: 0.5))
             .accessibilityLabel("Bot reacted: \(labels[emoji] ?? emoji)")
     }
 }
