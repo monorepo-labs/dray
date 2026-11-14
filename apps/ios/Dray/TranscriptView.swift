@@ -13,6 +13,12 @@ struct TranscriptView: View {
     @State private var earlier = 0
     /// Whether new rows scroll into view: dropped by the reader scrolling up (`FollowsBottom`).
     @State private var following = true
+    /// A bot chat opened unread, its read done.
+    @State private var openedUnread = false
+    /// The last item it held once read, bounding the NEW divider.
+    @State private var unreadUpTo: String?
+    /// The reply unread ones begin at; settled once, so reading the chat never moves it.
+    @State private var newFrom: String?? = nil
 
     private var item: SessionItem? { store.items[key] }
     private var busy: Bool { item?.busy ?? false }
@@ -25,10 +31,13 @@ struct TranscriptView: View {
         let botTasks = bot.map { store.botTasks(store.botChat(key.server, $0)) } ?? []
         let asks = store.asks[key] ?? []
         let segments = segments(bot)
+        let chat = bot == nil ? [] : chatItems(segments)
+        let complete = store.transcripts[segments[0]]?.olderBefore == nil && hidden(bot, segments) == nil
+        let chatMark = "\(chat.count)|\(chat.first?.id ?? "")|\(complete)|\(store.serverRead.contains(key))"
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
-                    if store.transcripts[segments[0]]?.olderBefore != nil || hidden(bot, segments) != nil { older(bot, segments) }
+                    if !complete { older(bot, segments) }
                     if transcript == nil {
                         placeholder
                     } else if bot == nil && turns.isEmpty && !busy && (store.queued[key] ?? []).isEmpty {
@@ -38,12 +47,7 @@ struct TranscriptView: View {
                         }
                         .frame(minHeight: 420)
                     }
-                    if bot != nil {
-                        ForEach(Array(segments.enumerated()), id: \.element) { i, segment in
-                            if i > 0 { SwitchLine(harness: store.items[segment]?.harness) }
-                            if let events = store.transcripts[segment]?.events { BotChatRows(key: segment, events: events) }
-                        }
-                    }
+                    if bot != nil { BotChatRows(key: key, items: chat, newFrom: newFrom ?? nil) }
                     ForEach(turns) { TurnView(turn: $0) }
                     ForEach(store.queued[key] ?? [], id: \.id) { q in
                         UserBubble(text: q.text, from: nil, queued: true)
@@ -115,7 +119,8 @@ struct TranscriptView: View {
             }
         }
         .modifier(LocalServersButton(key: key, shown: bot == nil))
-        .task { await store.open(key) }
+        .task { await open() }
+        .onChange(of: chatMark) { settleUnread() }
         .prPanel(key)
         .sheet(isPresented: $showingTasks) { BotTasksSheet(server: key.server, tasks: botTasks) { openTask?($0) } }
         .sheet(isPresented: $fixing) { SettingsView(focus: key.server) }
@@ -185,6 +190,45 @@ struct TranscriptView: View {
         } else {
             TranscriptSkeleton()
         }
+    }
+
+    /// The bot chat's items across its sessions on screen, a line where each later one begins.
+    /// The desktop's `chatItems`.
+    private func chatItems(_ segments: [SessionKey]) -> [BotItem] {
+        segments.enumerated().flatMap { i, segment in
+            let events = store.transcripts[segment]?.events ?? []
+            let items = botItems(events)
+            guard i > 0 else { return items }
+            let ts = events.first?.ts ?? store.items[segment]?.created
+            return [.switchTo(id: "switch:\(segment.id)", harness: store.items[segment]?.harness, ts: ts)] + items
+        }
+    }
+
+    private func chat(_ bot: Bot?) -> [BotItem] { bot == nil ? [] : chatItems(segments(bot)) }
+
+    /// Marks the session read, noting first whether a bot chat opened unread.
+    private func open() async {
+        let unread = store.bot(key) != nil && store.items[key]?.status == "completed"
+        await store.open(key)
+        openedUnread = unread
+        settleUnread()
+    }
+
+    /// Sets where unread replies begin, once enough of the chat is loaded to say (`unreadStart`).
+    private func settleUnread() {
+        guard openedUnread, newFrom == nil else { return }
+        let bot = store.bot(key)
+        let items = chat(bot)
+        if unreadUpTo == nil {
+            // Taken once the server's read lands, never off the cache alone: replies it
+            // brings count as unread, and later ones don't.
+            guard store.serverRead.contains(key), let last = items.last?.id else { return }
+            unreadUpTo = last
+        }
+        guard let upTo = unreadUpTo else { return }
+        let segments = segments(bot)
+        let complete = store.transcripts[segments[0]]?.olderBefore == nil && hidden(bot, segments) == nil
+        if let at = unreadStart(items, upTo: upTo, complete: complete) { newFrom = at }
     }
 
     /// A bot chat's sessions on screen, oldest first: this one, and the earlier ones an agent

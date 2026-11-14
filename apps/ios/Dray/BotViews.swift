@@ -118,19 +118,26 @@ struct SwitchLine: View {
 }
 
 struct BotChatRows: View {
-    @Environment(Store.self) private var store
+    /// Any of the chat's sessions: its rows reach only for the server.
     let key: SessionKey
-    let events: [AgentEvent]
+    /// The whole chat's items, its sessions oldest first (`chatItems`).
+    let items: [BotItem]
+    /// The reply unread ones begin at, which the NEW divider sits above.
+    let newFrom: String?
 
     var body: some View {
-        let items = botItems(events)
         let rows = botRows(items)
         ForEach(Array(rows.enumerated()), id: \.element.id) { i, row in
+            if row.id == newFrom { NewDivider() }
             if let label = timeLabel(rows, i) {
                 Text(label).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                     .frame(maxWidth: .infinity).padding(.top, Theme.Space.s)
             }
-            BotRowView(key: key, row: row, late: late(items, row))
+            if case .item(.switchTo(_, let harness, _)) = row {
+                SwitchLine(harness: harness)
+            } else {
+                BotRowView(key: key, row: row, late: late(items, row))
+            }
         }
     }
 
@@ -145,6 +152,20 @@ struct BotChatRows: View {
     private func late(_ items: [BotItem], _ row: BotRow) -> Bool {
         guard case .item(.card(let id, _, _)) = row, let i = items.firstIndex(where: { $0.id == id }) else { return false }
         return items[(i + 1)...].filter { if case .user = $0 { true } else { false } }.count >= 3
+    }
+}
+
+/// Where the replies the reader has not seen begin, as a messenger marks it.
+struct NewDivider: View {
+    var body: some View {
+        HStack(spacing: Theme.Space.m) {
+            Rectangle().fill(Theme.border).frame(height: 1)
+            Text("NEW").font(.system(size: 11, weight: .medium)).tracking(0.3).foregroundStyle(Theme.secondary)
+            Rectangle().fill(Theme.border).frame(height: 1)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("New messages")
+        .accessibilityIdentifier("new-divider")
     }
 }
 
@@ -207,6 +228,8 @@ private struct BotRowView: View {
                         .strikethrough(undone).lineLimit(1)
                 }
                 .font(Theme.Font.subhead)
+            case .switchTo:
+                EmptyView()
             }
         }
     }

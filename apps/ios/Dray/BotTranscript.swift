@@ -18,12 +18,14 @@ enum BotItem: Identifiable {
     /// "Messaged" another bot, by the id `dray bot send` printed where it did.
     case botSent(id: String, name: String, botId: String?, ts: String?)
     case learned(id: String, lesson: Lesson, commit: String, undone: Bool, ts: String?)
+    /// Where the chat moved to another session, and the agent it runs.
+    case switchTo(id: String, harness: String?, ts: String?)
 
     var id: String {
         switch self {
         case .user(let id, _, _, _, _), .assistant(let id, _, _), .notice(let id, _, _), .card(let id, _, _),
              .task(let id, _, _), .sent(let id, _, _), .botMessage(let id, _, _, _, _), .botSent(let id, _, _, _),
-             .learned(let id, _, _, _, _): id
+             .learned(let id, _, _, _, _), .switchTo(let id, _, _): id
         }
     }
 
@@ -31,7 +33,7 @@ enum BotItem: Identifiable {
         switch self {
         case .user(_, _, _, _, let ts), .assistant(_, _, let ts), .notice(_, _, let ts), .card(_, _, let ts),
              .task(_, _, let ts), .sent(_, _, let ts), .botMessage(_, _, _, _, let ts), .botSent(_, _, _, let ts),
-             .learned(_, _, _, _, let ts): ts
+             .learned(_, _, _, _, let ts), .switchTo(_, _, let ts): ts
         }
     }
 }
@@ -144,6 +146,31 @@ func botRows(_ items: [BotItem]) -> [BotRow] {
         }
     }
     return out
+}
+
+/// Where unread replies begin: the first of the bot's replies after the
+/// reader's own last message. The desktop's `firstUnread`.
+func firstUnread(_ items: [BotItem]) -> String? {
+    var mark: String?
+    for item in items {
+        switch item {
+        case .user: mark = nil
+        case .assistant(let id, _, _) where mark == nil: mark = id
+        default: break
+        }
+    }
+    return mark
+}
+
+/// Where unread replies begin among the items up to `upTo`, the last one the
+/// chat held when it opened. Nil while not yet known: the reader's last message
+/// may sit above what is loaded, so it waits for one of theirs or the whole chat
+/// (`complete`). The desktop's `unreadStart`; `.some(nil)` is "settled, none".
+func unreadStart(_ items: [BotItem], upTo: String, complete: Bool) -> String?? {
+    let seen = items.firstIndex { $0.id == upTo }.map { Array(items[...$0]) } ?? items
+    let mine = seen.contains { if case .user = $0 { true } else { false } }
+    guard complete || mine else { return nil }
+    return .some(firstUnread(seen))
 }
 
 /// The tool the bot is on now, for the orb line: "Bash dray session new …".
