@@ -30,6 +30,8 @@ struct SessionList: View {
     @State private var mode = ListMode.live
     @State private var drafts: [(server: UUID, draft: DraftItem)] = []
     @State private var shown = Self.pageSize
+    /// A bot with no chat, opened on its own page while sessions are hidden.
+    @State private var starting: BotStart?
     /// Settings › Appearance: the list is bots alone, with nothing that serves sessions.
     @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
 
@@ -65,10 +67,8 @@ struct SessionList: View {
         let blank = mode == .live && runs.isEmpty && botRows.isEmpty
         // A picked filter keeps its strip, or there would be no way back to All.
         let strip = !hideSessions && names.count > 1 && (filter != nil || !(mode == .drafts ? drafts.isEmpty : all.isEmpty))
-        // A bot with no chat still needs the dock: its first message is what starts one. So does
-        // anything already in it, or a pick that leaves the bot mid-recording takes Stop with it.
-        let inDock = task.hasText || Dictations.shared.state(.newSession) != .idle || Dictations.shared.kept[.newSession] != nil
-        let dock = !store.live.isEmpty && (!hideSessions || task.bot != nil || inDock)
+        // Bots only: a bot with no chat yet opens its own page, which carries the dock instead.
+        let dock = !store.live.isEmpty && !hideSessions
         VStack(spacing: 0) {
             List(selection: $selection) {
                 // Quiet about reconnects, never about a read that failed or a server waiting on the reader.
@@ -87,7 +87,10 @@ struct SessionList: View {
                             .sessionRow(selected: selection == chat)
                     } else {
                         // No chat yet: the dock aims at its folder, and the first message starts one.
-                        Button { task.aim(at: b.bot, on: b.server) } label: {
+                        Button {
+                            task.aim(at: b.bot, on: b.server)
+                            if hideSessions { starting = BotStart(server: b.server, bot: b.bot) }
+                        } label: {
                             BotListRow(server: b.server, bot: b.bot, chat: nil)
                         }
                         .buttonStyle(RowButtonStyle())
@@ -164,6 +167,12 @@ struct SessionList: View {
         .page()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { header }
+        .navigationDestination(item: $starting) { b in
+            BotStartView(task: task, server: b.server, bot: b.bot) { key in
+                starting = nil
+                selection = key
+            }
+        }
         // Again once a server comes up: a view opened before it connected read nothing from it.
         // Drafts and settled are read whatever the view: their buttons show only when there are some,
         // and an empty live list counts what was settled today.

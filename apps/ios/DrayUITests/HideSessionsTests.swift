@@ -28,6 +28,15 @@ final class HideSessionsTests: XCTestCase {
         XCTAssertFalse(app.buttons["Keyboard"].exists, "the dock still shows")
         sleep(1)
         snap(app, "3-bots-only")
+
+        // A bot with no chat opens its own page, and the dock lives there, never on the list.
+        app.staticTexts["Ops"].tap()
+        XCTAssertTrue(app.buttons["Keyboard"].waitForExistence(timeout: 5), "no dock on the bot's page")
+        sleep(1)
+        snap(app, "4-bot-page")
+        app.navigationBars.buttons.firstMatch.tap()
+        sleep(1)
+        XCTAssertFalse(app.buttons["Keyboard"].exists, "the dock came back to the list")
     }
 
     func testNoTasksNoStrip() throws {
@@ -36,7 +45,7 @@ final class HideSessionsTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Ops"].waitForExistence(timeout: 20), "no bot row")
         sleep(2)
         XCTAssertFalse(app.buttons["alpha-site"].exists, "a strip with no tasks")
-        snap(app, "4-no-tasks")
+        snap(app, "5-no-tasks")
     }
 
     private func pair(_ url: String?, _ token: String?, _ args: [String] = []) throws -> XCUIApplication {

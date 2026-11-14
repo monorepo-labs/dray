@@ -124,22 +124,7 @@ struct TranscriptView: View {
     /// The session's title over where it runs: its project and its machine, never the branch.
     @ViewBuilder private var title: some View {
         if let bot = store.bot(key) {
-            // A bot's folder is no project: its face and name, and where it runs.
-            VStack(spacing: 1) {
-                HStack(spacing: 6) {
-                    BotFace(bot: bot, size: 20)
-                    Text(bot.name).font(Theme.Font.headline).foregroundStyle(Theme.text).lineLimit(1)
-                }
-                HStack(spacing: 4) {
-                    ServerIcon().frame(width: 11, height: 11)
-                    Text(store.name(of: key.server))
-                }
-                .font(Theme.Font.footnote)
-                .foregroundStyle(Theme.tertiary)
-                .lineLimit(1)
-            }
-            .frame(maxWidth: 240)
-            .accessibilityElement(children: .combine)
+            BotTitle(bot: bot, server: key.server)
         } else {
             taskTitle
         }
