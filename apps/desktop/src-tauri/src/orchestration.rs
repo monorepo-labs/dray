@@ -462,7 +462,7 @@ fn session_named(request: &Request) -> Option<&str> {
         Request::Browser(r) => Some(&r.session_id),
         Request::MergeCard(r) => Some(&r.session_id),
         Request::SetNeed(r) => Some(&r.session_id),
-        // Never `AddVideo`: its path is this machine's, and forwarded it would
+        // Never `AddVideo` or `AddImage`: its path is this machine's, and forwarded it would
         // name a file the other machine does not have, or a different one.
         _ => None,
     }
@@ -970,7 +970,8 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::ListDrafts(list) => list_drafts(list).await,
         Request::RemoveDraft(draft) => remove_draft(&draft.id, app).await,
         Request::StartDraft(start) => start_draft(start, None, app).await,
-        Request::AddVideo(video) => add_video(video).await,
+        Request::AddVideo(video) => add_video(video, false).await,
+        Request::AddImage(image) => add_video(image, true).await,
         Request::MergeCard(card) => post_merge_card(card, app).await,
         Request::SetNeed(need) => {
             let text = Some(need.need.trim().to_string()).filter(|t| !t.is_empty());
@@ -1385,14 +1386,20 @@ async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
     Ok(answered(crate::headless::automation::run(&request.session_id, request.action).await))
 }
 
-/// Files a video for a session's chat. The folder is worked out here because
-/// only the server knows its home, and it is the one the session's delete sweeps.
-async fn add_video(request: dray_proto::AddVideo) -> Result<Response> {
+/// Files a video, or for `image` a screenshot, for a session's chat. The folder
+/// is worked out here because only the server knows its home, and it is the
+/// one the session's delete sweeps.
+async fn add_video(request: dray_proto::AddVideo, image: bool) -> Result<Response> {
     let dray_proto::AddVideo { session_id, path, name } = request;
     store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
     let dir = store::get_home_app_dir().await?.join("browser/recordings").join(&session_id);
     let filed = tokio::task::spawn_blocking(move || {
-        crate::recording::add(Path::new(&path), &dir, name.as_deref())
+        let source = Path::new(&path);
+        // Without this a video handed to `dray image add` would be filed as one.
+        if image && !crate::recording::is_image(source) {
+            return Err(format!("{path} is not a PNG or JPEG"));
+        }
+        crate::recording::add(source, &dir, name.as_deref())
     })
     .await?;
     Ok(match filed {

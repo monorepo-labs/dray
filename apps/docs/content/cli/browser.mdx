@@ -145,6 +145,8 @@ Recordings are saved under `~/.dray/browser/recordings/<session-id>/` and delete
 
 Any other video, like a screen recording, plays the same way once `dray video add <file>` has filed it. It converts anything that isn't an MP4, with `avconvert` on a Mac and `ffmpeg` where that cannot read it and on Linux, and prints the path. Run it on the machine serving the session. A machine with no way to convert the file says so.
 
+A screenshot shows inline the same way once `dray image add <file>` has filed it. It takes a PNG or JPEG, keeps it as it is, and prints the path.
+
 While a recording runs, the pane shows a notice in place of the page, and you cannot switch the session's tabs. Screenshots still work. One recording per session at a time.
 
 ## On a server

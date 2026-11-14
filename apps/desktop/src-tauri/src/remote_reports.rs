@@ -140,16 +140,17 @@ impl Outbox {
     }
 }
 
-/// The videos a report names: what the chat's player matches
-/// (`RECORDING_IN_TEXT` in transcript.ts), a `.mp4` one folder under a
-/// `browser/recordings` or `browser-dev/recordings`. Each answered as written
-/// and as its (folder, file), names neither starting with `.` so a copy made
-/// from them stays inside this machine's recordings.
-fn video_paths(text: &str) -> Vec<(&str, &str, &str)> {
+/// The videos and screenshots a report names: what the chat draws inline
+/// (`RECORDING` and `SCREENSHOT` in Markdown.tsx), a `.mp4`, `.png` or `.jpg`
+/// one folder under a `browser/recordings` or `browser-dev/recordings`. Each
+/// answered as written and as its (folder, file), names neither starting with
+/// `.` so a copy made from them stays inside this machine's recordings.
+fn proof_paths(text: &str) -> Vec<(&str, &str, &str)> {
     let mut found = Vec::new();
     for token in text.split(|c: char| c.is_whitespace() || "\"'`()<>".contains(c)) {
         let Some(start) = token.find('/') else { continue };
-        let Some(end) = token.rfind(".mp4").map(|i| i + 4) else { continue };
+        let ends = [".mp4", ".png", ".jpg"].iter().filter_map(|ext| token.rfind(ext).map(|i| i + ext.len()));
+        let Some(end) = ends.max() else { continue };
         let Some(path) = token.get(start..end) else { continue };
         let Some((_, tail)) = path.split_once("/browser/recordings/").or_else(|| path.split_once("/browser-dev/recordings/"))
         else {
@@ -185,7 +186,7 @@ mod collect {
     const BACKOFF_CAP: Duration = Duration::from_secs(300);
     /// A proof video is short; a copy taking longer is holding up the report.
     const VIDEO_FETCH: Duration = Duration::from_secs(120);
-    const MAX_VIDEOS: usize = 3;
+    const MAX_FILES: usize = 3;
     const CHAT_BUDGET: u64 = 1 << 30;
 
     /// A task on another machine whose reports belong to a bot chat here.
@@ -329,7 +330,7 @@ mod collect {
                     // Into the chat this server tracked the task under, never
                     // one the answer names: that machine holds no token here,
                     // so it must not pick which chat runs a turn.
-                    let text = fetch_videos(saved, &remote.parent, &report.text).await;
+                    let text = fetch_proof(saved, &remote.parent, &report.text).await;
                     if deliver(&report, text, &remote.parent, &saved.name, app).await {
                         acked.push(report.id);
                     }
@@ -377,40 +378,40 @@ mod collect {
         }
     }
 
-    /// A report's videos sit on the task's machine, where the bot's chat
-    /// cannot play them, so each is copied here and the report names the copy.
+    /// A report's videos and screenshots sit on the task's machine, where the
+    /// bot's chat cannot draw them, so each is copied here and the report names the copy.
     /// One that fails to copy keeps its far path: the bot can still say where it is.
     ///
     /// The copies go under the bot chat's own recordings, deleted with it, and
     /// the far machine's text picks what is fetched, so a report copies at
-    /// most [`MAX_VIDEOS`] and a chat holds at most [`CHAT_BUDGET`] bytes of them.
-    async fn fetch_videos(saved: &machines::Saved, parent: &str, text: &str) -> String {
-        let videos = video_paths(text);
-        if videos.is_empty() {
+    /// most [`MAX_FILES`] and a chat holds at most [`CHAT_BUDGET`] bytes of them.
+    async fn fetch_proof(saved: &machines::Saved, parent: &str, text: &str) -> String {
+        let files = proof_paths(text);
+        if files.is_empty() {
             return text.to_string();
         }
         let (base, token) = match machines::http_reach(saved).await {
             Ok(reach) => reach,
             Err(e) => {
-                eprintln!("[remote reports video err] {}: {e}", saved.name);
+                eprintln!("[remote reports proof err] {}: {e}", saved.name);
                 return text.to_string();
             }
         };
         let dir = match store::get_home_app_dir().await {
             Ok(home) => home.join("browser/recordings").join(parent),
             Err(e) => {
-                eprintln!("[remote reports video err] {e:#}");
+                eprintln!("[remote reports proof err] {e:#}");
                 return text.to_string();
             }
         };
         let mut left = CHAT_BUDGET.saturating_sub(dir_size(&dir).await);
         let mut out = text.to_string();
-        for (path, folder, file) in videos.into_iter().take(MAX_VIDEOS) {
+        for (path, folder, file) in files.into_iter().take(MAX_FILES) {
             // The far folder in the name: two tasks can each film a `demo.mp4`.
             let local = dir.join(format!("{folder}-{file}"));
-            match fetch_video(&base, &token, path, &local, &mut left).await {
+            match fetch_file(&base, &token, path, &local, &mut left).await {
                 Ok(()) => out = out.replace(path, &local.to_string_lossy()),
-                Err(e) => eprintln!("[remote reports video err] {}: {path}: {e:#}", saved.name),
+                Err(e) => eprintln!("[remote reports proof err] {}: {path}: {e:#}", saved.name),
             }
         }
         out
@@ -429,7 +430,7 @@ mod collect {
 
     /// Copies `path` on the far machine to `local`, spending from `left`. A
     /// copy already there is a report delivered twice, and costs nothing.
-    async fn fetch_video(base: &str, token: &str, path: &str, local: &Path, left: &mut u64) -> anyhow::Result<()> {
+    async fn fetch_file(base: &str, token: &str, path: &str, local: &Path, left: &mut u64) -> anyhow::Result<()> {
         if tokio::fs::try_exists(local).await.unwrap_or(false) {
             return Ok(());
         }
@@ -454,7 +455,7 @@ mod collect {
             let mut size = 0u64;
             while let Some(chunk) = response.chunk().await? {
                 size += chunk.len() as u64;
-                anyhow::ensure!(size <= budget, "over the chat's {} MB of copied videos", CHAT_BUDGET >> 20);
+                anyhow::ensure!(size <= budget, "over the chat's {} MB of copied proof", CHAT_BUDGET >> 20);
                 tokio::io::AsyncWriteExt::write_all(&mut out, &chunk).await?;
             }
             tokio::io::AsyncWriteExt::flush(&mut out).await?;
@@ -551,21 +552,24 @@ mod tests {
     }
 
     #[test]
-    fn a_report_names_the_videos_the_chat_plays() {
+    fn a_report_names_the_proof_the_chat_draws() {
         let text = "Done. Video: `/home/u/.dray/browser/recordings/s1/demo.mp4`.\n\
             Again (/home/u/.dray/browser/recordings/s1/demo.mp4) and \
-            [dev](/x/.dray-dev/browser-dev/recordings/s2/b.mp4)";
+            [dev](/x/.dray-dev/browser-dev/recordings/s2/b.mp4). \
+            Before /h/browser/recordings/s1/before.png, after /h/browser/recordings/s1/after.jpg.";
         assert_eq!(
-            video_paths(text),
+            proof_paths(text),
             vec![
                 ("/home/u/.dray/browser/recordings/s1/demo.mp4", "s1", "demo.mp4"),
                 ("/x/.dray-dev/browser-dev/recordings/s2/b.mp4", "s2", "b.mp4"),
+                ("/h/browser/recordings/s1/before.png", "s1", "before.png"),
+                ("/h/browser/recordings/s1/after.jpg", "s1", "after.jpg"),
             ]
         );
     }
 
     #[test]
-    fn a_path_that_could_leave_recordings_is_no_video() {
+    fn a_path_that_could_leave_recordings_is_no_proof() {
         for text in [
             "/h/browser/recordings/../x.mp4",
             "/h/browser/recordings/s/.part.mp4",
@@ -574,7 +578,7 @@ mod tests {
             "/h/shots/s/a.mp4",
             "/h/browser/recordings/s/a.mov",
         ] {
-            assert!(video_paths(text).is_empty(), "{text}");
+            assert!(proof_paths(text).is_empty(), "{text}");
         }
     }
 }

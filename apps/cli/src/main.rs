@@ -74,6 +74,9 @@ enum Command {
     /// Put a video where this session's chat plays it.
     #[command(subcommand, arg_required_else_help = true)]
     Video(VideoCommand),
+    /// Put a screenshot where this session's chat shows it.
+    #[command(subcommand, arg_required_else_help = true)]
+    Image(ImageCommand),
     /// Publish one of this session's dev servers as a public link, list the
     /// live ones, or stop one.
     #[command(arg_required_else_help = true, args_conflicts_with_subcommands = true)]
@@ -393,6 +396,25 @@ enum ShareCommand {
 }
 
 #[derive(Subcommand)]
+enum ImageCommand {
+    /// File a PNG or JPEG on this machine for the chat, and print the path to
+    /// put in your reply.
+    Add(ImageAdd),
+}
+
+#[derive(Args)]
+struct ImageAdd {
+    /// The screenshot. It must be on this machine: copy one made elsewhere here first.
+    file: PathBuf,
+    /// What to call it. Defaults to the file's own name.
+    name: Option<String>,
+    /// The session whose chat shows it. Defaults to the session running this
+    /// command.
+    #[arg(long)]
+    session: Option<String>,
+}
+
+#[derive(Subcommand)]
 enum VideoCommand {
     /// File a video on this machine for the chat, converting it to MP4 if it
     /// needs it, and print the path to put in your reply.
@@ -455,7 +477,8 @@ fn run() -> Result<(), String> {
         Command::Draft(command) => draft::run(command),
         Command::Bot(command) => bot::run(command),
         Command::Browser(args) => browser(args),
-        Command::Video(VideoCommand::Add(args)) => add_video(args),
+        Command::Video(VideoCommand::Add(args)) => add_media(args.file, args.name, args.session, false),
+        Command::Image(ImageCommand::Add(args)) => add_media(args.file, args.name, args.session, true),
         Command::Share(args) => share(args),
         Command::Machine(command) => machine::run(command),
         Command::Server(command) => setup::server(command),
@@ -697,21 +720,18 @@ fn merge_card(args: SessionArg) -> Result<(), String> {
     }
 }
 
-/// Resolved here, not by the server: a relative path means this shell's
-/// directory, and the server stands in another.
-fn add_video(args: VideoAdd) -> Result<(), String> {
-    let session_id = args
-        .session
+/// `dray video add` and `dray image add`. The path is resolved here, not by the
+/// server: a relative path means this shell's directory, and the server stands
+/// in another.
+fn add_media(file: PathBuf, name: Option<String>, session: Option<String>, image: bool) -> Result<(), String> {
+    let what = if image { "screenshot" } else { "video" };
+    let session_id = session
         .or_else(parent_session_id)
         .ok_or("which session? Pass --session <id>, or run this from inside a Dray session.")?;
-    let path = std::fs::canonicalize(&args.file).map_err(|e| {
-        format!("{}: {e}. A video made on another machine has to be copied here first.", args.file.display())
-    })?;
-    let request = Request::AddVideo(AddVideo {
-        session_id,
-        path: path.to_string_lossy().into_owned(),
-        name: args.name,
-    });
+    let path = std::fs::canonicalize(&file)
+        .map_err(|e| format!("{}: {e}. A {what} made on another machine has to be copied here first.", file.display()))?;
+    let add = AddVideo { session_id, path: path.to_string_lossy().into_owned(), name };
+    let request = if image { Request::AddImage(add) } else { Request::AddVideo(add) };
     match send(request)? {
         Response::Video { path } => {
             println!("{path}");
