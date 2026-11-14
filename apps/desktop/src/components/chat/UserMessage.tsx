@@ -389,7 +389,15 @@ export default function UserMessage({
   );
 }
 
-const REACTION_LABELS: Record<string, string> = { "👀": "Seen", "✅": "Done", "🎉": "Celebrating" };
+const REACTION_LABELS: Record<string, string> = {
+  "👀": "Seen",
+  "✅": "Done",
+  "🎉": "Celebrating",
+  "👍": "Like",
+  "❤️": "Love",
+  "😂": "Laughing",
+  "😢": "Sad",
+};
 
 /// A bot's reaction, as iMessage draws a tapback: a round chip on the bubble's top
 /// corner on the bot's side, a step lighter than the chat's page colour and

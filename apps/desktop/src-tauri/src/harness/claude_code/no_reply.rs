@@ -72,7 +72,7 @@ pub fn response(request_id: &str, message: &Value) -> Value {
             },
             {
                 "name": REACT,
-                "description": "Reacts to the user's newest message with an emoji instead of replying, and ends your turn with no reply: 👀 seen or on it, ✅ done, 🎉 celebrate. Call it once; its result closes the turn, so write nothing and call nothing after it.",
+                "description": "Reacts to the user's newest message with an emoji instead of replying, and ends your turn with no reply: 👀 seen or on it, ✅ done, 🎉 celebrate, 👍 ok or agreed, ❤️ thanks, 😂 funny, 😢 sorry to hear. Call it once; its result closes the turn, so write nothing and call nothing after it.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {"emoji": {"type": "string", "enum": crate::bots::react::EMOJI.map(|(e, _)| e)}},
@@ -126,7 +126,9 @@ mod tests {
         let list = reply(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}));
         assert_eq!(list["result"]["tools"][0]["name"], TOOL);
         assert_eq!(list["result"]["tools"][1]["name"], REACT);
-        assert_eq!(list["result"]["tools"][1]["inputSchema"]["properties"]["emoji"]["enum"][1], "✅");
+        let offered = &list["result"]["tools"][1]["inputSchema"]["properties"]["emoji"]["enum"];
+        assert_eq!(offered.as_array().map(Vec::len), Some(7));
+        assert_eq!(offered[4], "❤️");
         assert_eq!(format!("mcp__{SERVER}__{TOOL}"), TOOL_NAME);
         assert_eq!(format!("mcp__{SERVER}__{REACT}"), REACT_NAME);
         assert_eq!(TOOL_NAMES, format!("{TOOL_NAME},{REACT_NAME}"));

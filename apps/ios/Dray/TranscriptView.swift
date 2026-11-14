@@ -483,7 +483,7 @@ struct ReactionBadge: View {
     let emoji: String
 
     var body: some View {
-        let labels = ["👀": "Seen", "✅": "Done", "🎉": "Celebrating"]
+        let labels = ["👀": "Seen", "✅": "Done", "🎉": "Celebrating", "👍": "Like", "❤️": "Love", "😂": "Laughing", "😢": "Sad"]
         Text(emoji)
             .font(.system(size: 15))
             .frame(width: 28, height: 28)

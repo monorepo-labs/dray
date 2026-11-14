@@ -10,13 +10,25 @@ use crate::events::{AgentEvent, AgentEventPayload};
 
 /// The reactions a bot has, each with the word that also names it. A short
 /// fixed set, so each one keeps a single meaning the prompt can teach.
-pub const EMOJI: [(&str, &str); 3] = [("👀", "seen"), ("✅", "done"), ("🎉", "celebrate")];
+pub const EMOJI: [(&str, &str); 7] = [
+    ("👀", "seen"),
+    ("✅", "done"),
+    ("🎉", "celebrate"),
+    ("👍", "like"),
+    ("❤️", "love"),
+    ("😂", "laugh"),
+    ("😢", "sad"),
+];
 
 /// The emoji `said` names: one of [`EMOJI`], or its word. A variation selector
-/// is ignored, since some keyboards add one to ✅.
+/// is ignored on both sides: some keyboards add one to ✅, and ❤ alone, without
+/// it, draws as a text glyph, so the stored form keeps it.
 pub fn emoji(said: &str) -> Option<&'static str> {
     let said = said.trim().trim_end_matches('\u{FE0F}');
-    EMOJI.iter().find(|(e, word)| *e == said || word.eq_ignore_ascii_case(said)).map(|(e, _)| *e)
+    EMOJI
+        .iter()
+        .find(|(e, word)| e.trim_end_matches('\u{FE0F}') == said || word.eq_ignore_ascii_case(said))
+        .map(|(e, _)| *e)
 }
 
 /// The id of the newest message the user typed. A task's report, another
@@ -83,7 +95,12 @@ mod tests {
         assert_eq!(emoji(" Done "), Some("✅"));
         assert_eq!(emoji("✅\u{FE0F}"), Some("✅"));
         assert_eq!(emoji("celebrate"), Some("🎉"));
-        assert_eq!(emoji("👍"), None);
+        assert_eq!(emoji("👍"), Some("👍"));
+        assert_eq!(emoji("❤"), Some("❤️"));
+        assert_eq!(emoji("❤️"), Some("❤️"));
+        assert_eq!(emoji("Laugh"), Some("😂"));
+        assert_eq!(emoji("sad"), Some("😢"));
+        assert_eq!(emoji("🔥"), None);
     }
 
     #[test]

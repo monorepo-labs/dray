@@ -145,14 +145,15 @@ enum SessionCommand {
     /// clears it now.
     Need(Need),
     /// React to the user's newest message in this bot's chat instead of
-    /// replying: 👀 seen or on it, ✅ done, 🎉 celebrate. End the turn with no
-    /// text after it.
+    /// replying: 👀 seen or on it, ✅ done, 🎉 celebrate, 👍 ok, ❤️ thanks, 😂
+    /// funny, 😢 sorry to hear. End the turn with no text after it.
     React(ReactArgs),
 }
 
 #[derive(Args)]
 struct ReactArgs {
-    /// 👀, ✅ or 🎉, or its word: seen, done, celebrate.
+    /// 👀 ✅ 🎉 👍 ❤️ 😂 😢, or its word: seen, done, celebrate, like, love,
+    /// laugh, sad.
     emoji: String,
 }
 

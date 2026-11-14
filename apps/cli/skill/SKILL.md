@@ -310,12 +310,13 @@ row in the "Waiting on you" card at the foot of your chat, and it clears as soon
 as the task moves.
 
 ```bash
-dray session react 👀   # or ✅, 🎉; also seen, done, celebrate
+dray session react 👀   # or ✅ 🎉 👍 ❤️ 😂 😢; also seen, done, celebrate, like, love, laugh, sad
 ```
 
 A bot only. Puts the emoji on the user's newest message in your chat, in place
-of a reply: 👀 seen or on it, ✅ done, 🎉 celebrate. A new one on the same
-message replaces the old. End your turn without writing anything after it.
+of a reply: 👀 seen or on it, ✅ done, 🎉 celebrate, 👍 ok or agreed, ❤️ thanks,
+😂 funny, 😢 sorry to hear. A new one on the same message replaces the old. End
+your turn without writing anything after it.
 
 ## Saving work for later
 

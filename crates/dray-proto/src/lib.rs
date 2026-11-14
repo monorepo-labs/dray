@@ -206,7 +206,8 @@ pub struct SetNeed {
 pub struct React {
     /// The bot's chat: the calling session.
     pub session_id: String,
-    /// 👀, ✅ or 🎉, or the word for one: seen, done, celebrate.
+    /// 👀 ✅ 🎉 👍 ❤️ 😂 😢, or the word for one: seen, done, celebrate, like,
+    /// love, laugh, sad.
     pub emoji: String,
 }
 
