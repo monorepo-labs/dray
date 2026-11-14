@@ -30,6 +30,8 @@ struct SessionList: View {
     @State private var mode = ListMode.live
     @State private var drafts: [(server: UUID, draft: DraftItem)] = []
     @State private var shown = Self.pageSize
+    /// Settings › Appearance: the list is bots alone, with nothing that serves sessions.
+    @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
 
     private static let pageSize = 40
 
@@ -52,7 +54,7 @@ struct SessionList: View {
         let names = store.live.flatMap { store.projects[$0.id] ?? [] }.map(\.name).filter { seen.insert($0).inserted }
         // A picked project that left the list narrows nothing.
         let filter = names.contains { $0 == project } ? project : nil
-        let all = mode == .drafts ? [] : store.runs(project: filter, settled: mode == .settled)
+        let all = mode == .drafts || hideSessions ? [] : store.runs(project: filter, settled: mode == .settled)
         // Paged: only the first `shown` rows are drawn, more as the last one comes on screen.
         let runs = page(all, shown)
         let more = runs.reduce(0) { $0 + $1.rows.count } < all.reduce(0) { $0 + $1.rows.count }
@@ -61,6 +63,10 @@ struct SessionList: View {
             (id: "\(b.server)/\(b.bot.id)", server: b.server, bot: b.bot, chat: store.botChat(b.server, b.bot).last)
         } : []
         let blank = mode == .live && runs.isEmpty && botRows.isEmpty
+        // A picked filter keeps its strip, or there would be no way back to All.
+        let strip = !hideSessions && names.count > 1 && (filter != nil || !(mode == .drafts ? drafts.isEmpty : all.isEmpty))
+        // A bot with no chat still needs the dock: its first message is what starts one.
+        let dock = !store.live.isEmpty && (!hideSessions || task.bot != nil)
         VStack(spacing: 0) {
             List(selection: $selection) {
                 // Quiet about reconnects, never about a read that failed or a server waiting on the reader.
@@ -87,7 +93,7 @@ struct SessionList: View {
                     }
                 }
                 // Under the bots, since no filter narrows them; its top padding is the gap after them.
-                if names.count > 1 {
+                if strip {
                     ProjectStrip(names: names, picked: filter) { project = $0 }
                         .padding(.bottom, Theme.Space.m)
                         .listRowInsets(EdgeInsets())
@@ -130,7 +136,7 @@ struct SessionList: View {
             .listStyle(.plain)
             .contentMargins(.top, Theme.Space.m, for: .scrollContent)
             // The resting dock's height, so the last row scrolls clear of the orb.
-            .contentMargins(.bottom, store.live.isEmpty ? 0 : 160, for: .scrollContent)
+            .contentMargins(.bottom, dock ? 160 : 0, for: .scrollContent)
             // The breaks between runs are 16pt, under the 44pt a list row otherwise takes.
             .environment(\.defaultMinListRowHeight, 1)
             .themedList()
@@ -144,13 +150,15 @@ struct SessionList: View {
             .overlay { if blank { empty(filter) } }
         }
         .overlay(alignment: .bottom) {
-            if !store.live.isEmpty {
+            if dock {
                 // Dim while nothing is connected: the screen above says why.
                 VoiceDock(task: task) { selection = $0 }.opacity(blank && !anyConnected ? 0.3 : 1)
             }
         }
         // A new view or filter starts on its first page.
         .onChange(of: "\(mode)\(filter ?? "")") { shown = Self.pageSize }
+        // Its buttons go with the sessions, so a view left open would have no way back.
+        .onChange(of: hideSessions) { if hideSessions { mode = .live } }
         .page()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { header }
@@ -172,10 +180,10 @@ struct SessionList: View {
         }
         // Each only where it has something to show, or is the view up now so there is a way back.
         ToolbarItemGroup(placement: .topBarTrailing) {
-            if mode == .drafts || (anyConnected && !drafts.isEmpty) {
+            if !hideSessions, mode == .drafts || (anyConnected && !drafts.isEmpty) {
                 viewToggle(.drafts, label: "Drafts") { Image(systemName: "circle.dashed") }
             }
-            if mode == .settled || (anyConnected && store.items.values.contains { $0.archived == true && $0.hidden != true }) {
+            if !hideSessions, mode == .settled || (anyConnected && store.items.values.contains { $0.archived == true && $0.hidden != true }) {
                 viewToggle(.settled, label: "Settled") { CheckCheck().frame(width: 20, height: 20) }
             }
         }
@@ -280,7 +288,10 @@ struct SessionList: View {
                 .compactMap { r in parseDate(r.item.modified).map { (row: r, at: $0) } }
                 .filter { Calendar.current.isDateInToday($0.at) }
             Group {
-                if let last = today.max(by: { $0.at < $1.at }) {
+                if hideSessions {
+                    EmptyScreen(art: EmptyArt(kind: .tasks), title: "No bots yet",
+                                message: "Make one in the Dray desktop app.")
+                } else if let last = today.max(by: { $0.at < $1.at }) {
                     EmptyScreen(art: SettledStack(title: last.row.item.title, time: shortAge(last.at)),
                                 title: "All clear", message: today.count == 1 ? "1 settled today." : "\(today.count) settled today.")
                 } else if let filter {
