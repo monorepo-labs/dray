@@ -30,4 +30,5 @@
 - [GitHub](https://github.com/monorepo-labs/dray)
 - [Docs](https://www.drayhq.com/docs)
 - [Docs llms.txt](https://www.drayhq.com/docs/llms.txt): every docs page, one line each.
+- [FAQ](https://www.drayhq.com/faq): bots, agents, subscriptions and privacy.
 - [Changelog](https://www.drayhq.com/changelog)
