@@ -65,8 +65,10 @@ struct SessionList: View {
         let blank = mode == .live && runs.isEmpty && botRows.isEmpty
         // A picked filter keeps its strip, or there would be no way back to All.
         let strip = !hideSessions && names.count > 1 && (filter != nil || !(mode == .drafts ? drafts.isEmpty : all.isEmpty))
-        // A bot with no chat still needs the dock: its first message is what starts one.
-        let dock = !store.live.isEmpty && (!hideSessions || task.bot != nil)
+        // A bot with no chat still needs the dock: its first message is what starts one. So does
+        // anything already in it, or a pick that leaves the bot mid-recording takes Stop with it.
+        let inDock = task.hasText || Dictations.shared.state(.newSession) != .idle || Dictations.shared.kept[.newSession] != nil
+        let dock = !store.live.isEmpty && (!hideSessions || task.bot != nil || inDock)
         VStack(spacing: 0) {
             List(selection: $selection) {
                 // Quiet about reconnects, never about a read that failed or a server waiting on the reader.
