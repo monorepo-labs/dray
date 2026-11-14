@@ -173,6 +173,10 @@ async fn learn_user_name(bot: &Bot, commit: &str, sink: &Sink) {
         return;
     }
     let Some(name) = clean_name(&read_file(&dir.join(USER_FILE)).await) else { return };
+    // Two bots told at once would share `write_atomic`'s temp file, and the
+    // name saved could differ from the one their notes carry.
+    static USER_NAME_LOCK: Mutex<()> = Mutex::const_new(());
+    let _guard = USER_NAME_LOCK.lock().await;
     if user_name().await.as_deref() == Some(name.as_str()) {
         return;
     }
