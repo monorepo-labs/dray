@@ -47,6 +47,12 @@ struct CloneProgress: Decodable {
     let line: String
 }
 
+/// An agent and one of its models, picked for a bot.
+struct AgentPick: Hashable {
+    let harness: String
+    let model: String
+}
+
 // MARK: Rules
 
 /// The desktop composer's rules, restated since neither side can call the
@@ -57,6 +63,8 @@ enum Picks {
     /// answer from their own settings.
     static let defaultModel = ["claude_code": "opus", "codex": "gpt-6.1-sol", "pi": "", "fx": "", "grok": "grok-4.7"]
     static let defaultEffort = "high"
+    /// `AGENT_LABELS`.
+    static let agentLabels = ["claude_code": "Claude Code", "codex": "Codex", "pi": "pi", "fx": "fx", "grok": "Grok"]
     static let effortLabels = ["low": "Low", "medium": "Medium", "high": "High", "xhigh": "Extra High", "max": "Max", "ultra": "Ultra"]
     static let stances = [("bypassPermissions", "Bypass permissions"), ("manual", "Ask every time"), ("plan", "Plan"), ("auto", "Auto")]
 

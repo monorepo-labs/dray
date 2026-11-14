@@ -30,6 +30,7 @@ struct SessionList: View {
     @State private var mode = ListMode.live
     @State private var drafts: [(server: UUID, draft: DraftItem)] = []
     @State private var shown = Self.pageSize
+    @State private var newBot = false
 
     private static let pageSize = 40
 
@@ -154,6 +155,7 @@ struct SessionList: View {
         .page()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { header }
+        .sheet(isPresented: $newBot) { BotSheet(editing: nil) { selection = $0 } }
         // Again once a server comes up: a view opened before it connected read nothing from it.
         // Drafts and settled are read whatever the view: their buttons show only when there are some,
         // and an empty live list counts what was settled today.
@@ -164,7 +166,7 @@ struct SessionList: View {
     }
 
     /// Settings on the left; the drafts and settled views sharing one glass pill
-    /// on the right. While one is shown, the other dims, so the lit one reads as on.
+    /// on the right, then New bot. While one view is shown, the other dims, so the lit one reads as on.
     @ToolbarContentBuilder private var header: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             Button { sheet = .settings(server: nil) } label: { Image(systemName: "gearshape") }
@@ -177,6 +179,12 @@ struct SessionList: View {
             }
             if mode == .settled || (anyConnected && store.items.values.contains { $0.archived == true && $0.hidden != true }) {
                 viewToggle(.settled, label: "Settled") { CheckCheck().frame(width: 20, height: 20) }
+            }
+        }
+        if anyConnected {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { newBot = true } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("New bot")
             }
         }
     }

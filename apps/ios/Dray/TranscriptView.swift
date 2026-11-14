@@ -6,11 +6,10 @@ struct TranscriptView: View {
     let key: SessionKey
     @State private var fixing = false
     @State private var showingTasks = false
+    @State private var editingBot = false
     @Environment(\.openTask) private var openTask
     /// The floating banner's height, kept clear above the first row so it never sits on "Load earlier".
     @State private var bannerHeight: CGFloat = 0
-    /// How many of a bot chat's earlier sessions are drawn above this one.
-    @State private var earlier = 0
     /// Whether new rows scroll into view: dropped by the reader scrolling up (`FollowsBottom`).
     @State private var following = true
     /// A bot chat opened unread, its read done.
@@ -104,10 +103,29 @@ struct TranscriptView: View {
         .onChange(of: asks.count) { old, new in if new > old { Haptic.warning() } }
         .safeAreaInset(edge: .bottom, spacing: 0) { ReplyDock(key: key) }
         .overlay(alignment: .top) {
+            // The bar draws no shade here, so rows fade out under the clock rather than sit on it.
+            if bot != nil {
+                // Spans the status bar and the bar under it: this view starts where they end,
+                // so its distance from the screen's top is their height. Ignoring the safe area
+                // instead reads an inset of zero.
+                GeometryReader { g in
+                    let top = g.frame(in: .global).minY
+                    LinearGradient(stops: [.init(color: Theme.page, location: 0), .init(color: Theme.page.opacity(0.9), location: 0.4),
+                                           .init(color: Theme.page.opacity(0), location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: top)
+                        .offset(y: -top)
+                }
+                .allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .top) {
             SessionBanner(server: key.server) { fixing = true }
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { bannerHeight = $0 }
         }
         .navigationBarTitleDisplayMode(.inline)
+        // Every control up there is a chip of its own, so the bar draws no shade behind them.
+        .modifier(BareTopEdge(on: bot != nil))
         .toolbar {
             ToolbarItem(placement: .principal) { title }
             if bot != nil {
@@ -124,27 +142,27 @@ struct TranscriptView: View {
         .prPanel(key)
         .sheet(isPresented: $showingTasks) { BotTasksSheet(server: key.server, tasks: botTasks) { openTask?($0) } }
         .sheet(isPresented: $fixing) { SettingsView(focus: key.server) }
+        .sheet(isPresented: $editingBot) { if let bot { BotSheet(editing: (key.server, bot)) } }
     }
 
-    /// The session's title over where it runs: its project and its machine, never the branch.
+    /// A task's title over where it runs, its project and its machine; a bot's chip.
     @ViewBuilder private var title: some View {
         if let bot = store.bot(key) {
-            // A bot's folder is no project: its face and name, and where it runs.
-            VStack(spacing: 1) {
+            // A bot's folder is no project: its face and name as a chip, which opens the bot.
+            Button { editingBot = true } label: {
                 HStack(spacing: 6) {
-                    BotFace(bot: bot, size: 20)
+                    BotFace(bot: bot, size: 32)
                     Text(bot.name).font(Theme.Font.headline).foregroundStyle(Theme.text).lineLimit(1)
                 }
-                HStack(spacing: 4) {
-                    ServerIcon().frame(width: 11, height: 11)
-                    Text(store.name(of: key.server))
-                }
-                .font(Theme.Font.footnote)
-                .foregroundStyle(Theme.tertiary)
-                .lineLimit(1)
+                .padding(.leading, 6)
+                .padding(.trailing, 16)
+                .frame(height: 44)
+                .glassChip()
             }
+            .buttonStyle(.plain)
             .frame(maxWidth: 240)
-            .accessibilityElement(children: .combine)
+            .accessibilityLabel(bot.name)
+            .accessibilityIdentifier("botChip")
         } else {
             taskTitle
         }
@@ -232,12 +250,16 @@ struct TranscriptView: View {
     }
 
     /// A bot chat's sessions on screen, oldest first: this one, and the earlier ones an agent
-    /// switch left, each drawn only once the one after it is read back to its start (`drawnSegments`).
+    /// switch left, each drawn once the one after it is read back to its start (`drawnSegments`)
+    /// and it is held: "Load earlier" reads it, and a switch made here already holds it.
     private func segments(_ bot: Bot?) -> [SessionKey] {
         guard let bot else { return [key] }
         let chat = store.botChat(key.server, bot)
         guard let i = chat.firstIndex(of: key) else { return [key] }
-        return Array(chat[max(0, i - earlier)...i])
+        var start = i
+        while start > 0, let top = store.transcripts[chat[start]], top.olderBefore == nil,
+              store.transcripts[chat[start - 1]] != nil { start -= 1 }
+        return Array(chat[start...i])
     }
 
     /// The session an agent switch left just above what is drawn, if any.
@@ -262,8 +284,8 @@ struct TranscriptView: View {
                     if store.transcripts[top]?.olderBefore != nil {
                         await store.loadOlder(top)
                     } else if let before = hidden(bot, segments) {
+                        // Held once read, which is what draws it (`segments`).
                         await store.load(before)
-                        earlier += 1
                     }
                 }
             }
@@ -807,6 +829,30 @@ struct FollowsBottom: ViewModifier {
                 }
         } else {
             content
+        }
+    }
+}
+
+/// Drops the bar's dark shade over scrolled rows where everything in it is glass.
+private struct BareTopEdge: ViewModifier {
+    let on: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content.scrollEdgeEffectHidden(on, for: .top)
+        } else {
+            content.toolbarBackground(on ? .hidden : .automatic, for: .navigationBar)
+        }
+    }
+}
+
+extension View {
+    /// A glass capsule like the back button's, for a control the bar does not wrap itself.
+    @ViewBuilder func glassChip() -> some View {
+        if #available(iOS 26, *) {
+            glassEffect(.regular.interactive(), in: .capsule)
+        } else {
+            background(.ultraThinMaterial, in: Capsule())
         }
     }
 }
