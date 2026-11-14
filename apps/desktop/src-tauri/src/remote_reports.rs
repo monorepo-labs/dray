@@ -439,8 +439,9 @@ mod collect {
             .await?
             .error_for_status()?;
         // Built under a hidden name, which the player never matches, so a cut
-        // download leaves no player on half a video.
-        let part = dir.join(format!(".{file}.part"));
+        // download leaves no player on half a video. Its own per download: two
+        // tasks reporting one clip copy it at once, and the rename is atomic.
+        let part = dir.join(format!(".{file}.{}.part", uuid::Uuid::new_v4().simple()));
         let budget = *left;
         let written: anyhow::Result<u64> = async {
             let mut out = tokio::fs::File::create(&part).await?;
