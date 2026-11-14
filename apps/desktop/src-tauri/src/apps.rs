@@ -661,17 +661,35 @@ async fn island_done_mac(session_id: String, note: String) -> Result<(), String>
     // Written beside the inbox and moved in whole, so the island never reads a
     // note half-written and takes it for an empty file, a finished turn.
     // One file per event, `<id>.<n>`: a finish and a notice for one chat can
-    // overlap, and sharing a name, one would replace the other unread.
+    // overlap, and sharing a name, one would replace the other unread. An
+    // island from before that reads the whole name as the id and drops it, so
+    // it gets the bare id, and a note it cannot draw goes to the banner.
+    let current = island_reads_events(&dir).await;
+    if !current && !note.is_empty() {
+        return Err("this Dray Island draws no notes".into());
+    }
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-    let name = format!("{session_id}.{stamp}-{n}");
+    let name = if current { format!("{session_id}.{stamp}-{n}") } else { session_id };
     let tmp = dir.with_file_name(&name);
     let reach = |err: std::io::Error| format!("could not reach the island: {err}");
     tokio::fs::write(&tmp, note).await.map_err(reach)?;
     tokio::fs::rename(&tmp, dir.join(&name)).await.map_err(reach)?;
     tokio::process::Command::new("notifyutil").args(["-p", "com.yogesh.dray.island.done"]).output().await.ok();
     Ok(())
+}
+
+/// Whether the running island reads `<id>.<n>` events and their notes: one
+/// that does writes its pid beside the inbox at launch (`Delegate.eventsMarker`),
+/// so an island an update left running on its old binary answers no.
+#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+async fn island_reads_events(dir: &std::path::Path) -> bool {
+    let Ok(pid) = tokio::fs::read_to_string(dir.with_file_name("events-pid")).await else { return false };
+    let Ok(out) = tokio::process::Command::new("pgrep").args(["-x", "Dray Island"]).output().await else {
+        return false;
+    };
+    String::from_utf8_lossy(&out.stdout).lines().any(|line| line.trim() == pid.trim())
 }
 
 /// The island's inbox for finished sessions; `Delegate.doneDir` in the island names it too.

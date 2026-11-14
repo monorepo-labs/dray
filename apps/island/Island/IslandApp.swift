@@ -374,6 +374,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 }
             }
         }, "com.yogesh.dray.island.show" as CFString, nil, .deliverImmediately)
+        // Tells Dray this island reads `<id>.<n>` events and their notes: an older one still running reads neither.
+        try? FileManager.default.createDirectory(at: Self.doneDir, withIntermediateDirectories: true)
+        try? String(ProcessInfo.processInfo.processIdentifier).write(to: Self.eventsMarker, atomically: true, encoding: .utf8)
         // A session finished where Dray would have posted its banner. The ids
         // queue under `island.done`, since a Darwin notification carries none.
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), nil, { _, _, _, _, _ in
@@ -404,6 +407,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
     /// Dray's inbox, one file per event holding its note; `island_done_dir` in apps.rs names it too.
     static let doneDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Caches/com.yogesh.dray.island/done")
+    /// This island's pid, which `island_reads_events` in apps.rs matches against the running one.
+    static let eventsMarker = doneDir.deletingLastPathComponent().appendingPathComponent("events-pid")
 
     /// Takes the sessions Dray dropped, oldest first, deleting only the files
     /// read, so one landing meanwhile waits for its own notification. A file's
