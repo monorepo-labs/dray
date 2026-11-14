@@ -174,6 +174,7 @@ export const APP_COMMANDS = new Set([
   "resume_boat",
   "extend_boat",
   "cloud_info",
+  "cloud_account",
   "set_cloud_key",
   "set_cloud_on",
   "start_cloud_machine",

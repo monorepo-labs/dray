@@ -951,6 +951,7 @@ pub fn run() {
             servers::resume_boat,
             servers::extend_boat,
             servers::cloud_info,
+            cloud::cloud_account,
             servers::set_cloud_key,
             servers::set_cloud_on,
             servers::start_cloud_machine,

@@ -1,5 +1,5 @@
 /// Static segments under `/app` that an org slug would shadow.
-const RESERVED_SLUGS = new Set(["new", "account"]);
+const RESERVED_SLUGS = new Set(["new", "account", "cloud"]);
 
 /// Why `slug` cannot name an org, or null when it can.
 export function slugProblem(slug: string): string | null {
