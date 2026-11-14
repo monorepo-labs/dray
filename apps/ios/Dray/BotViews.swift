@@ -633,6 +633,11 @@ struct BotTasksSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationBackground(Theme.card)
+        // Tasks are hidden, so the list never reads their repos' marks, and the order rests on them.
+        .task {
+            let repos = Set(tasks.compactMap { key in store.items[key].map { ProjectKey(server: key.server, path: $0.projectPath) } })
+            for repo in repos { await store.ensureMarks(repo.server, repo.path) }
+        }
     }
 
     private var ordered: [SessionKey] {
