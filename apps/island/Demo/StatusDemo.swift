@@ -6,6 +6,15 @@ import SwiftUI
 /// Dock; Replay builds them again, since a done pill's clock runs here too.
 @main
 struct StatusDemo: App {
+    init() {
+        // `--snapshot <dir>`: the grown waiting pill as PNGs, drawn offscreen, then quit.
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--snapshot"), args.indices.contains(i + 1) {
+            let dir = URL(fileURLWithPath: args[i + 1])
+            DispatchQueue.main.async { snapshotWaiting(to: dir) }
+        }
+    }
+
     var body: some Scene {
         WindowGroup("Island states") {
             DemoPage().frame(minWidth: 700, minHeight: 760)
@@ -267,6 +276,57 @@ private func stamp(ago: TimeInterval = 0) -> String {
     let f = ISO8601DateFormatter()
     f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     return f.string(from: Date(timeIntervalSinceNow: -ago))
+}
+
+// MARK: Snapshot
+
+/// The bot's waiting pill grown, and again on the first card's merge confirm,
+/// each in an offscreen window: shown without a window on screen or the pointer moved.
+@MainActor private func snapshotWaiting(to dir: URL) {
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let shots: [(name: String, confirming: String?)] = [("waiting-grown", nil), ("waiting-confirm", waitingRows[0].id)]
+    var windows: [NSWindow] = []
+    for shot in shots {
+        let store = Store()
+        let server = UUID()
+        store.seed(server, items: [opsChat], asks: [])
+        store.seed(home: server, bots: bots)
+        let key = SessionKey(server: server, id: opsChat.sessionId)
+        let pill = DonePill(notch: true, notchHeight: 32, items: [(key, "Ops", "2 tasks waiting on you", Array(waitingRows.prefix(2)))],
+                            open: { _ in }, openInApp: { _ in }, expanded: true, confirming: shot.confirming)
+            .environment(store)
+            .padding(.horizontal, 36)
+            .padding(.bottom, 24)
+            .background(Color(white: 0.22))
+            .environment(\.colorScheme, .dark)
+        let host = NSHostingView(rootView: pill)
+        let window = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 600, height: 400), styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        window.contentView = host
+        window.orderFrontRegardless()
+        windows.append(window)
+    }
+    // Two passes: the card list measures itself before the pill takes its height.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        for (shot, window) in zip(shots, windows) {
+            guard let host = window.contentView else { continue }
+            window.setContentSize(host.fittingSize)
+            host.layoutSubtreeIfNeeded()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            for (shot, window) in zip(shots, windows) {
+                guard let host = window.contentView,
+                      let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(host.bounds.width * 2),
+                                                 pixelsHigh: Int(host.bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4,
+                                                 hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0,
+                                                 bitsPerPixel: 0) else { continue }
+                rep.size = host.bounds.size
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("\(shot.name).png"))
+            }
+            NSApp.terminate(nil)
+        }
+    }
 }
 
 // MARK: Stage

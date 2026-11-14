@@ -299,7 +299,10 @@ struct DonePill: View {
     /// Answers why it failed, or nil once landed.
     var merge: (SessionKey, WaitingTask, String) async -> String? = { _, _, _ in nil }
     var hover: (Bool) -> Void = { _ in }
-    @State private var expanded = false
+    /// Grown under the pointer; the demo's snapshot draws it grown from the start.
+    @State var expanded = false
+    /// A card drawn on its merge confirm from the start, for the demo's snapshot.
+    var confirming: String? = nil
     @State private var collapse: Task<Void, Never>?
     @State private var listHeight: CGFloat = 0
     private static let row: CGFloat = 26
@@ -325,6 +328,8 @@ struct DonePill: View {
                         OpenInAppButton(chord: true) { openInApp(first.key) }
                     }
                 }
+                // Centred over the grown list, so its margins match the cards'.
+                .frame(maxWidth: expanded && cards ? .infinity : nil)
                 .contentShape(Rectangle())
                 .onTapGesture { if let first = items.first { open(first.key) } }
                 if expanded {
@@ -334,10 +339,12 @@ struct DonePill: View {
                                 // One item's own line is the pill's header already.
                                 if items.count > 1 { line(item) }
                                 ForEach(item.rows, id: \.id) { task in
-                                    WaitingCard(task: task, open: { openTask(item.key, task) }, merge: { await merge(item.key, task, $0) })
+                                    WaitingCard(task: task, open: { openTask(item.key, task) }, merge: { await merge(item.key, task, $0) },
+                                                confirming: confirming == task.id)
                                 }
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         // Cards differ in height, so the list is measured rather than counted.
                         .onGeometryChange(for: CGFloat.self, of: \.size.height) { listHeight = $0 }
                     }
@@ -401,7 +408,7 @@ struct WaitingTask: Decodable, Hashable {
 
 /// A waiting task as the bot chat's card draws it: face, title, PR and age, and
 /// under them its bot's line for the reader. A click brings Dray forward on the
-/// task; a ready PR lands from here, Merge then Confirm, as the card's does.
+/// task; a ready PR lands from here, Merge then the method.
 struct WaitingCard: View {
     @Environment(Store.self) private var store
     let task: WaitingTask
@@ -409,10 +416,9 @@ struct WaitingCard: View {
     /// Takes the method; answers why it failed, or nil once landed.
     let merge: (String) async -> String?
     @State private var hover = false
-    @State private var confirming = false
+    @State var confirming = false
     @State private var merging = false
     @State private var failed: String?
-    @AppStorage("island.mergeMethod") private var method = "squash"
     /// The app's `--accent-merge`.
     private static let green = Color(red: 0x23 / 255, green: 0x86 / 255, blue: 0x36 / 255)
 
@@ -473,7 +479,7 @@ struct WaitingCard: View {
     }
 
     /// Merge, then the method as the confirm: a repo may allow only some, and the
-    /// pills' window never takes a menu. The last one picked is drawn filled.
+    /// pills' window never takes a menu. Squash, the default, is filled in the primary spot, last.
     @ViewBuilder private var mergeControl: some View {
         if confirming {
             Button("Cancel") { confirming = false }
@@ -481,8 +487,7 @@ struct WaitingCard: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(0.55))
             ForEach(Self.methods, id: \.value) { m in
-                fill(m.label, filled: m.value == method) {
-                    method = m.value
+                fill(m.label, filled: m.value == "squash") {
                     confirming = false
                     merging = true
                     failed = nil
@@ -498,7 +503,7 @@ struct WaitingCard: View {
         }
     }
 
-    private static let methods = [(value: "squash", label: "Squash"), (value: "merge", label: "Merge"), (value: "rebase", label: "Rebase")]
+    private static let methods = [(value: "rebase", label: "Rebase"), (value: "merge", label: "Merge"), (value: "squash", label: "Squash")]
 
     private func fill(_ label: String, filled: Bool = true, action: @escaping () -> Void) -> some View {
         Button(action: action) {
