@@ -68,6 +68,11 @@ final class Store {
     /// Each repo's PR marks by branch, as `pr_marks` last answered.
     private(set) var marks: [ProjectKey: [String: PrMark]] = [:]
     var drafts: [SessionKey: String] = [:]
+    /// A bot chat's agent and model for its next message, picked in its sheet: the desktop's
+    /// `unsentPicks`. Another agent moves the chat to a new session on that send.
+    var unsent: [SessionKey: AgentPick] = [:]
+    /// The session an agent switch from a chat goes to, minted once and kept until it lands.
+    private var switches: [SessionKey: SessionKey] = [:]
     /// gh's latest progress line per clone, by server and slug.
     var cloneProgress: [UUID: [String: String]] = [:]
     /// Moves when any client saves a draft (`drafts_changed`) or this one removes one: the list re-reads.
@@ -439,7 +444,7 @@ final class Store {
         await loadMarks(server, force: false)
     }
 
-    private func loadBots(_ server: UUID) async {
+    func loadBots(_ server: UUID) async {
         // A server from before bots answers `unknown command`, and holds none.
         guard let list: [Bot] = try? await connections[server]?.call("list_bots") else { return }
         bots[server] = list
@@ -788,36 +793,74 @@ final class Store {
     /// held copy sent back would undo its change.
     /// `model`, `effort`, `stance` and `fast` are what the reader moved for this reply; each nil keeps
     /// the session's as just re-read, so a change another client made is never undone.
-    func send(_ key: SessionKey, _ text: String, attachments: [String] = [],
-              model: String? = nil, effort: String? = nil, stance: String? = nil, fast: Bool? = nil) async -> Bool {
-        guard let c = connections[key.server] else { return false }
+    /// Sends a reply, answering the session it went to. Another `harness`, in a bot chat, is
+    /// an agent switch: a new session in the bot's folder, which the server hands the chat so far.
+    @discardableResult
+    func send(_ key: SessionKey, _ text: String, attachments: [String] = [], harness: String? = nil,
+              model: String? = nil, effort: String? = nil, stance: String? = nil, fast: Bool? = nil) async -> SessionKey? {
+        guard let c = connections[key.server] else { return nil }
         do {
             let fresh: SessionItem? = try await c.call("get_session_by_id", ["sessionId": .string(key.id), "turns": 0])
             guard let item = fresh else { throw DrayError("Session not found") }
             store(key, item)
+            let moving = harness.map { $0 != item.harness } ?? false
+            var to = key
+            var isNew = false
+            if moving {
+                // One id per switch, kept across retries: a switch whose reply was lost already
+                // made its session, and a second would stop the first and send the words twice.
+                to = switches[key] ?? SessionKey(server: key.server, id: UUID().uuidString.lowercased())
+                switches[key] = to
+                let made: SessionItem? = (try? await c.call("get_session_by_id", ["sessionId": .string(to.id), "turns": 0])) ?? nil
+                if let made {
+                    created(key.server, made)
+                    // The index entry lands before the agent starts, so the session alone proves
+                    // nothing: the words landed only if its log holds them.
+                    let log: Snapshot? = try await c.call("get_session_by_id", ["sessionId": .string(to.id), "turns": 1])
+                    if log?.events.contains(where: { if case .userMessage = $0.payload { true } else { false } }) == true {
+                        switches[key] = nil
+                        unsent[key] = nil
+                        return to
+                    }
+                    // Still starting: the first send may yet land, and a second session would run it twice.
+                    if made.busy { throw DrayError("The switch is still starting. Try again in a moment.") }
+                    // Its agent never started, and Codex cannot resume a thread it never made: a new one.
+                    // ponytail: the empty session stays in the chat as one more "Switched to" line;
+                    // delete_session would tell the bot the reader deleted a task.
+                    to = SessionKey(server: key.server, id: UUID().uuidString.lowercased())
+                    switches[key] = to
+                }
+                // The desktop's rule: the old agent's turn would be cut off by the switch.
+                if item.busy { throw DrayError("Wait for this turn to end to switch agent.") }
+                isNew = true
+            }
+            let agent = harness ?? item.harness
             let outcome: SendOutcome = try await c.call("send_msg", [
-                "sessionId": .string(key.id),
+                "sessionId": .string(to.id),
                 "prompt": .string(text),
                 "attachmentPaths": .array(attachments.map { .string($0) }),
-                "harness": .string(item.harness),
-                "model": .string(model ?? item.model),
-                "effort": JSON(effort ?? item.effort),
-                "permissionMode": .string(stance ?? item.permissionMode),
+                "harness": .string(agent),
+                "model": .string(model ?? (moving ? Picks.defaultModel[agent] ?? "" : item.model)),
+                "effort": JSON(moving ? effort : effort ?? item.effort),
+                "permissionMode": .string(Picks.stanceFor(agent, stance ?? item.permissionMode)),
                 "fast": .bool(fast ?? item.fast ?? false),
                 "cwd": .string(item.cwd),
                 "branch": nil,
                 "useWorktree": false,
                 "worktreeName": nil,
                 "baseRef": nil,
-                "isNewSession": false,
+                "isNewSession": .bool(isNew),
             ])
+            if let snapshot = outcome.snapshot { created(key.server, snapshot) }
+            unsent[key] = nil
+            switches[key] = nil
             // By id: the server's `queue_changed` usually lands before this reply.
-            if let q = outcome.queued, !(queued[key]?.contains(q) ?? false) { queued[key, default: []].append(q) }
-            sends[key, default: 0] += 1
-            return true
+            if let q = outcome.queued, !(queued[to]?.contains(q) ?? false) { queued[to, default: []].append(q) }
+            sends[to, default: 0] += 1
+            return to
         } catch {
             lastError = error.localizedDescription
-            return false
+            return nil
         }
     }
 
