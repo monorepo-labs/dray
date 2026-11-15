@@ -190,8 +190,8 @@ jobs:
       - name: TEMP size the cache by arch
         if: github.event_name == 'workflow_dispatch'
         run: |
-          du -sk apps/desktop/src-tauri/target/* ~/.cargo/registry/* ~/.cargo/git ~/.cache/cef/* 2>/dev/null | sort -rn
-          du -sk apps/desktop/src-tauri/target/*/release/{deps,build,.fingerprint} 2>/dev/null
+          du -sk apps/desktop/src-tauri/target/* ~/.cargo/registry/* ~/.cargo/git ~/.cache/cef/* 2>/dev/null | sort -rn || true
+          du -sk apps/desktop/src-tauri/target/*/release/{deps,build,.fingerprint} 2>/dev/null || true
 
       # tauri-build copies the sidecar named for this triple next to the
       # binary while compiling, and fails if there is none; the bundler then
