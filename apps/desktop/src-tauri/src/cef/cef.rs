@@ -122,6 +122,14 @@ struct Tab {
     can_go_forward: bool,
     /// The main frame's last load failure, cleared when a new load starts.
     error: Option<String>,
+    /// The failure a load set aside on starting, put back if that load
+    /// never commits. Chromium retries an error page by itself a second or
+    /// so after it lands, and a retry that fails again is dropped silently:
+    /// no `on_load_error`, no new page, so the tab read as healthy while
+    /// Chromium still showed the failure.
+    held_error: Option<String>,
+    /// Whether the main frame committed a document since the load began.
+    committed: bool,
     /// Last drawn on screen or acted on by `dray browser`.
     seen: Instant,
     /// Set by `sweep` before the close, cleared by `wake`. `on_before_close`
@@ -720,6 +728,8 @@ fn restore(session: &str) {
                     can_go_back: false,
                     can_go_forward: false,
                     error: None,
+                    held_error: None,
+                    committed: false,
                     seen: Instant::now(),
                     discarded: true,
                     opener: None,
@@ -1348,6 +1358,8 @@ wrap_life_span_handler! {
                         can_go_back: false,
                         can_go_forward: false,
                         error: None,
+                        held_error: None,
+                        committed: false,
                         seen: Instant::now(),
                         discarded: false,
                         opener: self.opener,
@@ -1838,13 +1850,19 @@ wrap_load_handler! {
     impl LoadHandler {
         fn on_loading_state_change(&self, _browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, can_go_back: ::std::os::raw::c_int, can_go_forward: ::std::os::raw::c_int) {
             update_tab(self.tab, |t| {
+                if is_loading != 0 && !t.loading {
+                    t.held_error = t.error.take();
+                    t.committed = false;
+                } else if is_loading == 0 && t.loading {
+                    if !t.committed && t.error.is_none() {
+                        t.error = t.held_error.take();
+                    }
+                    t.held_error = None;
+                }
                 t.loading = is_loading != 0;
                 t.waking &= is_loading != 0;
                 t.can_go_back = can_go_back != 0;
                 t.can_go_forward = can_go_forward != 0;
-                if is_loading != 0 {
-                    t.error = None;
-                }
             });
         }
 
@@ -1861,6 +1879,7 @@ wrap_load_handler! {
             if !frame.map(|f| f.is_main() != 0).unwrap_or(false) {
                 return;
             }
+            update_tab(self.tab, |t| t.committed = true);
             disarm_picker(self.tab);
         }
 
@@ -2400,6 +2419,8 @@ fn load(session_id: String, url: String, tab: Option<i32>) -> Result<(), String>
                 t.url = url;
                 t.loading = true;
                 t.error = None;
+                t.held_error = None;
+                t.committed = false;
             });
             let _ = tx.send(Ok(()));
             return;
