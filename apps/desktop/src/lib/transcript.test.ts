@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTranscript, drawsSameTurn, hiddenInBotChat, isToolGroup, runningRuns, segmentMedia, segmentWork, sessionMedia, type Turn } from "@/lib/transcript";
+import { buildTranscript, drawsSameTurn, hiddenInBotChat, isToolGroup, opensTab, runningRuns, segmentMedia, segmentWork, sessionMedia, type Turn } from "@/lib/transcript";
 import type { AgentEvent, AgentEventPayload, ToolResult } from "@/types/events";
 
 /// Only the envelope fields `buildTranscript` orders and keys by are filled;
@@ -487,6 +487,39 @@ describe("subagent runs", () => {
 
     expect(runningRuns(subagents, null).map((r) => r.id)).toEqual(["toolu_3"]);
     expect(runningRuns(subagents, "toolu_1").map((r) => r.id)).toEqual(["toolu_3", "toolu_1"]);
+  });
+
+  /// A finished subagent stays: its conversation is still worth opening.
+  it("keeps finished subagents, dropping only finished shells", () => {
+    const agentCall = (seq: number, callId: string): AgentEvent => {
+      const e = callStarted(seq, callId);
+      return { ...e, payload: { ...e.payload, name: "Agent" } as AgentEventPayload };
+    };
+    const done = (seq: number, toolUseId: string, taskId: string) =>
+      lifecycle(seq, toolUseId, {
+        type: "subagent_completed",
+        agentId: taskId,
+        status: "completed",
+        summary: null,
+        usage: null,
+      } as AgentEventPayload);
+    const { subagents } = buildTranscript(
+      [
+        callStarted(0, "toolu_1"),
+        started(1, "toolu_1", "task-a"),
+        done(2, "toolu_1", "task-a"),
+        agentCall(3, "toolu_2"),
+        started(4, "toolu_2", "task-b"),
+        done(5, "toolu_2", "task-b"),
+      ],
+      false,
+    );
+
+    expect(runningRuns(subagents, null).map((r) => r.id)).toEqual(["toolu_2"]);
+    expect(subagents.map((r) => [r.id, opensTab(r)])).toEqual([
+      ["toolu_2", true],
+      ["toolu_1", false],
+    ]);
   });
 });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { groupLabel, isRoutineError, mcpCall, skillBrief, streamingLabel, subagentBrief, toolLabel, toolSummary } from "./tools";
+import { groupLabel, isRoutineError, mcpCall, skillBrief, streamingLabel, subagentBrief, toolLabel, toolSummary, verbName } from "./tools";
 
 // Every input here is a real `Skill` call taken out of `~/.dray/sessions`. The
 // harness classifies the tool as `other` and leaves `title` null, so the name
@@ -215,7 +215,23 @@ describe("subagentBrief", () => {
           task: "Reply with exactly: hi",
         },
       }),
-    ).toEqual({ task: "Reply with exactly: hi", model: "gpt-5.6-luna", effort: "high" });
+    ).toEqual({ task: "Reply with exactly: hi", model: "gpt-5.6-luna", effort: "high", agent: null });
+  });
+
+  it("names fx's wait for what it does, not as a delegation", () => {
+    expect(toolLabel(verbName("subagent", "other", { action: "wait", agent: "files" }), false)).toBe(
+      "Waited for subagents",
+    );
+    expect(verbName("subagent", "subagent_spawn", { action: "message" })).toBe("subagent");
+    expect(toolSummary("subagent", "subagent_spawn", { action: "message", agent: "w", message: "List" })).toBe("List");
+  });
+
+  // fx 0.0.17, as captured: a message to a named child, not a nested request.
+  it("reads fx 0.0.17's message to a named child", () => {
+    expect(
+      subagentBrief({ action: "message", agent: "worker", message: "List the files", report: "final" }),
+    ).toEqual({ task: "List the files", model: null, effort: null, agent: "worker" });
+    expect(subagentBrief({ action: "wait" })).toBeNull();
   });
 
   it("leaves model and effort null where the child took the session's own", () => {
@@ -223,6 +239,7 @@ describe("subagentBrief", () => {
       task: "Run `pwd`",
       model: null,
       effort: null,
+      agent: null,
     });
   });
 

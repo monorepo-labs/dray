@@ -1787,6 +1787,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
             crate::fork_session(&session_id, &fork_id, worktree).await;
         session_index_item(session_id: String) => crate::session_index_item(&session_id).await;
         session_keeps_children(session_id: String) => crate::session_keeps_children(&session_id).await;
+        fx_subagent_events(session_id: String, agent: String) =>
+            crate::harness::fx::history::fx_subagent_events(session_id, agent).await;
         // `dray --machine` from an agent on the Mac that added this machine.
         orchestrate(
             line: String, origin: Option<String>, caller: Option<crate::orchestration::Caller>,

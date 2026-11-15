@@ -17,6 +17,7 @@ import {
   isRoutineError,
   skillBrief,
   subagentBrief,
+  verbName,
   toolLabel,
   toolSummary,
 } from "@/lib/tools";
@@ -391,7 +392,7 @@ export default function ToolCall({
                 pending && "shimmer-text",
               )}
             >
-              {mcp ? "MCP" : toolLabel(name, pending)}
+              {mcp ? "MCP" : toolLabel(verbName(name, toolType, input), pending)}
             </span>
           )}
 

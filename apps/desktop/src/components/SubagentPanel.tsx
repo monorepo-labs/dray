@@ -1,12 +1,12 @@
 import { useEffect, useRef } from "react";
-import { ChevronRight, Square } from "lucide-react";
+import { Bot, ChevronRight, Square, SquareTerminal } from "lucide-react";
 
 import EventRow from "@/components/chat/EventRow";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { compactTokens } from "@/lib/format";
 import { subagentBrief } from "@/lib/tools";
-import type { SubagentRun } from "@/lib/transcript";
+import { isShellRun, opensTab, type SubagentRun } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 import type { AgentEvent, ToolResult } from "@/types/events";
 
@@ -21,6 +21,9 @@ type SubagentPanelProps = {
   /// — so the stop button is withheld rather than offered and then erroring.
   live: boolean;
   onSelect: (id: string | null) => void;
+  /// Opens a subagent's conversation as a tab of the row. Absent where the
+  /// panel's session has no row of its own, and then every run expands.
+  onOpen?: (run: SubagentRun) => void;
   onStopTask: (taskId: string) => void;
 };
 
@@ -43,6 +46,7 @@ export default function SubagentPanel({
   resultByCallId,
   live,
   onSelect,
+  onOpen,
   onStopTask,
 }: SubagentPanelProps) {
   // Same reading as each row's own button, so the count and the rows agree.
@@ -77,6 +81,7 @@ export default function SubagentPanel({
             resultByCallId={resultByCallId}
             live={live}
             onToggle={() => onSelect(run.id === selectedId ? null : run.id)}
+            onOpen={onOpen && opensTab(run) ? () => onOpen(run) : undefined}
             onStopTask={onStopTask}
           />
         ))}
@@ -106,15 +111,16 @@ function hasBrief(spawn: AgentEvent): boolean {
 
 /// One run: what it is doing on the row, what it did underneath.
 ///
-/// No icon and no tool name. Every row here is a subagent, so an icon repeated
-/// down the list distinguishes nothing, and the name is the harness's word for
-/// the mechanism ("Task", "local_bash") rather than for the work.
+/// No tool name: it is the harness's word for the mechanism ("Task",
+/// "local_bash") rather than for the work. A mark instead says which of the two
+/// kinds a row is, a subagent or a shell, since only one opens as a tab.
 function RunRow({
   run,
   open,
   resultByCallId,
   live,
   onToggle,
+  onOpen,
   onStopTask,
 }: {
   run: SubagentRun;
@@ -122,6 +128,8 @@ function RunRow({
   resultByCallId: Map<string, ToolResult>;
   live: boolean;
   onToggle: () => void;
+  /// Where set, a click opens the run's tab rather than expanding the row.
+  onOpen?: () => void;
   onStopTask: (taskId: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -167,17 +175,22 @@ function RunRow({
       <div className="flex items-center transition-colors hover:bg-sidebar-accent/50">
         <button
           type="button"
-          onClick={onToggle}
-          disabled={!hasContent}
+          onClick={onOpen ?? onToggle}
+          disabled={!onOpen && !hasContent}
           className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left text-ui"
         >
-          {hasContent && (
+          {!onOpen && hasContent && (
             <ChevronRight
               className={cn(
                 "size-3.5 shrink-0 text-muted-foreground transition-transform",
                 open && "rotate-90",
               )}
             />
+          )}
+          {isShellRun(run) ? (
+            <SquareTerminal aria-label="Shell" className="size-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <Bot aria-label="Subagent" className="size-3.5 shrink-0 text-muted-foreground" />
           )}
 
           {/* The shimmer stands in for the orb the chat row carries: at this text
@@ -222,7 +235,7 @@ function RunRow({
         )}
       </div>
 
-      {open && hasContent && (
+      {open && hasContent && !onOpen && (
         <div className="flex flex-col gap-2 border-t border-border px-3 py-2.5">
           {/* The spawning call first: its arguments are the prompt this run was
               given, and its result the report it came back with. For a

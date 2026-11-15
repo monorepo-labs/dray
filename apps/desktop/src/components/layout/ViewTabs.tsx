@@ -2,7 +2,7 @@ import {
   ChatBubbleOvalLeftIcon,
   DocumentPlusIcon,
 } from "@heroicons/react/16/solid";
-import { Folder, Plus, Server, X } from "lucide-react";
+import { Bot, Folder, Plus, Server, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 
 import AgentBeam from "@/components/browser/AgentBeam";
@@ -89,8 +89,9 @@ import { cn } from "@/lib/utils";
 /// Which view fills the main column.
 export const VIEW_TABS = ["chat", "browser", "changes", "files"] as const;
 
-/// `pick` is a bot row's Diff or Files tab on a session it picked (#892).
-export type ViewTab = (typeof VIEW_TABS)[number] | "pick";
+/// `pick` is a bot row's Diff or Files tab on a session it picked (#892);
+/// `subagent` a subagent's conversation opened from the chat.
+export type ViewTab = (typeof VIEW_TABS)[number] | "pick" | "subagent";
 
 /// The pointer crosses this row on its way to everything below it, so a
 /// tooltip waits for a hover that means it — the crew's own delay.
@@ -193,6 +194,17 @@ export type PickTabsProps = {
   onReopen: (kind: "changes" | "files", target: string) => string;
 };
 
+/// Subagents opened from the chat, each a tab showing its conversation.
+export type SubagentTabsProps = {
+  items: { id: string; label: string; working: boolean }[];
+  /// The run on screen, while the row's view is `subagent`.
+  lit: string | null;
+  onPick: (id: string) => void;
+  onClose: (id: string) => void;
+  /// ⌘⇧T: back in the row, the reader left where they are.
+  onReopen: (id: string) => void;
+};
+
 type Item = {
   key: TabKey;
   icon: React.ReactNode;
@@ -240,7 +252,9 @@ export default function ViewTabs({
   working = false,
   tasks,
   picks,
+  subagents,
 }: {
+  subagents?: SubagentTabsProps;
   /// Whose browser pages the row lists: a bot's tasks share the bot chat's.
   browserId?: string;
   /// A bot chat's Diff and Files picks.
@@ -434,6 +448,17 @@ export default function ViewTabs({
         keepsView: open.length === 1,
       }));
     }),
+    ...(subagents?.items ?? []).map((run) => ({
+      key: `subagent:${run.id}`,
+      icon: run.working ? <Orb state="working" variant="gyro" label="Working" size={16} /> : <Bot className={MARK} />,
+      label: run.label,
+      active: own === "subagent" && subagents?.lit === run.id,
+      pick: () => subagents?.onPick(run.id),
+      close: () => {
+        pushClosedTab(sessionId, { key: `subagent:${run.id}` });
+        subagents?.onClose(run.id);
+      },
+    })),
     ...(tasks?.items ?? []).map((task) => ({
       key: `task:${task.sessionId}`,
       machine: task.machine !== LOCAL ? serverName(task.machine) : undefined,
@@ -675,6 +700,7 @@ export default function ViewTabs({
     } else if (key === "changes" || key === "files") setShown(key, true);
     else if (key.startsWith("file:")) reopenFile(sessionId, key.slice("file:".length));
     else if (key.startsWith("task:")) tasks?.onReopen(key.slice("task:".length));
+    else if (key.startsWith("subagent:")) subagents?.onReopen(key.slice("subagent:".length));
     else key = `blank:${addBlankTab(browserId, entry.page)}`;
     if (entry.at !== undefined) {
       orders.set(sessionId, moveKey(orders.get(sessionId) ?? order, key, entry.at));
