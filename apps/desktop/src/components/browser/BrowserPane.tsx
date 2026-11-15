@@ -997,18 +997,22 @@ function Servers({
     if (!polling) return;
     let live = true;
     const ids = ownerKey.split(" ");
-    // A failed read keeps that owner's last list, as one list always did.
-    const read = () =>
-      void Promise.all(ids.map((id) => listLocalServers(id).then((list) => [id, list] as const, () => null))).then(
-        (lists) =>
-          live &&
-          setServers((prev) => {
-            const next = new Map<string, LocalServer[]>();
-            for (const id of ids) next.set(id, prev.get(id) ?? []);
-            for (const got of lists) if (got) next.set(got[0], got[1]);
-            return next;
-          }),
-      );
+    // Each owner lands on its own reply, so one task's machine going quiet
+    // holds back no other list, and is not asked again until it answers. A
+    // failed read keeps that owner's last list, as one list always did.
+    const asking = new Set<string>();
+    const read = () => {
+      for (const id of ids) {
+        if (asking.has(id)) continue;
+        asking.add(id);
+        void listLocalServers(id)
+          .then(
+            (list) => live && setServers((prev) => new Map(prev).set(id, list)),
+            () => undefined,
+          )
+          .finally(() => asking.delete(id));
+      }
+    };
     read();
     const timer = setInterval(read, 5000);
     return () => {
