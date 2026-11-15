@@ -1,4 +1,4 @@
-import { botChat } from "@/lib/bots";
+import { botChat, previewLine } from "@/lib/bots";
 import { crewRows, type CrewRow } from "@/lib/crew";
 import { prStatus, type PrStatusKey } from "@/lib/pr";
 import type { BackgroundTask, Bot, PrMark, SessionIndexItem, SessionStatus } from "@/types/events";
@@ -153,6 +153,19 @@ export const cardRows = (stalls: readonly Stall[], dismissed: readonly string[])
 export function needLine(stall: Stall): string | undefined {
   const { need, modified } = stall.row.item;
   return onCard(stall) && need && Date.parse(need.at) >= Date.parse(modified) ? need.text : undefined;
+}
+
+/// A waiting row's line until its bot writes a need: the last paragraph of the
+/// task's last message, one line, since an agent ends on its question. Code
+/// blocks are skipped, so a reply closing on a diff still reads as words.
+export function lastMessageLine(text: string | null | undefined): string | undefined {
+  const prose = (text ?? "").replace(/```[\s\S]*?(?:```|$)/g, "\n\n");
+  const paragraph = prose
+    .split(/\n\s*\n/)
+    .map(previewLine)
+    .filter(Boolean)
+    .at(-1);
+  return paragraph || undefined;
 }
 
 /// Each bot that has a chat: the chat's session id and the bot's tasks.

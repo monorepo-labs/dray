@@ -7,6 +7,7 @@ import PrStateIcon from "@/components/PrStateIcon";
 import { MergeControl } from "@/components/TasksPanel";
 import { Button } from "@/components/ui/button";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { useStallLine } from "@/hooks/useStallLine";
 import { seededAvatar } from "@/lib/botAvatar";
 import type { CrewRow } from "@/lib/crew";
 import { isModClick } from "@/lib/platform";
@@ -69,8 +70,9 @@ export default function StalledTasks({
 }
 
 /// One task as an inbox row: face, title, PR and time on top; what it needs
-/// under it where its bot wrote that. Only a waiting task holds a skeleton for
-/// the line, since most ready PRs never get one.
+/// under it where its bot wrote that. A waiting task with no need yet draws its
+/// own last message instead, read off its server, and holds a skeleton only
+/// while that read runs; most ready PRs never get a line at all.
 function StalledRow({
   stall,
   now,
@@ -90,6 +92,8 @@ function StalledRow({
   const id = item.sessionId;
   const status = pr && prStatus(pr);
   const need = needLine(stall);
+  const waiting = stall.kind === "waiting" && !need;
+  const last = useStallLine(stall.key, id, waiting);
 
   return (
     // A div, since a button cannot hold Open task and Merge inside it.
@@ -147,9 +151,12 @@ function StalledRow({
         </span>
         {need ? (
           <span className="min-w-0 truncate text-ui text-foreground/70">{need}</span>
+        ) : waiting && last.reading ? (
+          <span className="my-1 h-3 w-48 animate-pulse rounded bg-muted-foreground/20" />
+        ) : waiting && last.line ? (
+          <span className="min-w-0 truncate text-ui text-foreground/70">{last.line}</span>
         ) : (
-          // The bot is still reading the task; the slot holds its place.
-          stall.kind === "waiting" && <span className="my-1 h-3 w-48 animate-pulse rounded bg-muted-foreground/20" />
+          waiting && <span className="min-w-0 truncate text-ui text-muted-foreground">Waiting for your reply</span>
         )}
       </span>
     </div>
