@@ -1444,12 +1444,20 @@ impl SessionManager {
                         });
                     }
 
-                    let queued = s.queue_msg(prompt, attachment_paths, issues, from, app).await;
-                    return Ok(SendOutcome {
-                        snapshot: None,
-                        queued: Some(queued),
-                        issues: linked,
-                    });
+                    // Re-read under the status lock: `turn_in_flight` above is
+                    // stale by every await since, and a turn that ended in
+                    // between has already run its flush. Queued then, the
+                    // prompt waited on a boundary that never came.
+                    if let Some(queued) = s
+                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone(), app)
+                        .await
+                    {
+                        return Ok(SendOutcome {
+                            snapshot: None,
+                            queued: Some(queued),
+                            issues: linked,
+                        });
+                    }
                 }
             }
 
@@ -2506,8 +2514,8 @@ impl Session {
         message
     }
 
-    /// fx alone, and the whole of what keeps its two-prompt race shut. Decides,
-    /// **under the status lock**, whether this prompt joins the running turn —
+    /// What keeps a prompt from being queued behind a turn that already ended.
+    /// Decides, **under the status lock**, whether this prompt joins the running turn —
     /// queued for the turn-end flush — or finds the turn already over and must
     /// start a fresh one. `Some` was queued; `None` means the turn ended and
     /// the caller delivers now.
@@ -2520,8 +2528,10 @@ impl Session {
     /// later would — and a completion can slip between, marking the turn done
     /// with a prompt queued behind it and no reservation, which is the race.
     ///
-    /// fx has no injection point, so a prompt for a live turn only ever waits
-    /// here for its end; there is no write-through path to take.
+    /// For fx it is the whole of what keeps its two-prompt race shut: fx has no
+    /// injection point, so a prompt for a live turn only ever waits here for
+    /// its end. Claude Code's turn-end flush runs after the tracker closes the
+    /// turn, so a prompt queued here while it is still open is drained by it.
     async fn queue_if_in_flight(
         &self,
         prompt: &str,
