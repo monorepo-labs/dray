@@ -1752,6 +1752,9 @@ function App() {
         : [],
     [strip?.owner, stripBot, sessionIndexItems, statusBySession, askingSessions],
   );
+  // A bot's browser is where its tasks' links open, so its new tab lists
+  // their servers too; anyone else's lists its own alone.
+  const tasksIn = (browserFor: string) => (botBrowser(bots, sessionIndexItems, browserFor) ? botTasks : undefined);
   // The index lists one side of the sidebar, so a task settled under a pick
   // leaves it while its folder may still be there to show. Each target's
   // entry is kept as last seen, and the lit one is asked for again on every
@@ -3429,6 +3432,7 @@ function App() {
       return (
         <BrowserPane
           sessionId={browserOf(rowSession.sessionId)}
+          tasks={tasksIn(rowSession.sessionId)}
           tab={Number(key.slice("page:".length))}
           active={!issuesOpen && shown}
           onClose={() => removeSplit(rowSession.sessionId, key)}
@@ -4291,6 +4295,7 @@ function App() {
           <MountOnce when={fullBrowserOpen}>
           <BrowserPane
             sessionId={browserSession ?? selectedSession.sessionId}
+            tasks={tasksIn(selectedSession.sessionId)}
             active={fullBrowserOpen}
           />
           </MountOnce>
