@@ -55,8 +55,6 @@ jobs:
       # Apple stops notarizing whenever it updates the developer agreement
       # until the Account Holder accepts it, and the build only finds out
       # minutes in. Any notarytool call answers the same 403, so ask first.
-      - name: TEMP fail like a refused notary check
-        run: exit 1
       - run: xcrun notarytool history --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" >/dev/null
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -165,11 +163,14 @@ jobs:
 
       # The `build` legs need nothing from this job, so they start beside it
       # and would compile on for minutes after a failure here. Stopping the run
-      # is what keeps the notary check failing in seconds.
+      # is what keeps the notary check failing in seconds. A cancelled run
+      # reads as someone pressing Cancel, so it says why first.
       - if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh run cancel "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}"
+        run: |
+          echo "::error title=Release stopped::extras failed; see its red step. The run is cancelled so the build legs stop."
+          gh run cancel "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}"
 
   # The app's binary, one runner per arch, at the same time. `tauri build
   # --target universal-apple-darwin` compiled the two one after the other, and
