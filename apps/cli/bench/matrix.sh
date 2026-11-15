@@ -1,6 +1,7 @@
 #!/bin/sh
 # dray-serve's opt-level matrix (#1130): the `serve` profile (fat LTO, one
 # codegen unit) at opt levels 3, s and z, each a clean build measured whole.
+# The profile's per-package overrides (serde, memchr at 3) apply to all three.
 # dray is the baseline one throughout, so its rows in `compare` show run-to-run
 # noise. Needs `bench.py run baseline` first. Settings ride as env vars; no
 # Cargo.toml moves.

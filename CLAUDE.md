@@ -108,7 +108,7 @@ That = real entry point. `pnpm tauri` = shim ([scripts/tauri.mjs](apps/desktop/s
 - `cd apps/desktop/src-tauri && cargo test` — Rust tests (parser + mapper + event-model compatibility, plus git and file index). Single test: `cargo test parses_complex_fixture`.
 - `cd apps/desktop/src-tauri && cargo check` — fast type check, no linking whole app.
 - `cd apps/desktop/src-tauri && cargo check --no-default-features --features serve --bin dray-serve --tests` — the headless build. **Run it after any core change**: nothing else compiles it.
-- `cd apps/desktop/src-tauri && cargo build --profile serve --no-default-features --features serve --bin dray-serve` — the shipped server, as release-cli.yml builds it. `serve` (fat LTO, one codegen unit) is its own profile so `tauri build` stays on plain `release`; output lands in `target/serve/`.
+- `cd apps/desktop/src-tauri && cargo build --profile serve --no-default-features --features serve --bin dray-serve` — the shipped server, as release-cli.yml builds it. `serve` (fat LTO, one codegen unit, opt-level "s" with serde and memchr at 3) is its own profile so `tauri build` stays on plain `release`; output lands in `target/serve/`.
 - Size and speed of `dray` and `dray-serve`, before and after a change: [apps/cli/bench/README.md](apps/cli/bench/README.md).
 - `pnpm test` — frontend tests (vitest, node environment, no DOM). Pure logic where being wrong invisible on screen: most of `src/lib` and the module stores in `src/hooks`, a `*.test.ts` beside each. [streaming.ts](apps/desktop/src/lib/streaming.ts) read same committed fixtures Rust tests do. Components not tested — no DOM here.
 

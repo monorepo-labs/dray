@@ -277,13 +277,24 @@ required-features = ["cef"]
 tokio = { version = "1", features = ["test-util"] }
 
 # dray-serve as release-cli.yml ships it (`--profile serve`), apart from
-# `release` so the app's `tauri build` stays as it was. Fat LTO and one codegen
-# unit took it from 44 to 29 MB with no path slower (#1130). Opt-level 3, not
-# "s": "s" was 18 MB but 25-43% slower on list, tail and paging, which
-# serialize straight through serde. No `panic = "abort"`: a panic in one task
-# must not take every session down.
+# `release` so the app's `tauri build` stays as it was (#1130). Fat LTO at "s"
+# takes it from 44 to 18 MB (29 MB at opt-level 3); serde and memchr at 3 keep
+# list and transcript reads within 0.3 ms of opt-level 3. No `panic = "abort"`:
+# a panic in one task must not take every session down.
 [profile.serve]
 inherits = "release"
-opt-level = 3
+opt-level = "s"
 lto = "fat"
 codegen-units = 1
+
+[profile.serve.package.serde]
+opt-level = 3
+
+[profile.serve.package.serde_core]
+opt-level = 3
+
+[profile.serve.package.serde_json]
+opt-level = 3
+
+[profile.serve.package.memchr]
+opt-level = 3

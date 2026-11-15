@@ -13,7 +13,7 @@ cd apps/cli/bench
 ./bench.py run x --serve-env CARGO_PROFILE_SERVE_OPT_LEVEL=3 --cli-bin ~/dray-bench-results/baseline/dray
 ./bench.py run x --reuse-build --server-env LD_PRELOAD=/path/libjemalloc.so.2   # env for the server itself
 ./bench.py bloat baseline                  # dray-serve size by crate and biggest functions
-./matrix.sh                                # dray-serve's `serve` profile at opt 3 / s / z
+./matrix.sh                                # dray-serve's `serve` profile at opt 3 / s / z (serde, memchr stay at 3)
 ```
 
 - Builds match `.github/workflows/release-cli.yml` for the host target, in a private target dir, so each build time is a clean one: `dray` at its `release` profile, `dray-serve` at the `serve` profile in `apps/desktop/src-tauri/Cargo.toml`. `DRAY_BENCH_SERVE_PROFILE=release` builds a tree from before that profile existed. `--env`, `--serve-env` and `--cli-env` pass build settings; `--serve-bin`/`--cli-bin` skip a build and measure a given binary. `DRAY_BENCH_REPO` builds another source tree (a `git archive` of a tag).
