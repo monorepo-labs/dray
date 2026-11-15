@@ -44,6 +44,12 @@ describe() (
     echo "## binary $p"
     echo "arches: $(lipo -archs "$p")"
     codesign -dv --verbose=2 "$p" 2>&1 | grep -E '^(Identifier|Format|CodeDirectory|Authority|TeamIdentifier|Runtime Version)'
+    # The code's own fingerprint, per arch: a binary changed at the same
+    # size and identity shows here and nowhere else. Signing time is not in
+    # it, so a rebuild of the same source matches.
+    for a in $(lipo -archs "$p"); do
+      echo "cdhash $a: $(codesign -dv --verbose=4 --arch "$a" "$p" 2>&1 | sed -n 's/^CDHash=//p')"
+    done
     echo "## entitlements $p"
     codesign -d --entitlements :- "$p" 2>/dev/null | plutil -convert xml1 -o - - 2>/dev/null || echo "(none)"
   done < "$OUT/.machos"
