@@ -1,9 +1,10 @@
-import { ChatBubbleOvalLeftIcon } from "@heroicons/react/16/solid";
+import { ChatBubbleOvalLeftIcon, DocumentPlusIcon } from "@heroicons/react/16/solid";
 import {
   ArrowLeft,
   ArrowRight,
   Bug,
   Clock,
+  Folder,
   ExternalLink,
   Globe,
   RotateCw,
@@ -19,7 +20,7 @@ import BotAvatar from "@/components/BotAvatar";
 import GlobeFilledIcon from "@/components/icons/GlobeFilledIcon";
 import { ItemTab } from "@/components/layout/ViewTabs";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
 import { seededAvatar } from "@/lib/botAvatar";
 import { cn } from "@/lib/utils";
@@ -85,7 +86,8 @@ const machineOf = (s: Srv, sessionMachine?: string) => (s.task ? s.task.machine 
 
 // The window: the titlebar row, the browser's toolbar, the page.
 
-type Win = { bot: boolean; servers: Srv[]; machine?: string };
+/// `full` draws the window at the page's size, as the app's browser view is.
+type Win = { bot: boolean; servers: Srv[]; machine?: string; full?: boolean };
 const WINDOWS: Win[] = [
   { bot: false, servers: SESSION, machine: "boat" },
   { bot: true, servers: BOT },
@@ -199,7 +201,10 @@ function Frame({
   label?: string;
 }) {
   return (
-    <div style={{ height: 480 }} className="flex w-[640px] flex-col overflow-hidden rounded-xl border border-border bg-background shadow-card">
+    <div
+      style={win.full ? { height: "100%", width: "100%" } : { height: 480, width: 640 }}
+      className="flex flex-col overflow-hidden rounded-xl border border-border bg-background shadow-card"
+    >
       <Row bot={win.bot} label={page ? page.page : (label ?? "New tab")} page={!!page || !!label} />
       {toolbar}
       {page ? <FakePage srv={page} /> : <div className="relative min-h-0 flex-1 overflow-hidden">{empty}</div>}
@@ -207,14 +212,12 @@ function Frame({
   );
 }
 
-const rowClass = "flex min-h-8 min-w-0 items-center gap-2 rounded-md px-2 text-left hover:bg-foreground/5";
-
 function Recent() {
   return (
     <section className="flex flex-col gap-0.5">
       <h3 className="px-2 pb-1 text-muted-foreground">Recently visited</h3>
       {RECENT.map((r) => (
-        <div key={r.url} className={rowClass}>
+        <div key={r.url} className="flex min-h-7 min-w-0 items-center gap-2 rounded-md px-2 text-left hover:bg-foreground/5">
           <Globe className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="min-w-0 truncate">{r.title}</span>
           <span className="ml-auto min-w-0 max-w-1/2 shrink-0 truncate font-mono text-muted-foreground">{r.url}</span>
@@ -246,42 +249,63 @@ function groups(win: Win): { task?: Task; heading: React.ReactNode; servers: Srv
   }));
 }
 
-/// A's list: a heading per task (or the session's machine), a card per server.
+/// A's list, in the markup `Servers` in BrowserPane draws: a heading per
+/// task (or the session's machine), a bordered card per server.
 function ServerList({ win, onOpen }: { win: Win; onOpen: (s: Srv) => void }) {
   return (
     <>
-    {groups(win).map((g, i) => (
-      <section key={i} className="flex flex-col gap-1">
-        <h3 className="px-2 pb-0.5 text-muted-foreground">{g.heading}</h3>
-        {g.servers.map((s) => (
-          <div key={s.port} className="flex items-center gap-1 rounded-lg border border-border p-0.5">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button type="button" onClick={() => onOpen(s)} className={cn(rowClass, "min-w-0 flex-1 hover:bg-transparent hover:underline")}>
-                  <Live />
+      {groups(win).map((g, i) => (
+        <section key={i} className="flex flex-col gap-1.5">
+          <h3 className="px-2 pb-1 text-muted-foreground">{g.heading}</h3>
+          {g.servers.map((s) => (
+            <div key={s.port} className="flex flex-col rounded-lg border border-border">
+              <div className="flex min-h-9 items-center gap-1 p-1">
+                <button
+                  type="button"
+                  onClick={() => onOpen(s)}
+                  className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-1 text-left hover:underline"
+                >
                   <span className="font-mono">localhost:{s.port}</span>
                   <span className="truncate text-muted-foreground">{s.process}</span>
                 </button>
-              </TooltipTrigger>
-              {s.forwarded && (
-                <TooltipContent side="top">
-                  Runs on {machineOf(s, win.machine)}; opens here through localhost:{s.forwarded}
-                </TooltipContent>
-              )}
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon-sm" aria-label="Get shareable link" className={cn("shrink-0", TOOL_BTN)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Get shareable link"
+                  className={cn("group/share h-7 shrink-0 gap-0 px-[7px] text-ui text-muted-foreground", TOOL_BTN)}
+                >
                   <Share2 className="size-3.5" />
+                  <span className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-[max-width,opacity] duration-200 ease-out group-hover/share:max-w-40 group-hover/share:opacity-100 motion-reduce:transition-none">
+                    <span className="block pr-0.5 pl-1.5">Get shareable link</span>
+                  </span>
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">Get shareable link</TooltipContent>
-            </Tooltip>
-          </div>
-        ))}
-      </section>
-    ))}
+              </div>
+            </div>
+          ))}
+        </section>
+      ))}
     </>
+  );
+}
+
+/// The Diff and Files cards the new tab leads with once a turn has run.
+function TurnCards() {
+  return (
+    <section className="grid grid-cols-2 gap-2">
+      {[
+        { label: "Diff", icon: <DocumentPlusIcon className="size-4 text-muted-foreground" /> },
+        { label: "Files", icon: <Folder className="size-4 fill-current text-muted-foreground" /> },
+      ].map((c) => (
+        <button
+          key={c.label}
+          type="button"
+          className="flex flex-col items-start gap-1.5 rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:bg-foreground/5"
+        >
+          <span className="flex size-4 items-center justify-center">{c.icon}</span>
+          {c.label}
+        </button>
+      ))}
+    </section>
   );
 }
 
@@ -295,10 +319,12 @@ function A({ win }: { win: Win }) {
       page={page}
       toolbar={<Toolbar value={page ? `localhost:${page.forwarded ?? page.port}` : ""} page={!!page} />}
       empty={
-        <div className="flex h-full justify-center overflow-hidden px-8 pt-6 text-ui">
-          <div className="flex w-full max-w-md flex-col gap-4">
+        <div className="flex h-full overflow-y-auto p-8 text-ui">
+          <div className="m-auto flex w-full max-w-sm flex-col gap-4">
+            <TurnCards />
             <ServerList win={win} onOpen={setPage} />
             {!win.bot && <Recent />}
+            <p className="px-2 text-muted-foreground">Search or enter a URL above, or open a link from the chat.</p>
           </div>
         </div>
       }
@@ -474,7 +500,8 @@ function E({ win }: { win: Win }) {
       label={`localhost:${dead.port}`}
       toolbar={<Toolbar value={`localhost:${page?.port ?? dead.port}/`} page />}
       empty={
-        <div style={{ paddingTop: 40 }} className="flex h-full flex-col items-center gap-5 bg-card px-10 text-ui">
+        <div className="flex h-full overflow-y-auto bg-card p-8 text-ui">
+          <div className="m-auto flex w-full flex-col items-center gap-5">
           <div className="flex flex-col items-center gap-2 text-center">
             <Unplug className="size-6 text-muted-foreground" />
             <h2 className="text-base font-medium">Nothing is answering on localhost:{dead.port}</h2>
@@ -502,10 +529,11 @@ function E({ win }: { win: Win }) {
             </div>
           </div>
           {rest.length > 0 && (
-            <div className="flex w-full max-w-md flex-col gap-4">
+            <div className="flex w-full max-w-sm flex-col gap-4">
               <ServerList win={{ ...win, servers: rest }} onOpen={setPage} />
             </div>
           )}
+          </div>
         </div>
       }
     />
@@ -550,7 +578,50 @@ const VARIATIONS: { key: string; name: string; View: (p: { win: Win }) => React.
   },
 ];
 
+/// `?full=A&who=bot` draws one take alone at the window's size, behind a
+/// sidebar-wide strip, so its spacing reads as it would in the app.
+function Full({ view, bot }: { view: string; bot: boolean }) {
+  const v = VARIATIONS.find((x) => x.key === view) ?? VARIATIONS[0];
+  const win = { ...WINDOWS[bot ? 1 : 0], full: true };
+  return (
+    <TooltipProvider>
+      <div className="flex h-screen">
+        <aside className="flex w-60 shrink-0 flex-col gap-2 p-4 text-ui text-muted-foreground">
+          <a href="?" className="hover:text-foreground">
+            ← All variations
+          </a>
+          <span>
+            {v.key} — {v.name}, {bot ? "bot" : "session"}
+          </span>
+          <FullLinks />
+        </aside>
+        <main className="min-w-0 flex-1 p-2 pl-0">
+          <v.View win={win} />
+        </main>
+      </div>
+      <DemoThemeBar />
+    </TooltipProvider>
+  );
+}
+
+function FullLinks() {
+  return (
+    <span className="flex flex-wrap gap-x-3 gap-y-1 text-ui">
+      {["A", "E"].flatMap((k) =>
+        ["session", "bot"].map((who) => (
+          <a key={k + who} href={`?full=${k}&who=${who}`} className="underline underline-offset-2 hover:text-foreground">
+            {k} {who}
+          </a>
+        )),
+      )}
+    </span>
+  );
+}
+
 function Demo() {
+  const params = new URLSearchParams(location.search);
+  const full = params.get("full");
+  if (full) return <Full view={full} bot={params.get("who") === "bot"} />;
   return (
     <TooltipProvider>
       <div className="flex flex-col gap-10 p-10 pb-40">
@@ -559,6 +630,9 @@ function Demo() {
           <p className="max-w-3xl text-ui text-muted-foreground">
             Left: a normal session on <b>boat</b>, two servers. Right: a bot's browser, where every task's links now open — its
             servers come from three tasks on This Mac, boat and a cloud machine. Click a server to open it in the tab.
+          </p>
+          <p className="flex items-center gap-2 text-ui text-muted-foreground">
+            Full page, at the window's size: <FullLinks />
           </p>
         </div>
         {VARIATIONS.map((v) => (

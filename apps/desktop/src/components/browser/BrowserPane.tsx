@@ -1077,27 +1077,24 @@ function Servers({
                       {s.mine && !o.task && <span className="ml-auto shrink-0 text-muted-foreground">this session</span>}
                     </button>
                     {!s.share && (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label="Get shareable link"
-                            onClick={() => share(o.sessionId, s.port)}
-                            disabled={sharing !== null}
-                            className={cn("shrink-0 text-muted-foreground", TOOL_BTN)}
-                          >
-                            {sharing === key ? <Spinner className="size-3.5" /> : <Share2 className="size-3.5" />}
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          {sharing !== key
-                            ? "Get shareable link"
-                            : fetching
-                              ? "Setting up tunnel…"
-                              : "Creating link…"}
-                        </TooltipContent>
-                      </Tooltip>
+                      // An icon that slides its name out on hover, and keeps it
+                      // out while the link is being made. Max-width rather than
+                      // width, which cannot animate to the label's own size.
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label="Get shareable link"
+                        onClick={() => share(o.sessionId, s.port)}
+                        disabled={sharing !== null}
+                        className={cn("group/share h-7 shrink-0 gap-0 px-[7px] text-ui text-muted-foreground", TOOL_BTN)}
+                      >
+                        {sharing === key ? <Spinner className="size-3.5" /> : <Share2 className="size-3.5" />}
+                        <span className={cn("max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-[max-width,opacity] duration-200 ease-out group-hover/share:max-w-40 group-hover/share:opacity-100 motion-reduce:transition-none", sharing === key && "max-w-40 opacity-100")}>
+                          <span className="block pr-0.5 pl-1.5">
+                            {sharing !== key ? "Get shareable link" : fetching ? "Setting up tunnel…" : "Creating link…"}
+                          </span>
+                        </span>
+                      </Button>
                     )}
                   </div>
                   {s.share && (
