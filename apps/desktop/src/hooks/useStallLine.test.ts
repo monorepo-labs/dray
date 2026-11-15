@@ -44,6 +44,17 @@ describe("readStallLine", () => {
     await expect(line).resolves.toBeUndefined();
   });
 
+  it("joins a read that hangs past its timeout rather than starting another", async () => {
+    answers.set("f", "silent");
+    const first = readStallLine("f:1", "f");
+    await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS);
+    await expect(first).resolves.toBeUndefined();
+    const second = readStallLine("f:1", "f");
+    await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS);
+    await expect(second).resolves.toBeUndefined();
+    expect(asked).toEqual(["f"]);
+  });
+
   it("reads again after a failure, and not after an answer", async () => {
     answers.set("d", "error");
     await expect(readStallLine("d:1", "d")).resolves.toBeUndefined();

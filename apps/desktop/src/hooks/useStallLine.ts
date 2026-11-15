@@ -17,27 +17,31 @@ const ANSWERED_CAP = 200;
 /// Lines read, by stall key; `null` where the task wrote nothing. A key names
 /// one stall, so a task that moves is read afresh.
 const answered = new Map<string, string | null>();
+/// Reads still running, by stall key. Kept until the read settles rather than
+/// until it times out, so a retry joins a read that hangs instead of stacking
+/// another beside it.
 const inFlight = new Map<string, Promise<string | null | undefined>>();
 
 /// The task's last message as one line; `undefined` where its server failed or
 /// did not answer in time.
 export function readStallLine(key: string, sessionId: string): Promise<string | null | undefined> {
-  const running = inFlight.get(key);
-  if (running) return running;
+  let read = inFlight.get(key);
+  if (!read) {
+    // `readPreviews` drops a server that errors, so a missing entry is a failure.
+    read = readPreviews([sessionId])
+      .then((p) => (p[sessionId] ? (lastMessageLine(p[sessionId].text) ?? null) : undefined))
+      .then((found) => {
+        if (found !== undefined) {
+          answered.set(key, found);
+          if (answered.size > ANSWERED_CAP) answered.delete(answered.keys().next().value!);
+        }
+        return found;
+      })
+      .finally(() => inFlight.delete(key));
+    inFlight.set(key, read);
+  }
   const timeout = new Promise<undefined>((done) => setTimeout(done, READ_TIMEOUT_MS));
-  // `readPreviews` drops a server that errors, so a missing entry is a failure.
-  const read = readPreviews([sessionId]).then((p) => (p[sessionId] ? (lastMessageLine(p[sessionId].text) ?? null) : undefined));
-  const line = Promise.race([read, timeout])
-    .then((found) => {
-      if (found !== undefined) {
-        answered.set(key, found);
-        if (answered.size > ANSWERED_CAP) answered.delete(answered.keys().next().value!);
-      }
-      return found;
-    })
-    .finally(() => inFlight.delete(key));
-  inFlight.set(key, line);
-  return line;
+  return Promise.race([read, timeout]);
 }
 
 /// A waiting row's line until its bot writes a need (`dray session need`),
