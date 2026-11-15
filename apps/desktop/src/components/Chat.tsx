@@ -142,6 +142,10 @@ const ACTIVE_LINE_PX = 24;
 /// flush against the header.
 const JUMP_PAD_PX = 12;
 
+/// Longest a smooth jump is taken to glide before a scroll is the reader's own
+/// again.
+const GLIDE_MS = 1500;
+
 /// Turns per page while a bot chat reads back to a picked task's reply. Each
 /// page lands as one render of the whole app, which costs far more than the
 /// read, so a long way back is taken in few of them.
@@ -250,6 +254,16 @@ export default function Chat({
   // from one the pin's own write queued — see `onScroll`. Every pin goes
   // through `pin` so the two cannot disagree.
   const pinnedTop = useRef(-1);
+  // A smooth jump in flight: where it lands, and until when. Leaving the
+  // bottom, its first frames are still within reach of the end, and read as
+  // the reader coming back they re-took the pin, which cancelled the glide, and
+  // let a bot chat's window go, which dropped the row it was headed for.
+  const glide = useRef<{ to: number; until: number } | null>(null);
+  const glideTo = (el: HTMLElement, top: number) => {
+    const to = Math.min(Math.max(top, 0), el.scrollHeight - el.clientHeight);
+    glide.current = { to, until: performance.now() + GLIDE_MS };
+    el.scrollTo({ top: to, behavior: "smooth" });
+  };
 
   // Pads the top so the newest turn starts on a whole pixel. WebKit scrolls in
   // whole pixels, so every backfill step mounting a fractional height above put
@@ -269,6 +283,7 @@ export default function Chat({
     content.style.setProperty("--snap", `${extra}px`);
   };
   const pin = (el: HTMLElement) => {
+    glide.current = null;
     snapToPixel();
     el.scrollTop = el.scrollHeight;
     pinnedTop.current = el.scrollTop;
@@ -652,7 +667,7 @@ export default function Chat({
 
     followRef.current = false;
     setActiveTurn(key);
-    scroller.scrollTo({ top: Math.max(top, 0), behavior: "smooth" });
+    glideTo(scroller, top);
   };
 
   // A bot chat is one conversation that grows forever, and drawing all of it
@@ -719,10 +734,13 @@ export default function Chat({
       if (more || drawFrom > 0) {
         // Unpinned first: pinned, the window growing re-takes the bottom, and
         // that scroll reads as the reader at the end and lets the window go.
+        // Held whole even with nothing undrawn: a window left following drops
+        // every page read above its tail, so the page read here went the
+        // moment it landed and the reply was never found.
         focusUnpinned.current ||= followRef.current;
         followRef.current = false;
-        if (drawFrom > 0) holdWindow(ALL_HELD);
-        else if (oldest?.olderBefore != null) loadOlder(oldest.sessionId, FOCUS_PAGE_TURNS);
+        holdWindow(ALL_HELD);
+        if (drawFrom === 0 && oldest?.olderBefore != null) loadOlder(oldest.sessionId, FOCUS_PAGE_TURNS);
         return;
       }
       focusedAt.current = botFocus.at;
@@ -745,7 +763,8 @@ export default function Chat({
       followRef.current = false;
       // Within a screen of the top the scroll reads the next page, and putting
       // the reader back on their row cuts a smooth one short.
-      scroller.scrollTo({ top: to, behavior: to < scroller.clientHeight ? "auto" : "smooth" });
+      if (to < scroller.clientHeight) scroller.scrollTo({ top: to });
+      else glideTo(scroller, to);
     });
     return () => cancelAnimationFrame(frame);
   }, [botFocus, oldestKey, more]);
@@ -805,6 +824,7 @@ export default function Chat({
   // the pin — the chat sat at the bottom unpinned, and whatever landed next,
   // seen or behind another tab, was left below the view.
   const onWheel = (e: React.WheelEvent) => {
+    glide.current = null;
     const el = scrollRef.current;
     if (!el || e.deltaY >= 0 || el.scrollTop <= 0) return;
     for (let n = e.target as Element | null; n !== el; n = n.parentElement) {
@@ -816,7 +836,13 @@ export default function Chat({
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX;
+    const g = glide.current;
+    if (g && (Math.abs(el.scrollTop - g.to) <= 1 || performance.now() > g.until)) glide.current = null;
+    // A card pick still reading back to its row is not the reader either: the
+    // rows it mounts above can leave a scroll event at the end before the
+    // glide starts, and letting the window go there drops what it mounted.
+    const hunting = !!botFocus && focusedAt.current !== botFocus.at;
+    const atEnd = !glide.current && !hunting && el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX;
     // **Only a scroll that moved the view can drop the pin.** A pin is a write
     // to `scrollTop`, and the browser answers that write with a scroll event a
     // frame later — by which time anything landing async in the transcript, a
@@ -867,6 +893,7 @@ export default function Chat({
   const scrollToBottom = () => {
     const el = scrollRef.current;
     if (!el) return;
+    glide.current = null;
     followRef.current = true;
     el.scrollTo({ top: el.scrollHeight, behavior: busy ? "auto" : "smooth" });
   };

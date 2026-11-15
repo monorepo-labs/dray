@@ -174,7 +174,8 @@ function Demo() {
         <p className="max-w-xl text-ui text-muted-foreground">
           Eleven tasks, eight stalled. A ready PR and a task idle on you reach the card; every stall goes to the bot. A row
           scrolls the chat to the bot's reply about the task; Open task, on hover, opens it. Merge waits a
-          second and takes the row away, as settling does.
+          second and takes the row away, as settling does, and the other PRs read Checking… for four seconds while
+          GitHub works their mergeability out again.
         </p>
         <div className="flex items-center gap-4 text-ui">
           <button type="button" className="underline" onClick={writeNeeds}>
@@ -214,7 +215,18 @@ function Demo() {
               onOpen={(id) => setOpened(ROWS.find((x) => x.row.item.sessionId === id)?.row.item.title ?? id)}
             onMerge={async (r) => {
               await new Promise((done) => setTimeout(done, 1000));
+              // As GitHub does: every other open PR's mergeability is worked
+              // out again, for a few seconds here.
+              const recheck = (settled: boolean) =>
+                setRows((all) =>
+                  all.map((x) => {
+                    const was = ROWS.find((y) => y.row.item.sessionId === x.row.item.sessionId)?.pr;
+                    return x.pr && was ? { ...x, pr: { ...x.pr, mergeable: settled ? was.mergeable : "UNKNOWN" } } : x;
+                  }),
+                );
               setRows((all) => all.filter((x) => x.row.item.sessionId !== r.item.sessionId));
+              recheck(false);
+              setTimeout(() => recheck(true), 4000);
             }}
             />
           </div>

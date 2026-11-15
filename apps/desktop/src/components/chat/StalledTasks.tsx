@@ -131,7 +131,15 @@ function StalledRow({
               Open task
               <ArrowUpRight data-icon="inline-end" />
             </Button>
-            {stall.kind === "ready" && pr && <MergeControl onMerge={(method) => onMerge(row, pr, method)} />}
+            {stall.kind === "ready" &&
+              pr &&
+              (stall.checking ? (
+                <span className="text-[12px] text-muted-foreground" title="GitHub is checking whether this can merge">
+                  Checking…
+                </span>
+              ) : (
+                <MergeControl onMerge={(method) => onMerge(row, pr, method)} />
+              ))}
           </span>
           <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">
             {compactAge(item.modified, now)}

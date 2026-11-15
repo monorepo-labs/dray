@@ -110,6 +110,8 @@ export function useStalledTasks({
       .filter(
         (s) =>
           (s.kind === "ready" || !needLine(s)) &&
+          // Only GitHub can say whether a checking PR is still ready.
+          !s.checking &&
           !nudged.has(s.key) &&
           !sending.current.has(s.key) &&
           triedOn.current.get(s.key) !== now,
