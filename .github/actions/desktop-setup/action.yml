@@ -19,10 +19,12 @@ runs:
   using: composite
   steps:
     - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+    # No pnpm store cache: restoring it was 25s ahead of everything else,
+    # where the install fetching its packages afresh runs hidden behind the
+    # cargo cache below.
     - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
         node-version: 22
-        cache: pnpm
 
     # Started here and waited for at the end, so it runs while the cargo cache
     # below downloads: 26s on its own, measured on v0.30.6. The desktop app's

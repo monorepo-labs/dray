@@ -187,6 +187,12 @@ jobs:
       # why the two share it.
       - uses: ./.github/actions/desktop-setup
 
+      - name: TEMP size the cache by arch
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          du -sk apps/desktop/src-tauri/target/* ~/.cargo/registry/* ~/.cargo/git ~/.cache/cef/* 2>/dev/null | sort -rn
+          du -sk apps/desktop/src-tauri/target/*/release/{deps,build,.fingerprint} 2>/dev/null
+
       # tauri-build copies the sidecar named for this triple next to the
       # binary while compiling, and fails if there is none; the bundler then
       # ships `dray-cli-universal-apple-darwin`, which `extras` builds. So the
@@ -383,7 +389,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          REF="$(gh release view --repo "${GITHUB_REPOSITORY}" --json tagName --jq .tagName)"
+          # The newest app release; GitHub's "latest" can be a `cli-v*` one.
+          REF="$(gh release list --repo "${GITHUB_REPOSITORY}" --exclude-pre-releases --limit 50 --json tagName \
+            --jq '[.[].tagName | select(startswith("v"))][0]')"
           echo "reference: $REF"
           R="$RUNNER_TEMP/reference"
           C="$RUNNER_TEMP/release/compare"
