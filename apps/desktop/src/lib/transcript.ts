@@ -1,4 +1,4 @@
-import { toolSummary } from "@/lib/tools";
+import { subagentBrief, toolSummary } from "@/lib/tools";
 import type { AgentEvent, FileEdit, ImageRef, ToolResult, Usage } from "@/types/events";
 
 export type SubagentRun = {
@@ -33,6 +33,8 @@ export type SubagentRun = {
   /// spawning call *is* the whole run, and a row that only navigates would send
   /// the reader to a panel holding what they were already looking at. Every
   /// other harness streams the child's work, where the link is the point.
+  /// fx 0.0.17 names its child, which `fx session` reads back, so only an
+  /// older fx's run stays inline.
   ///
   /// Keyed on the harness rather than on "has this run filed any events yet",
   /// which is true of every run for its first frame and would flip the row out
@@ -930,6 +932,10 @@ function build(
   for (const run of subagentById.values()) {
     run.spawn = callById.get(run.id) ?? null;
     run.background = !run.done && resultByCallId.has(run.id);
+    // fx 0.0.17 names its child, and `fx session <id>/<agent>` reads the
+    // child's conversation back, so the run has a tab to open after all.
+    const input = run.spawn?.payload.type === "tool_call_started" ? run.spawn.payload.input : null;
+    if (run.inline && input && subagentBrief(input)?.agent) run.inline = false;
   }
 
   // Applied last, and only where no real result exists. A background subagent
@@ -979,13 +985,21 @@ function build(
   };
 }
 
-/// The runs the Background Tasks list draws: the ones still running, plus the
-/// one the reader has open. The list is for seeing what is going on and
-/// stopping it, so a finished run drops off. The open one stays, or a click on
-/// a finished run's chat row opens the tab onto nothing, and a run finishing
-/// while the reader reads it would vanish from under them.
+/// The runs the More tab lists: every subagent, and the shells still running
+/// plus the one the reader has open. A finished shell is done with; a finished
+/// subagent is a conversation the reader may still want to open. The open one
+/// stays, or a run finishing while the reader reads it would vanish from under
+/// them.
 export function runningRuns(runs: SubagentRun[], openId: string | null): SubagentRun[] {
-  return runs.filter((run) => !run.done || run.id === openId);
+  return runs.filter((run) => !run.done || run.id === openId || !isShellRun(run));
+}
+
+/// A backgrounded shell — Claude Code's `Bash` or `Monitor`, which register
+/// as `local_bash` tasks — rather than an agent with a conversation of its own.
+/// A shell's whole account is its spawning call, so it has no tab to open.
+export function isShellRun(run: SubagentRun): boolean {
+  const name = run.spawn?.payload.type === "tool_call_started" ? run.spawn.payload.name : null;
+  return name === "Bash" || name === "Monitor" || run.label === "local_bash";
 }
 
 /// What a turn draws from: the turn and the maps its rows look calls up in.

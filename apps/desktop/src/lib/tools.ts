@@ -82,7 +82,7 @@ export function toolSummary(
     case "web":
       return field(input, "url") ?? field(input, "query");
     case "subagent_spawn":
-      return field(input, "description") ?? field(input, "subagent_type");
+      return field(input, "description") ?? subagentBrief(input)?.task ?? field(input, "subagent_type");
     default:
       break;
   }
@@ -169,6 +169,7 @@ const TOOL_VERBS: Record<string, Verbs> = {
   // fx's hand-off to a nested agent. Not "Subagent", which is the wire name and
   // a noun — the row says what happened, and the task sits beside it.
   subagent: ["Delegating", "Delegated", "task"],
+  subagent_wait: ["Waiting for subagents", "Waited for subagents", "wait"],
   // What the agent can reach: skills and MCP tools matching a query.
   capability_search: ["Searching", "Searched", "capability"],
   // fx truncates a long tool result and hands the model a handle to query for
@@ -226,15 +227,18 @@ const TOOL_VERBS: Record<string, Verbs> = {
 /// wants to know, since the run is otherwise on the session's own settings.
 export function subagentBrief(
   input: JsonValue,
-): { task: string; model: string | null; effort: string | null } | null {
+): { task: string; model: string | null; effort: string | null; agent: string | null } | null {
   const request = nested(input, "request");
-  const task = request && field(request, "task")?.trim();
+  if (request) {
+    const task = field(request, "task")?.trim();
+    if (!task) return null;
+    return { task, model: field(request, "model"), effort: field(request, "effort"), agent: null };
+  }
+  // fx 0.0.17 messages a named child instead (`{action:"message", agent,
+  // message}`), and that name is what `fx session <id>/<agent>` reads it by.
+  const task = field(input, "action") === "message" ? field(input, "message")?.trim() : null;
   if (!task) return null;
-  return {
-    task,
-    model: field(request, "model"),
-    effort: field(request, "effort"),
-  };
+  return { task, model: field(input, "model"), effort: field(input, "effort"), agent: field(input, "agent") };
 }
 
 /// The brief a `Skill` call was given — the sentence the model wrote for the
@@ -247,6 +251,15 @@ export function skillBrief(input: JsonValue): string | null {
 
 /// The label for a single tool-call row. `pending` picks the tense — a live call
 /// reads "Reading", a settled one "Read".
+/// The name a row's verb is looked up by. fx 0.0.17's `subagent` tool also
+/// waits on its children, and only a message delegates, so the other actions
+/// are named for what they do rather than drawn as "Delegated".
+export function verbName(name: string, toolType: string, input: JsonValue): string {
+  if (name !== "subagent" || toolType === "subagent_spawn") return name;
+  const action = field(input, "action");
+  return action ? `subagent_${action}` : name;
+}
+
 export function toolLabel(name: string, pending: boolean): string {
   const verbs = TOOL_VERBS[name];
   if (!verbs) return name;

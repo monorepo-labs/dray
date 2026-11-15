@@ -53,7 +53,7 @@ export default function MorePanel({
 
       {subagents.runs.length > 0 && (
         <>
-          <SectionTitle>Background Tasks</SectionTitle>
+          <SectionTitle>Background tasks / Subagents</SectionTitle>
           <SubagentPanel {...subagents} />
         </>
       )}

@@ -13,6 +13,7 @@
 //! permission channel, no cancel. See `apps/desktop/FX-PLAN.md`.
 
 pub mod commands;
+pub mod history;
 pub mod mapper;
 pub mod mcp;
 pub mod models;

@@ -249,7 +249,8 @@ import {
 import { worktreeNoticeDetail } from "@/lib/worktree";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import { useHandoffConfig } from "@/hooks/useHandoffConfig";
-import { buildTranscript, hiddenInBotChat, runningRuns, sessionMedia } from "@/lib/transcript";
+import { buildTranscript, hiddenInBotChat, isShellRun, runningRuns, sessionMedia } from "@/lib/transcript";
+import SubagentView from "@/components/SubagentView";
 import { cn } from "@/lib/utils";
 import { onUnhandledEscape } from "@/lib/escape";
 import { playSwipeTick } from "@/lib/tick";
@@ -681,6 +682,12 @@ function App() {
   const anyRunning = Object.values(statusBySession).some((s) => s === "in_progress");
 
   const [selectedSubagentId, setSelectedSubagentId] = useState<string | null>(null);
+  // Subagents open as tabs in a session's row, by the spawning call's id, and
+  // the one lit in each. The title is kept from the open, since a transcript
+  // evicted and loaded again has no run to name it for a moment. In memory,
+  // like `viewTabs`.
+  const [subagentTabs, setSubagentTabs] = useState<Record<string, { id: string; title: string }[]>>({});
+  const [subagentLit, setSubagentLit] = useState<Record<string, string>>({});
 
   // Per session and not persisted: which view you were last on is working
   // context for one session rather than a standing preference, and reopening
@@ -735,7 +742,14 @@ function App() {
       ? pickTabs[selectedBotId]?.find((t) => t.id === pickLit[selectedBotId])
       : undefined;
   // A pick closed while it was on screen leaves its session on Chat.
-  const viewTab: ViewTab = storedViewTab === "pick" && !litPick ? "chat" : storedViewTab;
+  const litSubagent =
+    storedViewTab === "subagent" && selectedSessionId
+      ? subagentTabs[selectedSessionId]?.find((t) => t.id === subagentLit[selectedSessionId])
+      : undefined;
+  const viewTab: ViewTab =
+    (storedViewTab === "pick" && !litPick) || (storedViewTab === "subagent" && !litSubagent)
+      ? "chat"
+      : storedViewTab;
 
   /// The picked issue as the one-element list the panel reads.
   ///
@@ -1832,10 +1846,29 @@ function App() {
 
   // Opens the tab without touching the selection, so a run the reader already
   // had expanded is still expanded when they come back to it.
+  //
+  // A subagent with a conversation of its own opens as a tab in the row
+  // instead, the way a bot's task does; a background shell has nothing past
+  // its call to show, so it keeps the panel. Only from the selected session's
+  // own row: a pane or a lit task tab names a run this session does not hold.
   const openSubagent = (id: string) => {
+    const run = subagents.find((r) => r.id === id);
+    if (run && !isShellRun(run) && selectedSessionId && !stripOwner) return openSubagentTab(selectedSessionId, run);
     setSelectedSubagentId(id);
     showPanel("more");
   };
+  const openSubagentTab = (sessionId: string, run: { id: string; description: string | null; label: string | null }) => {
+    const title = run.description ?? run.label ?? "Subagent";
+    setSubagentTabs((prev) =>
+      prev[sessionId]?.some((t) => t.id === run.id)
+        ? prev
+        : { ...prev, [sessionId]: [...(prev[sessionId] ?? []), { id: run.id, title }] },
+    );
+    setSubagentLit((prev) => ({ ...prev, [sessionId]: run.id }));
+    setViewTabs((prev) => ({ ...prev, [sessionId]: "subagent" }));
+  };
+  const closeSubagentTab = (sessionId: string, id: string) =>
+    setSubagentTabs((prev) => ({ ...prev, [sessionId]: (prev[sessionId] ?? []).filter((t) => t.id !== id) }));
 
   // An open session's own directory, since project- and local-scoped commands
   // differ per repo and a session can be running somewhere the picker isn't
@@ -2916,7 +2949,12 @@ function App() {
   const rowTabOnScreen =
     !issuesOpen &&
     !!selectedSessionId &&
-    (viewTab === "files" || viewTab === "changes" || viewTab === "pick" || fullBrowserOpen || !!strip?.lit);
+    (viewTab === "files" ||
+      viewTab === "changes" ||
+      viewTab === "pick" ||
+      viewTab === "subagent" ||
+      fullBrowserOpen ||
+      !!strip?.lit);
   const closeTabOrPane = () => {
     if (!selectedSessionId) return;
     // The row's own close, so the chord lands where the cross would — and
@@ -3728,6 +3766,29 @@ function App() {
                     }
                   : undefined
               }
+              subagents={
+                stripOwner
+                  ? undefined
+                  : {
+                      items: (subagentTabs[rowSession.sessionId] ?? []).map((t) => {
+                        const run = subagents.find((r) => r.id === t.id);
+                        return { id: t.id, label: t.title, working: !!run && !run.done };
+                      }),
+                      lit: subagentLit[rowSession.sessionId] ?? null,
+                      onPick: (id) => {
+                        setSubagentLit((prev) => ({ ...prev, [rowSession.sessionId]: id }));
+                        setViewTab("subagent");
+                      },
+                      onClose: (id) => closeSubagentTab(rowSession.sessionId, id),
+                      onReopen: (id) => {
+                        const run = subagents.find((r) => r.id === id);
+                        if (!run) return;
+                        openSubagentTab(rowSession.sessionId, run);
+                        // Back in the row, the reader left where they are.
+                        setViewTabs((prev) => ({ ...prev, [rowSession.sessionId]: viewTab }));
+                      },
+                    }
+              }
               // Not past a parent's breadcrumb, whose width the lead leaves out.
               alignX={crumb ? 0 : sidebarDrawn}
             />
@@ -3894,6 +3955,7 @@ function App() {
                   resultByCallId,
                   live: busy || backgroundTasks.length > 0,
                   onSelect: setSelectedSubagentId,
+                  onOpen: stripOwner ? undefined : (run) => openSubagentTab(shownSession.sessionId, run),
                   onStopTask: handleStopTask,
                 }}
               />
@@ -4262,6 +4324,22 @@ function App() {
             revision={turnRevision}
           />
           </MountOnce>
+        </TabBody>
+      )}
+      {litSubagent && selectedSession && (
+        <TabBody active={!issuesOpen && viewTab === "subagent"}>
+          {(() => {
+            const run = subagents.find((r) => r.id === litSubagent.id);
+            return run ? (
+              <SubagentView
+                key={run.id}
+                run={run}
+                sessionId={selectedSession.sessionId}
+                cwd={selectedSession.cwd}
+                resultByCallId={resultByCallId}
+              />
+            ) : null;
+          })()}
         </TabBody>
       )}
       {litPick && selectedBotId && (

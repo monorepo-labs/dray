@@ -168,9 +168,14 @@ impl Mapper {
                 let mut out = self.ensure_turn();
                 out.extend(self.close_open());
                 let name = name.unwrap_or_else(|| kind.name().to_string());
-                let tool_type = tool_type(kind, &name);
                 let input = tool_input(kind, raw_input);
                 let task = (name == "subagent").then(|| subagent_task(&input)).flatten();
+                // A `wait` or any other non-delegating action is no spawn, or
+                // it would draw as "Delegating" with nothing delegated.
+                let tool_type = match (&task, name.as_str()) {
+                    (None, "subagent") => kind.tool_type(),
+                    _ => tool_type(kind, &name),
+                };
                 if kind == ToolKind::Execute {
                     self.shells.insert(tool_call_id.clone());
                 }
@@ -528,7 +533,7 @@ impl Mapper {
 ///
 /// Keyed on the name because there is no kind to key on; a rename costs these
 /// two readings and nothing else.
-fn tool_type(kind: ToolKind, name: &str) -> ToolType {
+pub(super) fn tool_type(kind: ToolKind, name: &str) -> ToolType {
     match name {
         "subagent" => return ToolType::SubagentSpawn,
         "glob_files" => return ToolType::Search,
@@ -542,9 +547,16 @@ fn tool_type(kind: ToolKind, name: &str) -> ToolType {
 const SUBAGENT_LABEL: &str = "Subagent";
 
 /// The brief a `subagent` call was given, which is the run's own description.
-/// fx nests it under `request` beside the dispatch fields.
-fn subagent_task(input: &Value) -> Option<String> {
-    let task = input.get("request")?.get("task")?.as_str()?.trim();
+/// fx up to 0.0.16 nests it under `request`; 0.0.17 messages a named child
+/// (`{action:"message", agent, message}`) and has other actions on the same
+/// tool — `wait` above all — which start no run and so carry no brief.
+pub(super) fn subagent_task(input: &Value) -> Option<String> {
+    let task = match input.get("request") {
+        Some(request) => request.get("task")?.as_str()?,
+        None if input.get("action")?.as_str()? == "message" => input.get("message")?.as_str()?,
+        None => return None,
+    }
+    .trim();
     (!task.is_empty()).then(|| task.to_string())
 }
 
@@ -564,7 +576,7 @@ fn status_word(status: ToolStatus) -> &'static str {
 /// `action`, `profile`, `yield_time_ms`, and the session's own `cwd` — which
 /// gave every shell row an expanded body of machinery under one line of
 /// command. The command is the whole input, and it is already the summary.
-fn tool_input(kind: ToolKind, raw: Option<Value>) -> Value {
+pub(super) fn tool_input(kind: ToolKind, raw: Option<Value>) -> Value {
     let mut input = match raw {
         Some(Value::Object(map)) => Value::Object(map),
         Some(Value::Null) | None => json!({}),
@@ -606,9 +618,9 @@ fn result_text(shell: bool, streamed: String, closing: String) -> String {
 }
 
 /// fx wraps a subagent's report in `{"ok":true,"result":"…","error_code":null}`,
-/// and its report is the only account of the run there is: nothing about the
-/// child streams over ACP, and the whole transcript fx keeps for it lives in
-/// its own session store, which Dray does not read.
+/// and its report is the only account of the run the chat has: nothing about
+/// the child streams over ACP, and the whole transcript fx keeps for it lives
+/// in its own session store, which only the subagent tab reads (`history.rs`).
 ///
 /// Unwrapped by **shape rather than by parsing**, because fx caps tool content
 /// at 200 characters and that cut usually lands mid-string — so the envelope is
@@ -984,6 +996,43 @@ mod tests {
                 (call_id.as_str(), Some("completed")),
             ]
         );
+    }
+
+    /// fx 0.0.17 (`subagent_background.jsonl`): the call messages a named child
+    /// and answers at once, the child working on in the background; a `wait`
+    /// on the same tool starts no run; the report lands later as a second
+    /// close on the spawning call, which then carries it.
+    #[test]
+    fn a_background_subagent_is_one_run_and_a_wait_is_none() {
+        let events = replay(include_str!("fixtures/subagent_background.jsonl"));
+        let runs: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                P::SubagentStarted { description, .. } => description.as_deref(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            runs,
+            ["List the files in the current directory using the shell. Then read notes.md and reply with only its first line."]
+        );
+        let types: Vec<ToolType> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                P::ToolCallStarted { tool_type, .. } => Some(*tool_type),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(types, [ToolType::SubagentSpawn, ToolType::Other]);
+        let last = events
+            .iter()
+            .rev()
+            .find_map(|e| match &e.payload {
+                P::ToolCallCompleted { result, .. } => Some(result.text.as_str()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(last.contains("\"output\":\"alpha line one\""), "{last}");
     }
 
     /// The two names that outrank the kind fx sends with them. No capture here
