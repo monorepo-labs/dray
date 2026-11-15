@@ -25,6 +25,8 @@ enum Theme {
     static let off = Color(hex: 0x3A3A3A)
     /// A server's dot while it is on its way: quieter than any word beside it.
     static let dim = Color(hex: 0x525252)
+    /// The page lifted by 7% white: a bot's reaction chip, the desktop's `ReactionBadge`.
+    static let lifted = Color(hex: 0x171717)
 
     // Ink.
     static let text = Color(hex: 0xFAFAFA)
