@@ -518,6 +518,7 @@ async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Respo
         _ => None,
     };
     let creates = matches!(request, Request::CreateSession(_));
+    let starts = creates || matches!(request, Request::StartDraft(_));
     if machine == elsewhere::CLOUD && !creates {
         bail!("only `dray session new` takes --machine cloud — a cloud task's own machine is named on its row");
     }
@@ -543,7 +544,7 @@ async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Respo
     let response = response?;
     // The task's server keeps its reports, and this server holds the link to
     // collect them by; the other way round usually does not exist.
-    if let (true, Some(caller), Response::Created { session, .. }) = (creates, &forward.caller, &response) {
+    if let (true, Some(caller), Response::Created { session, .. }) = (starts, &forward.caller, &response) {
         if caller.bot_tree {
             let saved = crate::machines::on(machine).await.map_err(anyhow::Error::msg)?;
             crate::remote_reports::track(&saved.id, &session.session_id, &caller.session.session_id).await?;
@@ -1986,7 +1987,8 @@ async fn start_draft(start: StartDraft, caller: Option<&Caller>, app: &Sink) -> 
         .await?
         .with_context(|| format!("no draft {}", draft.id))?;
     app.emit(DRAFTS_CHANGED, ()).ok();
-    let started = start_session(&draft, start.parent_session_id.as_deref(), hidden, app).await;
+    let owes = caller.is_some_and(|c| c.bot_tree);
+    let started = start_session(&draft, start.parent_session_id.as_deref(), hidden, owes, app).await;
     let Err(error) = started else { return started };
     // The prompt rides the error where the draft cannot go back, so the task
     // survives in the caller's output even with the file unwritable.
@@ -2004,6 +2006,7 @@ async fn start_session(
     draft: &StoredDraft,
     parent: Option<&str>,
     hidden: bool,
+    owes_reports: bool,
     app: &Sink,
 ) -> Result<Response> {
     // Read again at the start rather than trusted from the save: the branch a
@@ -2013,6 +2016,11 @@ async fn start_session(
         None => None,
     };
     let session_id = uuid::Uuid::now_v7().to_string();
+    // Before the spawn, as `create_session` does: a bot's task from another
+    // machine is told at spawn that its replies are relayed.
+    if owes_reports {
+        crate::remote_reports::owe(&session_id).await?;
+    }
     let outcome = manager()
         .send_msg(
             &session_id,
