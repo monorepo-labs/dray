@@ -141,9 +141,14 @@ pub async fn run(port: u16) -> Result<()> {
     }
     let sink = Sink::new(|event, payload| HUB.publish(event, &payload));
     let home = start_core(sink.clone()).await?;
-    if let Some(sandbox) = crate::cloud_machine::boat_id().await {
-        tokio::spawn(crate::cloud_machine::heartbeat(home.clone(), sandbox));
-    }
+    // A login shell, which a heavy profile makes slow, so not before the bind.
+    // The heartbeat is the only reader.
+    let beat_home = home.clone();
+    tokio::spawn(async move {
+        if let Some(sandbox) = crate::cloud_machine::boat_id().await {
+            crate::cloud_machine::heartbeat(beat_home, sandbox).await;
+        }
+    });
 
     let (token, token_path) = mint_token().await?;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
