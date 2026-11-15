@@ -25,9 +25,9 @@ These controls appear on a new task only. Once the session starts they are gone,
 | Control | What it does |
 |---|---|
 | Project (folder icon) | Picks the project. **Attach project…** at the bottom adds a folder. `⌘⇧P` steps to the next project. |
-| Server (server icon) | Shown when the project lives on a server. Picks which machine the task runs on. `⌘⇧S` steps to the next connected one. |
-| **Worktree** switch | Runs the session in its own copy of the repo. `⌘⇧T` flips it. See [Worktrees](/using-dray/worktrees). |
-| Branch (branch icon) | Which branch the project is on. Hidden while Worktree is on, where the row says "from origin/main" (or your default branch) instead. |
+| Server (server icon) | Picks which machine the task runs on. Shown when the project lives on a server. Also shown when [Dray Cloud](/using-dray/cloud) is on and the project has a GitHub remote, as a **Cloud** entry. `⌘⇧S` steps to the next connected machine. |
+| **Worktree** switch | Runs the session in its own copy of the repo. `⌘⇧T` flips it. See [Worktrees](/using-dray/worktrees). The switch is still there when Cloud is picked. |
+| Branch (branch icon) | Which branch the project is on. Hidden while Worktree is on, where the row says "from origin/main" (or your default branch) instead. Also hidden when Cloud is picked and Worktree is off. |
 
 Picking a branch checks it out in the project for real. If the project has uncommitted files, Dray asks first:
 
