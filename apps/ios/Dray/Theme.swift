@@ -13,7 +13,7 @@ enum Theme {
     static let well = Color(hex: 0x141414)
     /// `--card`: a surface in the page — cards, grouped rows.
     static let card = Color(hex: 0x1A1A1A)
-    /// `--muted`: one step above a card — the sent bubble, chips, second buttons.
+    /// `--muted`: one step above a card — chips, second buttons.
     static let raised = Color(hex: 0x262626)
     /// `--surface-selected`: the current row.
     static let selected = Color(hex: 0x2B2B2B)
@@ -33,6 +33,11 @@ enum Theme {
     /// `--primary`: a filled button's fill, near white as on the desktop's dark page.
     static let primary = Color(hex: 0xEBEBEB)
     static let onPrimary = Color(hex: 0x171717)
+
+    /// The reader's own bubble: the desktop's dark blue `oklch(0.58 0.17 252)`,
+    /// the one its bot chats fill with, and its near-white ink.
+    static let sent = Color(hex: 0x0A7BDA)
+    static let onSent = Color(hex: 0xFCFCFC)
 
     // Edges: seams, never drawn rules.
     static let hairline = Color.white.opacity(0.06)
