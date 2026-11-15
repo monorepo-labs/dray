@@ -1085,6 +1085,10 @@ fn wake(id: i32) {
         t.discarded = false;
         t.waking = true;
         t.loading = true;
+        // Set aside as any load does; the loading-state handler sees a tab
+        // already loading and would leave a stale failure standing.
+        t.held_error = t.error.take();
+        t.committed = false;
         t.seen = Instant::now();
         (t.session.clone(), t.url.clone())
     };
@@ -1123,6 +1127,10 @@ fn sweep() {
         let openers: HashSet<i32> = tabs.iter().filter_map(|t| t.opener).collect();
         tabs.iter()
             .filter(|t| t.browser.is_some() && !t.discarded && !t.loading && !t.closing)
+            // A failed load is kept: its page costs little, and a stopped
+            // server's page hides the view, so the tab reads unseen while the
+            // reader waits on it — and a reload cannot reach a discarded tab.
+            .filter(|t| t.error.is_none())
             .filter(|t| t.seen.elapsed() >= DISCARD_AFTER)
             .filter(|t| t.opener.map_or(true, |o| !ids.contains(&o)) && !openers.contains(&t.id))
             .map(|t| (t.id, t.session.clone()))
