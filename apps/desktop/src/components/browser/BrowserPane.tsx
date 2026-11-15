@@ -10,6 +10,7 @@ import {
   Globe,
   RotateCcw,
   RotateCw,
+  Server,
   Share2,
   Smartphone,
   SquareDashedMousePointer,
@@ -19,6 +20,7 @@ import {
 import { DocumentPlusIcon } from "@heroicons/react/16/solid";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
+import BotAvatar from "@/components/BotAvatar";
 import Favicon, { hostOf } from "@/components/browser/Favicon";
 import RecordingNotice from "@/components/browser/RecordingNotice";
 import { useTurnNewTab, type TurnKind } from "@/components/layout/ViewTabs";
@@ -74,14 +76,15 @@ import {
   type LocalServer,
   type Viewport,
 } from "@/lib/browser";
+import { seededAvatar } from "@/lib/botAvatar";
 import { chromiumBusy, chromiumPercent, describeChromium } from "@/lib/chromium";
 import { bareUrl, matchHistory, type BrowserVisit } from "@/lib/history";
 import { useWindowFocused } from "@/lib/focus";
 import { serverName, useServers } from "@/lib/servers";
-import { LOCAL, serverOfSession } from "@/lib/transport";
+import { LOCAL, serverOfPath, serverOfSession } from "@/lib/transport";
 import { zoomLevel } from "@/lib/zoom";
 import { cn } from "@/lib/utils";
-import type { ChromiumStatus } from "@/types/events";
+import type { ChromiumStatus, SessionIndexItem } from "@/types/events";
 
 /// The element picker is built and parked: it works, but what it drops into
 /// the composer wants a screenshot beside it before it is worth a button.
@@ -126,9 +129,12 @@ export default function BrowserPane({
   active,
   tab,
   onClose,
+  tasks,
 }: {
   sessionId: string;
   active: boolean;
+  /// A bot's tasks, where this is the bot's browser: their servers open here.
+  tasks?: readonly SessionIndexItem[];
   /// A split pane's one tab, drawn whatever the strip has active. Such a
   /// pane has no device sizes: those are the session's, and its main view's.
   tab?: number;
@@ -246,7 +252,7 @@ export default function BrowserPane({
             This page was closed.
           </div>
         ) : empty ? (
-          <EmptyState sessionId={sessionId} active={active} />
+          <EmptyState sessionId={sessionId} active={active} tasks={tasks} />
         ) : viewport ? (
           // Clamped to the stage on both axes rather than scrolled or scaled:
           // the page is a native view the DOM can neither clip nor shrink,
@@ -873,7 +879,15 @@ function SizeBar({ sessionId, viewport }: { sessionId: string; viewport: Viewpor
 /// moment the list is looked at.
 ///
 /// The panel's is not, and has no row slot to turn.
-function EmptyState({ sessionId, active }: { sessionId: string; active: boolean }) {
+function EmptyState({
+  sessionId,
+  active,
+  tasks,
+}: {
+  sessionId: string;
+  active: boolean;
+  tasks?: readonly SessionIndexItem[];
+}) {
   const chromium = useChromium();
   // Nothing to open pages with yet: the download stands where the page would.
   // Diff and Files need no Chromium, so the cards stay above it.
@@ -882,7 +896,7 @@ function EmptyState({ sessionId, active }: { sessionId: string; active: boolean 
   }
   // Keyed, so one session's servers and its share in flight are never drawn
   // under another: the list is read on a timer and a failed read keeps the old.
-  return <Servers key={sessionId} sessionId={sessionId} active={active} />;
+  return <Servers key={sessionId} sessionId={sessionId} active={active} tasks={tasks} />;
 }
 
 /// Chromium is fetched after install (see chromium.rs), and this is where the
@@ -945,8 +959,26 @@ function TurnCards({ sessionId }: { sessionId: string }) {
   );
 }
 
-function Servers({ sessionId, active }: { sessionId: string; active: boolean }) {
-  const [servers, setServers] = useState<LocalServer[]>([]);
+/// A bot's browser reads at most this many tasks, newest first: each read is a
+/// `ps` and two `lsof`s on the task's machine, every five seconds.
+const TASK_READS = 12;
+
+/// Whose servers a list holds: the browser's own session, or one of a bot's
+/// tasks, whose servers open here though they run in its tree.
+type Owner = { sessionId: string; task?: SessionIndexItem };
+
+function Servers({
+  sessionId,
+  active,
+  tasks = [],
+}: {
+  sessionId: string;
+  active: boolean;
+  tasks?: readonly SessionIndexItem[];
+}) {
+  const owners: Owner[] = [{ sessionId }, ...tasks.slice(0, TASK_READS).map((task) => ({ sessionId: task.sessionId, task }))];
+  const ownerKey = owners.map((o) => o.sessionId).join(" ");
+  const [servers, setServers] = useState<ReadonlyMap<string, LocalServer[]>>(new Map());
   const recent = useHistory(sessionId, active).slice(0, RECENT);
   // Each read is a `ps` and two `lsof`s, and both mounts of this pane stay
   // mounted while hidden — so it reads only while on screen and frontmost,
@@ -955,7 +987,8 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
   const polling = active && focused;
   // Bumped after a share or a stop, so the row moves without waiting a poll.
   const [reread, setReread] = useState(0);
-  const [sharing, setSharing] = useState<number | null>(null);
+  // `owner:port`, since two tasks can each serve the same port in their own tree.
+  const [sharing, setSharing] = useState<string | null>(null);
   // The first share on a machine sets up its tunnel, a wait of its own.
   const [fetching, setFetching] = useState(false);
   const [copied, copy] = useCopied();
@@ -963,23 +996,32 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
   useEffect(() => {
     if (!polling) return;
     let live = true;
+    const ids = ownerKey.split(" ");
+    // A failed read keeps that owner's last list, as one list always did.
     const read = () =>
-      void listLocalServers(sessionId)
-        .then((list) => live && setServers(list))
-        .catch(() => undefined);
+      void Promise.all(ids.map((id) => listLocalServers(id).then((list) => [id, list] as const, () => null))).then(
+        (lists) =>
+          live &&
+          setServers((prev) => {
+            const next = new Map<string, LocalServer[]>();
+            for (const id of ids) next.set(id, prev.get(id) ?? []);
+            for (const got of lists) if (got) next.set(got[0], got[1]);
+            return next;
+          }),
+      );
     read();
     const timer = setInterval(read, 5000);
     return () => {
       live = false;
       clearInterval(timer);
     };
-  }, [sessionId, polling, reread]);
+  }, [ownerKey, polling, reread]);
 
   // The relay takes a moment to attach a link, so the row says so.
-  const share = (port: number) => {
-    setSharing(port);
-    void shareReady(sessionId).then((ready) => setFetching(!ready));
-    void shareServer(sessionId, port)
+  const share = (owner: string, port: number) => {
+    setSharing(`${owner}:${port}`);
+    void shareReady(owner).then((ready) => setFetching(!ready));
+    void shareServer(owner, port, sessionId)
       .catch(() => undefined)
       .finally(() => {
         setSharing(null);
@@ -987,86 +1029,92 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
         setReread((n) => n + 1);
       });
   };
-  const unshare = (port: number) =>
-    void stopShare(sessionId, port)
+  const unshare = (owner: string, port: number) =>
+    void stopShare(owner, port)
       .catch(() => undefined)
       .finally(() => setReread((n) => n + 1));
 
-  // A remote session's list is its server's.
-  const server = serverOfSession(sessionId);
   useServers();
-  const open = (port: number) =>
-    void openServer(sessionId, port)
+  // Forwarded off the owner's machine, opened in this browser: a bot task's
+  // server lands in the bot's row, as its links do.
+  const open = (owner: string, port: number) =>
+    void openServer(owner, port, sessionId)
       .then(() => trackBrowserOpen("http://localhost"))
       .catch(() => undefined);
+
+  const groups = owners.filter((o) => (servers.get(o.sessionId)?.length ?? 0) > 0);
 
   // One column, one left edge: the heading, the rows and the hint all start
   // at the same x, and the column as a whole sits in the middle.
   return (
-    <div className="flex h-full items-center justify-center p-8 text-ui">
-      <div className="flex w-full max-w-sm flex-col gap-4">
+    // `m-auto` rather than centring the row, so a bot with many tasks
+    // scrolls from its first heading instead of clipping it.
+    <div className="flex h-full overflow-y-auto p-8 text-ui">
+      <div className="m-auto flex w-full max-w-sm flex-col gap-4">
         <TurnCards sessionId={sessionId} />
-        {servers.length > 0 && (
-          <section className="flex flex-col gap-1.5">
-            <h3 className="px-2 pb-1 text-muted-foreground">
-              {server === LOCAL ? "Running locally" : `Running on ${serverName(server)}`}
-            </h3>
-            {servers.map((s) => (
-              // A bordered card per server, so a link under it reads as part
-              // of the same thing rather than as a second row.
-              <div key={s.port} className="flex flex-col rounded-lg border border-border">
-                <div className="flex min-h-9 items-center gap-1 p-1">
-                  <button
-                    type="button"
-                    onClick={() => open(s.port)}
-                    className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-1 text-left hover:underline"
-                  >
-                    <span className="font-mono">localhost:{s.port}</span>
-                    <span className="truncate text-muted-foreground">{s.process}</span>
-                    {s.mine && <span className="ml-auto shrink-0 text-muted-foreground">this session</span>}
-                  </button>
-                  {!s.share && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => share(s.port)}
-                          disabled={sharing !== null}
-                          // The pane is `--background`, the outline fill's own
-                          // colour, and on glass `--muted` hovers into it too.
-                          className={cn("shrink-0", TOOL_BTN)}
-                        >
-                          {sharing === s.port ? <Spinner className="size-3.5" /> : <Share2 />}
-                          {sharing !== s.port
-                            ? "Get public link"
+        {groups.map((o) => (
+          <section key={o.sessionId} className="flex flex-col gap-1.5">
+            <ServersHeading owner={o} />
+            {servers.get(o.sessionId)!.map((s) => {
+              const key = `${o.sessionId}:${s.port}`;
+              return (
+                // A bordered card per server, so a link under it reads as part
+                // of the same thing rather than as a second row.
+                <div key={s.port} className="flex flex-col rounded-lg border border-border">
+                  <div className="flex min-h-9 items-center gap-1 p-1">
+                    <button
+                      type="button"
+                      onClick={() => open(o.sessionId, s.port)}
+                      className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-1 text-left hover:underline"
+                    >
+                      <span className="font-mono">localhost:{s.port}</span>
+                      <span className="truncate text-muted-foreground">{s.process}</span>
+                      {/* A task's heading already says whose it is. */}
+                      {s.mine && !o.task && <span className="ml-auto shrink-0 text-muted-foreground">this session</span>}
+                    </button>
+                    {!s.share && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label="Get public link"
+                            onClick={() => share(o.sessionId, s.port)}
+                            disabled={sharing !== null}
+                            className={cn("shrink-0 text-muted-foreground", TOOL_BTN)}
+                          >
+                            {sharing === key ? <Spinner className="size-3.5" /> : <Share2 className="size-3.5" />}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {sharing !== key
+                            ? "Get public link — anyone can open it, until you stop it"
                             : fetching
                               ? "Setting up tunnel…"
                               : "Creating link…"}
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>A link anyone can open, until you stop it</TooltipContent>
-                    </Tooltip>
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
+                  </div>
+                  {s.share && (
+                    <SharedLink
+                      url={s.share}
+                      copied={copied === s.share}
+                      onOpen={(external) =>
+                        void (external
+                          ? openUrl(s.share!)
+                          : openInBrowser(sessionId, s.share!, true).then(() => trackBrowserOpen(s.share!))
+                        ).catch(() => undefined)
+                      }
+                      onCopy={() => void copy(s.share!)}
+                      onStop={() => unshare(o.sessionId, s.port)}
+                    />
                   )}
                 </div>
-                {s.share && (
-                  <SharedLink
-                    url={s.share}
-                    copied={copied === s.share}
-                    onOpen={(external) =>
-                      void (external
-                        ? openUrl(s.share!)
-                        : openInBrowser(sessionId, s.share!, true).then(() => trackBrowserOpen(s.share!))
-                      ).catch(() => undefined)
-                    }
-                    onCopy={() => void copy(s.share!)}
-                    onStop={() => unshare(s.port)}
-                  />
-                )}
-              </div>
-            ))}
+              );
+            })}
           </section>
-        )}
+        ))}
         {recent.length > 0 && (
           <section className="flex flex-col gap-0.5">
             <h3 className="px-2 pb-1 text-muted-foreground">Recently visited</h3>
@@ -1095,6 +1143,29 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
         </p>
       </div>
     </div>
+  );
+}
+
+/// A list's heading: where the browser's own session runs, or the task's face,
+/// title and machine.
+function ServersHeading({ owner }: { owner: Owner }) {
+  const { task } = owner;
+  const server = task ? serverOfPath(task.projectPath) : serverOfSession(owner.sessionId);
+  const machine = server === LOCAL ? null : serverName(server);
+  if (!task) {
+    return <h3 className="px-2 pb-1 text-muted-foreground">{machine ? `Running on ${machine}` : "Running locally"}</h3>;
+  }
+  return (
+    <h3 className="flex min-w-0 items-center gap-1.5 px-2 pb-1 text-muted-foreground">
+      <BotAvatar seed={task.sessionId} avatar={seededAvatar(task.sessionId)} className="block size-4 shrink-0 scale-[1.18]" />
+      <span className="truncate text-foreground">{task.title}</span>
+      {machine && (
+        <span className="flex shrink-0 items-center gap-1">
+          <Server className="size-3" />
+          {machine}
+        </span>
+      )}
+    </h3>
   );
 }
 

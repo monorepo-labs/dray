@@ -632,12 +632,12 @@ export function listLocalServers(sessionId: string) {
 }
 
 /// A public link to one of the session's dev servers, made where it runs. A
-/// refusal reports where a failed open does.
-export function shareServer(sessionId: string, port: number) {
-  openErrors.delete(sessionId);
+/// refusal reports where a failed open does, in `browser`: a bot's, for a task's server.
+export function shareServer(sessionId: string, port: number, browser = sessionId) {
+  openErrors.delete(browser);
   notify();
   return invoke<string>("share_port", { sessionId, port }).catch((e: unknown) => {
-    openErrors.set(sessionId, String(e));
+    openErrors.set(browser, String(e));
     notify();
     throw e;
   });
@@ -673,15 +673,16 @@ export async function reachableUrl(sessionId: string, url: string): Promise<stri
   return u.toString();
 }
 
-/// One of the session's dev servers, opened in this Mac's browser. A failed
-/// forward reports where a failed open does.
-export function openServer(sessionId: string, port: number) {
-  openErrors.delete(sessionId);
+/// One of the session's dev servers, opened in this Mac's browser — `browser`'s
+/// tabs, which are a bot's for one of its tasks. Forwarded off the session's
+/// own machine either way. A failed forward reports where a failed open does.
+export function openServer(sessionId: string, port: number, browser = sessionId) {
+  openErrors.delete(browser);
   notify();
   return reachableUrl(sessionId, `http://localhost:${port}`).then(
-    (url) => openInBrowser(sessionId, url, true),
+    (url) => openInBrowser(browser, url, true),
     (e: unknown) => {
-      openErrors.set(sessionId, String(e));
+      openErrors.set(browser, String(e));
       notify();
       throw e;
     },
