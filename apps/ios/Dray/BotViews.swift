@@ -272,7 +272,7 @@ private struct BotRowView: View {
         case .item(let item):
             switch item {
             case .user(_, let text, let images, let reaction, _):
-                UserBubble(text: text, from: nil, images: images, reaction: reaction)
+                UserBubble(text: text, from: nil, images: images, reaction: reaction, bot: true)
             case .assistant(_, let text, _):
                 MarkdownText(text: text)
                     .padding(.horizontal, Theme.Space.m)
@@ -290,7 +290,7 @@ private struct BotRowView: View {
             case .botMessage(_, let botId, let title, let text, _):
                 VStack(alignment: .trailing, spacing: Theme.Space.xs) {
                     line("Message from") { botChip(id: botId, name: title) }
-                    UserBubble(text: text, from: nil)
+                    UserBubble(text: text, from: nil, bot: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
             case .botSent(_, let name, let botId, _):

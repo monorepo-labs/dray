@@ -25,6 +25,10 @@ enum Theme {
     static let off = Color(hex: 0x3A3A3A)
     /// A server's dot while it is on its way: quieter than any word beside it.
     static let dim = Color(hex: 0x525252)
+    /// The page lifted by 7% white: a bot's reaction chip, the desktop's `ReactionBadge`.
+    static let lifted = Color(hex: 0x171717)
+    /// The reader's bubble in a bot chat, `[data-bot-chat] .user-bubble`'s blue.
+    static let botSent = Color(hex: 0x0A7BDA)
 
     // Ink.
     static let text = Color(hex: 0xFAFAFA)

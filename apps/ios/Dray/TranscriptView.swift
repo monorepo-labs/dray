@@ -498,6 +498,8 @@ struct UserBubble: View {
     var queued = false
     /// A bot's emoji on this message, drawn on the bubble's corner.
     var reaction: String? = nil
+    /// In a bot chat, where the reader's bubble is blue as on the desktop.
+    var bot = false
 
     var body: some View {
         VStack(alignment: .trailing, spacing: Theme.Space.xs) {
@@ -509,11 +511,11 @@ struct UserBubble: View {
             if !text.isEmpty {
                 Text(text)
                     .font(Theme.Font.body)
-                    .foregroundStyle(Theme.text)
+                    .foregroundStyle(bot ? .white : Theme.text)
                     .textSelection(.enabled)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
-                    .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+                    .background(bot ? Theme.botSent : Theme.raised, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
                     .overlay(alignment: .topLeading) {
                         if let reaction { ReactionBadge(emoji: reaction).offset(x: -12, y: -16) }
                     }
@@ -541,7 +543,7 @@ struct ReactionBadge: View {
         Text(emoji)
             .font(.system(size: 15))
             .frame(width: 28, height: 28)
-            .background(Theme.well, in: .circle)
+            .background(Theme.lifted, in: .circle)
             .overlay(Circle().strokeBorder(Theme.border, lineWidth: 0.5))
             .accessibilityLabel("Bot reacted: \(labels[emoji] ?? emoji)")
     }
