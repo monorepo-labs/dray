@@ -237,7 +237,9 @@ function groups(win: Win): { task?: Task; heading: React.ReactNode; servers: Srv
       <span className="flex min-w-0 items-center gap-1.5">
         {face(t)}
         <span className="truncate text-foreground">{t.title}</span>
-        <MachineMark name={t.machine} />
+        <span className="ml-auto pl-2">
+          <MachineMark name={t.machine} />
+        </span>
       </span>
     ),
     servers: win.servers.filter((s) => s.task === t),
@@ -493,16 +495,23 @@ function E({ win }: { win: Win }) {
           {rest.length > 0 && (
             <section className="flex w-full max-w-sm flex-col gap-0.5">
               <h3 className="px-2 pb-1 text-muted-foreground">Still running</h3>
-              {rest.map((s) => (
-                <button key={s.task?.id + String(s.port)} type="button" onClick={() => setPage(s)} className={rowClass}>
-                  <Live />
-                  <span className="font-mono">localhost:{s.port}</span>
-                  <span className="min-w-0 truncate text-muted-foreground">{s.task ? s.task.title : s.process}</span>
-                  <span className="ml-auto flex shrink-0 items-center gap-1.5">
-                    {s.task && face(s.task, "size-3.5")}
-                    <MachineMark name={machineOf(s, win.machine)} />
-                  </span>
-                </button>
+              {/* Grouped under each task as on the new tab; a session's own are one group, its machine on the right. */}
+              {groups({ ...win, servers: rest }).map((g, i) => (
+                <div key={i} className="flex flex-col gap-0.5 pb-1">
+                  {g.task && <div className="px-2 pt-1 text-muted-foreground">{g.heading}</div>}
+                  {g.servers.map((s) => (
+                    <button key={s.port} type="button" onClick={() => setPage(s)} className={rowClass}>
+                      <Live />
+                      <span className="font-mono">localhost:{s.port}</span>
+                      <span className="min-w-0 truncate text-muted-foreground">{s.process}</span>
+                      {!g.task && (
+                        <span className="ml-auto pl-2">
+                          <MachineMark name={win.machine} />
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
               ))}
             </section>
           )}

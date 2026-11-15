@@ -1164,7 +1164,7 @@ function ServersHeading({ owner }: { owner: Owner }) {
       <BotAvatar seed={task.sessionId} avatar={seededAvatar(task.sessionId)} className="block size-4 shrink-0 scale-[1.18]" />
       <span className="truncate text-foreground">{task.title}</span>
       {machine && (
-        <span className="flex shrink-0 items-center gap-1">
+        <span className="ml-auto flex shrink-0 items-center gap-1 pl-2">
           <Server className="size-3" />
           {machine}
         </span>
