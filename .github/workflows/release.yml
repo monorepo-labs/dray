@@ -477,10 +477,11 @@ jobs:
           upload() {
             OLD="$(gh api "$R/$ID/assets" --paginate --jq ".[] | select(.name == \"$1\") | .id")"
             [ -z "$OLD" ] || gh api -X DELETE "$R/assets/$OLD"
-            curl -sS --fail-with-body -o /dev/null -X POST \
+            curl -sS --fail-with-body -o "$RUNNER_TEMP/upload.json" -X POST \
               -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/zip" \
               --data-binary @"$RUNNER_TEMP/release/$1" \
-              "https://uploads.github.com/$R/$ID/assets?name=$1"
+              "https://uploads.github.com/$R/$ID/assets?name=$1" \
+              || { cat "$RUNNER_TEMP/upload.json" >&2; return 1; }
           }
           upload "$DMG"
           upload Dray_universal.app.tar.gz

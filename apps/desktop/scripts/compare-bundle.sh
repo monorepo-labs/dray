@@ -22,6 +22,10 @@ describe() (
   find . -type l -exec stat -f '%N -> %Y' {} + | sort
   echo "## total"
   du -sk . | cut -f1
+  # Carried into the dmg's filesystem, so they move its size with no file
+  # changing; codesign ignores them.
+  echo "## xattrs"
+  find . -exec sh -c 'for f; do a=$(xattr "$f" 2>/dev/null | sort | tr "\n" " "); [ -z "$a" ] || echo "$f: $a"; done' _ {} + | sort
 
   # Nested bundles first, then every Mach-O, so a binary the bundler copied
   # in unsigned shows up as well as one it signed.
