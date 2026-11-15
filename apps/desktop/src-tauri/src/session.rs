@@ -4484,6 +4484,32 @@ mod tests {
         assert_eq!(shown.lock().unwrap().last().unwrap(), &serde_json::json!([]));
     }
 
+    /// The send path read the turn as running, then awaited long enough for it
+    /// to end and flush an empty queue. Queued now, the prompt would wait on a
+    /// boundary already past, so the re-read under the lock must refuse it and
+    /// leave the queue empty for the direct send. While the turn still runs it
+    /// queues, and the turn-end flush that follows drains it.
+    #[tokio::test]
+    async fn a_prompt_is_never_queued_behind_a_turn_that_ended() {
+        let manager = SessionManager::default();
+        let mut running = StatusTracker::default();
+        running.on_send();
+        let slot = child_with(&manager, "s", running).await;
+        let sink = Sink::new(|_, _| {});
+        let guard = slot.lock().await;
+        let session = guard.as_ref().unwrap();
+
+        let stale = session.status.lock().await.turn_in_flight();
+        assert!(stale, "the send's first read sees the turn running");
+        assert!(session.queue_if_in_flight("early", &[], &[], None, &sink).await.is_some());
+        assert_eq!(session.queued.lock().await.len(), 1, "held for the turn-end flush");
+        session.queued.lock().await.clear();
+
+        session.status.lock().await.on_event(&turn_completed());
+        assert!(session.queue_if_in_flight("late", &[], &[], None, &sink).await.is_none());
+        assert!(session.queued.lock().await.is_empty(), "nothing left for a flush that already ran");
+    }
+
     /// Only a child with nothing running and nothing waiting on it is stopped,
     /// and its slot left empty for the next send to resume into.
     #[tokio::test]
