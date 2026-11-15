@@ -83,9 +83,14 @@ export const prMarksChanged = channel<void>();
 
 /// The mark a session's row carries as last read, outside React: the server
 /// cache keeps whether each remote task's PR was open, for the warning a
-/// removal gives once that machine can no longer be asked.
-export const keptPrMark = (repoPath: string, branch: string | null): PrMark | undefined =>
-  branch ? cache.get(repoPath)?.get(branch) : undefined;
+/// removal gives once that machine can no longer be asked. `null` where the
+/// repo was read and holds none for the branch; `undefined` where nothing is
+/// known yet, which must not clear what an earlier run kept.
+export const keptPrMark = (repoPath: string, branch: string | null): PrMark | null | undefined => {
+  const marks = cache.get(repoPath);
+  if (!marks) return undefined;
+  return branch ? (marks.get(branch) ?? null) : null;
+};
 
 /// `path` and every key known to name the same GitHub repo.
 function sharing(path: string): string[] {

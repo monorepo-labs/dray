@@ -1,6 +1,6 @@
 import { sessionBranch } from "@/lib/pr";
 import { invoke, LOCAL, serverOfPath, type ServerId } from "@/lib/transport";
-import type { Bot, PrMark, Project, ServerInfo, SessionIndexItem } from "@/types/events";
+import type { Bot, PrMark, Project, ServerInfo, SessionIndexItem, SessionStatus } from "@/types/events";
 
 /// A remote's last known lists, kept on disk by the app so its rows outlive a
 /// restart while it cannot be reached (#871). `sessions` is the live side,
@@ -54,14 +54,26 @@ export function indexRow(item: SessionIndexItem): SessionIndexItem {
   return row;
 }
 
-/// `row` marked `prOpen` where its PR was last seen open, which is what lets
-/// a removal warn about it once the machine can no longer be asked
-/// (`machines::unfinished`). Absent means no open PR as far as this app saw.
-export function withPrOpen(
-  row: SessionIndexItem,
-  prOf: (repoPath: string, branch: string | null) => PrMark | undefined,
-): SessionIndexItem & { prOpen?: true } {
-  return prOf(row.projectPath, sessionBranch(row))?.state === "OPEN" ? { ...row, prOpen: true } : row;
+type KeptRow = SessionIndexItem & { prOpen?: true };
+
+/// `row` as kept, marked `prOpen` where its PR was last seen open, which is
+/// what lets a removal warn about it once the machine can no longer be asked
+/// (`machines::unfinished`), and carrying `status`, the live one where the
+/// app heard a newer one than the index row's. A repo not read yet this run
+/// (`prOf` answering `undefined`) leaves a mark kept from before as it was.
+export function keptRow(
+  row: KeptRow,
+  prOf: (repoPath: string, branch: string | null) => PrMark | null | undefined,
+  status?: SessionStatus,
+): KeptRow {
+  const pr = prOf(row.projectPath, sessionBranch(row));
+  let next: KeptRow = status && status !== row.status ? { ...row, status } : row;
+  if (pr?.state === "OPEN") return next.prOpen ? next : { ...next, prOpen: true };
+  if (pr !== undefined && next.prOpen) {
+    const { prOpen: _, ...rest } = next;
+    next = rest;
+  }
+  return next;
 }
 
 const written = new Map<ServerId, string>();

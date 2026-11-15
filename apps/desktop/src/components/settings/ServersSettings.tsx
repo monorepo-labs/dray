@@ -94,12 +94,15 @@ export default function ServersSettings() {
   const [adding, setAdding] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
   // Per server, its tasks last seen unfinished, read as Remove is asked.
+  // Absent while that read runs, which holds Remove, so the warning cannot
+  // land after the machine is gone.
   const [unfinished, setUnfinished] = useState<Record<string, string[]>>({});
   const askRemove = (id: string) => {
+    setUnfinished(({ [id]: _, ...rest }) => rest);
     setConfirming(id);
     void invoke<string[]>("server_unfinished", { id }, LOCAL)
-      .then((titles) => setUnfinished((all) => ({ ...all, [id]: titles })))
-      .catch(() => {});
+      .catch(() => [])
+      .then((titles) => setUnfinished((all) => ({ ...all, [id]: titles })));
   };
   const [renaming, setRenaming] = useState<string | null>(null);
   const [updates, setUpdates] = useState<Record<string, UpdateState>>({});
@@ -200,6 +203,7 @@ export default function ServersSettings() {
             onBeta={(beta) => void invoke("set_server_beta", { id: server.id, beta }, LOCAL).catch(console.error)}
             confirming={confirming === server.id}
             warning={unfinishedWarning(unfinished[server.id])}
+            reading={!unfinished[server.id]}
             onRemove={() => askRemove(server.id)}
             onCancel={() => setConfirming(null)}
             onConfirm={() => {
@@ -850,6 +854,7 @@ function Row({
   onAssistant,
   confirming = false,
   warning,
+  reading = false,
   onRemove,
   onCancel,
   onConfirm,
@@ -883,6 +888,8 @@ function Row({
   confirming?: boolean;
   /// Said under the row while Remove is asked.
   warning?: string | null;
+  /// Remove waits while what `warning` says is still being read.
+  reading?: boolean;
   onRemove?: () => void;
   onCancel?: () => void;
   onConfirm?: () => void;
@@ -919,7 +926,7 @@ function Row({
         {confirming ? (
           // Asked in the row, the transcription models' own reading: a modal
           // is more than forgetting an address is worth.
-          <CancelOrConfirm verb="Remove" onConfirm={onConfirm!} onCancel={onCancel!} autoFocus />
+          <CancelOrConfirm verb="Remove" onConfirm={onConfirm!} onCancel={onCancel!} busy={reading} autoFocus />
         ) : (
           (onToggle || onRemove || onAssistant || action) && (
             <div className="flex items-center gap-1.5">

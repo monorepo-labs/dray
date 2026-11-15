@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { serverShown, unfinishedWarning, unreachable, withKept, withPrOpen } from "@/lib/serverCache";
+import { keptRow, serverShown, unfinishedWarning, unreachable, withKept } from "@/lib/serverCache";
 import { qualify } from "@/lib/transport";
 import type { PrMark, ServerInfo, SessionIndexItem } from "@/types/events";
 
@@ -57,15 +57,27 @@ describe("withKept", () => {
   });
 });
 
-describe("withPrOpen", () => {
-  const task = { projectPath: "/srv/dray", branch: null, worktreeName: "fix-login" } as SessionIndexItem;
-  const marks = (state: PrMark["state"]) => (repo: string, branch: string | null) =>
-    repo === "/srv/dray" && branch === "worktree-fix-login" ? ({ state } as PrMark) : undefined;
+describe("keptRow", () => {
+  const task = { projectPath: "/srv/dray", branch: null, worktreeName: "fix-login", status: "idle" } as SessionIndexItem;
+  const marks = (state: PrMark["state"] | null) => (repo: string, branch: string | null) =>
+    repo === "/srv/dray" && branch === "worktree-fix-login" ? (state && ({ state } as PrMark)) : undefined;
 
   it("marks a row whose PR is open, and only that", () => {
-    expect(withPrOpen(task, marks("OPEN"))).toEqual({ ...task, prOpen: true });
-    expect(withPrOpen(task, marks("MERGED"))).toBe(task);
-    expect(withPrOpen(task, () => undefined)).toBe(task);
+    expect(keptRow(task, marks("OPEN"))).toEqual({ ...task, prOpen: true });
+    expect(keptRow(task, marks("MERGED"))).toBe(task);
+    expect(keptRow(task, () => undefined)).toBe(task);
+  });
+
+  it("clears a kept mark once a newer read says otherwise, and only then", () => {
+    const kept = { ...task, prOpen: true as const };
+    expect(keptRow(kept, marks("MERGED"))).toEqual(task);
+    expect(keptRow(kept, marks(null))).toEqual(task);
+    expect(keptRow(kept, () => undefined)).toBe(kept);
+  });
+
+  it("carries the live status over the index row's", () => {
+    expect(keptRow(task, () => undefined, "in_progress")).toEqual({ ...task, status: "in_progress" });
+    expect(keptRow(task, () => undefined, "idle")).toBe(task);
   });
 });
 
