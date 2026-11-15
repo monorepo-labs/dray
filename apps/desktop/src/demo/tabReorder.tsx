@@ -1,14 +1,15 @@
 import React, { useState } from "react";
 import ReactDOM from "react-dom/client";
 
-import BrowserPane from "@/components/browser/BrowserPane";
 import FileTabs from "@/components/files/FileTabs";
+import ViewTabs, { type ViewTab } from "@/components/layout/ViewTabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
 import type { OpenFile } from "@/hooks/useOpenFiles";
 import "../App.css";
 
-/// Dragging tabs along the browser pane's strip and the Files view's strip.
+/// Dragging tabs along the titlebar's row, where a session's pages are tabs,
+/// and the Files view's strip.
 ///
 /// Both strips are the real components. The browser's tab order lives in Rust,
 /// so the bridge is stubbed here to answer `browser_move` the way the app does:
@@ -96,26 +97,29 @@ const FILES: OpenFile[] = ["src/App.tsx", "src/lib/browser.ts", "src-tauri/src/l
   (path) => ({ path: `/repo/${path}`, reveal: 0, state: { status: "loading" } }),
 );
 
+/// The row leads with Chat, which the browser cases leave in place.
+const PAGE_TABS = "#browser-tabs [role=tab]:not(:first-child)";
+
 /// Drags each strip's first tab past its next two neighbours with synthetic
 /// pointer events and reports the order before and after, for an agent
 /// checking this page without a real pointer.
 async function dragCheck(): Promise<string> {
   const frame = () => new Promise((r) => requestAnimationFrame(r));
   const cases: [string, string, (tabs: HTMLElement[]) => number, number][] = [
-    ["files, past two", "#file-tabs", (tabs) => tabs[2].getBoundingClientRect().right - 5, 0],
-    ["browser, past one", "#browser-tabs", (tabs) => tabs[1].getBoundingClientRect().right - 5, 0],
+    ["files, past two", "#file-tabs [role=tab]", (tabs) => tabs[2].getBoundingClientRect().right - 5, 0],
+    ["browser, past one", PAGE_TABS, (tabs) => tabs[1].getBoundingClientRect().right - 5, 0],
     // Held at the strip's edge, so it has to scroll to go further.
     [
       "browser, held at the edge",
-      "#browser-tabs",
+      PAGE_TABS,
       (tabs) => tabs[0].parentElement!.getBoundingClientRect().right - 5,
       60,
     ],
   ];
   const out: string[] = [];
-  for (const [name, root, target, hold] of cases) {
-    const sel = `${root} [role=tab]`;
-    const read = () => [...document.querySelectorAll(sel)].map((t) => t.textContent?.trim());
+  for (const [name, sel, target, hold] of cases) {
+    // `innerText`, since a row tab carries its beam's `<style>` and `textContent` reads it out.
+    const read = () => [...document.querySelectorAll<HTMLElement>(sel)].map((t) => t.innerText.trim());
     const before = read().join(" | ");
     const tabs = [...document.querySelectorAll<HTMLElement>(sel)];
     const strip = tabs[0].parentElement!;
@@ -143,7 +147,7 @@ async function dragCheck(): Promise<string> {
 /// Right-clicks the browser strip's third tab, opening its real menu, for an
 /// agent whose browser verbs have no right button.
 function rightClickTab() {
-  const tab = document.querySelectorAll<HTMLElement>("#browser-tabs [role=tab]")[2];
+  const tab = document.querySelectorAll<HTMLElement>(PAGE_TABS)[2];
   const r = tab.getBoundingClientRect();
   tab.dispatchEvent(
     new MouseEvent("contextmenu", { bubbles: true, button: 2, clientX: r.left + 10, clientY: r.bottom }),
@@ -152,6 +156,7 @@ function rightClickTab() {
 
 function Demo() {
   const [check, setCheck] = useState("");
+  const [tab, setTab] = useState<ViewTab>("browser");
   const [files, setFiles] = useState(FILES);
   const [active, setActive] = useState(FILES[0].path);
   const move = (path: string, delta: number) =>
@@ -197,10 +202,10 @@ function Demo() {
             />
           </div>
         </section>
-        <section className="flex max-w-md flex-col gap-2">
-          <h2 className="text-ui text-muted-foreground">Browser pane</h2>
-          <div id="browser-tabs" className="h-40 overflow-hidden rounded-lg border border-border bg-card">
-            <BrowserPane sessionId={SESSION} active panel />
+        <section className="flex max-w-2xl flex-col gap-2">
+          <h2 className="text-ui text-muted-foreground">Titlebar row</h2>
+          <div id="browser-tabs" className="flex h-10 items-center rounded-lg border border-border bg-sidebar px-2">
+            <ViewTabs sessionId={SESSION} title="acme / Landing page" tab={tab} onChange={setTab} />
           </div>
         </section>
       </div>

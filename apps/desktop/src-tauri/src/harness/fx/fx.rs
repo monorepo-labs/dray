@@ -654,6 +654,7 @@ async fn open_session(
         .await?
         .and_then(|item| item.thread_id)
         .context("this session has no fx session to resume")?;
+    crate::bots::prepare(session_cwd).await;
 
     let answer = open_with_servers(
         client,

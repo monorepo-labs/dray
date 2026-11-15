@@ -56,7 +56,7 @@ const GROUPS: { title: string; entries: FaqEntry[] }[] = [
       },
       {
         q: "Does a bot remember how I work?",
-        a: "Yes. A bot saves what it learns, such as your preferences, decisions, people and where things live, as notes in its own folder, and reads them when they matter. Its instructions file holds its job and your rules. Dray commits that folder to a local git history after every turn, so nothing the bot overwrites is lost.",
+        a: "Yes. A bot saves what it learns, such as your preferences, decisions, people and where things live, as notes in its own folder, and reads them when they matter. Its AGENTS.md holds its job and your rules, and the agent it runs on loads that file every session. Dray commits that folder to a local git history after every turn, so nothing the bot overwrites is lost.",
       },
       {
         q: "Can I switch a bot to another agent?",
