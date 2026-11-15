@@ -5,7 +5,7 @@ import Orb from "@/components/Orb";
 import EventRow from "@/components/chat/EventRow";
 import { Button } from "@/components/ui/button";
 import { subagentBrief } from "@/lib/tools";
-import { isShellRun, opensTab, type SubagentRun } from "@/lib/transcript";
+import { canOpenTab, isShellRun, opensTab, type SubagentRun } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 import type { AgentEvent, ToolResult } from "@/types/events";
 
@@ -95,6 +95,7 @@ function RunSection({
             live={live}
             onToggle={() => onSelect(run.id === selectedId ? null : run.id)}
             onOpen={onOpen && opensTab(run) ? () => onOpen(run) : undefined}
+            locked={opensTab(run) && !canOpenTab(run)}
             onStopTask={onStopTask}
           />
         ))}
@@ -164,6 +165,7 @@ function RunRow({
   live,
   onToggle,
   onOpen,
+  locked,
   onStopTask,
 }: {
   run: SubagentRun;
@@ -173,6 +175,8 @@ function RunRow({
   onToggle: () => void;
   /// Where set, a click opens the run's tab rather than expanding the row.
   onOpen?: () => void;
+  /// The tab has nothing to show until the run ends, so the row waits.
+  locked: boolean;
   onStopTask: (taskId: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -210,14 +214,15 @@ function RunRow({
   // by itself.
   const hasContent =
     command !== null || run.events.length > 0 || (run.spawn != null && hasBrief(run.spawn));
-  const expands = !onOpen && hasContent;
+  const expands = !onOpen && !locked && hasContent;
+  const opens = !!onOpen && !locked;
 
   return (
     <div
       ref={ref}
       className={cn(
         "group rounded-lg transition-colors",
-        (onOpen || expands) && "hover:bg-sidebar-accent/50",
+        (opens || expands) && "hover:bg-sidebar-accent/50",
       )}
     >
       {/* A row, not one button: the stop control is a second action on the same
@@ -225,8 +230,8 @@ function RunRow({
       <div className="flex items-center">
         <button
           type="button"
-          onClick={onOpen ?? onToggle}
-          disabled={!onOpen && !expands}
+          onClick={opens ? onOpen : onToggle}
+          disabled={!opens && !expands}
           className={cn(
             "flex min-w-0 flex-1 cursor-default items-center gap-2.5 pl-2.5 text-left",
             // A finished subagent is history: the shorter row is half of how it
@@ -261,7 +266,7 @@ function RunRow({
           </span>
           {/* Each kind says what a click does, on hover: a subagent opens a
               tab, a shell expands — and an open shell keeps its caret. */}
-          {onOpen ? (
+          {opens ? (
             <ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
           ) : (
             expands && (

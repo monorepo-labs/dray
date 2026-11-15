@@ -249,7 +249,7 @@ import {
 import { worktreeNoticeDetail } from "@/lib/worktree";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import { useHandoffConfig } from "@/hooks/useHandoffConfig";
-import { buildTranscript, hiddenInBotChat, opensTab, runningRuns, sessionMedia } from "@/lib/transcript";
+import { buildTranscript, canOpenTab, hiddenInBotChat, opensTab, runningRuns, sessionMedia } from "@/lib/transcript";
 import SubagentView from "@/components/SubagentView";
 import { cn } from "@/lib/utils";
 import { onUnhandledEscape } from "@/lib/escape";
@@ -1856,7 +1856,10 @@ function App() {
   // own row: a pane or a lit task tab names a run this session does not hold.
   const openSubagent = (id: string) => {
     const run = subagents.find((r) => r.id === id);
-    if (run && opensTab(run) && selectedSessionId && !stripOwner) return openSubagentTab(selectedSessionId, run);
+    if (run && opensTab(run) && selectedSessionId && !stripOwner) {
+      if (canOpenTab(run)) openSubagentTab(selectedSessionId, run);
+      return;
+    }
     setSelectedSubagentId(id);
     showPanel("more");
   };

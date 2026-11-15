@@ -109,6 +109,7 @@ const RUNS: SubagentRun[] = [
     usage: null,
     events: [textEvent("Three readers so far: the guess, the gateway, a live session.")],
     inline: false,
+    opensWhenDone: false,
     spawn: spawnEvent("call-1", "Find every place the effort ladder is read"),
   },
   {
@@ -123,6 +124,7 @@ const RUNS: SubagentRun[] = [
     usage: null,
     events: [textEvent("`rawOutput` needs no rename_all — every field would read None for ever.")],
     inline: false,
+    opensWhenDone: false,
     spawn: spawnEvent("call-2", "Check the grok mapper against the captured wire"),
   },
 ];
