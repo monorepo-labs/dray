@@ -1754,6 +1754,7 @@ function App() {
   );
   // A bot's browser is where its tasks' links open, so its new tab lists
   // their servers too; anyone else's lists its own alone.
+  const indexItemOf = (id: string) => sessionIndexItems.find((i) => i.sessionId === id);
   const tasksIn = (browserFor: string) => (botBrowser(bots, sessionIndexItems, browserFor) ? botTasks : undefined);
   // The index lists one side of the sidebar, so a task settled under a pick
   // leaves it while its folder may still be there to show. Each target's
@@ -3433,6 +3434,7 @@ function App() {
         <BrowserPane
           sessionId={browserOf(rowSession.sessionId)}
           tasks={tasksIn(rowSession.sessionId)}
+          own={indexItemOf(browserOf(rowSession.sessionId))}
           tab={Number(key.slice("page:".length))}
           active={!issuesOpen && shown}
           onClose={() => removeSplit(rowSession.sessionId, key)}
@@ -4296,6 +4298,7 @@ function App() {
           <BrowserPane
             sessionId={browserSession ?? selectedSession.sessionId}
             tasks={tasksIn(selectedSession.sessionId)}
+            own={indexItemOf(browserSession ?? selectedSession.sessionId)}
             active={fullBrowserOpen}
           />
           </MountOnce>

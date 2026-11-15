@@ -65,6 +65,7 @@ function start() {
       opening.delete(sessionId);
     }
     tabsBySession.set(sessionId, tabs);
+    noteFailures(tabs);
     fetched.add(sessionId);
     // The reader moving on or off a tab under a shot moves the cover with them.
     // Here rather than at the click: the Rust side has switched by now, so
@@ -234,6 +235,7 @@ function fetchTabs(sessionId: string) {
   void invoke<BrowserTab[]>("browser_tabs", { sessionId })
     .then((tabs) => {
       tabsBySession.set(sessionId, tabs);
+      noteFailures(tabs);
       notify();
     })
     .catch(() => fetched.delete(sessionId));
@@ -665,12 +667,70 @@ export async function reachableUrl(sessionId: string, url: string): Promise<stri
   } catch {
     return url;
   }
-  if (server === LOCAL || !LOOPBACK.has(u.hostname) || !/^https?:$/.test(u.protocol)) return url;
+  if (!LOOPBACK.has(u.hostname) || !/^https?:$/.test(u.protocol)) return url;
   const port = Number(u.port) || (u.protocol === "https:" ? 443 : 80);
+  if (server === LOCAL) {
+    servedBy.set(port, { sessionId, port, forwarded: false });
+    return url;
+  }
   const local = await invoke<number>("forward_port", { server, port }, LOCAL);
+  servedBy.set(local, { sessionId, port, forwarded: true });
   u.hostname = "localhost";
   u.port = String(local);
   return u.toString();
+}
+
+/// Whose server each of this Mac's loopback ports was opened as, and its
+/// port where it runs: a forward hides both. Last opener wins, since one
+/// machine has one server on a port.
+const servedBy = new Map<number, { sessionId: string; port: number; forwarded: boolean }>();
+
+/// What a stopped dev server leaves. Refused where the port is this Mac's own;
+/// a forward accepts the connection and drops it once the far end refuses.
+const REFUSED = /ERR_CONNECTION_REFUSED$/;
+const DROPPED = /ERR_(CONNECTION_REFUSED|EMPTY_RESPONSE|CONNECTION_CLOSED|CONNECTION_RESET)$/;
+
+/// When this app first saw each tab's page fail, by tab id. Kept through a
+/// retry's load, so Retry does not restart the clock.
+const failedAt = new Map<number, { url: string; at: number; error: string }>();
+
+function noteFailures(tabs: BrowserTab[]) {
+  for (const t of tabs) {
+    const seen = failedAt.get(t.id);
+    if (t.error) {
+      failedAt.set(t.id, { url: t.url, at: seen?.url === t.url ? seen.at : Date.now(), error: t.error });
+    } else if (!t.loading || seen?.url !== t.url) {
+      failedAt.delete(t.id);
+    }
+  }
+}
+
+/// A tab left on a dev server that stopped. `sessionId` runs it, and `null`
+/// is a port this app never opened for a session, which nobody can be asked
+/// about. `retrying` is a load under way after the failure: the page stays
+/// put through it rather than flashing Chromium's own.
+export type StoppedServer = { port: number; sessionId: string | null; since: number; retrying: boolean };
+
+/// `browser` is the session whose tabs these are, taken as the owner of a
+/// port nothing recorded where it runs on this Mac.
+export function stoppedServer(tab: BrowserTab, browser: string): StoppedServer | null {
+  const failed = failedAt.get(tab.id);
+  const retrying = !tab.error && tab.loading && failed?.url === tab.url;
+  const error = tab.error ?? (retrying ? failed.error : null);
+  if (!error) return null;
+  let u: URL;
+  try {
+    u = new URL(tab.url);
+  } catch {
+    return null;
+  }
+  if (!LOOPBACK.has(u.hostname) || u.protocol !== "http:") return null;
+  const local = Number(u.port) || 80;
+  const served = servedBy.get(local);
+  if (!(served?.forwarded ? DROPPED : REFUSED).test(error)) return null;
+  const since = failed?.at ?? Date.now();
+  if (served) return { port: served.port, sessionId: served.sessionId, since, retrying };
+  return { port: local, sessionId: serverOfSession(browser) === LOCAL ? browser : null, since, retrying };
 }
 
 /// One of the session's dev servers, opened in this Mac's browser — `browser`'s
