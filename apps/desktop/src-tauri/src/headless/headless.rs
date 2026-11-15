@@ -99,7 +99,7 @@ static NO_SANDBOX: AtomicBool = AtomicBool::new(false);
 const WINDOW: &str = "--window-size=1440,900";
 /// A session's browser unused this long is closed and its tabs kept by url.
 /// The Mac's reason — one renderer reached 5.7GB in 20h — and a VPS has less.
-const DISCARD_AFTER: Duration = Duration::from_secs(15 * 60);
+const DISCARD_AFTER: Duration = Duration::from_secs(5 * 60);
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 // --- What `dray browser` reads ----------------------------------------------
