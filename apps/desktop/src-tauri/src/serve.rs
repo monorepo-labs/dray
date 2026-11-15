@@ -556,9 +556,20 @@ impl Hub {
         // No receivers is ordinary — nobody connected, or the app not
         // serving — and the frame would be built for nobody.
         if self.events.receiver_count() > 0 {
-            let _ = self.events.send(json!({ "event": event, "payload": payload }).to_string().into());
+            let _ = self.events.send(event_frame(event, payload).into());
         }
     }
+}
+
+/// `{"event":…,"payload":…}`, serialized off the borrowed payload: `json!`
+/// cloned the whole tree to wrap it.
+fn event_frame(event: &str, payload: &Value) -> String {
+    #[derive(Serialize)]
+    struct Frame<'a> {
+        event: &'a str,
+        payload: &'a Value,
+    }
+    serde_json::to_string(&Frame { event, payload }).unwrap_or_default()
 }
 
 /// Every server's hub, a static because Remote access serves it from a
@@ -1537,19 +1548,13 @@ async fn connection(
         tokio::spawn(crate::analytics::CLIENT_COUNTS.scope(counts, async move {
             let args = tag_dictation(&call.cmd, call.args, island);
             let answer = match call.cmd.as_str() {
-                "island_links" => island_links(island).await,
+                "island_links" => island_links(island).await.into_reply(),
                 _ => dispatch(&call.cmd, args, sink).await,
             };
-            let reply = match answer {
-                Ok(ok) => {
-                    if island {
-                        island_used(&call.cmd);
-                    }
-                    json!({ "id": call.id, "ok": ok })
-                }
-                Err(err) => json!({ "id": call.id, "err": err }),
-            };
-            let _ = replies.send(reply.to_string());
+            if island && answer.is_ok() {
+                island_used(&call.cmd);
+            }
+            let _ = replies.send(reply(&call.id, answer));
         }));
     }
 
@@ -1636,19 +1641,67 @@ fn answered(connection: u64, frame: Value) {
     }
 }
 
+/// JSON text, serialized straight off a command's typed result. Going through
+/// a `Value` tree first was most of a transcript read's CPU and its peak memory.
+#[derive(Debug, PartialEq)]
+struct Json(String);
+
+impl Json {
+    fn of<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<Self> {
+        serde_json::to_string(value).map(Self)
+    }
+
+    /// A JSON string holding `text`, how every refusal here is worded.
+    fn text(text: impl std::fmt::Display) -> Self {
+        Self::from(Value::String(text.to_string()))
+    }
+}
+
+impl From<Value> for Json {
+    fn from(value: Value) -> Self {
+        Self(serde_json::to_string(&value).unwrap_or_else(|_| "null".into()))
+    }
+}
+
 /// A command's answer as the wire carries it: the value, or the error as
 /// Tauri would have serialized it for a rejected `invoke`.
+type Answer = Result<Json, Json>;
+
 trait IntoReply {
-    fn into_reply(self) -> Result<Value, Value>;
+    fn into_reply(self) -> Answer;
 }
 
 impl<T: Serialize, E: Serialize> IntoReply for Result<T, E> {
-    fn into_reply(self) -> Result<Value, Value> {
+    fn into_reply(self) -> Answer {
         match self {
-            Ok(value) => serde_json::to_value(value).map_err(|e| json!(e.to_string())),
-            Err(err) => Err(serde_json::to_value(err).unwrap_or_else(|e| json!(e.to_string()))),
+            Ok(value) => Json::of(&value).map_err(Json::text),
+            Err(err) => Err(Json::of(&err).unwrap_or_else(Json::text)),
         }
     }
+}
+
+/// The reply frame. Its keys stay in the order `json!` sorted them, so the
+/// envelope reads byte for byte as it did; the answer is copied once, not reparsed.
+fn reply(id: &Value, answer: Answer) -> String {
+    let id = Json::from(id.clone()).0;
+    let (body, ok) = match answer {
+        Ok(Json(body)) => (body, true),
+        Err(Json(body)) => (body, false),
+    };
+    let mut frame = String::with_capacity(body.len() + id.len() + 16);
+    if ok {
+        frame.push_str("{\"id\":");
+        frame.push_str(&id);
+        frame.push_str(",\"ok\":");
+        frame.push_str(&body);
+    } else {
+        frame.push_str("{\"err\":");
+        frame.push_str(&body);
+        frame.push_str(",\"id\":");
+        frame.push_str(&id);
+    }
+    frame.push('}');
+    frame
 }
 
 /// For a command that cannot fail.
@@ -1670,11 +1723,11 @@ macro_rules! table {
                 let args = if $args.is_null() { json!({}) } else { $args };
                 #[allow(unused_variables)]
                 let Args { $($arg),* } = serde_json::from_value(args)
-                    .map_err(|e| json!(format!("invalid arguments to {}: {e}", $cmd)))?;
+                    .map_err(|e| Json::text(format!("invalid arguments to {}: {e}", $cmd)))?;
                 IntoReply::into_reply($call)
             })*
             // How a desktop-only command looks from here.
-            _ => Err(json!(format!("unknown command {}", $cmd))),
+            _ => Err(Json::text(format!("unknown command {}", $cmd))),
         }
     };
 }
@@ -1682,7 +1735,7 @@ macro_rules! table {
 /// What the Mac's server answers beyond the core: Remote access, which moved
 /// into it from the app, and the restart an update asks for.
 #[cfg(feature = "desktop")]
-async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
+async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Answer {
     table! { cmd, args;
         get_remote_access() => ok(crate::remote_access::get_remote_access());
         set_remote_access(on: bool) => crate::remote_access::set_remote_access(sink, on).await;
@@ -1696,9 +1749,9 @@ async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value
 /// Every core command the desktop exposes, minus the ones that act on the
 /// server's own desktop: opening apps and terminals, and the pasteboard.
 /// Mac-only modules are not compiled here.
-async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
+async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
     if !dray_proto::REMOTE_MCP && cmd.starts_with("mcp_") {
-        return Err(json!(format!("unknown command {cmd}")));
+        return Err(Json::text(format!("unknown command {cmd}")));
     }
     #[cfg(feature = "desktop")]
     if matches!(
@@ -1716,19 +1769,19 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
     // of its own — the Island — dictates through the app's.
     #[cfg(feature = "desktop")]
     if crate::transcription::HOSTED.contains(&cmd) {
-        return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Open Dray to dictate.")));
+        return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Open Dray to dictate."))).into_reply();
     }
     // The Island's title opens its session in the app's window, which only the
     // app can raise, and the island opens on the session that window shows.
     #[cfg(feature = "desktop")]
     if matches!(cmd, "show_session" | "selected_session" | "extend_boat") {
-        return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Dray's window is closed.")));
+        return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Dray's window is closed."))).into_reply();
     }
     // The app's word to the island, which only this server reaches.
     #[cfg(feature = "desktop")]
     if cmd == "boat_alerts" {
         let _ = sink.emit("boat_alerts", &args);
-        return Ok(Value::Null);
+        return Ok(Json::from(Value::Null));
     }
     // A `dray-serve` updates itself; the Mac's server follows the app instead.
     #[cfg(not(feature = "desktop"))]
@@ -2265,8 +2318,47 @@ mod tests {
     async fn unknown_and_malformed_commands_answer_err() {
         let sink = Sink::new(|_, _| {});
         let err = dispatch("browser_open", Value::Null, sink.clone()).await.unwrap_err();
-        assert_eq!(err, json!("unknown command browser_open"));
+        assert_eq!(err, Json::from(json!("unknown command browser_open")));
         let err = dispatch("stop_task", json!({ "sessionId": 1 }), sink).await.unwrap_err();
+        let err: Value = serde_json::from_str(&err.0).unwrap();
         assert!(err.as_str().unwrap().starts_with("invalid arguments to stop_task"));
+    }
+
+    /// Replies are serialized off the typed result; the JSON must read the same
+    /// as the `Value` tree it replaced, key order aside.
+    #[test]
+    fn a_reply_reads_as_the_value_tree_did() {
+        use super::{reply, IntoReply, Json};
+        use crate::harness::claude_code::{mapper::Mapper, parser};
+        let mut mapper = Mapper::default();
+        let events: Vec<_> = include_str!("harness/claude_code/fixtures/complex.jsonl")
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| mapper.map(parser::parse_line(line).unwrap()).unwrap())
+            .collect();
+        assert!(events.len() > 100);
+        let mut item = crate::store::SessionIndexItem::new(
+            "s", crate::session::Harness::ClaudeCode, "/p", "/p", None, None, "hi",
+            crate::models::ModelId::new("opus"), None, crate::events::ApprovalPolicy::Auto, false, None,
+        );
+        item.unknown.insert("fromNewerBuild".into(), json!({ "z": 1, "a": [true] }));
+        let snapshot = crate::store::SessionSnapshot { index_item: item, events, older_before: Some(7) };
+        let read = |frame: String| serde_json::from_str::<Value>(&frame).unwrap();
+
+        let old = json!({ "id": 3, "ok": serde_json::to_value(Some(&snapshot)).unwrap() }).to_string();
+        let new = reply(&json!(3), Ok::<_, String>(Some(&snapshot)).into_reply());
+        assert_eq!(read(new), read(old));
+
+        let old = json!({ "id": "x\"y", "err": "no such session" }).to_string();
+        assert_eq!(reply(&json!("x\"y"), Err::<(), _>("no such session").into_reply()), old, "byte for byte");
+        let old = json!({ "id": 9, "ok": { "b": [1.5, null], "a": "\u{1}\n" } }).to_string();
+        assert_eq!(reply(&json!(9), Ok(Json::from(json!({ "b": [1.5, null], "a": "\u{1}\n" })))), old);
+    }
+
+    #[test]
+    fn an_event_frame_is_what_json_wrote() {
+        let payload = json!({ "sessionId": "s", "seq": 4, "payload": { "text": "a\"b", "z": null } });
+        let old = json!({ "event": "agent_event", "payload": payload }).to_string();
+        assert_eq!(super::event_frame("agent_event", &payload), old);
     }
 }
