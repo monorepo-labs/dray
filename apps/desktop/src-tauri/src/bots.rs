@@ -1196,11 +1196,14 @@ async fn move_legacy_instructions(bot: &Bot) -> Result<()> {
     let _guard = HISTORY_LOCK.lock().await;
     let old = tokio::fs::read_to_string(&legacy).await.context("could not read INSTRUCTIONS.md")?;
     let now = read_file(&dir.join(INSTRUCTIONS)).await;
-    // Holding the old text already means a move cut off before the removal;
-    // appending again would repeat every rule.
+    // Ending on the old text whole, as a move writes it, means one cut off
+    // before the removal; appending again would repeat every rule. Matched
+    // as that block, never a substring, which a longer rule can hold.
+    let (tail, block) = (now.trim_end(), old.trim_end());
+    let copied = tail == block || tail.ends_with(&format!("\n\n{block}"));
     let merged = if now.trim().is_empty() {
         old
-    } else if old.trim().is_empty() || now.contains(old.trim()) {
+    } else if old.trim().is_empty() || copied {
         now
     } else {
         format!("{}\n\n{old}", now.trim_end())
@@ -1687,6 +1690,15 @@ mod tests {
         move_legacy_instructions(&bot).await.unwrap();
         assert_eq!(tokio::fs::read_to_string(dir.join(INSTRUCTIONS)).await.unwrap(), "- New rule\n\n- Old rule\n");
         assert!(!dir.join(LEGACY_INSTRUCTIONS).exists());
+
+        // A rule only contained in a longer one was never copied.
+        tokio::fs::write(dir.join(INSTRUCTIONS), "- Always ask before deleting\n").await.unwrap();
+        tokio::fs::write(dir.join(LEGACY_INSTRUCTIONS), "- Always ask\n").await.unwrap();
+        move_legacy_instructions(&bot).await.unwrap();
+        assert_eq!(
+            tokio::fs::read_to_string(dir.join(INSTRUCTIONS)).await.unwrap(),
+            "- Always ask before deleting\n\n- Always ask\n"
+        );
         NOTES.lock().unwrap().retain(|(p, _)| p != &bot.path);
         tokio::fs::remove_dir_all(&dir).await.ok();
     }
