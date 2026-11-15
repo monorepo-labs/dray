@@ -86,11 +86,29 @@ describe("stalledTasks", () => {
     expect(s.since).toBe(turned);
   });
 
-  it("draws nothing for a ready PR while GitHub recomputes it", () => {
+  it("keeps a ready PR on the card, checking, while GitHub recomputes it", () => {
+    const seen = new Map<string, number>();
+    const [ready] = stalledTasks([row("a")], () => pr(), seen, T0 + STALL_MS, fresh);
+    expect(ready).toMatchObject({ kind: "ready", checking: false });
+    const [checking] = stalledTasks([row("a")], () => pr({ mergeable: "UNKNOWN" }), seen, T0 + STALL_MS, fresh);
+    expect(checking).toMatchObject({ kind: "ready", checking: true, key: ready.key, since: T0 });
+    const [back] = stalledTasks([row("a")], () => pr(), seen, T0 + STALL_MS, fresh);
+    expect(back).toMatchObject({ checking: false, since: T0 });
+  });
+
+  it("draws nothing for a PR first seen while GitHub works it out, or last seen not ready", () => {
+    const unknown = () => pr({ mergeable: "UNKNOWN" });
+    expect(stalledTasks([row("a")], unknown, new Map(), T0 + STALL_MS, fresh)).toEqual([]);
+    const seen = new Map<string, number>();
+    stalledTasks([row("a")], () => pr({ mergeStateStatus: "BLOCKED" }), seen, T0 + STALL_MS, fresh);
+    expect(stalledTasks([row("a")], unknown, seen, T0 + STALL_MS, fresh)).toEqual([]);
+  });
+
+  it("never carries one PR's readiness to another on the same task", () => {
     const seen = new Map<string, number>();
     expect(stalledTasks([row("a")], () => pr(), seen, T0 + STALL_MS, fresh)[0].kind).toBe("ready");
-    expect(stalledTasks([row("a")], () => pr({ mergeable: "UNKNOWN" }), seen, T0 + STALL_MS, fresh)).toEqual([]);
-    expect(stalledTasks([row("a")], () => pr(), seen, T0 + STALL_MS, fresh)[0].since).toBe(T0);
+    const other = () => pr({ number: 909, mergeable: "UNKNOWN" });
+    expect(stalledTasks([row("a")], other, seen, T0 + STALL_MS, fresh)).toEqual([]);
   });
 
   it("leaves a task whose checks are still running alone", () => {

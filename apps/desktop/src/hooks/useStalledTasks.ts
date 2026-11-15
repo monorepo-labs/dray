@@ -110,6 +110,8 @@ export function useStalledTasks({
       .filter(
         (s) =>
           (s.kind === "ready" || !needLine(s)) &&
+          // Only GitHub can say whether a checking PR is still ready.
+          !s.checking &&
           !nudged.has(s.key) &&
           !sending.current.has(s.key) &&
           triedOn.current.get(s.key) !== now,
@@ -164,6 +166,8 @@ export function useStalledTasks({
         projectPath: s.row.item.projectPath,
         modified: s.row.item.modified,
         need: needLine(s) ?? null,
+        // A checking row goes as ready: the island holds this snapshot until
+        // the next notice, so Checking… there would never turn back into Merge.
         ready: s.kind === "ready",
         pr: s.pr ?? null,
       }));
