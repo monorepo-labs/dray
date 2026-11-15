@@ -69,9 +69,14 @@ pub async fn owe(child: &str) -> anyhow::Result<()> {
 
 /// Whether `child` reports to a bot on another machine.
 pub async fn owed(child: &str) -> bool {
-    let Ok(path) = outbox_path().await else { return false };
+    owed_tasks().await.iter().any(|c| c == child)
+}
+
+/// Every task here that reports to a bot on another machine.
+pub async fn owed_tasks() -> Vec<String> {
+    let Ok(path) = outbox_path().await else { return Vec::new() };
     let outbox: Outbox = store::read_json(&path).await.unwrap_or_default();
-    outbox.owed.iter().any(|c| c == child)
+    outbox.owed
 }
 
 /// How long a report waits for collecting. A bot's server that removed this
