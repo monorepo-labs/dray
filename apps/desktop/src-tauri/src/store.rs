@@ -2210,25 +2210,35 @@ pub async fn clear_fork_from(session_id: &str) -> Result<bool> {
 }
 
 /// Appends one event as a line to the session's `.jsonl` log.
+///
+/// One blocking hop that opens `O_APPEND`, writes and closes. Four tokio fs
+/// calls plus a `create_dir_all` were ~10 thread handoffs per event. No handle
+/// is kept between events: delete, fork repointing and worktree relocation all
+/// rely on each append opening the file afresh.
 pub async fn append_session_event(session_id: &str, event: AgentEvent) -> Result<()> {
-    let path = get_session_path(session_id).await?;
+    let dir = get_home_app_dir().await?.join("sessions");
+    let path = dir.join(format!("{session_id}.jsonl"));
+    let mut line = serde_json::to_vec(&event)?;
+    line.push(b'\n');
 
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .await
-        .context("failed to open session file")?;
+    tokio::task::spawn_blocking(move || append_line(&dir, &path, &line))
+        .await?
+        .context("failed to open session file")
+}
 
-    let line = format!("{}\n", serde_json::to_string(&event)?);
-
-    file.write_all(line.as_bytes()).await?;
-    // tokio's `write_all` answers once the bytes are handed to a blocking task,
-    // not once they are written. The flush waits for that write and carries its
-    // error, so a full disk is reported and two appends keep their order.
-    file.flush().await?;
-
-    Ok(())
+/// `line` onto `path`, creating `dir` only when the open finds it missing, as
+/// `get_sessions_dir` would have before every append.
+fn append_line(dir: &Path, path: &Path, line: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let open = || std::fs::OpenOptions::new().create(true).append(true).open(path);
+    let mut file = match open() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(dir)?;
+            open()?
+        }
+        opened => opened?,
+    };
+    file.write_all(line)
 }
 
 /// One unreadable line, kept for investigation.
@@ -2340,6 +2350,21 @@ pub async fn get_session_path(session_id: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An append after the sessions directory went away recreates it and the
+    /// file, as `get_sessions_dir`'s `create_dir_all` before every append did,
+    /// and a later append lands after the first rather than over it.
+    #[test]
+    fn an_append_recreates_a_removed_directory_and_appends() {
+        let dir = std::env::temp_dir().join(format!("dray-append-{}", Uuid::now_v7())).join("sessions");
+        let path = dir.join("s.jsonl");
+        append_line(&dir, &path, b"one\n").unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        append_line(&dir, &path, b"two\n").unwrap();
+        append_line(&dir, &path, b"three\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "two\nthree\n");
+        std::fs::remove_dir_all(dir.parent().unwrap()).ok();
+    }
 
     #[test]
     fn a_worktree_build_names_its_own_dev_home() {
