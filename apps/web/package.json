@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "node --test 'test/*.test.mjs'",
+    "test": "node --test --test-concurrency=1 'test/*.test.mjs'",
     "db:migrate": "auth migrate --config src/lib/auth.ts -y"
   },
   "dependencies": {

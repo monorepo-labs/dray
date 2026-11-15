@@ -143,6 +143,7 @@ pub async fn run(port: u16) -> Result<()> {
     let home = start_core(sink.clone()).await?;
     if let Some(sandbox) = crate::cloud_machine::boat_id().await {
         tokio::spawn(crate::cloud_machine::heartbeat(home.clone(), sandbox));
+        tokio::spawn(crate::cloud_machine::github(home.clone()));
     }
 
     let (token, token_path) = mint_token().await?;

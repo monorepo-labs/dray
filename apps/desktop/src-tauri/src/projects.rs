@@ -432,6 +432,10 @@ pub async fn clone_github_repo(slug: String, sink: Sink) -> Result<Vec<Project>,
     let Some(_running) = Running::claim(name) else {
         return Err(anyhow!("{shown} is already being cloned.").into());
     };
+    // A cloud machine's first token may not be minted yet when the app asks
+    // for its clone, which is the first thing it asks.
+    #[cfg(any(feature = "serve", feature = "desktop"))]
+    crate::cloud_machine::github_ready().await.map_err(|e| anyhow!(e))?;
     let staging = parent.join(STAGING_DIR).join(name);
     let _ = fs::remove_dir_all(&staging).await;
     fs::create_dir_all(staging.parent().unwrap_or(&parent)).await.map_err(anyhow::Error::from)?;

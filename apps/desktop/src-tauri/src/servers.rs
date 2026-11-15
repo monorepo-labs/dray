@@ -1462,12 +1462,13 @@ async fn switch_cloud(on: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// A new machine for one task. Answers its server id once it is connected,
-/// so the task can clone onto it straight away.
+/// A new machine for one task, bound to `repo` (`owner/name`) for GitHub.
+/// Answers its server id once it is connected, so the task can clone onto it
+/// straight away.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn start_cloud_machine() -> Result<String, String> {
+pub async fn start_cloud_machine(repo: Option<String>) -> Result<String, String> {
     let key = cloud_key().await.ok_or(NO_CLOUD_KEY)?;
-    let machine = cloud::start(&key).await?;
+    let machine = cloud::start(&key, repo.as_deref()).await?;
     crate::analytics::track("feature_used", json!({ "feature": "cloud_machine_started" }));
     let reached = reach_new_machine(&machine.id).await;
     // Started but never reached: kept, it would run on unseen, and every
