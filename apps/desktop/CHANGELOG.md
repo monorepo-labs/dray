@@ -19,6 +19,35 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.6 · 2026-11-15
+
+### New
+
+- **Subagents open in a tab.** Click an agent row in the chat or the
+  More tab to read its whole conversation beside the session.
+- **Dev servers in the bot's browser.** A bot's new tab lists its tasks'
+  dev servers. A stopped one shows which task ran it, where, and a
+  button to ask for a restart.
+- **`dray session model`** switches a session's model and effort from
+  the terminal.
+
+### Improved
+
+- The More tab splits Background tasks from Subagents.
+- Links in a bot's task open as tabs in the bot's row.
+- Bots keep their instructions in AGENTS.md, which every agent reads
+  on its own.
+- Merging or settling a bot task deletes its worktree without asking.
+- Removing a machine warns about its unfinished tasks first.
+- fx shows a countdown while it retries a failed request.
+- Idle agent browsers on servers close after 5 minutes, not 30.
+
+### Fixed
+
+- Images an agent links by local path now show in the chat.
+- "Waiting on you" rows stay put while GitHub rechecks PRs after a
+  merge.
+
 ## 0.30.5 · 2026-11-14
 
 ### New
