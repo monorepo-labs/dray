@@ -216,7 +216,23 @@ jobs:
           : > "src-tauri/target/cli/dray-cli-$TARGET"
           pnpm tauri build --no-bundle --target "$TARGET" --features cef --config src-tauri/tauri.cef.conf.json --config src-tauri/tauri.island.conf.json --config src-tauri/tauri.cli.conf.json
 
-      - run: tar -cf "$RUNNER_TEMP/build.tar" -C apps/desktop/src-tauri "target/$TARGET/release/dray" "target/$TARGET/release/dray-helper"
+      # The aarch64 leg also carries the Tauri CLI `bundle` runs: the two
+      # packages pnpm installed here from the frozen lockfile, integrity
+      # checked, so the job holding the signing keys runs the bytes the lockfile
+      # pins without installing anything. Both legs run on arm64, as does
+      # `bundle`, so the darwin-arm64 binary is the one it needs.
+      - run: |
+          set -euo pipefail
+          FILES=("target/$TARGET/release/dray" "target/$TARGET/release/dray-helper")
+          if [ "$TARGET" = aarch64-apple-darwin ]; then
+            T=apps/desktop/src-tauri/target/tauri-cli/node_modules/@tauri-apps
+            mkdir -p "$T"
+            CLI="$(realpath apps/desktop/node_modules/@tauri-apps/cli)"
+            cp -R "$CLI" "$T/cli"
+            cp -R "$(realpath "$CLI/../cli-darwin-arm64")" "$T/cli-darwin-arm64"
+            FILES+=(target/tauri-cli)
+          fi
+          tar -cf "$RUNNER_TEMP/build.tar" -C apps/desktop/src-tauri "${FILES[@]}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mac-build-${{ matrix.target }}
@@ -273,16 +289,6 @@ jobs:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
-      # The Tauri CLI alone, at the version pnpm-lock.yaml pins, rather than a
-      # `pnpm install` of the whole frontend that nothing here builds.
-      - name: Install the Tauri CLI
-        run: |
-          set -euo pipefail
-          V="$(grep -oE "^  '@tauri-apps/cli@[0-9][^']*'" pnpm-lock.yaml | sort -u | sed "s/.*@//; s/'//")"
-          # Two versions locked would leave a newline in V.
-          case "$V" in ""|*[!0-9A-Za-z.+-]*) echo "no single @tauri-apps/cli in pnpm-lock.yaml: $V" >&2; exit 1 ;; esac
-          npm install --no-save --no-audit --no-fund --prefix "$RUNNER_TEMP/tauri" "@tauri-apps/cli@$V"
-          echo "$RUNNER_TEMP/tauri/node_modules/.bin" >> "$GITHUB_PATH"
 
       # One bundle for both architectures. `cef` turns the browser on and has
       # to match the compile, or `dray-helper` drops out of the bundler's
@@ -304,7 +310,8 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: tauri bundle --target universal-apple-darwin --features cef --config src-tauri/tauri.cef.conf.json --config src-tauri/tauri.island.conf.json --config src-tauri/tauri.cli.conf.json
+        # The Tauri CLI the aarch64 leg carried over; see there.
+        run: node src-tauri/target/tauri-cli/node_modules/@tauri-apps/cli/tauri.js bundle --target universal-apple-darwin --features cef --config src-tauri/tauri.cef.conf.json --config src-tauri/tauri.island.conf.json --config src-tauri/tauri.cli.conf.json
 
       # The bundler *warns* and carries on when notarization credentials are
       # missing or rejected — only an absent team id is fatal. So a release
@@ -636,6 +643,10 @@ jobs:
   # they are. `!cancelled()` is what runs this past a skipped `linux`; with no
   # status function the implicit `success()` would skip it too. A dry run's
   # `bundle` succeeds too, which is why the event is checked as well.
+  #
+  # release-cli's publish gate (.github/scripts/cli-publish-gate.sh) finds this
+  # job by the file name `release.yml` and the job name `manifest`; rename
+  # either and it waits out its 45-minute cap.
   manifest:
     needs: [bundle, linux]
     if: ${{ !cancelled() && needs.bundle.result == 'success' && github.event_name == 'push' }}
