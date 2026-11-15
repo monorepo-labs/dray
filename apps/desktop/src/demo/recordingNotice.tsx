@@ -2,7 +2,6 @@ import React, { useState } from "react";
 import ReactDOM from "react-dom/client";
 
 import BrowserPane from "@/components/browser/BrowserPane";
-import RightPanel, { TabBody, tabOrder } from "@/components/RightPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
 import "../App.css";
@@ -10,8 +9,8 @@ import "../App.css";
 /// What the browser pane shows while `dray browser record` runs.
 ///
 /// A recording only happens under an agent driving a CEF build, which a plain
-/// browser cannot be, so the real pane is mounted in the real right panel and
-/// the Tauri bridge is stubbed *outside* them — nothing in `src/` carries a
+/// browser cannot be, so the real pane is mounted in a box that resizes like the
+/// main column and the Tauri bridge is stubbed *outside* them — nothing in `src/` carries a
 /// demo seam. The page is a picture standing where the native view would be,
 /// which is exactly what the pane draws while recording anyway.
 const SESSION = "demo-session";
@@ -131,7 +130,7 @@ function Demo() {
         <div className="flex min-w-0 flex-1 flex-col gap-3 p-10">
           <h1 className="mb-2 text-lg font-medium">Browser pane while an agent records</h1>
           <p className="max-w-sm text-xs text-muted-foreground">
-            The real pane in the real right panel. Drag the panel's edge to check narrow widths.
+            The real pane. Drag the box's corner to check narrow widths.
           </p>
           <div className="flex gap-2">
             <button type="button" onClick={toggleRecording} className="rounded-md border border-border px-3 py-1.5 text-sm">
@@ -140,17 +139,14 @@ function Demo() {
           </div>
         </div>
 
-        <RightPanel
-          open
-          tabs={tabOrder({ pr: false, docs: false, issue: false, more: false, browser: true })}
-          tab="browser"
-          onTabChange={() => {}}
-          cwd="/Users/you/code/acme"
+        <div
+          dir="rtl"
+          className="flex w-[640px] min-w-72 max-w-[80vw] resize-x overflow-hidden border-l border-border bg-card"
         >
-          <TabBody active>
-            <BrowserPane sessionId={SESSION} active panel />
-          </TabBody>
-        </RightPanel>
+          <div dir="ltr" className="flex min-w-0 flex-1 flex-col">
+            <BrowserPane sessionId={SESSION} active />
+          </div>
+        </div>
       </div>
       <DemoThemeBar />
     </TooltipProvider>
