@@ -49,7 +49,7 @@ struct TranscriptView: View {
                     if bot != nil { BotChatRows(key: key, items: chat, newFrom: newFrom ?? nil) }
                     ForEach(turns) { TurnView(turn: $0) }
                     ForEach(store.queued[key] ?? [], id: \.id) { q in
-                        UserBubble(text: q.text, from: nil, queued: true)
+                        UserBubble(text: q.text, from: nil, queued: true, bot: bot != nil)
                     }
                     // Turns held but the refresh failed: what is on screen may be missing newer messages.
                     if transcript != nil, let error = store.transcriptErrors[key] {
