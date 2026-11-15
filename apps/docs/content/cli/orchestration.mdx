@@ -43,11 +43,15 @@ A session started with `--hidden` stays out of the sidebar. You see it only when
 
 A bot is one ongoing chat you run everything from. It has its own instructions and its own memory, and everything it starts reports back to it on its own.
 
+Opening Dray opens your first bot. With none left, it opens on a new task. The first one it makes is **Dray Bot**. Its chat starts with a greeting. Until you have told a bot what to call you, that greeting asks **What should I call you?**. The name is shared: tell any bot a different one and the rest use it.
+
 - **Make one** with **New bot** in the sidebar: a name, a face, a colour, and the agent and model it runs on. Its chat opens with the bot introducing itself; tell it its job in reply. Bots sit above All Projects like an inbox, each with its face and its last message.
+- **Change one** by right-clicking it and choosing **Edit…**. You can change the name, the face and the colour. The agent, the model and the machine it runs on stay. **Delete bot…** removes the bot, its folder included.
 - **It runs in its own folder**, not in a repository, and starts work in any project you name. Its folder holds `AGENTS.md` and a `memory` folder, both empty at first. The bot writes down its job in `AGENTS.md` from what you tell it, and the agent it runs on loads that file whenever its chat starts, as it would in any repository. An older bot's `INSTRUCTIONS.md` moves to `AGENTS.md`, rules and all, the next time it starts. It saves what is worth remembering as one dated file per memory, such as `2026-11-12-release-checklist.md`, and looks through them when it needs to.
-- **What it starts runs hidden.** Those sessions stay out of the sidebar. After every turn one of them ends, Dray sends its last message to the bot, so the bot always knows where its work stands. Their permission and question cards show in the bot's chat.
-- **The Tasks tab** in the bot's right panel lists everything it started, grouped Waiting on you, Working and Done. Click one to look inside.
-- **Right-click a bot** to start its chat fresh (instructions and memory stay) or to delete it.
+- **What it starts runs hidden.** Those sessions stay out of the sidebar. After every turn one of them ends, Dray sends its last message to the bot, so the bot always knows where its work stands. Their permission and question cards show in the bot's chat. Settling or deleting a task does not stop the sessions that task started. They keep running, worktrees included, and report to the nearest task or bot that is still open.
+- **The Tasks tab** in the bot's right panel lists everything it started, ordered by what you do next. A task waiting on you comes first, then a pull request ready to merge, then one whose checks are still running or that needs a review, then idle tasks, with working ones last. A pull request with failing checks sits with the idle tasks. Pinned tasks sit under **Pinned**. Set aside sinks to the bottom. Click a row to open the task as a tab in the bot's row. `⌘`-click opens the task on its own.
+- **A link in a task** opens as a tab in the bot's row, and the bot's chat comes forward to show the page. `⌘`-click opens it in your own browser.
+- **The bot's browser.** A new tab lists that bot's tasks' dev servers, each group headed by the task. See [Share a dev server](/reference/remote-access#share-a-dev-server).
 
 Bots live on this Mac.
 

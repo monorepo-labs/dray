@@ -27,7 +27,7 @@ To see which account each agent uses, or to sign in before anything fails, open 
 
 ## A session seems stuck
 
-- **The agent is still working.** A turn can take minutes. A "Retrying — attempt n of m" row means the agent is retrying a failed request to its provider; leave it.
+- **The agent is still working.** A turn can take minutes. A "Retrying — attempt n of m" row means the agent is retrying a failed request to its provider; leave it. fx shows its own line instead, with a countdown to the next try.
 - **Its server is offline.** The composer says "`<name>` is offline". Press **Try again**, or **Turn on** if you turned that server off. Its agents keep running there meanwhile.
 - **Stop it.** While a turn runs, the send button is **Stop**. Press it, then send your message again.
 - **Still nothing.** Restart the server, open the session and send again. The session resumes where it left off.
@@ -38,7 +38,7 @@ If a session never shows any reply, look in the [logs](#logs-and-parse-failures)
 
 Changing effort, and on some agents the model, restarts the agent. Dray waits to do that until the agent's background tasks have ended, and it doesn't say it is waiting. A dev server or a watch command the agent started in the background never ends on its own.
 
-Open the subagent panel from the background tasks count in the transcript, and stop the tasks you don't need with **Stop this subagent**, or **Stop all**. Then change the setting again.
+Open **More** from the background tasks count in the transcript. **Background tasks** and **Subagents** are separate. Stop the ones you don't need with the square button on a row, or **Stop all** on a section that has it. Then change the setting again. A subagent's row opens its conversation as a tab, where it can; stopping it is the square, not that click.
 
 ## A permission card's buttons don't work
 

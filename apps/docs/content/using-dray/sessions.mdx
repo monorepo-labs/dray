@@ -1,6 +1,6 @@
 ---
 title: Sessions and the sidebar
-description: Find sessions in the sidebar, read its marks and groups, pin, settle, set aside, fork, rename and delete sessions, and move between them from the keyboard.
+description: Find sessions in the sidebar, read its marks and groups, pin, settle, set aside, fork, rename and delete sessions, move between them from the keyboard, and split a tab out beside the chat.
 sidebar:
   order: 5
 ---
@@ -72,9 +72,9 @@ Right-click a finished, read session and choose **Mark unread** to put its green
 
 Settle when you are done with a session: hover its row and click the tick (**Settle**).
 
-Settling stops the session's agent and everything it started, such as background shells and dev servers, and closes its browser tabs. The session's browser profile is deleted, so its sign-ins are gone. The transcript stays. You cannot settle a session mid-turn; the button is hidden until the turn ends.
+Settling stops the session's agent and everything it started, such as background shells and dev servers, and closes its browser tabs. The session's browser profile is deleted, so its sign-ins are gone. The transcript stays. You cannot settle a session mid-turn; the button is hidden until the turn ends. Settling a task on a server you added, when that server isn't connected, is refused. Dray says it isn't connected, so the task can't be settled there, and tells you to remove the server in Settings → Servers. Removing it is what clears those tasks from here.
 
-A settled session moves to the settled view. Its composer is replaced by "Unsettle this task to send a follow-up." with an **Unsettle** button. If it ran in a worktree, settling offers to delete the worktree; see [Worktrees](/using-dray/worktrees#delete-a-worktree).
+A settled session moves to the settled view. Its composer is replaced by "Unsettle this task to send a follow-up." with an **Unsettle** button. If it ran in a worktree, settling offers to delete the worktree; see [Worktrees](/using-dray/worktrees#delete-a-worktree). A task a bot started is deleted without that question, and the sessions it started keep running.
 
 ### The settled view
 
@@ -125,6 +125,16 @@ Right-click and choose **Delete**, then **Delete** again at "Are you sure?". Thi
 
 You can change any of these in Settings → Shortcuts.
 
+## Split a view
+
+Drag a tab — a browser page, the diff, a file, or a task — onto the open view. Over the left half the hint reads **Split left**, over the right half **Split right**, when the window has room for another pane. Drop it and that tab sits beside the view.
+
+The panes are one group. The tab row draws the group as one tab, each member's icon and title side by side. Click the group tab to bring the split back. Click another tab and that one fills the window. Opening one member on its own, such as from a link in the chat, takes it out of the group.
+
+Drag the gap between panes to resize them. A drag that would make a pane too narrow does nothing. Drag the group tab to move the whole group along the row. Hold `⌥` and drag one member to reorder the panes.
+
+Hover a member in the group tab and click its cross to close that pane. `⌘W` closes the group's lead, and the view moves to the next member. Close the last extra pane and the tab is ordinary again. You can change `⌘W` in Settings → Shortcuts.
+
 ## The Dock badge
 
 The number on Dray's Dock icon counts sessions waiting on you plus sessions finished and unread: the yellow and green marks, in every space. It clears as you deal with them.
@@ -133,3 +143,5 @@ The number on Dray's Dock icon counts sessions waiting on you plus sessions fini
 
 - A fork copies the whole conversation; there is no fork from a chosen message.
 - Unsettling does not bring back a deleted worktree or browser profile.
+- A split lasts until you quit Dray.
+- A browser page splits out on a Mac. On Linux, split the diff, a file or a task.

@@ -153,6 +153,8 @@ While a recording runs, the pane shows a notice in place of the page, and you ca
 
 On a Linux server, `dray browser` runs its own Chromium with no window. It needs the system libraries Chromium uses, and `record` needs ffmpeg. `dray server install` offers both as **Browser for agents** and **ffmpeg**. See [Servers](/cli/servers).
 
+That Chromium closes after 5 minutes with nothing driving it. The next command opens the same pages again. A recording, a command in progress, or a screenshot keeps it open.
+
 Screenshots and recordings land in the same folders, under `~/.dray/browser` on the server.
 
 ## Limits

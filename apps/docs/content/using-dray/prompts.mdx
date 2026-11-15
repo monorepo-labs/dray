@@ -35,6 +35,8 @@ Claude Code reads a mentioned file into the prompt before the model starts. The 
 
 In a reply, file paths the agent writes are links. Click one to open it in Dray: Markdown in the Docs panel, anything else in the Files view. `⌘`-click opens it in your own editor.
 
+An image the agent writes as a markdown picture with a path on disk — absolute, a `file://` URL, or relative to the session's folder — shows in the chat. Click it to open it full size. A path Dray cannot read shows as its caption instead.
+
 ## Tag an issue with #
 
 With an issue tracker connected, type `#` to search your issues. The pick writes the issue's identifier and title, like `#DRA-53 Add issue tracker integration`. Picking an issue already in the prompt takes it back out. `⌘⏎` or `⌘`-click picks and keeps the list open for another.
@@ -87,5 +89,6 @@ Shortcuts here are defaults; you can change them in Settings → Shortcuts.
 ## Limits
 
 - A path holding a space cannot be mentioned with `@`.
+- A markdown image whose path starts with `~` or `$` is not shown. Write an absolute path, a `file://` URL, or a path relative to the session's folder.
 - Commands from a Claude Code plugin installed while Dray is open show after you restart Dray.
 - Unsent text is lost when you quit; use a draft to keep it.
