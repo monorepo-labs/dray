@@ -2221,24 +2221,24 @@ pub async fn append_session_event(session_id: &str, event: AgentEvent) -> Result
     let mut line = serde_json::to_vec(&event)?;
     line.push(b'\n');
 
-    tokio::task::spawn_blocking(move || append_line(&dir, &path, &line))
-        .await?
-        .context("failed to open session file")
+    tokio::task::spawn_blocking(move || append_line(&dir, &path, &line)).await?
 }
 
 /// `line` onto `path`, creating `dir` only when the open finds it missing, as
 /// `get_sessions_dir` would have before every append.
-fn append_line(dir: &Path, path: &Path, line: &[u8]) -> std::io::Result<()> {
+fn append_line(dir: &Path, path: &Path, line: &[u8]) -> Result<()> {
     use std::io::Write;
     let open = || std::fs::OpenOptions::new().create(true).append(true).open(path);
     let mut file = match open() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::create_dir_all(dir)?;
-            open()?
+            std::fs::create_dir_all(dir)
+                .with_context(|| format!("could not create {}", dir.display()))?;
+            open()
         }
-        opened => opened?,
-    };
-    file.write_all(line)
+        opened => opened,
+    }
+    .context("failed to open session file")?;
+    file.write_all(line).context("failed to write session file")
 }
 
 /// One unreadable line, kept for investigation.
