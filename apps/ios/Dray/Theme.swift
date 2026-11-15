@@ -34,9 +34,11 @@ enum Theme {
     static let primary = Color(hex: 0xEBEBEB)
     static let onPrimary = Color(hex: 0x171717)
 
-    /// The reader's own bubble: the desktop's dark blue `oklch(0.58 0.17 252)`,
-    /// the one its bot chats fill with, and its near-white ink.
-    static let sent = Color(hex: 0x0A7BDA)
+    /// The reader's own bubble: the desktop's dark blue `oklch(0.562 0.17 252)`,
+    /// the one its bot chats fill with, and its near-white ink. That blue lies
+    /// outside sRGB, so it is named in Display P3, where WebKit draws it; a hex
+    /// would clip it to a different blue.
+    static let sent = Color(.displayP3, red: 0.192, green: 0.454, blue: 0.806)
     static let onSent = Color(hex: 0xFCFCFC)
 
     // Edges: seams, never drawn rules.
