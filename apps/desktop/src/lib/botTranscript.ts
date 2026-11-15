@@ -14,7 +14,7 @@ export type BotItem =
   | { kind: "notice"; event: AgentEvent }
   /// A task's pull request, posted by `dray session merge-card`.
   | { kind: "card"; event: AgentEvent }
-  | { kind: "task"; key: string; sessionId: string; ts: string }
+  | { kind: "task"; key: string; sessionId: string; ts: string; title?: string }
   | { kind: "report"; event: AgentEvent; sessionId: string; title: string }
   | { kind: "sent"; key: string; target: string; text: string; ts: string }
   /// A message from another bot, by `dray bot send` or a send to its chat.
@@ -332,6 +332,11 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
   const items: BotItem[] = [];
   const undone = undoneLessons(events);
   const reactions = reactionsOf(events);
+  // Merging from a card settles the task, which takes it off the active index
+  // `taskOf` reads, so its start line is named from the card.
+  const cardTitles = new Map(
+    events.flatMap(({ payload }) => (payload.type === "merge_card" ? [[payload.taskId, payload.title] as const] : [])),
+  );
   // Inside a turn Dray's review opened, whose words are for nobody: told to
   // write no reply, the bot sometimes explains itself anyway.
   let review = false;
@@ -387,7 +392,7 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       if (starts.has(p.callId)) {
         // `dray session new` prints the id alone on its line, unlike a send's.
         const id = p.result.text.match(TASK_ID)?.[1];
-        if (id) items.push({ kind: "task", key: p.callId, sessionId: id, ts: event.ts });
+        if (id) items.push({ kind: "task", key: p.callId, sessionId: id, ts: event.ts, title: cardTitles.get(id) });
       }
       // `dray bot send` names the bot it reached on a line of its own, one per
       // send in order; its id still names the bot after a rename. Matched on

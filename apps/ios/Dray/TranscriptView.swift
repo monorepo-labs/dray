@@ -150,21 +150,7 @@ struct TranscriptView: View {
     /// A task's title over where it runs, its project and its machine; a bot's chip.
     @ViewBuilder private var title: some View {
         if let bot = store.bot(key) {
-            // A bot's folder is no project: its face and name as a chip, which opens the bot.
-            Button { editingBot = true } label: {
-                HStack(spacing: 6) {
-                    BotFace(bot: bot, size: 32)
-                    Text(bot.name).font(Theme.Font.headline).foregroundStyle(Theme.text).lineLimit(1)
-                }
-                .padding(.leading, 6)
-                .padding(.trailing, 16)
-                .frame(height: 44)
-                .glassChip()
-            }
-            .buttonStyle(.plain)
-            .frame(maxWidth: 240)
-            .accessibilityLabel(bot.name)
-            .accessibilityIdentifier("botChip")
+            BotTitle(bot: bot) { editingBot = true }
         } else {
             taskTitle
         }
@@ -866,7 +852,7 @@ struct FollowsBottom: ViewModifier {
 }
 
 /// Drops the bar's dark shade over scrolled rows where everything in it is glass.
-private struct BareTopEdge: ViewModifier {
+struct BareTopEdge: ViewModifier {
     let on: Bool
 
     func body(content: Content) -> some View {

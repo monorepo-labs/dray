@@ -249,7 +249,7 @@ import {
 import { worktreeNoticeDetail } from "@/lib/worktree";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import { useHandoffConfig } from "@/hooks/useHandoffConfig";
-import { buildTranscript, runningRuns, sessionMedia } from "@/lib/transcript";
+import { buildTranscript, hiddenInBotChat, runningRuns, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 import { onUnhandledEscape } from "@/lib/escape";
 import { playSwipeTick } from "@/lib/tick";
@@ -1660,12 +1660,16 @@ function App() {
 
   // A live background task counts even where no run is built for it yet, and a
   // task list counts on its own — the tab is a catch-all, so any one of its
-  // sections having something is enough to draw it.
+  // sections having something is enough to draw it. In a bot chat only media
+  // the chat itself hides counts: what plays there would put a row of tabs
+  // over the task list for nothing.
   const hasMoreTab =
     panelRuns.length > 0 ||
     backgroundTasks.length > 0 ||
     sessionTodos !== null ||
-    sessionAttachments.length > 0;
+    (selectedBot
+      ? hiddenInBotChat(selectedSession?.events ?? [], sessionAttachments).length > 0
+      : sessionAttachments.length > 0);
 
   const taskSources = useRef({ crew, sessionIndexItems });
   taskSources.current = { crew, sessionIndexItems };

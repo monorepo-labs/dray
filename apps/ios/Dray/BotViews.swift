@@ -51,17 +51,17 @@ struct BotListRow: View {
                         Text(shortAge(at)).font(Theme.Font.footnote.font.monospacedDigit()).foregroundStyle(Theme.tertiary)
                     }
                 }
-                Group {
-                    if item?.busy == true && !asking {
-                        TypingDots().frame(height: 20, alignment: .leading)
-                    } else {
-                        Text(previewLine(preview?.text ?? bot.greeting?.last ?? bot.welcome ?? ""))
-                            .font(Theme.Font.subhead)
-                            .foregroundStyle(Theme.secondary)
-                            .lineLimit(1)
-                    }
+                // No line at all with nothing to say, so the name sits level with the face.
+                let line = previewLine(preview?.text ?? bot.greeting?.last ?? bot.welcome ?? "")
+                if item?.busy == true && !asking {
+                    TypingDots().frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
+                } else if !line.isEmpty {
+                    Text(line)
+                        .font(Theme.Font.subhead)
+                        .foregroundStyle(Theme.secondary)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
             }
         }
         .padding(.leading, 14)
@@ -98,6 +98,81 @@ func previewLine(_ text: String) -> String {
     s = s.replacing(/[*`]+/, with: "")
     s = s.replacing(/\[([^\]]*)\]\([^)]*\)/) { String($0.output.1) }
     return s.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+}
+
+/// A bot's header: a bot's folder is no project, so its face and name as a chip, which opens the bot.
+struct BotTitle: View {
+    let bot: Bot
+    let edit: () -> Void
+
+    var body: some View {
+        Button(action: edit) {
+            HStack(spacing: 6) {
+                BotFace(bot: bot, size: 32)
+                Text(bot.name).font(Theme.Font.headline).foregroundStyle(Theme.text).lineLimit(1)
+            }
+            .padding(.leading, 6)
+            .padding(.trailing, 16)
+            .frame(height: 44)
+            .glassChip()
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: 240)
+        .accessibilityLabel(bot.name)
+        .accessibilityIdentifier("botChip")
+    }
+}
+
+/// A bot with no chat yet, picked from a list showing bots alone.
+struct BotStart: Hashable {
+    let server: UUID
+    let bot: Bot
+}
+
+/// That bot's page before its first message: its greeting, and the dock aimed
+/// at its folder. The send starts the chat, which `started` opens in its place.
+struct BotStartView: View {
+    @Environment(Store.self) private var store
+    @Bindable var task: NewTask
+    let server: UUID
+    let bot: Bot
+    let started: (SessionKey) -> Void
+    @State private var editing = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                ForEach(Array((bot.greeting ?? bot.welcome.map { [$0] } ?? []).enumerated()), id: \.offset) { _, line in
+                    MarkdownText(text: line)
+                        .padding(.horizontal, Theme.Space.m)
+                        .padding(.vertical, 10)
+                        .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+                        .padding(.trailing, 32)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(Theme.Space.l)
+        }
+        .defaultScrollAnchor(.bottom)
+        // The resting dock's height, as on the list: open, it covers the page.
+        .contentMargins(.bottom, 160, for: .scrollContent)
+        .overlay(alignment: .bottom) { VoiceDock(task: task, started: started) }
+        .page()
+        .navigationBarTitleDisplayMode(.inline)
+        .modifier(BareTopEdge(on: true))
+        .toolbar { ToolbarItem(placement: .principal) { BotTitle(bot: bot) { editing = true } } }
+        .sheet(isPresented: $editing) { BotSheet(editing: (server, bot)) }
+        // Re-aimed on every visit: a pick in the dock leaves the bot, and Back is not a send.
+        .onAppear { task.aim(at: bot, on: server) }
+        .onDisappear {
+            if task.bot?.bot.id == bot.id { task.bot = nil }
+            // The list draws no dock while sessions are hidden, so a recording left running
+            // would have no Stop: stopped and kept, as `ReplyDock` does, its words here next visit.
+            if Dictations.shared.state(.newSession) == .recording {
+                Task { await Dictations.shared.stop(store, draft: .newSession) }
+            }
+        }
+    }
 }
 
 // MARK: The chat

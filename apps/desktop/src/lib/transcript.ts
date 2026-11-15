@@ -284,6 +284,17 @@ export function sessionMedia(events: AgentEvent[]): SessionMedia[] {
   return media.reverse();
 }
 
+/// The media a bot's chat draws nowhere, so the More tab is still their home:
+/// tool-result screenshots and task reports' pictures, which the chat hides,
+/// and a recording no reply names. The reader's own pictures and the videos
+/// a reply names play in the chat.
+export function hiddenInBotChat(events: AgentEvent[], media: SessionMedia[]): SessionMedia[] {
+  const said = events
+    .flatMap(({ subagent, payload }) => (!subagent && payload.type === "assistant_text" ? [payload.text] : []))
+    .join("\n");
+  return media.filter((m) => ("video" in m ? !said.includes(m.video) : !m.byYou));
+}
+
 export type Turn = {
   /// The user's prompt opening this turn, absent only for a transcript that
   /// starts mid-conversation.
