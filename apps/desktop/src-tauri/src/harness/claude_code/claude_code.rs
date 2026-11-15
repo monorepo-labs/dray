@@ -291,6 +291,7 @@ async fn read_stdout(
             continue;
         }
 
+        let mut filed = false;
         let claude_event = match parser::parse_line(&line) {
             Ok(ev) => ev,
             Err(err) => {
@@ -316,7 +317,15 @@ async fn read_stdout(
                 }
 
                 record_failure(ClaudeCode, session_id, "parse", &why, &line).await;
-                continue;
+
+                // A `result` closes the turn whatever else it says. Dropped,
+                // the session sat `in_progress` with the CLI idle until Stop.
+                if parser::is_unparsed_result(&line) {
+                    filed = true;
+                    ClaudeCodeEvent::Result(parser::ResultEvent::Unrecognized)
+                } else {
+                    continue;
+                }
             }
         };
 
@@ -368,7 +377,7 @@ async fn read_stdout(
             ClaudeCodeEvent::Unrecognized => Some("unmodeled line type"),
             _ => None,
         };
-        if let Some(detail) = unmodeled {
+        if let (Some(detail), false) = (unmodeled, filed) {
             record_failure(ClaudeCode, session_id, "unknown_subtype", detail, &line).await;
         }
 

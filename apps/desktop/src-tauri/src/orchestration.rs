@@ -518,6 +518,7 @@ async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Respo
         _ => None,
     };
     let creates = matches!(request, Request::CreateSession(_));
+    let starts = creates || matches!(request, Request::StartDraft(_));
     if machine == elsewhere::CLOUD && !creates {
         bail!("only `dray session new` takes --machine cloud — a cloud task's own machine is named on its row");
     }
@@ -543,7 +544,7 @@ async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Respo
     let response = response?;
     // The task's server keeps its reports, and this server holds the link to
     // collect them by; the other way round usually does not exist.
-    if let (true, Some(caller), Response::Created { session, .. }) = (creates, &forward.caller, &response) {
+    if let (true, Some(caller), Response::Created { session, .. }) = (starts, &forward.caller, &response) {
         if caller.bot_tree {
             let saved = crate::machines::on(machine).await.map_err(anyhow::Error::msg)?;
             crate::remote_reports::track(&saved.id, &session.session_id, &caller.session.session_id).await?;
@@ -849,6 +850,11 @@ mod elsewhere {
             Request::CreateSession(create) => {
                 let parent = parent_of(create.parent_session_id.as_deref()).await?;
                 forward.caller = caller(parent.as_ref()).await?;
+                // Said outright too, for a far server from before it read
+                // `bot_tree` as hiding the task.
+                if forward.caller.as_ref().is_some_and(|c| c.bot_tree) {
+                    create.hidden = true;
+                }
                 create.project_path = project_from(create.project_path.as_deref(), parent.as_ref());
                 project = create.project_path.clone();
                 create.base = branch_of(create.base.take(), project.as_deref()).await?;
@@ -1619,7 +1625,7 @@ impl CardTask {
 /// sub-task goes to the task that started it, or once that is settled, the
 /// nearest live session above it. Empty where there is none.
 async fn card_chat(parent: SessionIndexItem) -> Result<Vec<SessionIndexItem>> {
-    let parent = match parent.archived && bots::bot_at(&parent.cwd).await.is_none() && bots::in_bot_tree(&parent).await {
+    let parent = match parent.archived && bots::keeps_children(&parent).await {
         true => match store::live_from(&parent).await? {
             Some(live) => live,
             None => return Ok(Vec::new()),
@@ -1806,13 +1812,7 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
         bail!("--hidden needs a calling session: a hidden session shows only beside its parent");
     }
 
-    // Everything under a bot runs hidden: the bot is the one place its work is
-    // run from, and each child reports back to it on its own.
-    let in_bot_tree = match parent.as_ref() {
-        Some(p) => crate::bots::in_bot_tree(p).await,
-        None => false,
-    };
-    let hidden = create.hidden || in_bot_tree;
+    let hidden = create.hidden || under_bot(parent.as_ref(), caller).await;
 
     let project_path = resolve_project(&create, parent.as_ref())?;
     // A bot's folder is its own notes, not a project to work in. Its history
@@ -1980,12 +1980,15 @@ async fn find_draft(id: &str) -> Result<StoredDraft> {
 /// the app, which is the one way an agent can start work in the main checkout.
 async fn start_draft(start: StartDraft, caller: Option<&Caller>, app: &Sink) -> Result<Response> {
     let draft = find_draft(&start.id).await?;
-    check_depth(calling(start.parent_session_id.as_deref(), caller).await?.map(|c| c.1))?;
+    let calling = calling(start.parent_session_id.as_deref(), caller).await?;
+    check_depth(calling.as_ref().map(|c| c.1))?;
+    let hidden = under_bot(calling.as_ref().map(|c| &c.0), caller).await;
     let held = drafts::take(&draft.id)
         .await?
         .with_context(|| format!("no draft {}", draft.id))?;
     app.emit(DRAFTS_CHANGED, ()).ok();
-    let started = start_session(&draft, start.parent_session_id.as_deref(), app).await;
+    let owes = caller.is_some_and(|c| c.bot_tree);
+    let started = start_session(&draft, start.parent_session_id.as_deref(), hidden, owes, app).await;
     let Err(error) = started else { return started };
     // The prompt rides the error where the draft cannot go back, so the task
     // survives in the caller's output even with the file unwritable.
@@ -2002,6 +2005,8 @@ async fn start_draft(start: StartDraft, caller: Option<&Caller>, app: &Sink) -> 
 async fn start_session(
     draft: &StoredDraft,
     parent: Option<&str>,
+    hidden: bool,
+    owes_reports: bool,
     app: &Sink,
 ) -> Result<Response> {
     // Read again at the start rather than trusted from the save: the branch a
@@ -2011,6 +2016,11 @@ async fn start_session(
         None => None,
     };
     let session_id = uuid::Uuid::now_v7().to_string();
+    // Before the spawn, as `create_session` does: a bot's task from another
+    // machine is told at spawn that its replies are relayed.
+    if owes_reports {
+        crate::remote_reports::owe(&session_id).await?;
+    }
     let outcome = manager()
         .send_msg(
             &session_id,
@@ -2029,7 +2039,7 @@ async fn start_session(
             base_ref.as_deref(),
             true,
             parent,
-            false,
+            hidden,
             None,
             None,
             None,
@@ -2661,6 +2671,20 @@ fn project_from(requested: Option<&str>, parent: Option<&SessionIndexItem>) -> O
 /// index, or carried by the Mac that forwarded the call, whose index holds it.
 // ponytail: a child made on another machine walks only edges this index holds,
 // so its own children see depth 1 there; carry depth on the row if that matters.
+/// Whether a session started by `parent` is under a bot, and so runs hidden:
+/// the bot is the one place its work is run from, and each task reports back
+/// to it on its own. A forwarded caller says so itself, since the bot is in
+/// no index here.
+async fn under_bot(parent: Option<&SessionIndexItem>, caller: Option<&Caller>) -> bool {
+    if caller.is_some_and(|c| c.bot_tree) {
+        return true;
+    }
+    match parent {
+        Some(p) => crate::bots::in_bot_tree(p).await,
+        None => false,
+    }
+}
+
 async fn calling(id: Option<&str>, caller: Option<&Caller>) -> Result<Option<(SessionIndexItem, usize)>> {
     if let Some(caller) = caller {
         return Ok(Some((caller.session.clone(), caller.depth)));

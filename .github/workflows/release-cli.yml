@@ -43,10 +43,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          workspaces: apps/cli
-
       # The shared crate too — it is a separate cargo project, so the CLI's own
       # test run does not cover it.
       - name: Test the protocol crate
@@ -71,8 +67,13 @@ jobs:
             exit 1
           }
 
+  # Not gated on `test`: it runs beside the matrix and `publish` needs both, so
+  # a failing test still publishes nothing, and the matrix starts ~30s sooner.
+  #
+  # The target-to-runner table is repeated in warm-cli-cache.yml, and the
+  # runner is part of the cache key, so the two drifting costs a cold build,
+  # never a wrong one.
   build:
-    needs: test
     strategy:
       fail-fast: false
       matrix:
@@ -99,42 +100,23 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      # Restores what warm-cli-cache.yml saved on `main`; see the action for
+      # why the two share it.
+      - id: build
+        uses: ./.github/actions/cli-build
         with:
-          targets: ${{ matrix.target }}
+          target: ${{ matrix.target }}
+          runner: ${{ matrix.os }}
 
-      # Keyed on the CLI's own lockfile: it and the app are separate cargo
-      # projects, so a change to the app's dependencies must not evict this.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          workspaces: |
-            apps/cli
-            apps/desktop/src-tauri
-          key: ${{ matrix.target }}
-
-      - name: Build
-        working-directory: apps/cli
-        run: cargo build --release --target ${{ matrix.target }}
-
-      # From the same commit as the CLI, so one tag is one version of both.
       # macOS's `strip` keeps the linker's ad-hoc signature, which arm64 needs
       # to run the binary at all.
       # ponytail: ad-hoc signed, so every `dray update` is a new TCC identity;
       # sign with the Developer ID once headless Macs are a real target.
-      - name: Build dray-serve
+      - name: Strip dray-serve
         if: matrix.serve
-        working-directory: apps/desktop/src-tauri
-        # The CLI's version rides into the server, which reports it to the app
-        # so the app can tell whether a newer release is out on its channel.
-        # `serve` is the server's own profile (Cargo.toml), so the app's
-        # `tauri build` keeps the plain release one.
         run: |
-          export DRAY_CLI_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$GITHUB_WORKSPACE/apps/cli/Cargo.toml" | head -n 1)
-          cargo build --profile serve --no-default-features --features serve \
-            --bin dray-serve --target ${{ matrix.target }}
-          cp "target/${{ matrix.target }}/serve/dray-serve" "$GITHUB_WORKSPACE/apps/cli/target/${{ matrix.target }}/release/"
-          strip "$GITHUB_WORKSPACE/apps/cli/target/${{ matrix.target }}/release/dray-serve"
+          cp "${{ steps.build.outputs.serve-bin }}" "apps/cli/target/${{ matrix.target }}/release/"
+          strip "apps/cli/target/${{ matrix.target }}/release/dray-serve"
 
       # Named after the target triple because that is what install.sh derives
       # from `uname`. Rename either and the installer 404s.
@@ -165,8 +147,36 @@ jobs:
             apps/cli/dray-${{ matrix.target }}.tar.gz.sha256
           if-no-files-found: error
 
+  # Where PROTOCOL_VERSION moved since the last CLI release, holds publishing
+  # until the app release speaking it is out, so both tags can be pushed at
+  # once and the builds still overlap. Beside the matrix, never ahead of it.
+  # See the script for the rule and its cap.
+  gate:
+    if: startsWith(github.ref, 'refs/tags/cli-v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    # `actions: read` for the app's Release run, and nothing else.
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/cli-publish-gate.sh decide "$GITHUB_REF_NAME"
+
+      - if: steps.decide.outputs.moved == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/cli-publish-gate.sh wait "${{ steps.decide.outputs.app-tag }}" "${{ steps.decide.outputs.protocol }}"
+
   publish:
-    needs: build
+    needs: [test, build, gate]
     # A dispatch run proves the matrix and stops here; only a tag publishes.
     if: startsWith(github.ref, 'refs/tags/cli-v')
     runs-on: ubuntu-latest

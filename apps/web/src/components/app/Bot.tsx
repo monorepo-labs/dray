@@ -430,9 +430,8 @@ export function MergeCard({
     );
   }
   return (
-    // Light lifts the card with the app's card shadow; dark has no drop to
-    // cast, so a faint half-pixel edge draws it.
-    <div className="w-full max-w-lg self-start rounded-2xl border-[0.5px] border-border/50 bg-card p-3.5 light:border-transparent light:shadow-[0_1px_1px_oklch(0_0_1/4%),0_1px_1px_oklch(0_0_0/6%),0_1px_4px_oklch(0_0_0/4%)]">
+    // A half-pixel edge draws it in both schemes, a touch stronger on white.
+    <div className="w-full max-w-lg self-start rounded-2xl border-[0.5px] border-border/50 bg-card p-3.5 light:border-black/15">
       <div className="flex items-center gap-2.5">
         <span className="size-7 shrink-0">{face}</span>
         <div className="min-w-0 flex-1">

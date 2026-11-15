@@ -1599,7 +1599,19 @@ url: string,
 /**
  * The branch it was opened from — what the caller matches a session by.
  */
-headRefName: string, isDraft: boolean, state: PrMarkState, checksState: PrChecksState, 
+headRefName: string, 
+/**
+ * The tip commit's sha, on the open half alone. A push is a new one,
+ * which is what restarts the merge card's wait for checks to register.
+ * Optional in TS too, since a server older than the field sends none.
+ */
+headOid?: string, isDraft: boolean, state: PrMarkState, checksState: PrChecksState, 
+/**
+ * How many checks and statuses report on the tip, on the open half alone.
+ * Zero is both "no CI" and "CI not started yet", which only a count seen on
+ * an earlier push can tell apart.
+ */
+checkCount?: number, 
 /**
  * Enough of the panel's merge fields to answer "can this land now", which
  * the sidebar itself draws nothing from — the notice for a pull request

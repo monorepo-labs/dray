@@ -1,3 +1,4 @@
+import { mockIPC } from "@tauri-apps/api/mocks";
 import React, { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 
@@ -18,7 +19,10 @@ import "../App.css";
 /// starts with the ready PRs alone; every stall goes to the bot, listed under
 /// the chat as the nudges the app sends. **Bot writes needs** lands the lines a
 /// bot would write with `dray session need`, which puts the waiting tasks on
-/// the card and a line under the ready PR that asked to be tried.
+/// the card and a line under the ready PR that asked to be tried. Until then a
+/// waiting row draws its task's last message, read through a stubbed
+/// `bot_previews`: the rename task answers, the SQLite task sits on a machine
+/// that never does, and the release notes task wrote nothing.
 /// There is no server behind this page. Dismiss is stored for real; Reset
 /// clears it.
 const NOW = Date.now();
@@ -69,6 +73,21 @@ const ROWS: { row: CrewRow; pr?: PrMark; need?: string; answered?: boolean }[] =
   { row: row("4", "Add dark mode to docs", 60), pr: pr(916, { checksState: "RUNNING", mergeStateStatus: "BLOCKED" }) },
   { row: row("5", "Draft the onboarding email", 1) },
 ];
+
+/// What each waiting task's server answers `bot_previews` with; "silent" is a
+/// machine asleep, which only the read's timeout gets past.
+const LAST: Record<string, string | null | "silent"> = {
+  "1": "I added the rename button and wired it to `rename_session`.\n\nKeep the button and hide the branch chip below 900px, or drop it and rely on double-clicking the title?",
+  "2": "silent",
+  "0": null,
+};
+mockIPC((cmd, args) => {
+  const a = (args ?? {}) as { cmd?: string; args?: { sessionIds?: string[] } };
+  if (cmd !== "server_invoke" || a.cmd !== "bot_previews") return null;
+  const answers = (a.args?.sessionIds ?? []).map((id) => [id, LAST[id.slice(-1)] ?? null] as const);
+  if (answers.some(([, text]) => text === "silent")) return new Promise(() => {});
+  return Object.fromEntries(answers.map(([id, text]) => [id, { text, replies: 1 }]));
+});
 
 const BOT = "01a1cfc8-demo-stalled-bot";
 let seq = 0;

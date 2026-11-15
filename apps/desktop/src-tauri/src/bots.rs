@@ -1077,9 +1077,15 @@ fn same_dir(a: &str, b: &str) -> bool {
 /// Whether `item` is a bot's session, or anything one started, at any depth.
 ///
 /// Everything under a bot runs hidden and reports back after every turn, and a
-/// grandchild belongs to that arrangement as much as a child does.
+/// grandchild belongs to that arrangement as much as a child does. A bot on
+/// another machine is in no index here, so its tree starts at the task it
+/// started here, the one this server keeps reports for.
 pub async fn in_bot_tree(item: &SessionIndexItem) -> bool {
-    bot_chat_of(item).await.is_some()
+    if bot_chat_of(item).await.is_some() {
+        return true;
+    }
+    let owed = crate::remote_reports::owed_tasks().await;
+    !owed.is_empty() && crate::store::reaches(item, |i| owed.contains(&i.session_id)).await.unwrap_or(false)
 }
 
 /// The bot chat session `item` is, or the one it descends from.
@@ -1103,9 +1109,10 @@ pub(crate) async fn bot_chat_of(item: &SessionIndexItem) -> Option<SessionIndexI
 
 /// Whether `item` is a bot's task, whose sub-tasks outlive it: settling or
 /// deleting it leaves them running, adopted by the nearest live ancestor, where
-/// any other session's hidden children go with it.
+/// any other session's hidden children go with it. Only under a bot here: one
+/// on another machine leaves no live session here to adopt them.
 pub async fn keeps_children(item: &SessionIndexItem) -> bool {
-    bot_at(&item.cwd).await.is_none() && in_bot_tree(item).await
+    bot_at(&item.cwd).await.is_none() && bot_chat_of(item).await.is_some()
 }
 
 /// `base` with the bot's own block added where `cwd` is a bot's folder, or the
@@ -1272,8 +1279,7 @@ fn fill(template: &str, vars: &[(&str, &str)]) -> String {
 async fn reports_to_parent(session_id: &str) -> bool {
     match crate::store::get_session_index_item(session_id).await {
         Ok(Some(item)) => {
-            item.parent_session_id.is_some()
-                && (in_bot_tree(&item).await || crate::remote_reports::owed(&item.session_id).await)
+            item.parent_session_id.is_some() && in_bot_tree(&item).await
         }
         _ => false,
     }

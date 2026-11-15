@@ -12,56 +12,74 @@ name: Release
 #
 # A manual run builds the Linux AppImage alone, as a workflow artifact never
 # attached or published: the way to check Linux still compiles while it is
-# held out of releases.
+# held out of releases. With `dry_run` it runs the Mac path instead, signing
+# and notarization included, and keeps what a release would publish as a
+# workflow artifact: no release, no tag, nothing on R2 or `updates`.
+#
+# The Mac path is four macOS jobs, never more than three at once — the org's
+# free plan runs five, and release-cli.yml takes two of them. `extras` and the
+# two `build` legs start together; `bundle` waits for all three.
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run the Mac release end to end and publish nothing
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   # Part of the cache key's environment, so it has to match warm-cache.yml.
   CARGO_INCREMENTAL: 0
 
 jobs:
-  # Apple stops notarizing whenever it updates the developer agreement until
-  # the Account Holder accepts it, and the build only finds out ~30 minutes in.
-  # Any notarytool call answers the same 403, so ask before building.
-  notary-check:
-    if: github.event_name == 'push'
+  # Everything the Mac bundle needs that is not the app's own binary, off the
+  # compile's critical path: the guards, Dray Island and the CLI.
+  extras:
+    if: github.event_name == 'push' || inputs.dry_run
     runs-on: macos-latest
+    permissions:
+      contents: read
+      # For the cancel below.
+      actions: write
+    outputs:
+      channel: ${{ steps.channel.outputs.channel }}
+      prerelease: ${{ steps.channel.outputs.prerelease }}
+      notes: ${{ steps.notes.outputs.body }}
     steps:
+      # Apple stops notarizing whenever it updates the developer agreement
+      # until the Account Holder accepts it, and the build only finds out
+      # minutes in. Any notarytool call answers the same 403, so ask first.
       - run: xcrun notarytool history --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" >/dev/null
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-  build:
-    needs: notary-check
-    runs-on: macos-latest
-    outputs:
-      channel: ${{ steps.channel.outputs.channel }}
-      dmg: ${{ steps.mirror.outputs.dmg }}
-    steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # The manifest's version is the app's, not the tag's — a tag that names a
       # version the conf doesn't carry publishes a manifest no client considers
       # newer, and the release silently reaches nobody. Fail loudly instead.
-      - run: |
+      - if: github.event_name == 'push'
+        run: |
           V="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
           if [ "v$V" != "${GITHUB_REF_NAME}" ]; then
             echo "tag ${GITHUB_REF_NAME} does not match tauri.conf.json version v$V" >&2
             exit 1
           fi
 
+      # A dry run has no tag, so it reads the channel off the version, which
+      # is the same string a tag is held to above.
       - id: channel
         run: |
-          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+          V="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
+          if [[ "$V" == *-* ]]; then
             echo "channel=beta" >> "$GITHUB_OUTPUT"
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
@@ -84,6 +102,11 @@ jobs:
             found { print }
           ' apps/desktop/CHANGELOG.md)"
           BODY="$(printf '%s\n' "$BODY" | sed 's#](changelog/#](https://www.drayhq.com/changelog/#g')"
+          # Trimmed both ends, as tauri-action's input reader did: the blank
+          # line under the heading would otherwise lead every release body
+          # and `latest.json`'s `notes`.
+          BODY="${BODY#"${BODY%%[![:space:]]*}"}"
+          BODY="${BODY%"${BODY##*[![:space:]]}"}"
 
           # A stable release with no section would publish notes saying nothing,
           # which is worth stopping for — same reason the version guard above
@@ -102,29 +125,14 @@ jobs:
             echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"
 
-      # Restores the cache warm-cache.yml wrote on `main`; see the action for
-      # why the two share it.
-      - uses: ./.github/actions/desktop-setup
-
-      # The helper apps are signed by cef-helpers.sh, which the cef overlay
-      # runs as `beforeBundleCommand` — after the CLI's own cargo build, before
-      # its bundler — with the same identity the bundler puts on the app around
-      # them. `bundle.macOS.files` copies and signs nothing, and codesign
-      # refuses an app whose nested bundles carry no signature. Their
-      # entitlements differ from the app's too — V8 in the renderer wants JIT —
-      # so a `--deep` sign would be the wrong shape even if the bundler offered
-      # one. The bundler imports the certificate only once it starts signing,
-      # which is after the hook, so it is imported here first.
-      #
-      # It used to run as its own step ahead of the action, with a cargo build
-      # of its own. See the script for why that compiled the tree twice.
       - uses: apple-actions/import-codesign-certs@63fff01cd422d4b7b855d40ca1e9d34d2de9427d # v3
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
       # Dray Island, the Swift panel shipped inside the bundle. Built and signed
-      # ahead of the bundler for the helpers' reason above.
+      # ahead of the bundler, which signs nothing `bundle.macOS.files` copied
+      # (see build.sh).
       - name: Build Dray Island
         env:
           SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -132,16 +140,164 @@ jobs:
           brew install xcodegen
           apps/island/build.sh apps/desktop/src-tauri/target/island
 
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
       # The `dray` CLI, shipped inside the app so every Mac with Dray has one
-      # matching it (cli.rs copies it out on launch). Built here and not as
-      # `beforeBundleCommand`: tauri-build copies the per-arch sidecar while
-      # compiling the app, before that hook runs.
+      # matching it (cli.rs copies it out on launch). Here rather than in the
+      # `build` legs, where it was 42s on the critical path; see the script
+      # for what those legs use instead.
       - name: Build the dray CLI
         run: apps/desktop/scripts/cli-sidecar.sh apps/desktop/src-tauri/target/cli
 
-      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
+      # Tarred because an artifact keeps neither symlinks nor the executable
+      # bit, and a signed bundle needs both.
+      - run: tar -cf "$RUNNER_TEMP/extras.tar" -C apps/desktop/src-tauri target/island target/cli
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mac-extras
+          path: ${{ runner.temp }}/extras.tar
+          if-no-files-found: error
+          retention-days: 1
+
+      # The `build` legs need nothing from this job, so they start beside it
+      # and would compile on for minutes after a failure here. Stopping the run
+      # is what keeps the notary check failing in seconds. A cancelled run
+      # reads as someone pressing Cancel, so it says why first.
+      - if: failure()
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "::error title=Release stopped::extras failed; see its red step. The run is cancelled so the build legs stop."
+          gh run cancel "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}"
+
+  # The app's binary, one runner per arch, at the same time. `tauri build
+  # --target universal-apple-darwin` compiled the two one after the other, and
+  # that was half the release; `bundle` lipos what these leave.
+  #
+  # Same features, overlay configs and compile-time env as the universal build
+  # had, since `tauri build` runs cargo identically for one arch of a universal
+  # build and for that arch alone: the cache warm-cache.yml writes from the
+  # universal build fingerprints the same, and only `dray` itself compiles.
+  build:
+    if: github.event_name == 'push' || inputs.dry_run
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Restores the cache warm-cache.yml wrote on `main`; see the action for
+      # why the two share it.
+      - uses: ./.github/actions/desktop-setup
+
+      # tauri-build copies the sidecar named for this triple next to the
+      # binary while compiling, and fails if there is none; the bundler then
+      # ships `dray-cli-universal-apple-darwin`, which `extras` builds. So the
+      # file only has to exist here. What it holds is never read.
+      #
+      # `--no-bundle` stops before `beforeBundleCommand`, so cef-helpers.sh
+      # runs once, in `bundle`, against both arches' `dray-helper`.
+      - name: Compile
+        working-directory: apps/desktop
+        env:
+          # PostHog's write-only project key, read by `option_env!` at compile
+          # time. Unset is not fatal — the build ships with analytics inert,
+          # which is also what a local build does. `POSTHOG_HOST` is only needed
+          # if the project moves off US cloud; unset takes the default.
+          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
+          POSTHOG_HOST: ${{ vars.POSTHOG_HOST }}
+        run: |
+          mkdir -p src-tauri/target/cli
+          : > "src-tauri/target/cli/dray-cli-$TARGET"
+          pnpm tauri build --no-bundle --target "$TARGET" --features cef --config src-tauri/tauri.cef.conf.json --config src-tauri/tauri.island.conf.json --config src-tauri/tauri.cli.conf.json
+
+      # The aarch64 leg also carries the Tauri CLI `bundle` runs: the two
+      # packages pnpm installed here from the frozen lockfile, integrity
+      # checked, so the job holding the signing keys runs the bytes the lockfile
+      # pins without installing anything. Both legs run on arm64, as does
+      # `bundle`, so the darwin-arm64 binary is the one it needs.
+      - run: |
+          set -euo pipefail
+          FILES=("target/$TARGET/release/dray" "target/$TARGET/release/dray-helper")
+          if [ "$TARGET" = aarch64-apple-darwin ]; then
+            T=apps/desktop/src-tauri/target/tauri-cli/node_modules/@tauri-apps
+            mkdir -p "$T"
+            CLI="$(realpath apps/desktop/node_modules/@tauri-apps/cli)"
+            cp -R "$CLI" "$T/cli"
+            cp -R "$(realpath "$CLI/../cli-darwin-arm64")" "$T/cli-darwin-arm64"
+            FILES+=(target/tauri-cli)
+          fi
+          tar -cf "$RUNNER_TEMP/build.tar" -C apps/desktop/src-tauri "${FILES[@]}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mac-build-${{ matrix.target }}
+          path: ${{ runner.temp }}/build.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  # One universal bundle from the two arches, signed, notarized and checked,
+  # then published — or, on a dry run, kept as an artifact.
+  #
+  # `tauri bundle` is the second half of `tauri build`: the same bundler, the
+  # same `beforeBundleCommand`, the same updater signing, run over binaries
+  # already in `target/`. tauri-action could not drive it, since it only runs
+  # `tauri build`, so the release it made is made below with the same name,
+  # body, asset names and `latest.json`.
+  bundle:
+    needs: [extras, build]
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    outputs:
+      channel: ${{ needs.extras.outputs.channel }}
+      dmg: ${{ steps.stage.outputs.dmg }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: mac-*
+          path: ${{ runner.temp }}/parts
+
+      # Universal the way `tauri build` made it: the app's binary lipo'd here,
+      # `dray-helper` by cef-helpers.sh from the two arches' copies.
+      - name: Lay out target/
+        working-directory: apps/desktop/src-tauri
+        run: |
+          set -euo pipefail
+          for t in "$RUNNER_TEMP"/parts/*/*.tar; do tar -xf "$t"; done
+          mkdir -p target/universal-apple-darwin/release
+          lipo -create -output target/universal-apple-darwin/release/dray \
+            target/aarch64-apple-darwin/release/dray target/x86_64-apple-darwin/release/dray
+
+      # The helper apps are signed by cef-helpers.sh, which the cef overlay
+      # runs as `beforeBundleCommand` — before the bundler — with the same
+      # identity the bundler puts on the app around them. `bundle.macOS.files`
+      # copies and signs nothing, and codesign refuses an app whose nested
+      # bundles carry no signature. Their entitlements differ from the app's
+      # too — V8 in the renderer wants JIT — so a `--deep` sign would be the
+      # wrong shape even if the bundler offered one. The bundler imports the
+      # certificate only once it starts signing, which is after the hook, so
+      # it is imported here first.
+      - uses: apple-actions/import-codesign-certs@63fff01cd422d4b7b855d40ca1e9d34d2de9427d # v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+
+      # One bundle for both architectures. `cef` turns the browser on and has
+      # to match the compile, or `dray-helper` drops out of the bundler's
+      # binary list; the overlay config puts the helper apps in
+      # Contents/Frameworks, the island one Dray Island in Contents/Helpers,
+      # the cli one the CLI in Contents/MacOS.
+      - name: Bundle
+        working-directory: apps/desktop
+        env:
           # Signs the updater bundle. Separate from Apple's signature and not
           # optional: without it the client refuses the download.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -154,33 +310,17 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # PostHog's write-only project key, read by `option_env!` at compile
-          # time. Unset is not fatal — the build ships with analytics inert,
-          # which is also what a local build does. `POSTHOG_HOST` is only needed
-          # if the project moves off US cloud; unset takes the default.
-          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
-          POSTHOG_HOST: ${{ vars.POSTHOG_HOST }}
-        with:
-          # The Tauri project no longer sits at the repo root.
-          projectPath: apps/desktop
-          tagName: ${{ github.ref_name }}
-          releaseName: ${{ github.ref_name }}
-          prerelease: ${{ steps.channel.outputs.prerelease }}
-          releaseBody: ${{ steps.notes.outputs.body }}
-          generateReleaseNotes: true
-          # One bundle for both architectures. The action expands the universal
-          # entry into per-arch keys in `latest.json`, so a client asking for
-          # `darwin-aarch64` finds it. `cef` turns the browser on, and the
-          # overlay config puts the helper apps in Contents/Frameworks; the
-          # island one puts Dray Island in Contents/Helpers, the cli one the
-          # CLI in Contents/MacOS.
-          args: --target universal-apple-darwin --features cef --config src-tauri/tauri.cef.conf.json --config src-tauri/tauri.island.conf.json --config src-tauri/tauri.cli.conf.json
+        # The Tauri CLI the aarch64 leg carried over; see there.
+        run: node src-tauri/target/tauri-cli/node_modules/@tauri-apps/cli/tauri.js bundle --target universal-apple-darwin --features cef --config src-tauri/tauri.cef.conf.json --config src-tauri/tauri.island.conf.json --config src-tauri/tauri.cli.conf.json
 
       # The bundler *warns* and carries on when notarization credentials are
       # missing or rejected — only an absent team id is fatal. So a release
       # that quietly shipped unnotarized looks exactly like one that worked,
       # until a user's Mac refuses to open it. `stapler validate` is what tells
       # the two apart: it fails unless a ticket is actually attached.
+      #
+      # These run before anything is published, so a bundle failing one never
+      # reaches the release.
       - name: Verify the bundle is notarized
         run: |
           APP="apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/$(jq -r .productName apps/desktop/src-tauri/tauri.conf.json).app"
@@ -214,6 +354,84 @@ jobs:
           lipo "$CLI" -verify_arch arm64 x86_64
           "$CLI" --version
 
+      # What tauri-action published, under its names: the bundler's
+      # `Dray.app.tar.gz` gains the arch, and `latest.json` is its updater
+      # manifest — the universal build under all four darwin keys, `notes`
+      # the CHANGELOG body without GitHub's list, keys and formatting as
+      # JSON.stringify wrote them. Every installed app and the manifest job
+      # read that file, so its shape is not ours to change.
+      - name: Stage the release files
+        id: stage
+        env:
+          NOTES: ${{ needs.extras.outputs.notes }}
+        run: |
+          set -euo pipefail
+          BUNDLE=apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle
+          OUT="$RUNNER_TEMP/release"
+          mkdir -p "$OUT"
+          DMG="$(ls "$BUNDLE"/dmg/*.dmg)"
+          cp "$DMG" "$OUT/"
+          cp "$BUNDLE/macos/Dray.app.tar.gz" "$OUT/Dray_universal.app.tar.gz"
+          cp "$BUNDLE/macos/Dray.app.tar.gz.sig" "$OUT/Dray_universal.app.tar.gz.sig"
+          export VERSION="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
+          export SIG="$OUT/Dray_universal.app.tar.gz.sig"
+          # The tag is `v<version>`, held to that by `extras`.
+          export URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v$VERSION/Dray_universal.app.tar.gz"
+          node -e '
+            const fs = require("fs");
+            const e = process.env;
+            const entry = { signature: fs.readFileSync(e.SIG, "utf8"), url: e.URL };
+            const platforms = {};
+            for (const k of ["darwin-aarch64", "darwin-x86_64", "darwin-aarch64-app", "darwin-x86_64-app"]) platforms[k] = entry;
+            const json = { version: e.VERSION, notes: e.NOTES, pub_date: new Date().toISOString(), platforms };
+            fs.writeFileSync(process.argv[1], JSON.stringify(json, null, 2));
+          ' "$OUT/latest.json"
+          ls -l "$OUT"
+          echo "dmg=$(basename "$DMG")" >> "$GITHUB_OUTPUT"
+
+      # What a dry run is for: the bundle and manifest held against the last
+      # release, since nothing else would notice a pipeline change shipping a
+      # different app. Read the diff; some lines always differ.
+      - name: Compare with the last release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The newest app release; GitHub's "latest" can be a `cli-v*` one.
+          REF="$(gh release list --repo "${GITHUB_REPOSITORY}" --exclude-pre-releases --limit 50 --json tagName \
+            --jq '[.[].tagName | select(startswith("v"))][0]')"
+          echo "reference: $REF"
+          R="$RUNNER_TEMP/reference"
+          C="$RUNNER_TEMP/release/compare"
+          gh release download "$REF" --repo "${GITHUB_REPOSITORY}" --dir "$R"
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/mnt-ref" "$R"/*.dmg >/dev/null
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/mnt-new" "$RUNNER_TEMP/release"/*.dmg >/dev/null
+          echo "::group::bundle diff"
+          apps/desktop/scripts/compare-bundle.sh "$RUNNER_TEMP/mnt-ref/Dray.app" "$RUNNER_TEMP/mnt-new/Dray.app" "$C"
+          echo "::endgroup::"
+          echo "::group::asset names and sizes"
+          (cd "$R" && stat -f '%z %N' * | sort -k2) > "$C/assets-reference.txt"
+          (cd "$RUNNER_TEMP/release" && find . -maxdepth 1 -type f -exec stat -f '%z %N' {} + | sed 's#\./##' | sort -k2) > "$C/assets-candidate.txt"
+          paste "$C/assets-reference.txt" "$C/assets-candidate.txt"
+          echo "::endgroup::"
+          echo "::group::latest.json"
+          shape() { jq -r '[paths(scalars)] | map(map(tostring) | join(".")) | .[]' "$1"; }
+          diff <(shape "$R/latest.json") <(shape "$RUNNER_TEMP/release/latest.json") && echo "same keys, same order"
+          redact() { jq '.notes |= .[0:40] | .platforms[] |= (.signature |= .[0:24])' "$1"; }
+          diff <(redact "$R/latest.json") <(redact "$RUNNER_TEMP/release/latest.json") || true
+          echo "::endgroup::"
+          hdiutil detach "$RUNNER_TEMP/mnt-ref" >/dev/null
+          hdiutil detach "$RUNNER_TEMP/mnt-new" >/dev/null
+
+      - if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dry-run
+          path: ${{ runner.temp }}/release
+          if-no-files-found: error
+          retention-days: 7
+
       # Downloads are served from R2, not the release: GitHub's asset CDN has
       # had whole afternoons of a 42MB dmg taking 45 minutes. Versioned keys
       # are immutable and back the updater manifest; the site's versionless
@@ -221,7 +439,7 @@ jobs:
       # secret fails the release rather than shipping a manifest whose URLs
       # point at nothing.
       - name: Mirror to R2
-        id: mirror
+        if: github.event_name == 'push'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -231,21 +449,56 @@ jobs:
           AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_BUCKET: ${{ vars.R2_BUCKET }}
+          DMG: ${{ steps.stage.outputs.dmg }}
         run: |
           set -euo pipefail
           : "${AWS_ACCESS_KEY_ID:?}" "${R2_ACCOUNT_ID:?}" "${R2_BUCKET:?}"
-          BUNDLE=apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle
           put() {
-            aws s3 cp "$1" "s3://${R2_BUCKET}/$2" \
+            aws s3 cp "$RUNNER_TEMP/release/$1" "s3://${R2_BUCKET}/${GITHUB_REF_NAME}/$1" \
               --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
               --cache-control "public, max-age=31536000, immutable"
           }
-          DMG="$(ls "$BUNDLE"/dmg/*.dmg)"
-          put "$DMG" "${GITHUB_REF_NAME}/$(basename "$DMG")"
-          # The bundler writes `Dray.app.tar.gz`; tauri-action renames it on
-          # upload, and the manifest names the renamed one.
-          put "$(ls "$BUNDLE"/macos/*.app.tar.gz)" "${GITHUB_REF_NAME}/Dray_universal.app.tar.gz"
-          echo "dmg=$(basename "$DMG")" >> "$GITHUB_OUTPUT"
+          put "$DMG"
+          put Dray_universal.app.tar.gz
+
+      # tauri-action's release, made the way it made it: a published release
+      # named for the tag, the CHANGELOG body with GitHub's generated notes
+      # under it, assets sent as `application/zip`, `latest.json` last. A
+      # re-run finds the release its first attempt made and replaces assets
+      # of the same name.
+      - name: Publish the GitHub release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ needs.extras.outputs.notes }}
+          PRERELEASE: ${{ needs.extras.outputs.prerelease }}
+          DMG: ${{ steps.stage.outputs.dmg }}
+        run: |
+          set -euo pipefail
+          R="repos/${GITHUB_REPOSITORY}/releases"
+          if ! ID="$(gh api "$R/tags/${GITHUB_REF_NAME}" --jq .id 2>/dev/null)"; then
+            ID="$(gh api "$R" -f tag_name="${GITHUB_REF_NAME}" -f name="${GITHUB_REF_NAME}" \
+              -f body="$NOTES" -f target_commitish="${GITHUB_SHA}" -F draft=false \
+              -F prerelease="$PRERELEASE" -F generate_release_notes=true --jq .id)"
+          fi
+          upload() {
+            OLD="$(gh api "$R/$ID/assets" --paginate --jq ".[] | select(.name == \"$1\") | .id")"
+            [ -z "$OLD" ] || gh api -X DELETE "$R/assets/$OLD"
+            curl -sS --fail-with-body -o "$RUNNER_TEMP/upload.json" -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/zip" \
+              --data-binary @"$RUNNER_TEMP/release/$1" \
+              "https://uploads.github.com/$R/$ID/assets?name=$1" \
+              || { cat "$RUNNER_TEMP/upload.json" >&2; return 1; }
+          }
+          upload "$DMG"
+          upload Dray_universal.app.tar.gz
+          upload Dray_universal.app.tar.gz.sig
+          # `latest.json` names the tarball by the URL GitHub gives it, which
+          # stage built from the tag; the manifest job rewrites that prefix.
+          GOT="$(gh api "$R/$ID/assets" --paginate --jq '.[] | select(.name == "Dray_universal.app.tar.gz") | .browser_download_url')"
+          WANT="$(jq -r '.platforms["darwin-aarch64"].url' "$RUNNER_TEMP/release/latest.json")"
+          [ "$GOT" = "$WANT" ] || { echo "latest.json names $WANT, GitHub serves $GOT" >&2; exit 1; }
+          upload latest.json
 
   # The Linux app, as one AppImage. Beside the Mac build rather than inside
   # it, so nothing there moves; the manifest job puts its entry in.
@@ -255,13 +508,15 @@ jobs:
   # would refuse Debian 12 and Ubuntu 22.04 outright.
   #
   # No cache. warm-cache.yml warms the Mac's, and a tag build's own cache is
-  # unreadable to the next tag (see there), so this compiles cold — still
-  # inside the Mac job's notarization wait.
+  # unreadable to the next tag (see there), so this compiles cold, beside the
+  # Mac jobs. `manifest` waits for it, so once it ships it can be what sets
+  # the release's length.
   #
   # Held out of tag releases until the repo variable RELEASE_LINUX is `true`
   # (docs/releases.md). Skipped, it leaves no AppImage and no `linux-*` entry.
+  # A dry run is the Mac's and skips it too.
   linux:
-    if: github.event_name == 'workflow_dispatch' || vars.RELEASE_LINUX == 'true'
+    if: (github.event_name == 'workflow_dispatch' && !inputs.dry_run) || (github.event_name == 'push' && vars.RELEASE_LINUX == 'true')
     runs-on: ubuntu-22.04
     outputs:
       appimage: ${{ steps.mirror.outputs.appimage }}
@@ -346,8 +601,8 @@ jobs:
           ls usr/lib/Dray/transcribe/libggml-cpu-*.so usr/lib/Dray/transcribe/libggml-vulkan.so
 
       # The same mirror as the Mac's. The signature rides out as an output
-      # for the manifest; the file goes to the release from there, since the
-      # Mac job is what creates the release and may not have yet.
+      # for the manifest; the file goes to the release from there, since
+      # `bundle` is what creates the release and may not have yet.
       - name: Mirror to R2
         id: mirror
         if: github.event_name == 'push'
@@ -381,16 +636,23 @@ jobs:
   # The manifests live on a branch rather than in the release, because
   # `/releases/latest/` skips prereleases — so beta would have no fixed URL.
   # GitHub Pages serves this branch; the artifact URLs inside are rewritten
-  # onto the R2 mirror the build job uploaded to.
+  # onto the R2 mirror the bundle job uploaded to.
   #
   # A failed or skipped Linux build holds back nothing of the Mac's: the
   # manifest is written without a Linux entry, so Linux readers stay where
   # they are. `!cancelled()` is what runs this past a skipped `linux`; with no
-  # status function the implicit `success()` would skip it too.
+  # status function the implicit `success()` would skip it too. A dry run's
+  # `bundle` succeeds too, which is why the event is checked as well.
+  #
+  # release-cli's publish gate (.github/scripts/cli-publish-gate.sh) finds this
+  # job by the file name `release.yml` and the job name `manifest`; rename
+  # either and it waits out its 45-minute cap.
   manifest:
-    needs: [build, linux]
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    needs: [bundle, linux]
+    if: ${{ !cancelled() && needs.bundle.result == 'success' && github.event_name == 'push' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -413,7 +675,7 @@ jobs:
           AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_BUCKET: ${{ vars.R2_BUCKET }}
-          DMG: ${{ needs.build.outputs.dmg }}
+          DMG: ${{ needs.bundle.outputs.dmg }}
           APPIMAGE: ${{ needs.linux.outputs.appimage }}
           APPIMAGE_SIG: ${{ needs.linux.outputs.signature }}
           APPIMAGE_DIR: ${{ runner.temp }}/appimage
@@ -478,7 +740,7 @@ jobs:
           }
 
           promote beta.json
-          if [ "${{ needs.build.outputs.channel }}" = "stable" ]; then
+          if [ "${{ needs.bundle.outputs.channel }}" = "stable" ]; then
             promote stable.json
           fi
           rm manifest.json
@@ -501,7 +763,7 @@ jobs:
           # that keeps the manifest from moving backwards keeps it too — and
           # only after the push landed, since a push lost to a concurrent
           # release means this one did not win. A server-side copy of the key
-          # the build job uploaded; nothing is re-sent.
+          # the bundle job uploaded; nothing is re-sent.
           if [ "$(jq -r '.version // empty' stable.json 2>/dev/null)" = "$NEW" ]; then
             aws s3 cp "s3://${R2_BUCKET}/${GITHUB_REF_NAME}/${DMG}" "s3://${R2_BUCKET}/Dray_universal.dmg" \
               --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
