@@ -246,6 +246,45 @@ function groups(win: Win): { task?: Task; heading: React.ReactNode; servers: Srv
   }));
 }
 
+/// A's list: a heading per task (or the session's machine), a card per server.
+function ServerList({ win, onOpen }: { win: Win; onOpen: (s: Srv) => void }) {
+  return (
+    <>
+    {groups(win).map((g, i) => (
+      <section key={i} className="flex flex-col gap-1">
+        <h3 className="px-2 pb-0.5 text-muted-foreground">{g.heading}</h3>
+        {g.servers.map((s) => (
+          <div key={s.port} className="flex items-center gap-1 rounded-lg border border-border p-0.5">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button type="button" onClick={() => onOpen(s)} className={cn(rowClass, "min-w-0 flex-1 hover:bg-transparent hover:underline")}>
+                  <Live />
+                  <span className="font-mono">localhost:{s.port}</span>
+                  <span className="truncate text-muted-foreground">{s.process}</span>
+                </button>
+              </TooltipTrigger>
+              {s.forwarded && (
+                <TooltipContent side="top">
+                  Runs on {machineOf(s, win.machine)}; opens here through localhost:{s.forwarded}
+                </TooltipContent>
+              )}
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label="Get shareable link" className={cn("shrink-0", TOOL_BTN)}>
+                  <Share2 className="size-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Get shareable link</TooltipContent>
+            </Tooltip>
+          </div>
+        ))}
+      </section>
+    ))}
+    </>
+  );
+}
+
 // A: today's new-tab list, grouped by task in a bot's browser.
 
 function A({ win }: { win: Win }) {
@@ -258,37 +297,7 @@ function A({ win }: { win: Win }) {
       empty={
         <div className="flex h-full justify-center overflow-hidden px-8 pt-6 text-ui">
           <div className="flex w-full max-w-md flex-col gap-4">
-            {groups(win).map((g, i) => (
-              <section key={i} className="flex flex-col gap-1">
-                <h3 className="px-2 pb-0.5 text-muted-foreground">{g.heading}</h3>
-                {g.servers.map((s) => (
-                  <div key={s.port} className="flex items-center gap-1 rounded-lg border border-border p-0.5">
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button type="button" onClick={() => setPage(s)} className={cn(rowClass, "min-w-0 flex-1 hover:bg-transparent hover:underline")}>
-                          <Live />
-                          <span className="font-mono">localhost:{s.port}</span>
-                          <span className="truncate text-muted-foreground">{s.process}</span>
-                        </button>
-                      </TooltipTrigger>
-                      {s.forwarded && (
-                        <TooltipContent side="top">
-                          Runs on {machineOf(s, win.machine)}; opens here through localhost:{s.forwarded}
-                        </TooltipContent>
-                      )}
-                    </Tooltip>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button variant="ghost" size="icon-sm" aria-label="Get shareable link" className={cn("shrink-0", TOOL_BTN)}>
-                          <Share2 className="size-3.5" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top">Get shareable link</TooltipContent>
-                    </Tooltip>
-                  </div>
-                ))}
-              </section>
-            ))}
+            <ServerList win={win} onOpen={setPage} />
             {!win.bot && <Recent />}
           </div>
         </div>
@@ -493,27 +502,9 @@ function E({ win }: { win: Win }) {
             </div>
           </div>
           {rest.length > 0 && (
-            <section className="flex w-full max-w-sm flex-col gap-0.5">
-              <h3 className="px-2 pb-1 text-muted-foreground">Still running</h3>
-              {/* Grouped under each task as on the new tab; a session's own are one group, its machine on the right. */}
-              {groups({ ...win, servers: rest }).map((g, i) => (
-                <div key={i} className="flex flex-col gap-0.5 pb-1">
-                  {g.task && <div className="px-2 pt-1 text-muted-foreground">{g.heading}</div>}
-                  {g.servers.map((s) => (
-                    <button key={s.port} type="button" onClick={() => setPage(s)} className={rowClass}>
-                      <Live />
-                      <span className="font-mono">localhost:{s.port}</span>
-                      <span className="min-w-0 truncate text-muted-foreground">{s.process}</span>
-                      {!g.task && (
-                        <span className="ml-auto pl-2">
-                          <MachineMark name={win.machine} />
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              ))}
-            </section>
+            <div className="flex w-full max-w-md flex-col gap-4">
+              <ServerList win={{ ...win, servers: rest }} onOpen={setPage} />
+            </div>
           )}
         </div>
       }
