@@ -615,7 +615,7 @@ async function tell() {
   live(CHAT, {
     type: "learned",
     commit: "4f1c2ab",
-    files: [{ path: "INSTRUCTIONS.md", kind: "instructions", change: "changed", summary: "Write the changelog for every release, unasked." }],
+    files: [{ path: "AGENTS.md", kind: "instructions", change: "changed", summary: "Write the changelog for every release, unasked." }],
   });
   setStatus(CHAT, "completed");
 
