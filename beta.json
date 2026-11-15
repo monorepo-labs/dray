@@ -1,23 +1,23 @@
 {
-  "version": "0.30.5",
-  "notes": "### New\n\n- **Edit a bot.** Edit… in a bot's menu changes its name and face.\n- **Split groups.** Split panes form a group you can close and resize,\n  and the tab row draws the group as one tab.\n\n### Improved\n\n- Dray opens on your first bot.\n- A bot's Tasks tab puts what needs you first, then PRs ready to merge.\n- A task's own sub-tasks keep running after it settles, and report to\n  the nearest task or bot still open.\n- Bots react less: 👍 for an ok, 👀 only when looking into something.\n\n### Fixed\n\n- PR status that failed to load, often on a spent GitHub rate limit,\n  now retries, so a new PR always shows up.",
-  "pub_date": "2026-11-14T14:29:31.200Z",
+  "version": "0.30.6",
+  "notes": "### New\n\n- **Subagents open in a tab.** Click an agent row in the chat or the\n  More tab to read its whole conversation beside the session.\n- **Dev servers in the bot's browser.** A bot's new tab lists its tasks'\n  dev servers. A stopped one shows which task ran it, where, and a\n  button to ask for a restart.\n- **`dray session model`** switches a session's model and effort from\n  the terminal.\n\n### Improved\n\n- The More tab splits Background tasks from Subagents.\n- Links in a bot's task open as tabs in the bot's row.\n- Bots keep their instructions in AGENTS.md, which every agent reads\n  on its own.\n- Merging or settling a bot task deletes its worktree without asking.\n- Removing a machine warns about its unfinished tasks first.\n- fx shows a countdown while it retries a failed request.\n- Idle agent browsers on servers close after 5 minutes, not 30.\n\n### Fixed\n\n- Images an agent links by local path now show in the chat.\n- \"Waiting on you\" rows stay put while GitHub rechecks PRs after a\n  merge.",
+  "pub_date": "2026-11-15T07:46:15.230Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJTRUhvZ3dHUVV3eDRudXZPOHFXaCtzc2p3dkFxdGt2UWNXNHdlend0dVkzcFJyR2NCVE1Ga2EzdUlHTnlQS3RnYTVMZ2F3RzVqa2IxYXhtWEFZd3dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjY2NTU5CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC41CkdvTHh2WEl3ZzdvSFJqRmpvT1BlMHhRNmdxVUNuWFJWRWJNRnZEaEdXN1JuQkkrdlNYTkJSWTFtaWQ5RkRwVldRMk9uaHIwUXlMWnRLVE0ybURib0NRPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.5/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXI4YjNKQTJsbktOeG9qSEg5Q1FERHpOZ3cvR0orTld1N1BHam9yUGRiMXJOdmdCUmx1TktQQkFDNlY0ajYxSEVhSm1lclJwbGtmaEg4N3VGVHNBcFF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NzI4NzY2CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC42Cmt1VWR3cHNBS1YrcXVsK2VMMzIzYm1xUnFXc1F3V2ppRlMzV3IwT1ZvbEljeG4wbjcyWmNkbDZobktJNWM2cllFSnJNNmRvRkg4Z2E4T2FGVmhvYkNnPT0K",
+      "url": "https://downloads.drayhq.com/v0.30.6/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJTRUhvZ3dHUVV3eDRudXZPOHFXaCtzc2p3dkFxdGt2UWNXNHdlend0dVkzcFJyR2NCVE1Ga2EzdUlHTnlQS3RnYTVMZ2F3RzVqa2IxYXhtWEFZd3dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjY2NTU5CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC41CkdvTHh2WEl3ZzdvSFJqRmpvT1BlMHhRNmdxVUNuWFJWRWJNRnZEaEdXN1JuQkkrdlNYTkJSWTFtaWQ5RkRwVldRMk9uaHIwUXlMWnRLVE0ybURib0NRPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.5/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXI4YjNKQTJsbktOeG9qSEg5Q1FERHpOZ3cvR0orTld1N1BHam9yUGRiMXJOdmdCUmx1TktQQkFDNlY0ajYxSEVhSm1lclJwbGtmaEg4N3VGVHNBcFF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NzI4NzY2CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC42Cmt1VWR3cHNBS1YrcXVsK2VMMzIzYm1xUnFXc1F3V2ppRlMzV3IwT1ZvbEljeG4wbjcyWmNkbDZobktJNWM2cllFSnJNNmRvRkg4Z2E4T2FGVmhvYkNnPT0K",
+      "url": "https://downloads.drayhq.com/v0.30.6/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJTRUhvZ3dHUVV3eDRudXZPOHFXaCtzc2p3dkFxdGt2UWNXNHdlend0dVkzcFJyR2NCVE1Ga2EzdUlHTnlQS3RnYTVMZ2F3RzVqa2IxYXhtWEFZd3dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjY2NTU5CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC41CkdvTHh2WEl3ZzdvSFJqRmpvT1BlMHhRNmdxVUNuWFJWRWJNRnZEaEdXN1JuQkkrdlNYTkJSWTFtaWQ5RkRwVldRMk9uaHIwUXlMWnRLVE0ybURib0NRPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.5/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXI4YjNKQTJsbktOeG9qSEg5Q1FERHpOZ3cvR0orTld1N1BHam9yUGRiMXJOdmdCUmx1TktQQkFDNlY0ajYxSEVhSm1lclJwbGtmaEg4N3VGVHNBcFF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NzI4NzY2CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC42Cmt1VWR3cHNBS1YrcXVsK2VMMzIzYm1xUnFXc1F3V2ppRlMzV3IwT1ZvbEljeG4wbjcyWmNkbDZobktJNWM2cllFSnJNNmRvRkg4Z2E4T2FGVmhvYkNnPT0K",
+      "url": "https://downloads.drayhq.com/v0.30.6/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJTRUhvZ3dHUVV3eDRudXZPOHFXaCtzc2p3dkFxdGt2UWNXNHdlend0dVkzcFJyR2NCVE1Ga2EzdUlHTnlQS3RnYTVMZ2F3RzVqa2IxYXhtWEFZd3dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjY2NTU5CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC41CkdvTHh2WEl3ZzdvSFJqRmpvT1BlMHhRNmdxVUNuWFJWRWJNRnZEaEdXN1JuQkkrdlNYTkJSWTFtaWQ5RkRwVldRMk9uaHIwUXlMWnRLVE0ybURib0NRPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.5/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXI4YjNKQTJsbktOeG9qSEg5Q1FERHpOZ3cvR0orTld1N1BHam9yUGRiMXJOdmdCUmx1TktQQkFDNlY0ajYxSEVhSm1lclJwbGtmaEg4N3VGVHNBcFF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NzI4NzY2CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC42Cmt1VWR3cHNBS1YrcXVsK2VMMzIzYm1xUnFXc1F3V2ppRlMzV3IwT1ZvbEljeG4wbjcyWmNkbDZobktJNWM2cllFSnJNNmRvRkg4Z2E4T2FGVmhvYkNnPT0K",
+      "url": "https://downloads.drayhq.com/v0.30.6/Dray_universal.app.tar.gz"
     }
   }
 }
