@@ -14,7 +14,7 @@ name: Warm CLI cache
 
 on:
   push:
-    branches: [main, worktree-eager-wheat-harbor] # TEMPORARY: branch proof
+    branches: [main]
     # What the two builds read.
     paths:
       - "apps/cli/**"
