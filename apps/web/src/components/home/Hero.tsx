@@ -24,8 +24,8 @@ export function Hero() {
       <div className="relative mx-auto w-full max-w-[960px]">
         <SiteNav />
 
-        <div className="pt-16 sm:pt-[133px] lg:ml-[102px] lg:max-w-[756px]">
-          <h1 className="font-inter text-[36px] leading-[40px] font-normal tracking-[-0.03em] text-balance text-white sm:text-[46px] light:text-[#0A0A0A] sm:leading-[46px]">
+        <div className="pt-16 sm:pt-[117px] lg:ml-[102px] lg:max-w-[756px]">
+          <h1 className="font-inter text-[36px] leading-[40px] font-[350] tracking-[-0.03em] text-balance text-white sm:text-[46px] light:text-[#0A0A0A] sm:leading-[54px]">
             Work on dozens of coding tasks without getting overwhelmed.
           </h1>
           <div className="mt-8 flex flex-wrap items-start justify-between gap-4 pr-5">
@@ -34,7 +34,7 @@ export function Hero() {
           </div>
         </div>
 
-        <div className="relative mt-12 lg:rounded-[12px] lg:shadow-[0_2px_50px_12px_#0000004D] light:lg:shadow-[0_20px_60px_-20px_#00000040]">
+        <div className="relative mt-12 sm:left-1/2 sm:w-[min(1200px,calc(100vw-64px))] sm:-translate-x-1/2 lg:rounded-[12px] lg:shadow-[0_2px_50px_12px_#0000004D] light:lg:shadow-none">
           {/* The live window wants a desktop's width; a phone gets a still of
               it instead of a sideways-scrolling miniature. */}
           <div className={`relative max-sm:hidden ${h.liveCursor}`}>

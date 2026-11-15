@@ -14,7 +14,7 @@ import { ScaledWindow } from "./ScaledWindow";
 import { TaskPanel } from "./TaskPanel";
 import s from "./Hero.module.css";
 
-const WIDTH = 1128;
+const WIDTH = 1200;
 const HEIGHT = 720;
 
 /// The app, whole, above the fold, and the visitor can touch it. It opens on
