@@ -8,6 +8,7 @@ import {
   fixAskDone,
   fixLine,
   freshStalls,
+  lastMessageLine,
   needLine,
   onCard,
   stalledTasks,
@@ -228,5 +229,21 @@ describe("needLine", () => {
 
   it("never draws one on a stall the card leaves out", () => {
     expect(needLine(stall("fix", "Fix the checks"))).toBeUndefined();
+  });
+});
+
+describe("lastMessageLine", () => {
+  it("takes the last paragraph, on one line", () => {
+    expect(lastMessageLine("Done with the header.\n\nKeep the button\nor drop it?")).toBe("Keep the button or drop it?");
+  });
+
+  it("skips a code block the message ends on", () => {
+    expect(lastMessageLine("Which of these?\n\n```ts\nconst a = 1;\n```")).toBe("Which of these?");
+    expect(lastMessageLine("Which of these?\n\n```ts\nconst a = 1;")).toBe("Which of these?");
+  });
+
+  it("is nothing for an empty or missing message", () => {
+    expect(lastMessageLine(null)).toBeUndefined();
+    expect(lastMessageLine("  \n\n ```\nx\n```")).toBeUndefined();
   });
 });
