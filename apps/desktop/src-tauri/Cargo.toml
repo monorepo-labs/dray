@@ -275,3 +275,15 @@ required-features = ["cef"]
 [dev-dependencies]
 # Paused-clock tests for the engine's idle unload; a real ten-minute sleep is untestable.
 tokio = { version = "1", features = ["test-util"] }
+
+# dray-serve as release-cli.yml ships it (`--profile serve`), apart from
+# `release` so the app's `tauri build` stays as it was. Fat LTO and one codegen
+# unit took it from 44 to 29 MB with no path slower (#1130). Opt-level 3, not
+# "s": "s" was 18 MB but 25-43% slower on list, tail and paging, which
+# serialize straight through serde. No `panic = "abort"`: a panic in one task
+# must not take every session down.
+[profile.serve]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+codegen-units = 1

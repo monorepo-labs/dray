@@ -74,8 +74,12 @@ if [ -n "$DRAY_REF" ]; then
   git clone -q https://github.com/monorepo-labs/dray "$src"
   git -C "$src" checkout -q "$DRAY_REF"
   (cd "$src/apps/cli" && cargo build -q --release)
-  (cd "$src/apps/desktop/src-tauri" && cargo build -q --release --no-default-features --features serve --bin dray-serve)
-  install -m 755 "$src/apps/cli/target/release/dray" "$src/apps/desktop/src-tauri/target/release/dray-serve" "$HOME/.local/bin/"
+  # The server's own profile, as release-cli.yml builds it; a ref from before
+  # it existed has only `release`.
+  profile=release
+  grep -q '^\[profile\.serve\]' "$src/apps/desktop/src-tauri/Cargo.toml" && profile=serve
+  (cd "$src/apps/desktop/src-tauri" && cargo build -q --profile "$profile" --no-default-features --features serve --bin dray-serve)
+  install -m 755 "$src/apps/cli/target/release/dray" "$src/apps/desktop/src-tauri/target/$profile/dray-serve" "$HOME/.local/bin/"
   rm -rf "$src"
 fi
 

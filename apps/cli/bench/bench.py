@@ -35,6 +35,9 @@ HERE = Path(__file__).resolve().parent
 # Another source tree to build, e.g. a `git archive` of a release tag.
 REPO = Path(os.environ.get("DRAY_BENCH_REPO", HERE.parent.parent.parent)).resolve()
 RESULTS = Path(os.environ.get("DRAY_BENCH_RESULTS", Path.home() / "dray-bench-results"))
+# The cargo profile release-cli.yml builds dray-serve with. `release` builds
+# what shipped before it existed; a tree without `[profile.serve]` needs that.
+SERVE_PROFILE = os.environ.get("DRAY_BENCH_SERVE_PROFILE", "serve")
 CLI_DIR = REPO / "apps" / "cli"
 SERVE_DIR = REPO / "apps" / "desktop" / "src-tauri"
 FIXTURE = SERVE_DIR / "src" / "harness" / "claude_code" / "fixtures" / "complex.jsonl"
@@ -194,11 +197,12 @@ def build(label, args):
         env = env_for(info["serve_env"], tdir)
         env["DRAY_CLI_VERSION"] = cli_version()
         wait_quiet("building dray-serve")
-        log("building dray-serve (release, clean)…")
+        log(f"building dray-serve ({SERVE_PROFILE}, clean)…")
+        info["dray_serve_profile"] = SERVE_PROFILE
         info["dray_serve_build_s"] = timed_build(
-            ["cargo", "build", "--release", "--no-default-features", "--features", "serve",
+            ["cargo", "build", "--profile", SERVE_PROFILE, "--no-default-features", "--features", "serve",
              "--bin", "dray-serve", "--target", target], SERVE_DIR, env, out / "build-dray-serve.log")
-        shutil.copy2(tdir / target / "release" / "dray-serve", out / "dray-serve.unstripped")
+        shutil.copy2(tdir / target / SERVE_PROFILE / "dray-serve", out / "dray-serve.unstripped")
         log(f"  dray-serve built in {info['dray_serve_build_s']}s")
 
     # release-cli.yml strips dray-serve after the build and tars both.
