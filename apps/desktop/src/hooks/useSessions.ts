@@ -140,6 +140,9 @@ export type ApiRetryState = {
   maxRetries: number;
   status: number | null;
   reason: string | null;
+  /// The harness's own status line, drawn in place of the count. fx alone
+  /// sends one, with its countdown to the next try.
+  message: string | null;
 };
 
 /// Sessions whose worktree removal has been asked for and not refused.
@@ -255,6 +258,7 @@ function apiRetryOf(session: SessionSnapshot | null, busy: boolean): ApiRetrySta
       maxRetries: p.maxRetries,
       status: p.status,
       reason: p.reason,
+      message: p.message ?? null,
     };
   }
   return null;
