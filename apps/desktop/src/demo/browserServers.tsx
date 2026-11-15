@@ -529,7 +529,7 @@ function E({ win }: { win: Win }) {
             </div>
           </div>
           {rest.length > 0 && (
-            <div className="flex w-full max-w-sm flex-col gap-4">
+            <div className="mt-6 flex w-full max-w-sm flex-col gap-4">
               <ServerList win={{ ...win, servers: rest }} onOpen={setPage} />
             </div>
           )}
