@@ -1444,12 +1444,20 @@ impl SessionManager {
                         });
                     }
 
-                    let queued = s.queue_msg(prompt, attachment_paths, issues, from, app).await;
-                    return Ok(SendOutcome {
-                        snapshot: None,
-                        queued: Some(queued),
-                        issues: linked,
-                    });
+                    // Re-read under the status lock: `turn_in_flight` above is
+                    // stale by every await since, and a turn that ended in
+                    // between has already run its flush. Queued then, the
+                    // prompt waited on a boundary that never came.
+                    if let Some(queued) = s
+                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone(), app)
+                        .await
+                    {
+                        return Ok(SendOutcome {
+                            snapshot: None,
+                            queued: Some(queued),
+                            issues: linked,
+                        });
+                    }
                 }
             }
 
@@ -2506,8 +2514,8 @@ impl Session {
         message
     }
 
-    /// fx alone, and the whole of what keeps its two-prompt race shut. Decides,
-    /// **under the status lock**, whether this prompt joins the running turn —
+    /// What keeps a prompt from being queued behind a turn that already ended.
+    /// Decides, **under the status lock**, whether this prompt joins the running turn —
     /// queued for the turn-end flush — or finds the turn already over and must
     /// start a fresh one. `Some` was queued; `None` means the turn ended and
     /// the caller delivers now.
@@ -2520,8 +2528,10 @@ impl Session {
     /// later would — and a completion can slip between, marking the turn done
     /// with a prompt queued behind it and no reservation, which is the race.
     ///
-    /// fx has no injection point, so a prompt for a live turn only ever waits
-    /// here for its end; there is no write-through path to take.
+    /// For fx it is the whole of what keeps its two-prompt race shut: fx has no
+    /// injection point, so a prompt for a live turn only ever waits here for
+    /// its end. Claude Code's turn-end flush runs after the tracker closes the
+    /// turn, so a prompt queued here while it is still open is drained by it.
     async fn queue_if_in_flight(
         &self,
         prompt: &str,
@@ -4472,6 +4482,32 @@ mod tests {
         assert!(session.cancel_queued(&sink).await.is_none());
         assert_eq!(session.queued.lock().await[0].text, "done", "the report still reaches the bot");
         assert_eq!(shown.lock().unwrap().last().unwrap(), &serde_json::json!([]));
+    }
+
+    /// The send path read the turn as running, then awaited long enough for it
+    /// to end and flush an empty queue. Queued now, the prompt would wait on a
+    /// boundary already past, so the re-read under the lock must refuse it and
+    /// leave the queue empty for the direct send. While the turn still runs it
+    /// queues, and the turn-end flush that follows drains it.
+    #[tokio::test]
+    async fn a_prompt_is_never_queued_behind_a_turn_that_ended() {
+        let manager = SessionManager::default();
+        let mut running = StatusTracker::default();
+        running.on_send();
+        let slot = child_with(&manager, "s", running).await;
+        let sink = Sink::new(|_, _| {});
+        let guard = slot.lock().await;
+        let session = guard.as_ref().unwrap();
+
+        let stale = session.status.lock().await.turn_in_flight();
+        assert!(stale, "the send's first read sees the turn running");
+        assert!(session.queue_if_in_flight("early", &[], &[], None, &sink).await.is_some());
+        assert_eq!(session.queued.lock().await.len(), 1, "held for the turn-end flush");
+        session.queued.lock().await.clear();
+
+        session.status.lock().await.on_event(&turn_completed());
+        assert!(session.queue_if_in_flight("late", &[], &[], None, &sink).await.is_none());
+        assert!(session.queued.lock().await.is_empty(), "nothing left for a flush that already ran");
     }
 
     /// Only a child with nothing running and nothing waiting on it is stopped,
