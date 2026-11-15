@@ -2229,25 +2229,35 @@ pub async fn clear_fork_from(session_id: &str) -> Result<bool> {
 }
 
 /// Appends one event as a line to the session's `.jsonl` log.
+///
+/// One blocking hop that opens `O_APPEND`, writes and closes. Four tokio fs
+/// calls plus a `create_dir_all` were ~10 thread handoffs per event. No handle
+/// is kept between events: delete, fork repointing and worktree relocation all
+/// rely on each append opening the file afresh.
 pub async fn append_session_event(session_id: &str, event: AgentEvent) -> Result<()> {
-    let path = get_session_path(session_id).await?;
+    let dir = get_home_app_dir().await?.join("sessions");
+    let path = dir.join(format!("{session_id}.jsonl"));
+    let mut line = serde_json::to_vec(&event)?;
+    line.push(b'\n');
 
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .await
-        .context("failed to open session file")?;
+    tokio::task::spawn_blocking(move || append_line(&dir, &path, &line)).await?
+}
 
-    let line = format!("{}\n", serde_json::to_string(&event)?);
-
-    file.write_all(line.as_bytes()).await?;
-    // tokio's `write_all` answers once the bytes are handed to a blocking task,
-    // not once they are written. The flush waits for that write and carries its
-    // error, so a full disk is reported and two appends keep their order.
-    file.flush().await?;
-
-    Ok(())
+/// `line` onto `path`, creating `dir` only when the open finds it missing, as
+/// `get_sessions_dir` would have before every append.
+fn append_line(dir: &Path, path: &Path, line: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let open = || std::fs::OpenOptions::new().create(true).append(true).open(path);
+    let mut file = match open() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(dir)
+                .with_context(|| format!("could not create {}", dir.display()))?;
+            open()
+        }
+        opened => opened,
+    }
+    .context("failed to open session file")?;
+    file.write_all(line).context("failed to write session file")
 }
 
 /// One unreadable line, kept for investigation.
@@ -2315,13 +2325,50 @@ pub async fn record_parse_failure(
 pub async fn next_seq_by_session_id(session_id: &str) -> Result<u64> {
     let path = get_session_path(session_id).await?;
 
-    let buf = match fs::read_to_string(&path).await {
-        Ok(buf) => buf,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(e) => return Err(e).context("could not read session file"),
-    };
+    let seq = tokio::task::spawn_blocking(move || match std::fs::File::open(&path) {
+        Ok(file) => max_seq_of(file),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    })
+    .await?
+    .context("could not read session file")?;
 
-    Ok(max_seq(&buf).map_or(0, |seq| seq + 1))
+    Ok(seq.map_or(0, |seq| seq + 1))
+}
+
+/// [`max_seq`] over a log read a megabyte at a time rather than whole: a 40MB
+/// log was a 40MB buffer faulted in, a third of the resume. Cut at newlines,
+/// so the lines and the UTF-8 check are the ones a whole read would see.
+fn max_seq_of(mut file: impl std::io::Read) -> std::io::Result<Option<u64>> {
+    let mut buf = vec![0; 1 << 20];
+    let (mut held, mut max) = (0, None);
+    loop {
+        if held == buf.len() {
+            buf.resize(buf.len() * 2, 0);
+        }
+        let read = match file.read(&mut buf[held..]) {
+            Ok(read) => read,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        let end = held + read;
+        let whole = match buf[..end].iter().rposition(|&b| b == b'\n') {
+            _ if read == 0 => end,
+            Some(newline) => newline + 1,
+            None => {
+                held = end;
+                continue;
+            }
+        };
+        let text = std::str::from_utf8(&buf[..whole])
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        max = max.max(max_seq(text));
+        if read == 0 {
+            return Ok(max);
+        }
+        buf.copy_within(whole..end, 0);
+        held = end - whole;
+    }
 }
 
 /// The highest `seq`, never the last line's: a Claude Code subagent's events
@@ -2359,6 +2406,55 @@ pub async fn get_session_path(session_id: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Read in chunks, the answer is the whole read's: lines across a chunk's
+    /// edge, a last line with no newline, a torn line, a payload's own `seq`.
+    #[test]
+    fn max_seq_read_in_chunks_is_the_whole_reads() {
+        struct Trickle<'a>(&'a [u8], usize);
+        impl std::io::Read for Trickle<'_> {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                let n = self.1.min(out.len()).min(self.0.len());
+                out[..n].copy_from_slice(&self.0[..n]);
+                self.0 = &self.0[n..];
+                Ok(n)
+            }
+        }
+        let log = [
+            r#"{"seq":3,"payload":{"seq":900}}"#,
+            r#"{"payload":{"text":"é ✓"},"seq":7}"#,
+            r#"{"seq":2}"#,
+            "",
+            r#"not json {"seq":50}"#,
+            r#"{"seq":5,"payload":{"te"#,
+            "{\"seq\":6}\r",
+            r#"{"seq":4}"#,
+        ]
+        .join("\n");
+        assert_eq!(max_seq(&log), Some(7));
+        for chunk in [1, 2, 3, 7, 64, 4096] {
+            assert_eq!(max_seq_of(Trickle(log.as_bytes(), chunk)).unwrap(), Some(7), "{chunk}-byte reads");
+        }
+        let big = (0..40_000).map(|seq| format!(r#"{{"seq":{seq},"payload":{{"pad":"{}"}}}}"#, "x".repeat(seq % 90))).collect::<Vec<_>>().join("\n");
+        assert_eq!(max_seq_of(big.as_bytes()).unwrap(), max_seq(&big));
+        assert_eq!(max_seq_of(&b""[..]).unwrap(), None);
+        assert_eq!(max_seq_of(&b"{\"seq\":1}\n\xff\n"[..]).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    /// An append after the sessions directory went away recreates it and the
+    /// file, as `get_sessions_dir`'s `create_dir_all` before every append did,
+    /// and a later append lands after the first rather than over it.
+    #[test]
+    fn an_append_recreates_a_removed_directory_and_appends() {
+        let dir = std::env::temp_dir().join(format!("dray-append-{}", Uuid::now_v7())).join("sessions");
+        let path = dir.join("s.jsonl");
+        append_line(&dir, &path, b"one\n").unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        append_line(&dir, &path, b"two\n").unwrap();
+        append_line(&dir, &path, b"three\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "two\nthree\n");
+        std::fs::remove_dir_all(dir.parent().unwrap()).ok();
+    }
 
     #[test]
     fn a_worktree_build_names_its_own_dev_home() {

@@ -183,7 +183,7 @@ pub async fn relay(id: &str, mut hello: Value) -> Result<Socket, String> {
     let (url, token) = reach(&saved).await?;
     hello["token"] = token.into();
     let attempt = async {
-        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.map_err(|e| format!("could not reach {}: {e}", saved.name))?;
+        let (mut ws, _) = tokio_tungstenite::connect_async_with_config(&url, None, true).await.map_err(|e| format!("could not reach {}: {e}", saved.name))?;
         ws.send(Message::text(hello.to_string())).await.map_err(|e| e.to_string())?;
         Ok(ws)
     };
@@ -279,7 +279,9 @@ pub const REFUSED: &str = "the server refused: ";
 /// Connects and says `hello`. Answers the admitted socket, or why not.
 pub async fn admit_with(url: &str, hello: Value) -> Result<(Socket, Welcome), String> {
     let attempt = async {
-        let (mut ws, _) = tokio_tungstenite::connect_async(url)
+        // `true` is TCP_NODELAY: without it a small frame after another waits
+        // for the server's delayed ACK, ~40ms.
+        let (mut ws, _) = tokio_tungstenite::connect_async_with_config(url, None, true)
             .await
             .map_err(|e| format!("could not reach {url}: {e}"))?;
         ws.send(Message::text(hello.to_string()))

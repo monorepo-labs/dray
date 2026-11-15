@@ -30,7 +30,7 @@ outputs:
     value: ${{ steps.key.outputs.paths }}
   serve-bin:
     description: The unstripped `dray-serve`, relative to the workspace.
-    value: apps/desktop/src-tauri/target/${{ inputs.target }}/release/dray-serve
+    value: apps/desktop/src-tauri/target/${{ inputs.target }}/serve/dray-serve
 
 runs:
   using: composite
@@ -90,12 +90,13 @@ runs:
     # CLI's version rides into the server, which reports it to the app so the
     # app can tell whether a newer release is out on its channel. It reaches
     # the `dray` crate alone (`option_env!`), so it costs no dependency a
-    # rebuild.
+    # rebuild. `serve` is the server's own profile (Cargo.toml), so the app's
+    # `tauri build` keeps the plain release one.
     - name: Build dray-serve
       if: inputs.lookup-only != 'true'
       shell: bash
       working-directory: apps/desktop/src-tauri
       run: |
         export DRAY_CLI_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$GITHUB_WORKSPACE/apps/cli/Cargo.toml" | head -n 1)
-        cargo build --release --no-default-features --features serve \
+        cargo build --profile serve --no-default-features --features serve \
           --bin dray-serve --target ${{ inputs.target }}
