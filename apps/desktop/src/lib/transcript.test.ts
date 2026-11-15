@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTranscript, drawsSameTurn, hiddenInBotChat, isToolGroup, runningRuns, segmentMedia, segmentWork, sessionMedia, type Turn } from "@/lib/transcript";
+import { buildTranscript, drawsSameTurn, hiddenInBotChat, isToolGroup, opensTab, runningRuns, segmentMedia, segmentWork, sessionMedia, type Turn } from "@/lib/transcript";
 import type { AgentEvent, AgentEventPayload, ToolResult } from "@/types/events";
 
 /// Only the envelope fields `buildTranscript` orders and keys by are filled;
@@ -516,6 +516,10 @@ describe("subagent runs", () => {
     );
 
     expect(runningRuns(subagents, null).map((r) => r.id)).toEqual(["toolu_2"]);
+    expect(subagents.map((r) => [r.id, opensTab(r)])).toEqual([
+      ["toolu_2", true],
+      ["toolu_1", false],
+    ]);
   });
 });
 

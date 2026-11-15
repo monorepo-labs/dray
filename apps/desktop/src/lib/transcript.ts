@@ -995,11 +995,17 @@ export function runningRuns(runs: SubagentRun[], openId: string | null): Subagen
 }
 
 /// A backgrounded shell — Claude Code's `Bash` or `Monitor`, which register
-/// as `local_bash` tasks — rather than an agent with a conversation of its own.
-/// A shell's whole account is its spawning call, so it has no tab to open.
+/// as `local_bash` tasks, or a grok task-list run, labelled `bash` — rather
+/// than an agent with a conversation of its own.
 export function isShellRun(run: SubagentRun): boolean {
   const name = run.spawn?.payload.type === "tool_call_started" ? run.spawn.payload.name : null;
-  return name === "Bash" || name === "Monitor" || run.label === "local_bash";
+  return name === "Bash" || name === "Monitor" || run.label === "local_bash" || run.label === "bash";
+}
+
+/// Whether a run has a conversation to open as a tab. A shell's whole account
+/// is its spawning call, and an older fx's run names no child to read back.
+export function opensTab(run: SubagentRun): boolean {
+  return !run.inline && !isShellRun(run);
 }
 
 /// What a turn draws from: the turn and the maps its rows look calls up in.

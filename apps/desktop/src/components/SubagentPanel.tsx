@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { compactTokens } from "@/lib/format";
 import { subagentBrief } from "@/lib/tools";
-import { isShellRun, type SubagentRun } from "@/lib/transcript";
+import { isShellRun, opensTab, type SubagentRun } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 import type { AgentEvent, ToolResult } from "@/types/events";
 
@@ -81,7 +81,7 @@ export default function SubagentPanel({
             resultByCallId={resultByCallId}
             live={live}
             onToggle={() => onSelect(run.id === selectedId ? null : run.id)}
-            onOpen={onOpen && !isShellRun(run) ? () => onOpen(run) : undefined}
+            onOpen={onOpen && opensTab(run) ? () => onOpen(run) : undefined}
             onStopTask={onStopTask}
           />
         ))}
