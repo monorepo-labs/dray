@@ -147,8 +147,34 @@ jobs:
             apps/cli/dray-${{ matrix.target }}.tar.gz.sha256
           if-no-files-found: error
 
+  # Where PROTOCOL_VERSION moved since the last CLI release, holds publishing
+  # until the app release speaking it is out, so both tags can be pushed at
+  # once and the builds still overlap. Beside the matrix, never ahead of it.
+  # See the script for the rule and its cap.
+  gate:
+    if: startsWith(github.ref, 'refs/tags/cli-v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    # `actions: read` for the app's Release run, and nothing else.
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - id: decide
+        run: .github/scripts/cli-publish-gate.sh decide "$GITHUB_REF_NAME"
+
+      - if: steps.decide.outputs.moved == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/cli-publish-gate.sh wait "${{ steps.decide.outputs.app-tag }}" "${{ steps.decide.outputs.protocol }}"
+
   publish:
-    needs: [test, build]
+    needs: [test, build, gate]
     # A dispatch run proves the matrix and stops here; only a tag publishes.
     if: startsWith(github.ref, 'refs/tags/cli-v')
     runs-on: ubuntu-latest
