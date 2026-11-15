@@ -133,7 +133,21 @@ function spawnCommand(run: SubagentRun): string | null {
 /// The row's mark: a filled tile holding the terminal glyph or the working orb
 /// the chat's subagent row carries, or a bare check once a subagent is done —
 /// no tile, so history reads quieter than what is live.
-function RunMark({ run, shell }: { run: SubagentRun; shell: boolean }) {
+///
+/// `bare` drops the tile for a run with no Stop beside it (fx's): the tile
+/// reads as a control, and its width only lined titles up with tiled rows.
+function RunMark({ run, shell, bare }: { run: SubagentRun; shell: boolean; bare: boolean }) {
+  if (bare) {
+    return (
+      <span className="flex size-4 shrink-0 items-center justify-center">
+        {run.done ? (
+          <Check aria-label="Done" className="size-3.5 text-muted-foreground" />
+        ) : (
+          <Orb state="working" variant="gyro" size={16} label="Working" />
+        )}
+      </span>
+    );
+  }
   if (!shell && run.done) {
     // The tile's width without its height, so finished titles still line up.
     return (
@@ -200,6 +214,8 @@ function RunRow({
   // lifecycle event names it, and a dead child's tasks died with it — either way
   // the button would be one the CLI answers success to and nothing happens.
   const stoppable = live && !run.done && run.taskId !== null;
+  // fx publishes no handle for a child, so its rows never carry Stop.
+  const bare = !shell && run.spawn?.harness === "fx";
 
   // The brief a harness nests rather than streams — fx's, and the whole of what
   // it says about the child. Null everywhere else, where the spawning call's own
@@ -233,14 +249,16 @@ function RunRow({
           onClick={opens ? onOpen : onToggle}
           disabled={!opens && !expands}
           className={cn(
-            "flex min-w-0 flex-1 cursor-default items-center gap-2.5 pl-2.5 text-left",
+            "flex min-w-0 flex-1 cursor-default items-center pl-2.5 text-left",
+            bare ? "gap-2" : "gap-2.5",
             // A finished subagent is history: the shorter row is half of how it
-            // steps back, the bare check the other.
-            !shell && run.done ? "py-1" : "py-1.5",
+            // steps back, the bare check the other. A bare row is one height
+            // throughout, so nothing jumps when its run ends.
+            bare || (!shell && run.done) ? "py-1" : "py-1.5",
             stoppable ? "pr-1" : "pr-2.5",
           )}
         >
-          <RunMark run={run} shell={shell} />
+          <RunMark run={run} shell={shell} bare={bare} />
           <span className="min-w-0 flex-1">
             {/* Flex parents, because `shimmer-text` is inline-block: in a line
                 box it sits on the baseline and lifts the text off centre. */}

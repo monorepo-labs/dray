@@ -873,7 +873,7 @@ describe("a call whose background task the child still holds", () => {
         fx(seq, {
           type: "tool_call_completed",
           callId,
-          result: { text: "Sent to worker, which works on it now.", isError: false, images: [] },
+          result: { text: "Sent to worker, which works on it now.", isError: false, structured: null, exitCode: null, durationMs: null, images: [] },
         } as AgentEventPayload);
       const log = [named(0, "c1"), fxSpawn(1, "c1"), answered(2, "c1")];
 
