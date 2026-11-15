@@ -950,7 +950,7 @@ def fmt(v, unit):
     if unit == "bytes":
         return f"{v / 2**20:.2f} MiB" if v >= 2**20 else f"{v / 1024:.1f} KiB" if v >= 1024 else f"{v} B"
     if unit == "KiB":
-        return f"{v / 1024:.1f} MiB" if v >= 10240 else f"{v} KiB"
+        return f"{v / 1024:.1f} MiB" if v >= 10240 else f"{v:.0f} KiB"
     if unit in ("ms", "ms/op"):
         return f"{v:.3g} ms" if v < 10 else f"{v:.0f} ms"
     if unit == "s":
@@ -965,27 +965,50 @@ def scalar(metric):
 
 
 def compare(before, after, all_sections=False):
-    a = json.loads((RESULTS / f"{before}.json").read_text())
-    b = json.loads((RESULTS / f"{after}.json").read_text())
-    names = list(a["metrics"]) + [k for k in b["metrics"] if k not in a["metrics"]]
-    print(f"| metric | {before} | {after} | change % |")
-    print("|---|---:|---:|---:|")
+    """Either side may name several labels, comma-separated: runs of the same
+    binaries measured at different times. A side's value is then the median of
+    each label's own median, and the spread shows how far its runs disagreed."""
+    sides = [[json.loads((RESULTS / f"{l}.json").read_text()) for l in side.split(",") if l]
+             for side in (before, after)]
+    names = []
+    for side in sides:
+        for r in side:
+            names += [k for k in r["metrics"] if k not in names]
+
+    def side_value(side, name):
+        vals = [v for v in (scalar(r["metrics"].get(name)) for r in side) if v is not None]
+        if not vals:
+            return None, []
+        return statistics.median(vals), vals
+
+    many = any(len(side) > 1 for side in sides)
+    for title, side in (("before", sides[0]), ("after", sides[1])):
+        print(f"{title}: {', '.join(r['label'] for r in side)}  ")
+    print()
+    heads = [f"before (n={len(sides[0])})", f"after (n={len(sides[1])})", "change %"]
+    if many:
+        heads += ["before range", "after range"]
+    print("| metric | " + " | ".join(heads) + " |")
+    print("|---|" + "---:|" * len(heads))
     for name in names:
-        ma, mb = a["metrics"].get(name), b["metrics"].get(name)
-        unit = (ma or mb)["unit"]
+        unit = next(r["metrics"][name]["unit"] for side in sides for r in side if name in r["metrics"])
+        (va, la), (vb, lb) = side_value(sides[0], name), side_value(sides[1], name)
         if ".section" in name and not all_sections:
-            big = max(scalar(ma) or 0, scalar(mb) or 0)
-            if big < 64 * 1024:
+            if max(va or 0, vb or 0) < 64 * 1024:
                 continue
-        va, vb = scalar(ma), scalar(mb)
-        label = name + (" (median)" if (ma or mb).get("median") is not None else "")
+        timed = any(r["metrics"][name].get("median") is not None for side in sides for r in side
+                    if name in r["metrics"])
+        label = name + (" (median)" if timed else "")
         change = "–"
         if va and vb is not None:
             pct = (vb - va) / va * 100
             change = f"{pct:+.1f}%"
             if unit in HIGHER_IS_BETTER:
                 change += " ↑"
-        print(f"| {label} | {fmt(va, unit)} | {fmt(vb, unit)} | {change} |")
+        row = [fmt(va, unit), fmt(vb, unit), change]
+        if many:
+            row += [f"{fmt(min(l), unit)} – {fmt(max(l), unit)}" if len(l) > 1 else "–" for l in (la, lb)]
+        print(f"| {label} | " + " | ".join(row) + " |")
 
 
 # ── bloat ────────────────────────────────────────────────────────────────────
@@ -1087,9 +1110,9 @@ def main():
     r.add_argument("--only", default=",".join(GROUPS), help=f"comma list of {','.join(GROUPS)}")
     r.add_argument("--server-env", dest="server_env_run", action="append",
                    help="KEY=VALUE for every bench server at run time, e.g. LD_PRELOAD=… (repeatable)")
-    c = sub.add_parser("compare", help="markdown table of two labels")
-    c.add_argument("before")
-    c.add_argument("after")
+    c = sub.add_parser("compare", help="markdown table of two labels, or two comma-separated sets of runs")
+    c.add_argument("before", help="label, or labels a,b,c whose medians are combined")
+    c.add_argument("after", help="label, or labels a,b,c whose medians are combined")
     c.add_argument("--all-sections", action="store_true", help="list ELF sections under 64 KiB too")
     bl = sub.add_parser("bloat", help="size by crate and biggest functions, from an unstripped binary")
     bl.add_argument("label")
