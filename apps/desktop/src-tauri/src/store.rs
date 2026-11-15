@@ -1193,6 +1193,25 @@ pub async fn live_from(from: &SessionIndexItem) -> Result<Option<SessionIndexIte
     Ok(live_from_in(&items, from, None).cloned())
 }
 
+/// Whether `item` or any session above it is `hit`, crossing an adoption
+/// where a parent is gone.
+pub async fn reaches(item: &SessionIndexItem, hit: impl Fn(&SessionIndexItem) -> bool) -> Result<bool> {
+    let items = cached_index().await?;
+    Ok(reaches_in(&items, item, hit))
+}
+
+fn reaches_in(items: &[SessionIndexItem], item: &SessionIndexItem, hit: impl Fn(&SessionIndexItem) -> bool) -> bool {
+    let mut at = Some(item);
+    for _ in 0..8 {
+        let Some(item) = at else { return false };
+        if hit(item) {
+            return true;
+        }
+        at = tree_parent_in(items, item);
+    }
+    false
+}
+
 fn tree_parent_in<'a>(items: &'a [SessionIndexItem], item: &SessionIndexItem) -> Option<&'a SessionIndexItem> {
     let find = |id: &str| items.iter().find(|i| i.session_id == id && i.session_id != item.session_id);
     match item.parent_session_id.as_deref().and_then(find) {
@@ -2432,6 +2451,27 @@ mod tests {
         assert_eq!(readopt_in(&mut items, "task", None), ["sub"]);
         assert_eq!(adopted(&items, "sub"), None);
         assert_eq!(live_ancestor_in(&items, "sub"), Some("task"));
+    }
+
+    /// A bot's task from another machine is the top of its tree here, its
+    /// parent being in no index this server holds.
+    #[test]
+    fn a_walk_reaches_a_root_through_a_deleted_parent() {
+        let mut items = vec![
+            tree_item("task", Some("far-bot")),
+            tree_item("sub", Some("task")),
+            tree_item("gone-mid", Some("sub")),
+            tree_item("subsub", Some("gone-mid")),
+            tree_item("other", None),
+        ];
+        items[3].adopted_by = Some("sub".into());
+        items.retain(|i| i.session_id != "gone-mid");
+        let owed = |i: &SessionIndexItem| i.session_id == "task";
+        for id in ["task", "sub", "subsub"] {
+            let item = items.iter().find(|i| i.session_id == id).unwrap();
+            assert!(reaches_in(&items, item, owed), "{id}");
+        }
+        assert!(!reaches_in(&items, &items[3], owed));
     }
 
     /// The task is deleted after its sub-task was adopted: the adoption is the

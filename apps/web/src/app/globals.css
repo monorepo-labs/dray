@@ -227,12 +227,23 @@ body {
 }
 
 /* `shadow-window` inlines the theme's dark value when Tailwind builds it, so
-   the variable above never reaches it; the hero's window takes its light drop
-   here instead, softer than the token since it is the largest on the page,
-   and with no border: on white the drop alone outlines it. */
+   the variable above never reaches it; the hero's window drops it here and
+   takes a half-pixel border instead. */
 :root[data-scheme="light"] [data-home] #hero [data-app-window] {
-  border-color: transparent;
-  box-shadow: 0 30px 60px -24px rgba(0, 0, 0, 0.12), 0 10px 24px -12px rgba(0, 0, 0, 0.08);
+  border: 0.5px solid oklch(0 0 0 / 15%);
+  box-shadow: none;
+  /* Neutral greys: the palette's blue tint read as a cast on the hero's
+     window. */
+  --color-background: oklch(0.965 0 0);
+  --color-card: oklch(0.99 0 0);
+  --color-popover: oklch(0.99 0 0);
+  --color-secondary: oklch(0.99 0 0);
+  --color-raised: oklch(0.94 0 0);
+  --color-surface-raised: oklch(0.94 0 0);
+  --color-muted: oklch(0.92 0 0);
+  --color-accent: oklch(0.92 0 0);
+  --color-sidebar-accent: oklch(0.9 0 0);
+  --color-surface-thumb: oklch(0.99 0 0);
 }
 
 /* The machines drawing's dark palette mapped to a light one, value for

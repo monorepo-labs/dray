@@ -127,7 +127,7 @@ const TAKES: Take[] = [
         badge={
           <span
             className={cn(CHIP, CORNER, "size-7 rounded-full border-[1.5px] text-[15px]")}
-            style={{ background: lift(7), borderColor: "oklch(0.58 0.17 252)" }}
+            style={{ background: lift(7), borderColor: "oklch(0.562 0.17 252)" }}
           >
             {emoji}
           </span>

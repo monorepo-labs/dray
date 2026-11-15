@@ -49,7 +49,7 @@ struct TranscriptView: View {
                     if bot != nil { BotChatRows(key: key, items: chat, newFrom: newFrom ?? nil) }
                     ForEach(turns) { TurnView(turn: $0) }
                     ForEach(store.queued[key] ?? [], id: \.id) { q in
-                        UserBubble(text: q.text, from: nil, queued: true, bot: bot != nil)
+                        UserBubble(text: q.text, from: nil, queued: true)
                     }
                     // Turns held but the refresh failed: what is on screen may be missing newer messages.
                     if transcript != nil, let error = store.transcriptErrors[key] {
@@ -498,8 +498,6 @@ struct UserBubble: View {
     var queued = false
     /// A bot's emoji on this message, drawn on the bubble's corner.
     var reaction: String? = nil
-    /// In a bot chat, where the reader's bubble is blue as on the desktop.
-    var bot = false
 
     var body: some View {
         VStack(alignment: .trailing, spacing: Theme.Space.xs) {
@@ -511,11 +509,11 @@ struct UserBubble: View {
             if !text.isEmpty {
                 Text(text)
                     .font(Theme.Font.body)
-                    .foregroundStyle(bot ? .white : Theme.text)
+                    .foregroundStyle(Theme.onSent)
                     .textSelection(.enabled)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
-                    .background(bot ? Theme.botSent : Theme.raised, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+                    .background(Theme.sent, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
                     .overlay(alignment: .topLeading) {
                         if let reaction { ReactionBadge(emoji: reaction).offset(x: -12, y: -16) }
                     }
