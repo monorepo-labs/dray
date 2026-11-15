@@ -24,6 +24,7 @@ export function Faq() {
           {/* Quieter than the questions: the way out of the list, not one of them. */}
           <Link
             href="/faq"
+            onClick={() => posthog.capture("faq_more_click", {}, { transport: "sendBeacon" })}
             className={`flex items-center justify-between gap-6 bg-[#FFFFFF0D] px-6 py-5 transition-colors hover:bg-[#FFFFFF1A] light:bg-[#FAFAFA] light:hover:bg-[#F4F4F5] ${CARD_TEXT}`}
           >
             Got more questions?

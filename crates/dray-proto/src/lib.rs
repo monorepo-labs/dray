@@ -46,8 +46,9 @@ use std::path::PathBuf;
 /// broken CLI rather than as an app to update. v14 added `share_machines`, and
 /// v15 the assistant verbs, v16 `dray login` and `dray logout`, v17 the
 /// bot verbs, v18 `merge_card`, v19 `set_need`, v20 `react`, and v21
-/// `add_image`, which an older app would turn into a one-frame video.
-pub const PROTOCOL_VERSION: u32 = 21;
+/// `add_image`, which an older app would turn into a one-frame video. v22
+/// added `set_model`, which an older app reads as a broken CLI.
+pub const PROTOCOL_VERSION: u32 = 22;
 
 /// Remote MCP (#863), held out of release builds until Dray accounts (#874)
 /// land (#900). Gates `/mcp`, the assistant commands and the CLI's `assistant`
@@ -134,6 +135,7 @@ impl Request {
             Request::SetNeed(_) => 19,
             Request::React(_) => 20,
             Request::AddImage(_) => 21,
+            Request::SetModel(_) => 22,
         }
     }
 }
@@ -182,6 +184,22 @@ pub enum Request {
     React(React),
     /// `dray image add`: [`AddVideo`]'s fields, filed as the picture it is.
     AddImage(AddVideo),
+    SetModel(SetModel),
+}
+
+/// A session's model and effort, changed the way its composer's picker does:
+/// recorded now, carried out by its next turn. Neither named only reads them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetModel {
+    pub session_id: String,
+    /// An alias the session's harness knows, like `fable` or `sonnet`.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// `low` … `ultra`. Absent keeps the session's level where the model has
+    /// it, else takes the model's own default.
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 /// A merge card for a task's open pull request, posted into `session_id`'s
@@ -894,6 +912,9 @@ pub enum Response {
     MergeCard { number: u64, url: String, title: String },
     /// The emoji a reaction put on the user's message.
     Reacted { emoji: String },
+    /// The model and effort a session runs its next turn on, by label.
+    /// `changed` is false for a read, or a pick it already had.
+    Model { session: SessionSummary, model: String, effort: Option<String>, changed: bool },
     /// The session's live links after the change, whichever verb asked.
     Shared { shares: Vec<SharedPort> },
     /// The session a verb acted on, as it stands after.
@@ -1278,6 +1299,8 @@ mod tests {
         assert_eq!(Envelope::new(react.clone()).v, 20);
         let image = Request::AddImage(AddVideo { session_id: "s".into(), path: "/a.png".into(), name: None });
         assert_eq!(Envelope::new(image.clone()).v, 21);
+        let model = Request::SetModel(Default::default());
+        assert_eq!(Envelope::new(model.clone()).v, 22);
         let newest = old
             .iter()
             .chain(&drafts)
@@ -1288,7 +1311,7 @@ mod tests {
             .chain(&assistants)
             .chain(&link)
             .chain(&bots)
-            .chain([&card, &need, &react, &image])
+            .chain([&card, &need, &react, &image, &model])
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));

@@ -73,6 +73,21 @@ final class BotTests: XCTestCase {
         snap(app, "agent-switch")
     }
 
+    /// Needs `DRAY_BOT`'s chat unread, its replies after the reader's last message: the NEW
+    /// divider sits above the first of them and stays put once the chat is read.
+    func testUnreadDivider() throws {
+        guard let name = env["DRAY_BOT"] else { throw XCTSkip("set TEST_RUNNER_DRAY_BOT") }
+        let app = try connected()
+        let bot = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+        XCTAssertTrue(bot.waitForExistence(timeout: 20), "no bot row")
+        bot.tap()
+        let divider = app.descendants(matching: .any)["new-divider"]
+        XCTAssertTrue(divider.waitForExistence(timeout: 10), "an unread chat drew no NEW divider")
+        sleep(2)
+        XCTAssertTrue(divider.exists, "the divider left once the chat was read")
+        snap(app, "unread-divider")
+    }
+
     /// A fresh app paired to the test server through its link.
     private func connected() throws -> XCUIApplication {
         guard let url = env["DRAY_URL"], let token = env["DRAY_TOKEN"] else {

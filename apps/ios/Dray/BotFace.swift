@@ -18,8 +18,9 @@ struct BotFace: View {
     }
 
     /// A bot's task wears a face seeded from its session id, as the desktop's `seededAvatar`.
-    init(seed: String, size: CGFloat = 20) {
+    init(seed: String, avatar: BotAvatar? = nil, size: CGFloat = 20) {
         self.seed = seed
+        self.avatar = avatar
         self.size = size
     }
 

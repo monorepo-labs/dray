@@ -29,12 +29,29 @@ enum ImageLoader {
     static func load(_ ref: ImageRef, from server: Connection?) async -> PlatformImage? {
         guard let key = key(ref, server) else { return nil }
         if let hit = cache.object(forKey: key) { return hit }
-        guard let request = request(ref, server),
-              let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode ?? 200 == 200,
-              let image = PlatformImage(data: data) else { return nil }
+        var image: PlatformImage?
+        if let request = request(ref, server),
+           let (data, response) = try? await URLSession.shared.data(for: request),
+           (response as? HTTPURLResponse)?.statusCode ?? 200 == 200 {
+            image = PlatformImage(data: data)
+        }
+        if image == nil { image = await readFile(ref, server) }
+        guard let image else { return nil }
         cache.setObject(image, forKey: key)
         return image
+    }
+
+    /// `/file` serves attachments and recordings alone, so any other path an agent
+    /// names comes back through `read_file` as a `data:` URL: the desktop's `ProofImage`.
+    private static func readFile(_ ref: ImageRef, _ server: Connection?) async -> PlatformImage? {
+        struct Body: Decodable { let dataUrl: String? }
+        guard let server, let raw = ref.path ?? ref.url else { return nil }
+        let path = raw.hasPrefix("file://") ? String(raw.dropFirst(7)) : raw
+        guard path.hasPrefix("/"),
+              let body = try? await server.call("read_file", ["path": .string(path)], as: Body.self),
+              let base64 = body.dataUrl?.split(separator: ",", maxSplits: 1).last,
+              let data = Data(base64Encoded: String(base64)) else { return nil }
+        return PlatformImage(data: data)
     }
 
     /// A path is per server; a URL is the same picture from anywhere.
@@ -87,6 +104,8 @@ struct RemoteImage: View {
     let ref: ImageRef
     /// Fill the frame and crop, for a thumbnail; otherwise fit it whole.
     var fill = false
+    /// Drawn instead of the glyph where the picture cannot be read: the path it stood for.
+    var fallback: String?
     /// Kept with its ref, so a view handed another picture never shows the last one meanwhile.
     @State private var loaded: (ref: ImageRef, image: PlatformImage)?
     @State private var failed = false
@@ -97,6 +116,8 @@ struct RemoteImage: View {
                 Image(platform: image)
                     .resizable()
                     .aspectRatio(contentMode: fill ? .fill : .fit)
+            } else if failed, let fallback {
+                Text(fallback).foregroundStyle(.secondary)
             } else {
                 Rectangle().fill(.primary.opacity(0.06))
                     .overlay {

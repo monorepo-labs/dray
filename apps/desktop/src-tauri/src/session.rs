@@ -155,6 +155,24 @@ pub struct SendOutcome {
     pub issues: Vec<IssueRef>,
 }
 
+/// The model `harness` knows as `model`, from whichever table can name it. The
+/// two single-vendor harnesses have one written here; pi, fx, grok and Codex
+/// answer from what the machine last reported, so a model shipped after this
+/// build still spawns.
+///
+/// `None` is legal for pi alone and means "let pi decide" — its own settings
+/// already name a model, and Dray naming one it might have no key for is the
+/// worst possible first run.
+pub async fn model_spec(harness: Harness, model: &ModelId) -> Result<Option<Model>> {
+    Ok(match harness {
+        Harness::Pi => crate::harness::pi::models::find(model).await,
+        Harness::Fx => crate::harness::fx::models::find(model).await,
+        Harness::Grok => crate::harness::grok::models::find(model).await,
+        Harness::Codex => crate::harness::codex::models::find(model).await,
+        _ => Some(find_model(model).with_context(|| format!("unknown model {model}"))?),
+    })
+}
+
 /// Whether a send has to replace the child rather than write to it.
 ///
 /// A **setting change** waits for everything to be idle, background tasks
@@ -875,24 +893,7 @@ impl SessionManager {
         app: &Sink,
     ) -> Result<SendOutcome> {
         let _counted = Sending::enter().await;
-        // Resolved against whichever table can name it. The two single-vendor
-        // harnesses have one written here; pi's list is answered by the machine,
-        // so its models are looked up in what the probe last reported.
-        //
-        // `None` is legal for pi alone and means "let pi decide" — its own
-        // settings already name a model, and Dray naming one it might have no
-        // key for is the worst possible first run.
-        let model_spec = match harness {
-            Harness::Pi => crate::harness::pi::models::find(&model).await,
-            Harness::Fx => crate::harness::fx::models::find(&model).await,
-            // grok's too: its list rides the handshake, so a model xAI shipped
-            // after this build still spawns.
-            Harness::Grok => crate::harness::grok::models::find(&model).await,
-            // Codex's list is the machine's answer too now, with the table
-            // behind it — so a model shipped after this build still spawns.
-            Harness::Codex => crate::harness::codex::models::find(&model).await,
-            _ => Some(find_model(&model).with_context(|| format!("unknown model {model}"))?),
-        };
+        let model_spec = model_spec(harness, &model).await?;
 
         // A model belongs to exactly one harness, and the pair reaches here from
         // two places that each know only half of it — the composer's stored
@@ -1750,6 +1751,39 @@ impl SessionManager {
     /// task held the session `in_progress` — the status follows the turn alone
     /// now, so that fan-out only killed dev servers the reader still wanted.
     /// Per-task stops stay available in the subagent panel for the narrower ask.
+    /// `dray session model` for a prompt already held behind a running turn.
+    /// That prompt opens the next turn but is flushed straight to the child,
+    /// never through `send_msg`, so the pick goes out now by the rule a prompt
+    /// queued now would take: live on Claude Code, deferred to the flush on fx.
+    /// An effort Claude Code cannot move in place waits for the next send.
+    ///
+    /// Stance and fast come off `item`, not the child: the queued send wrote
+    /// its own to the index, and on fx they are still pending beside the
+    /// model, so the child's would undo them.
+    pub async fn carry_pick_to_queue(&self, item: &SessionIndexItem, app: &Sink) -> Result<()> {
+        let session_id = item.session_id.as_str();
+        let (model, effort, mode, fast) = (&item.model, item.effort, item.permission_mode, item.fast);
+        let Some(slot) = self.sessions.lock().await.get(session_id).cloned() else {
+            return Ok(());
+        };
+        let mut guard = slot.lock().await;
+        let Some(s) = guard.as_mut() else { return Ok(()) };
+        if !s.status.lock().await.turn_in_flight() || s.queued.lock().await.is_empty() {
+            return Ok(());
+        }
+        let spec = model_spec(s.harness, model).await?;
+        match &s.stdin {
+            Transport::Fx(fx) => fx.defer_controls(DeferredControls { model: spec, effort, mode, fast }),
+            _ if s.harness == Harness::ClaudeCode => {
+                apply_live_controls(s, session_id, model, spec.as_ref(), effort, mode, fast, app).await?
+            }
+            // pi and grok steer a prompt into the running turn rather than
+            // holding it here, and so does Codex: nothing of theirs is queued.
+            _ => {}
+        }
+        Ok(())
+    }
+
     pub async fn interrupt(&self, session_id: &str, app: &Sink) -> Result<()> {
         // pi stops off its own desk, for `answer_questions`' reason and one
         // more: the optimistic row the composer draws for a new session puts

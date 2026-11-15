@@ -100,28 +100,26 @@ func previewLine(_ text: String) -> String {
     return s.split(whereSeparator: \.isWhitespace).joined(separator: " ")
 }
 
-/// A bot's header: a bot's folder is no project, so its face and name, and where it runs.
+/// A bot's header: a bot's folder is no project, so its face and name as a chip, which opens the bot.
 struct BotTitle: View {
-    @Environment(Store.self) private var store
     let bot: Bot
-    let server: UUID
+    let edit: () -> Void
 
     var body: some View {
-        VStack(spacing: 1) {
+        Button(action: edit) {
             HStack(spacing: 6) {
-                BotFace(bot: bot, size: 20)
+                BotFace(bot: bot, size: 32)
                 Text(bot.name).font(Theme.Font.headline).foregroundStyle(Theme.text).lineLimit(1)
             }
-            HStack(spacing: 4) {
-                ServerIcon().frame(width: 11, height: 11)
-                Text(store.name(of: server))
-            }
-            .font(Theme.Font.footnote)
-            .foregroundStyle(Theme.tertiary)
-            .lineLimit(1)
+            .padding(.leading, 6)
+            .padding(.trailing, 16)
+            .frame(height: 44)
+            .glassChip()
         }
+        .buttonStyle(.plain)
         .frame(maxWidth: 240)
-        .accessibilityElement(children: .combine)
+        .accessibilityLabel(bot.name)
+        .accessibilityIdentifier("botChip")
     }
 }
 
@@ -139,6 +137,7 @@ struct BotStartView: View {
     let server: UUID
     let bot: Bot
     let started: (SessionKey) -> Void
+    @State private var editing = false
 
     var body: some View {
         ScrollView {
@@ -160,7 +159,9 @@ struct BotStartView: View {
         .overlay(alignment: .bottom) { VoiceDock(task: task, started: started) }
         .page()
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .principal) { BotTitle(bot: bot, server: server) } }
+        .modifier(BareTopEdge(on: true))
+        .toolbar { ToolbarItem(placement: .principal) { BotTitle(bot: bot) { editing = true } } }
+        .sheet(isPresented: $editing) { BotSheet(editing: (server, bot)) }
         // Re-aimed on every visit: a pick in the dock leaves the bot, and Back is not a send.
         .onAppear { task.aim(at: bot, on: server) }
         .onDisappear {
@@ -183,8 +184,7 @@ struct SwitchLine: View {
     let harness: String?
 
     var body: some View {
-        let names = ["claude_code": "Claude Code", "codex": "Codex", "pi": "pi", "fx": "fx", "grok": "Grok"]
-        Text("Switched to \(harness.map { names[$0] ?? $0 } ?? "another agent")")
+        Text("Switched to \(harness.map { Picks.agentLabels[$0] ?? $0 } ?? "another agent")")
             .font(Theme.Font.footnote)
             .foregroundStyle(Theme.tertiary)
             .frame(maxWidth: .infinity)
@@ -192,19 +192,26 @@ struct SwitchLine: View {
 }
 
 struct BotChatRows: View {
-    @Environment(Store.self) private var store
+    /// Any of the chat's sessions: its rows reach only for the server.
     let key: SessionKey
-    let events: [AgentEvent]
+    /// The whole chat's items, its sessions oldest first (`chatItems`).
+    let items: [BotItem]
+    /// The reply unread ones begin at, which the NEW divider sits above.
+    let newFrom: String?
 
     var body: some View {
-        let items = botItems(events)
         let rows = botRows(items)
         ForEach(Array(rows.enumerated()), id: \.element.id) { i, row in
+            if row.id == newFrom { NewDivider() }
             if let label = timeLabel(rows, i) {
                 Text(label).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                     .frame(maxWidth: .infinity).padding(.top, Theme.Space.s)
             }
-            BotRowView(key: key, row: row, late: late(items, row))
+            if case .item(.switchTo(_, let harness, _)) = row {
+                SwitchLine(harness: harness)
+            } else {
+                BotRowView(key: key, row: row, late: late(items, row))
+            }
         }
     }
 
@@ -219,6 +226,20 @@ struct BotChatRows: View {
     private func late(_ items: [BotItem], _ row: BotRow) -> Bool {
         guard case .item(.card(let id, _, _)) = row, let i = items.firstIndex(where: { $0.id == id }) else { return false }
         return items[(i + 1)...].filter { if case .user = $0 { true } else { false } }.count >= 3
+    }
+}
+
+/// Where the replies the reader has not seen begin, as a messenger marks it.
+struct NewDivider: View {
+    var body: some View {
+        HStack(spacing: Theme.Space.m) {
+            Rectangle().fill(Theme.border).frame(height: 1)
+            Text("NEW").font(.system(size: 11, weight: .medium)).tracking(0.3).foregroundStyle(Theme.secondary)
+            Rectangle().fill(Theme.border).frame(height: 1)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("New messages")
+        .accessibilityIdentifier("new-divider")
     }
 }
 
@@ -281,6 +302,8 @@ private struct BotRowView: View {
                         .strikethrough(undone).lineLimit(1)
                 }
                 .font(Theme.Font.subhead)
+            case .switchTo:
+                EmptyView()
             }
         }
     }
@@ -461,7 +484,7 @@ struct MergeCardView: View {
                 Task {
                     let sent = await store.send(task,
                                                 "PR #\(card.number) has merge conflicts with its base branch. Fix them and push.")
-                    if !sent { asked = false }
+                    if sent == nil { asked = false }
                 }
             }
             .font(Theme.Font.pill)
@@ -676,6 +699,8 @@ struct StalledCard: View {
 struct BotTasksSheet: View {
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
+    /// The bot's server: a task on any other is marked with the server glyph, as on desktop.
+    let server: UUID
     let tasks: [SessionKey]
     let open: (SessionKey) -> Void
 
@@ -749,6 +774,12 @@ struct BotTasksSheet: View {
                     .foregroundStyle(asking ? Theme.accent : Theme.text)
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                // Asked of the bot's server, not `key`: a machine paired directly and shared too
+                // can hand `botTasks` the shared copy of a task that runs right here.
+                if store.items[SessionKey(server: server, id: key.id)] == nil {
+                    ServerIcon().frame(width: 12, height: 12).foregroundStyle(Theme.secondary)
+                        .accessibilityLabel("Runs on \(store.name(of: key.server))")
+                }
                 if let pr {
                     if pr.state == "OPEN" && pr.checksState == "RUNNING" { ChecksSpinner().frame(width: 14, height: 14) }
                     else { PrGlyph(mark: pr, size: 14) }

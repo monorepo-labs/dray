@@ -1034,7 +1034,7 @@ final class Composer {
         case .session(let k):
             do {
                 let landed = try await landed(files, on: k.server)
-                sent = await store.send(k, text, attachments: landed) ? k : nil
+                sent = await store.send(k, text, attachments: landed)
                 if sent == nil { failure = store.lastError }
             } catch {
                 sent = nil

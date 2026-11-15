@@ -212,11 +212,20 @@ Opens on the newest turns (`turns: 8`), pages older ones in on scroll to top.
 A reconnect re-reads the open session's tail and appends what it does not hold,
 matched on event id, never `seq`.
 
-New rows follow only while the reader is within 40pt of the end, the
+The view holds the end only while the reader is within 40pt of it, the
 desktop's pin: a scroll up leaves them where they are, coming back or sending
-follows again (`FollowsBottom`, iOS 18; iOS 17 always follows). The stack is
-a `VStack`, not lazy: a lazy one's height estimates left a chat opened from
-the cache scrolled past its end, blank, once the read drew less.
+follows again (`FollowsBottom`, iOS 18; iOS 17 follows new rows only, always).
+The pin answers the content's height and the room it shows in, not new rows:
+a picture's placeholder is 10pt tall and a video's is a guess, so a chat grew
+by hundreds of points after it opened and the newest message sat behind the
+dock (#1104). The stack is a `VStack`, not lazy: a lazy one's height estimates
+left a chat opened from the cache scrolled past its end, blank, once the read
+drew less.
+
+`OpenAtBottomTests` checks all of it against a scratch server behind
+`scripts/late_turns_proxy.py`, which holds media back and lands turns on
+demand. A Mac serves a picture before the first frame, so without the proxy
+every one of these passes on a build that fails on a phone.
 
 ## Pairing
 

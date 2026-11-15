@@ -39,10 +39,13 @@ struct RecordingPlayer: View {
     @State private var failed = false
 
     var body: some View {
-        if !failed {
+        if failed {
+            // The message no longer shows the path, so a video that cannot play says which it was.
+            Text(path).font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
+        } else {
             Group {
                 if let player {
-                    VideoPlayer(player: player)
+                    PlayerController(player: player)
                 } else {
                     Rectangle().fill(.primary.opacity(0.06))
                 }
@@ -66,5 +69,20 @@ struct RecordingPlayer: View {
         }
         aspect = size.width / size.height
         player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+    }
+}
+
+/// UIKit's player rather than SwiftUI's `VideoPlayer`, which has no full screen button.
+private struct PlayerController: UIViewControllerRepresentable {
+    let player: AVPlayer
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = player
+        return controller
+    }
+
+    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+        controller.player = player
     }
 }

@@ -338,7 +338,10 @@ export default function RightPanel({
                 light takes no opacity at all; the caps there are already quieter
                 than their dark twins, `--muted` being a black veil on a near-white
                 page rather than a white one on near-black. */}
-            <ShortcutKeys ids={["panel.tab.prev", "panel.tab.next"]} className="ml-1.5 h-full shrink-0 dark:opacity-50" />
+            {/* Not for one tab, which the chord would step onto itself. */}
+            {tabs.length > 1 && (
+              <ShortcutKeys ids={["panel.tab.prev", "panel.tab.next"]} className="ml-1.5 h-full shrink-0 dark:opacity-50" />
+            )}
           </div>
         )}
 

@@ -34,6 +34,7 @@ struct SessionList: View {
     @State private var starting: BotStart?
     /// Settings › Appearance: the list is bots alone, with nothing that serves sessions.
     @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
+    @State private var newBot = false
 
     private static let pageSize = 40
 
@@ -173,6 +174,7 @@ struct SessionList: View {
                 selection = key
             }
         }
+        .sheet(isPresented: $newBot) { BotSheet(editing: nil) { selection = $0 } }
         // Again once a server comes up: a view opened before it connected read nothing from it.
         // Drafts and settled are read whatever the view: their buttons show only when there are some,
         // and an empty live list counts what was settled today.
@@ -183,7 +185,7 @@ struct SessionList: View {
     }
 
     /// Settings on the left; the drafts and settled views sharing one glass pill
-    /// on the right. While one is shown, the other dims, so the lit one reads as on.
+    /// on the right, then New bot. While one view is shown, the other dims, so the lit one reads as on.
     @ToolbarContentBuilder private var header: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             Button { sheet = .settings(server: nil) } label: { Image(systemName: "gearshape") }
@@ -196,6 +198,12 @@ struct SessionList: View {
             }
             if !hideSessions, mode == .settled || (anyConnected && store.items.values.contains { $0.archived == true && $0.hidden != true }) {
                 viewToggle(.settled, label: "Settled") { CheckCheck().frame(width: 20, height: 20) }
+            }
+        }
+        if anyConnected {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { newBot = true } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("New bot")
             }
         }
     }
@@ -301,7 +309,7 @@ struct SessionList: View {
             Group {
                 if hideSessions {
                     EmptyScreen(art: EmptyArt(kind: .tasks), title: "No bots yet",
-                                message: "Make one in the Dray desktop app.")
+                                message: "Tap + to make one.")
                 } else if let last = today.max(by: { $0.at < $1.at }) {
                     EmptyScreen(art: SettledStack(title: last.row.item.title, time: shortAge(last.at)),
                                 title: "All clear", message: today.count == 1 ? "1 settled today." : "\(today.count) settled today.")

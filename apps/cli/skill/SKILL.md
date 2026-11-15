@@ -98,6 +98,23 @@ A Codex session spawned from a Claude one takes Codex's own default, and the
 reverse likewise: Claude Code is Opus 5.5 on High, Codex is Sol on Medium. Pass
 `--model` and `--effort` there only when the user named them.
 
+### Switching a running session's model
+
+```bash
+dray session model <id> fable                 # switch model; keeps its effort where fable has it
+dray session model <id> opus --effort high    # model and effort
+dray session model <id> --effort low          # effort alone
+dray session model <id>                       # print what it runs on
+```
+
+The composer's model picker, from here. The pick lands from the session's next
+turn — the next message it gets, from you or the user, one already waiting
+included — and a running turn is not stopped. The model is an alias of the
+session's own agent; an effort the model lacks is refused with the levels it
+has. A session on another machine is found by its id. Switch a session only
+where the user asked, or one you started yourself, and ask before raising one
+to Fable or above its harness's default effort, for the reasons above.
+
 **pi names no default at all**, and that is deliberate rather than a gap: it is
 multi-provider, so which models exist depends on which providers the user has
 logged into, and any name this skill picked might be one they have no key for.
@@ -271,6 +288,7 @@ looking the session up again.
 
 ```bash
 dray session rename <id> "Add retry to the upload client"
+dray session model <id> sonnet              # its next turn runs on sonnet; see "Model and effort"
 dray session stop <id>                      # stop the running turn, like its Stop button
 dray session settle <id>                    # it stops and leaves the active list; worktree kept
 dray session settle <id> --delete-worktree  # and the worktree and branch go too
@@ -500,6 +518,7 @@ dray --machine vps session new "Run the load test" --title "Load test"
 dray --machine vps session ls                # that machine's sessions
 dray session ls --machine all                # this one's and every connected machine's
 dray session send <session-id> "Use the staging DB"   # finds the machine on its own
+dray session model <session-id> sonnet                # so does every verb taking an id
 ```
 
 `--machine <name>` runs a `session`, `draft`, `issue`, `browser` or `share`

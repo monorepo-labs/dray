@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import UIKit
 
 /// `transcription.rs`'s `TranscribeOutcome`. An unknown kind reads as a failure naming it.
 enum TranscribeOutcome: Decodable {
@@ -69,6 +70,15 @@ final class Dictations {
     /// The transcription each draft is waiting on. Cancel clears it, so an
     /// answer landing after that is dropped rather than written in.
     @ObservationIgnored private var pending: [SessionKey: UUID] = [:]
+    /// Times the app has left the screen. A send that saw this move was cut off
+    /// by leaving, though the socket's error may only land once it is back.
+    @ObservationIgnored private var leaves = 0
+
+    init() {
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.leaves += 1 }
+        }
+    }
 
     func state(_ draft: SessionKey) -> Dictation { phase[draft] ?? .idle }
 
@@ -162,12 +172,21 @@ final class Dictations {
     }
 
     /// The file goes once the server has answered, whatever it said; a send
-    /// that never reached it keeps the file for Retry.
+    /// that never reached it keeps the file for Retry. Leaving the app keeps
+    /// it running for the system's grace; a send cut off by suspension goes
+    /// again once the app is back, since the server dropped the reply with the socket.
     private func send(_ store: Store, _ server: UUID, _ draft: SessionKey, _ url: URL) async {
         let run = UUID()
         pending[draft] = run
         phase[draft] = .transcribing
+        let left = leaves
+        var grace = UIBackgroundTaskIdentifier.invalid
+        grace = UIApplication.shared.beginBackgroundTask(withName: "Dictation") {
+            UIApplication.shared.endBackgroundTask(grace)
+            grace = .invalid
+        }
         defer {
+            if grace != .invalid { UIApplication.shared.endBackgroundTask(grace) }
             if pending[draft] == run {
                 pending[draft] = nil
                 phase[draft] = nil
@@ -190,6 +209,16 @@ final class Dictations {
             guard pending[draft] == run else {
                 try? FileManager.default.removeItem(at: url)
                 return
+            }
+            if leaves != left {
+                // Polled: a suspended app spends nothing on it.
+                while UIApplication.shared.applicationState != .active { try? await Task.sleep(for: .seconds(1)) }
+                for _ in 0..<40 where !store.canDictate(server) { try? await Task.sleep(for: .milliseconds(500)) }
+                guard pending[draft] == run else {
+                    try? FileManager.default.removeItem(at: url)
+                    return
+                }
+                if store.canDictate(server) { return await send(store, server, draft, url) }
             }
             kept[draft] = url
             notes[draft] = "Couldn't transcribe: \(error.localizedDescription)"

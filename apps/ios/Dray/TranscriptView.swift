@@ -6,13 +6,18 @@ struct TranscriptView: View {
     let key: SessionKey
     @State private var fixing = false
     @State private var showingTasks = false
+    @State private var editingBot = false
     @Environment(\.openTask) private var openTask
     /// The floating banner's height, kept clear above the first row so it never sits on "Load earlier".
     @State private var bannerHeight: CGFloat = 0
-    /// How many of a bot chat's earlier sessions are drawn above this one.
-    @State private var earlier = 0
     /// Whether new rows scroll into view: dropped by the reader scrolling up (`FollowsBottom`).
     @State private var following = true
+    /// A bot chat opened unread, its read done.
+    @State private var openedUnread = false
+    /// The last item it held once read, bounding the NEW divider.
+    @State private var unreadUpTo: String?
+    /// The reply unread ones begin at; settled once, so reading the chat never moves it.
+    @State private var newFrom: String?? = nil
 
     private var item: SessionItem? { store.items[key] }
     private var busy: Bool { item?.busy ?? false }
@@ -25,10 +30,13 @@ struct TranscriptView: View {
         let botTasks = bot.map { store.botTasks(store.botChat(key.server, $0)) } ?? []
         let asks = store.asks[key] ?? []
         let segments = segments(bot)
+        let chat = bot == nil ? [] : chatItems(segments)
+        let complete = store.transcripts[segments[0]]?.olderBefore == nil && hidden(bot, segments) == nil
+        let chatMark = "\(chat.count)|\(chat.first?.id ?? "")|\(complete)|\(store.serverRead.contains(key))"
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
-                    if store.transcripts[segments[0]]?.olderBefore != nil || hidden(bot, segments) != nil { older(bot, segments) }
+                    if !complete { older(bot, segments) }
                     if transcript == nil {
                         placeholder
                     } else if bot == nil && turns.isEmpty && !busy && (store.queued[key] ?? []).isEmpty {
@@ -38,12 +46,7 @@ struct TranscriptView: View {
                         }
                         .frame(minHeight: 420)
                     }
-                    if bot != nil {
-                        ForEach(Array(segments.enumerated()), id: \.element) { i, segment in
-                            if i > 0 { SwitchLine(harness: store.items[segment]?.harness) }
-                            if let events = store.transcripts[segment]?.events { BotChatRows(key: segment, events: events) }
-                        }
-                    }
+                    if bot != nil { BotChatRows(key: key, items: chat, newFrom: newFrom ?? nil) }
                     ForEach(turns) { TurnView(turn: $0) }
                     ForEach(store.queued[key] ?? [], id: \.id) { q in
                         UserBubble(text: q.text, from: nil, queued: true)
@@ -71,10 +74,11 @@ struct TranscriptView: View {
                     }
                     ForEach(asks) { AskCard(key: key, event: $0) }
                     if bot != nil { StalledCard(tasks: botTasks) }
-                    Color.clear.frame(height: 1).id("bottom")
+                    // The stack's bottom padding, and what a scroll to the end lands on.
+                    Color.clear.frame(height: Theme.Space.m).id("bottom")
                 }
                 .padding(.horizontal, Theme.Space.l)
-                .padding(.vertical, Theme.Space.m)
+                .padding(.top, Theme.Space.m)
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
             }
@@ -84,8 +88,9 @@ struct TranscriptView: View {
             // to its end by estimate, and when the read replaced what the cache drew with
             // less, the view sat past the new end, blank until the reader swiped.
             .defaultScrollAnchor(.bottom)
-            .modifier(FollowsBottom(following: $following))
-            // The newest row, not the count, or loading earlier turns would jump to the end.
+            .modifier(FollowsBottom(following: $following) { proxy.scrollTo("bottom", anchor: .bottom) })
+            // Before iOS 18 nothing reads the content's size, so the newest row is the cue.
+            // The row, not the count, or loading earlier turns would jump to the end.
             .onChange(of: "\(turns.last?.id ?? "")|\(turns.last?.work.last?.newestId ?? "")|\(turns.last?.completed ?? false)|\(asks.count)|\(busy)|\(bot == nil ? "" : transcript?.events.last?.id ?? "")") {
                 if following { proxy.scrollTo("bottom", anchor: .bottom) }
             }
@@ -100,10 +105,29 @@ struct TranscriptView: View {
         .onChange(of: asks.count) { old, new in if new > old { Haptic.warning() } }
         .safeAreaInset(edge: .bottom, spacing: 0) { ReplyDock(key: key) }
         .overlay(alignment: .top) {
+            // The bar draws no shade here, so rows fade out under the clock rather than sit on it.
+            if bot != nil {
+                // Spans the status bar and the bar under it: this view starts where they end,
+                // so its distance from the screen's top is their height. Ignoring the safe area
+                // instead reads an inset of zero.
+                GeometryReader { g in
+                    let top = g.frame(in: .global).minY
+                    LinearGradient(stops: [.init(color: Theme.page, location: 0), .init(color: Theme.page.opacity(0.9), location: 0.4),
+                                           .init(color: Theme.page.opacity(0), location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: top)
+                        .offset(y: -top)
+                }
+                .allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .top) {
             SessionBanner(server: key.server) { fixing = true }
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { bannerHeight = $0 }
         }
         .navigationBarTitleDisplayMode(.inline)
+        // Every control up there is a chip of its own, so the bar draws no shade behind them.
+        .modifier(BareTopEdge(on: bot != nil))
         .toolbar {
             ToolbarItem(placement: .principal) { title }
             if bot != nil {
@@ -115,16 +139,18 @@ struct TranscriptView: View {
             }
         }
         .modifier(LocalServersButton(key: key, shown: bot == nil))
-        .task { await store.open(key) }
+        .task { await open() }
+        .onChange(of: chatMark) { settleUnread() }
         .prPanel(key)
-        .sheet(isPresented: $showingTasks) { BotTasksSheet(tasks: botTasks) { openTask?($0) } }
+        .sheet(isPresented: $showingTasks) { BotTasksSheet(server: key.server, tasks: botTasks) { openTask?($0) } }
         .sheet(isPresented: $fixing) { SettingsView(focus: key.server) }
+        .sheet(isPresented: $editingBot) { if let bot { BotSheet(editing: (key.server, bot)) } }
     }
 
-    /// The session's title over where it runs: its project and its machine, never the branch.
+    /// A task's title over where it runs, its project and its machine; a bot's chip.
     @ViewBuilder private var title: some View {
         if let bot = store.bot(key) {
-            BotTitle(bot: bot, server: key.server)
+            BotTitle(bot: bot) { editingBot = true }
         } else {
             taskTitle
         }
@@ -172,13 +198,56 @@ struct TranscriptView: View {
         }
     }
 
+    /// The bot chat's items across its sessions on screen, a line where each later one begins.
+    /// The desktop's `chatItems`.
+    private func chatItems(_ segments: [SessionKey]) -> [BotItem] {
+        segments.enumerated().flatMap { i, segment in
+            let events = store.transcripts[segment]?.events ?? []
+            let items = botItems(events)
+            guard i > 0 else { return items }
+            let ts = events.first?.ts ?? store.items[segment]?.created
+            return [.switchTo(id: "switch:\(segment.id)", harness: store.items[segment]?.harness, ts: ts)] + items
+        }
+    }
+
+    private func chat(_ bot: Bot?) -> [BotItem] { bot == nil ? [] : chatItems(segments(bot)) }
+
+    /// Marks the session read, noting first whether a bot chat opened unread.
+    private func open() async {
+        let unread = store.bot(key) != nil && store.items[key]?.status == "completed"
+        await store.open(key)
+        openedUnread = unread
+        settleUnread()
+    }
+
+    /// Sets where unread replies begin, once enough of the chat is loaded to say (`unreadStart`).
+    private func settleUnread() {
+        guard openedUnread, newFrom == nil else { return }
+        let bot = store.bot(key)
+        let items = chat(bot)
+        if unreadUpTo == nil {
+            // Taken once the server's read lands, never off the cache alone: replies it
+            // brings count as unread, and later ones don't.
+            guard store.serverRead.contains(key), let last = items.last?.id else { return }
+            unreadUpTo = last
+        }
+        guard let upTo = unreadUpTo else { return }
+        let segments = segments(bot)
+        let complete = store.transcripts[segments[0]]?.olderBefore == nil && hidden(bot, segments) == nil
+        if let at = unreadStart(items, upTo: upTo, complete: complete) { newFrom = at }
+    }
+
     /// A bot chat's sessions on screen, oldest first: this one, and the earlier ones an agent
-    /// switch left, each drawn only once the one after it is read back to its start (`drawnSegments`).
+    /// switch left, each drawn once the one after it is read back to its start (`drawnSegments`)
+    /// and it is held: "Load earlier" reads it, and a switch made here already holds it.
     private func segments(_ bot: Bot?) -> [SessionKey] {
         guard let bot else { return [key] }
         let chat = store.botChat(key.server, bot)
         guard let i = chat.firstIndex(of: key) else { return [key] }
-        return Array(chat[max(0, i - earlier)...i])
+        var start = i
+        while start > 0, let top = store.transcripts[chat[start]], top.olderBefore == nil,
+              store.transcripts[chat[start - 1]] != nil { start -= 1 }
+        return Array(chat[start...i])
     }
 
     /// The session an agent switch left just above what is drawn, if any.
@@ -203,8 +272,8 @@ struct TranscriptView: View {
                     if store.transcripts[top]?.olderBefore != nil {
                         await store.loadOlder(top)
                     } else if let before = hidden(bot, segments) {
+                        // Held once read, which is what draws it (`segments`).
                         await store.load(before)
-                        earlier += 1
                     }
                 }
             }
@@ -498,10 +567,11 @@ struct Thumbnails: View {
 /// A picture in the reading column, at most a screen's width and a little less tall.
 struct InlineImage: View {
     let ref: ImageRef
+    var fallback: String?
 
     var body: some View {
         // Clipped before the frame, so the corners are the picture's and not the column's.
-        RemoteImage(ref: ref)
+        RemoteImage(ref: ref, fallback: fallback)
             .clipShape(.rect(cornerRadius: Theme.Radius.md, style: .continuous))
             .frame(maxWidth: 320, maxHeight: 320, alignment: .leading)
     }
@@ -638,8 +708,10 @@ struct MarkdownText: View {
     let text: String
 
     var body: some View {
+        let recordings = recordingPaths(in: text)
+        let images = imagePaths(in: text)
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(markdownBlocks(text).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(markdownBlocks(hiding(recordings + images, in: text)).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .prose(let s):
                     Text(inlineMarkdown(s)).font(Theme.Font.body).foregroundStyle(Theme.text)
@@ -681,10 +753,10 @@ struct MarkdownText: View {
                     ImageButton(ref: ref) { InlineImage(ref: ref) }
                 }
             }
-            ForEach(recordingPaths(in: text), id: \.self) { RecordingPlayer(path: $0) }
-            ForEach(screenshotPaths(in: text), id: \.self) { path in
+            ForEach(recordings, id: \.self) { RecordingPlayer(path: $0) }
+            ForEach(images, id: \.self) { path in
                 let ref = ImageRef(path: path, url: nil, mimeType: nil)
-                ImageButton(ref: ref) { InlineImage(ref: ref) }
+                ImageButton(ref: ref) { InlineImage(ref: ref, fallback: path) }
             }
         }
         .tint(Theme.link)
@@ -726,25 +798,79 @@ struct TranscriptSkeleton: View {
     }
 }
 
-/// The desktop chat's pin (`AT_BOTTOM_PX` in Chat.tsx): new rows follow while the
-/// view is within 40pt of the end. Only a scroll the reader made drops it, since
-/// rows landing push the end away too; coming back to the end raises it again.
-/// iOS 17 has no scroll phase to tell the two apart, so there it always follows.
+/// The desktop chat's pin (`AT_BOTTOM_PX` and the ResizeObserver in Chat.tsx): within
+/// 40pt of the end the view holds the end, whatever moves it. A row landing does, and
+/// so does a picture or a video loading late, a fold opening and the dock growing, none
+/// of which a new row announces. Only a scroll the reader made drops the pin, since each
+/// of those pushes the end away too; coming back to the end raises it again.
+/// iOS 17 reads no scroll geometry, so there the pin never drops and only new rows move the view.
 struct FollowsBottom: ViewModifier {
     @Binding var following: Bool
+    let toEnd: () -> Void
     @State private var reading = false
+    /// What resizes put below a following view while a finger held it. The reader did not move
+    /// that far, so it comes off the distance they are judged by, and is scrolled away on release.
+    /// A reader already off the end is owed none: counted, it raised the pin that far short.
+    @State private var grown: CGFloat = 0
 
     func body(content: Content) -> some View {
         if #available(iOS 18, *) {
             content
-                .onScrollPhaseChange { _, phase in reading = phase == .interacting || phase == .decelerating }
-                .onScrollGeometryChange(for: CGFloat.self) { g in
-                    g.contentSize.height + g.contentInsets.bottom - g.containerSize.height - g.contentOffset.y
-                } action: { _, left in
-                    if left < 40 { following = true } else if reading { following = false }
+                .onScrollPhaseChange { _, phase in
+                    reading = phase != .idle
+                    guard phase == .idle else { return }
+                    if following && grown != 0 { toEnd() }
+                    grown = 0
+                }
+                // The content's height, the room it shows in, and what is left below the view.
+                // Off `visibleRect`, which spans the insets: `containerSize` already has them out,
+                // and taking the dock's off it again read 348pt left at the very end.
+                .onScrollGeometryChange(for: [CGFloat].self) { g in
+                    let end = g.visibleRect.maxY - g.contentInsets.bottom
+                    return [g.contentSize.height, g.visibleRect.height - g.contentInsets.top - g.contentInsets.bottom, g.contentSize.height - end]
+                } action: { old, new in
+                    let resized = old[0] != new[0] || old[1] != new[1]
+                    if reading && resized && following { grown += new[2] - old[2] }
+                    if new[2] - grown < 40 { following = true } else if reading && !resized { following = false }
+                    // Never from under a finger, and never for a move alone: a drag's first
+                    // points arrive before its phase does, and a scroll then ends the drag.
+                    if following && resized && !reading { toEnd() }
+                }
+                // About one warm open in fifty of a long chat sat at its top, with the geometry
+                // still and so nothing above to move it. Why is not known; a scroll to the end
+                // a few seconds on took, so one is sent once the push has settled, and again.
+                .task {
+                    for wait in [0.5, 1.0] {
+                        try? await Task.sleep(for: .seconds(wait))
+                        if following && !reading { toEnd() }
+                    }
                 }
         } else {
             content
+        }
+    }
+}
+
+/// Drops the bar's dark shade over scrolled rows where everything in it is glass.
+struct BareTopEdge: ViewModifier {
+    let on: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content.scrollEdgeEffectHidden(on, for: .top)
+        } else {
+            content.toolbarBackground(on ? .hidden : .automatic, for: .navigationBar)
+        }
+    }
+}
+
+extension View {
+    /// A glass capsule like the back button's, for a control the bar does not wrap itself.
+    @ViewBuilder func glassChip() -> some View {
+        if #available(iOS 26, *) {
+            glassEffect(.regular.interactive(), in: .capsule)
+        } else {
+            background(.ultraThinMaterial, in: Capsule())
         }
     }
 }

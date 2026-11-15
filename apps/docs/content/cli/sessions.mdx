@@ -87,6 +87,26 @@ The message arrives as an ordinary prompt and starts a turn, so it wakes an idle
 
 Sent from inside a session, the receiving agent is told which session sent it, with its id, so it can reply with `dray session send`. A message never changes the receiving session's model, effort or permission mode.
 
+## Switch a session's model
+
+```bash
+dray session model <id> fable
+dray session model <id> opus --effort high
+dray session model <id> --effort low
+dray session model <id>
+```
+
+Does what the model picker in the session's composer does. The new model and effort apply from the session's next turn, including a message already waiting behind a running turn. The running turn is not stopped.
+
+| Form | What it does |
+|---|---|
+| `model <id> <alias>` | Switches the model. The session keeps its effort if the new model has that level, else takes the model's default. |
+| `model <id> <alias> --effort <level>` | Switches both. A level the model lacks is refused, and the error lists the ones it has. |
+| `model <id> --effort <level>` | Changes the effort alone. |
+| `model <id>` | Prints the model and effort the session runs on. |
+
+The alias must be one the session's own agent knows. A session on another machine is found by its id, like `dray session send`.
+
 ## Rename, stop, settle
 
 ```bash
