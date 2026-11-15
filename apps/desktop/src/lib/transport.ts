@@ -150,6 +150,7 @@ export const APP_COMMANDS = new Set([
   "local_server",
   "add_server",
   "remove_server",
+  "server_unfinished",
   "save_server_cache",
   "server_caches",
   "reconnect_servers",

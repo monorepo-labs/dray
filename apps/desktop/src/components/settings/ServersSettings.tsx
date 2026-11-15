@@ -31,6 +31,7 @@ import { useCloud } from "@/lib/cloud";
 import { MACHINE } from "@/lib/platform";
 import { serverName, useLocalServer, useServers } from "@/lib/servers";
 import { invoke, listen, LOCAL } from "@/lib/transport";
+import { unfinishedWarning } from "@/lib/serverCache";
 import { cn } from "@/lib/utils";
 import type {
   AssistantSummary,
@@ -92,6 +93,14 @@ export default function ServersSettings() {
   const servers = all.filter((s) => !s.cloud);
   const [adding, setAdding] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
+  // Per server, its tasks last seen unfinished, read as Remove is asked.
+  const [unfinished, setUnfinished] = useState<Record<string, string[]>>({});
+  const askRemove = (id: string) => {
+    setConfirming(id);
+    void invoke<string[]>("server_unfinished", { id }, LOCAL)
+      .then((titles) => setUnfinished((all) => ({ ...all, [id]: titles })))
+      .catch(() => {});
+  };
   const [renaming, setRenaming] = useState<string | null>(null);
   const [updates, setUpdates] = useState<Record<string, UpdateState>>({});
   const patchUpdate = (id: string, next: UpdateState) =>
@@ -190,7 +199,8 @@ export default function ServersSettings() {
             beta={server.beta}
             onBeta={(beta) => void invoke("set_server_beta", { id: server.id, beta }, LOCAL).catch(console.error)}
             confirming={confirming === server.id}
-            onRemove={() => setConfirming(server.id)}
+            warning={unfinishedWarning(unfinished[server.id])}
+            onRemove={() => askRemove(server.id)}
             onCancel={() => setConfirming(null)}
             onConfirm={() => {
               setConfirming(null);
@@ -839,6 +849,7 @@ function Row({
   onCheckUpdate,
   onAssistant,
   confirming = false,
+  warning,
   onRemove,
   onCancel,
   onConfirm,
@@ -870,6 +881,8 @@ function Row({
   /// Present while connected: the code comes from the server itself.
   onAssistant?: () => void;
   confirming?: boolean;
+  /// Said under the row while Remove is asked.
+  warning?: string | null;
   onRemove?: () => void;
   onCancel?: () => void;
   onConfirm?: () => void;
@@ -965,6 +978,7 @@ function Row({
           dot. */}
       {/* `empty:` because a child may draw nothing — no assistants yet — and
           an empty block would still take the row's gap. */}
+      {confirming && warning && <p className="pl-4.5 text-ui text-muted-foreground">{warning}</p>}
       {children && <div className="flex flex-col gap-2 pl-4.5 empty:hidden">{children}</div>}
     </div>
   );

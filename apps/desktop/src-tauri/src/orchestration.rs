@@ -1217,13 +1217,22 @@ async fn machine_list(request: Request) -> Result<Response> {
         name: row.saved.name,
         status: row.status.into(),
         error: row.error,
+        unfinished: Vec::new(),
     };
     let row = match request {
         Request::ListServers => {
             return Ok(Response::Servers { servers: machines::list().await.into_iter().map(summarize).collect() });
         }
         Request::AddServer(add) => machines::add(add.name, add.address, add.token).await,
-        Request::RemoveServer(server) => machines::remove(&server.name).await,
+        Request::RemoveServer(server) => {
+            // Read first: what the app kept of it goes once it is off the list.
+            let unfinished = match machines::find(&machines::load().await, &server.name) {
+                Ok(saved) => machines::unfinished(&saved.id).await,
+                Err(_) => Vec::new(),
+            };
+            let row = machines::remove(&server.name).await.map_err(anyhow::Error::msg)?;
+            return Ok(Response::Server { server: dray_proto::ServerSummary { unfinished, ..summarize(row) } });
+        }
         Request::RenameServer(rename) => machines::rename(&rename.name, &rename.new_name).await,
         Request::SetServerOn(set) => machines::set_on(&set.name, set.on).await,
         other => bail!("{other:?} is not answered here"),
@@ -1292,8 +1301,10 @@ mod server_list {
     /// Takes the token with it.
     async fn remove(name: &str) -> Result<Response> {
         let server = find(name)?;
+        // Before the removal, which deletes the list it is read from.
+        let unfinished = crate::machines::unfinished(&server.id).await;
         servers::remove_server(server.id.clone()).await.map_err(anyhow::Error::msg)?;
-        Ok(Response::Server { server: summarize(server) })
+        Ok(Response::Server { server: ServerSummary { unfinished, ..summarize(server) } })
     }
 
     async fn rename(rename: dray_proto::RenameServer) -> Result<Response> {
@@ -1320,7 +1331,14 @@ mod server_list {
             true => serde_json::to_value(server.status).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(),
             false => "off".to_string(),
         };
-        ServerSummary { id: server.id, name: server.name, address: server.ssh.unwrap_or(server.url), status, error: server.error }
+        ServerSummary {
+            id: server.id,
+            name: server.name,
+            address: server.ssh.unwrap_or(server.url),
+            status,
+            error: server.error,
+            unfinished: Vec::new(),
+        }
     }
 }
 

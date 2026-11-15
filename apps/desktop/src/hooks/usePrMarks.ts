@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { invoke } from "@/lib/transport";
 
+import { channel } from "@/lib/channel";
 import { useWindowFocused } from "@/lib/focus";
 import { markDisagrees, marksGaveUp, marksRepo, marksRetryDelay, pickPrMark, sameMark } from "@/lib/pr";
 import { branchChanged, inRepo, panelRead } from "@/lib/prSync";
@@ -76,6 +77,15 @@ const repoOf = new Map<string, string>();
 const failures = new Map<string, { count: number; at: number }>();
 
 const EMPTY: Map<string, PrMark> = new Map();
+
+/// Fires whenever any repo's marks change, for readers outside the hook.
+export const prMarksChanged = channel<void>();
+
+/// The mark a session's row carries as last read, outside React: the server
+/// cache keeps whether each remote task's PR was open, for the warning a
+/// removal gives once that machine can no longer be asked.
+export const keptPrMark = (repoPath: string, branch: string | null): PrMark | undefined =>
+  branch ? cache.get(repoPath)?.get(branch) : undefined;
 
 /// `path` and every key known to name the same GitHub repo.
 function sharing(path: string): string[] {
@@ -161,6 +171,7 @@ export function usePrMarks(
   pathsRef.current = repoPaths;
 
   const [byRepo, setByRepo] = useState<Map<string, Map<string, PrMark>>>(() => new Map(cache));
+  useEffect(() => prMarksChanged.emit(), [byRepo]);
 
   /// `only` narrows the read to a subset of what is visible. The poll passes
   /// the repos that actually hold an open pull request: forcing every visible

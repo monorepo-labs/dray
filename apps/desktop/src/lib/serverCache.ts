@@ -1,5 +1,6 @@
+import { sessionBranch } from "@/lib/pr";
 import { invoke, LOCAL, serverOfPath, type ServerId } from "@/lib/transport";
-import type { Bot, Project, ServerInfo, SessionIndexItem } from "@/types/events";
+import type { Bot, PrMark, Project, ServerInfo, SessionIndexItem } from "@/types/events";
 
 /// A remote's last known lists, kept on disk by the app so its rows outlive a
 /// restart while it cannot be reached (#871). `sessions` is the live side,
@@ -53,6 +54,16 @@ export function indexRow(item: SessionIndexItem): SessionIndexItem {
   return row;
 }
 
+/// `row` marked `prOpen` where its PR was last seen open, which is what lets
+/// a removal warn about it once the machine can no longer be asked
+/// (`machines::unfinished`). Absent means no open PR as far as this app saw.
+export function withPrOpen(
+  row: SessionIndexItem,
+  prOf: (repoPath: string, branch: string | null) => PrMark | undefined,
+): SessionIndexItem & { prOpen?: true } {
+  return prOf(row.projectPath, sessionBranch(row))?.state === "OPEN" ? { ...row, prOpen: true } : row;
+}
+
 const written = new Map<ServerId, string>();
 const writes = new Map<ServerId, Promise<unknown>>();
 
@@ -73,3 +84,13 @@ export function saveServerCache(server: ServerId, cache: ServerCache): void {
 /// answers none.
 export const loadServerCaches = (): Promise<Record<ServerId, ServerCache>> =>
   invoke<Record<ServerId, ServerCache>>("server_caches", {}, LOCAL).catch(() => ({}));
+
+/// What Remove's question adds where tasks there still looked unfinished.
+/// Removing is how a stopped machine's tasks leave this device, so the line
+/// says what goes and what keeps running.
+export function unfinishedWarning(titles: string[] | undefined): string | null {
+  if (!titles?.length) return null;
+  const count = titles.length === 1 ? "1 task" : `${titles.length} tasks`;
+  const names = titles.map((t) => `“${t}”`).join(", ");
+  return `${count} here last looked unfinished — running, waiting on you, or with an unmerged PR: ${names}. Removing clears them from this device; anything running keeps running there.`;
+}

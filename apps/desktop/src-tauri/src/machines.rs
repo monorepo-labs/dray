@@ -640,6 +640,37 @@ pub async fn remove(name: &str) -> Result<Row, String> {
     Ok(Row { saved, status: "off", error: None })
 }
 
+/// Titles of `id`'s tasks that still look unfinished, for a warning before it
+/// is removed. Read off the list the app keeps of it (`server-cache/<id>.json`,
+/// #871), never the machine itself: the one being removed is usually stopped.
+/// None where nothing was kept, a `dray-serve` with no app beside it.
+pub async fn unfinished(id: &str) -> Vec<String> {
+    let safe = !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    let Ok(dir) = store::app_subdir("server-cache").await else { return Vec::new() };
+    if !safe {
+        return Vec::new();
+    }
+    let Ok(body) = tokio::fs::read_to_string(dir.join(format!("{id}.json"))).await else { return Vec::new() };
+    serde_json::from_str::<Value>(&body).map(|cache| unfinished_in(&cache)).unwrap_or_default()
+}
+
+/// Settled tasks are done. Of the rest, one mid-turn — a card waiting on the
+/// reader holds the turn open too — one carrying a need line, or one whose PR
+/// was last seen open (`prOpen`, which the app adds to each kept row). Read
+/// field by field, since the frontend owns the shape.
+fn unfinished_in(cache: &Value) -> Vec<String> {
+    let rows = cache.get("sessions").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    rows.iter()
+        .filter(|row| row.get("archived").and_then(Value::as_bool) != Some(true))
+        .filter(|row| {
+            row.get("status").and_then(Value::as_str) == Some("in_progress")
+                || row.get("need").is_some_and(|n| !n.is_null())
+                || row.get("prOpen").and_then(Value::as_bool) == Some(true)
+        })
+        .map(|row| row.get("title").and_then(Value::as_str).filter(|t| !t.is_empty()).unwrap_or("Untitled").to_string())
+        .collect()
+}
+
 /// An empty name puts back the default, its host.
 pub async fn rename(name: &str, new_name: &str) -> Result<Row, String> {
     let saved = {
@@ -678,6 +709,23 @@ pub async fn set_on(name: &str, on: bool) -> Result<Row, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stopped machine's tasks can't be settled, so unsettled alone says
+    /// nothing; only running, waiting or an open PR counts.
+    #[test]
+    fn unfinished_is_running_waiting_or_an_open_pr() {
+        let cache = json!({ "sessions": [
+            { "title": "Idle, PR merged", "status": "idle", "archived": false, "prOpen": false },
+            { "title": "Done, unread", "status": "completed", "archived": false },
+            { "title": "Running", "status": "in_progress", "archived": false },
+            { "title": "Needs you", "status": "idle", "need": { "text": "Pick one", "at": "x" } },
+            { "title": "PR open", "status": "idle", "prOpen": true },
+            { "title": "Settled mid-turn", "status": "in_progress", "archived": true },
+            { "title": "", "status": "in_progress" },
+        ], "archived": [{ "title": "Other side", "status": "in_progress" }] });
+        assert_eq!(unfinished_in(&cache), ["Running", "Needs you", "PR open", "Untitled"]);
+        assert!(unfinished_in(&json!({})).is_empty());
+    }
 
     #[test]
     fn normalizes_what_a_reader_types() {
