@@ -419,6 +419,13 @@ class WS:
             raise ConnectionError(head.decode(errors="replace"))
         self.buf = bytearray(rest)
         self.next_id = 0
+        # Events that landed while the last call waited for its reply. Replies
+        # and events share one socket in no promised order, and the fake agent
+        # answers in microseconds, so a resumed turn can close before
+        # `send_msg` answers. `wait_for` looks here first, or it waits for an
+        # event already gone by: the likeliest cause of the rare resume that
+        # never finished (stages 2 and 3, about 1 in 1,000 resumes).
+        self.early = []
         self.send(json.dumps({"v": 1, "token": token}))
         welcome = json.loads(self.recv())
         if "err" in welcome:
@@ -478,12 +485,14 @@ class WS:
         """Sends one command; answers (ms to the reply's last byte, raw reply)."""
         self.next_id += 1
         frame = json.dumps({"id": self.next_id, "cmd": cmd, "args": args or {}})
+        self.early = []
         t0 = time.perf_counter()
         self.send(frame)
         while True:
             msg = self.recv()
             if not msg.startswith(b'{"event"'):
                 return (time.perf_counter() - t0) * 1000, msg
+            self.early.append(msg)
 
     def call(self, cmd, args=None):
         ms, raw = self.call_raw(cmd, args)
@@ -493,15 +502,25 @@ class WS:
         return ms, reply.get("ok")
 
     def wait_for(self, needle, limit=300):
-        """Reads events until one holding every byte string in `needle`."""
-        deadline = time.time() + limit
-        seen = 0
-        while time.time() < deadline:
-            msg = self.recv()
-            seen += 1
+        """Reads events, those that came ahead of the last reply first, until one holding every byte string in `needle`."""
+        early, self.early = self.early, []
+        for i, msg in enumerate(early):
             if all(n in msg for n in needle):
-                return seen
-        raise TimeoutError(f"no event with {needle}")
+                log(f"  {needle[0].decode()} reached the client before the reply to the call that caused it")
+                return i + 1
+        deadline = time.time() + limit
+        seen = []
+        try:
+            while time.time() < deadline:
+                msg = self.recv()
+                seen.append(msg)
+                if all(n in msg for n in needle):
+                    return len(early) + len(seen)
+        except TimeoutError:
+            pass
+        last = [m[:160].decode(errors="replace") for m in (early + seen)[-5:]]
+        raise TimeoutError(f"no event with {needle} in {limit}s or a quiet socket; "
+                           f"{len(early)} events before the reply, {len(seen)} after; last: {last}")
 
     def close(self):
         try:
