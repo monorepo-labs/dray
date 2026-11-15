@@ -204,13 +204,18 @@ pub async fn ensure_skills(dir: &Path) {
 /// and an automated pass that rewrote one would change what the user asked
 /// for with nobody asking. Where the turn took any line away, its edit to the
 /// file is put back whole before the commit.
+///
+/// The old file too, for a bot whose move has not run yet.
 pub async fn keep_rules(dir: &Path) -> Result<bool> {
-    let diff = git(dir, &["diff", "-U0", "HEAD", "--", INSTRUCTIONS]).await?;
-    if !diff.lines().any(|l| l.starts_with('-') && !l.starts_with("---")) {
-        return Ok(false);
+    let mut kept = false;
+    for path in [INSTRUCTIONS, LEGACY_INSTRUCTIONS] {
+        let diff = git(dir, &["diff", "-U0", "HEAD", "--", path]).await?;
+        if diff.lines().any(|l| l.starts_with('-') && !l.starts_with("---")) {
+            git(dir, &["checkout", "HEAD", "--", path]).await?;
+            kept = true;
+        }
     }
-    git(dir, &["checkout", "HEAD", "--", INSTRUCTIONS]).await?;
-    Ok(true)
+    Ok(kept)
 }
 
 /// The lessons `commit` changed, and which of them are now over their cap.
@@ -593,6 +598,17 @@ mod tests {
         assert!(!dir.as_path().join(LEGACY_INSTRUCTIONS).exists());
         let log = git(dir.as_path(), &["log", "-1", "--format=%s"]).await.unwrap();
         assert!(log.starts_with("Undone by the user: AGENTS.md"), "{log}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_review_cannot_take_a_rule_from_the_old_file_either() {
+        let (bot, dir) = scratch_bot();
+        std::fs::write(dir.as_path().join(LEGACY_INSTRUCTIONS), "- Rule the user wrote\n").unwrap();
+        super::super::start_history(&bot).await.unwrap();
+        std::fs::write(dir.as_path().join(LEGACY_INSTRUCTIONS), "").unwrap();
+        assert!(keep_rules(dir.as_path()).await.unwrap());
+        assert_eq!(std::fs::read_to_string(dir.as_path().join(LEGACY_INSTRUCTIONS)).unwrap(), "- Rule the user wrote\n");
         std::fs::remove_dir_all(&dir).ok();
     }
 

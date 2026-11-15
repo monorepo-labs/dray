@@ -524,12 +524,17 @@ static NOTES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Ve
 enum Note {
     Renamed,
     UserName,
+    Moved,
 }
 
 /// Tells the bot at `path` `note` ahead of its next prompt.
 fn note_bot(path: &str, kind: Note, note: String) {
     let mut notes = NOTES.lock().unwrap();
-    let tag = |k: &Note| if *k == Note::Renamed { "The user renamed you" } else { "The user asked to be called" };
+    let tag = |k: &Note| match k {
+        Note::Renamed => "The user renamed you",
+        Note::UserName => "The user asked to be called",
+        Note::Moved => "Your instructions moved",
+    };
     notes.retain(|(p, n)| !(same_dir(p, path) && n.starts_with(tag(&kind))));
     debug_assert!(note.starts_with(tag(&kind)));
     notes.push((path.to_string(), note));
@@ -1122,12 +1127,29 @@ pub async fn system_prompt(base: &str, session_id: &str, cwd: &str) -> String {
         };
     };
     let others: Vec<&str> = bots.iter().filter(|b| b.id != bot.id).map(|b| b.name.as_str()).collect();
+    prepare_folder(bot).await;
+    let instructions = read_file(&Path::new(&bot.path).join(INSTRUCTIONS)).await;
+    let user = user_name().await;
+    format!("{base}\n\n{}", bot_block(bot, &others, &instructions, user.as_deref()))
+}
+
+/// Readies the folder of the bot whose session runs in `cwd`, where it is a
+/// bot's. For a resume that sends no prompt, grok's and fx's, which would
+/// otherwise skip [`system_prompt`] and the move of an old `INSTRUCTIONS.md`.
+pub async fn prepare(cwd: &str) {
+    if let Some(bot) = bot_at(cwd).await {
+        prepare_folder(&bot).await;
+    }
+}
+
+/// What every spawn of a bot needs on disk before its agent reads the folder.
+async fn prepare_folder(bot: &Bot) {
     let dir = Path::new(&bot.path);
     // Ahead of the history, so a folder getting its first commit here never
     // commits the pointer.
     write_pointer(dir).await;
     // Every bot's spawn passes here, so a bot made before there was history
-    // gets it on first use, and the prompt below is true from its first turn.
+    // gets it on first use, and its prompt is true from its first turn.
     if let Err(e) = start_history(bot).await {
         eprintln!("[bot history] {e:#}");
     }
@@ -1138,9 +1160,6 @@ pub async fn system_prompt(base: &str, session_id: &str, cwd: &str) -> String {
     // straight to one. Its old `MEMORY.md` is left alone: bots had no users yet.
     tokio::fs::create_dir_all(dir.join(MEMORY)).await.ok();
     learn::ensure_skills(dir).await;
-    let instructions = read_file(&dir.join(INSTRUCTIONS)).await;
-    let user = user_name().await;
-    format!("{base}\n\n{}", bot_block(bot, &others, &instructions, user.as_deref()))
 }
 
 /// Writes the `CLAUDE.md` that imports the instructions for Claude Code, and
@@ -1177,13 +1196,24 @@ async fn move_legacy_instructions(bot: &Bot) -> Result<()> {
     let _guard = HISTORY_LOCK.lock().await;
     let old = tokio::fs::read_to_string(&legacy).await.context("could not read INSTRUCTIONS.md")?;
     let now = read_file(&dir.join(INSTRUCTIONS)).await;
-    let merged = match (now.trim().is_empty(), old.trim().is_empty()) {
-        (true, _) => old,
-        (false, true) => now,
-        (false, false) => format!("{}\n\n{old}", now.trim_end()),
+    // Holding the old text already means a move cut off before the removal;
+    // appending again would repeat every rule.
+    let merged = if now.trim().is_empty() {
+        old
+    } else if old.trim().is_empty() || now.contains(old.trim()) {
+        now
+    } else {
+        format!("{}\n\n{old}", now.trim_end())
     };
     write_atomic(&dir.join(INSTRUCTIONS), &merged).await?;
     tokio::fs::remove_file(&legacy).await.context("could not remove INSTRUCTIONS.md")?;
+    // A grok or fx chat resumes on the prompt it started with, which still
+    // names the old file, so the bot is told whatever its agent.
+    note_bot(
+        &bot.path,
+        Note::Moved,
+        format!("Your instructions moved from `{LEGACY_INSTRUCTIONS}` to `{INSTRUCTIONS}`, which your agent loads on its own at the start of every session. Edit `{INSTRUCTIONS}` from now on; `{LEGACY_INSTRUCTIONS}` is gone."),
+    );
     if !dir.join(".git").exists() {
         return Ok(());
     }
@@ -1648,6 +1678,16 @@ mod tests {
         move_legacy_instructions(&bot).await.unwrap();
         assert_eq!(tokio::fs::read_to_string(dir.join(INSTRUCTIONS)).await.unwrap(), "- New rule\n\n- Old rule\n");
         assert!(!dir.join(LEGACY_INSTRUCTIONS).exists());
+        assert!(NOTES.lock().unwrap().iter().any(|(p, n)| p == &bot.path && n.starts_with("Your instructions moved")));
+        NOTES.lock().unwrap().retain(|(p, _)| p != &bot.path);
+
+        // Cut off after the write and before the removal: the next start
+        // finds both, and must not append the old rules a second time.
+        tokio::fs::write(dir.join(LEGACY_INSTRUCTIONS), "- Old rule\n").await.unwrap();
+        move_legacy_instructions(&bot).await.unwrap();
+        assert_eq!(tokio::fs::read_to_string(dir.join(INSTRUCTIONS)).await.unwrap(), "- New rule\n\n- Old rule\n");
+        assert!(!dir.join(LEGACY_INSTRUCTIONS).exists());
+        NOTES.lock().unwrap().retain(|(p, _)| p != &bot.path);
         tokio::fs::remove_dir_all(&dir).await.ok();
     }
 
