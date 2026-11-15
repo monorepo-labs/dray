@@ -80,30 +80,22 @@ runs:
         restore-keys: ${{ steps.key.outputs.prefix }}
         lookup-only: ${{ inputs.lookup-only }}
 
-    # Side by side: with the cache warm, each is its own `dray` crate and
-    # little else. The CLI's is LTO'd into one codegen unit, a single core,
-    # while the server's front end leaves the rest idle, so the CLI costs
-    # the leg nothing. Separate target dirs, so no lock between them.
-    #
-    # dray-serve is from the same commit as the CLI, so one tag is one version
-    # of both. The CLI's version rides into the server, which reports it to the
-    # app so the app can tell whether a newer release is out on its channel.
-    # It reaches the `dray` crate alone (`option_env!`), so it costs no
-    # dependency a rebuild.
-    - name: Build dray and dray-serve
+    - name: Build dray
       if: inputs.lookup-only != 'true'
       shell: bash
+      working-directory: apps/cli
+      run: cargo build --release --target ${{ inputs.target }}
+
+    # From the same commit as the CLI, so one tag is one version of both. The
+    # CLI's version rides into the server, which reports it to the app so the
+    # app can tell whether a newer release is out on its channel. It reaches
+    # the `dray` crate alone (`option_env!`), so it costs no dependency a
+    # rebuild.
+    - name: Build dray-serve
+      if: inputs.lookup-only != 'true'
+      shell: bash
+      working-directory: apps/desktop/src-tauri
       run: |
-        set -euo pipefail
-        log="$RUNNER_TEMP/dray-build.log"
-        (cd apps/cli && cargo build --release --target ${{ inputs.target }}) > "$log" 2>&1 &
-        cli=$!
-        version=$(sed -n 's/^version = "\(.*\)"/\1/p' apps/cli/Cargo.toml | head -n 1)
-        (cd apps/desktop/src-tauri && DRAY_CLI_VERSION=$version cargo build --release \
-          --no-default-features --features serve --bin dray-serve --target ${{ inputs.target }})
-        status=0
-        wait "$cli" || status=$?
-        echo "::group::dray (apps/cli)"
-        cat "$log"
-        echo "::endgroup::"
-        exit "$status"
+        export DRAY_CLI_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$GITHUB_WORKSPACE/apps/cli/Cargo.toml" | head -n 1)
+        cargo build --release --no-default-features --features serve \
+          --bin dray-serve --target ${{ inputs.target }}
