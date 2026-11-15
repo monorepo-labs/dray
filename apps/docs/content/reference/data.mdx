@@ -55,7 +55,7 @@ Deleting a session removes, from this machine:
 
 It does not remove the agent's own record of the conversation. Claude Code, Codex, fx and Grok Build keep their own transcripts in their own folders (below). A pushed branch and any pull request stay on GitHub.
 
-**Settling** a session is not deleting it. Settle stops it and removes its browser profile, so it starts signed out of websites if you unsettle it. The transcript and attachments stay. The worktree stays until you delete it or the session, except a bot's task: settling it, or merging its pull request, deletes the worktree, and the sessions that task started stay. See [Sessions](/using-dray/sessions) and [Worktrees](/using-dray/worktrees#bot-tasks).
+**Settling** a session is not deleting it. Settle stops it and removes its browser profile, so it starts signed out of websites if you unsettle it. The transcript and attachments stay. The worktree stays until you delete it or the session. In the app, settling a bot's task, or merging its pull request, deletes the worktree, and the sessions that task started stay. `dray session settle` keeps that worktree unless you pass `--delete-worktree`. See [Sessions](/using-dray/sessions) and [Worktrees](/using-dray/worktrees#bot-tasks).
 
 ## Environment variables
 

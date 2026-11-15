@@ -131,7 +131,7 @@ dray session unset-aside <id>
 
 Both work on a session whose machine is offline, where this machine knows which one holds it: a task a bot started there, or one named with `--machine`. The change waits here and lands when the machine answers.
 
-These are the same as the sidebar's buttons. Settling a session also settles the hidden sessions it started, except a bot's task: those sub-tasks keep running and report to the nearest task or bot still open. See [Bots](/cli/orchestration#bots).
+Settling a session also settles the hidden sessions it started, except a bot's task: those sub-tasks keep running and report to the nearest task or bot still open. See [Bots](/cli/orchestration#bots). The sidebar's **Settle** on a bot's task also deletes its worktree. This command keeps it unless you pass `--delete-worktree`. See [Worktrees](/using-dray/worktrees#bot-tasks).
 
 ## Merge card
 

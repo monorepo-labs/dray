@@ -60,7 +60,7 @@ For a session you started yourself, nothing deletes the worktree on its own. Dra
 
 ### Bot tasks
 
-Settling a task a bot started, or merging its pull request from the bot's chat or its **Tasks** tab, deletes the worktree without asking. Files the merge did not take go too. If the delete fails, Dray says **Worktree cleanup failed** and names the reason. Sessions that task started keep running, and keep their own worktrees. See [Bots](/cli/orchestration#bots).
+In the app, settling a task a bot started, or merging its pull request from the bot's chat or its **Tasks** tab, deletes the worktree without asking. Files the merge did not take go too. `dray session settle` keeps the worktree unless you pass `--delete-worktree`, which deletes it the same way. If the delete fails, Dray says **Worktree cleanup failed** and names the reason. Sessions that task started keep running, and keep their own worktrees. See [Bots](/cli/orchestration#bots).
 
 ### When Dray refuses
 
