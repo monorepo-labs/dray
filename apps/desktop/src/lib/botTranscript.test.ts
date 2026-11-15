@@ -52,6 +52,15 @@ describe("botItems", () => {
     expect(items[2]).toMatchObject({ kind: "task", sessionId: ID });
   });
 
+  it("names a task from its merge card, which outlives the settled task", () => {
+    const items = botItems([
+      call("c1", `dray session new --project /repo "Write the changelog"`),
+      result("c1", `${ID}\n`),
+      ev({ type: "merge_card", taskId: ID, title: "Write the changelog" } as AgentEventPayload),
+    ]);
+    expect(items[0]).toMatchObject({ kind: "task", sessionId: ID, title: "Write the changelog" });
+  });
+
   it("puts the bot's newest reaction on the message it names, and draws no row for it", () => {
     const fix = user("fix the login bug");
     const thanks = user("thanks!");

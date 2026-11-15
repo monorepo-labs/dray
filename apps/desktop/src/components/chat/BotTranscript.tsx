@@ -259,7 +259,7 @@ const ChatRow = memo(function ChatRow({ item, time, tight, isNew, bots, taskOf, 
         <TalkLine items={item.items} taskOf={taskOf} onOpenSession={onOpenSession} onOpenBot={onOpenBot} />
       ) : item.kind === "task" ? (
         <StartedLine
-          party={{ id: item.sessionId, title: taskOf?.(item.sessionId)?.title ?? "Task" }}
+          party={{ id: item.sessionId, title: taskOf?.(item.sessionId)?.title ?? item.title ?? "Task" }}
           onOpen={(alone) => onOpenSession(item.sessionId, alone)}
         />
       ) : item.kind === "user" && item.event.payload.type === "user_message" ? (
