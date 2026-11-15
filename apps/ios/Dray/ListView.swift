@@ -163,8 +163,15 @@ struct SessionList: View {
         }
         // A new view or filter starts on its first page.
         .onChange(of: "\(mode)\(filter ?? "")") { shown = Self.pageSize }
-        // Its buttons go with the sessions, so a view left open would have no way back.
-        .onChange(of: hideSessions) { if hideSessions { mode = .live } }
+        // Its buttons go with the sessions, so a view left open would have no way back; the dock
+        // goes too, so a recording it held is stopped and kept, as leaving `BotStartView` does.
+        .onChange(of: hideSessions) {
+            guard hideSessions else { return }
+            mode = .live
+            if Dictations.shared.state(.newSession) == .recording {
+                Task { await Dictations.shared.stop(store, draft: .newSession) }
+            }
+        }
         .page()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { header }
