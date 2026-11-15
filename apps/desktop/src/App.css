@@ -577,10 +577,11 @@
 
   /* In a bot chat, where the bot's replies are bubbles too, the reader's is
      filled blue as in light mode, a step deeper so white prose holds on a
-     near-black page. The tag colours are the light block's, for its reason: on
+     near-black page. L 0.562 is the lightest that keeps that prose at 4.5:1;
+     the phone's bubble is this colour too. The tag colours are the light block's, for its reason: on
      a saturated fill the palette's own accents sink. */
   [data-bot-chat] .user-bubble {
-    background: oklch(0.58 0.17 252);
+    background: oklch(0.562 0.17 252);
     color: oklch(0.99 0 0);
     box-shadow: none;
 
@@ -672,9 +673,11 @@
   }
 
   /* This is the one palette that *fills* the bubble, and it is what makes the
-     tags a problem here and nowhere else. */
+     tags a problem here and nowhere else. The fill is dark mode's bubble blue,
+     not `--primary`: white prose on the primary measured 3.1:1, and this is the
+     lightest blue holding 4.5:1. Send keeps the brighter primary. */
   .user-bubble {
-    background: var(--primary);
+    background: oklch(0.562 0.17 252);
     color: var(--primary-foreground);
     box-shadow: none;
 

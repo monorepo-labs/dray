@@ -113,11 +113,11 @@ struct ReplyDock: View {
         VStack(alignment: .trailing, spacing: 6) {
             Text(text)
                 .font(Theme.Font.body)
-                .foregroundStyle(Theme.text)
+                .foregroundStyle(Theme.onSent)
                 .lineLimit(3)
                 .padding(.vertical, 10)
                 .padding(.horizontal, 14)
-                .background(Theme.raised, in: UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20,
+                .background(Theme.sent, in: UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20,
                                                                       bottomTrailingRadius: 6, topTrailingRadius: 20, style: .continuous))
                 .frame(maxWidth: 290, alignment: .trailing)
                 .onTapGesture { edit() }
