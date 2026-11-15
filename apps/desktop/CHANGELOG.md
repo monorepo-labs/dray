@@ -19,6 +19,23 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.7 · 2026-11-15
+
+### Improved
+
+- The server you install on other machines is 60% smaller and answers
+  faster.
+- Your messages sit in a darker blue bubble that's easier to read.
+- fx subagents show as running until they actually finish.
+
+### Fixed
+
+- A Claude Code turn that ends in an error no longer leaves the session
+  stuck as working.
+- Every session a bot's task starts stays hidden, on any machine.
+- A merge card waits for checks to start before it appears.
+- A "Waiting on you" row no longer sits on a loading placeholder.
+
 ## 0.30.6 · 2026-11-15
 
 ### New
