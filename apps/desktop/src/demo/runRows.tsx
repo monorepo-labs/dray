@@ -76,6 +76,7 @@ function agent(
     usage: opts.tokens ? usage(opts.tokens) : null,
     events: [],
     inline: false,
+    opensWhenDone: false,
     spawn: fx
       ? spawn(id, "subagent", { action: "message", agent: type, message: description })
       : spawn(id, "Agent", { description, prompt: description, subagent_type: type }),
@@ -95,6 +96,7 @@ function shell(id: string, name: "Bash" | "Monitor", description: string, comman
     usage: null,
     events: [],
     inline: false,
+    opensWhenDone: false,
     spawn: spawn(id, name, { command, description, run_in_background: true }),
   };
 }

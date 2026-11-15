@@ -2,7 +2,7 @@ import {
   ChatBubbleOvalLeftIcon,
   DocumentPlusIcon,
 } from "@heroicons/react/16/solid";
-import { Bot, Folder, Plus, Server, X } from "lucide-react";
+import { Folder, Plus, Server, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 
 import AgentBeam from "@/components/browser/AgentBeam";
@@ -460,7 +460,12 @@ export default function ViewTabs({
     }),
     ...(subagents?.items ?? []).map((run) => ({
       key: `subagent:${run.id}`,
-      icon: run.working ? <Orb state="working" variant="gyro" label="Working" size={16} /> : <Bot className={MARK} />,
+      // The chat's own mark: what opens is a conversation, like the chat.
+      icon: run.working ? (
+        <Orb state="working" variant="gyro" label="Working" size={16} />
+      ) : (
+        <ChatBubbleOvalLeftIcon className={MARK} />
+      ),
       label: run.label,
       active: own === "subagent" && subagents?.lit === run.id,
       pick: () => subagents?.onPick(run.id),

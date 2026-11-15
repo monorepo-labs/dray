@@ -5,7 +5,7 @@ import Orb from "@/components/Orb";
 import EventRow from "@/components/chat/EventRow";
 import { Button } from "@/components/ui/button";
 import { subagentBrief } from "@/lib/tools";
-import { isShellRun, opensTab, type SubagentRun } from "@/lib/transcript";
+import { canOpenTab, isShellRun, opensTab, type SubagentRun } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 import type { AgentEvent, ToolResult } from "@/types/events";
 
@@ -95,6 +95,7 @@ function RunSection({
             live={live}
             onToggle={() => onSelect(run.id === selectedId ? null : run.id)}
             onOpen={onOpen && opensTab(run) ? () => onOpen(run) : undefined}
+            locked={opensTab(run) && !canOpenTab(run)}
             onStopTask={onStopTask}
           />
         ))}
@@ -132,7 +133,21 @@ function spawnCommand(run: SubagentRun): string | null {
 /// The row's mark: a filled tile holding the terminal glyph or the working orb
 /// the chat's subagent row carries, or a bare check once a subagent is done —
 /// no tile, so history reads quieter than what is live.
-function RunMark({ run, shell }: { run: SubagentRun; shell: boolean }) {
+///
+/// `bare` drops the tile for a run with no Stop beside it (fx's): the tile
+/// reads as a control, and its width only lined titles up with tiled rows.
+function RunMark({ run, shell, bare }: { run: SubagentRun; shell: boolean; bare: boolean }) {
+  if (bare) {
+    return (
+      <span className="flex size-4 shrink-0 items-center justify-center">
+        {run.done ? (
+          <Check aria-label="Done" className="size-3.5 text-muted-foreground" />
+        ) : (
+          <Orb state="working" variant="gyro" size={16} label="Working" />
+        )}
+      </span>
+    );
+  }
   if (!shell && run.done) {
     // The tile's width without its height, so finished titles still line up.
     return (
@@ -164,6 +179,7 @@ function RunRow({
   live,
   onToggle,
   onOpen,
+  locked,
   onStopTask,
 }: {
   run: SubagentRun;
@@ -173,6 +189,8 @@ function RunRow({
   onToggle: () => void;
   /// Where set, a click opens the run's tab rather than expanding the row.
   onOpen?: () => void;
+  /// The tab has nothing to show until the run ends, so the row waits.
+  locked: boolean;
   onStopTask: (taskId: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -196,6 +214,8 @@ function RunRow({
   // lifecycle event names it, and a dead child's tasks died with it — either way
   // the button would be one the CLI answers success to and nothing happens.
   const stoppable = live && !run.done && run.taskId !== null;
+  // fx publishes no handle for a child, so its rows never carry Stop.
+  const bare = !shell && run.spawn?.harness === "fx";
 
   // The brief a harness nests rather than streams — fx's, and the whole of what
   // it says about the child. Null everywhere else, where the spawning call's own
@@ -210,14 +230,15 @@ function RunRow({
   // by itself.
   const hasContent =
     command !== null || run.events.length > 0 || (run.spawn != null && hasBrief(run.spawn));
-  const expands = !onOpen && hasContent;
+  const expands = !onOpen && !locked && hasContent;
+  const opens = !!onOpen && !locked;
 
   return (
     <div
       ref={ref}
       className={cn(
         "group rounded-lg transition-colors",
-        (onOpen || expands) && "hover:bg-sidebar-accent/50",
+        (opens || expands) && "hover:bg-sidebar-accent/50",
       )}
     >
       {/* A row, not one button: the stop control is a second action on the same
@@ -225,17 +246,19 @@ function RunRow({
       <div className="flex items-center">
         <button
           type="button"
-          onClick={onOpen ?? onToggle}
-          disabled={!onOpen && !expands}
+          onClick={opens ? onOpen : onToggle}
+          disabled={!opens && !expands}
           className={cn(
-            "flex min-w-0 flex-1 cursor-default items-center gap-2.5 pl-2.5 text-left",
+            "flex min-w-0 flex-1 cursor-default items-center pl-2.5 text-left",
+            bare ? "gap-2" : "gap-2.5",
             // A finished subagent is history: the shorter row is half of how it
-            // steps back, the bare check the other.
-            !shell && run.done ? "py-1" : "py-1.5",
+            // steps back, the bare check the other. A bare row is one height
+            // throughout, so nothing jumps when its run ends.
+            bare || (!shell && run.done) ? "py-1" : "py-1.5",
             stoppable ? "pr-1" : "pr-2.5",
           )}
         >
-          <RunMark run={run} shell={shell} />
+          <RunMark run={run} shell={shell} bare={bare} />
           <span className="min-w-0 flex-1">
             {/* Flex parents, because `shimmer-text` is inline-block: in a line
                 box it sits on the baseline and lifts the text off centre. */}
@@ -261,7 +284,7 @@ function RunRow({
           </span>
           {/* Each kind says what a click does, on hover: a subagent opens a
               tab, a shell expands — and an open shell keeps its caret. */}
-          {onOpen ? (
+          {opens ? (
             <ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
           ) : (
             expands && (

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTranscript, drawsSameTurn, hiddenInBotChat, isToolGroup, opensTab, runningRuns, segmentMedia, segmentWork, sessionMedia, type Turn } from "@/lib/transcript";
+import { buildTranscript, canOpenTab, drawsSameTurn, hiddenInBotChat, isToolGroup, opensTab, runningRuns, segmentMedia, segmentWork, sessionMedia, type Turn } from "@/lib/transcript";
 import type { AgentEvent, AgentEventPayload, ToolResult } from "@/types/events";
 
 /// Only the envelope fields `buildTranscript` orders and keys by are filled;
@@ -854,6 +854,40 @@ describe("a call whose background task the child still holds", () => {
     it("names no task, so nothing offers to stop it", () => {
       const { subagentById } = buildTranscript([fxCall(0, "c1"), fxSpawn(1, "c1")], true);
       expect(subagentById.get("c1")?.taskId).toBeNull();
+    });
+
+    /// fx 0.0.17's call answers at once and the child works on; the mapper
+    /// lists it as a background task under the call's id until the report.
+    describe("a named child working in the background", () => {
+      const named = (seq: number, callId: string): AgentEvent =>
+        fx(seq, {
+          type: "tool_call_started",
+          callId,
+          name: "subagent",
+          toolType: "subagent_spawn",
+          input: { action: "message", agent: "worker", message: "Reply with exactly: hi" },
+          rawInput: null,
+          title: null,
+        } as AgentEventPayload);
+      const answered = (seq: number, callId: string): AgentEvent =>
+        fx(seq, {
+          type: "tool_call_completed",
+          callId,
+          result: { text: "Sent to worker, which works on it now.", isError: false, structured: null, exitCode: null, durationMs: null, images: [] },
+        } as AgentEventPayload);
+      const log = [named(0, "c1"), fxSpawn(1, "c1"), answered(2, "c1")];
+
+      it("is running while its task is live, and opens only once done", () => {
+        const run = buildTranscript(log, false, new Set(["c1"])).subagentById.get("c1")!;
+        expect([run.done, run.background, opensTab(run), canOpenTab(run)]).toEqual([false, false, true, false]);
+        // No Stop: fx has no request to end a child.
+        expect(run.taskId).toBeNull();
+      });
+
+      it("is done once its task is gone", () => {
+        const run = buildTranscript(log, false, new Set()).subagentById.get("c1")!;
+        expect([run.done, canOpenTab(run)]).toEqual([true, true]);
+      });
     });
   });
 });

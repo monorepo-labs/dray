@@ -1235,6 +1235,20 @@ async fn read_stdout(
         }
     }
 
+    // A named subagent still working is a background task, and it died with
+    // the child: emptying the set is what ends its run, since no report can
+    // come now. A no-op where nothing was running.
+    crate::session::settle_dead_child(
+        &handles.session_id,
+        Fx,
+        &seq,
+        &status,
+        &queued,
+        "fx stopped before the turn finished",
+        &handles.app,
+    )
+    .await;
+
     Ok(())
 }
 

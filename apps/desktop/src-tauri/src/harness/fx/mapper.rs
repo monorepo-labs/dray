@@ -9,7 +9,7 @@
 //! non-thought update.
 
 use crate::events::{
-    usage::ContextWindow, AgentEvent, AgentEventPayload, BlockType, DeltaEvent, SessionInfo, Subagent, ToolResult, ToolType, TurnStatus, Usage,
+    usage::ContextWindow, AgentEvent, AgentEventPayload, BackgroundTask, BlockType, DeltaEvent, SessionInfo, Subagent, ToolResult, ToolType, TurnStatus, Usage,
 };
 use crate::harness::acp::{self, block_ref, OpenBlock};
 use crate::harness::{mentions_any, Harness};
@@ -78,7 +78,19 @@ pub struct Mapper {
     /// delegated six times otherwise reports none of them; the chat draws the
     /// tool row rather than a link into the panel, which is what
     /// `SubagentRun.inline` is for.
-    subagents: HashSet<String>,
+    subagents: HashMap<String, Run>,
+}
+
+/// An open delegated run, by its spawning call.
+struct Run {
+    /// The brief, which is what the background task list names it by.
+    task: String,
+    /// fx 0.0.17's shape: a named child messaged in the background, whose call
+    /// closes twice — once at once to say the child took the work, again with
+    /// its report.
+    named: bool,
+    /// The first close has landed and the child is still working.
+    working: bool,
 }
 
 impl Mapper {
@@ -92,7 +104,7 @@ impl Mapper {
             occupancy: None,
             outputs: HashMap::new(),
             suppressed: HashSet::new(),
-            subagents: HashSet::new(),
+            subagents: HashMap::new(),
             shells: HashSet::new(),
         }
     }
@@ -170,6 +182,7 @@ impl Mapper {
                 let name = name.unwrap_or_else(|| kind.name().to_string());
                 let input = tool_input(kind, raw_input);
                 let task = (name == "subagent").then(|| subagent_task(&input)).flatten();
+                let named = input.get("agent").and_then(Value::as_str).is_some();
                 // A `wait` or any other non-delegating action is no spawn, or
                 // it would draw as "Delegating" with nothing delegated.
                 let tool_type = match (&task, name.as_str()) {
@@ -196,7 +209,10 @@ impl Mapper {
                 // lists nothing however many children a session delegates to.
                 // See [`Self::subagents`] for what this costs.
                 if let Some(task) = task {
-                    self.subagents.insert(tool_call_id.clone());
+                    self.subagents.insert(
+                        tool_call_id.clone(),
+                        Run { task: task.clone(), named, working: false },
+                    );
                     out.push(self.subagent_event(
                         &tool_call_id,
                         AgentEventPayload::SubagentStarted {
@@ -256,13 +272,30 @@ impl Mapper {
                     images: Vec::new(),
                 };
 
+                let report = is_report(&result.text);
                 let mut out = vec![self.event(AgentEventPayload::ToolCallCompleted {
                     call_id: tool_call_id.clone(),
                     result,
                 })];
+                // A named child's first close only says it took the work, so
+                // the run stays open, listed as a background task, until the
+                // report closes the call again. The task is what keeps the run
+                // open in the transcript, and what closes it if the child dies
+                // before reporting: `settle_dead_child` empties the set.
+                if let Some(run) = self.subagents.get_mut(&tool_call_id) {
+                    if run.named && !run.working && !report && status != ToolStatus::Failed {
+                        run.working = true;
+                        out.push(self.background_tasks());
+                        out.push(self.event(AgentEventPayload::ModelRequestStarted));
+                        return out;
+                    }
+                }
                 // Closes the run the spawning call opened, or the panel row
                 // shimmers for the rest of the session.
-                if self.subagents.remove(&tool_call_id) {
+                if let Some(run) = self.subagents.remove(&tool_call_id) {
+                    if run.working {
+                        out.push(self.background_tasks());
+                    }
                     out.push(self.subagent_event(
                         &tool_call_id,
                         AgentEventPayload::SubagentCompleted {
@@ -492,6 +525,24 @@ impl Mapper {
         self.event(payload)
     }
 
+    /// The named children still working, as the whole set — the payload
+    /// replaces. Each is keyed on its spawning call, which is the run's own id,
+    /// since fx publishes no handle for a child.
+    fn background_tasks(&self) -> AgentEvent {
+        let mut tasks: Vec<BackgroundTask> = self
+            .subagents
+            .iter()
+            .filter(|(_, run)| run.working)
+            .map(|(id, run)| BackgroundTask {
+                task_id: id.clone(),
+                task_type: "local_agent".to_string(),
+                description: run.task.clone(),
+            })
+            .collect();
+        tasks.sort_by(|a, b| a.task_id.cmp(&b.task_id));
+        self.event(AgentEventPayload::BackgroundTasksChanged { tasks })
+    }
+
     /// A lifecycle event belonging to a run rather than to the conversation.
     /// The envelope's `id` is the spawning call's, which is what the transcript
     /// correlates a run on.
@@ -562,6 +613,12 @@ pub(super) fn subagent_task(input: &Value) -> Option<String> {
 
 /// How a run ended, in the vocabulary [`AgentEventPayload::SubagentCompleted`]
 /// already uses.
+/// Whether a close carries a child's report rather than fx's word that the
+/// child took the work. The prefix is fx 0.0.17's, from `subagent_background`.
+fn is_report(text: &str) -> bool {
+    text.trim_start().starts_with("Subagent report")
+}
+
 fn status_word(status: ToolStatus) -> &'static str {
     if status == ToolStatus::Failed {
         "failed"
@@ -1033,6 +1090,60 @@ mod tests {
             })
             .unwrap();
         assert!(last.contains("\"output\":\"alpha line one\""), "{last}");
+    }
+
+    /// The run is working from fx's first close, which only says the child
+    /// took the work, until the report: listed as a background task between
+    /// the two, so the transcript keeps it open and a dead child closes it.
+    #[test]
+    fn a_background_subagent_runs_until_its_report() {
+        let events = replay(include_str!("fixtures/subagent_background.jsonl"));
+        let spawn = "call-a6ac7c59-b047-4809-818d-f660718b215b-0";
+        let closes: Vec<usize> = events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matches!(&e.payload, P::ToolCallCompleted { call_id, .. } if call_id == spawn))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(closes.len(), 2, "an ack and a report");
+
+        let sets: Vec<(usize, Vec<String>)> = events
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| match &e.payload {
+                P::BackgroundTasksChanged { tasks } => {
+                    Some((i, tasks.iter().map(|t| t.task_id.clone()).collect()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sets.len(), 2, "{sets:?}");
+        assert!(sets[0].0 > closes[0] && sets[0].0 < closes[1]);
+        assert_eq!(sets[0].1, [spawn]);
+        assert!(sets[1].0 > closes[1] && sets[1].1.is_empty());
+
+        let done: Vec<usize> = events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matches!(e.payload, P::SubagentCompleted { .. }))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(done.len(), 1);
+        assert!(done[0] > closes[1], "closed by the report, not the ack");
+    }
+
+    /// A named child whose first close fails took no work, so nothing is left
+    /// running behind it.
+    #[test]
+    fn a_failed_message_closes_the_run_at_once() {
+        let fixture = concat!(
+            r#"<< {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"x","update":{"sessionUpdate":"tool_call","toolCallId":"c1","name":"subagent","kind":"other","status":"pending","rawInput":{"action":"message","agent":"worker","message":"Do it"}}}}"#,
+            "\n",
+            r#"<< {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"x","update":{"sessionUpdate":"tool_call_update","toolCallId":"c1","status":"failed","content":[{"type":"content","content":{"type":"text","text":"no such agent"}}]}}}"#,
+        );
+        let events = replay(fixture);
+        assert!(events.iter().any(|e| matches!(e.payload, P::SubagentCompleted { .. })));
+        assert!(!events.iter().any(|e| matches!(e.payload, P::BackgroundTasksChanged { .. })));
     }
 
     /// The two names that outrank the kind fx sends with them. No capture here

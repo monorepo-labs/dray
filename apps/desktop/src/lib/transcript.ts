@@ -40,6 +40,9 @@ export type SubagentRun = {
   /// which is true of every run for its first frame and would flip the row out
   /// from under a Claude subagent the moment it started working.
   inline: boolean;
+  /// The run's tab has nothing to show until the run ends: fx saves a child's
+  /// conversation only when its turn does, so its rows open once it is done.
+  opensWhenDone: boolean;
   /// The main-thread `tool_call_started` that spawned this run. It is the only
   /// place a `local_bash` task's command and output live — such a task reports
   /// no events of its own, so a run built from the envelope alone is empty —
@@ -885,6 +888,7 @@ function build(
         background: false,
         usage: null,
         inline: event.harness === "fx",
+        opensWhenDone: false,
         events: [],
         spawn: null,
       };
@@ -933,9 +937,15 @@ function build(
     run.spawn = callById.get(run.id) ?? null;
     run.background = !run.done && resultByCallId.has(run.id);
     // fx 0.0.17 names its child, and `fx session <id>/<agent>` reads the
-    // child's conversation back, so the run has a tab to open after all.
+    // child's conversation back, so the run has a tab to open after all. Its
+    // call answers at once, so that answer is fx taking the work, not a
+    // backgrounded run: the child ends, and the run is working until it does.
     const input = run.spawn?.payload.type === "tool_call_started" ? run.spawn.payload.input : null;
-    if (run.inline && input && subagentBrief(input)?.agent) run.inline = false;
+    if (run.inline && input && subagentBrief(input)?.agent) {
+      run.inline = false;
+      run.opensWhenDone = true;
+      run.background = false;
+    }
   }
 
   // Applied last, and only where no real result exists. A background subagent
@@ -945,8 +955,8 @@ function build(
   // because the task id lives on the run and not on the call.
   for (const callId of abandoned) {
     if (resultByCallId.has(callId)) continue;
-    const taskId = subagentById.get(callId)?.taskId;
-    if (taskId !== null && taskId !== undefined && liveTaskIds.has(taskId)) continue;
+    const run = subagentById.get(callId);
+    if (run && liveTaskIds.has(taskHandle(run))) continue;
     resultByCallId.set(callId, ABANDONED);
   }
 
@@ -954,7 +964,7 @@ function build(
   // `subagent_completed` only arrives from a child still alive to send it.
   // After the abandoned marks, since a stand-in is an answer here too.
   for (const run of subagentById.values()) {
-    if (run.done || (run.taskId !== null && liveTaskIds.has(run.taskId))) continue;
+    if (run.done || liveTaskIds.has(taskHandle(run))) continue;
     run.done = resultByCallId.has(run.id);
   }
 
@@ -983,6 +993,19 @@ function build(
     editsByCallId,
     pendingAsks,
   };
+}
+
+/// The id a run's live background task goes by. fx names no handle for its
+/// child, so its mapper lists the task under the spawning call's id, which a
+/// harness's own task id never equals.
+function taskHandle(run: SubagentRun): string {
+  return run.taskId ?? run.id;
+}
+
+/// Whether a click can open the run's tab now: one that has a conversation and
+/// can already show it.
+export function canOpenTab(run: SubagentRun): boolean {
+  return opensTab(run) && !(run.opensWhenDone && !run.done);
 }
 
 /// The runs the More tab lists: every subagent, and the shells still running
