@@ -503,6 +503,11 @@ pub enum AgentEventPayload {
         /// or `unknown`. The last is the majority case and says nothing, so it
         /// is dropped on the way in rather than shown.
         reason: Option<String>,
+        /// The harness's own status line, drawn in place of the attempt count
+        /// where present. fx alone sends one ("Gateway error · next try in 3s ·
+        /// attempt 3") and restates it every second, so its countdown moves.
+        #[serde(default)]
+        message: Option<String>,
     },
     /// A compaction finished, and the transcript before it no longer reaches the
     /// model. Both counts are optional so an unfamiliar wire shape still closes

@@ -1173,6 +1173,16 @@ async fn read_stdout(
         };
 
         for agent_event in mapper.map(event) {
+            // fx restates a running retry every second with a fresh countdown,
+            // for as long as the network is down. Emitted, never logged: one
+            // line a second is a log read whole on every open, and the next
+            // tick redraws the row after a reconnect anyway.
+            if matches!(agent_event.payload, AgentEventPayload::ApiRetry { .. }) {
+                if let Err(err) = handles.app.emit("agent_event", &agent_event) {
+                    eprintln!("[fx retry emit err] {err}");
+                }
+                continue;
+            }
             crate::session::ingest(&ingest, agent_event, &handles.app).await;
         }
     }

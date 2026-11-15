@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 
 use super::parser::{
-    FxEvent, PromptResponse, SessionUpdate, ToolContent, ToolKind, ToolStatus,
+    FxEvent, PromptResponse, Recovery, SessionUpdate, ToolContent, ToolKind, ToolStatus,
 };
 
 /// What fx says when the session's provider wants a login. Written to
@@ -293,14 +293,51 @@ impl Mapper {
                 }))]
             }
 
-            // fx's own title, dropped: Dray titles fx sessions itself.
-            SessionUpdate::SessionInfoUpdate
-            | SessionUpdate::AvailableCommandsUpdate
+            // fx's own title is dropped: Dray titles fx sessions itself.
+            SessionUpdate::SessionInfoUpdate { meta } => match meta.fx.model_response_recovery {
+                Some(Some(recovery)) => self.recovery(recovery),
+                // The retry is over and the request is going out. Deltas never
+                // reach the events list, so without this the retry row would
+                // stay up over the reply streaming in under it.
+                Some(None) => vec![self.event(AgentEventPayload::ModelRequestStarted)],
+                None => Vec::new(),
+            },
+
+            SessionUpdate::AvailableCommandsUpdate
             | SessionUpdate::UserMessageChunk
             | SessionUpdate::CurrentModeUpdate
             | SessionUpdate::Plan
             | SessionUpdate::Unknown => Vec::new(),
         }
+    }
+
+    /// A model request fx is retrying (0.0.17), as the retry row.
+    ///
+    /// fx retries until it gets through or the turn is stopped, and restates
+    /// the countdown every second, so this fires once a second for as long as
+    /// a network is down. The read loop emits these and logs none of them.
+    ///
+    /// `recovered` arrives after the reply it recovered and `failed` just
+    /// before the prompt answers, so each is already on screen another way.
+    /// Any other state is drawn with fx's own sentence, `need_user` included:
+    /// never seen over ACP on a custom connection, where a quota or filter
+    /// refusal answers `refused` at once, but documented for `fx ask --json`.
+    fn recovery(&mut self, recovery: Recovery) -> Vec<AgentEvent> {
+        if matches!(recovery.state.as_str(), "recovered" | "failed") {
+            return Vec::new();
+        }
+        let message = recovery
+            .message
+            .filter(|m| !m.trim().is_empty())
+            .or_else(|| recovery.need.as_ref().map(|need| format!("fx is waiting on you: {need}")));
+        vec![self.event(AgentEventPayload::ApiRetry {
+            attempt: recovery.attempt.unwrap_or(1),
+            // Unbounded: fx retries until it gets through or is stopped.
+            max_retries: 0,
+            status: None,
+            reason: recovery.need,
+            message,
+        })]
     }
 
     fn prompt_done(&mut self, response: PromptResponse) -> Vec<AgentEvent> {
@@ -1103,5 +1140,82 @@ mod tests {
                 "{text:?} was dropped"
             );
         }
+    }
+
+    const RETRY_RECOVERED: &str = include_str!("fixtures/retry_recovered.jsonl");
+    const RETRY_CANCELLED: &str = include_str!("fixtures/retry_cancelled.jsonl");
+
+    fn retry_messages(events: &[AgentEvent]) -> Vec<(u32, &str)> {
+        events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                P::ApiRetry { attempt, message, .. } => Some((*attempt, message.as_deref()?)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Three 503s, then a reply. Every countdown tick draws fx's own sentence,
+    /// the `null` that ends the retry is a request starting — so the retry row
+    /// gives way before the reply streams — and `recovered` draws nothing.
+    #[test]
+    fn a_retry_draws_fx_s_countdown_and_clears_before_the_reply() {
+        let events = replay(RETRY_RECOVERED);
+
+        let retries = retry_messages(&events);
+        assert_eq!(retries.len(), 10);
+        assert_eq!(retries[0], (1, "Gateway error · next try in 1s · attempt 1"));
+        assert_eq!(retries[4], (3, "Gateway error · retrying · attempt 3"));
+        assert_eq!(retries.last().unwrap(), &(4, "Gateway error · retrying · attempt 4"));
+
+        let last_retry = events.iter().rposition(|e| matches!(e.payload, P::ApiRetry { .. })).unwrap();
+        let text = events.iter().position(|e| matches!(e.payload, P::Delta(_))).unwrap();
+        assert!(
+            events[last_retry..text].iter().any(|e| matches!(e.payload, P::ModelRequestStarted)),
+            "the reply must not stream in under a retry row",
+        );
+
+        let P::TurnCompleted { status, .. } = &events.last().unwrap().payload else {
+            panic!("the turn closes");
+        };
+        assert_eq!(*status, TurnStatus::Success);
+    }
+
+    /// Stop during a retry: fx clears the retry and answers `cancelled`, which
+    /// is the same quiet close any other Stop gets. 0.0.17 dropped the separate
+    /// pause, so there is no third outcome.
+    #[test]
+    fn a_stop_during_a_retry_closes_the_turn_like_any_stop() {
+        let events = replay(RETRY_CANCELLED);
+
+        assert!(!retry_messages(&events).is_empty());
+        let P::TurnCompleted { status, stop_reason, final_text, .. } = &events.last().unwrap().payload else {
+            panic!("the turn closes");
+        };
+        assert_eq!(*status, TurnStatus::Success);
+        assert_eq!(stop_reason.as_deref(), Some("cancelled"));
+        assert_eq!(*final_text, None);
+    }
+
+    /// The states the captures never reach: `need_user` with no sentence still
+    /// says what fx waits on; `failed` and `recovered` draw nothing.
+    #[test]
+    fn a_recovery_state_with_no_sentence_still_draws() {
+        let mut mapper = Mapper::new("s".into(), Arc::new(AtomicU64::new(0)));
+        let recovery = |state: &str, need: Option<&str>| Recovery {
+            state: state.into(),
+            attempt: Some(2),
+            need: need.map(str::to_string),
+            message: None,
+        };
+
+        let events = mapper.recovery(recovery("need_user", Some("quota")));
+        assert!(matches!(
+            &events[0].payload,
+            P::ApiRetry { attempt: 2, reason: Some(need), message: Some(m), .. }
+                if need == "quota" && m == "fx is waiting on you: quota"
+        ));
+        assert!(mapper.recovery(recovery("failed", None)).is_empty());
+        assert!(mapper.recovery(recovery("recovered", None)).is_empty());
     }
 }

@@ -390,7 +390,13 @@ status: number | null,
  * or `unknown`. The last is the majority case and says nothing, so it
  * is dropped on the way in rather than shown.
  */
-reason: string | null, } | { "type": "context_compacted", 
+reason: string | null, 
+/**
+ * The harness's own status line, drawn in place of the attempt count
+ * where present. fx alone sends one ("Gateway error · next try in 3s ·
+ * attempt 3") and restates it every second, so its countdown moves.
+ */
+message: string | null, } | { "type": "context_compacted", 
 /**
  * `manual` or `auto`.
  */

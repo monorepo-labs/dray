@@ -814,6 +814,7 @@ impl Mapper {
                 max_retries: 0,
                 status: None,
                 reason: err.error.codex_error_info.as_ref().map(error_kind),
+                message: None,
             })];
         }
 

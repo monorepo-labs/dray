@@ -1087,6 +1087,7 @@ export default function Chat({
                 maxRetries={apiRetry.maxRetries}
                 status={apiRetry.status}
                 reason={apiRetry.reason}
+                message={apiRetry.message}
               />
             )}
           </div>

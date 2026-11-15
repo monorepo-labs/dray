@@ -487,6 +487,7 @@ impl Mapper {
                 // Dropped here so every consumer sees one absence rather than
                 // two spellings of it.
                 reason: error.filter(|e| e != "unknown"),
+                message: None,
             })),
             SystemEvent::CompactBoundary {
                 compact_metadata, ..
@@ -2539,6 +2540,7 @@ mod tests {
                 max_retries: 10,
                 status: None,
                 reason: None,
+                ..
             }
         ));
 
@@ -2547,6 +2549,7 @@ mod tests {
             max_retries,
             status,
             reason,
+            ..
         } = payloads[1]
         else {
             panic!("expected a retry");
