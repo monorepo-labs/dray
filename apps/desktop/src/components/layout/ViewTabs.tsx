@@ -46,12 +46,22 @@ import {
   closeTab,
   openInBrowser,
   setPendingTab,
+  stoppedServer,
   useBlankTabs,
   useBrowserTabs,
   useParkedTabs,
   usePendingTab,
   useRecordedTab,
+  type BrowserTab,
 } from "@/lib/browser";
+
+/// A page's name in the row. A stopped dev server's is its address, as its
+/// page draws it, where Chromium's error page would title it the host alone.
+function pageLabel(page: BrowserTab, browser: string): string {
+  const stopped = stoppedServer(page, browser);
+  if (stopped) return `localhost:${stopped.port}`;
+  return page.error ? "Can't reach page" : page.title || hostOf(page.url);
+}
 import { seededAvatar } from "@/lib/botAvatar";
 import { tabLabels } from "@/lib/fileTree";
 import {
@@ -348,7 +358,7 @@ export default function ViewTabs({
     ...pages.map((page) => ({
       key: `page:${page.id}`,
       icon: <Favicon tab={page} />,
-      label: page.error ? "Can't reach page" : page.title || hostOf(page.url),
+      label: pageLabel(page, browserId),
       active: own === "browser" && page.active && !pending,
       overlay: <AgentBeam tab={page.id} />,
       locked: page.id === recorded,
