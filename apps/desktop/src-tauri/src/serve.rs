@@ -600,6 +600,9 @@ pub async fn listen(
             // Reaps finished connections, so the set holds live ones alone.
             Some(_) = connections.join_next() => continue,
         };
+        // The welcome and `live_state` go out as two small writes, and Nagle
+        // held the second for the client's delayed ACK: 40ms on every connect.
+        let _ = stream.set_nodelay(true);
         let (sink, hub, token, tunnel_file) = (sink.clone(), hub.clone(), token.clone(), tunnel_file.clone());
         connections.spawn(async move {
             // Bounded like the rest of what comes before the token: `peek`
