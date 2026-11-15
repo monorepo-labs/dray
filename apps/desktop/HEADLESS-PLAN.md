@@ -125,7 +125,7 @@ the reader's strip. So headless `emit` does nothing.
   is accepted and logged, since an open one blocks every `Runtime.evaluate`.
 - **Default window 1440×900**, the Mac's `DEFAULT_VIEWPORT`, so `snapshot` and
   `click` see the laptop layout a screenshot shows.
-- **Discard**: a session's browser unused for 5 minutes is killed and its tabs
+- **Discard**: a session's browser unused for 15 minutes is killed and its tabs
   kept with url and title; the next verb on one relaunches and reopens it under
   the same id. Not while recording or driven. The Mac's reason, worse on a
   small VPS.
