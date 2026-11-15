@@ -166,6 +166,8 @@ jobs:
           filter: blob:none
 
       - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: .github/scripts/cli-publish-gate.sh decide "$GITHUB_REF_NAME"
 
       - if: steps.decide.outputs.moved == 'true'

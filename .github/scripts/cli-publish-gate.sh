@@ -21,6 +21,8 @@ repo=${GITHUB_REPOSITORY:-monorepo-labs/dray}
 
 die() { echo "::error::$*" >&2; exit 1; }
 out() { [ -z "${GITHUB_OUTPUT:-}" ] || printf '%s\n' "$@" >> "$GITHUB_OUTPUT"; }
+# The tag endpoint answers published releases alone, drafts 404.
+published() { gh api "repos/$repo/releases/tags/$1" --silent 2>/dev/null; }
 protocol_at() {
   git show "$1:$proto_file" | sed -n 's/^pub const PROTOCOL_VERSION: u32 = \([0-9]*\);$/\1/p'
 }
@@ -30,11 +32,17 @@ decide() {
   now=$(protocol_at "$tag")
   [ -n "$now" ] || die "no PROTOCOL_VERSION in $proto_file at $tag"
 
-  # A stable CLI is measured against the last stable one, since stable users
-  # never had the betas in between; a beta against whatever shipped last.
+  # Measured against the last CLI that shipped, not the last tag: a tag whose
+  # publish never happened (its gate timed out) put nothing in anyone's hands,
+  # and comparing against it would wave the next one through. A stable CLI
+  # skips betas too, since stable users never had them.
   local skip=()
   case ${tag#cli-v} in *-*) ;; *) skip=(--exclude 'cli-v*-*') ;; esac
-  prev=$(git describe --tags --abbrev=0 --match 'cli-v*' "${skip[@]}" "$tag^" 2>/dev/null || true)
+  prev=$tag
+  while prev=$(git describe --tags --abbrev=0 --match 'cli-v*' "${skip[@]}" "$prev^" 2>/dev/null); do
+    published "$prev" && break
+    echo "skipping $prev: no published release"
+  done
   before=${prev:+$(protocol_at "$prev")}
 
   if [ -n "$prev" ] && [ "$before" = "$now" ]; then
