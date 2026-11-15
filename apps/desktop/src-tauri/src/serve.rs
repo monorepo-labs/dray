@@ -109,6 +109,35 @@ pub fn frame_in(message: Message) -> Option<String> {
 /// would leave a transcript wrong with nothing to say so.
 const EVENT_BACKLOG: usize = 4096;
 
+/// A reply this large leaves its parse and its JSON freed but held in glibc's
+/// arenas: ~280MB resident after a 40MB transcript read.
+const TRIM_AFTER: usize = 1 << 20;
+
+/// How long after the last large reply the heap is trimmed. A scroll up a
+/// transcript is a burst of pages, and a trim after each made paging 25% slower.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+const TRIM_QUIET: std::time::Duration = std::time::Duration::from_secs(1);
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+static LARGE_REPLIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Hands freed heap back to the OS once no large reply has gone out for
+/// [`TRIM_QUIET`]. glibc keeps what a worker thread's arena frees.
+fn give_back_memory_soon() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        use std::sync::atomic::Ordering::Relaxed;
+        let this = LARGE_REPLIES.fetch_add(1, Relaxed) + 1;
+        tokio::spawn(async move {
+            tokio::time::sleep(TRIM_QUIET).await;
+            if LARGE_REPLIES.load(Relaxed) == this {
+                // SAFETY: malloc_trim only walks glibc's own arenas, under their locks.
+                let _ = tokio::task::spawn_blocking(|| unsafe { libc::malloc_trim(0) }).await;
+            }
+        });
+    }
+}
+
 /// How long a connection may take to prove itself — the `/file` head, or the
 /// handshake plus hello — before it is dropped. Everything before the token is
 /// checked is somebody unknown spending this process's memory.
@@ -1499,8 +1528,12 @@ async fn connection(
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
             };
+            let big = frame.len() >= TRIM_AFTER;
             if write.send(frame_out(frame, deflate)).await.is_err() {
                 break;
+            }
+            if big {
+                give_back_memory_soon();
             }
         }
         write.close().await.ok();
