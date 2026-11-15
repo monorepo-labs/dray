@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { flushSync } from "react-dom";
 
@@ -13,7 +13,8 @@ import "../App.css";
 /// The real `Chat` as a bot chat sixty exchanges long, and a row picked from
 /// its "Waiting on you" card. The question: the chat glides from its bottom to
 /// the bot's reply about the task and stays there — whether that reply is in
-/// the drawn tail or far above it, and whether a reply lands mid-glide.
+/// the drawn tail or far above it, and whether a reply lands mid-glide — and
+/// that what it read is let go again once the reader is back at the bottom.
 /// `?paged` reads it from a fake log a page at a time, as the app does.
 /// **Run check** puts the verdict in the window title, for Safari too.
 
@@ -83,6 +84,9 @@ function Demo() {
   const [events, setEvents] = useState(EVENTS);
   // Where in the log the held events start.
   const [from, setFrom] = useState(TAIL);
+  // How many events the session holds, for the trim leg.
+  const held = useRef(0);
+  held.current = events.length - from;
   useEffect(() => {
     let reading = false;
     setOlderLoader((_, turns = 16) => {
@@ -142,7 +146,21 @@ function Demo() {
         results.push(`${name}: ${at === null ? "block gone" : at >= -2 && at < 150 ? "landed" : `${at}px off`}`);
       }
     }
-    const pass = results.every((r) => r.endsWith("landed"));
+    // Back at the bottom, what the jump read and drew is let go again.
+    const rows = () => document.querySelector("[data-bot-chat]")?.children.length ?? 0;
+    await toBottom();
+    const before = { rows: rows(), held: held.current };
+    pick(OLD);
+    await sleep(2500);
+    const jumped = { rows: rows(), held: held.current };
+    await toBottom();
+    await sleep(600);
+    const back = { rows: rows(), held: held.current };
+    const trimmed = back.rows === before.rows && back.held === before.held;
+    results.push(
+      `trim: ${trimmed ? "trimmed" : "kept"} (rows ${before.rows}→${jumped.rows}→${back.rows}, events ${before.held}→${jumped.held}→${back.held})`,
+    );
+    const pass = results.every((r) => r.endsWith("landed") || r.startsWith("trim: trimmed"));
     const text = `${pass ? "PASS" : "FAIL"} — ${results.join(", ")}`;
     setVerdict(text);
     document.title = text;
