@@ -104,6 +104,13 @@ describe("stalledTasks", () => {
     expect(stalledTasks([row("a")], unknown, seen, T0 + STALL_MS, fresh)).toEqual([]);
   });
 
+  it("never carries one PR's readiness to another on the same task", () => {
+    const seen = new Map<string, number>();
+    expect(stalledTasks([row("a")], () => pr(), seen, T0 + STALL_MS, fresh)[0].kind).toBe("ready");
+    const other = () => pr({ number: 909, mergeable: "UNKNOWN" });
+    expect(stalledTasks([row("a")], other, seen, T0 + STALL_MS, fresh)).toEqual([]);
+  });
+
   it("leaves a task whose checks are still running alone", () => {
     const running = () => pr({ checksState: "RUNNING", mergeStateStatus: "BLOCKED" });
     expect(stalledTasks([row("a")], running, new Map(), T0 + 2 * STALL_MS, fresh)).toEqual([]);

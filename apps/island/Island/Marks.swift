@@ -430,6 +430,9 @@ struct WaitingTask: Decodable, Hashable {
     let need: String?
     /// Its PR can land, so the card carries Merge.
     let ready: Bool
+    /// GitHub is working out a ready PR's mergeability again, as after any
+    /// merge: no Merge until it answers. Absent from an older app.
+    var checking: Bool? = nil
     let pr: PrMark?
 }
 
@@ -468,7 +471,13 @@ struct WaitingCard: View {
                         .fixedSize()
                     }
                     Spacer(minLength: 4)
-                    if task.ready, task.pr != nil { mergeControl }
+                    if task.ready, task.pr != nil {
+                        if task.checking == true {
+                            Text("Checking…").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
+                        } else {
+                            mergeControl
+                        }
+                    }
                     if let at = parseDate(task.modified) {
                         Text(shortAge(at)).font(.system(size: 11).monospacedDigit()).foregroundStyle(.white.opacity(0.35))
                     }

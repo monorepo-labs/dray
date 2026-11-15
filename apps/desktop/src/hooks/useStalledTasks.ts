@@ -167,6 +167,7 @@ export function useStalledTasks({
         modified: s.row.item.modified,
         need: needLine(s) ?? null,
         ready: s.kind === "ready",
+        checking: !!s.checking,
         pr: s.pr ?? null,
       }));
       void islandOn("done", chatId).then((on) =>
