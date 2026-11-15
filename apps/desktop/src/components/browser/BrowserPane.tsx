@@ -1082,7 +1082,7 @@ function Servers({
                           <Button
                             variant="ghost"
                             size="icon-sm"
-                            aria-label="Get public link"
+                            aria-label="Get shareable link"
                             onClick={() => share(o.sessionId, s.port)}
                             disabled={sharing !== null}
                             className={cn("shrink-0 text-muted-foreground", TOOL_BTN)}
@@ -1092,7 +1092,7 @@ function Servers({
                         </TooltipTrigger>
                         <TooltipContent>
                           {sharing !== key
-                            ? "Get public link — anyone can open it, until you stop it"
+                            ? "Get shareable link"
                             : fetching
                               ? "Setting up tunnel…"
                               : "Creating link…"}

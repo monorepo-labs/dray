@@ -277,11 +277,11 @@ function A({ win }: { win: Win }) {
                     </Tooltip>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <Button variant="ghost" size="icon-sm" aria-label="Get public link" className={cn("shrink-0", TOOL_BTN)}>
+                        <Button variant="ghost" size="icon-sm" aria-label="Get shareable link" className={cn("shrink-0", TOOL_BTN)}>
                           <Share2 className="size-3.5" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent side="top">Get public link — anyone with it can open it, until you stop it</TooltipContent>
+                      <TooltipContent side="top">Get shareable link</TooltipContent>
                     </Tooltip>
                   </div>
                 ))}
