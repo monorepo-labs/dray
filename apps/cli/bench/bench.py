@@ -34,6 +34,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 # Another source tree to build, e.g. a `git archive` of a release tag.
 REPO = Path(os.environ.get("DRAY_BENCH_REPO", HERE.parent.parent.parent)).resolve()
+# The checkout this script lives in. The bench project is cloned from here, not
+# from REPO, which may be a `git archive` with no history to clone.
+HARNESS_REPO = HERE.parent.parent.parent
 RESULTS = Path(os.environ.get("DRAY_BENCH_RESULTS", Path.home() / "dray-bench-results"))
 # The cargo profile release-cli.yml builds dray-serve with. `release` builds
 # what shipped before it existed; a tree without `[profile.serve]` needs that.
@@ -268,7 +271,7 @@ class Bench:
         self.home = self.root / "home"
         self.home.mkdir()
         self.project = self.root / "project"
-        subprocess.run(["git", "clone", "-q", "--shared", "--no-checkout", str(REPO), str(self.project)], check=True)
+        subprocess.run(["git", "clone", "-q", "--shared", "--no-checkout", str(HARNESS_REPO), str(self.project)], check=True)
         subprocess.run(["git", "-C", str(self.project), "-c", "advice.detachedHead=false", "checkout", "-q",
                         PROJECT_COMMIT], check=True)
         self.servers = []
@@ -929,8 +932,18 @@ def measure(label, only):
     out = RESULTS / label
     info = json.loads((out / "build.json").read_text())
     serve_bin = out / "dray-serve"
+    binaries = {n: hashlib.sha256((out / n).read_bytes()).hexdigest() for n in ("dray", "dray-serve")}
+    path = RESULTS / f"{label}.json"
+    if path.exists() and set(only) != set(GROUPS):
+        # A partial run adds to the label's other groups, so they must have
+        # measured these same binaries; older results carry no digests and
+        # are held to the build record instead.
+        old = json.loads(path.read_text())
+        same = old["binaries"] == binaries if "binaries" in old else old.get("build") == info
+        if not same:
+            sys.exit(f"bench: {label}.json holds results for other binaries; rerun every group or use a new label")
     result = {"label": label, "created": datetime.datetime.now().isoformat(timespec="seconds"),
-              "machine": machine(), "build": info, "settings": {"runs": RUNS, "warmup": WARMUP,
+              "machine": machine(), "build": info, "binaries": binaries, "settings": {"runs": RUNS, "warmup": WARMUP,
                                                                "replay_copies": REPLAY_COPIES,
                                                                "project_commit": PROJECT_COMMIT,
                                                                "server_env": SERVER_ENV}, "metrics": {}}
@@ -952,7 +965,6 @@ def measure(label, only):
     finally:
         bench.close()
     result["load_after"] = os.getloadavg()[0]
-    path = RESULTS / f"{label}.json"
     if path.exists() and set(only) != set(GROUPS):
         old = json.loads(path.read_text())
         old["metrics"].update(m)
@@ -1150,14 +1162,17 @@ def main():
     if args.cmd == "build":
         print(json.dumps(build(args.label, args), indent=2))
     elif args.cmd == "run":
-        if not args.reuse_build:
-            build(args.label, args)
-        elif not (RESULTS / args.label / "build.json").exists():
-            sys.exit(f"bench: nothing built for {args.label}; drop --reuse-build")
         only = [g for g in args.only.split(",") if g]
         bad = set(only) - set(GROUPS)
         if bad:
             sys.exit(f"bench: unknown group {bad}")
+        if not args.reuse_build and set(only) != set(GROUPS) and (RESULTS / f"{args.label}.json").exists():
+            sys.exit(f"bench: {args.label} has results; a partial run adds to them, so measure the same "
+                     "binaries with --reuse-build, or use a new label")
+        if not args.reuse_build:
+            build(args.label, args)
+        elif not (RESULTS / args.label / "build.json").exists():
+            sys.exit(f"bench: nothing built for {args.label}; drop --reuse-build")
         # Loopback only: whatever the server reaches for at start (a relay,
         # analytics, a sandbox heartbeat) fails at once, the same every run.
         os.execvp("unshare", ["unshare", "-rn", sys.executable, str(Path(__file__).resolve()), "_measure",
