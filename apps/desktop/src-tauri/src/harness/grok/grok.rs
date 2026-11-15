@@ -328,6 +328,7 @@ async fn open_session(
     // no `false` spelled out beside it. The rules do not ride along — grok keeps
     // those on its own session record.
     if !is_new_session {
+        crate::bots::prepare(session_cwd).await;
         let mut meta = json!({});
         if let Some((key, value)) = stance_meta(mode) {
             meta[key] = json!(value);
