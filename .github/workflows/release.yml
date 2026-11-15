@@ -55,6 +55,8 @@ jobs:
       # Apple stops notarizing whenever it updates the developer agreement
       # until the Account Holder accepts it, and the build only finds out
       # minutes in. Any notarytool call answers the same 403, so ask first.
+      - name: TEMP fail like a refused notary check
+        run: exit 1
       - run: xcrun notarytool history --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" >/dev/null
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -102,6 +104,11 @@ jobs:
             found { print }
           ' apps/desktop/CHANGELOG.md)"
           BODY="$(printf '%s\n' "$BODY" | sed 's#](changelog/#](https://www.drayhq.com/changelog/#g')"
+          # Trimmed both ends, as tauri-action's input reader did: the blank
+          # line under the heading would otherwise lead every release body
+          # and `latest.json`'s `notes`.
+          BODY="${BODY#"${BODY%%[![:space:]]*}"}"
+          BODY="${BODY%"${BODY##*[![:space:]]}"}"
 
           # A stable release with no section would publish notes saying nothing,
           # which is worth stopping for — same reason the version guard above
