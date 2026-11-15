@@ -441,6 +441,12 @@ pub struct ServerSummary {
     /// Why the last connect failed.
     #[serde(default)]
     pub error: Option<String>,
+    /// On a removal only: titles of its tasks last seen running, waiting on
+    /// the reader or holding an unmerged PR, judged off the list this device
+    /// kept, so the CLI can warn. Skipped empty, so every other answer is
+    /// byte-identical to an older server's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unfinished: Vec<String>,
 }
 
 /// A video on the machine serving the session, to be filed where that

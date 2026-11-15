@@ -2,7 +2,8 @@ import { invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSess
 import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
 import { botsOf, isBotPath, keepBots, refreshBots, useBots } from "@/lib/bots";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
-import { indexRow, loadServerCaches, saveServerCache, unreachable, withKept } from "@/lib/serverCache";
+import { indexRow, keptRow, loadServerCaches, saveServerCache, unreachable, withKept } from "@/lib/serverCache";
+import { keptPrMark, prMarksChanged } from "@/hooks/usePrMarks";
 import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
 import { CloudError, cloudIo, isCloud, onCloud, placeTask, setCloudFailure, setPlacing } from "@/lib/cloud";
 import { keepCloudTranscript, keptCloudTranscript } from "@/lib/cloudTranscripts";
@@ -1736,6 +1737,13 @@ const setSessionFlags = async (
       return false;
     }
   }
+  // Only its own server can stop the child, so a stopped one leaves the task
+  // stuck; removing that machine is what clears it from here (#1114).
+  if (flags.archived && server !== LOCAL && !serverConnected(server) && !isCloud(server)) {
+    const name = serverName(server);
+    fail(`${name} isn't connected, so this task can't be settled there. To clear its tasks from here, remove ${name} in Settings → Servers.`);
+    return false;
+  }
   const machine = cloudMachineOf(sessionId);
   // Its machine is deleted with it, so a stopped one is not woken just to
   // write a flag it is about to lose.
@@ -2301,6 +2309,10 @@ useEffect(() => {
 // during a toggle the list briefly holds the other side, and filing that under
 // this one would draw settled rows as live after the next restart. The settled
 // side is kept from reads alone.
+// A PR merging moves no index row, nor does a turn starting, and the kept
+// row's `prOpen` and `status` must follow both.
+const [prMarksSeen, setPrMarksSeen] = useState(0);
+useEffect(() => prMarksChanged.subscribe(() => setPrMarksSeen((n) => n + 1)), []);
 useEffect(() => {
   const live = !showArchivedRef.current && indexSide === false;
   // An off server's rows are hidden, not gone: its share on screen is empty,
@@ -2317,7 +2329,7 @@ useEffect(() => {
     for (const { id } of remoteServers()) {
       if (!answered.has(`${id}:sessions`) && !answered.has(`${id}:projects`)) continue;
       saveServerCache(id, {
-        sessions: lastIndex.get(`${id}:false`),
+        sessions: lastIndex.get(`${id}:false`)?.map((row) => keptRow(row, keptPrMark, statusBySession[row.sessionId])),
         archived: lastIndex.get(`${id}:true`),
         projects: lastProjects.get(id),
         bots: botsOf(id),
@@ -2325,7 +2337,7 @@ useEffect(() => {
     }
   }, 1000);
   return () => clearTimeout(timer);
-}, [sessionIndexItems, projects, indexSide, bots])
+}, [sessionIndexItems, projects, indexSide, bots, prMarksSeen, statusBySession])
 
 // Refetched per project rather than cached: branches change outside the app.
 // The guard matters because switching projects quickly would otherwise let a

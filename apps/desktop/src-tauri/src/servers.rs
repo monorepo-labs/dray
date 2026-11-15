@@ -1899,6 +1899,13 @@ pub async fn remove_server(id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Titles of a server's tasks that still look unfinished, for Remove's
+/// confirm: what `dray machine rm` warns about, from the same kept list.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn server_unfinished(id: String) -> Vec<String> {
+    crate::machines::unfinished(&id).await
+}
+
 /// Where a remote's last known sessions and projects are kept, so its rows
 /// outlive the app while it cannot be reached (#871). The frontend owns the
 /// shape; this only files it. `None` for an id that could not be a file name.
