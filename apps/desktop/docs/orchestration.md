@@ -36,7 +36,7 @@
 
 ## Creating sessions
 
-**Spawned sessions always take a worktree, and no flag turns it off** — three issues in one checkout overwrite each other. `--no-worktree` and `--worktree-name` both existed and were removed; the agent has no basis for picking a name and a supplied one is one more thing that collides.
+**Spawned sessions take a worktree unless `--no-worktree` asks otherwise** — three issues in one checkout overwrite each other. `--no-worktree` was removed once for that reason and came back (#1152) for work that changes no repo: a bot setting up a machine or debugging infra had nowhere to send it but a worktree, or did it inline and held its chat. It runs in `--project` as it is, a repo's checkout or any folder; a folder that is no repo without the flag is refused before the row is written, since `-w` would fail after it. It takes no `--base`. No protocol bump: an old app makes a worktree, and the CLI reads `worktree_name` back and says so. `'~'` is the home of the machine running the task — the CLI expands it here, `localize` there — and a `--project` given with `--machine` is forwarded uncanonicalized, or a plain `/tmp` arrives as macOS's `/private/tmp`. `--worktree-name` stays gone: the agent has no basis for picking a name and a supplied one is one more thing that collides.
 
 **`--from` moves where the tree starts, not who owns it.** `-w` forks from `origin/<default>` whatever is checked out, so a spawned session could not see the work of the session that spawned it — which put the obvious use, *a second model reviewing what the first just did*, out of reach. `--from <session-id | branch | ref>` still makes a new worktree, based at that point. Sharing a live checkout stays out of scope.
 

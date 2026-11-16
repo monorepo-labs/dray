@@ -184,9 +184,16 @@ struct New {
     prompt: String,
 
     /// Repo to run in. Defaults to the calling session's project, or the git
-    /// repo of the current directory.
+    /// repo of the current directory. With --no-worktree, any folder; `~` is
+    /// the home folder of the machine that runs it.
     #[arg(long)]
     project: Option<PathBuf>,
+
+    /// Run in the project folder as it is, with no worktree or branch: the
+    /// repo's own checkout, or a folder that is no repo. For work that changes
+    /// no repo, such as setting up a machine or research.
+    #[arg(long, conflicts_with = "base")]
+    no_worktree: bool,
 
     /// A model alias the harness knows, like opus or sonnet on claude_code.
     /// Defaults to the calling session's model.
@@ -538,6 +545,7 @@ fn new(args: New) -> Result<(), String> {
         // one running on it. clap has no other spelling for a bare flag.
         fast: args.fast.then_some(true),
         hidden: args.hidden,
+        no_worktree: args.no_worktree,
     });
 
     match send(request)? {
@@ -551,7 +559,7 @@ fn new(args: New) -> Result<(), String> {
                 on_machine(&session),
                 match &session.worktree_name {
                     Some(name) => format!(" in worktree {name}"),
-                    None => String::new(),
+                    None => format!(" in {}, no worktree", session.cwd),
                 },
                 // `--base <session-id>` names a session, so the branch it
                 // resolved to is news: the caller asked with an id and only the
@@ -561,8 +569,14 @@ fn new(args: New) -> Result<(), String> {
                     None => String::new(),
                 }
             );
-            // An app older than the flag ignores it and lists the session, and
-            // the agent would otherwise tell the user it is hidden.
+            // An app older than either flag ignores it, and the agent would
+            // otherwise tell the user what it asked for rather than what ran.
+            if args.no_worktree && session.worktree_name.is_some() {
+                eprintln!(
+                    "This Dray app does not know --no-worktree, so the session runs in a worktree. \
+                     Update the Dray app."
+                );
+            }
             if args.hidden && !session.hidden {
                 eprintln!(
                     "This Dray app does not know --hidden, so the session shows in the sidebar. \
@@ -1327,14 +1341,29 @@ fn resolve_project(explicit: Option<PathBuf>) -> Option<String> {
         // path means this shell's directory, and the server stands in another
         // — under launchd that is `/`, so `--project .` matched no session.
         // Left as typed for another machine, where the path is that machine's.
+        // A quoted `~` reaches here unexpanded, which is how a path names the
+        // home of another machine; the server there expands it.
         let path = match MACHINE.get() {
-            None => std::path::absolute(&path).unwrap_or(path),
+            None => {
+                let path = expand_home(path);
+                std::path::absolute(&path).unwrap_or(path)
+            }
             Some(_) => path,
         };
         return Some(path.to_string_lossy().into_owned());
     }
 
     repo_root(Path::new("."))
+}
+
+/// A leading `~` as this user's home, for a path the shell left unexpanded.
+fn expand_home(path: PathBuf) -> PathBuf {
+    let Ok(rest) = path.strip_prefix("~") else { return path };
+    match std::env::home_dir() {
+        Some(home) if rest.as_os_str().is_empty() => home,
+        Some(home) => home.join(rest),
+        None => path,
+    }
 }
 
 /// The repo `dir` belongs to — its **main** worktree, not whichever linked one
@@ -1616,11 +1645,30 @@ mod tests {
     }
 
     #[test]
-    fn there_is_no_way_to_opt_out_of_the_worktree() {
-        // Sessions created here run at the same time by design, so sharing a
-        // checkout is never the right answer — the flag is gone rather than
-        // defaulted.
-        assert!(Cli::try_parse_from(["dray", "new", "x", "--no-worktree"]).is_err());
+    fn opting_out_of_the_worktree_is_explicit_and_takes_no_base() {
+        let Ok(Cli { command: Command::Session(SessionCommand::New(new)), .. }) =
+            Cli::try_parse_from(["dray", "session", "new", "x", "--no-worktree", "--project", "/srv"])
+        else {
+            panic!("not a create");
+        };
+        assert!(new.no_worktree);
+        let Ok(Cli { command: Command::Session(SessionCommand::New(new)), .. }) =
+            Cli::try_parse_from(["dray", "session", "new", "x"])
+        else {
+            panic!("not a create");
+        };
+        assert!(!new.no_worktree);
+        // `--base` starts a worktree on a ref, which this has none to start.
+        assert!(Cli::try_parse_from(["dray", "new", "x", "--no-worktree", "--base", "main"]).is_err());
+    }
+
+    #[test]
+    fn a_leading_tilde_is_home() {
+        let home = std::env::home_dir().unwrap();
+        assert_eq!(expand_home("~".into()), home);
+        assert_eq!(expand_home("~/notes".into()), home.join("notes"));
+        assert_eq!(expand_home("~bob/x".into()), PathBuf::from("~bob/x"));
+        assert_eq!(expand_home("/srv/~".into()), PathBuf::from("/srv/~"));
     }
 
     /// The old spellings still parse — agents with an older skill, and remote
