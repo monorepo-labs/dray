@@ -1923,12 +1923,18 @@ function App() {
 
   // The panel's last writing turn may sit above the tail a transcript holds.
   // Read back for it only where the held turns record snapshots at all: a
-  // session in a plain directory has nothing up there to find.
+  // session in a plain directory has nothing up there to find. Only while the
+  // panel shows it, as `useChanges` reads only then.
   const olderWritesNeeded = useMemo(() => {
     const { ranges, newest } = writingTurns(selectedSession?.events ?? [], 2, true);
     return newest ? 2 - ranges.length : 0;
   }, [selectedSession?.events]);
-  const olderWrites = useOlderWrites(selectedSessionId, selectedSession?.olderBefore, olderWritesNeeded);
+  const olderWrites = useOlderWrites(
+    selectedSessionId,
+    selectedSession?.olderBefore,
+    olderWritesNeeded,
+    panelShown && activeTab === "changes",
+  );
   const { baseline, head, previous } = useMemo(
     () => changeRange(selectedSession?.events ?? [], olderWrites),
     [selectedSession?.events, olderWrites],
