@@ -2974,10 +2974,10 @@ const setCrewSeen = (ids: string[]) => {
 };
 
 /// Reads a session's newest `FIRST_MOUNT` turns and lands them, answering
-/// whether the id resolved to anything. The rest of the log is paged in by
-/// `loadOlder`, which the transcript asks for once it has mounted everything it
-/// holds — a 21MB log is ~1.8MB of tail, and the webview's `JSON.parse` of the
-/// whole was ~400ms before the newest turn could draw.
+/// whether the id resolved to anything. The rest of the log is read by
+/// `loadOlder` as the reader scrolls up toward it — a 21MB log is ~1.8MB of
+/// tail, and the webview's `JSON.parse` of the whole was ~400ms before the
+/// newest turn could draw.
 ///
 /// One read per session however many ask at once, so a hover's prefetch and
 /// the click that follows share it rather than landing twice.

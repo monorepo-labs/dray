@@ -3460,7 +3460,7 @@ function App() {
     }
     if (key.startsWith("task:")) {
       // Read here; the composer sends to the main view's session.
-      return <Chat {...paneState(key.slice("task:".length))} {...paneChat} crowded active={false} />;
+      return <Chat {...paneState(key.slice("task:".length))} {...paneChat} active={false} />;
     }
     const pick = strip && pickTabs[strip.bot]?.find((t) => `pick:${t.id}` === key);
     // Its own watcher, since the lit pick in the main view holds `"pick"`.
@@ -4266,7 +4266,6 @@ function App() {
               void openTask(id);
             }}
             unread={!!selectedSessionId && openedUnread === selectedSessionId}
-            crowded={!collapsed && (panelShown || (crewDrawn && crewBeside) || (issuesOpen && !!pickedIssue))}
             // Its own chords only while the chat tab is on screen.
             active={!issuesOpen && viewTab === "chat"}
           />
