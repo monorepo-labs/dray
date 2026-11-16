@@ -197,7 +197,8 @@ import { issueTag, rememberIssueTitle, setIssueOpener } from "@/lib/issue";
 import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
 import { focusComposer, focusComposerEnd } from "@/lib/composerFocus";
-import { changeRange, lastToolResult } from "@/lib/changes";
+import { changeRange, lastToolResult, writingTurns } from "@/lib/changes";
+import { useOlderWrites } from "@/hooks/useOlderWrites";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
@@ -1920,9 +1921,17 @@ function App() {
   const modelTakesImages =
     models.find((m) => m.id === modelId)?.acceptsImages ?? true;
 
+  // The panel's last writing turn may sit above the tail a transcript holds.
+  // Read back for it only where the held turns record snapshots at all: a
+  // session in a plain directory has nothing up there to find.
+  const olderWritesNeeded = useMemo(() => {
+    const { ranges, newest } = writingTurns(selectedSession?.events ?? [], 2, true);
+    return newest ? 2 - ranges.length : 0;
+  }, [selectedSession?.events]);
+  const olderWrites = useOlderWrites(selectedSessionId, selectedSession?.olderBefore, olderWritesNeeded);
   const { baseline, head, previous } = useMemo(
-    () => changeRange(selectedSession?.events ?? []),
-    [selectedSession?.events],
+    () => changeRange(selectedSession?.events ?? [], olderWrites),
+    [selectedSession?.events, olderWrites],
   );
 
   // A pull request appears because something happened, and the thing that
