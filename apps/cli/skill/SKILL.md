@@ -305,7 +305,8 @@ Settling is refused while a turn runs — stop it first, or wait.
 **`--delete-worktree` deletes whatever the worktree holds**, uncommitted and
 unpushed work included, and nothing asks. Before passing it, check the tree
 yourself — `git -C <cwd> status --short` and `git -C <cwd> log @{u}..` or
-against `origin/<default>` — and ask the user, naming what would be lost.
+against `origin/<default>` — and ask the user, naming what would be lost. A
+session started with `--no-worktree` has none, and refuses the flag.
 
 ## Handing a pull request to the user
 
