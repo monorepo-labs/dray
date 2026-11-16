@@ -495,7 +495,7 @@ pub async fn head_tree(cwd: &str) -> Option<String> {
 
 /// Whether git recognises this directory at all, which is the question `HEAD`
 /// cannot answer on its own — a fresh `git init` has no HEAD to resolve.
-async fn is_repo(cwd: &str) -> bool {
+pub async fn is_repo(cwd: &str) -> bool {
     git(cwd, &["rev-parse", "--git-dir"]).await.is_some()
 }
 

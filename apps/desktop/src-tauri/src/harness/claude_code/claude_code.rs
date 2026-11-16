@@ -64,7 +64,7 @@ pub async fn init(
     fork_from: Option<&str>,
     app: &Sink,
 ) -> Result<Session> {
-    let system_prompt = crate::bots::system_prompt(APPEND_SYSTEM_PROMPT, session_id, session_cwd).await;
+    let system_prompt = crate::bots::system_prompt(APPEND_SYSTEM_PROMPT, session_id, session_cwd, crate::session::Harness::ClaudeCode).await;
     let mut args = vec![
         "-p",
         "--input-format",

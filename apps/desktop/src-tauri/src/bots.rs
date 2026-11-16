@@ -1124,7 +1124,7 @@ pub async fn keeps_children(item: &SessionIndexItem) -> bool {
 /// knows — and is why Settings says an edit lands at the bot's next start.
 /// The instructions are not in it: the agent loads `AGENTS.md` itself, and
 /// injecting them too would put them in its context twice.
-pub async fn system_prompt(base: &str, session_id: &str, cwd: &str) -> String {
+pub async fn system_prompt(base: &str, session_id: &str, cwd: &str, harness: Harness) -> String {
     let bots = read_list().await.unwrap_or_default();
     let Some(bot) = bots.iter().find(|b| same_dir(&b.path, cwd)) else {
         return if reports_to_parent(session_id).await {
@@ -1137,7 +1137,27 @@ pub async fn system_prompt(base: &str, session_id: &str, cwd: &str) -> String {
     prepare_folder(bot).await;
     let instructions = read_file(&Path::new(&bot.path).join(INSTRUCTIONS)).await;
     let user = user_name().await;
-    format!("{base}\n\n{}", bot_block(bot, &others, &instructions, user.as_deref()))
+    format!("{base}\n\n{}", bot_block(bot, &others, &instructions, user.as_deref(), harness))
+}
+
+/// Where a bot sends long work that changes no repo. Measured on a Mac: a
+/// background subagent outlives the turn and wakes the parent with its result
+/// on Claude Code and grok. Codex keeps one running but never wakes the
+/// parent, fx holds the turn until it ends, and pi has none, so those start a
+/// task. The tool is named because Codex reached for a background shell until
+/// told which tool to use.
+fn long_work(harness: Harness) -> &'static str {
+    match harness {
+        Harness::ClaudeCode => {
+            "Other work that takes more than a couple of minutes or has several steps, such as setting up a machine, research, checking logs or taking a snapshot, goes to a background subagent: the Agent tool with `run_in_background: true`. Your turn then ends at once, and its result comes back to you on its own. Pass on what matters when it reports."
+        }
+        Harness::Grok => {
+            "Other work that takes more than a couple of minutes or has several steps, such as setting up a machine, research, checking logs or taking a snapshot, goes to a background subagent: `spawn_subagent` with `background: true`, and no waiting on it. Your turn then ends at once, and its result comes back to you on its own. Pass on what matters when it reports."
+        }
+        _ => {
+            "So does other work that takes more than a couple of minutes or has several steps, such as setting up a machine, research, checking logs or taking a snapshot: start it with `--no-worktree`, below."
+        }
+    }
 }
 
 /// Readies the folder of the bot whose session runs in `cwd`, where it is a
@@ -1451,7 +1471,7 @@ fn instructions_note(instructions: &str) -> String {
     }
 }
 
-fn bot_block(bot: &Bot, others: &[&str], instructions: &str, user: Option<&str>) -> String {
+fn bot_block(bot: &Bot, others: &[&str], instructions: &str, user: Option<&str>, harness: Harness) -> String {
     let user = match user {
         Some(user) => format!(
             "Call the user {user}. If they ask to be called something else, write just that name to `{USER_FILE}` in your folder and use it from then on; Dray shares it with the other bots."
@@ -1472,6 +1492,7 @@ fn bot_block(bot: &Bot, others: &[&str], instructions: &str, user: Option<&str>)
             ("instructions", &instructions_note(instructions)),
             ("others", &others),
             ("user", &user),
+            ("long_work", long_work(harness)),
         ],
     )
 }
@@ -1492,7 +1513,7 @@ mod tests {
 
     #[test]
     fn block_points_at_the_instructions_and_memory_without_their_text() {
-        let block = bot_block(&bot(), &["Research"], "Watch CI.", None);
+        let block = bot_block(&bot(), &["Research"], "Watch CI.", None, Harness::ClaudeCode);
         assert!(!block.contains("Watch CI."), "the agent loads AGENTS.md itself");
         assert!(block.contains(&format!("`{INSTRUCTIONS}`")));
         assert!(block.contains("/h/bots/b"));
@@ -1501,7 +1522,24 @@ mod tests {
         assert!(block.contains("never ask it to report back"));
         assert!(block.contains("dray session settle <id> --delete-worktree"));
         assert!(block.contains("The other bots now: \"Research\"."));
-        assert!(bot_block(&bot(), &[], "", None).contains("There are no other bots yet."));
+        assert!(bot_block(&bot(), &[], "", None, Harness::ClaudeCode).contains("There are no other bots yet."));
+    }
+
+    /// Claude Code and grok are told to use a background subagent, naming the
+    /// tool; Codex, fx and pi have none that wakes the bot, so their long work
+    /// goes to a task.
+    #[test]
+    fn long_work_goes_where_the_harness_can_take_it() {
+        let claude = bot_block(&bot(), &[], "", None, Harness::ClaudeCode);
+        assert!(claude.contains("the Agent tool with `run_in_background: true`"));
+        let grok = bot_block(&bot(), &[], "", None, Harness::Grok);
+        assert!(grok.contains("`spawn_subagent` with `background: true`"));
+        for harness in [Harness::Pi, Harness::Codex, Harness::Fx] {
+            let block = bot_block(&bot(), &[], "", None, harness);
+            assert!(!block.contains("subagent"), "{harness:?}");
+            assert!(block.contains("start it with `--no-worktree`"), "{harness:?}");
+        }
+        assert!(!claude.contains("{long_work}"));
     }
 
     fn named_bot(id: &str, name: &str) -> Bot {
@@ -1591,15 +1629,15 @@ mod tests {
 
     #[test]
     fn the_block_speaks_of_the_file_only_where_the_bot_must_act() {
-        assert!(bot_block(&bot(), &[], " \n", None).contains("is empty: your job is whatever the user tells you first"));
+        assert!(bot_block(&bot(), &[], " \n", None, Harness::ClaudeCode).contains("is empty: your job is whatever the user tells you first"));
         let long = "é".repeat(FILE_CAP + 1);
-        assert!(bot_block(&bot(), &[], &long, None).contains(&format!("is {} characters, over its", FILE_CAP + 1)));
-        assert!(!bot_block(&bot(), &[], "Watch CI.", None).contains("characters, over its"));
+        assert!(bot_block(&bot(), &[], &long, None, Harness::ClaudeCode).contains(&format!("is {} characters, over its", FILE_CAP + 1)));
+        assert!(!bot_block(&bot(), &[], "Watch CI.", None, Harness::ClaudeCode).contains("characters, over its"));
     }
 
     #[test]
     fn every_template_is_filled_whole() {
-        let block = bot_block(&bot(), &[], "a", Some("Yogesh"));
+        let block = bot_block(&bot(), &[], "a", Some("Yogesh"), Harness::ClaudeCode);
         let kickoff = fill(KICKOFF_PROMPT, &[("name", "Ops"), ("projects", "dray"), ("greet", "Hi"), ("unnamed", "")]);
         let review = fill(include_str!("bots/review_prompt.md"), &[("reason", "The user just corrected you.")]);
         for text in [&block, &kickoff, &review] {
@@ -1610,10 +1648,10 @@ mod tests {
 
     #[test]
     fn the_bot_is_told_its_name_and_the_users() {
-        let known = bot_block(&bot(), &[], "", Some("Yogesh"));
+        let known = bot_block(&bot(), &[], "", Some("Yogesh"), Harness::ClaudeCode);
         assert!(known.starts_with("# Your name is Ops"));
         assert!(known.contains("Call the user Yogesh."));
-        let unknown = bot_block(&bot(), &[], "", None);
+        let unknown = bot_block(&bot(), &[], "", None, Harness::ClaudeCode);
         assert!(unknown.contains("Never guess it"));
         assert!(unknown.contains(USER_FILE));
     }

@@ -807,6 +807,14 @@ pub struct CreateSession {
     /// so the CLI can say so.
     #[serde(default)]
     pub hidden: bool,
+    /// Run in the project folder as it is, with no worktree or branch: a
+    /// repo's own checkout, or a folder that is no repo at all. For work that
+    /// changes no repo, such as setting up a machine.
+    ///
+    /// No protocol bump, as with `hidden`: an old app ignores it and makes a
+    /// worktree, which [`SessionSummary::worktree_name`] shows the CLI.
+    #[serde(default)]
+    pub no_worktree: bool,
 }
 
 /// Tagging a session that already exists — or untagging it.

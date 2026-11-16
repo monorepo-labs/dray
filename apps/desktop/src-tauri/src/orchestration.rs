@@ -658,7 +658,8 @@ async fn localize(request: &mut Request, origin: Option<&str>) -> Result<()> {
         Request::ListSessions(list) | Request::ListDrafts(list) | Request::ListShares(list) => &mut list.project_path,
         _ => return Ok(()),
     };
-    let Some(path) = slot.clone() else { return Ok(()) };
+    let Some(path) = slot.as_deref().map(expand_home) else { return Ok(()) };
+    *slot = Some(path.clone());
     let projects = crate::projects::read_projects().await.map_err(anyhow::Error::from)?;
     if let Some(origin) = origin {
         for project in &projects {
@@ -855,8 +856,17 @@ mod elsewhere {
                 if forward.caller.as_ref().is_some_and(|c| c.bot_tree) {
                     create.hidden = true;
                 }
-                create.project_path = project_from(create.project_path.as_deref(), parent.as_ref());
-                project = create.project_path.clone();
+                project = project_from(create.project_path.as_deref(), parent.as_ref());
+                // A path given is the far side's to resolve: canonicalized here,
+                // a plain folder like `/tmp` would arrive as macOS's
+                // `/private/tmp`. A repo is still found there by its `origin`.
+                if create.project_path.is_none() {
+                    create.project_path = project.clone();
+                }
+                // Checked here, since the machine it lands on holds no bots.
+                if let Some(project) = &project {
+                    refuse_bot_folder(project).await?;
+                }
                 create.base = branch_of(create.base.take(), project.as_deref()).await?;
             }
             Request::CreateDraft(create) => {
@@ -1815,10 +1825,14 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
     let hidden = create.hidden || under_bot(parent.as_ref(), caller).await;
 
     let project_path = resolve_project(&create, parent.as_ref())?;
-    // A bot's folder is its own notes, not a project to work in. Its history
-    // makes it a repository, so a task there would start in a worktree of it.
-    if crate::bots::bot_holding(&project_path).await.is_some() {
-        bail!("a bot's folder is not a project — pass --project <repo path>");
+    refuse_bot_folder(&project_path).await?;
+    if create.no_worktree && create.base.is_some() {
+        bail!("--base starts a worktree, so it cannot go with --no-worktree");
+    }
+    // Refused here rather than left to the harness, which would fail after the
+    // row is written and leave a task that can never start.
+    if !create.no_worktree && !crate::git::is_repo(&project_path).await {
+        bail!("{project_path} is no git repository — pass --no-worktree to run in it as it is");
     }
 
     // The project is deliberately *not* attached here. The sidebar's filter
@@ -1864,10 +1878,11 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
             fast,
             &project_path,
             None,
-            // Always. Sessions created this way are meant to run at the same
-            // time, and several agents writing to one checkout overwrite each
-            // other — the changes panel cannot even tell them apart.
-            true,
+            // On unless the caller opts out. Sessions created this way run at
+            // the same time, and several agents writing to one checkout
+            // overwrite each other, so `--no-worktree` is for work that
+            // changes no repo: setting up a machine, research, infra.
+            !create.no_worktree,
             // Never named by the caller: an agent has no basis for choosing
             // one, and a name that collides is a create that fails for a field
             // nobody wanted. `None` lets the app generate a readable one.
@@ -2646,6 +2661,35 @@ fn resolve_harness(requested: Option<&str>, parent: Option<&SessionIndexItem>) -
     })
 }
 
+/// A bot's folder is its own notes, not a place to work, and a task there
+/// would be read as the bot's own chat. Its history makes it a repository, so
+/// without this a task would start in a worktree of it.
+async fn refuse_bot_folder(project: &str) -> Result<()> {
+    if crate::bots::bot_holding(project).await.is_some() {
+        bail!(
+            "a bot's folder is not a project — pass --project <repo path>, \
+             or --no-worktree --project <folder> for work outside any repo"
+        );
+    }
+    Ok(())
+}
+
+/// A leading `~` as the home of the machine reading it, so a path written for
+/// another machine can name its home without knowing how it is spelled there.
+fn expand_home(path: &str) -> String {
+    let rest = match path {
+        "~" => "",
+        _ => match path.strip_prefix("~/") {
+            Some(rest) => rest,
+            None => return path.to_string(),
+        },
+    };
+    match std::env::home_dir() {
+        Some(home) => home.join(rest).to_string_lossy().trim_end_matches('/').to_string(),
+        None => path.to_string(),
+    }
+}
+
 fn resolve_project(create: &CreateSession, parent: Option<&SessionIndexItem>) -> Result<String> {
     project_from(create.project_path.as_deref(), parent).context(
         "no project to create the session in — pass --project, or run this from inside a repo",
@@ -2742,6 +2786,16 @@ fn summarize(item: SessionIndexItem) -> SessionSummary {
 mod tests {
     use super::*;
     use crate::models::Effort;
+
+    /// A forwarded `'~'` is the home of the machine that runs the task.
+    #[test]
+    fn a_leading_tilde_is_this_machines_home() {
+        let home = std::env::home_dir().unwrap().to_string_lossy().into_owned();
+        assert_eq!(expand_home("~"), home);
+        assert_eq!(expand_home("~/work"), format!("{home}/work"));
+        assert_eq!(expand_home("~bob"), "~bob");
+        assert_eq!(expand_home("/srv/x"), "/srv/x");
+    }
 
     fn item(id: &str, parent: Option<&str>) -> SessionIndexItem {
         SessionIndexItem::new(

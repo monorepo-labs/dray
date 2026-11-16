@@ -44,7 +44,8 @@ Options:
 
 | flag | meaning |
 |---|---|
-| `--project <path>` | Repo to run in. Defaults to the current session's, or the repo you are in. |
+| `--project <path>` | Repo to run in. Defaults to the current session's, or the repo you are in. With `--no-worktree`, any folder. |
+| `--no-worktree` | Run in the `--project` folder as it is, with no worktree or branch — see *Work outside a worktree*. |
 | `--model <alias>` | `opus`, `sonnet`, `fable`, `haiku` on Claude Code; a `provider/model` id on pi. Defaults to the current session's model — see *Model and effort*. |
 | `--effort <level>` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. Defaults to the current session's — see *Model and effort*. |
 | `--harness <name>` | `claude_code`, `codex`, `pi`, `fx` or `grok`. Defaults to the current session's. |
@@ -180,13 +181,31 @@ does.
 
 ### Each session gets its own worktree
 
-Every session runs in its own git worktree on its own branch, and there is no way
-to turn that off. It is what makes running them at once safe — without it, three
-agents write to one checkout and overwrite each other.
+Every session runs in its own git worktree on its own branch. It is what makes
+running them at once safe — without it, three agents write to one checkout and
+overwrite each other.
 
 By default the worktree branches from `origin/<default>`, **not** from the branch
 you are on. So a session created plainly cannot see unpushed work — yours or
 another session's.
+
+### Work outside a worktree
+
+```bash
+dray session new --no-worktree --project '~' "Set up Docker on this machine and report the version"
+dray session new --no-worktree --project ~/code/app "Find out why the dev server here fails to start"
+```
+
+`--no-worktree` runs the session in the `--project` folder as it is: a repo's
+own checkout, or a folder that is no repo at all. It is for work that changes no
+repo's files — setting up a machine, infra, research. **Never for editing a
+repo**: the session shares that checkout with the user and every other session
+in it. It takes no `--base`.
+
+`'~'` is the home folder of the machine that runs it. Quoted, so with
+`--machine` the shell leaves it for that machine to expand; unquoted, it is this
+one's. With `--machine`, `--project` is otherwise a folder on that machine, or a
+repo it has a checkout of.
 
 ### Basing a session on existing work
 
@@ -217,8 +236,8 @@ Three things to know:
 - **A new branch, not a shared one.** The session gets its own
   `worktree-<name>` branch starting at that commit. It never checks out the
   branch you named, so it cannot commit onto your work or move it.
-- **Not a shared checkout.** There is no way to run two sessions in one
-  directory, and `--base` is not it. Two agents writing to one checkout overwrite
+- **Not a shared checkout.** `--base` never runs two sessions in one
+  directory. Two agents writing to one checkout overwrite
   each other, and the changes panel cannot tell them apart.
 
 The line `dray session new` prints says what it resolved: `Started "…" in worktree
@@ -304,7 +323,8 @@ Settling is refused while a turn runs — stop it first, or wait.
 **`--delete-worktree` deletes whatever the worktree holds**, uncommitted and
 unpushed work included, and nothing asks. Before passing it, check the tree
 yourself — `git -C <cwd> status --short` and `git -C <cwd> log @{u}..` or
-against `origin/<default>` — and ask the user, naming what would be lost.
+against `origin/<default>` — and ask the user, naming what would be lost. A
+session started with `--no-worktree` has none, and refuses the flag.
 
 ## Handing a pull request to the user
 

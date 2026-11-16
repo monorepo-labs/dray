@@ -634,7 +634,7 @@ async fn open_session(
                 new_session_params(
                     &hello,
                     session_cwd,
-                    &crate::bots::system_prompt(SYSTEM_PROMPT, session_id, session_cwd).await,
+                    &crate::bots::system_prompt(SYSTEM_PROMPT, session_id, session_cwd, crate::session::Harness::Fx).await,
                 ),
                 mcp_servers,
             )
