@@ -1147,7 +1147,7 @@ pub async fn system_prompt(base: &str, session_id: &str, cwd: &str, harness: Har
 fn long_work(harness: Harness) -> &'static str {
     match harness {
         Harness::ClaudeCode => {
-            "Other work that takes more than a couple of minutes or has several steps, such as setting up a machine, research, checking logs or taking a snapshot, goes to a background subagent. Your turn then ends at once, and its result comes back to you on its own. React 👀 when you start one, and pass on what matters when it reports."
+            "Other work that takes more than a couple of minutes or has several steps, such as setting up a machine, research, checking logs or taking a snapshot, goes to a background subagent. Your turn then ends at once, and its result comes back to you on its own. Pass on what matters when it reports."
         }
         _ => {
             "So does other work that takes more than a couple of minutes or has several steps, such as setting up a machine, research, checking logs or taking a snapshot: start it with `--no-worktree`, below."
