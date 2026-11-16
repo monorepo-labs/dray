@@ -7,10 +7,10 @@ import type { SessionPage } from "@/types/events";
 /// Pages read looking for a turn that wrote before giving up: 256 turns back.
 const MAX_PAGES = 16;
 const PAGE_TURNS = 16;
-/// A failed read is tried again after 1s, 2s and 4s: the panel asks only when
-/// its key moves, so a read lost to a dropped connection would otherwise stay
-/// lost for as long as the session sits still.
-const RETRIES = 3;
+/// A failed read is tried again, backing off to this, for as long as the panel
+/// shows it: the panel asks only when its key moves, so a read lost to a
+/// dropped connection would otherwise stay lost however long the outage was.
+const RETRY_MAX_MS = 30_000;
 /// Answers kept, one per session and read-back point.
 const CACHE_MAX = 64;
 
@@ -54,7 +54,7 @@ export function useOlderWrites(
       setAttempt({ key, n: n + 1 });
     })().catch((e) => {
       console.error("failed to read back for the changes panel", e);
-      if (live && n < RETRIES) retry = setTimeout(() => setAttempt({ key, n: n + 1 }), 1000 * 2 ** n);
+      if (live) retry = setTimeout(() => setAttempt({ key, n: n + 1 }), Math.min(1000 * 2 ** n, RETRY_MAX_MS));
     });
     return () => {
       live = false;
