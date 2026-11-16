@@ -29,6 +29,7 @@ struct TranscriptView: View {
         let turns = bot == nil ? buildTurns(transcript?.events ?? [], busy: busy) : []
         let botTasks = bot.map { store.botTasks(store.botChat(key.server, $0)) } ?? []
         let asks = store.asks[key] ?? []
+        let taskAsks = store.hiddenAsks(bot == nil ? store.botTasks([key]) : botTasks)
         let segments = segments(bot)
         let chat = bot == nil ? [] : chatItems(segments)
         let complete = store.transcripts[segments[0]]?.olderBefore == nil && hidden(bot, segments) == nil
@@ -73,6 +74,15 @@ struct TranscriptView: View {
                         OrbLine(activity: .background, label: n == 1 ? "1 background task running" : "\(n) background tasks running")
                     }
                     ForEach(asks) { AskCard(key: key, event: $0) }
+                    // Answered by the task's own key, so the reply reaches its server, not this chat's.
+                    ForEach(taskAsks, id: \.event.id) { t in
+                        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                            Text(store.items[t.key]?.title ?? "Task")
+                                .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
+                                .lineLimit(1).padding(.leading, 2)
+                            AskCard(key: t.key, event: t.event)
+                        }
+                    }
                     if bot != nil { StalledCard(tasks: botTasks) }
                     // The stack's bottom padding, and what a scroll to the end lands on.
                     Color.clear.frame(height: Theme.Space.m).id("bottom")
@@ -91,7 +101,7 @@ struct TranscriptView: View {
             .modifier(FollowsBottom(following: $following) { proxy.scrollTo("bottom", anchor: .bottom) })
             // Before iOS 18 nothing reads the content's size, so the newest row is the cue.
             // The row, not the count, or loading earlier turns would jump to the end.
-            .onChange(of: "\(turns.last?.id ?? "")|\(turns.last?.work.last?.newestId ?? "")|\(turns.last?.completed ?? false)|\(asks.count)|\(busy)|\(bot == nil ? "" : transcript?.events.last?.id ?? "")") {
+            .onChange(of: "\(turns.last?.id ?? "")|\(turns.last?.work.last?.newestId ?? "")|\(turns.last?.completed ?? false)|\(asks.count + taskAsks.count)|\(busy)|\(bot == nil ? "" : transcript?.events.last?.id ?? "")") {
                 if following { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             .onChange(of: store.sends[key]) {
@@ -102,7 +112,7 @@ struct TranscriptView: View {
         .page()
         .environment(\.imageServer, store.connection(key.server))
         // A card arriving is the agent stopping to ask: felt, once per card.
-        .onChange(of: asks.count) { old, new in if new > old { Haptic.warning() } }
+        .onChange(of: asks.count + taskAsks.count) { old, new in if new > old { Haptic.warning() } }
         .safeAreaInset(edge: .bottom, spacing: 0) { ReplyDock(key: key) }
         .overlay(alignment: .top) {
             // The bar draws no shade here, so rows fade out under the clock rather than sit on it.

@@ -28,7 +28,9 @@ phone reads and drives it over the same WebSocket the desktop uses
   goes out, since `send_msg` is what carries it. **Stop** sits at the end of
   the picks while a turn runs. The top bar names the project and machine,
   never the branch.
-- **Permission and question cards**, answered in place.
+- **Permission and question cards**, answered in place. A hidden task's card,
+  a bot's above all, draws at the foot of the chat that started it under the
+  task's title, on whichever machine the task runs, and lights the bot's face.
 - **New task by voice**, from a dock under the list: hold the orb to talk,
   and the recording runs hands-free until Done or Cancel. The words land as
   the task's text; holding again adds to them, the keyboard edits them in a
