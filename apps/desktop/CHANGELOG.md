@@ -19,6 +19,15 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.8 · 2026-11-16
+
+### Improved
+
+- Bots hand long work to a background helper or a task, so their chat
+  stays free while it runs.
+- `dray session new --no-worktree` starts a task in the folder as it is,
+  repo or not.
+
 ## 0.30.7 · 2026-11-15
 
 ### Improved
