@@ -504,6 +504,12 @@ final class Store {
         return out
     }
 
+    /// The first card each hidden one of `tasks` is stopped on. A hidden task has no
+    /// row of its own, so its card is drawn in the chat that started it, the desktop's crew.
+    func hiddenAsks(_ tasks: [SessionKey]) -> [(key: SessionKey, event: AgentEvent)] {
+        tasks.compactMap { k in items[k]?.hidden == true ? asks[k]?.first.map { (k, $0) } : nil }
+    }
+
     /// Each bot chat's newest reply and unread count, read off the log's end by its server.
     private(set) var previews: [SessionKey: BotPreview] = [:] { didSet { keepList() } }
 

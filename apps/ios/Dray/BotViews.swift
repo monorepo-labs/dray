@@ -32,7 +32,8 @@ struct BotListRow: View {
 
     var body: some View {
         let item = chat.flatMap { store.items[$0] }
-        let asking = chat.map(store.isAsking) ?? false
+        // A task's card is drawn in this chat, so the bot waits on the reader too.
+        let asking = (chat.map(store.isAsking) ?? false) || !store.hiddenAsks(store.botTasks(store.botChat(server, bot))).isEmpty
         let unread = item?.status == "completed"
         let preview = chat.flatMap { store.previews[$0] }
         HStack(spacing: Theme.Space.m) {
