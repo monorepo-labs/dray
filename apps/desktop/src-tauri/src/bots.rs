@@ -1140,14 +1140,19 @@ pub async fn system_prompt(base: &str, session_id: &str, cwd: &str, harness: Har
     format!("{base}\n\n{}", bot_block(bot, &others, &instructions, user.as_deref(), harness))
 }
 
-/// Where a bot sends long work that changes no repo. A background subagent
-/// ends the bot's turn at once and reports back on its own, but only Claude
-/// Code is known to run one past the turn; any other harness is told to start
-/// a task, which works everywhere.
+/// Where a bot sends long work that changes no repo. Measured on a Mac: a
+/// background subagent outlives the turn and wakes the parent with its result
+/// on Claude Code and grok. Codex keeps one running but never wakes the
+/// parent, fx holds the turn until it ends, and pi has none, so those start a
+/// task. The tool is named because Codex reached for a background shell until
+/// told which tool to use.
 fn long_work(harness: Harness) -> &'static str {
     match harness {
         Harness::ClaudeCode => {
-            "Other work that takes more than a couple of minutes or has several steps, such as setting up a machine, research, checking logs or taking a snapshot, goes to a background subagent. Your turn then ends at once, and its result comes back to you on its own. Pass on what matters when it reports."
+            "Other work that takes more than a couple of minutes or has several steps, such as setting up a machine, research, checking logs or taking a snapshot, goes to a background subagent: the Agent tool with `run_in_background: true`. Your turn then ends at once, and its result comes back to you on its own. Pass on what matters when it reports."
+        }
+        Harness::Grok => {
+            "Other work that takes more than a couple of minutes or has several steps, such as setting up a machine, research, checking logs or taking a snapshot, goes to a background subagent: `spawn_subagent` with `background: true`, and no waiting on it. Your turn then ends at once, and its result comes back to you on its own. Pass on what matters when it reports."
         }
         _ => {
             "So does other work that takes more than a couple of minutes or has several steps, such as setting up a machine, research, checking logs or taking a snapshot: start it with `--no-worktree`, below."
@@ -1520,13 +1525,16 @@ mod tests {
         assert!(bot_block(&bot(), &[], "", None, Harness::ClaudeCode).contains("There are no other bots yet."));
     }
 
-    /// Only Claude Code is told to use a background subagent; pi and the rest
-    /// have none that outlives the turn, so their long work goes to a task.
+    /// Claude Code and grok are told to use a background subagent, naming the
+    /// tool; Codex, fx and pi have none that wakes the bot, so their long work
+    /// goes to a task.
     #[test]
     fn long_work_goes_where_the_harness_can_take_it() {
         let claude = bot_block(&bot(), &[], "", None, Harness::ClaudeCode);
-        assert!(claude.contains("goes to a background subagent"));
-        for harness in [Harness::Pi, Harness::Codex, Harness::Fx, Harness::Grok] {
+        assert!(claude.contains("the Agent tool with `run_in_background: true`"));
+        let grok = bot_block(&bot(), &[], "", None, Harness::Grok);
+        assert!(grok.contains("`spawn_subagent` with `background: true`"));
+        for harness in [Harness::Pi, Harness::Codex, Harness::Fx] {
             let block = bot_block(&bot(), &[], "", None, harness);
             assert!(!block.contains("subagent"), "{harness:?}");
             assert!(block.contains("start it with `--no-worktree`"), "{harness:?}");
