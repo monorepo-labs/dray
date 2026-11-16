@@ -1,23 +1,23 @@
 {
-  "version": "0.30.7",
-  "notes": "### Improved\n\n- The server you install on other machines is 60% smaller and answers\n  faster.\n- Your messages sit in a darker blue bubble that's easier to read.\n- fx subagents show as running until they actually finish.\n\n### Fixed\n\n- A Claude Code turn that ends in an error no longer leaves the session\n  stuck as working.\n- Every session a bot's task starts stays hidden, on any machine.\n- A merge card waits for checks to start before it appears.\n- A \"Waiting on you\" row no longer sits on a loading placeholder.",
-  "pub_date": "2026-11-15T15:55:50.525Z",
+  "version": "0.30.8",
+  "notes": "### Improved\n\n- Bots hand long work to a background helper or a task, so their chat\n  stays free while it runs.\n- `dray session new --no-worktree` starts a task in the folder as it is,\n  repo or not.",
+  "pub_date": "2026-11-16T16:34:49.731Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJYSkFaRzd0bU5kODlvd1BuYkgzRi9QUFBBcWJWUWFrRkNLOWgzd0ExSDcvM0VsR05SZVdnRDMzOEFvak16YzNUVTZSQTUzdU9kY0lmSVRKMTUrcmc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NzU4MTQ3CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC43CmIvTDVFcjNSMC9OYW9DVnBoMURkZmhVc0RDNE9iWWNEeGlabEVxU3ZtczRYelNCNXpTcGdGKzZoZzh2VTlZcjVoZERQOUU0MGdaOWV6ZHdCSGFRUUJRPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.7/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdsN0hydGZFRnM1cVFkMWVNWGMxVlB2dHNvQW5JK1hwcWd4QzZiWkVINHg5emorMlJSV2lvUVAvcENMZFplUzVlMDVBbGJOVnRuSjRtZWZvZW5LY0FjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0ODQ2ODg3CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC44CmQ5SmdTcmxoNGtUalBEd2dVY21WNkZvWC9PZm02eUh2Ums3VW9maUhUdjlaNTg5MUtLemU1dEJFY3d1WHRtRmIrRXRjSDBsSDFNa0RQc0Nkc0hhbER3PT0K",
+      "url": "https://downloads.drayhq.com/v0.30.8/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJYSkFaRzd0bU5kODlvd1BuYkgzRi9QUFBBcWJWUWFrRkNLOWgzd0ExSDcvM0VsR05SZVdnRDMzOEFvak16YzNUVTZSQTUzdU9kY0lmSVRKMTUrcmc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NzU4MTQ3CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC43CmIvTDVFcjNSMC9OYW9DVnBoMURkZmhVc0RDNE9iWWNEeGlabEVxU3ZtczRYelNCNXpTcGdGKzZoZzh2VTlZcjVoZERQOUU0MGdaOWV6ZHdCSGFRUUJRPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.7/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdsN0hydGZFRnM1cVFkMWVNWGMxVlB2dHNvQW5JK1hwcWd4QzZiWkVINHg5emorMlJSV2lvUVAvcENMZFplUzVlMDVBbGJOVnRuSjRtZWZvZW5LY0FjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0ODQ2ODg3CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC44CmQ5SmdTcmxoNGtUalBEd2dVY21WNkZvWC9PZm02eUh2Ums3VW9maUhUdjlaNTg5MUtLemU1dEJFY3d1WHRtRmIrRXRjSDBsSDFNa0RQc0Nkc0hhbER3PT0K",
+      "url": "https://downloads.drayhq.com/v0.30.8/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJYSkFaRzd0bU5kODlvd1BuYkgzRi9QUFBBcWJWUWFrRkNLOWgzd0ExSDcvM0VsR05SZVdnRDMzOEFvak16YzNUVTZSQTUzdU9kY0lmSVRKMTUrcmc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NzU4MTQ3CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC43CmIvTDVFcjNSMC9OYW9DVnBoMURkZmhVc0RDNE9iWWNEeGlabEVxU3ZtczRYelNCNXpTcGdGKzZoZzh2VTlZcjVoZERQOUU0MGdaOWV6ZHdCSGFRUUJRPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.7/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdsN0hydGZFRnM1cVFkMWVNWGMxVlB2dHNvQW5JK1hwcWd4QzZiWkVINHg5emorMlJSV2lvUVAvcENMZFplUzVlMDVBbGJOVnRuSjRtZWZvZW5LY0FjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0ODQ2ODg3CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC44CmQ5SmdTcmxoNGtUalBEd2dVY21WNkZvWC9PZm02eUh2Ums3VW9maUhUdjlaNTg5MUtLemU1dEJFY3d1WHRtRmIrRXRjSDBsSDFNa0RQc0Nkc0hhbER3PT0K",
+      "url": "https://downloads.drayhq.com/v0.30.8/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJYSkFaRzd0bU5kODlvd1BuYkgzRi9QUFBBcWJWUWFrRkNLOWgzd0ExSDcvM0VsR05SZVdnRDMzOEFvak16YzNUVTZSQTUzdU9kY0lmSVRKMTUrcmc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NzU4MTQ3CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC43CmIvTDVFcjNSMC9OYW9DVnBoMURkZmhVc0RDNE9iWWNEeGlabEVxU3ZtczRYelNCNXpTcGdGKzZoZzh2VTlZcjVoZERQOUU0MGdaOWV6ZHdCSGFRUUJRPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.7/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdsN0hydGZFRnM1cVFkMWVNWGMxVlB2dHNvQW5JK1hwcWd4QzZiWkVINHg5emorMlJSV2lvUVAvcENMZFplUzVlMDVBbGJOVnRuSjRtZWZvZW5LY0FjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0ODQ2ODg3CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC44CmQ5SmdTcmxoNGtUalBEd2dVY21WNkZvWC9PZm02eUh2Ums3VW9maUhUdjlaNTg5MUtLemU1dEJFY3d1WHRtRmIrRXRjSDBsSDFNa0RQc0Nkc0hhbER3PT0K",
+      "url": "https://downloads.drayhq.com/v0.30.8/Dray_universal.app.tar.gz"
     }
   }
 }
