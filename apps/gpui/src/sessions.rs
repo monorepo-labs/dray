@@ -278,10 +278,36 @@ pub fn relative_time(iso: &str, now: i64) -> String {
     }
 }
 
+/// App.tsx's `stepRow`: the row ⌘⇧↓/↑ lands on, in the sidebar's order.
+/// Down wraps past the last row; up stops at the first. From no selection,
+/// either lands on the first.
+pub fn step<'a>(order: &[&'a str], from: Option<&str>, delta: i32) -> Option<&'a str> {
+    if order.is_empty() {
+        return None;
+    }
+    let at = from.and_then(|id| order.iter().position(|o| *o == id));
+    let to = match at {
+        None => 0,
+        Some(i) if delta > 0 => (i + 1) % order.len(),
+        Some(i) => i.saturating_sub(1),
+    };
+    Some(order[to])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn stepping_wraps_down_and_holds_at_the_top() {
+        let order = ["a", "b", "c"];
+        assert_eq!(step(&order, None, 1), Some("a"));
+        assert_eq!(step(&order, Some("c"), 1), Some("a"));
+        assert_eq!(step(&order, Some("a"), -1), Some("a"));
+        assert_eq!(step(&order, Some("b"), -1), Some("a"));
+        assert_eq!(step(&[], Some("b"), 1), None);
+    }
 
     const NOW: &str = "2026-11-10T12:00:00Z";
 

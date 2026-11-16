@@ -45,6 +45,11 @@ env:
 
 jobs:
   warm:
+    # Not the release bump. The tag build compiles that same commit with
+    # `cef` minutes later, so it is no compile signal; it would hold a macOS
+    # runner while the release wants three, and the cache it wrote would
+    # differ from the last one by `dray`'s version alone.
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

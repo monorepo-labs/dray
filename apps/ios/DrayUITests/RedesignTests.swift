@@ -57,14 +57,9 @@ final class RedesignTests: XCTestCase {
         XCTAssertTrue(orb.waitForExistence(timeout: 20), "no voice dock")
         sleep(2)
         snap(app, "voice-rest")
-        // Not asserted: the hint lasts two seconds, and a loaded simulator's query can miss it.
         orb.tap()
-        _ = app.staticTexts["Hold to talk"].waitForExistence(timeout: 2)
-        snap(app, "voice-hint")
-        sleep(2)
-        orb.press(forDuration: 0.6)
         let stop = app.buttons["Done"]
-        XCTAssertTrue(stop.waitForExistence(timeout: 10), "holding the orb started no recording")
+        XCTAssertTrue(stop.waitForExistence(timeout: 10), "tapping the orb started no recording")
         sleep(3)
         snap(app, "voice-recording")
         app.buttons["Cancel"].tap()
@@ -208,7 +203,7 @@ final class RedesignTests: XCTestCase {
         sleep(3)
         snap(app, "reply-rest")
 
-        orb.press(forDuration: 0.6)
+        orb.tap()
         let done = app.buttons["Done"]
         XCTAssertTrue(done.waitForExistence(timeout: 10), "holding the orb started no recording")
         sleep(2)

@@ -22,6 +22,9 @@ targets:
       # The Island's dictation orb, shared by path as the Island shares this app's client.
       - path: ../island/Island/VoiceOrb.swift
       - path: ../island/Island/VoiceOrb.metal
+      # Bot faces: the app's Blobatar bundled for JavaScriptCore, the Island's own copy.
+      - path: ../island/Island/botface.js
+        buildPhase: resources
     dependencies:
       - package: ThinkingOrbs
     scheme:

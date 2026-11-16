@@ -109,6 +109,35 @@ pub fn frame_in(message: Message) -> Option<String> {
 /// would leave a transcript wrong with nothing to say so.
 const EVENT_BACKLOG: usize = 4096;
 
+/// A reply this large leaves its parse and its JSON freed but held in glibc's
+/// arenas: ~280MB resident after a 40MB transcript read.
+const TRIM_AFTER: usize = 1 << 20;
+
+/// How long after the last large reply the heap is trimmed. A scroll up a
+/// transcript is a burst of pages, and a trim after each made paging 25% slower.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+const TRIM_QUIET: std::time::Duration = std::time::Duration::from_secs(1);
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+static LARGE_REPLIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Hands freed heap back to the OS once no large reply has gone out for
+/// [`TRIM_QUIET`]. glibc keeps what a worker thread's arena frees.
+fn give_back_memory_soon() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        use std::sync::atomic::Ordering::Relaxed;
+        let this = LARGE_REPLIES.fetch_add(1, Relaxed) + 1;
+        tokio::spawn(async move {
+            tokio::time::sleep(TRIM_QUIET).await;
+            if LARGE_REPLIES.load(Relaxed) == this {
+                // SAFETY: malloc_trim only walks glibc's own arenas, under their locks.
+                let _ = tokio::task::spawn_blocking(|| unsafe { libc::malloc_trim(0) }).await;
+            }
+        });
+    }
+}
+
 /// How long a connection may take to prove itself — the `/file` head, or the
 /// handshake plus hello — before it is dropped. Everything before the token is
 /// checked is somebody unknown spending this process's memory.
@@ -141,6 +170,14 @@ pub async fn run(port: u16) -> Result<()> {
     }
     let sink = Sink::new(|event, payload| HUB.publish(event, &payload));
     let home = start_core(sink.clone()).await?;
+    // A login shell, which a heavy profile makes slow, so not before the bind.
+    // The heartbeat is the only reader.
+    let beat_home = home.clone();
+    tokio::spawn(async move {
+        if let Some(sandbox) = crate::cloud_machine::boat_id().await {
+            crate::cloud_machine::heartbeat(beat_home, sandbox).await;
+        }
+    });
 
     let (token, token_path) = mint_token().await?;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -517,6 +554,7 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     crate::auto_continue::rearm(&sink).await;
 
     tokio::spawn(crate::remote_reports::run(sink.clone()));
+    tokio::spawn(crate::held_flags::run(sink.clone()));
     // Agents this server spawns reach it through `dray`, so it serves the
     // socket the desktop app does — under `DRAY_HOME` where that is set.
     tokio::spawn(async move {
@@ -552,9 +590,20 @@ impl Hub {
         // No receivers is ordinary — nobody connected, or the app not
         // serving — and the frame would be built for nobody.
         if self.events.receiver_count() > 0 {
-            let _ = self.events.send(json!({ "event": event, "payload": payload }).to_string().into());
+            let _ = self.events.send(event_frame(event, payload).into());
         }
     }
+}
+
+/// `{"event":…,"payload":…}`, serialized off the borrowed payload: `json!`
+/// cloned the whole tree to wrap it.
+fn event_frame(event: &str, payload: &Value) -> String {
+    #[derive(Serialize)]
+    struct Frame<'a> {
+        event: &'a str,
+        payload: &'a Value,
+    }
+    serde_json::to_string(&Frame { event, payload }).unwrap_or_default()
 }
 
 /// Every server's hub, a static because Remote access serves it from a
@@ -596,6 +645,9 @@ pub async fn listen(
             // Reaps finished connections, so the set holds live ones alone.
             Some(_) = connections.join_next() => continue,
         };
+        // The welcome and `live_state` go out as two small writes, and Nagle
+        // held the second for the client's delayed ACK: 40ms on every connect.
+        let _ = stream.set_nodelay(true);
         let (sink, hub, token, tunnel_file) = (sink.clone(), hub.clone(), token.clone(), tunnel_file.clone());
         connections.spawn(async move {
             // Bounded like the rest of what comes before the token: `peek`
@@ -1476,8 +1528,12 @@ async fn connection(
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
             };
+            let big = frame.len() >= TRIM_AFTER;
             if write.send(frame_out(frame, deflate)).await.is_err() {
                 break;
+            }
+            if big {
+                give_back_memory_soon();
             }
         }
         write.close().await.ok();
@@ -1530,19 +1586,13 @@ async fn connection(
         tokio::spawn(crate::analytics::CLIENT_COUNTS.scope(counts, async move {
             let args = tag_dictation(&call.cmd, call.args, island);
             let answer = match call.cmd.as_str() {
-                "island_links" => island_links(island).await,
+                "island_links" => island_links(island).await.into_reply(),
                 _ => dispatch(&call.cmd, args, sink).await,
             };
-            let reply = match answer {
-                Ok(ok) => {
-                    if island {
-                        island_used(&call.cmd);
-                    }
-                    json!({ "id": call.id, "ok": ok })
-                }
-                Err(err) => json!({ "id": call.id, "err": err }),
-            };
-            let _ = replies.send(reply.to_string());
+            if island && answer.is_ok() {
+                island_used(&call.cmd);
+            }
+            let _ = replies.send(reply(&call.id, answer));
         }));
     }
 
@@ -1629,19 +1679,67 @@ fn answered(connection: u64, frame: Value) {
     }
 }
 
+/// JSON text, serialized straight off a command's typed result. Going through
+/// a `Value` tree first was most of a transcript read's CPU and its peak memory.
+#[derive(Debug, PartialEq)]
+struct Json(String);
+
+impl Json {
+    fn of<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<Self> {
+        serde_json::to_string(value).map(Self)
+    }
+
+    /// A JSON string holding `text`, how every refusal here is worded.
+    fn text(text: impl std::fmt::Display) -> Self {
+        Self::from(Value::String(text.to_string()))
+    }
+}
+
+impl From<Value> for Json {
+    fn from(value: Value) -> Self {
+        Self(serde_json::to_string(&value).unwrap_or_else(|_| "null".into()))
+    }
+}
+
 /// A command's answer as the wire carries it: the value, or the error as
 /// Tauri would have serialized it for a rejected `invoke`.
+type Answer = Result<Json, Json>;
+
 trait IntoReply {
-    fn into_reply(self) -> Result<Value, Value>;
+    fn into_reply(self) -> Answer;
 }
 
 impl<T: Serialize, E: Serialize> IntoReply for Result<T, E> {
-    fn into_reply(self) -> Result<Value, Value> {
+    fn into_reply(self) -> Answer {
         match self {
-            Ok(value) => serde_json::to_value(value).map_err(|e| json!(e.to_string())),
-            Err(err) => Err(serde_json::to_value(err).unwrap_or_else(|e| json!(e.to_string()))),
+            Ok(value) => Json::of(&value).map_err(Json::text),
+            Err(err) => Err(Json::of(&err).unwrap_or_else(Json::text)),
         }
     }
+}
+
+/// The reply frame. Its keys stay in the order `json!` sorted them, so the
+/// envelope reads byte for byte as it did; the answer is copied once, not reparsed.
+fn reply(id: &Value, answer: Answer) -> String {
+    let id = Json::from(id.clone()).0;
+    let (body, ok) = match answer {
+        Ok(Json(body)) => (body, true),
+        Err(Json(body)) => (body, false),
+    };
+    let mut frame = String::with_capacity(body.len() + id.len() + 16);
+    if ok {
+        frame.push_str("{\"id\":");
+        frame.push_str(&id);
+        frame.push_str(",\"ok\":");
+        frame.push_str(&body);
+    } else {
+        frame.push_str("{\"err\":");
+        frame.push_str(&body);
+        frame.push_str(",\"id\":");
+        frame.push_str(&id);
+    }
+    frame.push('}');
+    frame
 }
 
 /// For a command that cannot fail.
@@ -1663,11 +1761,11 @@ macro_rules! table {
                 let args = if $args.is_null() { json!({}) } else { $args };
                 #[allow(unused_variables)]
                 let Args { $($arg),* } = serde_json::from_value(args)
-                    .map_err(|e| json!(format!("invalid arguments to {}: {e}", $cmd)))?;
+                    .map_err(|e| Json::text(format!("invalid arguments to {}: {e}", $cmd)))?;
                 IntoReply::into_reply($call)
             })*
             // How a desktop-only command looks from here.
-            _ => Err(json!(format!("unknown command {}", $cmd))),
+            _ => Err(Json::text(format!("unknown command {}", $cmd))),
         }
     };
 }
@@ -1675,7 +1773,7 @@ macro_rules! table {
 /// What the Mac's server answers beyond the core: Remote access, which moved
 /// into it from the app, and the restart an update asks for.
 #[cfg(feature = "desktop")]
-async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
+async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Answer {
     table! { cmd, args;
         get_remote_access() => ok(crate::remote_access::get_remote_access());
         set_remote_access(on: bool) => crate::remote_access::set_remote_access(sink, on).await;
@@ -1689,9 +1787,9 @@ async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value
 /// Every core command the desktop exposes, minus the ones that act on the
 /// server's own desktop: opening apps and terminals, and the pasteboard.
 /// Mac-only modules are not compiled here.
-async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
+async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
     if !dray_proto::REMOTE_MCP && cmd.starts_with("mcp_") {
-        return Err(json!(format!("unknown command {cmd}")));
+        return Err(Json::text(format!("unknown command {cmd}")));
     }
     #[cfg(feature = "desktop")]
     if matches!(
@@ -1709,19 +1807,19 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
     // of its own — the Island — dictates through the app's.
     #[cfg(feature = "desktop")]
     if crate::transcription::HOSTED.contains(&cmd) {
-        return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Open Dray to dictate.")));
+        return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Open Dray to dictate."))).into_reply();
     }
     // The Island's title opens its session in the app's window, which only the
     // app can raise, and the island opens on the session that window shows.
     #[cfg(feature = "desktop")]
     if matches!(cmd, "show_session" | "selected_session" | "extend_boat") {
-        return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Dray's window is closed.")));
+        return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Dray's window is closed."))).into_reply();
     }
     // The app's word to the island, which only this server reaches.
     #[cfg(feature = "desktop")]
     if cmd == "boat_alerts" {
         let _ = sink.emit("boat_alerts", &args);
-        return Ok(Value::Null);
+        return Ok(Json::from(Value::Null));
     }
     // A `dray-serve` updates itself; the Mac's server follows the app instead.
     #[cfg(not(feature = "desktop"))]
@@ -1749,7 +1847,11 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
             permission_mode, fast, &cwd, branch.as_deref(), use_worktree,
             worktree_name.as_deref(), base_ref.as_deref(), is_new_session, sink,
         ).await;
-        interrupt_session(session_id: String) => crate::interrupt_session(&session_id, sink).await;
+        // The reader's own stop, settle and delete are noted for the task's bot
+        // here, on the client wire: `dray` is how the bot does each itself.
+        interrupt_session(session_id: String) => crate::bots::reader_did(
+            &session_id, Some(crate::bots::Act::Stopped), crate::interrupt_session(&session_id, sink),
+        ).await;
         stop_task(session_id: String, task_id: String) => crate::stop_task(&session_id, &task_id).await;
         cancel_queued(session_id: String) => crate::cancel_queued(&session_id, sink).await;
         respond_permission(session_id: String, request_id: String, option_id: String) =>
@@ -1758,12 +1860,29 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
             crate::answer_questions(&session_id, &request_id, answers, sink).await;
         mark_session_read(session_id: String, read: bool) => crate::mark_session_read(&session_id, read, sink).await;
         set_session_flags(session_id: String, archived: Option<bool>, pinned: Option<bool>, hidden: Option<bool>, aside: Option<bool>) =>
-            crate::set_session_flags(&session_id, archived, pinned, hidden, aside, sink).await;
+            crate::bots::reader_did(
+                &session_id,
+                (archived == Some(true)).then_some(crate::bots::Act::Settled),
+                crate::set_session_flags(&session_id, archived, pinned, hidden, aside, sink),
+            ).await;
+        // Set aside on a row whose own server is down (#1050).
+        held_session_flags() => ok(crate::held_flags::list().await);
+        hold_session_flags(machine: String, session_id: String, aside: bool, pinned: Option<bool>) =>
+            crate::held_flags::hold_and_announce(machine, session_id, aside, pinned, sink).await;
+        unhold_session_flags(session_id: String) => crate::held_flags::unhold_and_announce(session_id, sink).await;
+        release_held_flag(session_id: String, at: String) =>
+            crate::held_flags::release_and_announce(session_id, at, sink).await;
+        flush_held_flags(machine: String) => ok(crate::held_flags::flush_now(machine, sink).await);
         rename_session(session_id: String, title: String) => crate::rename_session(session_id, title, sink).await;
-        delete_session(session_id: String) => crate::delete_session(&session_id).await;
+        delete_session(session_id: String) => crate::bots::reader_did(
+            &session_id, Some(crate::bots::Act::Deleted), crate::delete_session(&session_id, sink),
+        ).await;
         fork_session(session_id: String, fork_id: String, worktree: bool) =>
             crate::fork_session(&session_id, &fork_id, worktree).await;
         session_index_item(session_id: String) => crate::session_index_item(&session_id).await;
+        session_keeps_children(session_id: String) => crate::session_keeps_children(&session_id).await;
+        fx_subagent_events(session_id: String, agent: String) =>
+            crate::harness::fx::history::fx_subagent_events(session_id, agent).await;
         // `dray --machine` from an agent on the Mac that added this machine.
         orchestrate(
             line: String, origin: Option<String>, caller: Option<crate::orchestration::Caller>,
@@ -1863,6 +1982,9 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         start_bot(id: String, harness: crate::session::Harness, model: crate::models::ModelId, effort: Option<crate::models::Effort>, permission_mode: crate::events::ApprovalPolicy, fast: bool) =>
             crate::bots::start_bot(id, harness, model, effort, permission_mode, fast, sink).await;
         delete_bot(id: String) => crate::bots::delete_bot(id, sink).await;
+        edit_bot(id: String, name: String, avatar: crate::bots::BotAvatar) => crate::bots::edit_bot(id, name, avatar, sink).await;
+        bot_learned_diff(session_id: String, commit: String, path: String) => crate::bots::bot_learned_diff(session_id, commit, path).await;
+        bot_undo_learned(session_id: String, commit: String, path: String) => crate::bots::bot_undo_learned(session_id, commit, path, sink).await;
 
         // Assistants signed in to `/mcp`.
         mcp_pair(read_only: bool, replaces: Option<String>) => crate::mcp::pair(sink, read_only, replaces).await;
@@ -2234,8 +2356,47 @@ mod tests {
     async fn unknown_and_malformed_commands_answer_err() {
         let sink = Sink::new(|_, _| {});
         let err = dispatch("browser_open", Value::Null, sink.clone()).await.unwrap_err();
-        assert_eq!(err, json!("unknown command browser_open"));
+        assert_eq!(err, Json::from(json!("unknown command browser_open")));
         let err = dispatch("stop_task", json!({ "sessionId": 1 }), sink).await.unwrap_err();
+        let err: Value = serde_json::from_str(&err.0).unwrap();
         assert!(err.as_str().unwrap().starts_with("invalid arguments to stop_task"));
+    }
+
+    /// Replies are serialized off the typed result; the JSON must read the same
+    /// as the `Value` tree it replaced, key order aside.
+    #[test]
+    fn a_reply_reads_as_the_value_tree_did() {
+        use super::{reply, IntoReply, Json};
+        use crate::harness::claude_code::{mapper::Mapper, parser};
+        let mut mapper = Mapper::default();
+        let events: Vec<_> = include_str!("harness/claude_code/fixtures/complex.jsonl")
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| mapper.map(parser::parse_line(line).unwrap()).unwrap())
+            .collect();
+        assert!(events.len() > 100);
+        let mut item = crate::store::SessionIndexItem::new(
+            "s", crate::session::Harness::ClaudeCode, "/p", "/p", None, None, "hi",
+            crate::models::ModelId::new("opus"), None, crate::events::ApprovalPolicy::Auto, false, None,
+        );
+        item.unknown.insert("fromNewerBuild".into(), json!({ "z": 1, "a": [true] }));
+        let snapshot = crate::store::SessionSnapshot { index_item: item, events, older_before: Some(7) };
+        let read = |frame: String| serde_json::from_str::<Value>(&frame).unwrap();
+
+        let old = json!({ "id": 3, "ok": serde_json::to_value(Some(&snapshot)).unwrap() }).to_string();
+        let new = reply(&json!(3), Ok::<_, String>(Some(&snapshot)).into_reply());
+        assert_eq!(read(new), read(old));
+
+        let old = json!({ "id": "x\"y", "err": "no such session" }).to_string();
+        assert_eq!(reply(&json!("x\"y"), Err::<(), _>("no such session").into_reply()), old, "byte for byte");
+        let old = json!({ "id": 9, "ok": { "b": [1.5, null], "a": "\u{1}\n" } }).to_string();
+        assert_eq!(reply(&json!(9), Ok(Json::from(json!({ "b": [1.5, null], "a": "\u{1}\n" })))), old);
+    }
+
+    #[test]
+    fn an_event_frame_is_what_json_wrote() {
+        let payload = json!({ "sessionId": "s", "seq": 4, "payload": { "text": "a\"b", "z": null } });
+        let old = json!({ "event": "agent_event", "payload": payload }).to_string();
+        assert_eq!(super::event_frame("agent_event", &payload), old);
     }
 }

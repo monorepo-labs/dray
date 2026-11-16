@@ -91,7 +91,8 @@ private struct PrPanelModifier: ViewModifier {
             // that failed with the socket down would otherwise never retry.
             .task(id: "\(busy)|\(connected)") { if connected { await model.load(store) } }
             .toolbar {
-                if model.visible {
+                // A bot's folder holds notes, not work: no PR lookup there, as on the desktop.
+                if model.visible && store.bot(model.key) == nil {
                     ToolbarItem(placement: .primaryAction) {
                         // The list row's own glyph, so the button says the PR's state before it is opened.
                         Button { showing = true } label: {

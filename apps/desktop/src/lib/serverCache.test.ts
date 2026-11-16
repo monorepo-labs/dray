@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { serverShown, unreachable, withKept } from "@/lib/serverCache";
+import { keptRow, serverShown, unfinishedWarning, unreachable, withKept } from "@/lib/serverCache";
 import { qualify } from "@/lib/transport";
-import type { ServerInfo } from "@/types/events";
+import type { PrMark, ServerInfo, SessionIndexItem } from "@/types/events";
 
 const server = (id: string, over: Partial<ServerInfo> = {}): ServerInfo =>
   ({ id, name: id, on: true, status: "connected", ...over }) as ServerInfo;
@@ -54,5 +54,41 @@ describe("withKept", () => {
   it("answers the same array when nothing moves, so React skips the render", () => {
     const prev = [here, boxRow];
     expect(withKept(prev, [server("box")], [], () => undefined, pathOf)).toBe(prev);
+  });
+});
+
+describe("keptRow", () => {
+  const task = { projectPath: "/srv/dray", branch: null, worktreeName: "fix-login", status: "idle" } as SessionIndexItem;
+  const marks = (state: PrMark["state"] | null) => (repo: string, branch: string | null) =>
+    repo === "/srv/dray" && branch === "worktree-fix-login" ? (state && ({ state } as PrMark)) : undefined;
+
+  it("marks a row whose PR is open, and only that", () => {
+    expect(keptRow(task, marks("OPEN"))).toEqual({ ...task, prOpen: true });
+    expect(keptRow(task, marks("MERGED"))).toBe(task);
+    expect(keptRow(task, () => undefined)).toBe(task);
+  });
+
+  it("clears a kept mark once a newer read says otherwise, and only then", () => {
+    const kept = { ...task, prOpen: true as const };
+    expect(keptRow(kept, marks("MERGED"))).toEqual(task);
+    expect(keptRow(kept, marks(null))).toEqual(task);
+    expect(keptRow(kept, () => undefined)).toBe(kept);
+  });
+
+  it("carries the live status over the index row's", () => {
+    expect(keptRow(task, () => undefined, "in_progress")).toEqual({ ...task, status: "in_progress" });
+    expect(keptRow(task, () => undefined, "idle")).toBe(task);
+  });
+});
+
+describe("unfinishedWarning", () => {
+  it("says nothing with nothing unfinished", () => {
+    expect(unfinishedWarning(undefined)).toBeNull();
+    expect(unfinishedWarning([])).toBeNull();
+  });
+
+  it("counts and names each task", () => {
+    expect(unfinishedWarning(["Fix login"])).toMatch(/^1 task here .*“Fix login”\./);
+    expect(unfinishedWarning(["A", "B"])).toMatch(/^2 tasks here .*“A”, “B”\./);
   });
 });

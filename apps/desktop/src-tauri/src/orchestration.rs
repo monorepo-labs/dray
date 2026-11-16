@@ -26,7 +26,7 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use dray_proto::{
     encode_line, CreateDraft, CreateSession, DraftSummary, Envelope, StartDraft, IssueInput, IssueLink, LinkIssues, ListSessions, Request,
-    Response, SendMessage, SendToBot, SessionSummary, MAX_LINE, OLDEST_SPOKEN, PROTOCOL_VERSION,
+    Response, SendMessage, SendToBot, SessionSummary, SetAside, MAX_LINE, OLDEST_SPOKEN, PROTOCOL_VERSION,
 };
 use std::path::Path;
 use tokio::{
@@ -50,6 +50,12 @@ pub const SESSION_CREATED: &str = "session_created";
 /// carrying the entry as it now stands. The sidebar's own buttons need none:
 /// the frontend made those writes and merges what they answered.
 pub const SESSION_CHANGED: &str = "session_changed";
+
+/// `dray session model` moved a session's pick, carrying the entry as it now
+/// stands. Apart from [`SESSION_CHANGED`] because a composer showing that
+/// session has to take the new pick over its own, which no other change to
+/// the entry may make it do.
+pub const SESSION_MODEL_CHANGED: &str = "session_model_changed";
 
 /// Emitted when `dray issue link` or `dray issue unlink` changes what a session
 /// is tagged with, so the panel's Issue tab appears, redraws or goes away
@@ -422,13 +428,26 @@ async fn handle(stream: UnixStream, app: &Sink) -> Result<()> {
 /// bounce on to a third machine.
 async fn route(request: Request, app: &Sink) -> Result<Response> {
     if let Request::OnMachine(on) = request {
-        return on_machine(&on.machine, *on.request).await;
+        return on_machine(&on.machine, *on.request, app).await;
     }
     #[cfg(any(feature = "serve", feature = "desktop"))]
     if let Some(id) = session_named(&request) {
         if store::get_session_index_item(id).await?.is_none() {
+            // Where this server already knows the machine — a bot's task
+            // started there, or a flag held for it — asked straight, since a
+            // sweep cannot find one whose machine is down and set-aside holds
+            // it then (#1050).
+            if let Request::SetAside(aside) = &request {
+                let known = match crate::held_flags::machine_of(id).await {
+                    Some(machine) => Some(machine),
+                    None => crate::remote_reports::machine_of(id).await,
+                };
+                if let Some(machine) = known {
+                    return elsewhere::set_aside(&machine, aside.clone(), app).await;
+                }
+            }
             if let Some(machine) = elsewhere::locate(id).await {
-                return on_machine(&machine, request).await;
+                return on_machine(&machine, request, app).await;
             }
         }
     }
@@ -449,7 +468,9 @@ fn session_named(request: &Request) -> Option<&str> {
         Request::Browser(r) => Some(&r.session_id),
         Request::MergeCard(r) => Some(&r.session_id),
         Request::SetNeed(r) => Some(&r.session_id),
-        // Never `AddVideo`: its path is this machine's, and forwarded it would
+        Request::React(r) => Some(&r.session_id),
+        Request::SetModel(r) => Some(&r.session_id),
+        // Never `AddVideo` or `AddImage`: its path is this machine's, and forwarded it would
         // name a file the other machine does not have, or a different one.
         _ => None,
     }
@@ -478,7 +499,7 @@ fn this_machine_only(request: &Request) -> bool {
 }
 
 #[cfg(any(feature = "serve", feature = "desktop"))]
-async fn on_machine(machine: &str, request: Request) -> Result<Response> {
+async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Response> {
     if this_machine_only(&request) {
         bail!("`dray machine` and `dray server` act on this machine alone — drop --machine");
     }
@@ -488,15 +509,62 @@ async fn on_machine(machine: &str, request: Request) -> Result<Response> {
         };
         return elsewhere::list_everywhere(list).await;
     }
+    if let Request::SetAside(aside) = request {
+        return elsewhere::set_aside(machine, aside, app).await;
+    }
+    // Read before the send, since a flush landing during it empties the file.
+    let held_at_send = match &request {
+        Request::SendMessage(send) => crate::held_flags::list().await.into_iter().find(|h| h.session_id == send.session_id),
+        _ => None,
+    };
     let creates = matches!(request, Request::CreateSession(_));
+    let starts = creates || matches!(request, Request::StartDraft(_));
+    if machine == elsewhere::CLOUD && !creates {
+        bail!("only `dray session new` takes --machine cloud — a cloud task's own machine is named on its row");
+    }
     let forward = elsewhere::prepare(request).await?;
-    let response = elsewhere::forward(machine, &forward).await?;
+    let placed = match machine == elsewhere::CLOUD {
+        true => Some(elsewhere::start_cloud(forward.origin.as_deref()).await?),
+        false => None,
+    };
+    let machine = placed.as_deref().unwrap_or(machine);
+    let response = elsewhere::forward(machine, &forward).await;
+    // Its machine is the task's alone, so one that never got the task goes.
+    // A lost reply proves nothing, so the machine is asked before it goes.
+    if let Some(id) = &placed {
+        let unused = match &response {
+            Ok(Response::Created { .. }) => false,
+            Ok(_) => true,
+            Err(_) => elsewhere::holds_nothing(id).await,
+        };
+        if unused {
+            elsewhere::drop_cloud(id).await;
+        }
+    }
+    let response = response?;
     // The task's server keeps its reports, and this server holds the link to
     // collect them by; the other way round usually does not exist.
-    if let (true, Some(caller), Response::Created { session, .. }) = (creates, &forward.caller, &response) {
+    if let (true, Some(caller), Response::Created { session, .. }) = (starts, &forward.caller, &response) {
         if caller.bot_tree {
             let saved = crate::machines::on(machine).await.map_err(anyhow::Error::msg)?;
             crate::remote_reports::track(&saved.id, &session.session_id, &caller.session.session_id).await?;
+        }
+    }
+    // A message brings a set-aside session back, so a flag held from before
+    // it must not stay put away. Dropped behind any flush writing it, and
+    // undone there where that flush may have landed after the message.
+    if let (Some(held), Response::Sent { .. }) = (held_at_send, &response) {
+        let released = crate::held_flags::release(&held.session_id, &held.at).await?;
+        if released == crate::held_flags::Released::Held {
+            crate::held_flags::announce(app, Vec::new()).await;
+        }
+        // Only a flag the flush wrote: a newer choice, held or written
+        // directly, is the reader's and stands.
+        if held.aside && released == crate::held_flags::Released::Landed {
+            let back = elsewhere::prepare(Request::SetAside(SetAside { session_id: held.session_id, aside: false })).await?;
+            if let Err(e) = elsewhere::forward(machine, &back).await {
+                eprintln!("[held flags] could not bring back after a send: {e:#}");
+            }
         }
     }
     Ok(response)
@@ -504,7 +572,7 @@ async fn on_machine(machine: &str, request: Request) -> Result<Response> {
 
 /// A build with no serve wire has no client half to reach one with.
 #[cfg(not(any(feature = "serve", feature = "desktop")))]
-async fn on_machine(_machine: &str, _request: Request) -> Result<Response> {
+async fn on_machine(_machine: &str, _request: Request, _app: &Sink) -> Result<Response> {
     bail!("this build reaches no other machines")
 }
 
@@ -622,6 +690,48 @@ mod elsewhere {
     use anyhow::anyhow;
     use serde_json::json;
 
+    /// `--machine cloud`: a fresh Dray Cloud machine for one task, as the
+    /// composer's Cloud pick starts one.
+    pub const CLOUD: &str = "cloud";
+
+    /// Starts a cloud machine and clones the project there, answering the
+    /// machine's id. The app starts it, since it holds Dray Cloud's key and
+    /// connections and writes the machine into `servers.json` once connected.
+    pub async fn start_cloud(origin: Option<&str>) -> Result<String> {
+        let slug = origin
+            .and_then(|o| o.strip_prefix("github.com/"))
+            .filter(|slug| slug.split('/').count() == 2)
+            .ok_or_else(|| anyhow!("Cloud runs projects with a GitHub remote — pass --project <repo path> for one"))?;
+        let id = match crate::serve::host_call("start_cloud_machine", serde_json::Value::Null).await {
+            Some(Ok(id)) => id.as_str().unwrap_or_default().to_string(),
+            Some(Err(e)) => bail!("couldn't start a cloud machine: {}", e.as_str().unwrap_or(&e.to_string())),
+            None => bail!("Dray Cloud starts machines through the Dray app — open it and try again"),
+        };
+        let cloned = async {
+            let saved = machines::on(&id).await?;
+            machines::call(&saved, "clone_github_repo", json!({ "slug": slug })).await
+        };
+        if let Err(e) = cloned.await {
+            drop_cloud(&id).await;
+            bail!("couldn't clone {slug} onto its cloud machine: {e}");
+        }
+        Ok(id)
+    }
+
+    /// Whether machine `id` answers with no sessions at all. One that does not
+    /// answer may hold a task, so it counts as holding one.
+    pub async fn holds_nothing(id: &str) -> bool {
+        let Ok(saved) = machines::on(id).await else { return false };
+        let rows = machines::call(&saved, "list_session_index_items", json!({ "archived": false })).await;
+        matches!(rows, Ok(serde_json::Value::Array(rows)) if rows.is_empty())
+    }
+
+    /// Deletes cloud machine `id`, best effort: a machine left behind still
+    /// goes when the app settles what runs on it, or by hand in Settings.
+    pub async fn drop_cloud(id: &str) {
+        let _ = crate::serve::host_call("drop_cloud_machine", json!({ "id": id })).await;
+    }
+
     /// The machine holding session `id`, where one does. Every machine is
     /// asked at once, each given [`machines::SWEEP`].
     pub async fn locate(id: &str) -> Option<String> {
@@ -667,7 +777,10 @@ mod elsewhere {
     /// Runs a prepared request on `machine`, a name or an id, and marks every
     /// session it answers with as that machine's.
     pub async fn forward(machine: &str, forward: &Forward) -> Result<Response> {
-        let saved = machines::on(machine).await.map_err(anyhow::Error::msg)?;
+        forward_to(&machines::on(machine).await.map_err(anyhow::Error::msg)?, forward).await
+    }
+
+    async fn forward_to(saved: &machines::Saved, forward: &Forward) -> Result<Response> {
         let answer = machines::call(&saved, "orchestrate", serde_json::to_value(forward)?).await.map_err(|e| {
             match e.starts_with("unknown command") {
                 true => anyhow!("{}'s Dray server is too old to take dray requests — update it", saved.name),
@@ -676,7 +789,9 @@ mod elsewhere {
         })?;
         let mut response: Response = serde_json::from_value(answer)?;
         let rows: Vec<&mut SessionSummary> = match &mut response {
-            Response::Created { session, .. } | Response::Session { session } => vec![session],
+            Response::Created { session, .. } | Response::Session { session } | Response::Model { session, .. } => {
+                vec![session]
+            }
             Response::Listed { sessions } => sessions.iter_mut().collect(),
             _ => vec![],
         };
@@ -684,6 +799,46 @@ mod elsewhere {
             row.machine = Some(saved.name.clone());
         }
         Ok(response)
+    }
+
+    /// `dray session set-aside` for a session on `machine`, a name or an id:
+    /// written there, or held here when that machine does not answer (#1050).
+    /// A machine turned off is held for too — turning it back on lands it.
+    pub async fn set_aside(machine: &str, aside: SetAside, app: &Sink) -> Result<Response> {
+        let saved = machines::find(&machines::load().await, machine).map_err(anyhow::Error::msg)?;
+        // An older flag held here is superseded either way. Dropped first, and
+        // behind any flush writing it, so this write lands after it.
+        if crate::held_flags::unhold(&aside.session_id).await?.is_some() {
+            crate::held_flags::announce(app, Vec::new()).await;
+        }
+        if !saved.off {
+            let forward = prepare(Request::SetAside(aside.clone())).await?;
+            match tokio::time::timeout(machines::SWEEP, forward_to(&saved, &forward)).await {
+                Ok(Ok(response)) => return Ok(response),
+                // A server too old for `orchestrate` still takes the flush's
+                // `set_session_flags`, so it is held like any other.
+                Ok(Err(e)) => eprintln!("[set aside] holding for {}: {e:#}", saved.name),
+                Err(_) => eprintln!("[set aside] holding for {}: no answer", saved.name),
+            }
+        }
+        let held = crate::held_flags::hold(&saved.id, &aside.session_id, aside.aside, None).await?;
+        crate::held_flags::announce(app, Vec::new()).await;
+        Ok(Response::Session {
+            session: SessionSummary {
+                session_id: held.session_id.clone(),
+                title: held.session_id,
+                cwd: String::new(),
+                project_path: String::new(),
+                branch: None,
+                worktree_name: None,
+                status: "idle".into(),
+                modified: held.at,
+                parent_session_id: None,
+                hidden: false,
+                machine: Some(saved.name),
+                held: true,
+            },
+        })
     }
 
     /// Fills in what only this machine's index knows before a request leaves:
@@ -696,6 +851,11 @@ mod elsewhere {
             Request::CreateSession(create) => {
                 let parent = parent_of(create.parent_session_id.as_deref()).await?;
                 forward.caller = caller(parent.as_ref()).await?;
+                // Said outright too, for a far server from before it read
+                // `bot_tree` as hiding the task.
+                if forward.caller.as_ref().is_some_and(|c| c.bot_tree) {
+                    create.hidden = true;
+                }
                 project = project_from(create.project_path.as_deref(), parent.as_ref());
                 // A path given is the far side's to resolve: canonicalized here,
                 // a plain folder like `/tmp` would arrive as macOS's
@@ -836,8 +996,20 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::ListDrafts(list) => list_drafts(list).await,
         Request::RemoveDraft(draft) => remove_draft(&draft.id, app).await,
         Request::StartDraft(start) => start_draft(start, None, app).await,
-        Request::AddVideo(video) => add_video(video).await,
+        Request::AddVideo(video) => add_video(video, false).await,
+        Request::AddImage(image) => add_video(image, true).await,
         Request::MergeCard(card) => post_merge_card(card, app).await,
+        Request::React(react) => {
+            let chat = store::get_session_index_item(&react.session_id)
+                .await?
+                .with_context(|| format!("no session {}", react.session_id))?;
+            let payload = crate::bots::react::reaction(&chat.session_id, &chat.cwd, &react.emoji).await?;
+            let emoji = crate::bots::react::emoji(&react.emoji).unwrap_or_default().to_string();
+            // Logged, not posted: a reaction is the bot saying nothing, so its
+            // turn stays a silent one and raises no Done.
+            manager().log_event(&chat.session_id, chat.harness, payload, app).await?;
+            Ok(Response::Reacted { emoji })
+        }
         Request::SetNeed(need) => {
             let text = Some(need.need.trim().to_string()).filter(|t| !t.is_empty());
             crate::store::set_session_need(&need.session_id, text)
@@ -848,6 +1020,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         }
         Request::Share(share) => share_port(share).await,
         Request::ListShares(list) => list_shares(list).await,
+        Request::SetModel(set) => set_model(set, app).await,
         Request::RenameSession(rename) => {
             crate::rename_session(rename.session_id.clone(), rename.title, app.clone()).await?;
             answer_session(&rename.session_id).await
@@ -991,6 +1164,18 @@ pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_jso
             Ok(serde_json::Value::Null)
         }
         "island_links" => serde_json::to_value(crate::servers::island_links()).map_err(|e| e.to_string()),
+        // `dray session new --machine cloud`, which the server cannot start
+        // itself: the cloud connections and their `servers.json` rows are the app's.
+        // Refused while off, since a machine started then is never listed and
+        // its start would only time out.
+        "start_cloud_machine" => match crate::servers::cloud_info().await.on {
+            true => crate::servers::start_cloud_machine().await.map(serde_json::Value::from),
+            false => Err("Dray Cloud is off. Turn it on in Settings, Servers.".into()),
+        },
+        "drop_cloud_machine" => {
+            let id = args["id"].as_str().ok_or("drop_cloud_machine wants an id")?.to_string();
+            crate::servers::drop_cloud_machine(id).await.map(|()| serde_json::Value::Null)
+        }
         // The island's Extend, on a timer only the app is reading.
         "extend_boat" => {
             let id = args["id"].as_str().ok_or("extend_boat wants an id")?.to_string();
@@ -1048,13 +1233,22 @@ async fn machine_list(request: Request) -> Result<Response> {
         name: row.saved.name,
         status: row.status.into(),
         error: row.error,
+        unfinished: Vec::new(),
     };
     let row = match request {
         Request::ListServers => {
             return Ok(Response::Servers { servers: machines::list().await.into_iter().map(summarize).collect() });
         }
         Request::AddServer(add) => machines::add(add.name, add.address, add.token).await,
-        Request::RemoveServer(server) => machines::remove(&server.name).await,
+        Request::RemoveServer(server) => {
+            // Read first: what the app kept of it goes once it is off the list.
+            let unfinished = match machines::find(&machines::load().await, &server.name) {
+                Ok(saved) => machines::unfinished(&saved.id).await,
+                Err(_) => Vec::new(),
+            };
+            let row = machines::remove(&server.name).await.map_err(anyhow::Error::msg)?;
+            return Ok(Response::Server { server: dray_proto::ServerSummary { unfinished, ..summarize(row) } });
+        }
         Request::RenameServer(rename) => machines::rename(&rename.name, &rename.new_name).await,
         Request::SetServerOn(set) => machines::set_on(&set.name, set.on).await,
         other => bail!("{other:?} is not answered here"),
@@ -1123,8 +1317,10 @@ mod server_list {
     /// Takes the token with it.
     async fn remove(name: &str) -> Result<Response> {
         let server = find(name)?;
+        // Before the removal, which deletes the list it is read from.
+        let unfinished = crate::machines::unfinished(&server.id).await;
         servers::remove_server(server.id.clone()).await.map_err(anyhow::Error::msg)?;
-        Ok(Response::Server { server: summarize(server) })
+        Ok(Response::Server { server: ServerSummary { unfinished, ..summarize(server) } })
     }
 
     async fn rename(rename: dray_proto::RenameServer) -> Result<Response> {
@@ -1151,7 +1347,14 @@ mod server_list {
             true => serde_json::to_value(server.status).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(),
             false => "off".to_string(),
         };
-        ServerSummary { id: server.id, name: server.name, address: server.ssh.unwrap_or(server.url), status, error: server.error }
+        ServerSummary {
+            id: server.id,
+            name: server.name,
+            address: server.ssh.unwrap_or(server.url),
+            status,
+            error: server.error,
+            unfinished: Vec::new(),
+        }
     }
 }
 
@@ -1220,6 +1423,84 @@ pub(crate) async fn announce_change(ids: &[String], app: &Sink) {
     }
 }
 
+/// `dray session model`: the composer's model picker, from outside it. Only the
+/// pick is written, as the picker's is; the session's next send carries it out
+/// through `send_msg`, which compares it against what the child runs and
+/// applies it in place or respawns. A prompt already queued behind a running
+/// turn bypasses that, so [`SessionManager::carry_pick_to_queue`] covers it.
+async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
+    let item = store::get_session_index_item(&set.session_id)
+        .await?
+        .with_context(|| format!("no session {}", set.session_id))?;
+    let harness = item.harness;
+    if !harness.names_a_cli() {
+        bail!("this build cannot run that session's agent, {}", harness.label());
+    }
+    let model = match set.model.as_deref() {
+        Some(alias) => resolve_model(Some(alias), None, harness).await?,
+        None => item.model.clone(),
+    };
+    let spec = crate::session::model_spec(harness, &model).await?;
+    if set.model.is_some() && harness == Harness::Codex && spec.is_none() {
+        bail!("{model} is not a Codex model");
+    }
+    let label = spec.as_ref().map_or_else(|| model.to_string(), |m| m.label.clone());
+    // A bare read writes nothing, even where the recorded level is one the
+    // model has since dropped: `send_msg` repairs that on its own.
+    let asked = set.model.is_some() || set.effort.is_some();
+    let effort = match asked {
+        true => {
+            let requested = resolve_effort(set.effort.as_deref(), None, harness)?;
+            effort_for(spec.as_ref(), requested, item.effort, &label, harness)?
+        }
+        false => item.effort,
+    };
+    let changed = model != item.model || effort != item.effort;
+    let item = match changed {
+        true => {
+            let item = store::set_session_pick(&item.session_id, model, effort)
+                .await?
+                .with_context(|| format!("no session {}", set.session_id))?;
+            app.emit(SESSION_CHANGED, &item).ok();
+            app.emit(SESSION_MODEL_CHANGED, &item).ok();
+            manager().carry_pick_to_queue(&item, app).await?;
+            item
+        }
+        false => item,
+    };
+    Ok(Response::Model {
+        session: summarize(item),
+        model: label,
+        effort: effort.map(|e| e.as_arg().to_string()),
+        changed,
+    })
+}
+
+/// The level a session runs at once `spec` replaces its model. A level the
+/// model lacks is refused, not dropped, since the caller asked for it by name;
+/// none asked keeps `current` where the model has it, as the picker does
+/// mid-session, else takes the model's own default.
+fn effort_for(
+    spec: Option<&crate::models::Model>,
+    requested: Option<Effort>,
+    current: Option<Effort>,
+    label: &str,
+    harness: Harness,
+) -> Result<Option<Effort>> {
+    Ok(match (spec, requested) {
+        (Some(spec), Some(level)) if !spec.efforts.contains(&level) => {
+            let ladder: Vec<_> = spec.efforts.iter().map(|e| e.as_arg()).collect();
+            match ladder.is_empty() {
+                true => bail!("{label} takes no effort level"),
+                false => bail!("{label} takes effort {}", ladder.join(", ")),
+            }
+        }
+        (None, Some(_)) => bail!("name a model to set an effort on — {} picks its own here", harness.label()),
+        (Some(spec), level) => crate::models::resolve_effort(spec, level.or(current)),
+        (None, None) => current,
+    })
+}
+
 async fn answer_session(id: &str) -> Result<Response> {
     let item = store::get_session_index_item(id).await?.with_context(|| format!("no session {id}"))?;
     Ok(Response::Session { session: summarize(item) })
@@ -1239,14 +1520,20 @@ async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
     Ok(answered(crate::headless::automation::run(&request.session_id, request.action).await))
 }
 
-/// Files a video for a session's chat. The folder is worked out here because
-/// only the server knows its home, and it is the one the session's delete sweeps.
-async fn add_video(request: dray_proto::AddVideo) -> Result<Response> {
+/// Files a video, or for `image` a screenshot, for a session's chat. The folder
+/// is worked out here because only the server knows its home, and it is the
+/// one the session's delete sweeps.
+async fn add_video(request: dray_proto::AddVideo, image: bool) -> Result<Response> {
     let dray_proto::AddVideo { session_id, path, name } = request;
     store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
     let dir = store::get_home_app_dir().await?.join("browser/recordings").join(&session_id);
     let filed = tokio::task::spawn_blocking(move || {
-        crate::recording::add(Path::new(&path), &dir, name.as_deref())
+        let source = Path::new(&path);
+        // Without this a video handed to `dray image add` would be filed as one.
+        if image && !crate::recording::is_image(source) {
+            return Err(format!("{path} is not a PNG or JPEG"));
+        }
+        crate::recording::add(source, &dir, name.as_deref())
     })
     .await?;
     Ok(match filed {
@@ -1344,9 +1631,17 @@ impl CardTask {
 /// oldest first: the card is posted in the last, and a card in any of them
 /// counts. A normal task's is `parent` itself. A bot's task goes to the bot's
 /// chat, since Start fresh settles the session that started it, and an agent
-/// switch leaves earlier sessions on screen in the same conversation. Empty
-/// where there is none.
+/// switch leaves earlier sessions on screen in the same conversation. A bot's
+/// sub-task goes to the task that started it, or once that is settled, the
+/// nearest live session above it. Empty where there is none.
 async fn card_chat(parent: SessionIndexItem) -> Result<Vec<SessionIndexItem>> {
+    let parent = match parent.archived && bots::keeps_children(&parent).await {
+        true => match store::live_from(&parent).await? {
+            Some(live) => live,
+            None => return Ok(Vec::new()),
+        },
+        false => parent,
+    };
     Ok(match bots::bot_at(&parent.cwd).await {
         Some(bot) => bots::chat_sessions(&bot.path).await?,
         None if parent.archived => Vec::new(),
@@ -1376,7 +1671,16 @@ pub async fn auto_merge_card(
 ) -> Result<Option<String>, crate::Fail> {
     let _held = POSTING_CARD.lock().await;
 
-    let Some(parent) = store::get_session_index_item(&session_id).await? else {
+    // A deleted parent is bridged by the task's adoption, as its reports are.
+    let adopted_by = match store::get_session_index_item(&task_id).await? {
+        Some(task) => task.adopted_by,
+        None => None,
+    };
+    let mut parent = store::get_session_index_item(&session_id).await?;
+    if let (None, Some(by)) = (&parent, adopted_by) {
+        parent = store::get_session_index_item(&by).await?;
+    }
+    let Some(parent) = parent else {
         return Ok(None);
     };
     let sessions = card_chat(parent).await?;
@@ -1518,13 +1822,7 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
         bail!("--hidden needs a calling session: a hidden session shows only beside its parent");
     }
 
-    // Everything under a bot runs hidden: the bot is the one place its work is
-    // run from, and each child reports back to it on its own.
-    let in_bot_tree = match parent.as_ref() {
-        Some(p) => crate::bots::in_bot_tree(p).await,
-        None => false,
-    };
-    let hidden = create.hidden || in_bot_tree;
+    let hidden = create.hidden || under_bot(parent.as_ref(), caller).await;
 
     let project_path = resolve_project(&create, parent.as_ref())?;
     refuse_bot_folder(&project_path).await?;
@@ -1697,12 +1995,15 @@ async fn find_draft(id: &str) -> Result<StoredDraft> {
 /// the app, which is the one way an agent can start work in the main checkout.
 async fn start_draft(start: StartDraft, caller: Option<&Caller>, app: &Sink) -> Result<Response> {
     let draft = find_draft(&start.id).await?;
-    check_depth(calling(start.parent_session_id.as_deref(), caller).await?.map(|c| c.1))?;
+    let calling = calling(start.parent_session_id.as_deref(), caller).await?;
+    check_depth(calling.as_ref().map(|c| c.1))?;
+    let hidden = under_bot(calling.as_ref().map(|c| &c.0), caller).await;
     let held = drafts::take(&draft.id)
         .await?
         .with_context(|| format!("no draft {}", draft.id))?;
     app.emit(DRAFTS_CHANGED, ()).ok();
-    let started = start_session(&draft, start.parent_session_id.as_deref(), app).await;
+    let owes = caller.is_some_and(|c| c.bot_tree);
+    let started = start_session(&draft, start.parent_session_id.as_deref(), hidden, owes, app).await;
     let Err(error) = started else { return started };
     // The prompt rides the error where the draft cannot go back, so the task
     // survives in the caller's output even with the file unwritable.
@@ -1719,6 +2020,8 @@ async fn start_draft(start: StartDraft, caller: Option<&Caller>, app: &Sink) -> 
 async fn start_session(
     draft: &StoredDraft,
     parent: Option<&str>,
+    hidden: bool,
+    owes_reports: bool,
     app: &Sink,
 ) -> Result<Response> {
     // Read again at the start rather than trusted from the save: the branch a
@@ -1728,6 +2031,11 @@ async fn start_session(
         None => None,
     };
     let session_id = uuid::Uuid::now_v7().to_string();
+    // Before the spawn, as `create_session` does: a bot's task from another
+    // machine is told at spawn that its replies are relayed.
+    if owes_reports {
+        crate::remote_reports::owe(&session_id).await?;
+    }
     let outcome = manager()
         .send_msg(
             &session_id,
@@ -1746,7 +2054,7 @@ async fn start_session(
             base_ref.as_deref(),
             true,
             parent,
-            false,
+            hidden,
             None,
             None,
             None,
@@ -2090,18 +2398,28 @@ const NUDGE_TAIL: usize = 4000;
 /// so the bot can name what to try first. Without either the task waits on the
 /// reader. Bar a problem, the task's last message rides along, since the bot
 /// has no way to read it.
+///
+/// Sent to the task's server, which for a task on another machine holds no
+/// bot: there the nudge waits with the task's reports for the bot's server to
+/// collect (#958). True once sent or kept, false where nobody will read it, so
+/// the app never says a task is fixing what its bot never heard of.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn nudge_bot(
     session_id: String,
     problem: Option<String>,
     ready: Option<u32>,
     sink: Sink,
-) -> Result<(), crate::Fail> {
+) -> Result<bool, crate::Fail> {
     let task = store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
-    let Some(chat) = bots::bot_chat_of(&task).await else { return Ok(()) };
-    if task.archived || chat.archived || chat.session_id == task.session_id {
-        return Ok(());
-    }
+    let chat = bots::bot_chat_of(&task).await;
+    let owed = chat.is_none() && crate::remote_reports::owed(&session_id).await;
+    // A sub-task's nudge goes where its reports do: the task that started it
+    // while that is live, else the nearest live session above it.
+    let to = match &chat {
+        Some(chat) if chat.session_id != task.session_id => store::live_ancestor(&task).await?.or(Some(chat.clone())),
+        _ => chat,
+    };
+    let Some(route) = nudge_route(&task, to.as_ref(), owed) else { return Ok(false) };
     // A need written while the PR waited on review would outlive the review
     // on the ready row, since approving a PR does not move its task.
     if ready.is_some() && problem.is_none() && task.need.is_some() {
@@ -2120,9 +2438,39 @@ pub async fn nudge_bot(
             last_message_tail(&session_id).await?
         ),
     };
-    let send = SendMessage { session_id: chat.session_id, prompt, from_session_id: Some(session_id) };
-    send_message(send, None, &sink).await?;
-    Ok(())
+    match route {
+        NudgeRoute::Chat(chat) => {
+            let send = SendMessage { session_id: chat, prompt, from_session_id: Some(session_id) };
+            send_message(send, None, &sink).await?;
+        }
+        NudgeRoute::Outbox => {
+            let parent = task.parent_session_id.as_deref().unwrap_or_default();
+            crate::remote_reports::keep(&session_id, parent, &task.title, prompt).await?;
+        }
+    }
+    Ok(true)
+}
+
+/// Where a stall nudge goes: into the bot's chat or the live task above it on
+/// this server, or into the outbox for a bot on another machine, which `owed`
+/// says the task reports to.
+#[derive(Debug, PartialEq)]
+enum NudgeRoute {
+    Chat(String),
+    Outbox,
+}
+
+/// None for a task set aside, a chat settled, the bot's own chat, or a task
+/// with no bot anywhere.
+fn nudge_route(task: &SessionIndexItem, chat: Option<&SessionIndexItem>, owed: bool) -> Option<NudgeRoute> {
+    if task.archived {
+        return None;
+    }
+    match chat {
+        Some(chat) if chat.archived || chat.session_id == task.session_id => None,
+        Some(chat) => Some(NudgeRoute::Chat(chat.session_id.clone())),
+        None => owed.then_some(NudgeRoute::Outbox),
+    }
 }
 
 /// The last [NUDGE_TAIL] characters of a task's last message.
@@ -2169,19 +2517,22 @@ pub fn report_to_parent(
         if child.archived {
             return Ok(());
         }
-        let Some(parent) = store::get_session_index_item(&parent_id).await? else {
+        if store::tree_parent(&child).await?.is_none() {
             // A bot's task started from another machine: its bot's server
             // collects this, since this one rarely holds a way back to it.
             if crate::remote_reports::owed(&child_id).await {
                 crate::remote_reports::keep(&child_id, &parent_id, &child.title, text).await?;
             }
             return Ok(());
-        };
-        if parent.archived || !crate::bots::in_bot_tree(&child).await {
+        }
+        if !crate::bots::in_bot_tree(&child).await {
             return Ok(());
         }
+        // The parent while it is live; once it is settled or deleted, the
+        // nearest live session above it, up to the bot's chat.
+        let Some(to) = store::live_ancestor(&child).await? else { return Ok(()) };
         let Some(from) = sender(Some(&child_id)).await else { return Ok(()) };
-        deliver_report(parent_id, text, from, app).await
+        deliver_report(to.session_id, text, from, app).await
     })
 }
 
@@ -2210,6 +2561,31 @@ pub fn deliver_report(
             manager().settle(&parent_id).await?;
         }
         Ok(())
+    })
+}
+
+/// Dray's hidden review into a bot's chat (#973): sent like the reader's own
+/// message, signed by nobody, and drawn as nothing, as the kickoff is. Boxed
+/// for the reason [`report_to_parent`] is.
+pub fn send_review(
+    session_id: String,
+    prompt: String,
+    app: Sink,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
+    Box::pin(async move {
+        let Some(chat) = store::get_session_index_item(&session_id).await? else { return Ok(()) };
+        // A settled chat stays settled: a review must not resume it.
+        let chat = crate::bots::current_chat(chat).await;
+        if chat.archived {
+            return Ok(());
+        }
+        crate::bots::mark_dray_prompt(&chat.session_id, &prompt);
+        let send = SendMessage { session_id: chat.session_id.clone(), prompt: prompt.clone(), from_session_id: None };
+        let sent = send_message(send, None, &app).await;
+        if sent.is_err() {
+            crate::bots::take_dray_prompt(&chat.session_id, &prompt);
+        }
+        sent.map(drop)
     })
 }
 
@@ -2339,6 +2715,20 @@ fn project_from(requested: Option<&str>, parent: Option<&SessionIndexItem>) -> O
 /// index, or carried by the Mac that forwarded the call, whose index holds it.
 // ponytail: a child made on another machine walks only edges this index holds,
 // so its own children see depth 1 there; carry depth on the row if that matters.
+/// Whether a session started by `parent` is under a bot, and so runs hidden:
+/// the bot is the one place its work is run from, and each task reports back
+/// to it on its own. A forwarded caller says so itself, since the bot is in
+/// no index here.
+async fn under_bot(parent: Option<&SessionIndexItem>, caller: Option<&Caller>) -> bool {
+    if caller.is_some_and(|c| c.bot_tree) {
+        return true;
+    }
+    match parent {
+        Some(p) => crate::bots::in_bot_tree(p).await,
+        None => false,
+    }
+}
+
 async fn calling(id: Option<&str>, caller: Option<&Caller>) -> Result<Option<(SessionIndexItem, usize)>> {
     if let Some(caller) = caller {
         return Ok(Some((caller.session.clone(), caller.depth)));
@@ -2388,6 +2778,7 @@ fn summarize(item: SessionIndexItem) -> SessionSummary {
         parent_session_id: item.parent_session_id,
         hidden: item.hidden,
         machine: None,
+        held: false,
     }
 }
 
@@ -2421,6 +2812,34 @@ mod tests {
             false,
             parent,
         )
+    }
+
+    fn model(efforts: &[&str], default: Option<&str>) -> crate::models::Model {
+        serde_json::from_value(serde_json::json!({
+            "id": "m", "label": "M", "arg": "m", "efforts": efforts, "defaultEffort": default,
+        }))
+        .unwrap()
+    }
+
+    /// `dray session model`'s level: a named one the model lacks is refused
+    /// rather than quietly swapped, and a model switched alone keeps the level
+    /// the session ran at only where the new model has it.
+    #[test]
+    fn a_model_switch_keeps_or_refuses_effort() {
+        let ladder = model(&["low", "medium", "high"], Some("medium"));
+        let flat = model(&[], None);
+        let cc = Harness::ClaudeCode;
+        let pick = |spec, asked, current| effort_for(spec, asked, current, "M", cc);
+
+        assert_eq!(pick(Some(&ladder), Some(Effort::Low), Some(Effort::High)).unwrap(), Some(Effort::Low));
+        assert_eq!(pick(Some(&ladder), None, Some(Effort::High)).unwrap(), Some(Effort::High));
+        assert_eq!(pick(Some(&ladder), None, Some(Effort::Max)).unwrap(), Some(Effort::Medium));
+        assert_eq!(pick(Some(&flat), None, Some(Effort::High)).unwrap(), None);
+        let refused = pick(Some(&ladder), Some(Effort::Max), None).unwrap_err().to_string();
+        assert_eq!(refused, "M takes effort low, medium, high");
+        assert_eq!(pick(Some(&flat), Some(Effort::Low), None).unwrap_err().to_string(), "M takes no effort level");
+        assert!(pick(None, Some(Effort::Low), None).is_err());
+        assert_eq!(pick(None, None, Some(Effort::Low)).unwrap(), Some(Effort::Low));
     }
 
     /// The two harnesses' ladders share their names and not their scale —
@@ -2460,6 +2879,26 @@ mod tests {
         assert!(!resolve_fast(Some(false), Some(&parent), Harness::ClaudeCode));
         // No parent at all is the ordinary terminal call: off.
         assert!(!resolve_fast(None, None, Harness::ClaudeCode));
+    }
+
+    /// A task on another machine finds no bot on its own server, and was
+    /// answered as nudged with nothing sent, so the Tasks row said "Fixing"
+    /// for a conflict nobody was told about.
+    #[test]
+    fn a_nudge_for_a_task_on_another_machine_waits_for_its_bot() {
+        let task = item("t", Some("bot-chat"));
+        let chat = item("bot-chat", None);
+        assert_eq!(nudge_route(&task, Some(&chat), false), Some(NudgeRoute::Chat("bot-chat".into())));
+        assert_eq!(nudge_route(&task, None, true), Some(NudgeRoute::Outbox));
+        assert_eq!(nudge_route(&task, None, false), None);
+
+        let mut settled = chat.clone();
+        settled.archived = true;
+        assert_eq!(nudge_route(&task, Some(&settled), false), None);
+        assert_eq!(nudge_route(&chat, Some(&chat), false), None);
+        let mut aside = task.clone();
+        aside.archived = true;
+        assert_eq!(nudge_route(&aside, None, true), None);
     }
 
     #[test]

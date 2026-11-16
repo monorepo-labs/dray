@@ -1,11 +1,11 @@
-import { botChat } from "@/lib/bots";
+import { botChat, previewLine } from "@/lib/bots";
 import { crewRows, type CrewRow } from "@/lib/crew";
 import { prStatus, type PrStatusKey } from "@/lib/pr";
 import type { BackgroundTask, Bot, PrMark, SessionIndexItem, SessionStatus } from "@/types/events";
 
 /// How long a bot's task sits untouched before the reader hears of it. What
 /// the task can mend itself waits for none of it.
-export const STALL_MS = 5 * 60_000;
+export const STALL_MS = 2 * 60_000;
 
 /// A task of a bot's that has stalled. `ready`: its pull request has been
 /// able to land for [STALL_MS], and the reader merges it from the card. `fix`:
@@ -22,6 +22,9 @@ export type Stall = {
   problem?: string;
   /// The PR status a `fix` stall is about.
   status?: PrStatusKey;
+  /// A `ready` stall whose PR GitHub is working out again, as it does for every
+  /// open PR after a merge: listed so the card holds still, and not mergeable.
+  checking?: boolean;
   since: number;
   key: string;
 };
@@ -57,9 +60,10 @@ export function fixLine(ask: FixAsk | undefined, pr: PrMark | undefined, now: nu
 ///
 /// `readySince` is kept by the caller across calls and updated here: when each
 /// task's pull request was seen turning ready, `0` where it was ready the first
-/// time it was seen, `-1` while it is not. A PR found already ready counts from
-/// the task's last activity — waiting another [STALL_MS] of watching would hide
-/// one that has sat for a day.
+/// time it was seen, `-1` while it is not. Keyed by task and PR number, since a
+/// branch can carry a second PR that was never ready. A PR found already ready
+/// counts from the task's last activity — waiting another [STALL_MS] of
+/// watching would hide one that has sat for a day.
 ///
 /// `markFresh` says whether a task's PR mark was asked for after the task last
 /// moved. A fix is called at once only on a fresh mark, and otherwise after
@@ -70,7 +74,8 @@ export function fixLine(ask: FixAsk | undefined, pr: PrMark | undefined, now: nu
 /// running, one behind a card (the card is in the chat already), one set aside
 /// or waiting on its usage limit, one whose PR is running checks or still being
 /// worked out by GitHub — those wait on CI, not on anyone — and one whose PR
-/// has merged, which is done.
+/// has merged, which is done. A PR last seen ready stays a `ready` stall while
+/// GitHub works it out again, marked `checking`.
 export function stalledTasks(
   rows: readonly CrewRow[],
   prOf: (row: CrewRow) => PrMark | undefined,
@@ -84,24 +89,30 @@ export function stalledTasks(
     const id = item.sessionId;
     const pr = prOf(row);
     const status = pr && prStatus(pr).key;
+    const prKey = `${id}:${pr?.number}`;
     // Ready by the same word the Tasks tab says, so failing checks on a clean
     // merge state never read as mergeable.
     const ready = status && (status === "unknown" ? null : status === "ready");
-    if (ready === false) readySince.set(id, -1);
+    if (ready === false) readySince.set(prKey, -1);
     if (ready === true) {
-      const was = readySince.get(id);
-      if (was === undefined) readySince.set(id, 0);
-      else if (was === -1) readySince.set(id, now);
+      const was = readySince.get(prKey);
+      if (was === undefined) readySince.set(prKey, 0);
+      else if (was === -1) readySince.set(prKey, now);
     }
     if (row.busy || row.background || row.asking || item.aside || item.continueAt) continue;
-    // Unknown is held, not drawn: a merge elsewhere drops every open PR there
-    // to unknown for a poll, and a waiting stall in that gap would be a new one.
-    if (ready === null || status === "checksRunning" || status === "merged") continue;
+    // A merge elsewhere drops every open PR there to unknown for a poll. One
+    // last seen ready keeps its row, under the same key, so the card neither
+    // empties nor raises a notice again; anything else waits it out, since a
+    // waiting stall in that gap would be a new one.
+    const was = readySince.get(prKey);
+    const checking = ready === null && was !== undefined && was >= 0;
+    if ((ready === null && !checking) || status === "checksRunning" || status === "merged") continue;
 
     const touched = Date.parse(item.modified) || now;
-    if (ready === true) {
-      const since = Math.max(readySince.get(id) ?? 0, touched);
-      if (now - since >= STALL_MS) stalls.push({ row, pr, kind: "ready", since, key: `${id}:ready:${pr.number}:${item.modified}` });
+    if (pr && (ready || checking)) {
+      const since = Math.max(was ?? 0, touched);
+      if (now - since >= STALL_MS)
+        stalls.push({ row, pr, kind: "ready", since, key: `${id}:ready:${pr.number}:${item.modified}`, checking });
       continue;
     }
     const idle = now - touched >= STALL_MS;
@@ -126,6 +137,15 @@ export function stalledTasks(
 /// idle on the reader. The rest are the bot's alone.
 export const onCard = (stall: Stall): boolean => stall.kind !== "fix";
 
+/// Dismissed stalls, by key. A key names one stall, so the list only grows by
+/// what the reader dismisses.
+export const DISMISSED_KEY = "ade.dismissedStalls";
+
+/// The rows the bot's card draws: what is on it and not dismissed. The card
+/// and its notice both count from here, or the notice names rows nobody sees.
+export const cardRows = (stalls: readonly Stall[], dismissed: readonly string[]): Stall[] =>
+  stalls.filter((s) => onCard(s) && !dismissed.includes(s.key));
+
 /// What a card row needs from the reader, as its bot wrote it since the task
 /// last moved: an answer for a waiting task, something to try before a ready
 /// PR is merged. Nothing while the bot is still on it, and for most ready PRs
@@ -133,6 +153,19 @@ export const onCard = (stall: Stall): boolean => stall.kind !== "fix";
 export function needLine(stall: Stall): string | undefined {
   const { need, modified } = stall.row.item;
   return onCard(stall) && need && Date.parse(need.at) >= Date.parse(modified) ? need.text : undefined;
+}
+
+/// A waiting row's line until its bot writes a need: the last paragraph of the
+/// task's last message, one line, since an agent ends on its question. Code
+/// blocks are skipped, so a reply closing on a diff still reads as words.
+export function lastMessageLine(text: string | null | undefined): string | undefined {
+  const prose = (text ?? "").replace(/```[\s\S]*?(?:```|$)/g, "\n\n");
+  const paragraph = prose
+    .split(/\n\s*\n/)
+    .map(previewLine)
+    .filter(Boolean)
+    .at(-1);
+  return paragraph || undefined;
 }
 
 /// Each bot that has a chat: the chat's session id and the bot's tasks.

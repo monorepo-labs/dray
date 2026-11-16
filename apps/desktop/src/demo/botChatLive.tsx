@@ -18,7 +18,7 @@ const SESSION = "01a1cfc8-demo-bot-chat";
 
 /// A wide screenshot, the shape the 80px square crop cut to a sliver.
 const WIDE = `data:image/svg+xml,${encodeURIComponent(
-  `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="360"><rect width="1600" height="360" fill="#1b1b1b"/><rect x="40" y="40" width="880" height="80" rx="24" fill="#2b2b2b"/><text x="70" y="92" font-family="sans-serif" font-size="32" fill="#eee">I renamed myself to Dray.</text><rect x="40" y="140" width="1180" height="80" rx="24" fill="#2b2b2b"/><text x="70" y="192" font-family="monospace" font-size="30" fill="#999">Writing 01a1cfc8/INSTRUCTIONS.md +5</text><rect x="900" y="250" width="660" height="80" rx="24" fill="#3a7bd5"/><text x="930" y="302" font-family="sans-serif" font-size="32" fill="#fff">why is this a bubble?</text></svg>`,
+  `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="360"><rect width="1600" height="360" fill="#1b1b1b"/><rect x="40" y="40" width="880" height="80" rx="24" fill="#2b2b2b"/><text x="70" y="92" font-family="sans-serif" font-size="32" fill="#eee">I renamed myself to Dray.</text><rect x="40" y="140" width="1180" height="80" rx="24" fill="#2b2b2b"/><text x="70" y="192" font-family="monospace" font-size="30" fill="#999">Writing 01a1cfc8/AGENTS.md +5</text><rect x="900" y="250" width="660" height="80" rx="24" fill="#3a7bd5"/><text x="930" y="302" font-family="sans-serif" font-size="32" fill="#fff">why is this a bubble?</text></svg>`,
 )}`;
 
 let seq = 0;
@@ -78,7 +78,7 @@ function play(phase: Phase) {
   });
   const text =
     phase === "tool"
-      ? `{"file_path":"/Users/me/.dray/bots/01a1cfc8/INSTRUCTIONS.md","content":"# Dray\\n\\nRepo: ade\\nRemote: monorepo-labs/dray\\n\\n"`
+      ? `{"file_path":"/Users/me/.dray/bots/01a1cfc8/AGENTS.md","content":"# Dray\\n\\nRepo: ade\\nRemote: monorepo-labs/dray\\n\\n"`
       : phase === "thinking"
         ? "The reader wants tool calls out of the bubbles."
         : phase === "text"

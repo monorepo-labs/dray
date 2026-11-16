@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import type { CrewRow } from "@/lib/crew";
 import {
   STALL_MS,
+  cardRows,
   compactAge,
   fixAskDone,
   fixLine,
   freshStalls,
+  lastMessageLine,
   needLine,
   onCard,
   stalledTasks,
@@ -46,8 +48,8 @@ function pr(over: Partial<PrMark> = {}): PrMark {
 }
 
 describe("stalledTasks", () => {
-  it("waits five minutes before calling an idle task stalled", () => {
-    expect(STALL_MS).toBe(5 * 60_000);
+  it("waits two minutes before calling an idle task stalled", () => {
+    expect(STALL_MS).toBe(2 * 60_000);
     const rows = [row("a")];
     expect(stalledTasks(rows, () => undefined, new Map(), T0 + STALL_MS - 1, fresh)).toEqual([]);
     const [s] = stalledTasks(rows, () => undefined, new Map(), T0 + STALL_MS, fresh);
@@ -85,11 +87,29 @@ describe("stalledTasks", () => {
     expect(s.since).toBe(turned);
   });
 
-  it("draws nothing for a ready PR while GitHub recomputes it", () => {
+  it("keeps a ready PR on the card, checking, while GitHub recomputes it", () => {
+    const seen = new Map<string, number>();
+    const [ready] = stalledTasks([row("a")], () => pr(), seen, T0 + STALL_MS, fresh);
+    expect(ready).toMatchObject({ kind: "ready", checking: false });
+    const [checking] = stalledTasks([row("a")], () => pr({ mergeable: "UNKNOWN" }), seen, T0 + STALL_MS, fresh);
+    expect(checking).toMatchObject({ kind: "ready", checking: true, key: ready.key, since: T0 });
+    const [back] = stalledTasks([row("a")], () => pr(), seen, T0 + STALL_MS, fresh);
+    expect(back).toMatchObject({ checking: false, since: T0 });
+  });
+
+  it("draws nothing for a PR first seen while GitHub works it out, or last seen not ready", () => {
+    const unknown = () => pr({ mergeable: "UNKNOWN" });
+    expect(stalledTasks([row("a")], unknown, new Map(), T0 + STALL_MS, fresh)).toEqual([]);
+    const seen = new Map<string, number>();
+    stalledTasks([row("a")], () => pr({ mergeStateStatus: "BLOCKED" }), seen, T0 + STALL_MS, fresh);
+    expect(stalledTasks([row("a")], unknown, seen, T0 + STALL_MS, fresh)).toEqual([]);
+  });
+
+  it("never carries one PR's readiness to another on the same task", () => {
     const seen = new Map<string, number>();
     expect(stalledTasks([row("a")], () => pr(), seen, T0 + STALL_MS, fresh)[0].kind).toBe("ready");
-    expect(stalledTasks([row("a")], () => pr({ mergeable: "UNKNOWN" }), seen, T0 + STALL_MS, fresh)).toEqual([]);
-    expect(stalledTasks([row("a")], () => pr(), seen, T0 + STALL_MS, fresh)[0].since).toBe(T0);
+    const other = () => pr({ number: 909, mergeable: "UNKNOWN" });
+    expect(stalledTasks([row("a")], other, seen, T0 + STALL_MS, fresh)).toEqual([]);
   });
 
   it("leaves a task whose checks are still running alone", () => {
@@ -130,6 +150,16 @@ describe("stalledTasks", () => {
     expect(needLine(stall({ text: "Pick one", at: new Date(T0 - 1000).toISOString() }))).toBeUndefined();
     expect(onCard(stalledTasks([row("a")], () => pr(), new Map(), T0 + STALL_MS, fresh)[0])).toBe(true);
     expect(onCard(stalledTasks([row("a")], () => pr({ mergeable: "CONFLICTING" }), new Map(), T0, fresh)[0])).toBe(false);
+  });
+
+  it("counts the card's rows alone: no fix, nothing dismissed", () => {
+    const rows = [row("a"), row("b"), row("c")];
+    const prs: Record<string, PrMark> = { b: pr({ mergeable: "CONFLICTING" }), c: pr({ checksState: "FAILING" }) };
+    const stalls = stalledTasks([...rows, row("d")], (r) => prs[r.item.sessionId], new Map(), T0 + STALL_MS, fresh);
+    expect(stalls).toHaveLength(4);
+    const waiting = stalls.filter((s) => s.kind === "waiting");
+    expect(cardRows(stalls, []).map((s) => s.row.item.sessionId)).toEqual(["a", "d"]);
+    expect(cardRows(stalls, [waiting[0].key])).toEqual([waiting[1]]);
   });
 
   it("hands each stall to the banner once", () => {
@@ -199,5 +229,21 @@ describe("needLine", () => {
 
   it("never draws one on a stall the card leaves out", () => {
     expect(needLine(stall("fix", "Fix the checks"))).toBeUndefined();
+  });
+});
+
+describe("lastMessageLine", () => {
+  it("takes the last paragraph, on one line", () => {
+    expect(lastMessageLine("Done with the header.\n\nKeep the button\nor drop it?")).toBe("Keep the button or drop it?");
+  });
+
+  it("skips a code block the message ends on", () => {
+    expect(lastMessageLine("Which of these?\n\n```ts\nconst a = 1;\n```")).toBe("Which of these?");
+    expect(lastMessageLine("Which of these?\n\n```ts\nconst a = 1;")).toBe("Which of these?");
+  });
+
+  it("is nothing for an empty or missing message", () => {
+    expect(lastMessageLine(null)).toBeUndefined();
+    expect(lastMessageLine("  \n\n ```\nx\n```")).toBeUndefined();
   });
 });

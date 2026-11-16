@@ -6,6 +6,7 @@ import SwiftUI
 /// words show as the bubble they will send as, and nothing here saves a draft.
 struct ReplyDock: View {
     @Environment(Store.self) private var store
+    @Environment(\.openSession) private var openSession
     let key: SessionKey
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
     @State private var models: [Model] = []
@@ -36,13 +37,18 @@ struct ReplyDock: View {
     }
     private var open: Bool { phase != .rest }
     private var connected: Bool { store.serverState[key.server] == .connected }
-    private var away: Bool { !connected || !store.online }
+    /// Down long enough that its session says so; a quick reconnect dims nothing.
+    private var away: Bool { store.lost.contains(key.server) }
     /// Settings' pick, else any machine that can: the words come back to this draft whoever reads them.
     private var transcriber: UUID? { store.dictationServer(dictationPick) }
-    private var harness: String { item?.harness ?? "" }
-    private var modelId: String { model ?? item?.model ?? "" }
+    /// The bot sheet's agent and model, waiting for this reply.
+    private var pick: AgentPick? { store.unsent[key] }
+    /// The reply moves a bot chat to another agent.
+    private var moving: Bool { pick.map { $0.harness != item?.harness } ?? false }
+    private var harness: String { pick?.harness ?? item?.harness ?? "" }
+    private var modelId: String { model ?? pick?.model ?? item?.model ?? "" }
     private var current: Model? { models.first { $0.id == modelId } }
-    private var effortNow: String? { effort ?? item?.effort }
+    private var effortNow: String? { effort ?? (moving ? nil : item?.effort) }
     private var stanceNow: String { stance ?? item?.permissionMode ?? "" }
     private var fastNow: Bool { fast ?? item?.fast ?? false }
     private var note: String? { failed.map { "Couldn't send. \(sentence($0))" } ?? Dictations.shared.notes[key] }
@@ -50,11 +56,15 @@ struct ReplyDock: View {
     var body: some View {
         VStack(spacing: 14) {
             if phase == .ready { bubble.transition(.opacity) }
+            if moving, !open {
+                Text("Your next message moves this chat to \(Picks.agentLabels[harness] ?? harness).")
+                    .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
+            }
             if !open, let line = hint ?? note {
                 KeptNote(line: line, draft: key).transition(.opacity)
             }
             // Dim while the server or the network is away; the banner up top says why, and typing still works.
-            DockOrb(draft: key, size: 76, hold: hold, tap: tapped).opacity(away ? 0.4 : 1)
+            DockOrb(draft: key, size: 76, tap: tapped).opacity(away ? 0.4 : 1)
             if open {
                 actions
                     .padding(.top, 6)
@@ -78,6 +88,11 @@ struct ReplyDock: View {
         .animation(Theme.motion, value: hint)
         .animation(Theme.motion, value: connected)
         .onChange(of: phase) { confirming = false }
+        // The bot sheet's pick is the newer word on model and effort; the dock's own would override it.
+        .onChange(of: pick) {
+            model = nil
+            effort = nil
+        }
         .task(id: "\(harness)|\(connected)") {
             guard connected, !harness.isEmpty else { return }
             models = (try? await store.call(key.server, "list_models", ["harness": .string(harness)])) ?? models
@@ -98,11 +113,11 @@ struct ReplyDock: View {
         VStack(alignment: .trailing, spacing: 6) {
             Text(text)
                 .font(Theme.Font.body)
-                .foregroundStyle(Theme.text)
+                .foregroundStyle(Theme.onSent)
                 .lineLimit(3)
                 .padding(.vertical, 10)
                 .padding(.horizontal, 14)
-                .background(Theme.raised, in: UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20,
+                .background(Theme.sent, in: UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20,
                                                                       bottomTrailingRadius: 6, topTrailingRadius: 20, style: .continuous))
                 .frame(maxWidth: 290, alignment: .trailing)
                 .onTapGesture { edit() }
@@ -292,15 +307,15 @@ struct ReplyDock: View {
         return names.prefix(1).uppercased() + names.dropFirst() + " can change once this turn ends. The rest go with your next message."
     }
 
+    /// Tap to talk, tap again to stop: the orb is never held.
     private func tapped() {
-        guard phase == .rest else { return }
-        flash(transcriber != nil ? "Hold to talk" : "This server can't transcribe. Type instead.")
-    }
-
-    private func hold() {
+        if dictation == .recording {
+            Task { await Dictations.shared.stop(store, draft: key) }
+            return
+        }
         guard phase == .rest || phase == .ready else { return }
         guard let transcriber else { return flash("This server can't transcribe. Type instead.") }
-        // A kept recording is the only copy of what was said; it goes by Retry or Discard, never by a new hold.
+        // A kept recording is the only copy of what was said; it goes by Retry or Discard, never by a new tap.
         guard Dictations.shared.kept[key] == nil else { return }
         Dictations.shared.dismiss(key)
         failed = nil
@@ -330,15 +345,19 @@ struct ReplyDock: View {
         failed = nil
         Haptic.tap()
         // Only what the reader moved; a new model takes an effort it offers.
-        let level = model != nil || effort != nil ? current.flatMap { Picks.usableEffort($0, effortNow) } ?? effortNow : nil
+        let level = model != nil || effort != nil || pick != nil ? current.flatMap { Picks.usableEffort($0, effortNow) } ?? effortNow : nil
         Task {
-            if await store.send(key, words, model: model, effort: level, stance: stance, fast: fast) {
+            let to = await store.send(key, words, harness: pick?.harness, model: model ?? pick?.model, effort: level, stance: stance,
+                                      fast: moving ? fastNow && Picks.offersFast(harness, current) : fast)
+            if let to {
                 // Only if untouched meanwhile: words added while the send was out were never sent.
                 if store.drafts[key]?.trimmingCharacters(in: .whitespacesAndNewlines) == words { store.drafts[key] = nil }
                 model = nil
                 effort = nil
                 stance = nil
                 fast = nil
+                // A switch is a new session: the chat follows it.
+                if to != key { openSession?(to) }
             } else {
                 failed = store.lastError ?? "The server didn't answer."
                 store.lastError = nil

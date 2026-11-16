@@ -5,6 +5,7 @@ import App from "./App";
 import CrashScreen from "@/components/CrashScreen";
 import { trackActiveDay } from "@/lib/analytics";
 import { onFocusChange } from "@/lib/focus";
+import { runUnhandledEscape } from "@/lib/escape";
 import { applyIsland } from "@/lib/island";
 import { startSurveys } from "@/lib/surveys";
 import { startAgentUpdateChecks } from "@/hooks/useAgentUpdates";
@@ -29,8 +30,11 @@ applyZoom();
 // An Escape nothing handled is passed on to the window, which macOS reads as
 // "leave fullscreen". On `window` in bubble phase, so every handler on the
 // document has already had the key and still sees `defaultPrevented` unset.
+// The app's own last answer to the key runs here for the same reason.
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") e.preventDefault();
+  if (e.key !== "Escape") return;
+  runUnhandledEscape(e);
+  e.preventDefault();
 });
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

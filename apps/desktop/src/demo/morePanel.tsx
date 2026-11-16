@@ -6,7 +6,7 @@ import RightPanel, { TabBody, tabOrder } from "@/components/RightPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { Todo } from "@/lib/todos";
-import type { SessionMedia, SubagentRun } from "@/lib/transcript";
+import { runningRuns, type SessionMedia, type SubagentRun } from "@/lib/transcript";
 import type { AgentEvent, ToolResult } from "@/types/events";
 import "../App.css";
 
@@ -109,6 +109,7 @@ const RUNS: SubagentRun[] = [
     usage: null,
     events: [textEvent("Three readers so far: the guess, the gateway, a live session.")],
     inline: false,
+    opensWhenDone: false,
     spawn: spawnEvent("call-1", "Find every place the effort ladder is read"),
   },
   {
@@ -123,6 +124,7 @@ const RUNS: SubagentRun[] = [
     usage: null,
     events: [textEvent("`rawOutput` needs no rename_all — every field would read None for ever.")],
     inline: false,
+    opensWhenDone: false,
     spawn: spawnEvent("call-2", "Check the grok mapper against the captured wire"),
   },
 ];
@@ -364,7 +366,8 @@ function Demo() {
               media={media(mediaCount)}
               sessionId="demo"
               subagents={{
-                runs: picked.runs ?? RUNS,
+                // The finished run is dropped here as App drops it.
+                runs: runningRuns(picked.runs ?? RUNS, null),
                 selectedId: null,
                 resultByCallId: RESULTS,
                 live: true,

@@ -29,10 +29,10 @@ import { RANK_OWN } from "@/lib/cardKeys";
 import { planAsked, setPlan } from "@/lib/plan";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
-import { drawnSegments } from "@/lib/botTranscript";
+import { drawnSegments, earlierTurns, lastTurns } from "@/lib/botTranscript";
 import { readerMessagesAfter } from "@/lib/mergeCard";
 import { isProvisional } from "@/lib/provisional";
-import { loadOlder } from "@/lib/olderPages";
+import { dropOlder, loadOlder } from "@/lib/olderPages";
 import { firstMount, grow, mountedTurns } from "@/lib/turnWindow";
 import type { Bot, SessionSnapshot } from "@/types/events";
 
@@ -113,6 +113,8 @@ type ChatProps = {
   botFooter?: ReactNode;
   /// A task picked from that card, scrolled to. See [BotTranscript]'s `focus`.
   botFocus?: { sessionId: string; at: number } | null;
+  /// That pick found nothing to scroll to, with the whole chat read back.
+  onBotFocusMissed?: (sessionId: string) => void;
 };
 
 const NO_EARLIER: SessionSnapshot[] = [];
@@ -140,10 +142,23 @@ const ACTIVE_LINE_PX = 24;
 /// flush against the header.
 const JUMP_PAD_PX = 12;
 
+/// Longest a smooth jump is taken to glide before a scroll is the reader's own
+/// again.
+const GLIDE_MS = 1500;
+
 /// Turns per page while a bot chat reads back to a picked task's reply. Each
 /// page lands as one render of the whole app, which costs far more than the
 /// read, so a long way back is taken in few of them.
 const FOCUS_PAGE_TURNS = 64;
+
+/// Turns a bot chat draws while the reader follows its bottom: the tail it
+/// opens on and a page above it.
+const BOT_WINDOW_TURNS = 24;
+/// Turns drawn above at a time as the reader nears the top of what is drawn, as
+/// many as a page read from the log holds.
+const OLDER_TURNS = 16;
+/// A bot chat's window drawing everything held.
+const ALL_HELD = "all";
 
 /// Below this the rail is one or two ticks describing what is already on screen,
 /// which is chrome for nothing.
@@ -228,6 +243,7 @@ export default function Chat({
   unread = false,
   botFooter,
   botFocus,
+  onBotFocusMissed,
 }: ChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -238,6 +254,16 @@ export default function Chat({
   // from one the pin's own write queued — see `onScroll`. Every pin goes
   // through `pin` so the two cannot disagree.
   const pinnedTop = useRef(-1);
+  // A smooth jump in flight: where it lands, and until when. Leaving the
+  // bottom, its first frames are still within reach of the end, and read as
+  // the reader coming back they re-took the pin, which cancelled the glide, and
+  // let a bot chat's window go, which dropped the row it was headed for.
+  const glide = useRef<{ to: number; until: number } | null>(null);
+  const glideTo = (el: HTMLElement, top: number) => {
+    const to = Math.min(Math.max(top, 0), el.scrollHeight - el.clientHeight);
+    glide.current = { to, until: performance.now() + GLIDE_MS };
+    el.scrollTo({ top: to, behavior: "smooth" });
+  };
 
   // Pads the top so the newest turn starts on a whole pixel. WebKit scrolls in
   // whole pixels, so every backfill step mounting a fractional height above put
@@ -257,6 +283,7 @@ export default function Chat({
     content.style.setProperty("--snap", `${extra}px`);
   };
   const pin = (el: HTMLElement) => {
+    glide.current = null;
     snapToPixel();
     el.scrollTop = el.scrollHeight;
     pinnedTop.current = el.scrollTop;
@@ -268,9 +295,49 @@ export default function Chat({
   // exactly when there is newly something below to go to.
   const [atBottom, setAtBottom] = useState(true);
 
+  // How much of a bot chat's newest session is drawn. A chat left open grows by
+  // every turn, and each row it holds cost every event that landed: with the
+  // whole log read back, an event took ~40ms. So while the reader follows the
+  // bottom (`null`) it draws the last `BOT_WINDOW_TURNS` alone, sliding as turns
+  // land; scrolled up, the top holds on an event id, grown a page at a time as
+  // they near it, or on `ALL_HELD`, where pages read from the log are drawn as
+  // they land. Back at the bottom it slides again, and what was above goes.
+  const [botWindow, setBotWindow] = useState<{ sessionId: string | null; from: string | null }>({
+    sessionId: null,
+    from: null,
+  });
+  const held = bot && botWindow.sessionId === session?.sessionId ? botWindow.from : null;
+  const holdWindow = (from: string | null) => {
+    if (held !== from) setBotWindow({ sessionId: session?.sessionId ?? null, from });
+  };
+  const drawFrom = useMemo(() => {
+    if (!bot || !session || held === ALL_HELD) return 0;
+    const at = held ? session.events.findIndex((e) => e.id === held) : -1;
+    return at >= 0 ? at : lastTurns(session.events, BOT_WINDOW_TURNS);
+  }, [bot, session?.events, held]);
+  // Pages read above a sliding window are let go, so a chat read back and left
+  // holds its tail again. Turns that landed live stay held, since only a page
+  // read says where in the log it began.
+  const keepFrom = bot && held === null && drawFrom > 0 ? session?.events[drawFrom]?.id : undefined;
+  useEffect(() => {
+    if (session && keepFrom) dropOlder(session.sessionId, keepFrom);
+  }, [session?.sessionId, keepFrom]);
+  // The sessions before an agent switch go back to the tails they opened on.
+  const following = bot && held === null;
+  useEffect(() => {
+    if (following) for (const s of earlier) dropOlder(s.sessionId);
+  }, [following, earlier]);
   // A bot chat's sessions as drawn. Held across renders: a fresh array would
-  // rebuild the bot chat's rows on every event.
-  const segments = useMemo(() => drawnSegments(session ? [...earlier, session] : earlier), [earlier, session]);
+  // rebuild the bot chat's rows on every event. A windowed session says it has
+  // more above, so the sessions before it stay undrawn and the unread divider
+  // waits, as they do for a session not yet read back to its start.
+  const segments = useMemo(() => {
+    const live =
+      session && drawFrom > 0
+        ? { ...session, events: session.events.slice(drawFrom), olderBefore: session.olderBefore ?? 0 }
+        : session;
+    return drawnSegments(live ? [...earlier, live] : earlier);
+  }, [earlier, session, drawFrom]);
   const oldest = segments[0];
   const more = !!bot && (oldest?.olderBefore != null || earlierLoading);
   // Moves when a page lands above, which is what the anchor below answers.
@@ -280,6 +347,8 @@ export default function Chat({
     if (el) setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX);
   };
 
+  // Every held event, never a bot chat's window: a card can wait on the reader
+  // longer than 24 turns, and App builds this same array, whose cache it shares.
   const { events, turns, subagentById, resultByCallId, editsByCallId, pendingAsks } = useMemo(
     () => buildTranscript(session?.events ?? [], busy, liveTaskIds),
     [session?.events, busy, liveTaskIds],
@@ -598,17 +667,24 @@ export default function Chat({
 
     followRef.current = false;
     setActiveTurn(key);
-    scroller.scrollTo({ top: Math.max(top, 0), behavior: "smooth" });
+    glideTo(scroller, top);
   };
 
   // A bot chat is one conversation that grows forever, and drawing all of it
   // was the whole cost of opening one: it opens on its tail and reads a page
   // further back whenever the reader comes within a screen of the top. The
   // pane must also hold a screen above the bottom, or a short tail leaves
-  // nothing to scroll and nothing is ever asked for.
+  // nothing to scroll and nothing is ever asked for. What is already held is
+  // drawn before the log is read further.
   const askOlder = () => {
     const el = scrollRef.current;
-    if (el && oldest?.olderBefore != null && el.scrollTop < el.clientHeight) loadOlder(oldest.sessionId);
+    if (!el || !session || el.scrollTop >= el.clientHeight) return;
+    if (drawFrom > 0) {
+      const from = earlierTurns(session.events, drawFrom, OLDER_TURNS);
+      holdWindow(from > 0 ? session.events[from].id : ALL_HELD);
+    } else if (oldest?.olderBefore != null) {
+      loadOlder(oldest.sessionId);
+    }
   };
 
   // The rows at the top of the view and where they sat, taken on every scroll
@@ -648,12 +724,32 @@ export default function Chat({
   // A task picked from the bot's "Waiting on you" card: the bot's reply about
   // it, at the top of the pane, once the lit block is laid out. The pin drops
   // as a jump to a turn's does. A reply above what is loaded is read back to,
-  // a page at a time, until it is drawn or the chat runs out.
+  // a page at a time, until it is drawn or the chat runs out; run out, the
+  // pick is handed back, and the card opens the task instead.
   const focusedAt = useRef<number | null>(null);
+  const focusUnpinned = useRef(false);
   useEffect(() => {
     if (!botFocus || focusedAt.current === botFocus.at) return;
     if (!contentRef.current?.querySelector("[data-bot-focus]")) {
-      if (oldest?.olderBefore != null) loadOlder(oldest.sessionId, FOCUS_PAGE_TURNS);
+      if (more || drawFrom > 0) {
+        // Unpinned first: pinned, the window growing re-takes the bottom, and
+        // that scroll reads as the reader at the end and lets the window go.
+        // Held whole even with nothing undrawn: a window left following drops
+        // every page read above its tail, so the page read here went the
+        // moment it landed and the reply was never found.
+        focusUnpinned.current ||= followRef.current;
+        followRef.current = false;
+        holdWindow(ALL_HELD);
+        if (drawFrom === 0 && oldest?.olderBefore != null) loadOlder(oldest.sessionId, FOCUS_PAGE_TURNS);
+        return;
+      }
+      focusedAt.current = botFocus.at;
+      if (focusUnpinned.current && scrollRef.current) {
+        followRef.current = true;
+        pin(scrollRef.current);
+      }
+      focusUnpinned.current = false;
+      onBotFocusMissed?.(botFocus.sessionId);
       return;
     }
     const frame = requestAnimationFrame(() => {
@@ -661,15 +757,17 @@ export default function Chat({
       const node = contentRef.current?.querySelector<HTMLElement>("[data-bot-focus]");
       if (!scroller || !node) return;
       focusedAt.current = botFocus.at;
+      focusUnpinned.current = false;
       const top = node.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
       const to = Math.max(top - JUMP_PAD_PX, 0);
       followRef.current = false;
       // Within a screen of the top the scroll reads the next page, and putting
       // the reader back on their row cuts a smooth one short.
-      scroller.scrollTo({ top: to, behavior: to < scroller.clientHeight ? "auto" : "smooth" });
+      if (to < scroller.clientHeight) scroller.scrollTo({ top: to });
+      else glideTo(scroller, to);
     });
     return () => cancelAnimationFrame(frame);
-  }, [botFocus, oldestKey]);
+  }, [botFocus, oldestKey, more]);
 
   useEffect(() => () => cancelAnimationFrame(spyFrame.current), []);
 
@@ -726,6 +824,7 @@ export default function Chat({
   // the pin — the chat sat at the bottom unpinned, and whatever landed next,
   // seen or behind another tab, was left below the view.
   const onWheel = (e: React.WheelEvent) => {
+    glide.current = null;
     const el = scrollRef.current;
     if (!el || e.deltaY >= 0 || el.scrollTop <= 0) return;
     for (let n = e.target as Element | null; n !== el; n = n.parentElement) {
@@ -737,7 +836,13 @@ export default function Chat({
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX;
+    const g = glide.current;
+    if (g && (Math.abs(el.scrollTop - g.to) <= 1 || performance.now() > g.until)) glide.current = null;
+    // A card pick still reading back to its row is not the reader either: the
+    // rows it mounts above can leave a scroll event at the end before the
+    // glide starts, and letting the window go there drops what it mounted.
+    const hunting = !!botFocus && focusedAt.current !== botFocus.at;
+    const atEnd = !glide.current && !hunting && el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX;
     // **Only a scroll that moved the view can drop the pin.** A pin is a write
     // to `scrollTop`, and the browser answers that write with a scroll event a
     // frame later — by which time anything landing async in the transcript, a
@@ -766,6 +871,12 @@ export default function Chat({
     setAtBottom(atEnd);
     syncActive();
     if (bot) {
+      // Turns landing must not move the top out from under a reader who left
+      // the bottom, so it holds where it is until they come back.
+      if (atEnd) holdWindow(null);
+      else if (!followRef.current && held === null && session) {
+        holdWindow(drawFrom > 0 ? session.events[drawFrom].id : ALL_HELD);
+      }
       noteAnchor();
       askOlder();
     }
@@ -782,6 +893,7 @@ export default function Chat({
   const scrollToBottom = () => {
     const el = scrollRef.current;
     if (!el) return;
+    glide.current = null;
     followRef.current = true;
     el.scrollTo({ top: el.scrollHeight, behavior: busy ? "auto" : "smooth" });
   };
@@ -975,6 +1087,7 @@ export default function Chat({
                 maxRetries={apiRetry.maxRetries}
                 status={apiRetry.status}
                 reason={apiRetry.reason}
+                message={apiRetry.message}
               />
             )}
           </div>

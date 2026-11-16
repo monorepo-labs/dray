@@ -375,7 +375,11 @@ machine?: string,
 /**
  * `owner/name`, set with `machine`.
  */
-repo?: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
+repo?: string, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "reaction", 
+/**
+ * The `user_message` event reacted to, always in this same session.
+ */
+messageId: string, emoji: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
 /**
  * HTTP status, where the harness knew one. 529 (overloaded) and 500
  * are the only two observed.
@@ -386,7 +390,13 @@ status: number | null,
  * or `unknown`. The last is the majority case and says nothing, so it
  * is dropped on the way in rather than shown.
  */
-reason: string | null, } | { "type": "context_compacted", 
+reason: string | null, 
+/**
+ * The harness's own status line, drawn in place of the attempt count
+ * where present. fx alone sends one ("Gateway error · next try in 3s ·
+ * attempt 3") and restates it every second, so its countdown moves.
+ */
+message: string | null, } | { "type": "context_compacted", 
 /**
  * `manual` or `auto`.
  */
@@ -441,7 +451,12 @@ remoteAccess: boolean,
  * lists through it (#847). Off by default: it hands that token every
  * machine's reach, SSH logins included.
  */
-shareMachines: boolean, };
+shareMachines: boolean, 
+/**
+ * Dray Cloud's switch (#857). Here because Rust lists the machines at
+ * launch; the key itself sits in `credentials.json`.
+ */
+drayCloud: boolean, };
 
 /**
  * Permission stance a session *runs under*, in roughly increasing order of
@@ -599,11 +614,17 @@ path: string, created: string,
  */
 avatar?: BotAvatar | null, 
 /**
- * What its chat opens on before any session exists, drawn by the app,
- * and written to the log as the chat's first message when one starts.
- * Dray Bot's alone; a bot made with New bot greets with a real turn.
+ * Marks a bot whose chat opens on a welcome, drawn by the app and written
+ * to the log when a session starts. Dray Bot's alone; a bot made with New
+ * bot greets with a real turn. The words drawn are `greeting`'s.
  */
-welcome?: string | null, };
+welcome?: string | null, 
+/**
+ * The messages its chat opens on, worked out by `list_bots` on every read
+ * and never saved: the welcome in today's words, then the question for
+ * the user's name while no bot knows it. Empty with no welcome.
+ */
+greeting?: Array<string>, };
 
 /**
  * A Blobatar face: which silhouette and which hue. Strings and degrees rather
@@ -687,6 +708,20 @@ export type ChromiumStatus = { "state": "absent" } | { "state": "downloading", r
  * One line of git's progress while a repo clones.
  */
 export type CloneProgress = { slug: string, line: string, };
+
+/**
+ * The Dray Cloud row in Settings. The machines themselves ride
+ * `servers_changed`, each a server marked `cloud`.
+ */
+export type CloudInfo = { on: boolean, 
+/**
+ * A key is saved. The key itself never leaves Rust.
+ */
+keyed: boolean, 
+/**
+ * Why the last listing failed.
+ */
+error: string | null, };
 
 /**
  * What kind of entry a timeline row is. A review carries a verdict where a
@@ -1235,6 +1270,35 @@ export type IssueUnavailable = { "kind": "not_connected" } | { "kind": "unauthor
 export type IssuesChangedEvent = { sessionId: string, issues: Array<IssueRef>, };
 
 /**
+ * One file of a "Learned" row, before and after, for View diff.
+ */
+export type LearnedDiff = { path: string, before: string, after: string, };
+
+/**
+ * One file a bot's turn changed under its instructions, skills or memory.
+ * `kind` and `change` are plain strings, never enums, so a kind a later build
+ * adds cannot fail an older reader's whole line.
+ */
+export type LearnedFile = { 
+/**
+ * Relative to the bot's folder.
+ */
+path: string, 
+/**
+ * `instructions`, `skill` or `memory`.
+ */
+kind: string, 
+/**
+ * `added`, `changed` or `removed`.
+ */
+change: string, 
+/**
+ * One line saying what was learned: the rule added, or the skill's or
+ * memory's own `description`.
+ */
+summary: string, };
+
+/**
  * Where this server stands, as the app and `dray login` read it.
  */
 export type LinkState = { linked: Linked | null, pending: PendingLink | null, 
@@ -1535,7 +1599,19 @@ url: string,
 /**
  * The branch it was opened from — what the caller matches a session by.
  */
-headRefName: string, isDraft: boolean, state: PrMarkState, checksState: PrChecksState, 
+headRefName: string, 
+/**
+ * The tip commit's sha, on the open half alone. A push is a new one,
+ * which is what restarts the merge card's wait for checks to register.
+ * Optional in TS too, since a server older than the field sends none.
+ */
+headOid?: string, isDraft: boolean, state: PrMarkState, checksState: PrChecksState, 
+/**
+ * How many checks and statuses report on the tip, on the open half alone.
+ * Zero is both "no CI" and "CI not started yet", which only a count seen on
+ * an earlier push can tell apart.
+ */
+checkCount?: number, 
 /**
  * Enough of the panel's merge fields to answer "can this land now", which
  * the sidebar itself draws nothing from — the notice for a pull request
@@ -1847,7 +1923,16 @@ app: boolean,
 /**
  * An update landed on the server and it restarts onto it once idle.
  */
-restarting: boolean, boat: BoatStatus | null, };
+restarting: boolean, 
+/**
+ * Stopped and resuming, for a boat sandbox and a Dray Cloud machine alike.
+ */
+boat: BoatStatus | null, 
+/**
+ * A Dray Cloud machine (#857): drawn as no row of its own, and read as
+ * "Cloud" wherever a machine is named.
+ */
+cloud: boolean, };
 
 export type ServerStatus = "connecting" | "connected" | "disconnected";
 
@@ -1991,7 +2076,14 @@ continueOff: boolean,
  * with `dray session need`. Drawn only while `at` is no older than
  * `modified`, so the task moving clears it without a write.
  */
-need?: TaskNeed, };
+need?: TaskNeed, 
+/**
+ * The nearest live session above a bot's sub-task while the task that
+ * started it is settled or deleted, written by [`readopt`]. A bot's task outlives its parent
+ * task, and a client holding the index's active side alone cannot walk
+ * through a settled parent to find the bot.
+ */
+adoptedBy?: string, };
 
 /**
  * Session-level facts, known at startup.
@@ -2154,7 +2246,14 @@ continueOff: boolean,
  * with `dray session need`. Drawn only while `at` is no older than
  * `modified`, so the task moving clears it without a write.
  */
-need?: TaskNeed, };
+need?: TaskNeed, 
+/**
+ * The nearest live session above a bot's sub-task while the task that
+ * started it is settled or deleted, written by [`readopt`]. A bot's task outlives its parent
+ * task, and a client holding the index's active side alone cannot walk
+ * through a settled parent to find the bot.
+ */
+adoptedBy?: string, };
 
 /**
  * Driven by [`StatusTracker`](crate::session::StatusTracker). `Completed`

@@ -185,14 +185,14 @@ fn unclaimed(dir: &Path, stem: &str) -> PathBuf {
     path
 }
 
-/// `<stem>.mp4` in `dir` or the first free `<stem>-n.mp4`, created empty so
+/// `<stem>.<ext>` in `dir` or the first free `<stem>-n.<ext>`, created empty so
 /// two `dray video add`s running at once, each on its own connection, can
 /// never pick the same name.
-fn claim(dir: &Path, stem: &str) -> Result<PathBuf, String> {
+fn claim(dir: &Path, stem: &str, ext: &str) -> Result<PathBuf, String> {
     for n in 1.. {
         let path = match n {
-            1 => dir.join(format!("{stem}.mp4")),
-            n => dir.join(format!("{stem}-{n}.mp4")),
+            1 => dir.join(format!("{stem}.{ext}")),
+            n => dir.join(format!("{stem}-{n}.{ext}")),
         };
         match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(_) => return Ok(path),
@@ -203,28 +203,30 @@ fn claim(dir: &Path, stem: &str) -> Result<PathBuf, String> {
     unreachable!()
 }
 
-/// Files a video the agent made some other way into `dir`, for `dray video
-/// add`, and answers the `.mp4` the chat plays. An MP4 is copied and anything
-/// else converted, built under a hidden name of its own so a failed run leaves
-/// no player on half a video. One already in `dir` under a name the players
-/// match is answered as it stands.
+/// Files a video or screenshot the agent made some other way into `dir`, for
+/// `dray video add` and `dray image add`, and answers the file the chat draws.
+/// An MP4, PNG or JPEG is copied and any other video converted, built under a
+/// hidden name of its own so a failed run leaves no player on half a file. One
+/// already in `dir` under a name the chat matches is answered as it stands.
 pub fn add(source: &Path, dir: &Path, name: Option<&str>) -> Result<PathBuf, String> {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let mp4 = holds_mp4(source);
+    let image = image_kind(source);
+    let copied = image.is_some() || holds_mp4(source);
+    let ext = image.unwrap_or("mp4");
     std::fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-    let lowercase = source.extension().is_some_and(|e| e == "mp4");
-    if mp4 && lowercase && name.is_none() && source.parent().is_some_and(|parent| same_dir(parent, dir)) {
+    let lowercase = source.extension().is_some_and(|e| e == ext);
+    if copied && lowercase && name.is_none() && source.parent().is_some_and(|parent| same_dir(parent, dir)) {
         return Ok(source.to_path_buf());
     }
     let stem = name
         .map(slug)
         .filter(|s| !s.is_empty())
         .or_else(|| source.file_stem().map(|s| slug(&s.to_string_lossy())).filter(|s| !s.is_empty()))
-        .unwrap_or_else(|| "video".into());
-    let dest = claim(dir, &stem)?;
+        .unwrap_or_else(|| if image.is_some() { "screenshot" } else { "video" }.into());
+    let dest = claim(dir, &stem, ext)?;
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let part = dir.join(format!(".{stem}.{}-{n}.part.mp4", std::process::id()));
-    let built = if mp4 {
+    let part = dir.join(format!(".{stem}.{}-{n}.part.{ext}", std::process::id()));
+    let built = if copied {
         std::fs::copy(source, &part).map(drop).map_err(|e| format!("could not copy {}: {e}", source.display()))
     } else {
         to_mp4(source, &part)
@@ -238,6 +240,24 @@ pub fn add(source: &Path, dir: &Path, name: Option<&str>) -> Result<PathBuf, Str
         return Err(e);
     }
     Ok(dest)
+}
+
+/// Whether `path` holds a PNG or JPEG, for `dray image add`.
+pub fn is_image(path: &Path) -> bool {
+    image_kind(path).is_some()
+}
+
+/// `png` or `jpg` for a file that opens as one, whatever it is named: the
+/// chat's extension for it, which is how the chat tells a picture from a video.
+fn image_kind(path: &Path) -> Option<&'static str> {
+    use std::io::Read;
+    let mut head = [0u8; 8];
+    File::open(path).and_then(|mut f| f.read_exact(&mut head)).ok()?;
+    match head {
+        [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'] => Some("png"),
+        [0xff, 0xd8, 0xff, ..] => Some("jpg"),
+        _ => None,
+    }
 }
 
 /// Named `.mp4` and carrying an MP4's `ftyp` box, so a text file called
@@ -555,6 +575,23 @@ mod tests {
             assert_eq!(std::fs::read(path).unwrap(), MP4_HEAD);
         }
         assert_eq!(std::fs::read_dir(&filed).unwrap().count(), 8, "no part file left behind");
+    }
+
+    #[test]
+    fn a_screenshot_is_copied_as_the_picture_it_holds() {
+        let dir = temp_dir("image");
+        let filed = dir.join("recordings/s1");
+        let png = dir.join("Sim Shot.PNG");
+        let png_bytes = b"\x89PNG\r\n\x1a\nrest of a picture";
+        std::fs::write(&png, png_bytes).unwrap();
+        let first = add(&png, &filed, None).unwrap();
+        assert_eq!(first, filed.join("sim-shot.png"));
+        assert_eq!(std::fs::read(&first).unwrap(), png_bytes);
+        // Named by what it holds: a JPEG saved as `.jpeg` is still `.jpg` here.
+        let jpeg = dir.join("after.jpeg");
+        std::fs::write(&jpeg, b"\xff\xd8\xff\xe0 a photo").unwrap();
+        assert_eq!(add(&jpeg, &filed, None).unwrap(), filed.join("after.jpg"));
+        assert_eq!(std::fs::read_dir(&filed).unwrap().count(), 2, "no part file left behind");
     }
 
     #[test]

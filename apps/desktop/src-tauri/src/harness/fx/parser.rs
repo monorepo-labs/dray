@@ -82,7 +82,12 @@ pub enum SessionUpdate {
         #[serde(default, rename = "command_result")]
         command_result: Option<CommandResult>,
     },
-    SessionInfoUpdate,
+    /// A title, or — since 0.0.17 — fx's account of a model request it is
+    /// retrying, under `_meta.fx.modelResponseRecovery`.
+    SessionInfoUpdate {
+        #[serde(default, rename = "_meta")]
+        meta: InfoMeta,
+    },
     /// An occupancy reading — `used` of `size` — not a cumulative. The trap
     /// Codex's `total` and Claude's `result.usage` both set is absent here.
     UsageUpdate {
@@ -97,6 +102,47 @@ pub enum SessionUpdate {
     Plan,
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct InfoMeta {
+    #[serde(default)]
+    pub fx: FxInfoMeta,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FxInfoMeta {
+    /// Three answers, not two: absent on a title update, `Some(None)` where fx
+    /// sends `null` to say the retry is over, `Some(Some(_))` while it runs.
+    #[serde(default, deserialize_with = "present")]
+    pub model_response_recovery: Option<Option<Recovery>>,
+}
+
+/// One reading of a retry. `state` is `waiting` (a countdown to the next try),
+/// `retrying` (the try in flight), `recovered`, `failed` or `need_user`, the
+/// last naming what fx waits on in `need`. A string, so a state added later
+/// still reaches the mapper.
+#[derive(Debug, Deserialize)]
+pub struct Recovery {
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub attempt: Option<u32>,
+    #[serde(default)]
+    pub need: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// Wraps a present field, `null` included, in `Some` — which plain `Option`
+/// cannot do, reading `null` and absent alike as `None`.
+fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 /// fx's own account of a finished shell command. Snake case, since it is fx's
@@ -336,6 +382,8 @@ mod tests {
     const LADDER: &str = include_str!("fixtures/effort_ladder.jsonl");
     const CARRYOVER: &str = include_str!("fixtures/effort_carryover.jsonl");
     const PROVIDER_SWITCH: &str = include_str!("fixtures/provider_switch.jsonl");
+    const RETRY_RECOVERED: &str = include_str!("fixtures/retry_recovered.jsonl");
+    const RESUME_INTERRUPTED: &str = include_str!("fixtures/resume_interrupted.jsonl");
 
     /// Every reply in a capture that states the session's settings, in order —
     /// `session/new`, `session/resume` and `session/set_config_option` alike,
@@ -547,7 +595,7 @@ mod tests {
     /// unknown on a live session.
     #[test]
     fn every_captured_update_is_modelled() {
-        for fixture in [LIVE_TURN, PERMISSION, CANCEL, EDIT] {
+        for fixture in [LIVE_TURN, PERMISSION, CANCEL, EDIT, RETRY_RECOVERED, RESUME_INTERRUPTED] {
             for update in updates(fixture) {
                 assert!(!matches!(update, SessionUpdate::Unknown), "{update:?}");
             }
@@ -610,6 +658,68 @@ mod tests {
         assert_eq!(kinds, ["allow_once", "allow_always", "reject_once"]);
         assert_eq!(request.tool_call.kind, ToolKind::Execute);
         assert!(request.tool_call.raw_input.is_some());
+    }
+
+    /// A retry's three shapes on one update kind: a reading, `null` for "over",
+    /// and absent on a plain title update. Collapsing the first two would leave
+    /// nothing to clear the retry row with.
+    #[test]
+    fn a_retry_reading_its_end_and_a_title_are_three_answers() {
+        let recoveries: Vec<Option<Option<Recovery>>> = updates(RETRY_RECOVERED)
+            .into_iter()
+            .filter_map(|u| match u {
+                SessionUpdate::SessionInfoUpdate { meta } => Some(meta.fx.model_response_recovery),
+                _ => None,
+            })
+            .collect();
+
+        let states: Vec<&str> = recoveries
+            .iter()
+            .map(|r| match r {
+                Some(Some(r)) => r.state.as_str(),
+                Some(None) => "null",
+                None => "title",
+            })
+            .collect();
+        assert_eq!(states.first(), Some(&"waiting"));
+        assert_eq!(&states[states.len() - 3..], ["null", "recovered", "title"]);
+    }
+
+    /// fx 0.0.17 resends an interrupted request when its TUI reopens a session
+    /// (`fx -c`), but **`session/resume` sends nothing on its own** — measured
+    /// after a SIGKILL, a SIGTERM and a closed stdin mid-request. So Dray's
+    /// resume cannot double a prompt: the only prompt that runs is the one
+    /// Dray sends. Between each resume and Dray's next prompt, fx says only
+    /// the session's title.
+    #[test]
+    fn a_resume_after_an_interrupted_request_sends_nothing_on_its_own() {
+        let mut resumed = 0;
+        let mut waiting = false;
+        for line in RESUME_INTERRUPTED.lines() {
+            let (outbound, body) = match (line.strip_prefix(">> "), line.strip_prefix("<< ")) {
+                (Some(body), _) => (true, body),
+                (_, Some(body)) => (false, body),
+                _ => continue,
+            };
+            let value: Value = serde_json::from_str(body).unwrap();
+            let method = value.get("method").and_then(Value::as_str);
+            if outbound {
+                if method == Some("session/resume") {
+                    resumed += 1;
+                    waiting = true;
+                } else if method == Some("session/prompt") {
+                    waiting = false;
+                }
+            } else if waiting && method == Some("session/update") {
+                assert_eq!(
+                    value.pointer("/params/update/sessionUpdate").and_then(Value::as_str),
+                    Some("session_info_update"),
+                    "fx started work nobody asked for: {body}",
+                );
+                assert!(value.pointer("/params/update/_meta").is_none());
+            }
+        }
+        assert_eq!(resumed, 2);
     }
 
     /// A cancelled prompt still answers, and with its own word.

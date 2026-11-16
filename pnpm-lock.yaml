@@ -122,12 +122,18 @@ importers:
 
   apps/web:
     dependencies:
+      '@blobatar/react':
+        specifier: ^2.7.0
+        version: 2.7.0(blobatar@2.7.0(react@19.3.1))(react@19.3.1)
       '@yogesharc/thinking-orbs':
         specifier: ^0.1.2
         version: 0.1.2(react@19.3.1)
       better-auth:
         specifier: ^1.7.19
         version: 1.7.19(next@16.4.2(@babel/core@7.29.7)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(pg@8.23.1)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(vitest@5.0.5(@types/node@22.20.5)(vite@8.3.4(@types/node@22.20.5)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.1)))
+      blobatar:
+        specifier: ^2.7.0
+        version: 2.7.0(react@19.3.1)
       lucide-react:
         specifier: ^1.60.0
         version: 1.61.0(@types/react@19.3.0)(react@19.3.1)

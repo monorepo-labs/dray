@@ -68,6 +68,7 @@ export default function UserMessage({
   issues = [],
   from = null,
   cwd: writtenIn = null,
+  reaction = null,
   onOpenSession,
   onOpenBot,
 }: {
@@ -87,6 +88,8 @@ export default function UserMessage({
   /// `@mention` naming the tree it was typed in rather than the fork's own copy
   /// of the same file.
   cwd?: string | null;
+  /// A bot's emoji on this message, drawn as a badge on the bubble's corner.
+  reaction?: string | null;
   /// Opens the sending session. Absent where nothing can navigate, which draws
   /// the attribution as a plain line rather than hiding it.
   onOpenSession?: (sessionId: string) => void;
@@ -147,6 +150,8 @@ export default function UserMessage({
           read before the sentence written about it, on the way in and on the way
           back out. `end` so the row grows leftwards from the same edge the
           bubble sits on. */}
+      {/* A message of images alone has no bubble to sit on. */}
+      {reaction && !body && <ReactionBadge emoji={reaction} />}
       <ImageRow images={images} variant="sent" />
 
       {body && (
@@ -157,7 +162,10 @@ export default function UserMessage({
         // this sits *in* the transcript rather than floating at the window's
         // edge, and the crisper one read as an edge cut under it.
         <div
-          className="user-bubble max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground shadow-(--shadow-card)"
+          className={cn(
+            "user-bubble max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground shadow-(--shadow-card)",
+            reaction && "relative mt-3",
+          )}
           // The colour rides in and App.css paints it — a palette that fills
           // this bubble has to answer differently to one that doesn't, and only
           // the palette knows which it is. `data-brand` is what the rules match
@@ -359,6 +367,7 @@ export default function UserMessage({
               );
             })}
           </ClampedBody>
+          {reaction && <ReactionBadge emoji={reaction} className="absolute -top-4 -left-3" />}
         </div>
       )}
 
@@ -377,5 +386,35 @@ export default function UserMessage({
         </span>
       )}
     </div>
+  );
+}
+
+const REACTION_LABELS: Record<string, string> = {
+  "👀": "Seen",
+  "✅": "Done",
+  "🎉": "Celebrating",
+  "👍": "Like",
+  "❤️": "Love",
+  "😂": "Laughing",
+  "😢": "Sad",
+};
+
+/// A bot's reaction, as iMessage draws a tapback: a round chip on the bubble's top
+/// corner on the bot's side, a step lighter than the chat's page colour and
+/// edged by a hairline. Mixed off `--background` rather than `--muted`, which
+/// turns into a translucent veil on glass and let the bubble show through.
+function ReactionBadge({ emoji, className }: { emoji: string; className?: string }) {
+  return (
+    <span
+      role="img"
+      aria-label={`Bot reacted: ${REACTION_LABELS[emoji] ?? emoji}`}
+      className={cn(
+        "flex size-7 items-center justify-center rounded-full border-[0.5px] border-border bg-[color-mix(in_oklab,var(--background),white_7%)] text-[15px] leading-none select-none",
+        "motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:fade-in motion-safe:duration-200",
+        className,
+      )}
+    >
+      {emoji}
+    </span>
   );
 }

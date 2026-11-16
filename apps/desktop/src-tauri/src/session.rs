@@ -155,6 +155,24 @@ pub struct SendOutcome {
     pub issues: Vec<IssueRef>,
 }
 
+/// The model `harness` knows as `model`, from whichever table can name it. The
+/// two single-vendor harnesses have one written here; pi, fx, grok and Codex
+/// answer from what the machine last reported, so a model shipped after this
+/// build still spawns.
+///
+/// `None` is legal for pi alone and means "let pi decide" — its own settings
+/// already name a model, and Dray naming one it might have no key for is the
+/// worst possible first run.
+pub async fn model_spec(harness: Harness, model: &ModelId) -> Result<Option<Model>> {
+    Ok(match harness {
+        Harness::Pi => crate::harness::pi::models::find(model).await,
+        Harness::Fx => crate::harness::fx::models::find(model).await,
+        Harness::Grok => crate::harness::grok::models::find(model).await,
+        Harness::Codex => crate::harness::codex::models::find(model).await,
+        _ => Some(find_model(model).with_context(|| format!("unknown model {model}"))?),
+    })
+}
+
 /// Whether a send has to replace the child rather than write to it.
 ///
 /// A **setting change** waits for everything to be idle, background tasks
@@ -771,6 +789,22 @@ impl SessionManager {
         false
     }
 
+    /// Whether anything is working here, background tasks included: what Dray
+    /// Cloud's heartbeat reports. A slot locked by a send or a respawn counts,
+    /// as in [`Self::any_turn_in_flight`]. A new session's first send joins the
+    /// map only once its prompt is out, so `SENDS` is what makes it busy before.
+    pub async fn busy(&self) -> bool {
+        if SENDS.load(SeqCst) > 0 {
+            return true;
+        }
+        let slots: Vec<Slot> = self.sessions.lock().await.values().cloned().collect();
+        slots.iter().any(|slot| {
+            let Ok(guard) = slot.try_lock() else { return true };
+            let Some(session) = guard.as_ref() else { return false };
+            session.status.try_lock().map_or(true, |t| t.turn_in_flight() || t.has_outstanding_work())
+        })
+    }
+
     /// Stops every child idle past [`IDLE_LIMIT`]. Each holds ~250MB doing
     /// nothing, and the next send resumes it as it does after a restart. A slot
     /// or tracker locked right now is busy by definition, so it is skipped.
@@ -859,24 +893,7 @@ impl SessionManager {
         app: &Sink,
     ) -> Result<SendOutcome> {
         let _counted = Sending::enter().await;
-        // Resolved against whichever table can name it. The two single-vendor
-        // harnesses have one written here; pi's list is answered by the machine,
-        // so its models are looked up in what the probe last reported.
-        //
-        // `None` is legal for pi alone and means "let pi decide" — its own
-        // settings already name a model, and Dray naming one it might have no
-        // key for is the worst possible first run.
-        let model_spec = match harness {
-            Harness::Pi => crate::harness::pi::models::find(&model).await,
-            Harness::Fx => crate::harness::fx::models::find(&model).await,
-            // grok's too: its list rides the handshake, so a model xAI shipped
-            // after this build still spawns.
-            Harness::Grok => crate::harness::grok::models::find(&model).await,
-            // Codex's list is the machine's answer too now, with the table
-            // behind it — so a model shipped after this build still spawns.
-            Harness::Codex => crate::harness::codex::models::find(&model).await,
-            _ => Some(find_model(&model).with_context(|| format!("unknown model {model}"))?),
-        };
+        let model_spec = model_spec(harness, &model).await?;
 
         // A model belongs to exactly one harness, and the pair reaches here from
         // two places that each know only half of it — the composer's stored
@@ -1427,12 +1444,20 @@ impl SessionManager {
                         });
                     }
 
-                    let queued = s.queue_msg(prompt, attachment_paths, issues, from, app).await;
-                    return Ok(SendOutcome {
-                        snapshot: None,
-                        queued: Some(queued),
-                        issues: linked,
-                    });
+                    // Re-read under the status lock: `turn_in_flight` above is
+                    // stale by every await since, and a turn that ended in
+                    // between has already run its flush. Queued then, the
+                    // prompt waited on a boundary that never came.
+                    if let Some(queued) = s
+                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone(), app)
+                        .await
+                    {
+                        return Ok(SendOutcome {
+                            snapshot: None,
+                            queued: Some(queued),
+                            issues: linked,
+                        });
+                    }
                 }
             }
 
@@ -1734,6 +1759,39 @@ impl SessionManager {
     /// task held the session `in_progress` — the status follows the turn alone
     /// now, so that fan-out only killed dev servers the reader still wanted.
     /// Per-task stops stay available in the subagent panel for the narrower ask.
+    /// `dray session model` for a prompt already held behind a running turn.
+    /// That prompt opens the next turn but is flushed straight to the child,
+    /// never through `send_msg`, so the pick goes out now by the rule a prompt
+    /// queued now would take: live on Claude Code, deferred to the flush on fx.
+    /// An effort Claude Code cannot move in place waits for the next send.
+    ///
+    /// Stance and fast come off `item`, not the child: the queued send wrote
+    /// its own to the index, and on fx they are still pending beside the
+    /// model, so the child's would undo them.
+    pub async fn carry_pick_to_queue(&self, item: &SessionIndexItem, app: &Sink) -> Result<()> {
+        let session_id = item.session_id.as_str();
+        let (model, effort, mode, fast) = (&item.model, item.effort, item.permission_mode, item.fast);
+        let Some(slot) = self.sessions.lock().await.get(session_id).cloned() else {
+            return Ok(());
+        };
+        let mut guard = slot.lock().await;
+        let Some(s) = guard.as_mut() else { return Ok(()) };
+        if !s.status.lock().await.turn_in_flight() || s.queued.lock().await.is_empty() {
+            return Ok(());
+        }
+        let spec = model_spec(s.harness, model).await?;
+        match &s.stdin {
+            Transport::Fx(fx) => fx.defer_controls(DeferredControls { model: spec, effort, mode, fast }),
+            _ if s.harness == Harness::ClaudeCode => {
+                apply_live_controls(s, session_id, model, spec.as_ref(), effort, mode, fast, app).await?
+            }
+            // pi and grok steer a prompt into the running turn rather than
+            // holding it here, and so does Codex: nothing of theirs is queued.
+            _ => {}
+        }
+        Ok(())
+    }
+
     pub async fn interrupt(&self, session_id: &str, app: &Sink) -> Result<()> {
         // pi stops off its own desk, for `answer_questions`' reason and one
         // more: the optimistic row the composer draws for a new session puts
@@ -1843,7 +1901,12 @@ impl SessionManager {
     /// living at the project root while its files sat in a directory nothing
     /// pointed at any more.
     pub async fn remove_worktree(&self, session_id: &str) -> Result<SessionIndexItem> {
-        let (relocated, existed) = self.remove_tree(session_id).await?;
+        // A bot's task's sub-tasks outlive it, worktrees and all.
+        let with_children = match get_session_index_item(session_id).await? {
+            Some(item) => !crate::bots::keeps_children(&item).await,
+            None => true,
+        };
+        let (relocated, existed) = self.remove_tree(session_id, with_children).await?;
 
         // Reported here and not at the command, since only this side can tell a
         // deletion from a tidy-up — and only on the explicit route: `delete`
@@ -1859,7 +1922,7 @@ impl SessionManager {
 
     /// [`Self::remove_worktree`]'s work, answering whether the tree was still
     /// there.
-    async fn remove_tree(&self, session_id: &str) -> Result<(SessionIndexItem, bool)> {
+    async fn remove_tree(&self, session_id: &str, with_children: bool) -> Result<(SessionIndexItem, bool)> {
         let item = get_session_index_item(session_id)
             .await?
             .with_context(|| format!("no session {session_id}"))?;
@@ -1872,9 +1935,13 @@ impl SessionManager {
         // screen offers to remove its tree: it goes with this one. First, and a
         // refusal stops here — this session's own button is then still there to
         // retry with, where a child failing after it had nowhere to be retried.
-        for child in crate::store::hidden_children(session_id).await? {
+        let children = match with_children {
+            true => crate::store::hidden_children(session_id).await?,
+            false => Vec::new(),
+        };
+        for child in children {
             if child.worktree_name.is_some() {
-                Box::pin(self.remove_tree(&child.session_id)).await.with_context(|| {
+                Box::pin(self.remove_tree(&child.session_id, true)).await.with_context(|| {
                     format!("could not remove the worktree of hidden session \"{}\"", child.title)
                 })?;
             }
@@ -1898,6 +1965,15 @@ impl SessionManager {
     /// is mid-turn — and off the log otherwise, under the slot's lock either way
     /// so a spawn cannot take the same `seq`.
     pub async fn post_event(&self, session_id: &str, harness: Harness, payload: AgentEventPayload, app: &Sink) -> Result<()> {
+        self.log_event(session_id, harness, payload, app).await?;
+        POSTED.lock().unwrap().insert(session_id.to_string());
+        Ok(())
+    }
+
+    /// [`post_event`](Self::post_event) for a note made outside any turn, such
+    /// as an Undo: marked as posted it would leave the next silent turn
+    /// counted as an answered one.
+    pub async fn log_event(&self, session_id: &str, harness: Harness, payload: AgentEventPayload, app: &Sink) -> Result<()> {
         let slot = self.slot(session_id).await;
         let guard = slot.lock().await;
         let (harness, seq) = match guard.as_ref() {
@@ -1905,7 +1981,6 @@ impl SessionManager {
             None => (harness, next_seq_by_session_id(session_id).await?),
         };
         let event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
-        POSTED.lock().unwrap().insert(session_id.to_string());
         app.emit("agent_event", &event)?;
         append_session_event(session_id, event).await
     }
@@ -1970,12 +2045,19 @@ impl SessionManager {
     ///
     /// The child goes first and its lock is released before the disk work, so a
     /// dying process can't append one last event to a file we just removed.
-    pub async fn delete(&self, session_id: &str) -> Result<bool> {
+    ///
+    /// `with_children` false leaves its hidden children be: a bot's task's
+    /// sub-tasks outlive it ([`crate::bots::keeps_children`]).
+    pub async fn delete(&self, session_id: &str, with_children: bool) -> Result<bool> {
         // A hidden child is listed nowhere on screen, so it goes with
         // it. Here rather than in the frontend, which holds one side of the
         // settled split and can miss a child sitting on the other.
-        for child in crate::store::hidden_children(session_id).await? {
-            Box::pin(self.delete(&child.session_id)).await?;
+        let children = match with_children {
+            true => crate::store::hidden_children(session_id).await?,
+            false => Vec::new(),
+        };
+        for child in children {
+            Box::pin(self.delete(&child.session_id, true)).await?;
         }
 
         self.settle(session_id).await?;
@@ -2432,8 +2514,8 @@ impl Session {
         message
     }
 
-    /// fx alone, and the whole of what keeps its two-prompt race shut. Decides,
-    /// **under the status lock**, whether this prompt joins the running turn —
+    /// What keeps a prompt from being queued behind a turn that already ended.
+    /// Decides, **under the status lock**, whether this prompt joins the running turn —
     /// queued for the turn-end flush — or finds the turn already over and must
     /// start a fresh one. `Some` was queued; `None` means the turn ended and
     /// the caller delivers now.
@@ -2446,8 +2528,10 @@ impl Session {
     /// later would — and a completion can slip between, marking the turn done
     /// with a prompt queued behind it and no reservation, which is the race.
     ///
-    /// fx has no injection point, so a prompt for a live turn only ever waits
-    /// here for its end; there is no write-through path to take.
+    /// For fx it is the whole of what keeps its two-prompt race shut: fx has no
+    /// injection point, so a prompt for a live turn only ever waits here for
+    /// its end. Claude Code's turn-end flush runs after the tracker closes the
+    /// turn, so a prompt queued here while it is still open is drained by it.
     async fn queue_if_in_flight(
         &self,
         prompt: &str,
@@ -3159,6 +3243,28 @@ impl Drop for HandoverGuard<'_> {
     }
 }
 
+/// A bot chat's hidden lead-in for its next prompt: the hand-over, then what
+/// the reader did to its tasks. Taken once; put back with
+/// [`crate::bots::restore_handover`] where the send fails.
+async fn take_hidden(session_id: &str) -> Option<String> {
+    let hidden: String = [crate::bots::take_handover(session_id), crate::bots::take_since(session_id).await]
+        .into_iter()
+        .flatten()
+        .collect();
+    (!hidden.is_empty()).then_some(hidden)
+}
+
+/// `text` with the hidden lead-in ahead of it, or after it where `after`: a
+/// slash command only reads as one at the start, and fx's skills take the
+/// words that follow as theirs.
+fn lead_in_around(hidden: Option<&str>, text: &str, after: bool) -> String {
+    match hidden {
+        Some(hidden) if after => format!("{text}\n\n{}", hidden.trim_end()),
+        Some(hidden) => format!("{hidden}{text}"),
+        None => text.to_string(),
+    }
+}
+
 /// Persists the user's own prompt event, emits it, then writes it to the
 /// child's stdin — the CLI never echoes a prompt back, so this is the only
 /// place it enters the transcript.
@@ -3199,12 +3305,17 @@ async fn deliver_prompt(
     let text = prepared.text;
     // A bot chat taking over from another agent: the conversation so far goes
     // ahead of the first prompt, sent and never logged, so the chat draws only
-    // what the reader typed.
-    let mut handover = HandoverGuard { session_id, text: crate::bots::take_handover(session_id) };
-    let given = match &handover.text {
-        Some(handover) => format!("{handover}{text}"),
-        None => text.clone(),
-    };
+    // what the reader typed. What the reader did to the bot's tasks meanwhile
+    // rides the same way, and a failed send keeps it for the retry with the rest.
+    // A logged-only prompt leaves it for [`flush_one_per_turn`], which owns the
+    // send. So does a slash command, which only reads as one at the start,
+    // except on Codex, whose input carries the lead-in as an item of its own,
+    // and fx, whose commands are all skills that read the words after them.
+    let slash = text.starts_with('/');
+    let fx = matches!(transport, Transport::Fx(_));
+    let lead_in = send && (!slash || fx || matches!(transport, Transport::Rpc(_)));
+    let mut handover = HandoverGuard { session_id, text: if lead_in { take_hidden(session_id).await } else { None } };
+    let given = lead_in_around(handover.text.as_deref(), &text, slash && fx);
 
     // Ahead of the event for a second reason, and this one is about failure
     // rather than content. Codex resolves a leading `/skill` by asking its own
@@ -3214,31 +3325,38 @@ async fn deliver_prompt(
     // and the retry the error invites draws the reader's sentence twice.
     let codex = match transport {
         Transport::Rpc(thread) if send => {
-            Some((
-                thread,
-                crate::harness::codex::turn_input(thread, &given, &prepared.images).await?,
-            ))
+            // The skill is resolved off the reader's own text, so a lead-in
+            // cannot hide its leading `/`.
+            let mut input = crate::harness::codex::turn_input(thread, &text, &prepared.images).await?;
+            if let (Some(hidden), Some(items)) = (&handover.text, input.as_array_mut()) {
+                let at = usize::from(items.first().is_some_and(|i| i["type"] != "text"));
+                items.insert(at, json!({"type": "text", "text": hidden}));
+            }
+            Some((thread, input))
         }
         _ => None,
     };
 
     // A bot whose chat opens on a welcome (Dray Bot) has it written down as
     // the chat's first message, ahead of the prompt that started the session,
-    // so the chat reads after a restart as it did before the first send. Only
-    // logged: the agent is not given it.
-    if let Some(welcome) = crate::bots::take_welcome(session_id) {
+    // so the chat reads after a restart as it did before the first send. One
+    // event per message, each its own bubble. The agent is handed the same
+    // words in the hidden lead-in, never as a turn of its own.
+    for text in crate::bots::take_welcome(session_id).unwrap_or_default() {
         let event = AgentEvent::mint(
             session_id.to_string(),
             harness,
             seq.fetch_add(1, Relaxed),
             None,
             None,
-            AgentEventPayload::AssistantText { block: None, text: welcome },
+            AgentEventPayload::AssistantText { block: None, text },
         );
         app.emit("agent_event", &event)?;
         append_session_event(session_id, event).await?;
     }
     let seq = seq.fetch_add(1, Relaxed);
+    let dray = crate::bots::take_dray_prompt(session_id, prompt);
+    crate::bots::learn::note_prompt(session_id, prompt, from.as_ref(), dray);
 
     let payload = AgentEventPayload::UserMessage {
         text: text.clone(),
@@ -3258,7 +3376,7 @@ async fn deliver_prompt(
         // Absent means "this session's own cwd", which is the truth for every
         // message a session logs itself. Only a fork records one.
         cwd: None,
-        kickoff: crate::bots::take_kickoff(session_id),
+        kickoff: dray,
     };
     // Nothing tracks turns yet; Claude Code opens one per `init`.
     let agent_event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
@@ -3404,6 +3522,29 @@ fn report(session_id: &str, text: String, app: &Sink) {
     });
 }
 
+/// Logs what a bot's turn learned and asks for a review where one is owed
+/// (#973). Logged here rather than through `post_event`, whose slot lock a
+/// send can hold while it waits on this read loop.
+async fn after_bot_turn(ctx: &Ingest<'_>, turn: crate::bots::learn::Turn, app: &Sink) {
+    if let Some(payload) = turn.learned() {
+        let seq = ctx.flush_seq.fetch_add(1, Relaxed);
+        let event = AgentEvent::mint(ctx.session_id.to_string(), ctx.harness, seq, None, None, payload);
+        app.emit("agent_event", &event).ok();
+        if let Err(err) = append_session_event(ctx.session_id, event).await {
+            eprintln!("[learned write err] {err}");
+        }
+    }
+    if let Some(prompt) = turn.review(ctx.session_id) {
+        // Spawned: the send lands in this same session, whose read loop this is.
+        let review = crate::orchestration::send_review(ctx.session_id.to_string(), prompt, app.clone());
+        tokio::spawn(async move {
+            if let Err(e) = review.await {
+                eprintln!("[bot review err] {e:#}");
+            }
+        });
+    }
+}
+
 /// What a child's closing turn says to the bot: its last words, or what became
 /// of a turn that ended without any, so the bot is never left waiting on one.
 fn report_text(status: TurnStatus, stop_reason: Option<&str>, final_text: Option<&str>) -> String {
@@ -3465,26 +3606,32 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
     // A bot's child reports every turn it closes. Spawned: the send lands in
     // the parent's session, which must not hold this one's read loop up.
     let mut silent_bot_turn = false;
+    let mut bot_turn = None;
+    let mut ask_name = false;
     if agent_event.subagent.is_none() {
         match &agent_event.payload {
-            AgentEventPayload::AssistantText { text, .. } if !text.trim().is_empty() => {
+            AgentEventPayload::AssistantText { text, .. } if crate::events::has_text(text) => {
                 LAST_REPLY.lock().unwrap().insert(ctx.session_id.to_string(), text.clone());
             }
             AgentEventPayload::TurnCompleted { status, stop_reason, final_text, .. } => {
                 let last = LAST_REPLY.lock().unwrap().remove(ctx.session_id);
-                let said = final_text.as_deref().filter(|t| !t.trim().is_empty()).or(last.as_deref());
+                let said = final_text.as_deref().filter(|t| crate::events::has_text(t)).or(last.as_deref());
                 // A bot answering a report that needs nothing from the reader
                 // says nothing, and its chat draws nothing; a "Done" for it
                 // would point the reader at an empty turn.
                 let posted = POSTED.lock().unwrap().remove(ctx.session_id);
-                silent_bot_turn = said.is_none()
+                let notes = crate::bots::learn::take_notes(ctx.session_id);
+                // A review's words are hidden like its prompt, so it is silent
+                // whatever the bot said; its "Learned" rows wait unannounced.
+                silent_bot_turn = (said.is_none() || notes.reviewing())
                     && !posted
                     && *status == TurnStatus::Success
                     && crate::bots::bot_at(ctx.session_cwd).await.is_some();
                 report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
+                ask_name = crate::bots::take_name_ask(ctx.session_id) && *status == TurnStatus::Success;
                 // Awaited, not spawned: the queued flush below would start the
                 // next turn, which could overwrite this one's notes unsaved.
-                crate::bots::commit_turn(ctx.session_cwd).await;
+                bot_turn = crate::bots::commit_turn(ctx.session_cwd, notes, app).await;
             }
             _ => {}
         }
@@ -3611,6 +3758,25 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
 
     if let Err(err) = append_session_event(ctx.session_id, agent_event).await {
         eprintln!("[write err] {err}");
+    }
+
+    // A new bot's greeting, then Dray's question for the user's name as a
+    // message of its own (#1076), ahead of anything the turn learned.
+    if ask_name {
+        let text = crate::bots::ASK_NAME.to_string();
+        let payload = AgentEventPayload::AssistantText { block: None, text };
+        let seq = ctx.flush_seq.fetch_add(1, Relaxed);
+        let event = AgentEvent::mint(ctx.session_id.to_string(), ctx.harness, seq, None, None, payload);
+        app.emit("agent_event", &event).ok();
+        if let Err(err) = append_session_event(ctx.session_id, event).await {
+            eprintln!("[name ask write err] {err}");
+        }
+    }
+
+    // After the turn's close in the log, so its "Learned" rows draw under the
+    // turn that made them, and ahead of any queued prompt.
+    if let Some(turn) = bot_turn {
+        after_bot_turn(ctx, turn, app).await;
     }
 
     // After the boundary event is logged, so the prompt that follows it
@@ -3999,12 +4165,18 @@ async fn flush_one_per_turn(
         // success the reservation stands as `InProgress` and the turn is this
         // batch's; on failure every message is already on screen and in the log,
         // so the sentence saying why is the only thing still owing.
-        if let (false, Some(sent)) = (
-            texts.is_empty(),
-            transport.open_turn(&texts.join("\n\n"), &[]).await,
-        ) {
+        let mut handover = HandoverGuard { session_id, text: None };
+        if !texts.is_empty() {
+            handover.text = take_hidden(session_id).await;
+        }
+        let joined = texts.join("\n\n");
+        let given = lead_in_around(handover.text.as_deref(), &joined, joined.starts_with('/'));
+        if let (false, Some(sent)) = (texts.is_empty(), transport.open_turn(&given, &[]).await) {
             match sent {
-                Ok(()) => return,
+                Ok(()) => {
+                    handover.sent();
+                    return;
+                }
                 Err(err) => {
                     eprintln!("[queued flush err] {err}");
                     report_send_failure(session_id, harness, &err.to_string(), seq, app)
@@ -4211,6 +4383,14 @@ mod tests {
     use crate::harness::claude_code::{mapper::Mapper, parser};
 
     #[test]
+    fn a_lead_in_never_hides_a_leading_slash() {
+        let hidden = Some("[Since your last turn: x]\n\n");
+        assert_eq!(lead_in_around(hidden, "hi", false), "[Since your last turn: x]\n\nhi");
+        assert_eq!(lead_in_around(hidden, "/hello", true), "/hello\n\n[Since your last turn: x]");
+        assert_eq!(lead_in_around(None, "/hello", true), "/hello");
+    }
+
+    #[test]
     fn a_report_says_something_whatever_the_turn_left() {
         assert_eq!(report_text(TurnStatus::Success, None, Some(" pong ")), "pong");
         assert_eq!(
@@ -4302,6 +4482,32 @@ mod tests {
         assert!(session.cancel_queued(&sink).await.is_none());
         assert_eq!(session.queued.lock().await[0].text, "done", "the report still reaches the bot");
         assert_eq!(shown.lock().unwrap().last().unwrap(), &serde_json::json!([]));
+    }
+
+    /// The send path read the turn as running, then awaited long enough for it
+    /// to end and flush an empty queue. Queued now, the prompt would wait on a
+    /// boundary already past, so the re-read under the lock must refuse it and
+    /// leave the queue empty for the direct send. While the turn still runs it
+    /// queues, and the turn-end flush that follows drains it.
+    #[tokio::test]
+    async fn a_prompt_is_never_queued_behind_a_turn_that_ended() {
+        let manager = SessionManager::default();
+        let mut running = StatusTracker::default();
+        running.on_send();
+        let slot = child_with(&manager, "s", running).await;
+        let sink = Sink::new(|_, _| {});
+        let guard = slot.lock().await;
+        let session = guard.as_ref().unwrap();
+
+        let stale = session.status.lock().await.turn_in_flight();
+        assert!(stale, "the send's first read sees the turn running");
+        assert!(session.queue_if_in_flight("early", &[], &[], None, &sink).await.is_some());
+        assert_eq!(session.queued.lock().await.len(), 1, "held for the turn-end flush");
+        session.queued.lock().await.clear();
+
+        session.status.lock().await.on_event(&turn_completed());
+        assert!(session.queue_if_in_flight("late", &[], &[], None, &sink).await.is_none());
+        assert!(session.queued.lock().await.is_empty(), "nothing left for a flush that already ran");
     }
 
     /// Only a child with nothing running and nothing waiting on it is stopped,

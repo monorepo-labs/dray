@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
 import ServerFilledIcon from "@/components/icons/ServerFilledIcon";
@@ -38,9 +38,13 @@ export type BotPick = {
 
 /// Makes a bot — a name, a face and what it runs on — and starts its chat with
 /// the bot speaking first. Its job is told in reply, never in a form.
+///
+/// Given `editing`, the same dialog filled in with that bot's name and face,
+/// saving those alone: its server and agent are its chat's, not the form's.
 export default function NewBotDialog({
   open,
   onOpenChange,
+  editing,
   server,
   onServerChange,
   picker,
@@ -49,6 +53,7 @@ export default function NewBotDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  editing?: Bot | null;
   /// Where the bot is made and runs: its folder, its chat and its tasks.
   server: ServerId;
   onServerChange: (server: ServerId) => void;
@@ -65,29 +70,54 @@ export default function NewBotDialog({
   // again rather than making a second bot beside it.
   const [made, setMade] = useState<Bot | null>(null);
 
+  // Filled in each time it opens on a bot. One made before there was a pick
+  // starts from the default face, since its seeded one has no shape name.
+  useEffect(() => {
+    if (!open || !editing) return;
+    setName(editing.name);
+    setAvatar(editing.avatar ?? DEFAULT_AVATAR);
+  }, [open, editing]);
+
+  const shut = () => {
+    onOpenChange(false);
+    setName("");
+    setAvatar(DEFAULT_AVATAR);
+    setError(null);
+    setMade(null);
+  };
+
+  // Held open while a save or create is in flight: closed and reopened
+  // meanwhile, the old one's finish would close the new opening.
   const close = (next: boolean) => {
-    onOpenChange(next);
-    if (!next) {
-      setName("");
-      setAvatar(DEFAULT_AVATAR);
-      setError(null);
-      setMade(null);
-    }
+    if (next) onOpenChange(true);
+    else if (!busy) shut();
+  };
+
+  const save = async (bot: Bot) => {
+    const at = serverOfBot(bot);
+    await invoke<Bot>("edit_bot", { id: bot.id, name: name.trim(), avatar }, at);
+    await refreshBots(at);
   };
 
   const create = async () => {
+    let bot = made;
+    if (!bot) {
+      bot = await invoke<Bot>("create_bot", { name: name.trim(), avatar }, server);
+      setMade(bot);
+      await refreshBots(server);
+    }
+    return invoke<SessionIndexItem>("start_bot", { id: bot.id, ...pick }, serverOfBot(bot));
+  };
+
+  const submit = async () => {
     if (!name.trim() || busy) return;
     setBusy(true);
     try {
-      let bot = made;
-      if (!bot) {
-        bot = await invoke<Bot>("create_bot", { name: name.trim(), avatar }, server);
-        setMade(bot);
-        await refreshBots(server);
-      }
-      const chat = await invoke<SessionIndexItem>("start_bot", { id: bot.id, ...pick }, serverOfBot(bot));
-      close(false);
-      onStarted(chat);
+      let chat: SessionIndexItem | undefined;
+      if (editing) await save(editing);
+      else chat = await create();
+      shut();
+      if (chat) onStarted(chat);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -101,14 +131,14 @@ export default function NewBotDialog({
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent className="max-w-96 gap-5">
-        <DialogTitle>New bot</DialogTitle>
+        <DialogTitle>{editing ? "Edit bot" : "New bot"}</DialogTitle>
 
         <BotAvatar seed={seed} avatar={avatar} animate="always" className="mx-auto size-24" />
 
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            void create();
+            void submit();
           }}
         >
           <Input
@@ -158,21 +188,23 @@ export default function NewBotDialog({
           ))}
         </div>
 
-        <div className="flex justify-center gap-1">
-          {/* Locked from Create on: the bot lives on the server it was made
-              on, and a retry starts that one. */}
-          <ServerPicker value={server} onChange={onServerChange} disabled={busy || !!made} />
-          {picker}
-        </div>
+        {!editing && (
+          <div className="flex justify-center gap-1">
+            {/* Locked from Create on: the bot lives on the server it was made
+                on, and a retry starts that one. */}
+            <ServerPicker value={server} onChange={onServerChange} disabled={busy || !!made} />
+            {picker}
+          </div>
+        )}
 
         {error && <p className="text-ui text-destructive">{error}</p>}
 
         <div className="flex justify-end gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => close(false)}>
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => close(false)}>
             Cancel
           </Button>
-          <Button type="button" size="sm" disabled={!name.trim() || busy} onClick={() => void create()}>
-            Create
+          <Button type="button" size="sm" disabled={!name.trim() || busy} onClick={() => void submit()}>
+            {editing ? "Save" : "Create"}
           </Button>
         </div>
       </DialogContent>

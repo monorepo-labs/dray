@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTranscript, drawsSameTurn, isToolGroup, segmentMedia, segmentWork, sessionMedia, type Turn } from "@/lib/transcript";
+import { buildTranscript, canOpenTab, drawsSameTurn, hiddenInBotChat, isToolGroup, opensTab, runningRuns, segmentMedia, segmentWork, sessionMedia, type Turn } from "@/lib/transcript";
 import type { AgentEvent, AgentEventPayload, ToolResult } from "@/types/events";
 
 /// Only the envelope fields `buildTranscript` orders and keys by are filled;
@@ -458,6 +458,69 @@ describe("subagent runs", () => {
 
     expect(subagents[0].taskId).toBeNull();
   });
+
+  /// The Background Tasks list is for what is running now. The run the reader
+  /// has open stays, or a click on a finished run's chat row opens onto nothing.
+  it("lists only running runs, plus the open one", () => {
+    const completed = (seq: number, toolUseId: string, taskId: string) =>
+      lifecycle(seq, toolUseId, {
+        type: "subagent_completed",
+        agentId: taskId,
+        status: "completed",
+        summary: null,
+        usage: null,
+      } as AgentEventPayload);
+    const { subagents } = buildTranscript(
+      [
+        callStarted(0, "toolu_1"),
+        started(1, "toolu_1", "task-a"),
+        completed(2, "toolu_1", "task-a"),
+        callStarted(3, "toolu_2"),
+        started(4, "toolu_2", "task-b"),
+        completed(5, "toolu_2", "task-b"),
+        callStarted(6, "toolu_3"),
+        started(7, "toolu_3", "task-c"),
+      ],
+      true,
+      new Set(["task-c"]),
+    );
+
+    expect(runningRuns(subagents, null).map((r) => r.id)).toEqual(["toolu_3"]);
+    expect(runningRuns(subagents, "toolu_1").map((r) => r.id)).toEqual(["toolu_3", "toolu_1"]);
+  });
+
+  /// A finished subagent stays: its conversation is still worth opening.
+  it("keeps finished subagents, dropping only finished shells", () => {
+    const agentCall = (seq: number, callId: string): AgentEvent => {
+      const e = callStarted(seq, callId);
+      return { ...e, payload: { ...e.payload, name: "Agent" } as AgentEventPayload };
+    };
+    const done = (seq: number, toolUseId: string, taskId: string) =>
+      lifecycle(seq, toolUseId, {
+        type: "subagent_completed",
+        agentId: taskId,
+        status: "completed",
+        summary: null,
+        usage: null,
+      } as AgentEventPayload);
+    const { subagents } = buildTranscript(
+      [
+        callStarted(0, "toolu_1"),
+        started(1, "toolu_1", "task-a"),
+        done(2, "toolu_1", "task-a"),
+        agentCall(3, "toolu_2"),
+        started(4, "toolu_2", "task-b"),
+        done(5, "toolu_2", "task-b"),
+      ],
+      false,
+    );
+
+    expect(runningRuns(subagents, null).map((r) => r.id)).toEqual(["toolu_2"]);
+    expect(subagents.map((r) => [r.id, opensTab(r)])).toEqual([
+      ["toolu_2", true],
+      ["toolu_1", false],
+    ]);
+  });
 });
 
 describe("a tool call that came back with pictures", () => {
@@ -792,6 +855,40 @@ describe("a call whose background task the child still holds", () => {
       const { subagentById } = buildTranscript([fxCall(0, "c1"), fxSpawn(1, "c1")], true);
       expect(subagentById.get("c1")?.taskId).toBeNull();
     });
+
+    /// fx 0.0.17's call answers at once and the child works on; the mapper
+    /// lists it as a background task under the call's id until the report.
+    describe("a named child working in the background", () => {
+      const named = (seq: number, callId: string): AgentEvent =>
+        fx(seq, {
+          type: "tool_call_started",
+          callId,
+          name: "subagent",
+          toolType: "subagent_spawn",
+          input: { action: "message", agent: "worker", message: "Reply with exactly: hi" },
+          rawInput: null,
+          title: null,
+        } as AgentEventPayload);
+      const answered = (seq: number, callId: string): AgentEvent =>
+        fx(seq, {
+          type: "tool_call_completed",
+          callId,
+          result: { text: "Sent to worker, which works on it now.", isError: false, structured: null, exitCode: null, durationMs: null, images: [] },
+        } as AgentEventPayload);
+      const log = [named(0, "c1"), fxSpawn(1, "c1"), answered(2, "c1")];
+
+      it("is running while its task is live, and opens only once done", () => {
+        const run = buildTranscript(log, false, new Set(["c1"])).subagentById.get("c1")!;
+        expect([run.done, run.background, opensTab(run), canOpenTab(run)]).toEqual([false, false, true, false]);
+        // No Stop: fx has no request to end a child.
+        expect(run.taskId).toBeNull();
+      });
+
+      it("is done once its task is gone", () => {
+        const run = buildTranscript(log, false, new Set()).subagentById.get("c1")!;
+        expect([run.done, canOpenTab(run)]).toEqual([true, true]);
+      });
+    });
   });
 });
 
@@ -984,5 +1081,20 @@ describe("segmentMedia", () => {
       ["/archived/a-0.png", false],
       ["/att/mine.png", true],
     ]);
+  });
+
+  it("hiddenInBotChat keeps only media a bot's chat does not draw", () => {
+    const named = "/Users/me/.dray/browser/recordings/s1/named.mp4";
+    const unnamed = "/Users/me/.dray/browser/recordings/s1/unnamed.mp4";
+    const shot = { path: "/shots/tool.png", url: null, mimeType: "image/png" };
+    const mine = { path: "/att/mine.png", url: null, mimeType: "image/png" };
+    const events = [event(0, { type: "assistant_text", block: null, text: `Proof: ${named}` })];
+    const hidden = hiddenInBotChat(events, [
+      { video: named, byYou: false },
+      { video: unnamed, byYou: false },
+      { image: shot, byYou: false },
+      { image: mine, byYou: true },
+    ]);
+    expect(hidden.map((m) => ("video" in m ? m.video : m.image.path))).toEqual([unnamed, "/shots/tool.png"]);
   });
 });

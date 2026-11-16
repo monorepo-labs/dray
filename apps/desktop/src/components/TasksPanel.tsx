@@ -29,34 +29,55 @@ import type { MergeMethod, PrMark } from "@/types/events";
 
 type Flags = { archived?: boolean; pinned?: boolean; aside?: boolean };
 
-type TaskState = "asking" | "busy" | "idle";
+type TaskState = "asking" | "ready" | "soon" | "idle" | "busy";
 
-/// What wants the reader, then what works, then what is done — also the order
-/// the runs are drawn in. Set aside sinks under all three, as in the sidebar.
-const TASK_STATES: TaskState[] = ["asking", "busy", "idle"];
+/// What the reader acts on first: a question, then a PR to merge, then one
+/// about to be, then idle tasks, with working ones last since they need
+/// nothing yet. Not the sidebar's order, which leads with working. Set aside
+/// sinks under all of them.
+const TASK_STATES: TaskState[] = ["asking", "ready", "soon", "idle", "busy"];
 
-/// Needs you with working, as the sidebar pairs needs you with unread: each
-/// row's own mark, yellow title or orb, tells them apart.
-const SHARED_BREAKS: TaskState[][] = [["asking", "busy"]];
+/// Neighbouring single rows share a break, as the sidebar pairs needs you with
+/// unread: each row's own mark, yellow title, Merge, spinner or orb, tells
+/// them apart.
+const SHARED_BREAKS: TaskState[][] = [TASK_STATES];
 
-/// A run takes the strongest state in it, which only matters for the one run
-/// a short list draws.
-const taskState = (rows: CrewRow[]): TaskState =>
-  rows.some((r) => r.asking) ? "asking" : rows.some((r) => r.busy || r.background) ? "busy" : "idle";
+/// Where Merge shows: GitHub says it can land.
+const canMerge = (pr: PrMark | undefined): boolean =>
+  pr?.state === "OPEN" && !pr.isDraft && readyToMerge(pr) === true;
+
+/// Waiting on something outside the task that will likely pass on its own.
+/// Failing checks, conflicts and changes requested are the task's to mend, so
+/// they file with idle.
+const SOON = new Set<PrStatusKey>(["checksRunning", "needsReview", "unknown"]);
+
+/// The PR state wins over working, since Merge is what the reader came for.
+function rowState(row: CrewRow, pr: PrMark | undefined): TaskState {
+  if (row.asking) return "asking";
+  if (canMerge(pr)) return "ready";
+  if (pr?.state === "OPEN" && !pr.isDraft && SOON.has(prStatus(pr).key)) return "soon";
+  return row.busy || row.background ? "busy" : "idle";
+}
 
 /// The Pinned rows, then the runs drawn under them with a break between each.
 /// Sorted by state first, since a short list draws as one run and would
 /// otherwise keep newest-first, an idle task above one waiting on the reader.
-export function taskRuns(rows: CrewRow[]): { pinned: CrewRow[]; runs: CrewRow[][] } {
-  const rank = (r: CrewRow) => TASK_STATES.indexOf(taskState([r]));
-  const sorted = [...rows].sort((a, b) => rank(a) - rank(b));
+export function taskRuns(
+  rows: CrewRow[],
+  prOf: (row: CrewRow) => PrMark | undefined,
+): { pinned: CrewRow[]; runs: CrewRow[][] } {
+  const rank = new Map(rows.map((r) => [r, TASK_STATES.indexOf(rowState(r, prOf(r)))]));
+  const sorted = [...rows].sort((a, b) => rank.get(a)! - rank.get(b)!);
+  // A run takes its strongest state, which only matters for the one run a
+  // short list draws.
+  const runState = (run: CrewRow[]) => TASK_STATES[Math.min(...run.map((r) => rank.get(r)!))];
   // Pinned under its own heading, as the sidebar draws it. Setting aside
   // unpins, so the two never meet.
   const pinned = sorted.filter((r) => r.item.pinned && !r.item.aside);
   const aside = sorted.filter((r) => r.item.aside);
   const byState = stageRuns(
     sorted.filter((r) => !r.item.aside && !pinned.includes(r)).map((r) => [r]),
-    taskState,
+    runState,
     SHARED_BREAKS,
   );
   const runs = [...TASK_STATES.map((s) => byState.get(s) ?? []), aside].filter((run) => run.length);
@@ -104,7 +125,7 @@ export default function TasksPanel({
     );
   }
 
-  const { pinned, runs } = taskRuns(rows);
+  const { pinned, runs } = taskRuns(rows, prOf);
   const draw = (row: CrewRow) => (
     <TaskRow
       key={row.item.sessionId}
@@ -177,7 +198,7 @@ function TaskRow({
   const machine = server !== LOCAL ? serverName(server) : null;
   const id = item.sessionId;
   const working = row.busy && !row.asking;
-  const mergeable = pr?.state === "OPEN" && !pr.isDraft && readyToMerge(pr) === true;
+  const mergeable = canMerge(pr);
   // Merging here or from a merge card settles already, so the button is only
   // for a PR merged elsewhere, say the PR panel in the task's own tab. Never
   // mid-turn either way: settling kills the child.

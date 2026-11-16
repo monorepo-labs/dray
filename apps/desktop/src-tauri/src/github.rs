@@ -230,6 +230,11 @@ fragment pr on PullRequest{
 /// commit that has since been pushed over describes code nobody is waiting on.
 /// The merged half asks for none — its checks are over, and the row says merged.
 ///
+/// The tip's sha and how many checks report on it are there for the merge
+/// card, which must not take a push no check has reached yet for a passing
+/// one. `contexts{totalCount}` without a `first` is measured free: the query
+/// costs 1 point with or without both.
+///
 /// `first:100` is a real cap on both halves. A repo with more than a hundred
 /// open pull requests marks the hundred most recently touched; a branch merged
 /// long enough ago to fall past the hundredth loses its mark, which is the
@@ -238,8 +243,8 @@ const QUERY_MARKS: &str = r#"
 query($owner:String!,$repo:String!){
  repository(owner:$owner,name:$repo){
   open: pullRequests(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
-   number url headRefName isDraft mergeable mergeStateStatus reviewDecision
-   commits(last:1){nodes{commit{statusCheckRollup{state}}}}
+   number url headRefName headRefOid isDraft mergeable mergeStateStatus reviewDecision
+   commits(last:1){nodes{commit{statusCheckRollup{state contexts{totalCount}}}}}
   }}
   merged: pullRequests(states:MERGED,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
    number url headRefName isDraft
@@ -252,6 +257,9 @@ query($owner:String!,$repo:String!){
 #[derive(Deserialize)]
 struct Nodes<T> {
     nodes: Option<Vec<T>>,
+    /// Only where asked for, which the marks' check count alone does.
+    #[serde(default, rename = "totalCount")]
+    total_count: Option<u32>,
 }
 
 impl<T> Nodes<T> {
@@ -990,9 +998,21 @@ pub struct PrMark {
     pub url: String,
     /// The branch it was opened from — what the caller matches a session by.
     pub head_ref_name: String,
+    /// The tip commit's sha, on the open half alone. A push is a new one,
+    /// which is what restarts the merge card's wait for checks to register.
+    /// Optional in TS too, since a server older than the field sends none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub head_oid: Option<String>,
     pub is_draft: bool,
     pub state: PrMarkState,
     pub checks_state: PrChecksState,
+    /// How many checks and statuses report on the tip, on the open half alone.
+    /// Zero is both "no CI" and "CI not started yet", which only a count seen on
+    /// an earlier push can tell apart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub check_count: Option<u32>,
     /// Enough of the panel's merge fields to answer "can this land now", which
     /// the sidebar itself draws nothing from — the notice for a pull request
     /// turning ready does, and this is the only read that runs for a session
@@ -1058,6 +1078,7 @@ struct RawPrMark {
     url: String,
     #[serde(default)]
     head_ref_name: String,
+    head_ref_oid: Option<String>,
     /// Always false on a merged one — GitHub clears the flag on merge — so this
     /// is only ever read for the open half. One node shape for both keeps the
     /// query symmetrical.
@@ -1081,15 +1102,20 @@ struct RawPrMark {
 /// `commits(last:1)` asks for one, so anything else — no commits, no rollup, no
 /// CI — is [`PrChecksState::Clear`] rather than an error: a repo without checks is
 /// the ordinary case, not a failure to read one.
-fn read_checks(commits: Option<Nodes<RawCommitNode>>) -> PrChecksState {
-    Nodes::take(commits)
+///
+/// The count is `None` where the rollup was not asked for (the merged half) and
+/// zero where the tip carries none.
+fn read_checks(commits: Option<Nodes<RawCommitNode>>) -> (PrChecksState, Option<u32>) {
+    let asked = commits.is_some().then_some(0);
+    let rollup = Nodes::take(commits)
         .into_iter()
         .filter_map(|node| node.commit)
-        .filter_map(|commit| commit.status_check_rollup)
-        .filter_map(|rollup| rollup.state)
-        .map(|state| PrChecksState::from_rollup(&state))
-        .next()
-        .unwrap_or(PrChecksState::Clear)
+        .find_map(|commit| commit.status_check_rollup);
+    let Some(rollup) = rollup else {
+        return (PrChecksState::Clear, asked);
+    };
+    let state = rollup.state.as_deref().map_or(PrChecksState::Clear, PrChecksState::from_rollup);
+    (state, rollup.contexts.and_then(|c| c.total_count).or(asked))
 }
 
 /// The two-connection answer: `pullRequests` asked twice under two aliases.
@@ -1128,16 +1154,21 @@ fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
         .into_iter()
         .map(|pr| (PrMarkState::Open, pr))
         .chain(merged.into_iter().map(|pr| (PrMarkState::Merged, pr)))
-        .map(|(state, mut pr)| PrMark {
-            number: pr.number,
-            url: pr.url,
-            checks_state: read_checks(pr.commits.take()),
-            head_ref_name: pr.head_ref_name,
-            is_draft: pr.is_draft,
-            state,
-            mergeable: pr.mergeable,
-            merge_state_status: pr.merge_state_status,
-            review_decision: pr.review_decision.filter(|d| !d.is_empty()),
+        .map(|(state, pr)| {
+            let (checks_state, check_count) = read_checks(pr.commits);
+            PrMark {
+                number: pr.number,
+                url: pr.url,
+                checks_state,
+                check_count,
+                head_ref_name: pr.head_ref_name,
+                head_oid: pr.head_ref_oid.filter(|o| !o.is_empty()),
+                is_draft: pr.is_draft,
+                state,
+                mergeable: pr.mergeable,
+                merge_state_status: pr.merge_state_status,
+                review_decision: pr.review_decision.filter(|d| !d.is_empty()),
+            }
         })
         .collect())
 }
@@ -1158,8 +1189,11 @@ fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
 pub async fn merge_pr(cwd: String, number: u64, method: MergeMethod) -> Result<(), String> {
     let arg = number.to_string();
 
+    // Only ever the reader's merge, from a client: a bot and its tasks merge
+    // with `gh` and never reach this, so the bot is told of it.
     let Err(e) = gh(&cwd, &["pr", "merge", &arg, method.flag()]).await else {
         crate::analytics::feature_used("pr_merged");
+        crate::bots::note_merge(&cwd, number).await;
         return Ok(());
     };
 
@@ -1169,6 +1203,7 @@ pub async fn merge_pr(cwd: String, number: u64, method: MergeMethod) -> Result<(
         // reported failure and turned out to have worked.
         Some(true) => {
             crate::analytics::feature_used("pr_merged");
+            crate::bots::note_merge(&cwd, number).await;
             Ok(())
         }
         // Either it genuinely didn't merge, or we couldn't find out — and an
@@ -1737,6 +1772,23 @@ mod tests {
             "merged":{"nodes":[{"number":4,"headRefName":"b","isDraft":false}]}}}}"#;
         let prs = read_pr_marks(out).expect("pr marks parse");
         assert_eq!(prs[0].checks_state, PrChecksState::Clear);
+        assert_eq!(prs[0].check_count, None);
+        assert_eq!(prs[0].head_oid, None);
+    }
+
+    /// The merge card waits on these: a tip no check has reached yet reads as
+    /// zero, not as unknown, and a push is told by its sha.
+    #[test]
+    fn open_marks_carry_their_tip_and_check_count() {
+        let out = r#"{"data":{"repository":{"open":{"nodes":[
+            {"number":1,"headRefName":"a","headRefOid":"abc","isDraft":false,
+             "commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS","contexts":{"totalCount":3}}}}]}},
+            {"number":2,"headRefName":"b","headRefOid":"def","isDraft":false,
+             "commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}
+        ]},"merged":{"nodes":[]}}}}"#;
+        let prs = read_pr_marks(out).expect("pr marks parse");
+        assert_eq!((prs[0].head_oid.as_deref(), prs[0].check_count), (Some("abc"), Some(3)));
+        assert_eq!((prs[1].head_oid.as_deref(), prs[1].check_count), (Some("def"), Some(0)));
     }
 
     /// Same 200-with-errors trap the branch query has: a zero exit code proves

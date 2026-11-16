@@ -1,4 +1,4 @@
-import { toolSummary } from "@/lib/tools";
+import { subagentBrief, toolSummary } from "@/lib/tools";
 import type { AgentEvent, FileEdit, ImageRef, ToolResult, Usage } from "@/types/events";
 
 export type SubagentRun = {
@@ -33,11 +33,16 @@ export type SubagentRun = {
   /// spawning call *is* the whole run, and a row that only navigates would send
   /// the reader to a panel holding what they were already looking at. Every
   /// other harness streams the child's work, where the link is the point.
+  /// fx 0.0.17 names its child, which `fx session` reads back, so only an
+  /// older fx's run stays inline.
   ///
   /// Keyed on the harness rather than on "has this run filed any events yet",
   /// which is true of every run for its first frame and would flip the row out
   /// from under a Claude subagent the moment it started working.
   inline: boolean;
+  /// The run's tab has nothing to show until the run ends: fx saves a child's
+  /// conversation only when its turn does, so its rows open once it is done.
+  opensWhenDone: boolean;
   /// The main-thread `tool_call_started` that spawned this run. It is the only
   /// place a `local_bash` task's command and output live — such a task reports
   /// no events of its own, so a run built from the envelope alone is empty —
@@ -282,6 +287,17 @@ export function sessionMedia(events: AgentEvent[]): SessionMedia[] {
     } else if (payload.type === "assistant_text") scan(payload.text);
   }
   return media.reverse();
+}
+
+/// The media a bot's chat draws nowhere, so the More tab is still their home:
+/// tool-result screenshots and task reports' pictures, which the chat hides,
+/// and a recording no reply names. The reader's own pictures and the videos
+/// a reply names play in the chat.
+export function hiddenInBotChat(events: AgentEvent[], media: SessionMedia[]): SessionMedia[] {
+  const said = events
+    .flatMap(({ subagent, payload }) => (!subagent && payload.type === "assistant_text" ? [payload.text] : []))
+    .join("\n");
+  return media.filter((m) => ("video" in m ? !said.includes(m.video) : !m.byYou));
 }
 
 export type Turn = {
@@ -872,6 +888,7 @@ function build(
         background: false,
         usage: null,
         inline: event.harness === "fx",
+        opensWhenDone: false,
         events: [],
         spawn: null,
       };
@@ -919,6 +936,16 @@ function build(
   for (const run of subagentById.values()) {
     run.spawn = callById.get(run.id) ?? null;
     run.background = !run.done && resultByCallId.has(run.id);
+    // fx 0.0.17 names its child, and `fx session <id>/<agent>` reads the
+    // child's conversation back, so the run has a tab to open after all. Its
+    // call answers at once, so that answer is fx taking the work, not a
+    // backgrounded run: the child ends, and the run is working until it does.
+    const input = run.spawn?.payload.type === "tool_call_started" ? run.spawn.payload.input : null;
+    if (run.inline && input && subagentBrief(input)?.agent) {
+      run.inline = false;
+      run.opensWhenDone = true;
+      run.background = false;
+    }
   }
 
   // Applied last, and only where no real result exists. A background subagent
@@ -928,8 +955,8 @@ function build(
   // because the task id lives on the run and not on the call.
   for (const callId of abandoned) {
     if (resultByCallId.has(callId)) continue;
-    const taskId = subagentById.get(callId)?.taskId;
-    if (taskId !== null && taskId !== undefined && liveTaskIds.has(taskId)) continue;
+    const run = subagentById.get(callId);
+    if (run && liveTaskIds.has(taskHandle(run))) continue;
     resultByCallId.set(callId, ABANDONED);
   }
 
@@ -937,7 +964,7 @@ function build(
   // `subagent_completed` only arrives from a child still alive to send it.
   // After the abandoned marks, since a stand-in is an answer here too.
   for (const run of subagentById.values()) {
-    if (run.done || (run.taskId !== null && liveTaskIds.has(run.taskId))) continue;
+    if (run.done || liveTaskIds.has(taskHandle(run))) continue;
     run.done = resultByCallId.has(run.id);
   }
 
@@ -966,6 +993,42 @@ function build(
     editsByCallId,
     pendingAsks,
   };
+}
+
+/// The id a run's live background task goes by. fx names no handle for its
+/// child, so its mapper lists the task under the spawning call's id, which a
+/// harness's own task id never equals.
+function taskHandle(run: SubagentRun): string {
+  return run.taskId ?? run.id;
+}
+
+/// Whether a click can open the run's tab now: one that has a conversation and
+/// can already show it.
+export function canOpenTab(run: SubagentRun): boolean {
+  return opensTab(run) && !(run.opensWhenDone && !run.done);
+}
+
+/// The runs the More tab lists: every subagent, and the shells still running
+/// plus the one the reader has open. A finished shell is done with; a finished
+/// subagent is a conversation the reader may still want to open. The open one
+/// stays, or a run finishing while the reader reads it would vanish from under
+/// them.
+export function runningRuns(runs: SubagentRun[], openId: string | null): SubagentRun[] {
+  return runs.filter((run) => !run.done || run.id === openId || !isShellRun(run));
+}
+
+/// A backgrounded shell — Claude Code's `Bash` or `Monitor`, which register
+/// as `local_bash` tasks, or a grok task-list run, labelled `bash` — rather
+/// than an agent with a conversation of its own.
+export function isShellRun(run: SubagentRun): boolean {
+  const name = run.spawn?.payload.type === "tool_call_started" ? run.spawn.payload.name : null;
+  return name === "Bash" || name === "Monitor" || run.label === "local_bash" || run.label === "bash";
+}
+
+/// Whether a run has a conversation to open as a tab. A shell's whole account
+/// is its spawning call, and an older fx's run names no child to read back.
+export function opensTab(run: SubagentRun): boolean {
+  return !run.inline && !isShellRun(run);
 }
 
 /// What a turn draws from: the turn and the maps its rows look calls up in.

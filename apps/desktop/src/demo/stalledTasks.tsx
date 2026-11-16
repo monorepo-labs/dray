@@ -1,3 +1,4 @@
+import { mockIPC } from "@tauri-apps/api/mocks";
 import React, { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 
@@ -14,11 +15,14 @@ import "../App.css";
 /// `stalledTasks` and `onCard` on made-up tasks: two PRs ready to merge, one of
 /// them asking to be tried first, two idle tasks with a question, a PR waiting on review, one idle task the bot answers
 /// itself, two PRs the task can mend (failing checks, a conflict), and three
-/// left out — working, checks running, and idle only ten minutes. The card
+/// left out — working, checks running, and idle only a minute. The card
 /// starts with the ready PRs alone; every stall goes to the bot, listed under
 /// the chat as the nudges the app sends. **Bot writes needs** lands the lines a
 /// bot would write with `dray session need`, which puts the waiting tasks on
-/// the card and a line under the ready PR that asked to be tried.
+/// the card and a line under the ready PR that asked to be tried. Until then a
+/// waiting row draws its task's last message, read through a stubbed
+/// `bot_previews`: the rename task answers, the SQLite task sits on a machine
+/// that never does, and the release notes task wrote nothing.
 /// There is no server behind this page. Dismiss is stored for real; Reset
 /// clears it.
 const NOW = Date.now();
@@ -67,8 +71,23 @@ const ROWS: { row: CrewRow; pr?: PrMark; need?: string; answered?: boolean }[] =
   { row: row("7", "Rename the CLI flags", 50 * 60), pr: pr(917, { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }) },
   { row: row("8", "Audit the landing page", 90, true) },
   { row: row("4", "Add dark mode to docs", 60), pr: pr(916, { checksState: "RUNNING", mergeStateStatus: "BLOCKED" }) },
-  { row: row("5", "Draft the onboarding email", 10) },
+  { row: row("5", "Draft the onboarding email", 1) },
 ];
+
+/// What each waiting task's server answers `bot_previews` with; "silent" is a
+/// machine asleep, which only the read's timeout gets past.
+const LAST: Record<string, string | null | "silent"> = {
+  "1": "I added the rename button and wired it to `rename_session`.\n\nKeep the button and hide the branch chip below 900px, or drop it and rely on double-clicking the title?",
+  "2": "silent",
+  "0": null,
+};
+mockIPC((cmd, args) => {
+  const a = (args ?? {}) as { cmd?: string; args?: { sessionIds?: string[] } };
+  if (cmd !== "server_invoke" || a.cmd !== "bot_previews") return null;
+  const answers = (a.args?.sessionIds ?? []).map((id) => [id, LAST[id.slice(-1)] ?? null] as const);
+  if (answers.some(([, text]) => text === "silent")) return new Promise(() => {});
+  return Object.fromEntries(answers.map(([id, text]) => [id, { text, replies: 1 }]));
+});
 
 const BOT = "01a1cfc8-demo-stalled-bot";
 let seq = 0;
@@ -174,7 +193,8 @@ function Demo() {
         <p className="max-w-xl text-ui text-muted-foreground">
           Eleven tasks, eight stalled. A ready PR and a task idle on you reach the card; every stall goes to the bot. A row
           scrolls the chat to the bot's reply about the task; Open task, on hover, opens it. Merge waits a
-          second and takes the row away, as settling does.
+          second and takes the row away, as settling does, and the other PRs read Checking… for four seconds while
+          GitHub works their mergeability out again.
         </p>
         <div className="flex items-center gap-4 text-ui">
           <button type="button" className="underline" onClick={writeNeeds}>
@@ -214,7 +234,18 @@ function Demo() {
               onOpen={(id) => setOpened(ROWS.find((x) => x.row.item.sessionId === id)?.row.item.title ?? id)}
             onMerge={async (r) => {
               await new Promise((done) => setTimeout(done, 1000));
+              // As GitHub does: every other open PR's mergeability is worked
+              // out again, for a few seconds here.
+              const recheck = (settled: boolean) =>
+                setRows((all) =>
+                  all.map((x) => {
+                    const was = ROWS.find((y) => y.row.item.sessionId === x.row.item.sessionId)?.pr;
+                    return x.pr && was ? { ...x, pr: { ...x.pr, mergeable: settled ? was.mergeable : "UNKNOWN" } } : x;
+                  }),
+                );
               setRows((all) => all.filter((x) => x.row.item.sessionId !== r.item.sessionId));
+              recheck(false);
+              setTimeout(() => recheck(true), 4000);
             }}
             />
           </div>

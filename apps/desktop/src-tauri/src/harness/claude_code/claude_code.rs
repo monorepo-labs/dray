@@ -19,6 +19,7 @@ pub mod commands;
 pub mod control;
 pub mod mapper;
 pub mod models;
+pub mod no_reply;
 pub mod permissions;
 use permissions::PendingPermissions;
 
@@ -106,8 +107,16 @@ pub async fn init(
 
     // Orchestration calls raise no consent card. An additive allow rule, not a
     // whitelist — everything else still routes through `can_use_tool` exactly
-    // as before.
-    args.extend(["--allowedTools", ALLOWED_TOOLS]);
+    // as before. A bot's silent-turn tools ride along: a card for one would ask
+    // the user to approve the bot saying nothing.
+    let bot = crate::bots::bot_at(session_cwd).await.is_some();
+    let allowed = if bot { format!("{ALLOWED_TOOLS},{}", no_reply::TOOL_NAMES) } else { ALLOWED_TOOLS.into() };
+    args.extend(["--allowedTools", &allowed]);
+
+    let mcp_config = no_reply::mcp_config();
+    if bot {
+        args.extend(["--mcp-config", &mcp_config]);
+    }
 
     // Three ways in, and the fork is the only one naming two ids: it resumes the
     // parent's conversation but records it under this session's own id. Verified
@@ -147,6 +156,9 @@ pub async fn init(
     // the release app's sidebar.
     if let Some(endpoint) = crate::orchestration::child_endpoint() {
         command.env("DRAY_ENDPOINT", endpoint);
+    }
+    if bot {
+        command.env(no_reply::TERMINAL_TOOLS_ENV, no_reply::TOOL_NAMES);
     }
 
     let mut child = command
@@ -279,6 +291,7 @@ async fn read_stdout(
             continue;
         }
 
+        let mut filed = false;
         let claude_event = match parser::parse_line(&line) {
             Ok(ev) => ev,
             Err(err) => {
@@ -304,9 +317,35 @@ async fn read_stdout(
                 }
 
                 record_failure(ClaudeCode, session_id, "parse", &why, &line).await;
-                continue;
+
+                // A `result` closes the turn whatever else it says. Dropped,
+                // the session sat `in_progress` with the CLI idle until Stop.
+                if parser::is_unparsed_result(&line) {
+                    filed = true;
+                    ClaudeCodeEvent::Result(parser::ResultEvent::Unrecognized)
+                } else {
+                    continue;
+                }
             }
         };
+
+        if let ClaudeCodeEvent::ControlRequest {
+            request_id,
+            request: parser::ControlRequest::McpMessage { message },
+        } = &claude_event
+        {
+            let reply = match no_reply::reaction_asked(message) {
+                Some(said) => {
+                    let reacted = react(&ingest, &seq, &said, app).await;
+                    no_reply::react_response(request_id, message, reacted)
+                }
+                None => no_reply::response(request_id, message),
+            };
+            if let Err(err) = crate::session::write_line(&stdin, &reply).await {
+                eprintln!("[claude mcp reply err] {err}");
+            }
+            continue;
+        }
 
         // A control request the CLI is blocked on, of a subtype this build
         // can't put to the user. Refused from here rather than left alone:
@@ -338,7 +377,7 @@ async fn read_stdout(
             ClaudeCodeEvent::Unrecognized => Some("unmodeled line type"),
             _ => None,
         };
-        if let Some(detail) = unmodeled {
+        if let (Some(detail), false) = (unmodeled, filed) {
             record_failure(ClaudeCode, session_id, "unknown_subtype", detail, &line).await;
         }
 
@@ -371,6 +410,18 @@ async fn read_stdout(
     .await;
 
     Ok(())
+}
+
+/// Puts the bot's `react` call on the user's newest message, through the same
+/// counter and log as the turn it closes. Answers the emoji used, or why not.
+async fn react(ingest: &crate::session::Ingest<'_>, seq: &AtomicU64, said: &str, app: &Sink) -> Result<&'static str, String> {
+    let payload = crate::bots::react::reaction(ingest.session_id, ingest.session_cwd, said)
+        .await
+        .map_err(|e| e.to_string())?;
+    let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let event = crate::events::AgentEvent::mint(ingest.session_id.to_string(), ClaudeCode, n, None, None, payload);
+    crate::session::ingest(ingest, event, app).await;
+    Ok(crate::bots::react::emoji(said).unwrap_or_default())
 }
 
 #[cfg(test)]

@@ -80,6 +80,10 @@ static PURGE_TOKEN: AtomicU64 = AtomicU64::new(0);
 const PURGE_AFTER: Duration = Duration::from_secs(5);
 /// Which session is on screen and where. `None` shows nothing.
 static LAYOUT: Mutex<Option<(String, Layout)>> = Mutex::new(None);
+/// Tabs split out beside the chat, each on its own rect, all on screen at
+/// once. Apart from `LAYOUT`, which follows its session's active tab, since
+/// a split pane holds one tab whatever the strip has active.
+static PINNED: Mutex<Vec<(i32, Layout)>> = Mutex::new(Vec::new());
 /// Tab ids. Not CEF's `identifier()`, which a woken tab would come back
 /// under a new one of, renaming it under the strip and `dray browser tab`.
 static NEXT_TAB: AtomicI32 = AtomicI32::new(1);
@@ -118,6 +122,14 @@ struct Tab {
     can_go_forward: bool,
     /// The main frame's last load failure, cleared when a new load starts.
     error: Option<String>,
+    /// The failure a load set aside on starting, put back if that load
+    /// never commits. Chromium retries an error page by itself a second or
+    /// so after it lands, and a retry that fails again is dropped silently:
+    /// no `on_load_error`, no new page, so the tab read as healthy while
+    /// Chromium still showed the failure.
+    held_error: Option<String>,
+    /// Whether the main frame committed a document since the load began.
+    committed: bool,
     /// Last drawn on screen or acted on by `dray browser`.
     seen: Instant,
     /// Set by `sweep` before the close, cleared by `wake`. `on_before_close`
@@ -716,6 +728,8 @@ fn restore(session: &str) {
                     can_go_back: false,
                     can_go_forward: false,
                     error: None,
+                    held_error: None,
+                    committed: false,
                     seen: Instant::now(),
                     discarded: true,
                     opener: None,
@@ -902,7 +916,23 @@ fn create_tab(session: &str, url: &str, activate: bool, tab: Option<i32>) -> Res
 /// is visible. The only tab the reader counts as seeing.
 fn shown_tab() -> Option<i32> {
     let presented = LAYOUT.lock().unwrap().clone();
-    presented.filter(|(_, l)| l.visible).and_then(|(session, _)| active_id(&session))
+    let id = presented.filter(|(_, l)| l.visible).and_then(|(session, _)| active_id(&session))?;
+    // A native view has one frame, so a tab split out is drawn there alone.
+    (!PINNED.lock().unwrap().iter().any(|(p, _)| *p == id)).then_some(id)
+}
+
+/// Every tab on screen and where: the presented one and the split panes'.
+/// Pinned tabs on Mac alone, since an X11 tab lives in the one frame `x11.rs`
+/// keeps for the pane.
+fn shown_tabs() -> Vec<(i32, Layout)> {
+    let mut shown: Vec<(i32, Layout)> = Vec::new();
+    let pinned = PINNED.lock().unwrap().clone();
+    if let (Some(id), Some((_, layout))) = (shown_tab(), LAYOUT.lock().unwrap().clone()) {
+        shown.push((id, layout));
+    }
+    #[cfg(target_os = "macos")]
+    shown.extend(pinned);
+    shown
 }
 
 /// Moves the presented session's active tab onto the frontend's rect and
@@ -914,12 +944,16 @@ fn shown_tab() -> Option<i32> {
 /// active: the reader may switch to it meanwhile, and the pane's cover can
 /// land after the switch, which would put that layout squeezed into the pane.
 fn apply_layout() {
-    let shown = shown_tab().filter(|&id| !automation::off_pane(id));
-    if let Some(id) = shown {
+    let placed: Vec<(i32, Layout)> =
+        shown_tabs().into_iter().filter(|(id, _)| !automation::off_pane(*id)).collect();
+    for &(id, _) in &placed {
         touch(id);
         wake(id);
     }
-    let layout = LAYOUT.lock().unwrap().as_ref().map(|(_, l)| *l);
+    #[cfg(target_os = "linux")]
+    let shown = placed.first().map(|(id, _)| *id);
+    #[cfg(target_os = "linux")]
+    let layout = placed.first().map(|(_, l)| *l);
     let views: Vec<(i32, usize, Browser)> = TABS
         .lock()
         .unwrap()
@@ -930,11 +964,13 @@ fn apply_layout() {
     let warm: Vec<i32> = {
         let mut warm = WARM.lock().unwrap();
         warm.retain(|w| views.iter().any(|(id, ..)| id == w));
-        if let Some(id) = shown {
+        for &(id, _) in placed.iter().rev() {
             warm.retain(|&w| w != id);
             warm.push_front(id);
-            warm.truncate(WARM_TABS);
         }
+        // Never fewer than the tabs on screen, or a split pane's view would
+        // fall out of the list it is drawn from.
+        warm.truncate(WARM_TABS.max(placed.len()));
         warm.iter().copied().collect()
     };
     #[cfg(target_os = "linux")]
@@ -971,7 +1007,8 @@ fn apply_layout() {
     #[cfg(target_os = "macos")]
     for (id, view, browser) in views {
         let view: &NSView = unsafe { &*(view as *const NSView) };
-        let show = shown == Some(id);
+        let layout = placed.iter().find(|(p, _)| *p == id).map(|(_, l)| *l);
+        let show = layout.is_some();
         if show {
             if let (Some(layout), Some(parent)) = (layout, unsafe { view.superview() }) {
                 let parent_height = parent.bounds().size.height;
@@ -1048,6 +1085,10 @@ fn wake(id: i32) {
         t.discarded = false;
         t.waking = true;
         t.loading = true;
+        // Set aside as any load does; the loading-state handler sees a tab
+        // already loading and would leave a stale failure standing.
+        t.held_error = t.error.take();
+        t.committed = false;
         t.seen = Instant::now();
         (t.session.clone(), t.url.clone())
     };
@@ -1072,7 +1113,7 @@ fn wake(id: i32) {
 /// on screen, one still loading, one recording, picking, being driven or
 /// mid-screenshot, and either half of a live popup pair. Main thread.
 fn sweep() {
-    if let Some(id) = shown_tab() {
+    for (id, _) in shown_tabs() {
         touch(id);
     }
     if automation::capturing() {
@@ -1086,6 +1127,10 @@ fn sweep() {
         let openers: HashSet<i32> = tabs.iter().filter_map(|t| t.opener).collect();
         tabs.iter()
             .filter(|t| t.browser.is_some() && !t.discarded && !t.loading && !t.closing)
+            // A failed load is kept: its page costs little, and a stopped
+            // server's page hides the view, so the tab reads unseen while the
+            // reader waits on it — and a reload cannot reach a discarded tab.
+            .filter(|t| t.error.is_none())
             .filter(|t| t.seen.elapsed() >= DISCARD_AFTER)
             .filter(|t| t.opener.map_or(true, |o| !ids.contains(&o)) && !openers.contains(&t.id))
             .map(|t| (t.id, t.session.clone()))
@@ -1321,6 +1366,8 @@ wrap_life_span_handler! {
                         can_go_back: false,
                         can_go_forward: false,
                         error: None,
+                        held_error: None,
+                        committed: false,
                         seen: Instant::now(),
                         discarded: false,
                         opener: self.opener,
@@ -1811,13 +1858,19 @@ wrap_load_handler! {
     impl LoadHandler {
         fn on_loading_state_change(&self, _browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, can_go_back: ::std::os::raw::c_int, can_go_forward: ::std::os::raw::c_int) {
             update_tab(self.tab, |t| {
+                if is_loading != 0 && !t.loading {
+                    t.held_error = t.error.take();
+                    t.committed = false;
+                } else if is_loading == 0 && t.loading {
+                    if !t.committed && t.error.is_none() {
+                        t.error = t.held_error.take();
+                    }
+                    t.held_error = None;
+                }
                 t.loading = is_loading != 0;
                 t.waking &= is_loading != 0;
                 t.can_go_back = can_go_back != 0;
                 t.can_go_forward = can_go_forward != 0;
-                if is_loading != 0 {
-                    t.error = None;
-                }
             });
         }
 
@@ -1834,6 +1887,7 @@ wrap_load_handler! {
             if !frame.map(|f| f.is_main() != 0).unwrap_or(false) {
                 return;
             }
+            update_tab(self.tab, |t| t.committed = true);
             disarm_picker(self.tab);
         }
 
@@ -2302,6 +2356,28 @@ pub fn browser_layout(session_id: String, x: f64, y: f64, width: f64, height: f6
     on_main(apply_layout)
 }
 
+/// One split pane's tab and where, in the same CSS pixels as `browser_layout`.
+#[derive(serde::Deserialize)]
+pub struct Pin {
+    tab: i32,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+/// The tabs split out beside the chat, the whole set each time; empty takes
+/// every one off screen. A tab here is drawn here and nowhere else, even
+/// while it is its session's active tab.
+#[tauri::command]
+pub fn browser_pins(pins: Vec<Pin>) -> Result<(), String> {
+    *PINNED.lock().unwrap() = pins
+        .into_iter()
+        .map(|p| (p.tab, Layout { x: p.x, y: p.y, width: p.width, height: p.height, visible: true }))
+        .collect();
+    on_main(apply_layout)
+}
+
 /// The pane reporting that the page is covered and shot `shot` may proceed
 /// — the still is painted and the view is off screen, or there was nothing
 /// of this session's page on screen to cover. Answering late is safe,
@@ -2323,9 +2399,18 @@ pub fn browser_shutter_ready(shot: u64) {
 /// cannot be made is the caller's error, not a log line: the pane leaves
 /// its pending tab standing otherwise, with nothing to say why.
 #[tauri::command]
-pub fn browser_open(session_id: String, url: String, new_tab: bool) -> Result<(), String> {
-    let tab = if new_tab { None } else { active_id(&session_id) };
+pub fn browser_open(session_id: String, url: String, new_tab: bool, tab: Option<i32>) -> Result<(), String> {
+    let tab = if new_tab { None } else { reader_tab(&session_id, tab) };
     load(session_id, url, tab)
+}
+
+/// The tab a reader's control acts on: a split pane names its own, anything
+/// else means the active one. A tab of another session is never taken.
+fn reader_tab(session: &str, tab: Option<i32>) -> Option<i32> {
+    match tab {
+        Some(id) => (session_of(id).as_deref() == Some(session)).then_some(id),
+        None => active_id(session),
+    }
 }
 
 /// Loads `url` in `tab`, or in a new tab where that is `None` or has no
@@ -2342,6 +2427,8 @@ fn load(session_id: String, url: String, tab: Option<i32>) -> Result<(), String>
                 t.url = url;
                 t.loading = true;
                 t.error = None;
+                t.held_error = None;
+                t.committed = false;
             });
             let _ = tx.send(Ok(()));
             return;
@@ -2468,8 +2555,8 @@ pub fn browser_close(session_id: String, id: i32) -> Result<(), String> {
 
 /// Back, forward, reload or stop, on the active tab.
 #[tauri::command]
-pub fn browser_nav(session_id: String, action: String) -> Result<(), String> {
-    go(active_id(&session_id), action)
+pub fn browser_nav(session_id: String, action: String, tab: Option<i32>) -> Result<(), String> {
+    go(reader_tab(&session_id, tab), action)
 }
 
 fn go(tab: Option<i32>, action: String) -> Result<(), String> {
@@ -2486,9 +2573,9 @@ fn go(tab: Option<i32>, action: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn browser_devtools(session_id: String) -> Result<(), String> {
+pub fn browser_devtools(session_id: String, tab: Option<i32>) -> Result<(), String> {
     on_main(move || {
-        if let Some(browser) = active_id(&session_id).and_then(browser_of) {
+        if let Some(browser) = reader_tab(&session_id, tab).and_then(browser_of) {
             open_devtools(&browser);
         }
     })
@@ -2555,7 +2642,7 @@ pub fn close_session(session_id: &str) {
 /// past that the pane hides over nothing, as it did before. The tab is read
 /// after the wait, so the picture is of the tab up when it is taken.
 #[tauri::command]
-pub async fn browser_snapshot(session_id: String) -> Result<String, String> {
+pub async fn browser_snapshot(session_id: String, tab: Option<i32>) -> Result<String, String> {
     // Not while the shutter is open, and that exception is the whole reason
     // a shot can be covered by the page rather than by a blank. The lock is
     // held for the length of a shot, so a cover asked for inside one would
@@ -2572,7 +2659,7 @@ pub async fn browser_snapshot(session_id: String) -> Result<String, String> {
         )
     };
     // The reader's tab, never the agent's: this is the still the pane covers itself with.
-    let tab = active_id(&session_id).ok_or("no tab is open")?;
+    let tab = reader_tab(&session_id, tab).ok_or("no tab is open")?;
     // `innerWidth`, not the layout viewport's `clientWidth`: that one stops
     // at the scrollbar, and a picture a scrollbar short of the view is
     // stretched across it. The clip is in page coordinates, hence the

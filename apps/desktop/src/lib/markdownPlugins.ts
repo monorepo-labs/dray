@@ -265,6 +265,77 @@ export function walk(node: HastNode) {
   if (next) node.children = next;
 }
 
+/// The marker `rehypeLocalImages` puts on an image whose source is a file on
+/// this machine. The path rides `title` as a file link's does, and the alt text
+/// `data-alt`, which is not a child so the path pass never reads it as prose.
+export const LOCAL_IMAGE_CLASS = "dray-local-image";
+
+const URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+
+/// The file an image source names, where it names one: an absolute path or a
+/// path relative to the session's cwd. `null` for a web URL, a `data:`/`blob:`
+/// source, and `~/` or `$HOME/`, which the frontend has no home to resolve
+/// against.
+export function localImagePath(src: string): string | null {
+  const raw = decodePath(src.trim());
+  if (!raw || URL_SCHEME.test(raw) || raw.startsWith("//") || raw.startsWith("#")) return null;
+  if (raw.startsWith("~") || raw.startsWith("$")) return null;
+  return raw;
+}
+
+/// Turns an image's `file:///a/b.png` source into `/a/b.png`, before sanitize
+/// drops it for its scheme.
+function rehypeFileImageUrls() {
+  return (tree: HastNode) => unwrapFileUrls(tree);
+}
+
+function unwrapFileUrls(node: HastNode) {
+  for (const child of node.children ?? []) {
+    if (child.type !== "element") continue;
+    const src = child.tagName === "img" ? child.properties?.src : undefined;
+    if (typeof src === "string" && /^file:\/\/\//i.test(src.trim())) {
+      child.properties = { ...child.properties, src: src.trim().slice("file://".length) };
+    }
+    unwrapFileUrls(child);
+  }
+}
+
+/// Takes every image naming a local file out of harden's reach.
+///
+/// Harden reads a source as a URL: `/Users/me/a.png` survives as a path against
+/// the page's own origin, where nothing serves it, and a relative one is
+/// blocked outright. Swapped for a marked span here, `Markdown` loads
+/// the file the way the Files view does.
+function rehypeLocalImages() {
+  return (tree: HastNode) => markLocalImages(tree);
+}
+
+function markLocalImages(node: HastNode) {
+  const children = node.children;
+  if (!children) return;
+  for (let i = 0; i < children.length; i += 1) {
+    const child = children[i];
+    if (child.type !== "element") continue;
+    const src = child.tagName === "img" ? child.properties?.src : undefined;
+    const path = typeof src === "string" ? localImagePath(src) : null;
+    if (!path) {
+      markLocalImages(child);
+      continue;
+    }
+    const alt = child.properties?.alt;
+    children[i] = {
+      type: "element",
+      tagName: "span",
+      properties: {
+        className: [LOCAL_IMAGE_CLASS],
+        title: path,
+        ...(typeof alt === "string" && alt ? { dataAlt: alt } : {}),
+      },
+      children: [],
+    };
+  }
+}
+
 /// The same pipeline with paths marked, for the one surface where a path names
 /// a file on *this* machine.
 ///
@@ -274,9 +345,11 @@ export function walk(node: HastNode) {
 /// open files the reader does not have.
 export const REHYPE_PLUGINS_WITH_FILE_PATHS = [
   defaultRehypePlugins.raw,
+  rehypeFileImageUrls,
   defaultRehypePlugins.sanitize,
   rehypeTableCells,
   rehypeBareUrls,
   rehypeFilePaths,
+  rehypeLocalImages,
   HARDEN,
 ] as StreamdownProps["rehypePlugins"];

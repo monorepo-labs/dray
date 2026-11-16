@@ -7,26 +7,26 @@ import PrStateIcon from "@/components/PrStateIcon";
 import { MergeControl } from "@/components/TasksPanel";
 import { Button } from "@/components/ui/button";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { useStallLine } from "@/hooks/useStallLine";
 import { seededAvatar } from "@/lib/botAvatar";
 import type { CrewRow } from "@/lib/crew";
 import { isModClick } from "@/lib/platform";
 import { prStatus } from "@/lib/pr";
-import { compactAge, needLine, type Stall } from "@/lib/stalled";
+import { cardRows, compactAge, DISMISSED_KEY, needLine, type Stall } from "@/lib/stalled";
 import { cn } from "@/lib/utils";
 import type { MergeMethod, PrMark } from "@/types/events";
 
-/// Dismissed stalls, by key. A key names one stall, so the list only grows by
-/// what the reader dismisses; the cap keeps a long life from filling the store.
-const DISMISSED_KEY = "ade.dismissedStalls";
+/// Keeps a long life from filling the store with dismissed stalls.
 const DISMISSED_CAP = 200;
 
 /// The foot of a bot's chat while any of its tasks waits on the reader: an
 /// inbox row per task — its face, title, PR and how long it has sat. A PR
 /// ready to merge carries Merge; a task idle on the reader carries the line its
 /// bot wrote for it (`dray session need`), and so does a ready PR the task
-/// asked the reader to try first. A click scrolls the chat to the
-/// task's last report and the bot's reply, so the reader has the whole story
-/// without leaving the bot; Open, shown on hover, opens the task. A row clears
+/// asked the reader to try first. A click scrolls the chat to the bot's reply
+/// to the task's last report, so the reader has the whole story without leaving
+/// the bot; with none in the chat, it opens the task in a tab, as ⌘-click and
+/// Open, shown on hover, do. A row clears
 /// the moment its task moves; dismissed, a stall stays gone until the task
 /// changes and stalls again.
 export default function StalledTasks({
@@ -45,7 +45,7 @@ export default function StalledTasks({
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
 }) {
   const [dismissed, setDismissed] = useLocalStorage<string[]>(DISMISSED_KEY, []);
-  const shown = stalls.filter((s) => !dismissed.includes(s.key));
+  const shown = cardRows(stalls, dismissed);
   if (shown.length === 0) return null;
 
   return (
@@ -70,8 +70,9 @@ export default function StalledTasks({
 }
 
 /// One task as an inbox row: face, title, PR and time on top; what it needs
-/// under it where its bot wrote that. Only a waiting task holds a skeleton for
-/// the line, since most ready PRs never get one.
+/// under it where its bot wrote that. A waiting task with no need yet draws its
+/// own last message instead, read off its server, and holds a skeleton only
+/// while that read runs; most ready PRs never get a line at all.
 function StalledRow({
   stall,
   now,
@@ -91,13 +92,15 @@ function StalledRow({
   const id = item.sessionId;
   const status = pr && prStatus(pr);
   const need = needLine(stall);
+  const waiting = stall.kind === "waiting" && !need;
+  const last = useStallLine(stall.key, id, waiting);
 
   return (
     // A div, since a button cannot hold Open task and Merge inside it.
     <div
       role="button"
       tabIndex={0}
-      onClick={() => onFocus(id)}
+      onClick={(e) => (isModClick(e) ? onOpen(id, false) : onFocus(id))}
       onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onFocus(id)}
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
@@ -132,7 +135,15 @@ function StalledRow({
               Open task
               <ArrowUpRight data-icon="inline-end" />
             </Button>
-            {stall.kind === "ready" && pr && <MergeControl onMerge={(method) => onMerge(row, pr, method)} />}
+            {stall.kind === "ready" &&
+              pr &&
+              (stall.checking ? (
+                <span className="text-[12px] text-muted-foreground" title="GitHub is checking whether this can merge">
+                  Checking…
+                </span>
+              ) : (
+                <MergeControl onMerge={(method) => onMerge(row, pr, method)} />
+              ))}
           </span>
           <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">
             {compactAge(item.modified, now)}
@@ -140,9 +151,12 @@ function StalledRow({
         </span>
         {need ? (
           <span className="min-w-0 truncate text-ui text-foreground/70">{need}</span>
+        ) : waiting && last.reading ? (
+          <span className="my-1 h-3 w-48 animate-pulse rounded bg-muted-foreground/20" />
+        ) : waiting && last.line ? (
+          <span className="min-w-0 truncate text-ui text-foreground/70">{last.line}</span>
         ) : (
-          // The bot is still reading the task; the slot holds its place.
-          stall.kind === "waiting" && <span className="my-1 h-3 w-48 animate-pulse rounded bg-muted-foreground/20" />
+          waiting && <span className="min-w-0 truncate text-ui text-muted-foreground">Waiting for your reply</span>
         )}
       </span>
     </div>

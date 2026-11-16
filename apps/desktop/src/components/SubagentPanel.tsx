@@ -1,12 +1,11 @@
 import { useEffect, useRef } from "react";
-import { ChevronRight, Square } from "lucide-react";
+import { ArrowUpRight, Check, ChevronRight, Square, SquareTerminal } from "lucide-react";
 
+import Orb from "@/components/Orb";
 import EventRow from "@/components/chat/EventRow";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { compactTokens } from "@/lib/format";
 import { subagentBrief } from "@/lib/tools";
-import type { SubagentRun } from "@/lib/transcript";
+import { canOpenTab, isShellRun, opensTab, type SubagentRun } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 import type { AgentEvent, ToolResult } from "@/types/events";
 
@@ -21,52 +20,72 @@ type SubagentPanelProps = {
   /// — so the stop button is withheld rather than offered and then erroring.
   live: boolean;
   onSelect: (id: string | null) => void;
+  /// Opens a subagent's conversation as a tab of the row. Absent where the
+  /// panel's session has no row of its own, and then every run expands.
+  onOpen?: (run: SubagentRun) => void;
   onStopTask: (taskId: string) => void;
 };
 
-/// Every subagent in the session, one row each, expanding in place. A section
-/// of [MorePanel](./MorePanel.tsx), which draws it only where there are runs —
-/// so there is no empty state here.
+/// The session's background shells and subagents, as two titled sections of
+/// [MorePanel](./MorePanel.tsx). A section with no rows draws nothing, heading
+/// included — the tab is a catch-all whose sections come and go. Finished
+/// shells are dropped before they get here, see `runningRuns`; finished
+/// subagents stay, since their conversation is still worth opening.
 ///
-/// Shaped like [ChangesPanel](./ChangesPanel.tsx) rather than as a list above a
+/// Flat rows with no card or fill of their own, rather than one list above a
 /// detail pane: a fixed-height list gave the runs a few rows to live in however
-/// much space the pane had, and the split meant one run was always open whether
-/// or not the reader asked for it.
+/// much space the pane had. Picked from [run-rows.html](../../demo/run-rows.html).
 ///
-/// Newest first, ordered by [buildTranscript](@/lib/transcript). The running run
-/// is the one with a decision attached to it, and it is always the newest.
-export default function SubagentPanel({
+/// Newest first within each section, ordered by [buildTranscript](@/lib/transcript).
+export default function SubagentPanel({ runs, ...rest }: SubagentPanelProps) {
+  const sections = [
+    { title: "Background tasks", runs: runs.filter((run) => isShellRun(run)) },
+    { title: "Subagents", runs: runs.filter((run) => !isShellRun(run)) },
+  ];
+  return (
+    <div className="flex shrink-0 flex-col">
+      {sections.map(
+        (section) =>
+          section.runs.length > 0 && (
+            <RunSection key={section.title} title={section.title} runs={section.runs} {...rest} />
+          ),
+      )}
+    </div>
+  );
+}
+
+function RunSection({
+  title,
   runs,
   selectedId,
   resultByCallId,
   live,
   onSelect,
+  onOpen,
   onStopTask,
-}: SubagentPanelProps) {
+}: Omit<SubagentPanelProps, "runs"> & { title: string; runs: SubagentRun[] }) {
   // Same reading as each row's own button, so the count and the rows agree.
   const stoppable = runs.filter((run) => live && !run.done && run.taskId !== null);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {/* Only above two or more: with one, the row's own button is the whole
-          job. Built like a row — same text padding, same control margin — so
-          it is exactly one row tall. Outside the scroller rather than sticky
-          inside it: the pane is glass and `bg-sidebar` is transparent, so rows
-          scrolling under a sticky bar drew straight through it. */}
-      {stoppable.length > 1 && (
-        <div className="flex shrink-0 items-center border-b border-border text-ui text-muted-foreground">
-          <span className="flex-1 px-3 py-2.5">{stoppable.length} running</span>
+    <div>
+      {/* Stop all rides the heading, and only above two or more: with one, the
+          row's own button is the whole job. A pile of forgotten polling loops
+          (DRA-264) is the case it exists for. */}
+      <div className="flex items-center px-3 pt-4 pb-2 text-ui text-muted-foreground">
+        <span className="flex-1">{title}</span>
+        {stoppable.length > 1 && (
           <Button
             variant="ghost"
             size="xs"
-            className="mr-2 shrink-0"
+            className="-my-1 -mr-1.5 shrink-0"
             onClick={() => stoppable.forEach((run) => onStopTask(run.taskId!))}
           >
             Stop all
           </Button>
-        </div>
-      )}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+        )}
+      </div>
+      <div className="flex flex-col gap-0.5 px-1.5 pb-2">
         {runs.map((run) => (
           <RunRow
             key={run.id}
@@ -75,6 +94,8 @@ export default function SubagentPanel({
             resultByCallId={resultByCallId}
             live={live}
             onToggle={() => onSelect(run.id === selectedId ? null : run.id)}
+            onOpen={onOpen && opensTab(run) ? () => onOpen(run) : undefined}
+            locked={opensTab(run) && !canOpenTab(run)}
             onStopTask={onStopTask}
           />
         ))}
@@ -102,17 +123,63 @@ function hasBrief(spawn: AgentEvent): boolean {
   return subagentBrief(spawn.payload.input) !== null;
 }
 
-/// One run: what it is doing on the row, what it did underneath.
+/// The command a backgrounded `Bash` or `Monitor` was started with.
+function spawnCommand(run: SubagentRun): string | null {
+  if (run.spawn?.payload.type !== "tool_call_started") return null;
+  const command = (run.spawn.payload.input as Record<string, unknown> | null)?.command;
+  return typeof command === "string" && command.trim().length > 0 ? command : null;
+}
+
+/// The row's mark: a filled tile holding the terminal glyph or the working orb
+/// the chat's subagent row carries, or a bare check once a subagent is done —
+/// no tile, so history reads quieter than what is live.
 ///
-/// No icon and no tool name. Every row here is a subagent, so an icon repeated
-/// down the list distinguishes nothing, and the name is the harness's word for
-/// the mechanism ("Task", "local_bash") rather than for the work.
+/// `bare` drops the tile for a run with no Stop beside it (fx's): the tile
+/// reads as a control, and its width only lined titles up with tiled rows.
+function RunMark({ run, shell, bare }: { run: SubagentRun; shell: boolean; bare: boolean }) {
+  if (bare) {
+    return (
+      <span className="flex size-4 shrink-0 items-center justify-center">
+        {run.done ? (
+          <Check aria-label="Done" className="size-3.5 text-muted-foreground" />
+        ) : (
+          <Orb state="working" variant="gyro" size={16} label="Working" />
+        )}
+      </span>
+    );
+  }
+  if (!shell && run.done) {
+    // The tile's width without its height, so finished titles still line up.
+    return (
+      <span className="flex h-4 w-7 shrink-0 items-center justify-center">
+        <Check aria-label="Done" className="size-3.5 text-muted-foreground" />
+      </span>
+    );
+  }
+  return (
+    <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted">
+      {shell ? (
+        <SquareTerminal aria-label="Shell" className="size-3.5 text-muted-foreground" />
+      ) : (
+        <Orb state="working" variant="gyro" size={16} label="Working" />
+      )}
+    </span>
+  );
+}
+
+/// One run. A subagent opens its conversation as a tab; a shell expands in
+/// place onto the command it runs.
+///
+/// No tool name, token count or agent type: the harness's words for the
+/// mechanism ("Task", "local_bash", "general-purpose") rather than for the work.
 function RunRow({
   run,
   open,
   resultByCallId,
   live,
   onToggle,
+  onOpen,
+  locked,
   onStopTask,
 }: {
   run: SubagentRun;
@@ -120,6 +187,10 @@ function RunRow({
   resultByCallId: Map<string, ToolResult>;
   live: boolean;
   onToggle: () => void;
+  /// Where set, a click opens the run's tab rather than expanding the row.
+  onOpen?: () => void;
+  /// The tab has nothing to show until the run ends, so the row waits.
+  locked: boolean;
   onStopTask: (taskId: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -131,17 +202,20 @@ function RunRow({
     if (open) ref.current?.scrollIntoView({ block: "nearest" });
   }, [open]);
 
-  const detail =
-    (run.done ? run.description : run.status ?? run.description) ??
-    run.label ??
-    "Subagent";
-
-  const tokens = run.usage?.totalTokens ?? null;
+  const shell = isShellRun(run);
+  const running = !run.done;
+  const title = run.description ?? run.label ?? (shell ? "Background task" : "Subagent");
+  // A subagent's current step, under its title. A shell's command waits
+  // behind a click instead: it is long, and the title already says what it is.
+  const step = !shell && running ? run.status : null;
+  const command = shell ? spawnCommand(run) : null;
 
   // Only a run the harness still holds can be stopped. `taskId` is null until a
   // lifecycle event names it, and a dead child's tasks died with it — either way
   // the button would be one the CLI answers success to and nothing happens.
   const stoppable = live && !run.done && run.taskId !== null;
+  // fx publishes no handle for a child, so its rows never carry Stop.
+  const bare = !shell && run.spawn?.harness === "fx";
 
   // The brief a harness nests rather than streams — fx's, and the whole of what
   // it says about the child. Null everywhere else, where the spawning call's own
@@ -154,89 +228,105 @@ function RunRow({
   // A run whose spawn carries no brief and which has filed no events of its own
   // expands onto an empty box. Events arrive as it works, so this flips back on
   // by itself.
-  const hasContent = run.events.length > 0 || (run.spawn != null && hasBrief(run.spawn));
+  const hasContent =
+    command !== null || run.events.length > 0 || (run.spawn != null && hasBrief(run.spawn));
+  const expands = !onOpen && !locked && hasContent;
+  const opens = !!onOpen && !locked;
 
   return (
-    <div ref={ref} className="border-b border-border">
+    <div
+      ref={ref}
+      className={cn(
+        "group rounded-lg transition-colors",
+        (opens || expands) && "hover:bg-sidebar-accent/50",
+      )}
+    >
       {/* A row, not one button: the stop control is a second action on the same
-          line, and nesting it inside the expander would be a button inside a
-          button. The expander keeps the row's padding so its hit area is still
-          the whole line minus the control. */}
-      <div className="flex items-center transition-colors hover:bg-sidebar-accent/50">
+          line, and nesting it inside would be a button inside a button. */}
+      <div className="flex items-center">
         <button
           type="button"
-          onClick={onToggle}
-          disabled={!hasContent}
-          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left text-ui"
-        >
-          {hasContent && (
-            <ChevronRight
-              className={cn(
-                "size-3.5 shrink-0 text-muted-foreground transition-transform",
-                open && "rotate-90",
-              )}
-            />
+          onClick={opens ? onOpen : onToggle}
+          disabled={!opens && !expands}
+          className={cn(
+            "flex min-w-0 flex-1 cursor-default items-center pl-2.5 text-left",
+            bare ? "gap-2" : "gap-2.5",
+            // A finished subagent is history: the shorter row is half of how it
+            // steps back, the bare check the other. A bare row is one height
+            // throughout, so nothing jumps when its run ends.
+            bare || (!shell && run.done) ? "py-1" : "py-1.5",
+            stoppable ? "pr-1" : "pr-2.5",
           )}
-
-          {/* The shimmer stands in for the orb the chat row carries: at this text
-              size the orb is taller than the row it sits in, and a list of them
-              animating at once is the panel's loudest element. */}
-          <span
-            className={cn(
-              "min-w-0 flex-1 truncate",
-              run.done || run.background ? "text-sidebar-foreground" : "shimmer-text",
-            )}
-          >
-            {detail}
-          </span>
-
-          {tokens != null && (
-            <span className="shrink-0 tabular-nums text-muted-foreground">
-              {compactTokens(tokens)}
+        >
+          <RunMark run={run} shell={shell} bare={bare} />
+          <span className="min-w-0 flex-1">
+            {/* Flex parents, because `shimmer-text` is inline-block: in a line
+                box it sits on the baseline and lifts the text off centre. */}
+            <span className="flex min-w-0 text-ui">
+              <span
+                className={cn(
+                  "block max-w-full truncate",
+                  !running
+                    ? "text-muted-foreground"
+                    : shell
+                      ? "shimmer-text"
+                      : "text-sidebar-foreground",
+                )}
+              >
+                {title}
+              </span>
             </span>
+            {step && (
+              <span className="flex min-w-0 text-xs">
+                <span className="shimmer-text block max-w-full truncate">{step}</span>
+              </span>
+            )}
+          </span>
+          {/* Each kind says what a click does, on hover: a subagent opens a
+              tab, a shell expands — and an open shell keeps its caret. */}
+          {opens ? (
+            <ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+          ) : (
+            expands && (
+              <ChevronRight
+                className={cn(
+                  "size-3.5 shrink-0 text-muted-foreground transition",
+                  open ? "rotate-90" : "opacity-0 group-hover:opacity-100",
+                )}
+              />
+            )
           )}
         </button>
 
         {/* Shown rather than revealed on hover: a task running longer than it
-            should is what sends the reader here, and a control they have to
-            find by pointing at the right row is one more thing between them and
-            stopping it. Settled runs draw nothing, so the column is only as
-            loud as the session is busy. */}
+            should is what sends the reader here. No tooltip — the square says
+            stop, and `aria-label` says it to a screen reader. */}
         {stoppable && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label="Stop this subagent"
-                className="mr-2 shrink-0 text-muted-foreground hover:text-foreground"
-                onClick={() => onStopTask(run.taskId!)}
-              >
-                <Square className="fill-current" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Stop this subagent</TooltipContent>
-          </Tooltip>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={shell ? "Stop this task" : "Stop this subagent"}
+            className="mr-1.5 shrink-0 text-muted-foreground hover:text-foreground"
+            onClick={() => onStopTask(run.taskId!)}
+          >
+            <Square className="fill-current" />
+          </Button>
         )}
       </div>
 
-      {open && hasContent && (
-        <div className="flex flex-col gap-2 border-t border-border px-3 py-2.5">
-          {/* The spawning call first: its arguments are the prompt this run was
-              given, and its result the report it came back with. For a
-              background `Bash` it is the *only* content there is — such a task
-              files no events of its own, so without this the row opened onto
-              nothing. Expanded on arrival: it is what the reader opened the run
-              for, and a second click to reach it reveals nothing they hadn't
-              already asked for. */}
-          {/* A run whose whole account is the brief it was given draws that
-              brief, as text. The spawning call's own row would do it too, but
-              it comes with a caret of its own — a second thing to open inside
-              the pane the reader has just opened — and with a tool name and a
-              report beside it, where the row above is already the one and the
-              other is the agent's to relay. */}
-          {brief ? (
-            <p className="whitespace-pre-wrap text-ui text-sidebar-foreground">{brief}</p>
+      {open && expands && (
+        // Indented to the title, past the mark's tile and its gap.
+        <div className="flex flex-col gap-2 pr-2.5 pb-2 pl-12">
+          {command ? (
+            <div className="rounded-md bg-muted/70 px-2 py-1.5 font-mono text-xs break-all whitespace-pre-wrap text-sidebar-foreground">
+              <span className="text-muted-foreground">$ </span>
+              {command}
+            </div>
+          ) : brief ? (
+            // A run whose whole account is the brief it was given draws that
+            // brief as text, not as the spawning call's row with a caret of its
+            // own to open inside the row the reader just opened.
+            <p className="text-ui whitespace-pre-wrap text-sidebar-foreground">{brief}</p>
           ) : (
             run.spawn &&
             hasBrief(run.spawn) && (
@@ -244,9 +334,10 @@ function RunRow({
             )
           )}
 
-          {run.events.map((event) => (
-            <EventRow key={event.id} event={event} resultByCallId={resultByCallId} />
-          ))}
+          {!command &&
+            run.events.map((event) => (
+              <EventRow key={event.id} event={event} resultByCallId={resultByCallId} />
+            ))}
         </div>
       )}
     </div>

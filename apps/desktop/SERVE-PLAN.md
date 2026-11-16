@@ -62,6 +62,8 @@ which are today's features under a name, and skips `dray-serve` because of its
 ```bash
 cd apps/desktop/src-tauri
 cargo build --no-default-features --features serve --bin dray-serve
+# what release-cli.yml ships, into target/serve/
+cargo build --profile serve --no-default-features --features serve --bin dray-serve
 ```
 
 **Required check, every change to the core:**

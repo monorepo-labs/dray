@@ -62,7 +62,7 @@ export function MessagesPanel() {
     // height and reads as offscreen once the card's top scrolls past.
     <div ref={ref} aria-hidden="true" className="absolute inset-0">
       <div
-        className={`absolute bottom-[132px] left-1/2 flex w-[400px] max-w-[calc(100%-32px)] -translate-x-1/2 origin-bottom flex-col gap-3 rounded-[20px] bg-black px-4 py-3.5 shadow-[0_4px_12px_#00000059] transition-[opacity,scale] duration-250 ${sent ? "scale-95 opacity-0" : ""}`}
+        className={`absolute bottom-[156px] lg:bottom-[132px] left-1/2 flex w-[400px] max-w-[calc(100%-32px)] -translate-x-1/2 origin-bottom flex-col gap-3 rounded-[20px] bg-black px-4 py-3.5 shadow-[0_4px_12px_#00000059] transition-[opacity,scale] duration-250 ${sent ? "scale-95 opacity-0" : ""}`}
       >
         <div className="text-[13px] leading-4 font-semibold text-[#FFFFFFB3]">Retry uploads</div>
         <div className="flex flex-col gap-2">
@@ -126,7 +126,7 @@ export function MessagesPanel() {
 export function Flash({ label, className }: { label: string; className: string }) {
   return (
     <div
-      className={`absolute bottom-[132px] left-1/2 flex -translate-x-1/2 origin-bottom items-center gap-1.5 rounded-[20px] bg-black px-4 py-3 text-[13px] leading-4 font-semibold text-white shadow-[0_4px_12px_#00000059] ${className}`}
+      className={`absolute bottom-[156px] lg:bottom-[132px] left-1/2 flex -translate-x-1/2 origin-bottom items-center gap-1.5 rounded-[20px] bg-black px-4 py-3 text-[13px] leading-4 font-semibold text-white shadow-[0_4px_12px_#00000059] ${className}`}
     >
       <svg width="13" height="13" viewBox="0 0 13 13" className="shrink-0">
         <path

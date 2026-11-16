@@ -21,7 +21,7 @@ import {
 import Orb from "@/components/Orb";
 import BotAvatar from "@/components/BotAvatar";
 import { TypingDots } from "@/components/chat/BotTranscript";
-import { previewLine, type BotEntry } from "@/lib/bots";
+import { greetingOf, previewLine, type BotEntry } from "@/lib/bots";
 
 import PrStateIcon, { ChecksRunningIcon, prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
@@ -61,7 +61,7 @@ import { basename, isToday, relativeTime } from "@/lib/format";
 import { groupName, members, type SplitGroup } from "@/lib/groups";
 import { sessionBranch } from "@/lib/pr";
 import { checkoutsOf, groupProjects, keyOfPath, leadPath, soleServer } from "@/lib/projectGroups";
-import { offlineLine, projectLabel, serverConnected, serverName, useServers } from "@/lib/servers";
+import { offlineLine, projectLabel, serverName, shownOffline, useServers } from "@/lib/servers";
 import { LOCAL, serverOfPath } from "@/lib/transport";
 import { useResizable } from "@/components/ResizeHandle";
 import { useJumpDigit } from "@/lib/digitChords";
@@ -89,6 +89,7 @@ type SidebarProps = {
   bots?: BotEntry[];
   onOpenBot?: (bot: Bot) => void;
   onDeleteBot?: (bot: Bot) => void;
+  onEditBot?: (bot: Bot) => void;
   onNewBot?: () => void;
   // The live search query. Owned by the caller, because the list it narrows is
   // the caller's — the ⌘⇧↑/↓ walk reads the same array, and a query kept in here
@@ -984,6 +985,7 @@ export default function Sidebar({
   bots = [],
   onOpenBot,
   onDeleteBot,
+  onEditBot,
   onNewBot,
   search,
   onSearchChange,
@@ -1174,7 +1176,7 @@ export default function Sidebar({
   // Read for the re-render alone: a server dropping or coming back moves the
   // dimming on its rows and headings.
   useServers();
-  const offline = (path: string) => !serverConnected(serverOfPath(path));
+  const offline = (path: string) => shownOffline(serverOfPath(path));
   // A heading stands for every checkout of its project. It names a machine only
   // where there is just one to name, and dims only once all of them are gone.
   const headingServer = (path: string) => {
@@ -1218,6 +1220,15 @@ export default function Sidebar({
         : archivedShown
           ? "Nothing settled yet."
           : "No tasks yet.";
+
+  // The filter is where project grouping went. With no project attached it has
+  // nothing to filter, so it goes — unless something it controls is still in
+  // force: a stored filter still narrows the list, and its toggles are the only
+  // way back from drafts or settled, `archivedShown` included since it lags the
+  // request until the read lands. The empty text goes with it, under the bots
+  // "No tasks yet." is a line about nothing.
+  const filterShown =
+    projects.length > 0 || projectFilter !== null || draftsShown || archivedRequested || archivedShown;
 
   const asideRef = useRef<HTMLElement>(null);
   // The step ticks for itself, in `App`, where the chords land too.
@@ -1358,12 +1369,12 @@ export default function Sidebar({
             active={!!session && session.sessionId === selectedSessionId}
             onOpen={() => onOpenBot?.(bot)}
             onDelete={() => onDeleteBot?.(bot)}
+            onEdit={() => onEditBot?.(bot)}
           />;
         })}
       </div>}
 
-      {/* The filter is where project grouping went. */}
-      <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
+      {filterShown && <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
         <ProjectFilter
           projects={projects}
           value={projectFilter}
@@ -1413,7 +1424,7 @@ export default function Sidebar({
             </TooltipContent>
           </Tooltip>
         </div>
-      </div>
+      </div>}
 
       {/* With classic scrollbars the reserved gutter is the right-hand spacing,
           and the rows balance the track's extra width with `pr-0.5`. Overlay
@@ -1430,7 +1441,8 @@ export default function Sidebar({
         onScroll={more ? openMore : undefined}
       >
         {runs.length === 0 ? (
-          <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
+          // A typed query still gets its answer: silence there reads as broken.
+          (filterShown || search.trim()) && <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
         ) : (
           runs.flatMap((group, index) => {
             // A project heading is drawn only where the list spans projects:
@@ -1769,6 +1781,7 @@ function BotRow({
   active,
   onOpen,
   onDelete,
+  onEdit,
 }: {
   bot: Bot;
   /// The chat's last reply and the replies since the reader last wrote.
@@ -1783,13 +1796,14 @@ function BotRow({
   active: boolean;
   onOpen: () => void;
   onDelete: () => void;
+  onEdit: () => void;
 }) {
   const digit = useJumpDigit(sessionId ?? "");
   const [hovered, setHovered] = useState(false);
   const badge = asking ? "asking" : unread ? "unread" : null;
   const mask = badge === "asking" ? DOT_CUTOUT : badge === "unread" ? COUNT_CUTOUT : undefined;
-  // Before its first chat, Dray Bot's welcome is what its chat opens on.
-  const last = preview?.text || (!sessionId && bot.welcome);
+  // Before its first chat, Dray Bot's greeting is what its chat opens on.
+  const last = preview?.text || (!sessionId && greetingOf(bot).at(-1));
   const glimpse = last && previewLine(last);
   const offline = offlineLine(serverOfPath(bot.path));
 
@@ -1881,6 +1895,9 @@ function BotRow({
         </button>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-44">
+        <ContextMenuItem className="text-ui" onSelect={onEdit}>
+          Edit…
+        </ContextMenuItem>
         <ContextMenuItem className="text-ui text-destructive" onSelect={onDelete}>
           Delete bot…
         </ContextMenuItem>

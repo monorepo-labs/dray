@@ -1,4 +1,4 @@
-import { Suspense, useRef, useState } from "react";
+import { Suspense, useState } from "react";
 import { RefreshCw } from "lucide-react";
 
 import OpenInButton from "@/components/OpenInButton";
@@ -9,7 +9,6 @@ import { FILE_OPENER } from "@/lib/openWith";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useResizable } from "@/components/ResizeHandle";
-import { useSwipe } from "@/lib/swipe";
 import { cn } from "@/lib/utils";
 
 /// The header button that opens and closes the pane. Lives here rather than in
@@ -47,7 +46,6 @@ export function PanelToggle({ onToggle }: { onToggle: () => void }) {
 /// see `tabOrder`.
 export const PANEL_TABS = [
   "changes",
-  "browser",
   "tasks",
   "more",
   "pr",
@@ -60,10 +58,6 @@ export type PanelTab = (typeof PANEL_TABS)[number];
 
 export const PANEL_LABELS: Record<PanelTab, string> = {
   changes: "Changes",
-  // The session's browser lives here. Always drawn, unlike PR or Docs: its
-  // empty state is a URL bar, which is a place to start rather than a
-  // sentence saying there is nothing.
-  browser: "Browser",
   // A bot's children: the work it handed off, waiting, running or done.
   tasks: "Tasks",
   // A catch-all, and named as one on purpose. What is in it — the task list,
@@ -127,10 +121,7 @@ export function tabOrder({
   /// review or land. Its tasks' PRs show on their rows in the Tasks tab.
   tasks?: boolean;
 }): readonly PanelTab[] {
-  // Browser always: with no page open its empty state is a URL bar, the
-  // session's recent pages and its local servers — a place to start.
   const tabs: PanelTab[] = tasks ? ["tasks"] : pr ? ["pr", "changes"] : ["changes"];
-  tabs.push("browser");
   // After Changes, which is what keeps Issue immediately before More.
   if (docs) tabs.push("docs");
   // Immediately before More wherever it is drawn, so the row's order is the
@@ -261,16 +252,8 @@ export default function RightPanel({
     pane: open ? "panel" : undefined,
   });
 
-  // A swipe over the pane steps its tabs, wrapping, the way ⌘⌥[ ] does.
-  const asideRef = useRef<HTMLElement>(null);
-  useSwipe(asideRef, (delta) => {
-    const from = tabs.indexOf(tab);
-    if (tabs.length > 1) onTabChange(tabs[(from + delta + tabs.length) % tabs.length]);
-  });
-
   return (
     <aside
-      ref={asideRef}
       style={style}
       className={cn(
         // No border of its own: it sits in a card, whose ring is the edge.
@@ -292,6 +275,10 @@ export default function RightPanel({
           // Padded to sit where a tab's label would, so the pane's first line
           // lands on the same baseline whichever frame it is wearing.
           <span className="px-2 py-1 text-ui font-medium">{heading}</span>
+        ) : tabs.length === 1 && tabs[0] === "tasks" ? (
+          // A bot's pane with nothing beside its task list: the list says what
+          // the pane is, so the strip stays the titlebar it sits in.
+          null
         ) : (
           // A wrapping row clipped to one line, which sheds the keycaps when
           // they stop fitting and never a tab sooner — the CSS answer to a
@@ -346,7 +333,10 @@ export default function RightPanel({
                 light takes no opacity at all; the caps there are already quieter
                 than their dark twins, `--muted` being a black veil on a near-white
                 page rather than a white one on near-black. */}
-            <ShortcutKeys ids={["panel.tab.prev", "panel.tab.next"]} className="ml-1.5 h-full shrink-0 dark:opacity-50" />
+            {/* Not for one tab, which the chord would step onto itself. */}
+            {tabs.length > 1 && (
+              <ShortcutKeys ids={["panel.tab.prev", "panel.tab.next"]} className="ml-1.5 h-full shrink-0 dark:opacity-50" />
+            )}
           </div>
         )}
 

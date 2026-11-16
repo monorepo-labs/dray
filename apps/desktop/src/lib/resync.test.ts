@@ -70,6 +70,13 @@ describe("catching up a session mid-turn", () => {
     expect(appendLive(merged, ev("b", 2))).toBe(merged);
     expect(appendLive(merged, ev("c", 3)).map((e) => e.id)).toEqual(["a", "b", "c"]);
   });
+
+  it("replaces a retry tick rather than piling them up", () => {
+    const retry = (id: string, seq: number) => ({ id, seq, payload: { type: "api_retry" } }) as unknown as AgentEvent;
+    const one = appendLive([ev("a", 1)], retry("r1", 2));
+    expect(appendLive(one, retry("r2", 3)).map((e) => e.id)).toEqual(["a", "r2"]);
+    expect(appendLive([retry("r1", 1), ev("b", 2)], retry("r2", 3)).map((e) => e.id)).toEqual(["r1", "b", "r2"]);
+  });
 });
 
 describe("missedEvents", () => {

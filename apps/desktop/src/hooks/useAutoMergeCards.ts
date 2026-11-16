@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { readyForCard } from "@/lib/autoMergeCard";
+import { type CardWatch, cardDue, watchPr } from "@/lib/autoMergeCard";
 import { botAt } from "@/lib/bots";
 import { sessionBranch } from "@/lib/pr";
 import { invoke, LOCAL, serverOfPath, serverOfSession } from "@/lib/transport";
@@ -16,10 +16,13 @@ type Args = {
   items: SessionIndexItem[];
   bots: readonly Bot[];
   prFor: (repoPath: string, branch: string | null) => PrMark | undefined;
+  /// When the read `prFor` answers from was asked for, which is what the
+  /// card's settle window is measured in.
+  readAt: (repoPath: string) => number | undefined;
 };
 
 /// Posts a merge card in the chat that started a task once GitHub says the
-/// task's PR can merge (`readyForCard`).
+/// task's PR can merge and every check it expects has started (`cardDue`).
 ///
 /// **State, not transition**, unlike the Ready to merge notice: a PR that turned
 /// ready while the app was closed still gets its card. The server picks the
@@ -27,11 +30,13 @@ type Args = {
 /// what keeps it to one card per PR, the agent's own included. `done` here
 /// only saves the call, so it is dropped when a bot's chat changes: a fresh
 /// chat holds no card yet.
-export function useAutoMergeCards({ items, bots, prFor }: Args) {
+export function useAutoMergeCards({ items, bots, prFor, readAt }: Args) {
   const done = useRef(new Set<string>());
   /// When each ready PR was last tried, while it stays ready.
   const tried = useRef(new Map<string, number>());
   const inFlight = useRef(new Set<string>());
+  /// Each open PR's tip and checks across reads, by URL.
+  const watches = useRef(new Map<string, CardWatch>());
   const [tick, setTick] = useState(0);
   const [pending, setPending] = useState(false);
 
@@ -50,12 +55,17 @@ export function useAutoMergeCards({ items, bots, prFor }: Args) {
   useEffect(() => {
     const now = Date.now();
     const ready = new Set<string>();
+    const watched = new Set<string>();
     for (const task of tasks) {
       const branch = sessionBranch(task);
       const mark = prFor(task.projectPath, branch);
-      if (!branch || !mark || !readyForCard(mark)) continue;
+      const asked = readAt(task.projectPath);
+      if (!branch || !mark || mark.state !== "OPEN" || asked === undefined) continue;
       const key = mark.url;
-      if (done.current.has(key)) continue;
+      const watch = watchPr(watches.current.get(key), mark, asked);
+      watches.current.set(key, watch);
+      watched.add(key);
+      if (!cardDue(mark, watch, asked) || done.current.has(key)) continue;
       ready.add(key);
       if (inFlight.current.has(key) || now - (tried.current.get(key) ?? 0) < RETRY_MS) continue;
 
@@ -79,8 +89,9 @@ export function useAutoMergeCards({ items, bots, prFor }: Args) {
     }
     // A PR that stops being ready is tried at once when it comes back.
     for (const key of tried.current.keys()) if (!ready.has(key)) tried.current.delete(key);
+    for (const key of watches.current.keys()) if (!watched.has(key)) watches.current.delete(key);
     setPending(ready.size > 0);
-  }, [tasks, listed, botServers, prFor, tick]);
+  }, [tasks, listed, botServers, prFor, readAt, tick]);
 
   useEffect(() => {
     if (!pending) return;

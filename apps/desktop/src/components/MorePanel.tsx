@@ -9,8 +9,8 @@ import type { SessionMedia } from "@/lib/transcript";
 import { fileSrc, qualify, serverOfSession } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 
-/// The catch-all tab: a task list at the top, the session's subagent runs under
-/// it. Sections rather than tabs of their own, because the tab row cannot grow
+/// The catch-all tab: a task list at the top, the session's running background
+/// tasks under it. Sections rather than tabs of their own, because the tab row cannot grow
 /// one per answer the reader merely *checks* — and neither of these is
 /// something they work in.
 ///
@@ -45,28 +45,13 @@ export default function MorePanel({
       {/* A section with no rows is drawn as nothing at all, not as an empty
           state: this tab is a catch-all, so its sections come and go, and a
           heading over the words "no subagents" is two lines spent saying the
-          reader has nothing to read here. Both sections are titled or neither
-          is — a heading over one list and none over the other reads as the
-          second belonging to the first. */}
+          reader has nothing to read here. */}
       {/* Untitled: a grid of pictures names itself. */}
       {media.length > 0 && <AttachmentGrid media={media} sessionId={sessionId} />}
 
-      {subagents.runs.length > 0 && (
-        <>
-          <SectionTitle>Background Tasks</SectionTitle>
-          <SubagentPanel {...subagents} />
-        </>
-      )}
+      {/* Titles its own two sections, Background tasks and Subagents. */}
+      {subagents.runs.length > 0 && <SubagentPanel {...subagents} />}
     </div>
-  );
-}
-
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return (
-    // `pt-4` on every one of them rather than a gap on the container: the
-    // heading carries the break above it, so a section arriving or going takes
-    // its own spacing with it.
-    <div className="shrink-0 px-3 pt-4 pb-2 text-ui text-muted-foreground first:pt-3">{children}</div>
   );
 }
 

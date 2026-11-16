@@ -19,6 +19,128 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.7 · 2026-11-15
+
+### Improved
+
+- The server you install on other machines is 60% smaller and answers
+  faster.
+- Your messages sit in a darker blue bubble that's easier to read.
+- fx subagents show as running until they actually finish.
+
+### Fixed
+
+- A Claude Code turn that ends in an error no longer leaves the session
+  stuck as working.
+- Every session a bot's task starts stays hidden, on any machine.
+- A merge card waits for checks to start before it appears.
+- A "Waiting on you" row no longer sits on a loading placeholder.
+
+## 0.30.6 · 2026-11-15
+
+### New
+
+- **Subagents open in a tab.** Click an agent row in the chat or the
+  More tab to read its whole conversation beside the session.
+- **Dev servers in the bot's browser.** A bot's new tab lists its tasks'
+  dev servers. A stopped one shows which task ran it, where, and a
+  button to ask for a restart.
+- **`dray session model`** switches a session's model and effort from
+  the terminal.
+
+### Improved
+
+- The More tab splits Background tasks from Subagents.
+- Links in a bot's task open as tabs in the bot's row.
+- Bots keep their instructions in AGENTS.md, which every agent reads
+  on its own.
+- Merging or settling a bot task deletes its worktree without asking.
+- Removing a machine warns about its unfinished tasks first.
+- fx shows a countdown while it retries a failed request.
+- Idle agent browsers on servers close after 5 minutes, not 30.
+
+### Fixed
+
+- Images an agent links by local path now show in the chat.
+- "Waiting on you" rows stay put while GitHub rechecks PRs after a
+  merge.
+
+## 0.30.5 · 2026-11-14
+
+### New
+
+- **Edit a bot.** Edit… in a bot's menu changes its name and face.
+- **Split groups.** Split panes form a group you can close and resize,
+  and the tab row draws the group as one tab.
+
+### Improved
+
+- Dray opens on your first bot.
+- A bot's Tasks tab puts what needs you first, then PRs ready to merge.
+- A task's own sub-tasks keep running after it settles, and report to
+  the nearest task or bot still open.
+- Bots react less: 👍 for an ok, 👀 only when looking into something.
+
+### Fixed
+
+- PR status that failed to load, often on a spent GitHub rate limit,
+  now retries, so a new PR always shows up.
+
+## 0.30.4 · 2026-11-14 · notify
+
+### New
+
+- **Split panes.** Drag a tab from a session's tab row into the main
+  view to open it beside the chat. Pages, Diff, Files and bot tasks all
+  split.
+- **Video proof from tasks.** A bot's task ends visible work with a
+  short recording, and the bot passes it on so it plays in its chat.
+- **Bots react.** A bot with nothing to say puts 👀, ✅ or 🎉 on your
+  message instead of replying.
+- **Waiting cards in the Island.** Hover a bot's "waiting on you" pill
+  to see each task's card, and merge a ready PR from there.
+
+### Improved
+
+- A bot task waiting on you shows after 2 minutes, not 5.
+- Clicking a "Waiting on you" row scrolls to the task's last reply;
+  ⌘-click opens the task.
+- The background tasks list shows only tasks still running.
+- The sidebar remembers which bot you had open under each project
+  filter, and hides the filter row when no project is attached.
+- Esc leaves Settled or Drafts for the active list.
+- A task whose server is offline can still be set aside.
+- I'm back unlocks after 10 seconds, not 30.
+
+### Fixed
+
+- Scrolling a page sideways in the browser no longer switches tabs.
+- Hidden tasks stay hidden under a project filter.
+
+## 0.30.3 · 2026-11-13
+
+### New
+
+- **Bots learn from corrections.** When you correct a bot or a task
+  fails, it writes the lesson where it will be used next time: a rule,
+  a skill or a memory. Each lesson shows in the chat with View diff and
+  Undo.
+- **Bots hear what you did.** A bot is told which of its tasks you
+  merged, settled, stopped or deleted since its last turn.
+- New tab page has Diff and Files cards.
+
+### Improved
+
+- Long-open bot chats stay fast by keeping only recent turns drawn.
+- Bots stay quiet on task progress and can answer with lists and
+  tables.
+- A bot can end a turn without a reply, and blank replies no longer
+  draw.
+- Links in a bot's chat open as tabs in the bot's row.
+- Stalled tasks on another machine now reach their bot.
+- Merging goes straight to the merged row with no flash.
+- Boat sandbox stop warnings are off.
+
 ## 0.30.2 · 2026-11-13
 
 ### New

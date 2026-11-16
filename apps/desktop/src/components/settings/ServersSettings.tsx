@@ -27,9 +27,11 @@ import { Switch } from "@/components/ui/switch";
 import { useCopied } from "@/hooks/useCopied";
 import { boatAsleep, resumeBoat } from "@/lib/boat";
 import { relativeTime } from "@/lib/format";
+import { useCloud } from "@/lib/cloud";
 import { MACHINE } from "@/lib/platform";
 import { serverName, useLocalServer, useServers } from "@/lib/servers";
 import { invoke, listen, LOCAL } from "@/lib/transport";
+import { unfinishedWarning } from "@/lib/serverCache";
 import { cn } from "@/lib/utils";
 import type {
   AssistantSummary,
@@ -87,9 +89,21 @@ function detailOf(server: ServerInfo): string {
 /// projects and sessions join the sidebar while it is connected and stay,
 /// dimmed, while it is not — its agents keep running there either way.
 export default function ServersSettings() {
-  const servers = useServers();
+  const all = useServers();
+  const servers = all.filter((s) => !s.cloud);
   const [adding, setAdding] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
+  // Per server, its tasks last seen unfinished, read as Remove is asked.
+  // Absent while that read runs, which holds Remove, so the warning cannot
+  // land after the machine is gone.
+  const [unfinished, setUnfinished] = useState<Record<string, string[]>>({});
+  const askRemove = (id: string) => {
+    setUnfinished(({ [id]: _, ...rest }) => rest);
+    setConfirming(id);
+    void invoke<string[]>("server_unfinished", { id }, LOCAL)
+      .catch(() => [])
+      .then((titles) => setUnfinished((all) => ({ ...all, [id]: titles })));
+  };
   const [renaming, setRenaming] = useState<string | null>(null);
   const [updates, setUpdates] = useState<Record<string, UpdateState>>({});
   const patchUpdate = (id: string, next: UpdateState) =>
@@ -125,6 +139,7 @@ export default function ServersSettings() {
 
       <div className="flex flex-col">
         <ThisMacRow />
+        <CloudRow machines={all.filter((s) => s.cloud)} />
         {servers.map((server) => (
           // The row stays laid out under the field, hidden, so renaming moves
           // nothing: the row is as tall as its detail and fix make it, which a
@@ -187,7 +202,9 @@ export default function ServersSettings() {
             beta={server.beta}
             onBeta={(beta) => void invoke("set_server_beta", { id: server.id, beta }, LOCAL).catch(console.error)}
             confirming={confirming === server.id}
-            onRemove={() => setConfirming(server.id)}
+            warning={unfinishedWarning(unfinished[server.id])}
+            reading={!unfinished[server.id]}
+            onRemove={() => askRemove(server.id)}
             onCancel={() => setConfirming(null)}
             onConfirm={() => {
               setConfirming(null);
@@ -234,6 +251,94 @@ export default function ServersSettings() {
         />
       )}
     </>
+  );
+}
+
+/// Dray Cloud, as one row however many machines it runs: one per task, coming
+/// and going on their own, so a row each would be a list nobody acts on. The key
+/// is written once and never read back.
+function CloudRow({ machines }: { machines: ServerInfo[] }) {
+  const cloud = useCloud();
+  const [changing, setChanging] = useState(false);
+  // The service, never its machines: each one stops when its task goes idle,
+  // and that is Dray's business, not a state to show.
+  const status: ServerStatus = cloud.on && cloud.keyed && !cloud.error ? "connected" : "disconnected";
+  const detail = !cloud.keyed
+    ? "A machine of its own for each task, started by Dray and gone once the task settles. Paste your key to turn it on."
+    : !cloud.on
+      ? "Off"
+      : (cloud.error ??
+        (machines.length
+          ? `${machines.length} ${machines.length === 1 ? "task" : "tasks"} on Dray Cloud`
+          : "No tasks on it yet. Pick Cloud beside a project to start one."));
+
+  return (
+    <Row
+      name="Dray Cloud"
+      detail={detail}
+      status={status}
+      on={cloud.on}
+      onToggle={cloud.keyed ? (on) => void invoke("set_cloud_on", { on }, LOCAL).catch(console.error) : undefined}
+      action={
+        cloud.keyed && !changing ? (
+          <Button variant="ghost" size="sm" onClick={() => setChanging(true)}>
+            Change key
+          </Button>
+        ) : undefined
+      }
+    >
+      {(!cloud.keyed || changing) && (
+        <CloudKeyField onCancel={cloud.keyed ? () => setChanging(false) : undefined} onSaved={() => setChanging(false)} />
+      )}
+    </Row>
+  );
+}
+
+/// Checked against the control plane before it is kept, so a typo is refused
+/// here rather than saved as a switch that never lists anything.
+function CloudKeyField({ onCancel, onSaved }: { onCancel?: () => void; onSaved: () => void }) {
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await invoke("set_cloud_key", { key }, LOCAL);
+      setKey("");
+      onSaved();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form onSubmit={save} className="flex flex-col gap-1.5">
+      <div className="flex gap-1.5">
+        <Input
+          type="password"
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder="Dray Cloud key"
+          aria-label="Dray Cloud key"
+          autoFocus={!!onCancel}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+        />
+        {onCancel && (
+          <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+            Cancel
+          </Button>
+        )}
+        <Button type="submit" variant="secondary" size="sm" disabled={busy || !key.trim()}>
+          {busy ? "Checking…" : "Save"}
+        </Button>
+      </div>
+      {error && <p className="text-ui text-destructive">{error}</p>}
+    </form>
   );
 }
 
@@ -748,6 +853,8 @@ function Row({
   onCheckUpdate,
   onAssistant,
   confirming = false,
+  warning,
+  reading = false,
   onRemove,
   onCancel,
   onConfirm,
@@ -779,6 +886,10 @@ function Row({
   /// Present while connected: the code comes from the server itself.
   onAssistant?: () => void;
   confirming?: boolean;
+  /// Said under the row while Remove is asked.
+  warning?: string | null;
+  /// Remove waits while what `warning` says is still being read.
+  reading?: boolean;
   onRemove?: () => void;
   onCancel?: () => void;
   onConfirm?: () => void;
@@ -815,7 +926,7 @@ function Row({
         {confirming ? (
           // Asked in the row, the transcription models' own reading: a modal
           // is more than forgetting an address is worth.
-          <CancelOrConfirm verb="Remove" onConfirm={onConfirm!} onCancel={onCancel!} autoFocus />
+          <CancelOrConfirm verb="Remove" onConfirm={onConfirm!} onCancel={onCancel!} busy={reading} autoFocus />
         ) : (
           (onToggle || onRemove || onAssistant || action) && (
             <div className="flex items-center gap-1.5">
@@ -874,6 +985,7 @@ function Row({
           dot. */}
       {/* `empty:` because a child may draw nothing — no assistants yet — and
           an empty block would still take the row's gap. */}
+      {confirming && warning && <p className="pl-4.5 text-ui text-muted-foreground">{warning}</p>}
       {children && <div className="flex flex-col gap-2 pl-4.5 empty:hidden">{children}</div>}
     </div>
   );

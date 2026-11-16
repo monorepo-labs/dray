@@ -2,11 +2,12 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-/// Where Settings can go: a server's page, Dictation, Notifications.
+/// Where Settings can go: a server's page, Dictation, Notifications, Appearance.
 enum SettingsPage: Hashable {
     case server(UUID)
     case dictation
     case notifications
+    case appearance
 }
 
 /// The one Settings screen: a card per server, then Add server, Dictation,
@@ -18,6 +19,7 @@ struct SettingsView: View {
     @State private var adding = false
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
     @AppStorage(NotificationSettings.allowKey) private var notify = true
+    @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
 
     init(focus: UUID?) { _path = State(initialValue: focus.map { [.server($0)] } ?? []) }
 
@@ -42,6 +44,10 @@ struct SettingsView: View {
                         RowDivider(inset: 48)
                         NavigationLink(value: SettingsPage.notifications) {
                             SettingsRow("Notifications", icon: "bell", value: notify ? "On" : "Off")
+                        }
+                        RowDivider(inset: 48)
+                        NavigationLink(value: SettingsPage.appearance) {
+                            SettingsRow("Appearance", icon: "circle.lefthalf.filled", value: hideSessions ? "Bots only" : nil)
                         }
                     }
                     .buttonStyle(RowButtonStyle())
@@ -69,6 +75,7 @@ struct SettingsView: View {
                 case .server(let id): ServerDetail(id: id)
                 case .dictation: DictationSettings()
                 case .notifications: NotificationSettings()
+                case .appearance: AppearanceSettings()
                 }
             }
             .sheet(isPresented: $adding) { AddServerView(link: nil) }
@@ -803,5 +810,35 @@ struct NotificationSettings: View {
             .font(Theme.Font.body)
             .padding(.leading, Theme.Space.l).padding(.trailing, 14)
             .frame(minHeight: 52)
+    }
+}
+
+// MARK: Appearance
+
+/// How the home list looks. Hiding sessions leaves it to bots alone.
+struct AppearanceSettings: View {
+    static let hideSessionsKey = "list.hideSessions"
+    @AppStorage(hideSessionsKey) private var hideSessions = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                RowGroup {
+                    Toggle("Hide sessions", isOn: $hideSessions)
+                        .toggleStyle(SwitchStyle())
+                        .font(Theme.Font.body)
+                        .padding(.leading, Theme.Space.l).padding(.trailing, 14)
+                        .frame(minHeight: 52)
+                }
+                GroupLabel("Home shows your bots only: no sessions, project filter, orb, drafts or settled.")
+                    .padding(.horizontal, Theme.Space.m)
+            }
+            .padding(.horizontal, Theme.Space.l)
+            .padding(.top, Theme.Space.m)
+        }
+        .background(Theme.card.ignoresSafeArea())
+        .foregroundStyle(Theme.text)
+        .navigationTitle("Appearance")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

@@ -94,3 +94,13 @@ export function forgetClosedTabs(sessionId: string) {
     closed.set(owner, tabs.filter((t) => t.key !== key && t.pick?.target !== sessionId));
   }
 }
+
+/// `moveKey` for a drop at `to` among the tabs drawn, which leave out the
+/// split ones: the tab lands after the drawn tab it follows, wherever that
+/// sits in the full order, so a hidden tab never shifts the slot.
+export function movedTo(order: readonly TabKey[], drawn: readonly { key: TabKey }[], key: TabKey, to: number): TabKey[] {
+  const rest = drawn.filter((d) => d.key !== key);
+  const full = order.filter((k) => k !== key);
+  const at = to === 0 ? full.indexOf(rest[0]?.key ?? "") : full.indexOf(rest[to - 1].key) + 1;
+  return moveKey(full, key, Math.max(at, 0));
+}
