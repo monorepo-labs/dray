@@ -141,7 +141,7 @@ dray session merge-card <task-id>
 
 Run from inside a session, this posts a card in that session's chat for the open pull request on another session's branch, usually a task it started. The card shows the task, the PR number, its live status, a **Merge** button and an **Open on GitHub** link, so you can merge without opening the task or the side panel. It is refused when the branch has no open pull request.
 
-Dray also posts the card on its own, once per pull request, in the chat of the session that started the task, as soon as GitHub says the PR can merge: its branch protection, required checks and required reviews pass, and no check is still running. A card already in the chat for that PR, by hand or not, stops a second.
+Dray also posts the card on its own, once per pull request, in the chat of the session that started the task, once GitHub says the PR can merge: its branch protection, required checks and required reviews pass, and no check is still running. A fresh push can read as ready before any check has registered, so the card waits until a later check, at least a minute after Dray first sees the new commit, still says it can merge. If that commit has fewer checks than the one before it, the card waits for the rest, up to 10 minutes. A card already in the chat for that PR, by hand or not, stops a second. `dray session merge-card` does not wait: it posts as soon as you run it.
 
 The task can run on another machine, such as a sandbox of its own. The card then reads and merges the pull request through the GitHub CLI on the chat's machine, so it keeps working after that machine is gone.
 
@@ -154,7 +154,7 @@ dray session need <task-id> "Pick: keep the button or drop it"
 dray session need <task-id>
 ```
 
-Sets what a bot's task needs from you, in one line. It shows on the task's row in the **Waiting on you** card at the foot of the bot's chat, and clears once the task moves. With no text it clears now. Bots write it themselves when a task has sat waiting on you for 2 minutes.
+Sets what a bot's task needs from you, in one line. It shows on the task's row in the **Waiting on you** card at the foot of the bot's chat, and clears once the task moves. With no text it clears now. Bots write it themselves when a task has sat waiting on you for 2 minutes. Before the bot writes one, that row shows the last paragraph of the task's last message. If the message has nothing to show, the row says **Waiting for your reply**.
 
 A task whose pull request is ready to merge gets a line only when it asked you to try or check something before merging. Otherwise its row shows **Merge** alone.
 
