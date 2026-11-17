@@ -21,7 +21,7 @@ import type { MergeMethod, PrMark } from "@/types/events";
 /// Keeps a long life from filling the store with dismissed stalls.
 const DISMISSED_CAP = 200;
 
-/// Rows drawn before Show all, so a long card doesn't push the chat off screen.
+/// Rows drawn before "Show N more", so a long card doesn't push the chat off screen.
 const ROWS_SHOWN = 3;
 
 /// The foot of a bot's chat while any of its tasks waits on the reader: an
@@ -86,7 +86,7 @@ export default function StalledTasks({
           className="w-full text-muted-foreground"
           onClick={() => setAll((a) => !a)}
         >
-          {capped ? `Show all ${shown.length}` : "Show less"}
+          {capped ? `Show ${shown.length - ROWS_SHOWN} more` : "Show less"}
         </Button>
       )}
     </div>
