@@ -747,10 +747,19 @@ struct TaskMessageSheet: View {
     private var item: SessionItem? { store.items[task] }
     private var pr: PrMark? { item.flatMap { store.prMark(task, $0) } }
 
+    private func merge(_ item: SessionItem, _ pr: PrMark) -> some View {
+        // Fixed, or the bar proposes less than "Merge" needs and cuts it to "Me…".
+        MergeTaskButton(server: task.server, taskId: task.id, cwd: item.projectPath, number: pr.number, branch: pr.headRefName)
+            .fixedSize()
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
-                Group {
+                VStack(alignment: .leading, spacing: Theme.Space.m) {
+                    // Over the message, not in the bar: there, Done and Merge left a long title a word or two.
+                    Text(title.isEmpty ? "Untitled" : title)
+                        .font(Theme.Font.headline).foregroundStyle(Theme.text)
                     switch read {
                     case .reading:
                         VStack(alignment: .leading, spacing: 10) {
@@ -772,6 +781,19 @@ struct TaskMessageSheet: View {
                         Text("This task hasn't written anything yet.")
                             .font(Theme.Font.subhead).foregroundStyle(Theme.secondary)
                     }
+                    Button(action: open) {
+                        HStack(spacing: 4) {
+                            Text("Open task")
+                            Image(systemName: "arrow.up.right").font(Theme.Font.footnoteStrong.font)
+                        }
+                        .font(Theme.Font.pill)
+                        .foregroundStyle(Theme.secondary)
+                        .padding(.horizontal, 14)
+                        .frame(height: 34)
+                        .background(Theme.raised, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open task")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(Theme.Space.l)
@@ -779,38 +801,19 @@ struct TaskMessageSheet: View {
             .environment(\.imageServer, store.connection(task.server))
             // The bot chat's viewer pages its own turn; a picture here opens on its own.
             .environment(\.openImage, nil)
-            .navigationTitle(title.isEmpty ? "Untitled" : title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
-            }
-            // At the foot, Open task then Merge as on the desktop's row: in the bar, Merge
-            // was squeezed into Open task's glass and the title cut to a word.
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                HStack(spacing: Theme.Space.s) {
-                    Spacer()
-                    Button(action: open) {
-                        HStack(spacing: 4) {
-                            Text("Open task")
-                            Image(systemName: "arrow.up.right").font(Theme.Font.footnoteStrong.font)
-                        }
-                        .font(Theme.Font.pill)
-                        .foregroundStyle(Theme.text)
-                        .padding(.horizontal, 16)
-                        .frame(height: 34)
-                        .background(Theme.raised, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Open task")
-                    // The row's own Merge, held to the row's gate: a PR GitHub calls ready.
-                    if let item, let pr, prStatus(pr) == "ready" {
-                        MergeTaskButton(server: task.server, taskId: task.id, cwd: item.projectPath,
-                                        number: pr.number, branch: pr.headRefName)
+                // The primary action, held to the row's gate: a PR GitHub calls ready.
+                if let item, let pr, prStatus(pr) == "ready" {
+                    if #available(iOS 26.0, *) {
+                        ToolbarItem(placement: .primaryAction) { merge(item, pr) }
+                            // Its own green capsule, not one inside the bar's glass.
+                            .sharedBackgroundVisibility(.hidden)
+                    } else {
+                        ToolbarItem(placement: .primaryAction) { merge(item, pr) }
                     }
                 }
-                .padding(.horizontal, Theme.Space.l)
-                .padding(.vertical, Theme.Space.m)
-                .background(Theme.page)
             }
             .background(Theme.page.ignoresSafeArea())
         }
