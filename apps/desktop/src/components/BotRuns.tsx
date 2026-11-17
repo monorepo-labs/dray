@@ -1,7 +1,7 @@
 import { ChevronRight } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { devRuns, DEV_RUN_STATES, type DevRunState } from "@/components/botRunsDev";
+import { DEV_DONE_STYLES, devRuns, DEV_RUN_STATES, type DevDoneStyle, type DevRunState } from "@/components/botRunsDev";
 import { RunRow, RunSection } from "@/components/SubagentPanel";
 import { Button } from "@/components/ui/button";
 import { canOpenTab, isShellRun, opensTab, type SubagentRun } from "@/lib/transcript";
@@ -35,6 +35,7 @@ type Loader = (skip: number) => Promise<SubagentList>;
 /// server's logs, since the chat holds only its tail.
 export default function BotRuns(props: Props) {
   const [dev, setDev] = useState<DevRunState>("live");
+  const [style, setStyle] = useState<DevDoneStyle>("fold");
   const fake = import.meta.env.DEV && dev !== "live" ? devRuns(dev) : null;
   const { sessionId, also } = props;
   const load: Loader =
@@ -46,13 +47,19 @@ export default function BotRuns(props: Props) {
         {...props}
         {...(fake && { runs: fake.runs, live: true, onOpen: () => {}, onStopTask: () => {} })}
         load={load}
+        doneStyle={style}
       />
-      {import.meta.env.DEV && <DevPicker value={dev} onChange={setDev} />}
+      {import.meta.env.DEV && (
+        <div className="mx-3 mt-4 mb-3 flex flex-col gap-1">
+          <DevPicker label="Dev state" options={DEV_RUN_STATES} value={dev} onChange={setDev} />
+          <DevPicker label="All done" options={DEV_DONE_STYLES} value={style} onChange={setStyle} />
+        </div>
+      )}
     </>
   );
 }
 
-function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
+function Sections({ runs, load, doneStyle, ...rest }: Props & { load: Loader; doneStyle: DevDoneStyle }) {
   const [open, setOpen] = useState(false);
   const [older, setOlder] = useState<SubagentList | null>(null);
   // The server offset of the next page. Not the count held: runs landing
@@ -108,9 +115,59 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
     />
   );
 
+  const list = (rows: SubagentRun[]) => (
+    <>
+      {rows.map((run) => row(run, run.lastAt))}
+      {older?.more && rows.length === completed.length && (
+        <Button variant="ghost" size="xs" className="mx-1 self-start text-muted-foreground" disabled={loading} onClick={() => void more()}>
+          {loading ? "Loading…" : "Load more"}
+        </Button>
+      )}
+    </>
+  );
+  const chevron = <ChevronRight className={cn("size-3.5 shrink-0 transition", open && "rotate-90")} />;
+  const allDone = running.length === 0 && count > 0;
+
   return (
     <div className="flex shrink-0 flex-col">
-      {(running.length > 0 || count > 0) && (
+      {allDone && doneStyle === "quiet" ? (
+        // No heading: one muted line under the tasks, the runs folded in it.
+        <div className="flex flex-col gap-0.5 px-1.5 pt-2 pb-2">
+          <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className={TOGGLE}>
+            {chevron}
+            {count} completed {count === 1 ? "subagent" : "subagents"}
+          </button>
+          {open && list(completed)}
+        </div>
+      ) : allDone && doneStyle === "count" ? (
+        // The heading is the toggle, the count where Stop all would sit.
+        <div className="flex flex-col">
+          <button
+            type="button"
+            aria-expanded={open}
+            onClick={() => setOpen(!open)}
+            className="flex cursor-default items-center gap-1.5 px-3 pt-4 pb-2 text-ui text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <span className="flex-1 text-left">Subagents</span>
+            <span className="tabular-nums">{count}</span>
+            {chevron}
+          </button>
+          {open && <div className="flex flex-col gap-0.5 px-1.5 pb-2">{list(completed)}</div>}
+        </div>
+      ) : allDone && doneStyle === "recent" ? (
+        // The newest three in full, the rest behind Show all.
+        <div className="flex flex-col">
+          <div className="px-3 pt-4 pb-2 text-ui text-muted-foreground">Subagents</div>
+          <div className="flex flex-col gap-0.5 px-1.5 pb-2">
+            {open ? list(completed) : completed.slice(0, 3).map((run) => row(run, run.lastAt))}
+            {count > 3 && (
+              <button type="button" onClick={() => setOpen(!open)} className={TOGGLE}>
+                {open ? "Show fewer" : `Show all ${count}`}
+              </button>
+            )}
+          </div>
+        </div>
+      ) : (running.length > 0 || count > 0) && (
         <>
           <RunSection title="Subagents" {...rest} runs={running.filter((run) => held.has(run.id))} />
           {/* Running but older than the loaded chat: no events here to open. */}
@@ -121,21 +178,11 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
           )}
           {count > 0 && (
             <div className="-mt-2 flex flex-col gap-0.5 px-1.5 pb-2">
-              <button
-                type="button"
-                aria-expanded={open}
-                onClick={() => setOpen(!open)}
-                className="flex cursor-default items-center gap-1.5 rounded-lg px-2.5 py-1 text-ui text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground"
-              >
-                <ChevronRight className={cn("size-3.5 transition", open && "rotate-90")} />
+              <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className={TOGGLE}>
+                {chevron}
                 {count} completed
               </button>
-              {open && completed.map((run) => row(run, run.lastAt))}
-              {open && older?.more && (
-                <Button variant="ghost" size="xs" className="mx-1 self-start text-muted-foreground" disabled={loading} onClick={() => void more()}>
-                  {loading ? "Loading…" : "Load more"}
-                </Button>
-              )}
+              {open && list(completed)}
             </div>
           )}
         </>
@@ -144,6 +191,9 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
     </div>
   );
 }
+
+const TOGGLE =
+  "flex cursor-default items-center gap-1.5 self-stretch rounded-lg px-2.5 py-1 text-left text-ui text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground";
 
 /// A run the chat has not loaded, drawn as a row of its own. One the log never
 /// closed is still going only while its child holds the task; otherwise it died
@@ -168,12 +218,22 @@ function fromLog(s: SubagentSummary, live: ReadonlySet<string>): SubagentRun {
   };
 }
 
-/// Dev builds only: puts the sections in each state over fake runs.
-function DevPicker({ value, onChange }: { value: DevRunState; onChange: (v: DevRunState) => void }) {
+/// Dev builds only: one row of the picker under the sections.
+function DevPicker<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: Record<T, string>;
+  value: T;
+  onChange: (v: T) => void;
+}) {
   return (
-    <div className="mx-3 mt-4 mb-3 flex flex-wrap items-center gap-1 rounded-md border border-dashed border-border p-1.5 text-xs text-muted-foreground">
-      <span className="px-1">Dev state</span>
-      {(Object.keys(DEV_RUN_STATES) as DevRunState[]).map((id) => (
+    <div className="flex flex-wrap items-center gap-1 rounded-md border border-dashed border-border p-1.5 text-xs text-muted-foreground">
+      <span className="px-1">{label}</span>
+      {(Object.keys(options) as T[]).map((id) => (
         <button
           key={id}
           type="button"
@@ -184,7 +244,7 @@ function DevPicker({ value, onChange }: { value: DevRunState; onChange: (v: DevR
             value === id ? "bg-muted text-foreground" : "hover:text-foreground",
           )}
         >
-          {DEV_RUN_STATES[id]}
+          {options[id]}
         </button>
       ))}
     </div>

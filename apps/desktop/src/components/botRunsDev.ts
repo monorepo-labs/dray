@@ -17,6 +17,16 @@ export const DEV_RUN_STATES = {
 
 export type DevRunState = keyof typeof DEV_RUN_STATES;
 
+/// Takes on the section once every subagent has finished.
+export const DEV_DONE_STYLES = {
+  fold: "A · Heading + fold",
+  quiet: "B · One quiet line",
+  count: "C · Heading is the toggle",
+  recent: "D · Newest three",
+} as const;
+
+export type DevDoneStyle = keyof typeof DEV_DONE_STYLES;
+
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 
 function spawn(callId: string, name: string, input: Record<string, unknown>): AgentEvent {
