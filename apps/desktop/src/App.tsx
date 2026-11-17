@@ -3533,6 +3533,7 @@ function App() {
         <Sidebar
           items={searchedSessions}
           bots={botList}
+          newBotId={issuesOpen ? undefined : newBot?.id}
           onOpenBot={openBot}
           // The new-task composer first: the dialog shares its picker, which on
           // an open chat would change that chat's model instead.

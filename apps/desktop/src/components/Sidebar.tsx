@@ -90,6 +90,9 @@ type SidebarProps = {
   items: SessionIndexItem[];
   /// The Bots section: every bot with its ongoing chat, if it has one.
   bots?: BotEntry[];
+  /// The bot whose first chat the empty composer is aimed at: open, though it
+  /// has no chat session yet for `selectedSessionId` to name.
+  newBotId?: string;
   onOpenBot?: (bot: Bot) => void;
   onDeleteBot?: (bot: Bot) => void;
   onEditBot?: (bot: Bot) => void;
@@ -1028,6 +1031,7 @@ const STRIP_RAIL = "justify-center px-0 [&_svg:not([class*='size-'])]:size-4";
 export default function Sidebar({
   items,
   bots = [],
+  newBotId,
   onOpenBot,
   onDeleteBot,
   onEditBot,
@@ -1459,7 +1463,7 @@ export default function Sidebar({
             status={status}
             unread={status === "completed" || (!!session && unreadWorking.has(session.sessionId))}
             asking={!!session && askingSessions.has(session.sessionId)}
-            active={!!session && session.sessionId === selectedSessionId}
+            active={(!!session && session.sessionId === selectedSessionId) || bot.id === newBotId}
             onOpen={() => onOpenBot?.(bot)}
             onDelete={() => onDeleteBot?.(bot)}
             onEdit={() => onEditBot?.(bot)}
