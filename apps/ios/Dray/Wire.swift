@@ -161,6 +161,7 @@ struct SessionItem: Codable, Hashable {
     let worktreeName: String?
     let worktreeRemoved: Bool?
     let hidden: Bool?
+    let pinned: Bool?
     /// Set aside by the reader: started, not wanted now.
     let aside: Bool?
     let parentSessionId: String?

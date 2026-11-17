@@ -837,9 +837,9 @@ struct BotReplySheet: View {
 
 // MARK: Tasks
 
-/// A bot's tasks, which the list leaves out, in the desktop Tasks tab's order:
-/// waiting on the reader, a PR ready to merge, one about to be, idle, then
-/// working, set-aside ones last and faded. A tap opens one over the bot's chat.
+/// A bot's tasks, which the list leaves out, grouped as the desktop Tasks tab
+/// does: pinned, then waiting on the reader, a PR ready to merge, one about to
+/// be, idle, working, set-aside ones last and faded. A tap opens one over the bot's chat.
 struct BotTasksSheet: View {
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -860,8 +860,17 @@ struct BotTasksSheet: View {
                             .multilineTextAlignment(.center).frame(maxWidth: 280)
                             .padding(.vertical, Theme.Space.xxl)
                     }
-                    ForEach(ordered, id: \.self) { key in
-                        if let item = store.items[key] { row(key, item) }
+                    let (pinned, groups) = taskRuns
+                    if !pinned.isEmpty {
+                        Text("Pinned").font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, Theme.Space.m).padding(.bottom, Theme.Space.xs)
+                        ForEach(pinned, id: \.self, content: draw)
+                    }
+                    // The desktop Tasks tab's break between runs.
+                    ForEach(Array(groups.enumerated()), id: \.offset) { i, run in
+                        if i > 0 || !pinned.isEmpty { Color.clear.frame(height: 16) }
+                        ForEach(run, id: \.self, content: draw)
                     }
                     if !runs.isEmpty { RunsSections(keys: runs) }
                 }
@@ -883,20 +892,47 @@ struct BotTasksSheet: View {
         }
     }
 
-    private var ordered: [SessionKey] {
-        // The PR wins over working, since merging is what the reader came for.
-        func rank(_ key: SessionKey) -> Int {
-            guard let item = store.items[key] else { return 7 }
-            if item.aside == true { return 6 }
-            if store.isAsking(key) { return 0 }
-            if let pr = store.prMark(key, item), pr.state == "OPEN", !pr.isDraft {
-                if verdictOf(pr) == .ready { return 1 }
-                if ["checksRunning", "needsReview", "unknown"].contains(prStatus(pr)) { return 2 }
-            }
-            if item.busy || store.inBackground(key) { return 4 }
-            return 3
+    @ViewBuilder private func draw(_ key: SessionKey) -> some View {
+        if let item = store.items[key] { row(key, item) }
+    }
+
+    /// The state a task files under, the desktop's `rowState`: asking, ready to merge,
+    /// about to be, idle, working. The PR wins over working, since merging is what the reader came for.
+    private func rank(_ key: SessionKey, _ item: SessionItem) -> Int {
+        if store.isAsking(key) { return 0 }
+        if let pr = store.prMark(key, item), pr.state == "OPEN", !pr.isDraft {
+            if verdictOf(pr) == .ready { return 1 }
+            if ["checksRunning", "needsReview", "unknown"].contains(prStatus(pr)) { return 2 }
         }
-        return tasks.enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }.map(\.element)
+        if item.busy || store.inBackground(key) { return 4 }
+        return 3
+    }
+
+    /// The desktop's `taskRuns`: pinned under their own heading, then a run per state with
+    /// neighbouring single rows sharing one, then set aside. Fewer than three draw as one run.
+    private var taskRuns: (pinned: [SessionKey], runs: [[SessionKey]]) {
+        let ranked = tasks.enumerated().compactMap { i, key in store.items[key].map { (key, $0, rank(key, $0), i) } }
+            .sorted { ($0.2, $0.3) < ($1.2, $1.3) }
+        // Setting aside unpins, so the two never meet.
+        let pinned = ranked.filter { $0.1.pinned == true && $0.1.aside != true }.map(\.0)
+        let aside = ranked.filter { $0.1.aside == true }.map(\.0)
+        let rest = ranked.filter { $0.1.aside != true && $0.1.pinned != true }
+        var runs: [[SessionKey]] = []
+        if rest.count < 3 {
+            if !rest.isEmpty { runs.append(rest.map(\.0)) }
+        } else {
+            // A run of one between two breaks reads as a heading, so single neighbours share one.
+            var into: Int?
+            for state in 0...4 {
+                let rows = rest.filter { $0.2 == state }.map(\.0)
+                if rows.isEmpty { continue }
+                if rows.count > 1 { runs.append(rows); into = nil }
+                else if let i = into { runs[i] += rows }
+                else { runs.append(rows); into = runs.count - 1 }
+            }
+        }
+        if !aside.isEmpty { runs.append(aside) }
+        return (pinned, runs)
     }
 
     private func row(_ key: SessionKey, _ item: SessionItem) -> some View {
@@ -936,6 +972,7 @@ struct BotTasksSheet: View {
         }
         .buttonStyle(RowButtonStyle())
         .accessibilityIdentifier("botTask")
-        .opacity(item.aside == true ? 0.5 : 1)
+        // The list's set-aside fade: these rows start at full text, where the desktop's start muted.
+        .opacity(item.aside == true ? 0.3 : 1)
     }
 }
