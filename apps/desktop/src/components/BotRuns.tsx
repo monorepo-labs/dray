@@ -153,10 +153,19 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
               {running.map((run) => row(run))}
               {open && completed.map((run) => row(run, run.lastAt))}
               {open && older?.next && (
-                <Button variant="ghost" size="xs" className="mx-1 self-start text-muted-foreground" disabled={loading} onClick={() => void more()}>
-                  <ChevronDown />
+                // A finished row's frame, so the chevron sits in the checks'
+                // column and the label starts where their titles do.
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => void more()}
+                  className="flex cursor-default items-center gap-2.5 rounded-lg py-1 pr-2.5 pl-2.5 text-left text-ui text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:hover:bg-transparent"
+                >
+                  <span className="flex h-4 w-7 shrink-0 items-center justify-center">
+                    <ChevronDown className="size-3.5" />
+                  </span>
                   {loading ? "Loading…" : "Load more"}
-                </Button>
+                </button>
               )}
             </div>
           )}
