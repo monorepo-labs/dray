@@ -436,7 +436,9 @@ struct RunDetail: View {
                             .accessibilityIdentifier("runOutput")
                     }
                     .well()
-                } else if let outputError {
+                }
+                // Under any text already read, so a read that stops working never passes for a live one.
+                if let outputError {
                     Text(outputError).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                 }
             } else {
@@ -449,7 +451,8 @@ struct RunDetail: View {
                 }
             }
         }
-        .task(id: run.done) { await follow() }
+        // The answer lands after the task starts, and carries the path the read needs.
+        .task(id: "\(run.done)|\(run.answer ?? "")") { await follow() }
     }
 
     /// Re-reads the shell's output file every two seconds until the run ends. The path is the
@@ -457,7 +460,7 @@ struct RunDetail: View {
     private func follow() async {
         guard run.command != nil else { return }
         guard let path = run.answer?.firstMatch(of: /\/\S+\.output/).map({ String($0.output) }) else {
-            outputError = "This agent doesn't say where the output goes."
+            if run.answer != nil || run.done { outputError = "This agent doesn't say where the output goes." }
             return
         }
         struct Body: Decodable { let text: String? }
@@ -465,6 +468,8 @@ struct RunDetail: View {
             do {
                 let body: Body = try await store.call(run.session.server, "read_file", ["path": .string(path)])
                 // The tail: a dev server's log grows for hours, and what it says now is at the end.
+                // ponytail: `read_file` reads whole files up to 4 MiB; past that the error shows
+                // instead. A server-side tail read would lift it.
                 output = (body.text ?? "").split(separator: "\n", omittingEmptySubsequences: false)
                     .suffix(30).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
                 outputError = nil
