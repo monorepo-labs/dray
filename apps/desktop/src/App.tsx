@@ -1,6 +1,6 @@
 import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { invoke, listen, LOCAL, serverOfPath, serverOfSession } from "@/lib/transport";
+import { invoke, listen, LOCAL, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { CircleDashed, Plus } from "lucide-react";
 import PrStateIcon from "@/components/PrStateIcon";
@@ -203,6 +203,7 @@ import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, prRepoSlug, sessionBranch, slugKey } from "@/lib/pr";
 import { holdSettle } from "@/lib/heldFlags";
+import { mergeBlock, readLogin, useMergeAccess } from "@/lib/mergeAccess";
 import { keptRepo } from "@/lib/serverCache";
 import { botAt, botBrowser, botChat, botEntries, botSession, greetingOf, inBotTree, listenForBots, readPreviews, refreshBots, serverOfBot, useBots } from "@/lib/bots";
 import NewBotDialog from "@/components/NewBotDialog";
@@ -3365,9 +3366,26 @@ function App() {
 
   /// A task row's Merge: from its own checkout, or by its GitHub repo through
   /// This Mac while its machine is down, which the merge never needed.
-  const mergeRow = (row: CrewRow, pr: PrMark, method: MergeMethod) => {
+  const mergeRow = async (row: CrewRow, pr: PrMark, method: MergeMethod) => {
+    const blocked = taskMergeBlock(serverOfPath(row.item.cwd), pr.url);
+    if (blocked) throw new Error(blocked);
     const repo = shownOffline(serverOfPath(row.item.cwd)) ? prRepoSlug(pr.url) : undefined;
     return mergeTask(repo ? slugKey(repo) : row.item.projectPath, pr.number, method, row);
+  };
+
+  // Who each machine's `gh` is, read on every connect, so a machine that goes
+  // down is still known by the account it used.
+  useMergeAccess();
+  const connectedKey = allServers.flatMap((s) => (s.status === "connected" ? [s.id] : [])).join("\n");
+  useEffect(() => {
+    readLogin(LOCAL);
+    for (const id of connectedKey ? connectedKey.split("\n") : []) readLogin(id);
+  }, [connectedKey]);
+  /// Why Merge is not offered here for a task on `server` whose PR is at
+  /// `url`: only a task whose machine is down merges as this machine's `gh`.
+  const taskMergeBlock = (server: ServerId, url: string | undefined): string | null => {
+    const slug = shownOffline(server) ? prRepoSlug(url) : undefined;
+    return slug ? mergeBlock(server, serverName(server), slug) : null;
   };
 
   const cardsReread = useRef(new Set<string>());
@@ -3388,6 +3406,10 @@ function App() {
       });
     },
     titleOf: (id) => sessionIndexItems.find((i) => i.sessionId === id)?.title,
+    mergeBlock: (card) => {
+      const task = sessionIndexItems.find((i) => i.sessionId === card.taskId);
+      return taskMergeBlock(task ? serverOfPath(task.cwd) : serverOfSession(card.taskId), card.url);
+    },
     merge: async (card, method, settle) => {
       const item = settle
         ? (sessionIndexItems.find((i) => i.sessionId === card.taskId) ??
@@ -3987,6 +4009,7 @@ function App() {
                 onDetach={detachSession}
                 onFixConflicts={(row, pr) => askToFixConflicts(row.item, pr.number)}
                 onMerge={mergeRow}
+                mergeBlock={(row, pr) => taskMergeBlock(serverOfPath(row.item.cwd), pr.url)}
                 now={stalled.now}
               />
             </TabBody>
@@ -4309,6 +4332,7 @@ function App() {
                 }
                 onOpen={(id, alone) => void openTask(id, alone)}
                 onMerge={mergeRow}
+                mergeBlock={(row, pr) => taskMergeBlock(serverOfPath(row.item.cwd), pr.url)}
               />
             }
             botFocus={botFocus}

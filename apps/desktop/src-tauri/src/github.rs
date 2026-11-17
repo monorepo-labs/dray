@@ -921,6 +921,59 @@ pub async fn prs_for_branch(
     }
 }
 
+/// Each repo's answer to [`can_merge_repo`], and when it was read.
+static MERGE_ACCESS: LazyLock<Mutex<HashMap<String, (std::time::Instant, bool)>>> = LazyLock::new(Default::default);
+
+/// How long a repo's access answer stands. Access changes rarely, and the card
+/// asks on every task row it draws.
+const MERGE_ACCESS_FOR: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Whether this machine's `gh` account can merge into the repo `cwd` names:
+/// write access or above (#1178). Asked before Merge is offered here for a task
+/// whose own machine is down, since a merge from here runs as whoever this
+/// `gh` is. `None` where GitHub could not be asked; that is not cached.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn can_merge_repo(cwd: String) -> Option<bool> {
+    let slug = match slug_of(&cwd) {
+        Some(slug) => slug.to_string(),
+        None => {
+            let (owner, name) = repo_slug(&cwd).await.ok()?;
+            format!("{owner}/{name}")
+        }
+    };
+    if let Some((at, can)) = MERGE_ACCESS.lock().await.get(&slug) {
+        if at.elapsed() < MERGE_ACCESS_FOR {
+            return Some(*can);
+        }
+    }
+    // `host/owner/name` is a repo on a GitHub that is not github.com.
+    let parts: Vec<&str> = slug.split('/').collect();
+    let (host, path) = match parts.as_slice() {
+        [host, owner, name] => (Some(*host), format!("repos/{owner}/{name}")),
+        _ => (None, format!("repos/{slug}")),
+    };
+    let mut args = vec!["api", path.as_str(), "--jq", ".permissions"];
+    if let Some(host) = host {
+        args.extend(["--hostname", host]);
+    }
+    let can = match gh(&format!("{SLUG_PREFIX}{slug}"), &args).await {
+        Ok(out) => can_merge_from(&out)?,
+        // GitHub answers a private repo this account cannot see as missing.
+        Err(e) if e.contains("HTTP 404") => false,
+        Err(_) => return None,
+    };
+    MERGE_ACCESS.lock().await.insert(slug, (std::time::Instant::now(), can));
+    Some(can)
+}
+
+/// Reads `gh api repos/…`'s `permissions`: merging takes write access, which
+/// maintain and admin include. Absent is a token that cannot see them.
+fn can_merge_from(permissions: &str) -> Option<bool> {
+    let value: serde_json::Value = serde_json::from_str(permissions.trim()).ok()?;
+    let object = value.as_object()?;
+    Some(["push", "maintain", "admin"].iter().any(|key| object.get(*key).and_then(|v| v.as_bool()) == Some(true)))
+}
+
 /// Probes for `gh` again, and answers whether it is there now.
 ///
 /// The panel's recheck button, pressed by a reader who has just installed the
@@ -929,6 +982,7 @@ pub async fn prs_for_branch(
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn recheck_gh() -> bool {
     binpath::forget_gh();
+    MERGE_ACCESS.lock().await.clear();
     // The same absence, cached a second time: the issues side remembers *who*
     // `gh` answered as, and a reader pressing this has usually just installed
     // the CLI or signed in — so an answer taken before that must not outlive it.
@@ -1827,5 +1881,20 @@ mod tests {
         assert_eq!(slug_of("/github:monorepo-labs/dray"), Some("monorepo-labs/dray"));
         assert_eq!(slug_of("/home/me/dray"), None);
         assert_eq!(slug_of("github:nothing"), None);
+    }
+
+    /// Write access merges; read and triage do not; no permissions at all is
+    /// a token that cannot see them, which is not a yes.
+    #[test]
+    fn merge_access_needs_write() {
+        let perms = |push: bool, maintain: bool, admin: bool| {
+            format!(r#"{{"admin":{admin},"maintain":{maintain},"push":{push},"triage":true,"pull":true}}"#)
+        };
+        assert_eq!(can_merge_from(&perms(true, false, false)), Some(true));
+        assert_eq!(can_merge_from(&perms(false, true, false)), Some(true));
+        assert_eq!(can_merge_from(&perms(false, false, true)), Some(true));
+        assert_eq!(can_merge_from(&perms(false, false, false)), Some(false));
+        assert_eq!(can_merge_from("{}\n"), Some(false));
+        assert_eq!(can_merge_from(""), None);
     }
 }

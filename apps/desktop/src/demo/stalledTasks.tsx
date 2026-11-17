@@ -229,6 +229,7 @@ function Demo() {
             <StalledTasks
               key={shown}
               stalls={card}
+              mergeBlock={() => null}
               now={NOW}
               onFocus={(sessionId) => setFocus({ sessionId, at: Date.now() })}
               onOpen={(id) => setOpened(ROWS.find((x) => x.row.item.sessionId === id)?.row.item.title ?? id)}

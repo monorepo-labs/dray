@@ -86,6 +86,13 @@ describe("keptRow", () => {
     expect(keptRow(kept, marks(null))).toEqual({ ...task, prRepo: "acme/dray" });
   });
 
+  it("keeps the last kept fields on a fresh row whose PR is not read yet", () => {
+    const before = { ...task, prOpen: true as const, prRepo: "acme/dray" };
+    expect(keptRow(task, () => undefined, undefined, before)).toEqual(before);
+    // A read wins over what was kept, but the repo stays.
+    expect(keptRow(task, marks("MERGED"), undefined, before)).toEqual({ ...task, prRepo: "acme/dray" });
+  });
+
   it("carries the live status over the index row's", () => {
     expect(keptRow(task, () => undefined, "in_progress")).toEqual({ ...task, status: "in_progress" });
     expect(keptRow(task, () => undefined, "idle")).toBe(task);

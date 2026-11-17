@@ -3,6 +3,7 @@ import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
 import { botsOf, isBotPath, keepBots, refreshBots, useBots } from "@/lib/bots";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
 import { indexRow, keptRow, loadServerCaches, saveServerCache, unreachable, withKept } from "@/lib/serverCache";
+import { loginOf, seedLogin, useMergeAccess } from "@/lib/mergeAccess";
 import { keptPrMark, prMarksChanged } from "@/hooks/usePrMarks";
 import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
 import { CloudError, cloudIo, isCloud, onCloud, placeTask, setCloudFailure, setPlacing } from "@/lib/cloud";
@@ -163,6 +164,11 @@ const pathOfProject = (p: Project) => p.path;
 /// server that cannot be asked still draws the side the reader picks. Seeded
 /// from disk at launch and written back there (`serverCache.ts`).
 const lastIndex = new Map<string, SessionIndexItem[]>();
+
+/// Each live remote row as last kept on disk, by session: a row fresh from its
+/// server carries no `prOpen` or `prRepo`, and until its PR is read this run
+/// the kept ones must stand (`keptRow`'s `before`).
+const keptBefore = new Map<string, SessionIndexItem>();
 
 /// Each remote's last projects answer, kept for the same reason.
 const lastProjects = new Map<ServerId, Project[]>();
@@ -2293,6 +2299,8 @@ useEffect(() => {
       // A read that already landed this run is newer.
       if (!lastProjects.has(id) && cache.projects) lastProjects.set(id, cache.projects);
       if (cache.bots) keepBots(id, cache.bots);
+      seedLogin(id, cache.ghLogin);
+      for (const item of cache.sessions ?? []) keptBefore.set(item.sessionId, item);
       for (const [side, items] of [[false, cache.sessions], [true, cache.archived]] as const) {
         if (!items || lastIndex.has(`${id}:${side}`)) continue;
         // Routes a click on a kept row to its server, as a read would have.
@@ -2316,6 +2324,8 @@ useEffect(() => {
 // A PR merging moves no index row, nor does a turn starting, and the kept
 // row's `prOpen` and `status` must follow both.
 const [prMarksSeen, setPrMarksSeen] = useState(0);
+// A machine's `gh` login is kept with its rows too.
+const loginsSeen = useMergeAccess();
 useEffect(() => prMarksChanged.subscribe(() => setPrMarksSeen((n) => n + 1)), []);
 useEffect(() => {
   const live = !showArchivedRef.current && indexSide === false;
@@ -2332,16 +2342,21 @@ useEffect(() => {
   const timer = setTimeout(() => {
     for (const { id } of remoteServers()) {
       if (!answered.has(`${id}:sessions`) && !answered.has(`${id}:projects`)) continue;
+      const sessions = lastIndex
+        .get(`${id}:false`)
+        ?.map((row) => keptRow(row, keptPrMark, statusBySession[row.sessionId], keptBefore.get(row.sessionId)));
+      for (const row of sessions ?? []) keptBefore.set(row.sessionId, row);
       saveServerCache(id, {
-        sessions: lastIndex.get(`${id}:false`)?.map((row) => keptRow(row, keptPrMark, statusBySession[row.sessionId])),
+        sessions,
         archived: lastIndex.get(`${id}:true`),
         projects: lastProjects.get(id),
         bots: botsOf(id),
+        ghLogin: loginOf(id),
       });
     }
   }, 1000);
   return () => clearTimeout(timer);
-}, [sessionIndexItems, projects, indexSide, bots, prMarksSeen, statusBySession])
+}, [sessionIndexItems, projects, indexSide, bots, prMarksSeen, statusBySession, loginsSeen])
 
 // Refetched per project rather than cached: branches change outside the app.
 // The guard matters because switching projects quickly would otherwise let a

@@ -33,13 +33,15 @@ const DISMISSED_CAP = 200;
 /// the moment its task moves; dismissed, a stall stays gone until the task
 /// changes and stalls again. A task whose machine is down stays, drawn from
 /// what was last known with the offline mark in its time's place; Merge still
-/// works, through GitHub from here.
+/// works, through GitHub from here, where `mergeBlock` allows it, and the
+/// offline mark says why where it does not.
 export default function StalledTasks({
   stalls,
   now,
   onFocus,
   onOpen,
   onMerge,
+  mergeBlock,
 }: {
   /// The card's rows: `onCard` stalls alone.
   stalls: readonly Stall[];
@@ -48,6 +50,8 @@ export default function StalledTasks({
   /// `alone`: a ⌘-click, which switches to the task rather than opening its tab.
   onOpen: (sessionId: string, alone: boolean) => void;
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
+  /// Why a ready row offers no Merge, or `null` where it does.
+  mergeBlock: (row: CrewRow, pr: PrMark) => string | null;
 }) {
   const [dismissed, setDismissed] = useLocalStorage<string[]>(DISMISSED_KEY, []);
   // Each row's offline mark follows its machine.
@@ -70,7 +74,15 @@ export default function StalledTasks({
         </Button>
       </div>
       {shown.map((stall) => (
-        <StalledRow key={stall.key} stall={stall} now={now} onFocus={onFocus} onOpen={onOpen} onMerge={onMerge} />
+        <StalledRow
+          key={stall.key}
+          stall={stall}
+          now={now}
+          onFocus={onFocus}
+          onOpen={onOpen}
+          onMerge={onMerge}
+          mergeBlock={mergeBlock}
+        />
       ))}
     </div>
   );
@@ -86,12 +98,14 @@ function StalledRow({
   onFocus,
   onOpen,
   onMerge,
+  mergeBlock,
 }: {
   stall: Stall;
   now: number;
   onFocus: (sessionId: string) => void;
   onOpen: (sessionId: string, alone: boolean) => void;
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
+  mergeBlock: (row: CrewRow, pr: PrMark) => string | null;
 }) {
   const [hovered, setHovered] = useState(false);
   const { row, pr } = stall;
@@ -102,6 +116,7 @@ function StalledRow({
   const waiting = stall.kind === "waiting" && !need;
   const last = useStallLine(stall.key, id, waiting);
   const offline = offlineLine(serverOfPath(item.cwd));
+  const blocked = stall.kind === "ready" && pr && !stall.checking ? mergeBlock(row, pr) : null;
 
   return (
     // A div, since a button cannot hold Open task and Merge inside it.
@@ -150,11 +165,14 @@ function StalledRow({
                   Checking…
                 </span>
               ) : (
-                <MergeControl onMerge={(method) => onMerge(row, pr, method)} />
+                !blocked && <MergeControl onMerge={(method) => onMerge(row, pr, method)} />
               ))}
           </span>
           {offline ? (
-            <span className="flex shrink-0" title={`${offline} · last known state`}>
+            <span
+              className="flex shrink-0"
+              title={blocked ? `${offline} · last known state\n${blocked}` : `${offline} · last known state`}
+            >
               <SignalSlashIcon className="size-3.5 text-muted-foreground" aria-label={offline} />
             </span>
           ) : (
