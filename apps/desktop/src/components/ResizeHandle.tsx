@@ -42,6 +42,11 @@ const JUMP_PX = 24;
 /// default's detent.
 export type RailSnap = "toRail" | "fromRail" | "detent" | null;
 
+/// Dev builds only, while the bounce is judged against a flat snap: set, every
+/// snap bounces as a release build does; unset, every one settles flat.
+export const SNAP_BOUNCE_KEY = "dev.snapBounce";
+const bounces = () => !import.meta.env.DEV || readLocalStorage(SNAP_BOUNCE_KEY, false);
+
 const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const subscribeToResize = (fn: () => void) => {
@@ -172,7 +177,9 @@ export function useResizable({
     setReadFor(storageKey);
     setStored(read());
   }
-  const from = useRef<{ x: number; width: number } | null>(null);
+  // `raw` is the pointer's last width, kept here as well as in state: a release
+  // landing in the same frame as a move must not read the width before it.
+  const from = useRef<{ x: number; width: number; raw?: number } | null>(null);
   // The pointer's speed in px/s, handed to a spring so a snap carries the throw.
   const fling = useRef({ x: 0, at: 0, v: 0 });
   // A drag, and whether the default's detent has let go of it yet.
@@ -225,7 +232,7 @@ export function useResizable({
     } else if (a !== b || (a === "detent" && !drag)) {
       // The stretch inside the detent follows the pointer; only a jump springs.
       // Into the default bounces; a release settling back onto it does not.
-      const damping = a === "free" && b === "detent" ? DAMPING_DETENT : a === b ? DAMPING_CATCH : DAMPING;
+      const damping = !bounces() ? DAMPING_CATCH : a === "free" && b === "detent" ? DAMPING_DETENT : a === b ? DAMPING_CATCH : DAMPING;
       setSpring({ id: Date.now(), from: last, snap, damping });
       setDrawn(last);
     }
@@ -293,9 +300,9 @@ export function useResizable({
     if (!start) return;
     from.current = null;
     // A press with no move is not a drag, and must not pull a saved width in.
-    if (!drag) return;
+    if (start.raw === undefined) return;
     setDrag(null);
-    const next = clamp(stored, drag === "free" ? "rest" : "release");
+    const next = clamp(start.raw, drag === "free" ? "rest" : "release");
     setStored(next);
     writeLocalStorage(storageKey, next);
   };
@@ -341,7 +348,8 @@ export function useResizable({
         const f = fling.current;
         const now = performance.now();
         if (now - f.at >= 8) fling.current = { x: e.clientX, at: now, v: ((e.clientX - f.x) / (now - f.at)) * 1000 };
-        setStored(start.width + moved);
+        start.raw = start.width + moved;
+        setStored(start.raw);
         setDrag((d) => d ?? "pull");
       }}
       onPointerUp={end}

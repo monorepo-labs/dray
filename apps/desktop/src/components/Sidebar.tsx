@@ -65,7 +65,8 @@ import { sessionBranch } from "@/lib/pr";
 import { checkoutsOf, groupProjects, keyOfPath, leadPath, soleServer } from "@/lib/projectGroups";
 import { offlineLine, projectLabel, serverName, shownOffline, useServers } from "@/lib/servers";
 import { LOCAL, serverOfPath } from "@/lib/transport";
-import { useResizable } from "@/components/ResizeHandle";
+import { SNAP_BOUNCE_KEY, useResizable } from "@/components/ResizeHandle";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useJumpDigit } from "@/lib/digitChords";
 import type { ShortcutId } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
@@ -979,13 +980,23 @@ function devBadgeLabel(branch: string | null): string {
 /// fact its loudest. One line — a long branch truncates rather than pushing the
 /// row, with `title` restoring it.
 function DevBadge() {
+  const [bounce, setBounce] = useLocalStorage(SNAP_BOUNCE_KEY, false);
   return (
     <div
       data-rail-hide
-      title={__DEV_BRANCH__ ?? undefined}
-      className="shrink-0 truncate px-3.5 pb-2 font-mono text-[10px] leading-none text-muted-foreground/60"
+      className="flex shrink-0 items-center gap-2 px-3.5 pb-2 font-mono text-[10px] leading-none text-muted-foreground/60"
     >
-      {devBadgeLabel(__DEV_BRANCH__)}
+      <span title={__DEV_BRANCH__ ?? undefined} className="min-w-0 truncate">
+        {devBadgeLabel(__DEV_BRANCH__)}
+      </span>
+      {/* Dev-only A/B for the sidebar snap, while the bounce is decided. */}
+      <button
+        type="button"
+        onClick={() => setBounce((b) => !b)}
+        className="ml-auto shrink-0 cursor-pointer rounded px-1 py-0.5 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+      >
+        Snap: {bounce ? "bounce" : "flat"}
+      </button>
     </div>
   );
 }
