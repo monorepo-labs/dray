@@ -1,9 +1,10 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronRight, History } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { devRuns, DEV_RUN_STATES, setDevRunState, useDevRunState, type DevRunState } from "@/components/botRunsDev";
 import { RunRow, RunSection } from "@/components/SubagentPanel";
 import { Button } from "@/components/ui/button";
+import Spinner from "@/components/ui/spinner";
 import { canOpenTab, isShellRun, opensTab, type SubagentRun } from "@/lib/transcript";
 import { invoke } from "@/lib/transport";
 import { cn } from "@/lib/utils";
@@ -162,7 +163,8 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
                   className="flex cursor-default items-center gap-2.5 rounded-lg py-1 pr-2.5 pl-2.5 text-left text-ui text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:hover:bg-transparent"
                 >
                   <span className="flex h-4 w-7 shrink-0 items-center justify-center">
-                    <ChevronDown className="size-3.5" />
+                    {/* Older runs fetched, not a fold: a chevron here read as one. */}
+                    {loading ? <Spinner className="size-3.5" /> : <History className="size-3.5" />}
                   </span>
                   {loading ? "Loading…" : "Load more"}
                 </button>
