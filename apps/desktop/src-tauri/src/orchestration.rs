@@ -598,7 +598,7 @@ async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Respo
         }
         // Only a flag the flush wrote: a newer choice, held or written
         // directly, is the reader's and stands.
-        if held.aside && released == crate::held_flags::Released::Landed {
+        if held.aside == Some(true) && released == crate::held_flags::Released::Landed {
             let back = elsewhere::prepare(Request::SetAside(SetAside { session_id: held.session_id, aside: false })).await?;
             if let Err(e) = elsewhere::forward(machine, &back).await {
                 eprintln!("[held flags] could not bring back after a send: {e:#}");

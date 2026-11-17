@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { keptRow, serverShown, unfinishedWarning, unreachable, withKept } from "@/lib/serverCache";
+import { keptRepo, keptRow, serverShown, unfinishedWarning, unreachable, withKept } from "@/lib/serverCache";
 import { qualify } from "@/lib/transport";
 import type { PrMark, ServerInfo, SessionIndexItem } from "@/types/events";
 
@@ -73,6 +73,17 @@ describe("keptRow", () => {
     expect(keptRow(kept, marks("MERGED"))).toEqual(task);
     expect(keptRow(kept, marks(null))).toEqual(task);
     expect(keptRow(kept, () => undefined)).toBe(kept);
+  });
+
+  it("keeps the PR's repo, so it can be read from here while the machine is down", () => {
+    const url = "https://github.com/acme/dray/pull/4";
+    const withUrl = (repo: string, branch: string | null) =>
+      repo === "/srv/dray" && branch === "worktree-fix-login" ? ({ state: "OPEN", url } as PrMark) : undefined;
+    const kept = keptRow(task, withUrl);
+    expect(kept).toEqual({ ...task, prOpen: true, prRepo: "acme/dray" });
+    expect(keptRepo(kept)).toBe("acme/dray");
+    // The repo outlives the PR: a merged or vanished one still names it.
+    expect(keptRow(kept, marks(null))).toEqual({ ...task, prRepo: "acme/dray" });
   });
 
   it("carries the live status over the index row's", () => {

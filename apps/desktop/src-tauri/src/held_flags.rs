@@ -7,8 +7,11 @@
 //! that answers. The app asks for that write at once when it sees the server
 //! reconnect (`flush_held_flags`), so the row never waits out a backoff.
 //!
-//! Only `aside`, with the `pinned` that rides along with it. Settling stops the
-//! session's child, which nothing can do while its server is down.
+//! Mostly `aside`, with the `pinned` that rides along with it. A settle is
+//! held only behind a merge (#1178): a bot task's PR merged through GitHub from
+//! here while its machine slept. The work has landed, so the settle — which
+//! stops the child, and only that server can — waits for the machine, and its
+//! worktree goes with it.
 
 use crate::{events::now_rfc3339, store};
 use serde::{Deserialize, Serialize};
@@ -25,9 +28,16 @@ pub struct Held {
     /// The machine's id in `servers.json`, the app's server id too.
     pub machine: String,
     pub session_id: String,
-    pub aside: bool,
+    /// Absent on a held settle, which sets nothing else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aside: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
+    /// Remove the session's worktree once the settle lands, as Merge does.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remove_worktree: bool,
     /// When it was held. Bringing one back restarts the sidebar's three-day
     /// clock, so the app reads this as the row's `modified` until it lands.
     pub at: String,
@@ -68,7 +78,35 @@ async fn edit(change: impl FnOnce(&mut Vec<Held>)) -> anyhow::Result<bool> {
 /// Holds `aside` (and `pinned`) for `session_id` on `machine`, replacing what
 /// was held for it: the newest press is the one the reader means.
 pub async fn hold(machine: &str, session_id: &str, aside: bool, pinned: Option<bool>) -> anyhow::Result<Held> {
-    let held = Held { machine: machine.into(), session_id: session_id.into(), aside, pinned, at: now_rfc3339() };
+    put(Held {
+        machine: machine.into(),
+        session_id: session_id.into(),
+        aside: Some(aside),
+        pinned,
+        archived: None,
+        remove_worktree: false,
+        at: now_rfc3339(),
+    })
+    .await
+}
+
+/// Holds a settle for `session_id` on `machine`, whose PR was merged from here
+/// while it was down.
+pub async fn hold_settle(machine: &str, session_id: &str, remove_worktree: bool) -> anyhow::Result<Held> {
+    put(Held {
+        machine: machine.into(),
+        session_id: session_id.into(),
+        aside: None,
+        pinned: None,
+        archived: Some(true),
+        remove_worktree,
+        at: now_rfc3339(),
+    })
+    .await
+}
+
+async fn put(held: Held) -> anyhow::Result<Held> {
+    let session_id = held.session_id.clone();
     let entry = held.clone();
     edit(|list| {
         list.retain(|h| h.session_id != session_id);
@@ -207,6 +245,19 @@ mod flush {
         Ok(held)
     }
 
+    /// The serve command `hold_session_settle`: a bot task's PR merged from here
+    /// while its server is down.
+    pub async fn hold_settle_and_announce(
+        machine: String,
+        session_id: String,
+        remove_worktree: bool,
+        sink: Sink,
+    ) -> Result<Held, String> {
+        let held = hold_settle(&machine, &session_id, remove_worktree).await.map_err(|e| format!("{e:#}"))?;
+        announce(&sink, Vec::new()).await;
+        Ok(held)
+    }
+
     /// The serve command `unhold_session_flags`.
     pub async fn unhold_and_announce(session_id: String, sink: Sink) -> Result<Option<Held>, String> {
         let dropped = unhold(&session_id).await.map_err(|e| format!("{e:#}"))?;
@@ -272,12 +323,27 @@ mod flush {
                         continue;
                     }
                     for held in mine {
-                        let args = json!({ "sessionId": held.session_id, "aside": held.aside, "pinned": held.pinned });
-                        let answer = tokio::time::timeout(machines::SWEEP, machines::call(saved, "set_session_flags", args))
-                            .await
-                            .unwrap_or_else(|_| Err(format!("{} did not answer in time", saved.name)));
-                        match answer {
-                            Ok(item) => {
+                        let args = json!({
+                            "sessionId": held.session_id,
+                            "aside": held.aside,
+                            "pinned": held.pinned,
+                            "archived": held.archived,
+                        });
+                        let call = |cmd: &'static str, args: Value| async move {
+                            tokio::time::timeout(machines::SWEEP, machines::call(saved, cmd, args))
+                                .await
+                                .unwrap_or_else(|_| Err(format!("{} did not answer in time", saved.name)))
+                        };
+                        match call("set_session_flags", args).await {
+                            Ok(mut item) => {
+                                // Tried once: the settle landed, and a refused
+                                // removal is no reason to settle again.
+                                if held.remove_worktree && !item.is_null() {
+                                    match call("remove_session_worktree", json!({ "sessionId": held.session_id })).await {
+                                        Ok(moved) => item = moved,
+                                        Err(e) => eprintln!("[held flags err] {}: worktree: {e}", saved.name),
+                                    }
+                                }
                                 BACKOFF.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
                                 // Null is a session that server no longer has:
                                 // nothing left to write it to.
@@ -315,40 +381,57 @@ mod flush {
 }
 
 #[cfg(any(feature = "serve", feature = "desktop"))]
-pub use flush::{announce, flush_now, hold_and_announce, release_and_announce, run, unhold_and_announce};
+pub use flush::{
+    announce, flush_now, hold_and_announce, hold_settle_and_announce, release_and_announce, run, unhold_and_announce,
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn aside(session_id: &str) -> Held {
+        Held {
+            machine: "m".into(),
+            session_id: session_id.into(),
+            aside: Some(true),
+            pinned: None,
+            archived: None,
+            remove_worktree: false,
+            at: "2026-11-14T00:00:00Z".into(),
+        }
+    }
+
     #[test]
     fn a_held_flag_reads_back_as_written() {
-        let held = Held {
-            machine: "m".into(),
-            session_id: "s".into(),
-            aside: true,
-            pinned: Some(false),
-            at: "2026-11-14T00:00:00Z".into(),
-        };
+        let held = Held { pinned: Some(false), ..aside("s") };
         let wire = serde_json::to_value(&held).unwrap();
         assert_eq!(wire["sessionId"], "s");
         assert_eq!(wire["pinned"], false);
+        assert!(wire.get("archived").is_none() && wire.get("removeWorktree").is_none());
         assert_eq!(serde_json::from_value::<Held>(wire).unwrap(), held);
         // Bringing back takes no pin, and says none.
-        let back = Held { pinned: None, aside: false, ..held };
+        let back = Held { pinned: None, aside: Some(false), ..held };
         assert!(serde_json::to_value(&back).unwrap().get("pinned").is_none());
+    }
+
+    /// A file from before held settles still reads, and a settle says nothing
+    /// about set aside.
+    #[test]
+    fn a_held_settle_reads_back_and_older_files_still_parse() {
+        let old: Held = serde_json::from_str(r#"{"machine":"m","sessionId":"s","aside":true,"at":"t"}"#).unwrap();
+        assert_eq!((old.aside, old.archived, old.remove_worktree), (Some(true), None, false));
+        let settle = Held { aside: None, archived: Some(true), remove_worktree: true, ..aside("s") };
+        let wire = serde_json::to_value(&settle).unwrap();
+        assert!(wire.get("aside").is_none());
+        assert_eq!(wire["archived"], true);
+        assert_eq!(wire["removeWorktree"], true);
+        assert_eq!(serde_json::from_value::<Held>(wire).unwrap(), settle);
     }
 
     /// A send's undo goes only where the flush wrote that very flag, and once.
     #[test]
     fn only_the_flag_a_flush_wrote_reads_as_landed() {
-        let held = Held {
-            machine: "m".into(),
-            session_id: "landed-test".into(),
-            aside: true,
-            pinned: None,
-            at: "2026-11-14T00:00:00Z".into(),
-        };
+        let held = aside("landed-test");
         note_landed(&held);
         assert_eq!(took_landed("landed-test", "2026-11-14T00:00:01Z"), Released::Gone);
         assert_eq!(took_landed("landed-test", &held.at), Released::Landed);

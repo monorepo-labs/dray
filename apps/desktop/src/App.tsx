@@ -54,7 +54,7 @@ import { setLinkOpener } from "@/lib/openLink";
 import { repoChanged } from "@/lib/prSync";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useChanges } from "@/hooks/useChanges";
-import { usePrMarks } from "@/hooks/usePrMarks";
+import { keptPrMark, usePrMarks } from "@/hooks/usePrMarks";
 import { usePrReady } from "@/hooks/usePrReady";
 import { useAutoMergeCards } from "@/hooks/useAutoMergeCards";
 import { useWorkStatus } from "@/hooks/useWorkStatus";
@@ -179,7 +179,7 @@ import { boatAsleep, restoreHeld } from "@/lib/boat";
 import { onCloud, setCloudFailure, useCloud, useCloudFailure, useCloudPicks, usePlacing } from "@/lib/cloud";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout, nextCheckout } from "@/lib/projectGroups";
-import { serverConnected, serverName, useServers } from "@/lib/servers";
+import { serverConnected, serverName, shownOffline, useServers } from "@/lib/servers";
 import { canTagFrom } from "@/lib/sessionTag";
 import { useReachableSessions } from "@/hooks/useReachableSessions";
 import AgentUpdateLine from "@/components/composer/AgentUpdateLine";
@@ -187,7 +187,7 @@ import { useAgentUpdates, useAutoUpdateAgents } from "@/hooks/useAgentUpdates";
 import { overwritesInPlace, turnRunningOn } from "@/lib/agentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import AutoContinueNotice from "@/components/composer/AutoContinueNotice";
-import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, SessionIndexItem, SessionSnapshot, WorktreeDisposition } from "@/types/events";
+import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, PrMark, SessionIndexItem, SessionSnapshot, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -201,7 +201,9 @@ import { changeRange, lastToolResult, writingTurns } from "@/lib/changes";
 import { useOlderWrites } from "@/hooks/useOlderWrites";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
-import { prBadgeCount, sessionBranch } from "@/lib/pr";
+import { prBadgeCount, prRepoSlug, sessionBranch, slugKey } from "@/lib/pr";
+import { holdSettle } from "@/lib/heldFlags";
+import { keptRepo } from "@/lib/serverCache";
 import { botAt, botBrowser, botChat, botEntries, botSession, greetingOf, inBotTree, listenForBots, readPreviews, refreshBots, serverOfBot, useBots } from "@/lib/bots";
 import NewBotDialog from "@/components/NewBotDialog";
 import AgentIcon from "@/components/AgentIcon";
@@ -1418,17 +1420,24 @@ function App() {
   // Every task's too, wherever the reader is, hidden or filtered away: its PR
   // turning ready posts a merge card in the chat that started it, and a bot's
   // stalled task is judged by its PR. A bot's tasks are tasks like any other.
-  const botRepoKey = useMemo(
-    () =>
-      [
-        ...new Set(
-          sessionIndexItems
-            .filter((i) => !i.archived && i.parentSessionId && i.parentSessionId !== i.sessionId)
-            .map((i) => i.projectPath),
-        ),
-      ].join("\n"),
-    [sessionIndexItems],
+  // A task whose machine is down is read by its GitHub repo through This Mac
+  // as well (#1178), so its PR stays current on the card and merges from here.
+  const offlineRepo = useCallback(
+    (item: SessionIndexItem) => {
+      void allServers; // re-made on every server change, so callers re-read
+      if (!shownOffline(serverOfPath(item.cwd))) return undefined;
+      return prRepoSlug(keptPrMark(item.projectPath, sessionBranch(item))?.url) ?? keptRepo(item);
+    },
+    [allServers],
   );
+  const botRepoKey = useMemo(() => {
+    const tasks = sessionIndexItems.filter((i) => !i.archived && i.parentSessionId && i.parentSessionId !== i.sessionId);
+    const offline = tasks.flatMap((i) => {
+      const repo = offlineRepo(i);
+      return repo ? [slugKey(repo)] : [];
+    });
+    return [...new Set([...tasks.map((i) => i.projectPath), ...offline])].join("\n");
+  }, [sessionIndexItems, offlineRepo]);
   // Whichever sidebar list is up: a card on screen is still being read.
   const repoPaths = useMemo(
     () => [
@@ -1454,11 +1463,24 @@ function App() {
 
   // Each bot's tasks that have sat untouched: drawn at the foot of its chat,
   // and a banner per bot when new ones land while the window is away.
+  // A task whose machine is down reads its repo's marks from here: its own
+  // key's are a relaunch away from gone, and stale until then.
   const taskPr = useCallback(
-    (row: CrewRow) => prMarks.prFor(row.item.projectPath, sessionBranch(row.item)),
-    [prMarks.prFor],
+    (row: CrewRow): PrMark | undefined => {
+      const branch = sessionBranch(row.item);
+      const repo = offlineRepo(row.item);
+      const own = prMarks.prFor(row.item.projectPath, branch);
+      return repo ? (prMarks.prFor(slugKey(repo), branch) ?? own) : own;
+    },
+    [prMarks.prFor, offlineRepo],
   );
-  const taskPrReadAt = useCallback((row: CrewRow) => prMarks.readAt(row.item.projectPath), [prMarks.readAt]);
+  const taskPrReadAt = useCallback(
+    (row: CrewRow) => {
+      const repo = offlineRepo(row.item);
+      return (repo && prMarks.readAt(slugKey(repo))) || prMarks.readAt(row.item.projectPath);
+    },
+    [prMarks.readAt, offlineRepo],
+  );
   const stalled = useStalledTasks({
     bots,
     items: sessionIndexItems,
@@ -3325,13 +3347,27 @@ function App() {
     prMarks.refreshAfterWrite();
     // Landed, so the task is done — unless it is still working,
     // which settling would kill mid-turn.
-    if (!task) return;
+    if (!task || task.busy) return;
     const { item } = task;
-    if (task.busy || !(await setSessionFlags(item.sessionId, { archived: true }))) return;
+    const removeTree = !!item.worktreeName && !item.worktreeRemoved;
+    // Its machine is down, so the settle waits for it there and lands on reconnect.
+    const server = serverOfPath(item.cwd);
+    if (shownOffline(server)) {
+      await holdSettle(server, item.sessionId, removeTree).catch((e) => console.error("[held settle]", e));
+      return;
+    }
+    if (!(await setSessionFlags(item.sessionId, { archived: true }))) return;
     // The merge landed the work, so whatever the tree still holds is leftover:
     // asking here put a "Delete worktree?" notice on every merge with a stray file.
     // "asked" so a refused delete still says so rather than orphaning the tree.
-    if (item.worktreeName && !item.worktreeRemoved) removeWorktree(item.sessionId, "asked");
+    if (removeTree) removeWorktree(item.sessionId, "asked");
+  };
+
+  /// A task row's Merge: from its own checkout, or by its GitHub repo through
+  /// This Mac while its machine is down, which the merge never needed.
+  const mergeRow = (row: CrewRow, pr: PrMark, method: MergeMethod) => {
+    const repo = shownOffline(serverOfPath(row.item.cwd)) ? prRepoSlug(pr.url) : undefined;
+    return mergeTask(repo ? slugKey(repo) : row.item.projectPath, pr.number, method, row);
   };
 
   const cardsReread = useRef(new Set<string>());
@@ -3943,14 +3979,14 @@ function App() {
             <TabBody active={activeTab === "tasks"}>
               <TasksPanel
                 rows={crew}
-                prOf={(row) => prMarks.prFor(row.item.projectPath, sessionBranch(row.item))}
+                prOf={taskPr}
                 onOpen={(id, alone) => void openTask(id, alone)}
                 onSetFlags={handleSetSessionFlags}
                 onFork={forkSession}
                 onDelete={deleteTask}
                 onDetach={detachSession}
                 onFixConflicts={(row, pr) => askToFixConflicts(row.item, pr.number)}
-                onMerge={(row, pr, method) => mergeTask(row.item.projectPath, pr.number, method, row)}
+                onMerge={mergeRow}
                 now={stalled.now}
               />
             </TabBody>
@@ -4272,7 +4308,7 @@ function App() {
                   selectedBot && setStallFocus({ botId: selectedBot.id, sessionId, at: Date.now() })
                 }
                 onOpen={(id, alone) => void openTask(id, alone)}
-                onMerge={(row, pr, method) => mergeTask(row.item.projectPath, pr.number, method, row)}
+                onMerge={mergeRow}
               />
             }
             botFocus={botFocus}

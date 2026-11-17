@@ -1,3 +1,4 @@
+import { SignalSlashIcon } from "@heroicons/react/16/solid";
 import { ArrowUpRight, X } from "lucide-react";
 import { useState } from "react";
 
@@ -12,7 +13,9 @@ import { seededAvatar } from "@/lib/botAvatar";
 import type { CrewRow } from "@/lib/crew";
 import { isModClick } from "@/lib/platform";
 import { prStatus } from "@/lib/pr";
+import { offlineLine, useServers } from "@/lib/servers";
 import { cardRows, compactAge, DISMISSED_KEY, needLine, type Stall } from "@/lib/stalled";
+import { serverOfPath } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { MergeMethod, PrMark } from "@/types/events";
 
@@ -28,7 +31,9 @@ const DISMISSED_CAP = 200;
 /// the bot; with none in the chat, it opens the task in a tab, as ⌘-click and
 /// Open, shown on hover, do. A row clears
 /// the moment its task moves; dismissed, a stall stays gone until the task
-/// changes and stalls again.
+/// changes and stalls again. A task whose machine is down stays, drawn from
+/// what was last known with the offline mark in its time's place; Merge still
+/// works, through GitHub from here.
 export default function StalledTasks({
   stalls,
   now,
@@ -45,6 +50,8 @@ export default function StalledTasks({
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
 }) {
   const [dismissed, setDismissed] = useLocalStorage<string[]>(DISMISSED_KEY, []);
+  // Each row's offline mark follows its machine.
+  useServers();
   const shown = cardRows(stalls, dismissed);
   if (shown.length === 0) return null;
 
@@ -94,6 +101,7 @@ function StalledRow({
   const need = needLine(stall);
   const waiting = stall.kind === "waiting" && !need;
   const last = useStallLine(stall.key, id, waiting);
+  const offline = offlineLine(serverOfPath(item.cwd));
 
   return (
     // A div, since a button cannot hold Open task and Merge inside it.
@@ -145,9 +153,15 @@ function StalledRow({
                 <MergeControl onMerge={(method) => onMerge(row, pr, method)} />
               ))}
           </span>
-          <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">
-            {compactAge(item.modified, now)}
-          </span>
+          {offline ? (
+            <span className="flex shrink-0" title={`${offline} · last known state`}>
+              <SignalSlashIcon className="size-3.5 text-muted-foreground" aria-label={offline} />
+            </span>
+          ) : (
+            <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">
+              {compactAge(item.modified, now)}
+            </span>
+          )}
         </span>
         {need ? (
           <span className="min-w-0 truncate text-ui text-foreground/70">{need}</span>
