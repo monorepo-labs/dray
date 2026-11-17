@@ -348,7 +348,10 @@ export default function UserMessage({
                   <InlineLink
                     key={i}
                     href={segment.href ?? segment.text}
-                    className={cn(SEGMENT_COLOR.url, "font-medium")}
+                    // `break-all`, not the body's `wrap-anywhere`: that breaks a
+                    // word only once it fails a line of its own, so a long URL
+                    // left the word before it and started on the next line.
+                    className={cn(SEGMENT_COLOR.url, "font-medium break-all")}
                   >
                     {segment.text}
                   </InlineLink>
