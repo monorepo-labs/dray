@@ -8,8 +8,8 @@ import { fileSrc, invoke, qualify, serverOfSession } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { SessionPage } from "@/types/events";
 
-/// What one Load more press goes looking for: a row and a half of the grid.
-const LOAD_MORE = 9;
+/// What one Load more press goes looking for.
+const LOAD_MORE = 10;
 
 type MediaFilter = "all" | "you" | "ai";
 const MEDIA_FILTERS: { id: MediaFilter; label: string }[] = [
@@ -57,8 +57,12 @@ export default function AttachmentGrid({ logs }: { logs: HeldLog[] }) {
     setLoading(true);
     setFailed(false);
     try {
+      // The media lines alone, read back from `before` until there are enough.
+      // A server from before `list_attachments` sends whole turns instead.
       const page = (sessionId: string, before: number) =>
-        invoke<SessionPage>("get_session_page", { sessionId, before, turns: 16 });
+        invoke<SessionPage>("list_attachments", { sessionId, before, limit: LOAD_MORE }).catch(() =>
+          invoke<SessionPage>("get_session_page", { sessionId, before, turns: 16 }),
+        );
       setOlder(await loadOlderMedia(logs, older, page, LOAD_MORE));
     } catch (e) {
       console.error("failed to load older attachments", e);

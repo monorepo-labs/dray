@@ -35,9 +35,9 @@ export function allMedia(logs: HeldLog[], older: Record<string, OlderMedia>): Se
 }
 
 /// Reads pages above the held logs, newest log first, until `want` media not
-/// already shown turn up or every log is read to its start. Pages until it
-/// finds some rather than one page a click, since a page of turns often holds
-/// no picture at all and a button that adds nothing reads as broken.
+/// already shown turn up or every log is read to its start. A page is usually
+/// enough on its own; the loop covers a page short of `want` — the log's top,
+/// pictures the transcript already holds — and an older server's whole turns.
 export async function loadOlderMedia(
   logs: HeldLog[],
   older: Record<string, OlderMedia>,

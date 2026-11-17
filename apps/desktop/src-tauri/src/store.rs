@@ -1928,6 +1928,89 @@ pub struct SessionPage {
     pub older_before: Option<u64>,
 }
 
+/// The main thread's pictures and recordings written before byte `before`,
+/// newest first, about `limit` of them: for the attachment grid's Load more,
+/// which starts where the loaded transcript does and pages back from there.
+///
+/// Reads backwards in chunks and stops once it has `limit`, so a page costs
+/// what it shows rather than a scan of the log. Only lines that can carry
+/// media are parsed and sent, found by a substring check, plus the calls that
+/// print a recording's path, since the client reads a recording off its call.
+/// A page always opens on a turn, so such a call and its result never land in
+/// two different pages.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn list_attachments(session_id: &str, before: u64, limit: u32) -> Result<SessionPage, Fail> {
+    let path = get_session_path(session_id).await?;
+    let mut file = match fs::File::open(&path).await {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SessionPage { events: Vec::new(), older_before: None })
+        }
+        Err(e) => return Err(anyhow::Error::from(e).context("could not open session file").into()),
+    };
+    let len = file.metadata().await.map_err(anyhow::Error::from)?.len();
+    Ok(read_attachments(&mut file, before.min(len), limit, 256 * 1024).await?)
+}
+
+async fn read_attachments(
+    file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
+    end: u64,
+    limit: u32,
+    chunk: u64,
+) -> Result<SessionPage> {
+    let cut = |buf: &[u8], at_top: bool| {
+        let mut found = 0;
+        newest_line(buf, at_top, |line| {
+            found += media_in(line);
+            found >= limit.max(1) as usize && opens_turn(line)
+        })
+        .map(|(start, _)| start)
+        .or(at_top.then_some(0))
+    };
+    let Some((buf, begins)) = read_back_bytes(file, end, chunk, cut).await? else {
+        return Ok(SessionPage { events: Vec::new(), older_before: None });
+    };
+    let events = buf
+        .split(|&b| b == b'\n')
+        .filter(|line| carries_media(line) || prints_recording(line))
+        .filter_map(parse_line::<AgentEvent>)
+        .filter(|event| event.subagent.is_none())
+        .collect();
+    Ok(SessionPage { events, older_before: (begins > 0).then_some(begins) })
+}
+
+/// A line that may hold a picture or name a recording: the cheap test that
+/// decides which lines are worth parsing.
+fn carries_media(line: &[u8]) -> bool {
+    let has = |needle: &[u8]| line.windows(needle.len()).any(|w| w == needle);
+    has(br#""images":[{"#) || (has(b"/recordings/") && has(b".mp4"))
+}
+
+/// A call that may be `dray browser record stop` or `dray video add`, whose
+/// result names the recording.
+fn prints_recording(line: &[u8]) -> bool {
+    let has = |needle: &[u8]| line.windows(needle.len()).any(|w| w == needle);
+    has(br#""tool_call_started""#) && has(b"dray")
+}
+
+/// How many pictures and recordings a main-thread line holds, near enough to
+/// size a page: a recording is counted wherever its path appears.
+fn media_in(line: &[u8]) -> usize {
+    if !carries_media(line) {
+        return 0;
+    }
+    let Some(event) = parse_line::<AgentEvent>(line).filter(|e| e.subagent.is_none()) else {
+        return 0;
+    };
+    let videos = |text: &str| if text.contains("/recordings/") { text.matches(".mp4").count() } else { 0 };
+    match event.payload {
+        AgentEventPayload::UserMessage { images, .. } => images.len(),
+        AgentEventPayload::ToolCallCompleted { result, .. } => result.images.len() + videos(&result.text),
+        AgentEventPayload::AssistantText { text, .. } => videos(&text),
+        _ => 0,
+    }
+}
+
 /// Reads the newest `turns` turns ending at byte `end` (the file's end where
 /// `None`), backwards in doubling chunks, so only the lines returned are ever
 /// parsed as events.
@@ -1965,9 +2048,22 @@ async fn read_back(
     session_id: &str,
     file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
     end: u64,
-    mut chunk: u64,
+    chunk: u64,
     cut: impl Fn(&[u8], bool) -> Option<usize>,
 ) -> Result<Option<(Vec<AgentEvent>, u64)>> {
+    Ok(read_back_bytes(file, end, chunk, cut)
+        .await?
+        .map(|(buf, begins)| (parse_log(session_id, &buf), begins)))
+}
+
+/// [`read_back`] without the parse: the bytes from the cut to `end`, and the
+/// offset they begin at.
+async fn read_back_bytes(
+    file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
+    end: u64,
+    mut chunk: u64,
+    cut: impl Fn(&[u8], bool) -> Option<usize>,
+) -> Result<Option<(Vec<u8>, u64)>> {
     use std::io::SeekFrom;
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
@@ -1990,7 +2086,8 @@ async fn read_back(
         }
     };
 
-    Ok(Some((parse_log(session_id, &buf[cut..]), start + cut as u64)))
+    buf.drain(..cut);
+    Ok(Some((buf, start + cut as u64)))
 }
 
 /// Every event in a stretch of log, skipping lines that hold none rather than
@@ -3799,6 +3896,29 @@ mod page_tests {
         assert_eq!(turn_cut(buf.as_bytes(), true, 3), None);
         // Not the top of the file, so the first line may be a fragment.
         assert_eq!(turn_cut(&buf.as_bytes()[1..], false, 2), None);
+    }
+
+    /// Load more's pages: newest first, about `limit` pictures each, opening on
+    /// a turn, and carrying no line without one.
+    #[tokio::test]
+    async fn pages_attachments_back() {
+        let shot = |seq: u64| {
+            line(seq, false, serde_json::json!({
+                "type": "user_message", "text": "look", "images": [{"path": format!("/p/{seq}.png"), "url": null, "mimeType": null}],
+                "issues": [], "baseline": null, "queued": false, "from": null, "cwd": null,
+            }))
+        };
+        // Turns 0..6, a picture on each even one; every turn has a reply.
+        let log: String = (0..6u64)
+            .flat_map(|t| [if t % 2 == 0 { shot(t * 2) } else { prompt(t * 2, false) }, text(t * 2 + 1, false)])
+            .collect();
+        let mut file = std::io::Cursor::new(log.clone().into_bytes());
+        let paths = |page: &SessionPage| page.events.iter().map(|e| e.seq).collect::<Vec<_>>();
+
+        let first = read_attachments(&mut file, log.len() as u64, 2, 7).await.unwrap();
+        assert_eq!(paths(&first), [4, 8]);
+        let second = read_attachments(&mut file, first.older_before.unwrap(), 2, 7).await.unwrap();
+        assert_eq!((paths(&second), second.older_before), (vec![0], None));
     }
 
     /// Pages walked back from the end, through chunks far smaller than a line,
