@@ -88,14 +88,17 @@ struct SettingsView: View {
 
 // MARK: Pieces
 
-/// A card per server, then Add server. Past `limit`, the rest sit behind an All servers row.
+/// A card per server and Add server. Past `limit`, the rest sit behind an All servers row.
 private struct ServerCards: View {
     @Environment(Store.self) private var store
     let limit: Int?
     @State private var adding = false
 
     var body: some View {
+        // The full page leads with Add server; Settings keeps it under its few.
+        let addCard = Button { adding = true } label: { AddServerCard(first: store.servers.isEmpty) }
         VStack(spacing: Theme.Space.s) {
+            if limit == nil { addCard }
             ForEach(store.servers.prefix(limit ?? .max)) { s in
                 NavigationLink(value: SettingsPage.server(s.id)) { ServerCard(server: s) }
             }
@@ -107,7 +110,7 @@ private struct ServerCards: View {
                 }
                 .accessibilityIdentifier("settings.allServers")
             }
-            Button { adding = true } label: { AddServerCard(first: store.servers.isEmpty) }
+            if limit != nil { addCard }
         }
         .buttonStyle(RowButtonStyle())
         .sheet(isPresented: $adding) { AddServerView(link: nil) }
