@@ -4016,6 +4016,7 @@ function App() {
             tab={activeTab}
             onTabChange={setPanelTab}
             tabs={tabs}
+            counts={selectedBot ? { tasks: crew.filter((r) => !r.item.aside).length } : undefined}
             widthKey={shownSession.sessionId}
             refresh={panelRefresh}
             cwd={shownSession.cwd}

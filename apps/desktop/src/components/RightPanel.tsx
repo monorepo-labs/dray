@@ -149,6 +149,8 @@ type RightPanelProps = {
   onTabChange: (tab: PanelTab) => void;
   /// The tab row, as `tabOrder` answers it.
   tabs?: readonly PanelTab[];
+  /// A number drawn after a tab's label, muted: a bot's task total on Tasks.
+  counts?: Partial<Record<PanelTab, number>>;
   /// Re-reads whatever the active tab is showing, drawn at the far end of the
   /// tab row. One button rather than one per panel: it means the same thing
   /// everywhere, so it belongs to the frame and always sits in the same place.
@@ -229,6 +231,7 @@ export default function RightPanel({
   tab,
   onTabChange,
   tabs = BASE_TABS,
+  counts,
   refresh,
   cwd,
   actions,
@@ -276,9 +279,12 @@ export default function RightPanel({
           // lands on the same baseline whichever frame it is wearing.
           <span className="px-2 py-1 text-ui font-medium">{heading}</span>
         ) : tabs.length === 1 && tabs[0] === "tasks" ? (
-          // A bot's pane with nothing beside its task list: the list says what
-          // the pane is, so the strip stays the titlebar it sits in.
-          null
+          // A bot's pane with nothing beside its task list: the tab's words
+          // with nothing to switch to, so no fill and no weight over its count.
+          <span className="px-2 py-1 text-ui text-muted-foreground">
+            {PANEL_LABELS.tasks}
+            <TabCount n={counts?.tasks} />
+          </span>
         ) : (
           // A wrapping row clipped to one line, which sheds the keycaps when
           // they stop fitting and never a tab sooner — the CSS answer to a
@@ -304,6 +310,7 @@ export default function RightPanel({
                   onClick={() => onTabChange(value)}
                 >
                   {PANEL_LABELS[value]}
+                  <TabCount n={counts?.[value]} />
                 </TabButton>
               ))}
             </div>
@@ -348,6 +355,10 @@ export default function RightPanel({
       {children}
     </aside>
   );
+}
+
+function TabCount({ n }: { n: number | undefined }) {
+  return n === undefined ? null : <span className="ml-1.5 text-muted-foreground tabular-nums">{n}</span>;
 }
 
 /// The buttons at the pane's far end — the reader's own action, Open, Refresh.

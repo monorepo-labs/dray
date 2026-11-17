@@ -1,12 +1,10 @@
-import { ChevronRight, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { RunRow, RunSection } from "@/components/SubagentPanel";
-import { Button } from "@/components/ui/button";
+import { RunHeading, RunRow, RunSection } from "@/components/SubagentPanel";
 import Spinner from "@/components/ui/spinner";
 import { canOpenTab, isShellRun, opensTab, type SubagentRun } from "@/lib/transcript";
 import { invoke } from "@/lib/transport";
-import { cn } from "@/lib/utils";
 import type { SubagentCursor, SubagentList, SubagentSummary, ToolResult } from "@/types/events";
 
 type Props = {
@@ -119,42 +117,16 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
     <div className="flex shrink-0 flex-col">
       {(running.length > 0 || count > 0) && (
         <div className="flex flex-col">
-          {/* The whole heading folds the finished runs; running ones stay out
-              under it either way. Stop all sits between the title and the
-              count, so the row takes the click and Stop all keeps its own. */}
-          <div
-            onClick={() => count > 0 && setOpen(!open)}
-            className={cn(
-              "group/heading flex items-center gap-1.5 px-3 pt-4 pb-2 text-ui text-muted-foreground",
-              count > 0 && "transition-colors hover:text-foreground",
-            )}
-          >
-            <span className="flex-1">Subagents</span>
-            {stoppable.length > 1 && (
-              <Button
-                variant="ghost"
-                size="xs"
-                className="-my-1 shrink-0 text-muted-foreground"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  stoppable.forEach((run) => rest.onStopTask(run.taskId!));
-                }}
-              >
-                Stop all
-              </Button>
-            )}
-            {count > 0 && (
-              <button
-                type="button"
-                aria-expanded={open}
-                aria-label={`${open ? "Hide" : "Show"} completed subagents`}
-                className="flex shrink-0 cursor-default items-center gap-1.5"
-              >
-                <span className="tabular-nums">{countLabel}</span>
-                <ChevronRight className={cn("size-3.5 shrink-0 transition", open && "rotate-90")} />
-              </button>
-            )}
-          </div>
+          {/* With finished runs, the count is those, folded under the chevron;
+              running ones stay out under it either way. With none, it is the
+              running ones, and nothing folds. */}
+          <RunHeading
+            title="Subagents"
+            count={count > 0 ? countLabel : running.length > 1 ? running.length : undefined}
+            fold={count > 0 ? { open, onToggle: () => setOpen(!open), label: "completed subagents" } : undefined}
+            stoppable={stoppable}
+            onStopTask={rest.onStopTask}
+          />
           {(running.length > 0 || open) && (
             <div className="flex flex-col gap-0.5 px-1 pb-2">
               {running.map((run) => row(run))}
@@ -178,7 +150,9 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
           )}
         </div>
       )}
-      {shells.length > 0 && <RunSection title="Background tasks" {...rest} runs={shells} />}
+      {shells.length > 0 && (
+        <RunSection title="Background tasks" {...rest} runs={shells} count={shells.filter((run) => !run.done).length} />
+      )}
     </div>
   );
 }

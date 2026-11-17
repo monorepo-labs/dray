@@ -40,8 +40,8 @@ type SubagentPanelProps = {
 /// Newest first within each section, ordered by [buildTranscript](@/lib/transcript).
 export default function SubagentPanel({ runs, ...rest }: SubagentPanelProps) {
   const sections = [
-    { title: "Background tasks", runs: runs.filter((run) => isShellRun(run)) },
     { title: "Subagents", runs: runs.filter((run) => !isShellRun(run)) },
+    { title: "Background tasks", runs: runs.filter((run) => isShellRun(run)) },
   ];
   return (
     <div className="flex shrink-0 flex-col">
@@ -58,34 +58,29 @@ export default function SubagentPanel({ runs, ...rest }: SubagentPanelProps) {
 export function RunSection({
   title,
   runs,
+  count,
   selectedId,
   resultByCallId,
   live,
   onSelect,
   onOpen,
   onStopTask,
-}: Omit<SubagentPanelProps, "runs"> & { title: string; runs: SubagentRun[] }) {
-  // Same reading as each row's own button, so the count and the rows agree.
-  const stoppable = runs.filter((run) => live && !run.done && run.taskId !== null);
-
+}: Omit<SubagentPanelProps, "runs"> & {
+  title: string;
+  runs: SubagentRun[];
+  /// The heading's number where it is not every row: a bot's shells keep a
+  /// finished one listed while it is open.
+  count?: number;
+}) {
+  const n = count ?? runs.length;
   return (
     <div>
-      {/* Stop all rides the heading, and only above two or more: with one, the
-          row's own button is the whole job. A pile of forgotten polling loops
-          (DRA-264) is the case it exists for. */}
-      <div className="flex items-center px-3 pt-4 pb-2 text-ui text-muted-foreground">
-        <span className="flex-1">{title}</span>
-        {stoppable.length > 1 && (
-          <Button
-            variant="ghost"
-            size="xs"
-            className="-my-1 -mr-1.5 shrink-0"
-            onClick={() => stoppable.forEach((run) => onStopTask(run.taskId!))}
-          >
-            Stop all
-          </Button>
-        )}
-      </div>
+      <RunHeading
+        title={title}
+        count={n > 1 ? n : undefined}
+        stoppable={runs.filter((run) => live && !run.done && run.taskId !== null)}
+        onStopTask={onStopTask}
+      />
       <div className="flex flex-col gap-0.5 px-1 pb-2">
         {runs.map((run) => (
           <RunRow
@@ -101,6 +96,68 @@ export function RunSection({
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+/// A run section's title row: label, count and, where finished runs fold
+/// under it, the chevron, all together on the left so the number reads as the
+/// label's. Callers leave the count out at one, where the single row says it.
+///
+/// Stop all sits at the far end, over the rows' own stop buttons, and only
+/// above two or more: with one, the row's own button is the whole job. A pile
+/// of forgotten polling loops (DRA-264) is the case it exists for.
+export function RunHeading({
+  title,
+  count,
+  fold,
+  stoppable,
+  onStopTask,
+}: {
+  title: string;
+  count?: string | number;
+  /// The whole row toggles the folded runs; Stop all keeps its own click.
+  fold?: { open: boolean; onToggle: () => void; label: string };
+  /// Same reading as each row's own button, so the heading and rows agree.
+  stoppable: SubagentRun[];
+  onStopTask: (taskId: string) => void;
+}) {
+  return (
+    <div
+      onClick={fold?.onToggle}
+      className={cn(
+        "flex items-center px-3 pt-4 pb-2 text-ui text-muted-foreground",
+        fold && "group/heading",
+      )}
+    >
+      <span className={cn("flex items-center gap-1.5", fold && "transition-colors group-hover/heading:text-foreground")}>
+        <span>{title}</span>
+        {count !== undefined && <span className="tabular-nums">{count}</span>}
+        {fold && (
+          <button
+            type="button"
+            aria-expanded={fold.open}
+            aria-label={`${fold.open ? "Hide" : "Show"} ${fold.label}`}
+            className="flex shrink-0 cursor-default items-center"
+          >
+            <ChevronRight className={cn("size-3.5 shrink-0 transition", fold.open && "rotate-90")} />
+          </button>
+        )}
+      </span>
+      {stoppable.length > 1 && (
+        <Button
+          variant="ghost"
+          size="xs"
+          // Pulled out by its own padding, so the words end on the rows' edge.
+          className="-my-1 -mr-2 ml-auto shrink-0 text-ui text-muted-foreground"
+          onClick={(e) => {
+            e.stopPropagation();
+            stoppable.forEach((run) => onStopTask(run.taskId!));
+          }}
+        >
+          Stop all
+        </Button>
+      )}
     </div>
   );
 }
