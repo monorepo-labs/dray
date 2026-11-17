@@ -48,7 +48,7 @@ export default function StarCard() {
         </span>
       ) : (
         <>
-          <span className="px-3 pt-2.5 text-ui font-medium text-balance text-foreground">
+          <span className="px-3 pt-2.5 text-ui font-medium text-foreground">
             Liking Dray so far? A star would help us.
           </span>
           <div className="grid grid-cols-2 gap-1.5 p-2.5">
