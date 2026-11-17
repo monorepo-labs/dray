@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import ImageLightbox, { Thumb, type LightboxImage } from "@/components/chat/ImageLightbox";
-import { Button } from "@/components/ui/button";
+import Spinner from "@/components/ui/spinner";
 import { basename } from "@/lib/format";
 import { allMedia, loadOlderMedia, olderCursor, type HeldLog, type OlderMedia } from "@/lib/olderMedia";
 import { fileSrc, invoke, qualify, serverOfSession } from "@/lib/transport";
@@ -82,7 +82,7 @@ export default function AttachmentGrid({ logs }: { logs: HeldLog[] }) {
 
   // Empty cells finish the last row, so the lines run the whole width rather
   // than stopping where the pictures do.
-  const filler = (6 - (visible.length % 6)) % 6;
+  const filler = (6 - ((visible.length + (hasMore ? 1 : 0)) % 6)) % 6;
   const cell = "aspect-square border-b-[0.5px] border-border [&:not(:nth-child(6n))]:border-r-[0.5px]";
 
   return (
@@ -109,9 +109,9 @@ export default function AttachmentGrid({ logs }: { logs: HeldLog[] }) {
           ))}
         </div>
       )}
-      {visible.length === 0 ? (
+      {visible.length === 0 && !hasMore ? (
         <p className="px-3 py-2 text-ui text-muted-foreground">
-          {media.length > 0 ? "Nothing here." : hasMore ? "No attachments in recent messages." : "No attachments yet."}
+          {media.length > 0 ? "Nothing here." : "No attachments yet."}
         </p>
       ) : (
         // Edge to edge, with the panel's own sides as the outer frame.
@@ -132,16 +132,25 @@ export default function AttachmentGrid({ logs }: { logs: HeldLog[] }) {
               <Thumb item={item} className="size-full" />
             </button>
           ))}
+          {/* A cell of the grid rather than a button under it, so it reads
+              as where the next pictures will land. */}
+          {hasMore && (
+            <button
+              type="button"
+              onClick={() => void loadMore()}
+              disabled={loading}
+              aria-label={failed ? "Couldn't load more. Try again" : "Load more attachments"}
+              className={cn(
+                cell,
+                "flex items-center justify-center bg-muted/60 px-1 text-center text-ui leading-tight text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:hover:bg-muted/60",
+              )}
+            >
+              {loading ? <Spinner className="size-4" /> : failed ? "Try again" : "Load more"}
+            </button>
+          )}
           {Array.from({ length: filler }, (_, i) => (
             <div key={`filler-${i}`} className={cell} />
           ))}
-        </div>
-      )}
-      {hasMore && (
-        <div className="px-3">
-          <Button variant="secondary" size="xs" onClick={() => void loadMore()} disabled={loading}>
-            {loading ? "Loading…" : failed ? "Couldn't load. Try again" : "Load more"}
-          </Button>
         </div>
       )}
       <ImageLightbox
