@@ -139,7 +139,7 @@ export function useResizable({
   /// Drawn at `initial` while on the rail, without touching what is stored —
   /// for a moment that needs the full pane, like the sidebar's search field.
   widen?: boolean;
-}): { style: CSSProperties; handle: ReactNode; width: number } {
+}): { style: CSSProperties; handle: ReactNode; width: number; held: number } {
   const read = () => readLocalStorage(storageKey, initial);
   const [stored, setStored] = useState(read);
   // The key moves under a mounted pane — the right panel follows the selected
@@ -255,5 +255,5 @@ export function useResizable({
     />
   );
 
-  return { style: { width }, handle, width };
+  return { style: { width }, handle, width, held };
 }

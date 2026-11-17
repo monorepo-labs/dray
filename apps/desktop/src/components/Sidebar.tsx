@@ -15,6 +15,7 @@ import {
   Pin,
   Plus,
   Search,
+  Layers,
   Trash2,
   Undo2,
 } from "lucide-react";
@@ -183,6 +184,10 @@ type SidebarProps = {
   projects: Project[];
   /// `null` is every project, whatever space it is filed under.
   space: string | null;
+  /// Every space there is, for the rail's own switcher: the titlebar's sits
+  /// over the sidebar's end, which the rail puts under the traffic lights.
+  spaces: string[];
+  onSpaceChange: (space: string | null) => void;
   // `null` is every project, and it is the entry the filter opens on.
   projectFilter: string | null;
   onProjectFilterChange: (path: string | null) => void;
@@ -989,8 +994,9 @@ export const SIDEBAR_DEFAULT = 240;
 /// The icon-only sidebar, which a drag past halfway below the floor snaps to.
 export const SIDEBAR_RAIL = 56;
 
-/// Names a control in the icon rail, where its label is gone. The child as it
-/// is in the full sidebar.
+/// Names a control in the icon rail, where its label is gone; held shut in the
+/// full sidebar. One shape either way, so folding the rail mid-click never
+/// remounts the button the press landed on.
 function RailTip({
   on,
   label,
@@ -1002,9 +1008,8 @@ function RailTip({
   keys?: ShortcutId[];
   children: React.ReactElement;
 }) {
-  if (!on) return children;
   return (
-    <Tooltip>
+    <Tooltip open={on ? undefined : false}>
       <TooltipTrigger asChild>{children}</TooltipTrigger>
       <TooltipContent side="right">
         {label}
@@ -1062,6 +1067,8 @@ export default function Sidebar({
   onToggleArchived,
   projects,
   space,
+  spaces,
+  onSpaceChange,
   projectFilter,
   onDetach,
   onProjectFilterChange,
@@ -1079,7 +1086,7 @@ export default function Sidebar({
   draftsShown,
   onToggleDrafts,
 }: SidebarProps) {
-  const { style, handle, width } = useResizable({
+  const { style, handle, width, held } = useResizable({
     storageKey: "ade.sidebarWidth",
     initial: SIDEBAR_DEFAULT,
     min: SIDEBAR_MIN,
@@ -1376,8 +1383,20 @@ export default function Sidebar({
               }}
               // Only where there is nothing to lose. Clicking away from a query
               // that is narrowing the list is not a request to drop it.
+              //
+              // Over the rail, closing folds it and moves everything under a
+              // press that took the focus, so the close waits for the release:
+              // the click then lands on what was pressed.
               onBlur={() => {
-                if (!search) onSearchOpenChange(false);
+                if (search) return;
+                if (held !== SIDEBAR_RAIL) return onSearchOpenChange(false);
+                window.addEventListener(
+                  "pointerup",
+                  () => {
+                    if (document.activeElement?.id !== SEARCH_INPUT_ID) onSearchOpenChange(false);
+                  },
+                  { once: true },
+                );
               }}
               className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
             />
@@ -1679,7 +1698,26 @@ export default function Sidebar({
       {import.meta.env.DEV && !iconOnly && <DevBadge />}
 
       {iconOnly && (
-        <div className="flex shrink-0 justify-center pb-3">
+        <div className="flex shrink-0 flex-col items-center gap-0.5 pb-3">
+          {/* The titlebar switcher's click, stepping to the next space, with
+              the one in force named in the tooltip. */}
+          {spaces.length > 0 && (
+            <RailTip on label={space ?? "All Spaces"}>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Space: ${space ?? "All Spaces"}`}
+                onClick={() => {
+                  const entries = spaceEntries(spaces);
+                  const at = Math.max(0, entries.indexOf(space));
+                  onSpaceChange(entries[(at + 1) % entries.length]);
+                }}
+                className="text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <Layers className="size-4" />
+              </Button>
+            </RailTip>
+          )}
           <SettingsButton onOpen={onOpenSettings} />
         </div>
       )}
@@ -2386,6 +2424,7 @@ export function RowMenu({
   onDetach,
   onMarkUnread,
   onSettle,
+  settled = false,
   pin,
   children,
 }: {
@@ -2407,6 +2446,8 @@ export function RowMenu({
   onMarkUnread?: () => void;
   /// Absent where the row draws Settle itself, as every sidebar row does.
   onSettle?: () => void;
+  /// The row is settled, so the item undoes it: Unsettle.
+  settled?: boolean;
   pin?: { pinned: boolean; toggle: () => void };
   /// Whether the row reads as set aside, and so which way the item turns.
   /// Absent where the item would move nothing.
@@ -2538,8 +2579,8 @@ export function RowMenu({
 
             {onSettle && (
               <ContextMenuItem className="text-ui" onSelect={onSettle}>
-                <Check />
-                Settle
+                {settled ? <Undo2 /> : <Check />}
+                {settled ? "Unsettle" : "Settle"}
               </ContextMenuItem>
             )}
 
@@ -2809,6 +2850,14 @@ function SessionRow({
           ? () => onMarkUnread(item.sessionId)
           : undefined
       }
+      // The rail has no room for the hover button, so the menu carries it,
+      // under the same rule: no Settle while a turn is in flight.
+      onSettle={
+        iconOnly && (item.archived || status !== "in_progress")
+          ? () => void onSetFlags(item.sessionId, { archived: !item.archived })
+          : undefined
+      }
+      settled={!!item.archived}
       // Absent on a row that follows a pinned ancestor: it sits in Pinned
       // whichever way its own flag reads, so the verb would move nothing and
       // leave a flag behind. Absent on a settled row too, where the list draws

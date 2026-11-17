@@ -3555,6 +3555,8 @@ function App() {
           onSearchOpenChange={setSearchOpen}
           projects={spaceProjects}
           space={space}
+          spaces={spaces}
+          onSpaceChange={changeSpace}
           projectFilter={projectFilter}
           onProjectFilterChange={changeProjectFilter}
           onStepProjectFilter={stepProjectFilter}
