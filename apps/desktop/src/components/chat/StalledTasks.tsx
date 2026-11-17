@@ -1,4 +1,4 @@
-import { MousePointerClick, X } from "lucide-react";
+import { ArrowUpRight, MousePointerClick, X } from "lucide-react";
 import { useState } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
@@ -20,6 +20,9 @@ import type { MergeMethod, PrMark } from "@/types/events";
 
 /// Keeps a long life from filling the store with dismissed stalls.
 const DISMISSED_CAP = 200;
+
+/// Rows drawn before Show all, so a long card doesn't push the chat off screen.
+const ROWS_SHOWN = 3;
 
 /// The foot of a bot's chat while any of its tasks waits on the reader: an
 /// inbox row per task — its face, title, PR and how long it has sat. A PR
@@ -46,8 +49,10 @@ export default function StalledTasks({
 }) {
   const [dismissed, setDismissed] = useLocalStorage<string[]>(DISMISSED_KEY, []);
   const [open, setOpen] = useState<string | null>(null);
+  const [all, setAll] = useState(false);
   const shown = cardRows(stalls, dismissed);
   if (shown.length === 0) return null;
+  const capped = !all && shown.length > ROWS_SHOWN;
 
   return (
     <div className="flex w-full flex-col rounded-xl border border-border/60 p-1">
@@ -63,7 +68,7 @@ export default function StalledTasks({
           <X />
         </Button>
       </div>
-      {shown.map((stall) => (
+      {(capped ? shown.slice(0, ROWS_SHOWN) : shown).map((stall) => (
         <StalledRow
           key={stall.key}
           stall={stall}
@@ -74,6 +79,16 @@ export default function StalledTasks({
           onMerge={onMerge}
         />
       ))}
+      {shown.length > ROWS_SHOWN && (
+        <Button
+          variant="ghost"
+          size="xs"
+          className="self-start text-muted-foreground"
+          onClick={() => setAll((a) => !a)}
+        >
+          {capped ? `Show all ${shown.length}` : "Show less"}
+        </Button>
+      )}
     </div>
   );
 }
@@ -135,16 +150,8 @@ function StalledRow({
             {/* Held in place while hidden, so showing it moves nothing. Merge
                 sits before the time, so the time ends every row. */}
             <span className="ml-auto flex shrink-0 items-center gap-2">
-              <Button
-                variant="ghost"
-                size="xs"
-                className="text-muted-foreground opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpen(id, isModClick(e));
-                }}
-              >
-                Open task
+              {/* Half strength: it sits on every row the pointer crosses. */}
+              <span className="flex items-center gap-1 opacity-0 group-focus-within:opacity-50 group-hover:opacity-50">
                 {/* What the row does with ⌘ held. */}
                 <KbdGroup>
                   <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
@@ -152,7 +159,19 @@ function StalledRow({
                     <MousePointerClick />
                   </Kbd>
                 </KbdGroup>
-              </Button>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="text-muted-foreground"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpen(id, isModClick(e));
+                  }}
+                >
+                  Open task
+                  <ArrowUpRight data-icon="inline-end" />
+                </Button>
+              </span>
               {stall.kind === "ready" &&
                 pr &&
                 (stall.checking ? (
