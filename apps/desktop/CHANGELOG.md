@@ -19,6 +19,17 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.11 · 2026-11-17
+
+### Improved
+
+- Opening a row in Waiting on you shows the bot's reply about that task,
+  not the task's own report to the bot.
+
+### Fixed
+
+- Installing or updating the `dray` CLI picks the newest release again.
+
 ## 0.30.10 · 2026-11-17
 
 ### New
