@@ -117,11 +117,12 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
     <div className="flex shrink-0 flex-col">
       {(running.length > 0 || count > 0) && (
         <div className="flex flex-col">
-          {/* The count is the finished runs folded under the chevron; running
-              ones stay out under it either way. */}
+          {/* With finished runs, the count is those, folded under the chevron;
+              running ones stay out under it either way. With none, it is the
+              running ones, and nothing folds. */}
           <RunHeading
             title="Subagents"
-            count={count > 0 ? countLabel : undefined}
+            count={count > 0 ? countLabel : running.length > 1 ? running.length : undefined}
             fold={count > 0 ? { open, onToggle: () => setOpen(!open), label: "completed subagents" } : undefined}
             stoppable={stoppable}
             onStopTask={rest.onStopTask}
