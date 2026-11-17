@@ -19,6 +19,31 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.10 · 2026-11-17
+
+### New
+
+- Drag the sidebar narrow and it snaps to an icon rail.
+- A bot's Tasks tab lists its subagents and background tasks under the
+  tasks.
+
+### Improved
+
+- Clicking a row in Waiting on you opens the task's last message right
+  under it.
+- Attachments has Load more for older pictures.
+- A bot task on a machine that's offline stays in Waiting on you, and you
+  can still merge its PR.
+- Long links in your messages wrap in place instead of jumping to their
+  own line.
+
+### Fixed
+
+- A damaged line in a session's log no longer blocks the chat from
+  opening.
+- "Started a new task" shows in a bot chat however the bot started it.
+- Bots no longer nudge you to fix failing checks on a draft PR.
+
 ## 0.30.9 · 2026-11-17
 
 ### Improved
