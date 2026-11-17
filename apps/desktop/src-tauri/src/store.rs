@@ -1917,6 +1917,91 @@ pub async fn find_newest<T>(session_id: &str, find: impl Fn(&[AgentEvent]) -> Op
     }
 }
 
+/// A session's log opened for reading, with its length; `None` where it has none.
+pub async fn open_log(session_id: &str) -> Result<Option<(fs::File, u64)>> {
+    match fs::File::open(get_session_path(session_id).await?).await {
+        Ok(file) => {
+            let len = file.metadata().await?.len();
+            Ok(Some((file, len)))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).context("could not open session file"),
+    }
+}
+
+/// Hands `visit` a log `chunk` bytes of whole lines at a time, newest first,
+/// with the byte offset each starts at, until it answers or reading back
+/// reaches `limit` bytes from the end, `len`. Starts at byte `before` where
+/// given. Nothing is parsed here, so a caller searching each chunk for a
+/// needle walks a long log at the speed of that search.
+pub async fn scan_back<T>(
+    file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
+    len: u64,
+    before: Option<u64>,
+    limit: u64,
+    chunk: u64,
+    mut visit: impl FnMut(&[u8], u64) -> Option<T>,
+) -> Result<Option<T>> {
+    use std::io::SeekFrom;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    let floor = len.saturating_sub(limit);
+    let mut start = before.map_or(len, |b| b.min(len));
+    // The older end of the last chunk read, up to its first newline: a line
+    // the next chunk finishes.
+    let mut carry = Vec::new();
+    while start > floor {
+        let from = start.saturating_sub(chunk).max(floor);
+        let mut buf = vec![0; (start - from) as usize];
+        file.seek(SeekFrom::Start(from)).await?;
+        file.read_exact(&mut buf).await?;
+        buf.extend_from_slice(&carry);
+        start = from;
+        let (carry_end, first) = match memchr::memchr(b'\n', &buf) {
+            _ if from == 0 => (0, 0),
+            Some(i) => (i, i + 1),
+            None => (buf.len(), buf.len()),
+        };
+        if let Some(found) = visit(&buf[first..], from + first as u64) {
+            return Ok(Some(found));
+        }
+        buf.truncate(carry_end);
+        carry = buf;
+    }
+    Ok(None)
+}
+
+/// Hands `visit` a log's lines from byte `from` on, oldest first, `chunk`
+/// bytes read at a time, until it answers `false` or the log ends.
+pub async fn scan_forward(
+    file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
+    from: u64,
+    chunk: usize,
+    mut visit: impl FnMut(&[u8]) -> bool,
+) -> Result<()> {
+    use std::io::SeekFrom;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    file.seek(SeekFrom::Start(from)).await?;
+    let mut buf = Vec::new();
+    let mut read_into = vec![0; chunk];
+    loop {
+        let read = file.read(&mut read_into).await?;
+        buf.extend_from_slice(&read_into[..read]);
+        // At the end, a last line with no newline yet is whole as far as it goes.
+        let end = if read == 0 { buf.len() } else { memchr::memrchr(b'\n', &buf).map_or(0, |i| i + 1) };
+        for line in buf[..end].split(|&b| b == b'\n').filter(|l| !l.is_empty()) {
+            if !visit(line) {
+                return Ok(());
+            }
+        }
+        if read == 0 {
+            return Ok(());
+        }
+        buf.drain(..end);
+    }
+}
+
 /// One subagent a session ran, read off its log rather than off a transcript,
 /// so a bot's Tasks tab can list runs older than the chat has loaded.
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]

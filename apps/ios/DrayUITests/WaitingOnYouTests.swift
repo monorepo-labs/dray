@@ -1,14 +1,15 @@
 import XCTest
 
-/// #1181: a Waiting on you row opens its task's last message in a sheet, read off
-/// the task's own log, however far back the task sits in a long bot chat. Open
-/// task goes into it; the card holds five rows behind "Show N more".
+/// A Waiting on you row opens what the bot said about its task, in a sheet:
+/// its reply to the task's last report, found by the server however far back it
+/// sits in a long bot chat. A row with no reply opens the task itself. The card
+/// holds five rows behind "Show N more".
 /// Against a server seeded by `scripts/waiting_seed.py`:
 ///   TEST_RUNNER_DRAY_WAITING_URL=ws://127.0.0.1:47111 TEST_RUNNER_DRAY_TOKEN=1181…
 final class WaitingOnYouTests: XCTestCase {
     private var env: [String: String] { ProcessInfo.processInfo.environment }
 
-    func testRowOpensLastMessage() throws {
+    func testRowOpensBotReply() throws {
         let app = try pairedChat()
         let card = app.staticTexts["Waiting on you"]
         XCTAssertTrue(card.waitForExistence(timeout: 20), "no Waiting on you card")
@@ -21,8 +22,8 @@ final class WaitingOnYouTests: XCTestCase {
 
         // The week-old task, its report hundreds of turns up the chat.
         row(app, "Fix login redirect").tap()
-        XCTAssertTrue(text(app, "Fixed the redirect").waitForExistence(timeout: 5), "the sheet drew no message")
-        XCTAssertTrue(text(app, "Should I open the PR?").exists)
+        XCTAssertTrue(text(app, "fixed the login loop").waitForExistence(timeout: 5), "the sheet drew no bot reply")
+        XCTAssertFalse(text(app, "Should I open the PR?").exists, "the sheet drew the task's own message")
         XCTAssertTrue(app.buttons["Open image"].waitForExistence(timeout: 5), "the picture drew no button")
         snap(app, "2-sheet")
         // The button stands whether or not the read worked; the viewer labels a picture only once it loaded.
@@ -30,7 +31,7 @@ final class WaitingOnYouTests: XCTestCase {
         let pager = app.descendants(matching: .any)["image-pager"]
         XCTAssertTrue(pager.waitForExistence(timeout: 5), "no viewer")
         XCTAssertTrue(pager.descendants(matching: .any)["Image"].waitForExistence(timeout: 10),
-                      "the picture never loaded from the task's server")
+                      "the picture never loaded from the bot's server")
         app.buttons["Close"].tap()
 
         app.buttons["Open task"].tap()
@@ -38,19 +39,31 @@ final class WaitingOnYouTests: XCTestCase {
                       || app.staticTexts["Fix login redirect"].waitForExistence(timeout: 1), "Open task did not open it")
         XCTAssertFalse(app.buttons["Open task"].exists, "the sheet stayed up")
         snap(app, "3-task")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(card.waitForExistence(timeout: 5), "Back did not return to the bot")
+        back(app, card)
+
+        // Reported, but the bot never answered: the row opens the task, no sheet.
+        row(app, "Bump deps").tap()
+        XCTAssertTrue(app.navigationBars.staticTexts["Bump deps"].waitForExistence(timeout: 5)
+                      || app.staticTexts["Bump deps"].waitForExistence(timeout: 1), "a row with no reply did not open its task")
+        XCTAssertFalse(app.buttons["Open task"].exists, "a row with no reply opened a sheet")
+        snap(app, "4-no-reply-task")
+        back(app, card)
 
         app.buttons["Show 2 more"].tap()
         XCTAssertTrue(row(app, "Dark mode contrast").waitForExistence(timeout: 3), "Show more drew no rows")
         XCTAssertTrue(app.buttons["Show less"].exists)
-        snap(app, "4-all")
+        snap(app, "5-all")
         row(app, "Dark mode contrast").tap()
-        XCTAssertTrue(text(app, "Raised contrast").waitForExistence(timeout: 3), "the newest row's sheet drew no message")
-        snap(app, "5-newest-sheet")
+        XCTAssertTrue(text(app, "which palette should lead").waitForExistence(timeout: 3), "the newest row's sheet drew no reply")
+        snap(app, "6-newest-sheet")
         app.buttons["Done"].tap()
         app.buttons["Show less"].tap()
         XCTAssertTrue(app.buttons["Show 2 more"].waitForExistence(timeout: 3), "Show less did not cap the card")
+    }
+
+    private func back(_ app: XCUIApplication, _ card: XCUIElement) {
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(card.waitForExistence(timeout: 5), "Back did not return to the bot")
     }
 
     private func row(_ app: XCUIApplication, _ title: String) -> XCUIElement {

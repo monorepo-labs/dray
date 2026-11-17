@@ -6,6 +6,7 @@ import BotTranscript from "@/components/chat/BotTranscript";
 import StalledTasks from "@/components/chat/StalledTasks";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
+import { ChatSessionContext } from "@/hooks/useChatSession";
 import type { CrewRow } from "@/lib/crew";
 import { compactAge, needLine, onCard, stalledTasks } from "@/lib/stalled";
 import type { AgentEvent, PrMark, SessionIndexItem } from "@/types/events";
@@ -19,10 +20,11 @@ import "../App.css";
 /// starts with the ready PRs alone; every stall goes to the bot, listed under
 /// the chat as the nudges the app sends. **Bot writes needs** lands the lines a
 /// bot would write with `dray session need`, which puts the waiting tasks on
-/// the card and a line under the ready PR that asked to be tried. Until then a
-/// waiting row draws its task's last message, read through a stubbed
-/// `bot_previews`: the rename task answers, the SQLite task sits on a machine
-/// that never does, and the release notes task wrote nothing.
+/// the card and a line under the ready PR that asked to be tried. A row click
+/// opens the bot's reply to that task through a stubbed `bot_task_reply`: the
+/// rename, SQLite, pricing and docs search tasks have one, the ⌥ hints task's
+/// bot never answers, and the release notes task has none, so its click opens
+/// the task.
 /// There is no server behind this page. Dismiss is stored for real; Reset
 /// clears it.
 const NOW = Date.now();
@@ -33,6 +35,7 @@ const row = (id: string, title: string, minutes: number, busy = false): CrewRow 
     sessionId: `01a1d000-0000-7000-8000-00000000000${id}`,
     title,
     modified: ago(minutes),
+    cwd: "/repo",
     projectPath: "/repo",
     worktreeName: `task-${id}`,
   } as unknown as SessionIndexItem,
@@ -74,19 +77,24 @@ const ROWS: { row: CrewRow; pr?: PrMark; need?: string; answered?: boolean }[] =
   { row: row("5", "Draft the onboarding email", 1) },
 ];
 
-/// What each waiting task's server answers `bot_previews` with; "silent" is a
-/// machine asleep, which only the read's timeout gets past.
-const LAST: Record<string, string | null | "silent"> = {
-  "1": "I added the rename button and wired it to `rename_session`.\n\nKeep the button and hide the branch chip below 900px, or drop it and rely on double-clicking the title?",
-  "2": "silent",
-  "0": null,
+/// The bot's reply to each task's last report, as `bot_task_reply` reads it
+/// off the chat below; "silent" is a machine asleep, which only the read's
+/// timeout gets past.
+const REPLY: Record<string, string | null | "silent"> = {
+  "1": "The rename button works but crowds the header at narrow widths. Keep it and hide the branch chip, or drop it for double-click? Its screenshot shows the squeeze.",
+  "2": "The SQLite task wants your go-ahead on its migration plan: three steps, JSON kept as a backup for one release. Say the word and it starts.",
+  "3": "Pricing copy is in #908 and ready to merge.",
+  "9": "Docs search is up as #921. It reorders results, so it's waiting on your review.",
+  a: "silent",
 };
 mockIPC((cmd, args) => {
-  const a = (args ?? {}) as { cmd?: string; args?: { sessionIds?: string[] } };
-  if (cmd !== "server_invoke" || a.cmd !== "bot_previews") return null;
-  const answers = (a.args?.sessionIds ?? []).map((id) => [id, LAST[id.slice(-1)] ?? null] as const);
-  if (answers.some(([, text]) => text === "silent")) return new Promise(() => {});
-  return Object.fromEntries(answers.map(([id, text]) => [id, { text, replies: 1 }]));
+  // No remote servers, so every row reads as on this machine.
+  if (cmd === "list_servers") return [];
+  // The bot's chat is on This Mac, so the read comes straight here.
+  const a = (args ?? {}) as { taskId?: string };
+  if (cmd !== "bot_task_reply") return null;
+  const reply = REPLY[a.taskId?.slice(-1) ?? ""] ?? null;
+  return reply === "silent" ? new Promise(() => {}) : reply;
 });
 
 const BOT = "01a1cfc8-demo-stalled-bot";
@@ -212,6 +220,7 @@ function Demo() {
               }}
               onOpenSession={() => {}}
             />
+            <ChatSessionContext value={{ cwd: null, sessionId: BOT }}>
             <StalledTasks
               key={shown}
               stalls={card}
@@ -234,6 +243,7 @@ function Demo() {
               setTimeout(() => recheck(true), 4000);
             }}
             />
+            </ChatSessionContext>
           </div>
         </div>
         {opened && <span className="text-ui text-muted-foreground">Open → would open “{opened}”</span>}
