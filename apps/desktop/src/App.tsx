@@ -1814,7 +1814,10 @@ function App() {
   const attachmentLogs = useMemo(() => {
     if (!selectedSession) return null;
     const logs = selectedBot ? [selectedSession, ...[...earlier].reverse()] : [selectedSession];
-    return sessionAttachments.length > 0 || logs.some((log) => log.olderBefore != null) ? logs : null;
+    // Every log, not the selected one alone: a bot chat's earlier session may
+    // hold the only pictures, and its chat hides tool screenshots.
+    const shows = (log: SessionSnapshot) => log.olderBefore != null || sessionMedia(log.events).length > 0;
+    return sessionAttachments.length > 0 || logs.some(shows) ? logs : null;
   }, [selectedBot, selectedSession, sessionAttachments, earlier]);
   // Older history counts too: its pictures are reached only through the
   // grid's Load more, so the tab has to be there to press it.
