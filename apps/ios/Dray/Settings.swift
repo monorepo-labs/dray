@@ -2,9 +2,10 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-/// Where Settings can go: a server's page, Dictation, Notifications, Appearance.
+/// Where Settings can go: a server's page, every server, Dictation, Notifications, Appearance.
 enum SettingsPage: Hashable {
     case server(UUID)
+    case servers
     case dictation
     case notifications
     case appearance
@@ -16,7 +17,6 @@ struct SettingsView: View {
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var path: [SettingsPage]
-    @State private var adding = false
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
     @AppStorage(NotificationSettings.allowKey) private var notify = true
     @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
@@ -27,14 +27,7 @@ struct SettingsView: View {
         NavigationStack(path: $path) {
             ScrollView {
                 VStack(spacing: 28) {
-                    VStack(spacing: Theme.Space.s) {
-                        ForEach(store.servers) { s in
-                            NavigationLink(value: SettingsPage.server(s.id)) { ServerCard(server: s) }
-                                .buttonStyle(RowButtonStyle())
-                        }
-                        Button { adding = true } label: { AddServerCard(first: store.servers.isEmpty) }
-                            .buttonStyle(RowButtonStyle())
-                    }
+                    ServerCards(limit: 5)
 
                     RowGroup {
                         NavigationLink(value: SettingsPage.dictation) {
@@ -73,12 +66,16 @@ struct SettingsView: View {
             .navigationDestination(for: SettingsPage.self) { page in
                 switch page {
                 case .server(let id): ServerDetail(id: id)
+                case .servers:
+                    ScrollView { ServerCards(limit: nil).padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.m) }
+                        .background(Theme.card.ignoresSafeArea())
+                        .navigationTitle("Servers")
+                        .navigationBarTitleDisplayMode(.inline)
                 case .dictation: DictationSettings()
                 case .notifications: NotificationSettings()
                 case .appearance: AppearanceSettings()
                 }
             }
-            .sheet(isPresented: $adding) { AddServerView(link: nil) }
             .task { await Releases.shared.refresh() }
         }
     }
@@ -90,6 +87,32 @@ struct SettingsView: View {
 }
 
 // MARK: Pieces
+
+/// A card per server, then Add server. Past `limit`, the rest sit behind an All servers row.
+private struct ServerCards: View {
+    @Environment(Store.self) private var store
+    let limit: Int?
+    @State private var adding = false
+
+    var body: some View {
+        VStack(spacing: Theme.Space.s) {
+            ForEach(store.servers.prefix(limit ?? .max)) { s in
+                NavigationLink(value: SettingsPage.server(s.id)) { ServerCard(server: s) }
+            }
+            if let limit, store.servers.count > limit {
+                RowGroup {
+                    NavigationLink(value: SettingsPage.servers) {
+                        SettingsRow("All servers", value: "\(store.servers.count)")
+                    }
+                }
+                .accessibilityIdentifier("settings.allServers")
+            }
+            Button { adding = true } label: { AddServerCard(first: store.servers.isEmpty) }
+        }
+        .buttonStyle(RowButtonStyle())
+        .sheet(isPresented: $adding) { AddServerView(link: nil) }
+    }
+}
 
 /// A server: two stacked units, each with its light. The holes are cut, so
 /// whatever the glyph sits on shows through.
