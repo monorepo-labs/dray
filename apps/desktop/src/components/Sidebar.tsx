@@ -1149,7 +1149,8 @@ export default function Sidebar({
   useLayoutEffect(() => {
     const el = listRef.current;
     if (el) setNoGutter(el.offsetWidth === el.clientWidth);
-  }, [collapsed]);
+  // The rail unmounts the list too, so coming off it measures again.
+  }, [collapsed, iconOnly]);
   // Reset on the press, not on the rows landing: the request moves first, so
   // the window is already at its first step by the time the settled rows
   // arrive, and the read's commit draws one step rather than wherever the
@@ -1215,7 +1216,9 @@ export default function Sidebar({
     const observer = new ResizeObserver(openMore);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [more, settledLimit]);
+  // `iconOnly` too: the rail unmounts the list, and the one drawn after it
+  // needs an observer of its own.
+  }, [more, settledLimit, iconOnly]);
 
   // Keys for a run's own break and heading. Rows are keyed by session id
   // alone, as siblings across every run, so these may change freely.
