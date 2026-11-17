@@ -6,13 +6,13 @@
 ///
 /// A Rust crate runs whole when a file in it changed, or in a crate it depends
 /// on through a `path` dependency. Vitest runs `related` on the changed files,
-/// so only tests importing them; other JS suites run whole when their app
-/// changed. A file read by path rather than imported (`include_str!`, a
+/// so only tests importing them, or whole when a file was deleted or renamed;
+/// other JS suites run whole when their app changed. A file read by path rather than imported (`include_str!`, a
 /// fixture a test opens) counts as a change to whichever source names it. An
 /// app's own config runs that app's suite whole; a root config or the
 /// lockfile runs everything.
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 
 const args = process.argv.slice(2);
@@ -24,21 +24,18 @@ process.chdir(root);
 const base = args.includes("--base")
   ? args[args.indexOf("--base") + 1]
   : git("merge-base", "HEAD", "origin/main");
-const changed = [
-  ...new Set([
-    ...lines(git("diff", "--name-only", base)),
-    ...lines(git("ls-files", "--others", "--exclude-standard")),
-  ]),
-];
-const tracked = lines(git("ls-files"));
+const untracked = lines(git("ls-files", "--others", "--exclude-standard"));
+const changed = [...new Set([...lines(git("diff", "--name-only", "--no-renames", base)), ...untracked])];
+// What is on disk now: an unstaged delete is still in ls-files, a new crate is not yet.
+const present = [...lines(git("ls-files")), ...untracked].filter((f) => existsSync(f));
 
 // The GPUI rewrite is an unshipped experiment; nothing here tests it, --full included.
 const skipped = ["apps/gpui"];
 const suites = [
-  ...tracked
+  ...present
     .filter((f) => f.endsWith("/Cargo.toml") && !skipped.includes(posix.dirname(f)))
     .map((f) => ({ kind: "cargo", dir: posix.dirname(f) })),
-  ...tracked
+  ...present
     .filter((f) => /^apps\/[^/]+\/package\.json$/.test(f))
     .map((f) => ({ dir: posix.dirname(f), test: JSON.parse(readFileSync(f, "utf8")).scripts?.test }))
     .filter((s) => s.test)
@@ -62,7 +59,7 @@ for (const s of suites.filter((s) => s.kind === "cargo")) {
 // Paths a source file names with `../` are things it reads at build or test
 // time that no import graph sees. Keyed on the part after the last `../`.
 const readers = new Map();
-for (const f of tracked) {
+for (const f of present) {
   const s = owner(f);
   if (!s || !/\.(rs|tsx?|mjs|js)$/.test(f)) continue;
   for (const [, lit] of readFileSync(f, "utf8").matchAll(/["'`]([^"'`\n]*\.\.\/[^"'`\n]*)["'`]/g)) {
@@ -90,6 +87,8 @@ for (const f of changed) {
   if (!s && !/^(apps|crates|charts)\//.test(f)) all = true;
   // An app's top-level files are its config: package.json, vite.config.ts, tsconfig.
   if (s && s.kind !== "cargo" && !f.slice(s.dir.length + 1).includes("/")) s.whole = true;
+  // `vitest related` finds nothing importing a file that is gone, and passes.
+  if (s && s.kind !== "cargo" && !existsSync(f)) s.whole = true;
   for (const r of [f, ...readersOf(f)]) owner(r)?.files.add(r);
 }
 
