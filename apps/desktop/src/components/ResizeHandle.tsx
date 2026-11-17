@@ -11,7 +11,7 @@ import {
 
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { channel } from "@/lib/channel";
-import { GIVE, paneBounds, snapWidth, takenBy, type Pull } from "@/lib/resize";
+import { GIVE, paneBounds, snapWidth, springFrame, takenBy, type Pull } from "@/lib/resize";
 import { cn } from "@/lib/utils";
 
 /// Which edge of the pane the strip sits on. Dragging *away* from the pane
@@ -23,12 +23,6 @@ type Edge = "left" | "right";
 /// there for the default.
 const STEP_PX = 16;
 
-/// The snap's spring, critically damped: settles in about a quarter second and
-/// never passes its target. A bouncier one was tried and read as jank.
-const STIFFNESS = 520;
-const DAMPING = 2 * Math.sqrt(STIFFNESS);
-/// Fixed step, so the spring feels the same at 60Hz and 120Hz.
-const STEP_S = 1 / 240;
 /// A target moving further than this in a frame jumped rather than moved, and
 /// is chased from rest rather than matched.
 const JUMP_PX = 24;
@@ -235,11 +229,7 @@ export function useResizable({
       const t = target.current;
       const vt = Math.abs(t - chased) > JUMP_PX || !dt ? 0 : (t - chased) / dt;
       chased = t;
-      for (let left = dt; left > 0; left -= STEP_S) {
-        const h = Math.min(STEP_S, left);
-        v += (-STIFFNESS * (x - t) - DAMPING * (v - vt)) * h;
-        x += v * h;
-      }
+      [x, v] = springFrame(x, v, t, vt, dt);
       // Ends only once it has caught the target, so handing back to the pointer
       // never jumps.
       if (Math.abs(x - t) < (vt ? 3 : 1.5) && Math.abs(v - vt) < 100) return setSpring(null);

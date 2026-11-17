@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { paneBounds, snapWidth, takenBy } from "@/lib/resize";
+import { paneBounds, snapWidth, springFrame, takenBy } from "@/lib/resize";
 
 /// The chat column's floor, as `ResizeHandle` publishes it.
 const CHAT_MIN = 360;
@@ -77,6 +77,47 @@ describe("snapWidth's detent at the default", () => {
   // The detent lets go once per drag; after that the edge just follows.
   it("follows the pointer through the detent once it has let go", () => {
     expect(snapWidth(255, 180, 480, 240, undefined, "follow")).toBe(255);
+  });
+});
+
+describe("springFrame", () => {
+  /// Replays the hook's frame loop: the spring chases `path`, one target per
+  /// frame, and the target's speed is read off the last frame as it is there.
+  const chase = (path: number[], hz: number) => {
+    const dt = 1 / hz;
+    let [x, v] = [path[0], 0];
+    let prev = path[0];
+    const drawn: number[] = [];
+    for (const t of [...path, ...Array(40).fill(path.at(-1))]) {
+      [x, v] = springFrame(x, v, t, (t - prev) / dt, dt);
+      prev = t;
+      drawn.push(x);
+    }
+    return drawn;
+  };
+
+  // The case that slipped through: a fast pull that slows and stops, where
+  // the steps after a landing used to walk on past the pointer.
+  it("never passes a pointer that slows and stops", () => {
+    const path = [280];
+    for (let speed = 24; speed > 0; speed -= 1) path.push(path.at(-1)! + speed);
+    for (const hz of [60, 120]) {
+      const drawn = chase(path, hz);
+      const end = path.at(-1)!;
+      expect(Math.max(...drawn)).toBeLessThanOrEqual(end);
+      expect(drawn.at(-1)).toBeCloseTo(end, 0);
+    }
+  });
+
+  it("settles on a still target from either side without passing it", () => {
+    for (const from of [56, 400]) {
+      let [x, v] = [from, 0];
+      for (let i = 0; i < 60; i++) {
+        [x, v] = springFrame(x, v, 240, 0, 1 / 60);
+        expect(from < 240 ? x <= 240 : x >= 240).toBe(true);
+      }
+      expect(x).toBeCloseTo(240, 0);
+    }
   });
 });
 

@@ -73,6 +73,32 @@ export function snapWidth(
   return pull === "drag" ? within(Math.round(target + GIVE * Math.tanh((1.5 * off) / DETENT))) : target;
 }
 
+/// The snap's spring, critically damped: settles in about a quarter second. A
+/// bouncier one was tried and read as jank.
+const STIFFNESS = 520;
+const DAMPING = 2 * Math.sqrt(STIFFNESS);
+/// Fixed step, so the spring feels the same at 60Hz and 120Hz.
+const STEP_S = 1 / 240;
+
+/// One frame of the resize spring: `x` at speed `v` chasing `t`, which moves at
+/// `vt` px/s, over `dt` seconds. Returns the new position and speed.
+///
+/// Damping works on the speed relative to the target's, so a chase closes on a
+/// moving pointer instead of trailing it — which also means it carries the
+/// pointer's speed when the pointer stops. So a step that reaches or crosses
+/// the target lands on it and ends the frame there; one starting on it counts,
+/// or the steps after a landing walk straight past.
+export function springFrame(x: number, v: number, t: number, vt: number, dt: number): [number, number] {
+  for (let left = dt; left > 0; left -= STEP_S) {
+    const h = Math.min(STEP_S, left);
+    const before = x - t;
+    v += (-STIFFNESS * before - DAMPING * (v - vt)) * h;
+    x += v * h;
+    if (before === 0 ? x !== t : before * (x - t) <= 0) return [t, vt];
+  }
+  return [x, v];
+}
+
 /// Width the panes ahead of `self` are holding — what it cannot have.
 ///
 /// `order` is a precedence, and that is the whole reason the bounds settle.
