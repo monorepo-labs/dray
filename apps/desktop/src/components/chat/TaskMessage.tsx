@@ -2,9 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 
 import { Markdown } from "@/components/chat/Markdown";
 import { Button } from "@/components/ui/button";
-import { ChatSessionContext } from "@/hooks/useChatSession";
+import { ChatSessionContext, useChatSession } from "@/hooks/useChatSession";
 import { READ_TIMEOUT_MS } from "@/hooks/useStallLine";
 import { readPreviews } from "@/lib/bots";
+
+/// A read of a task's last message: running, failed — the task's server
+/// errored or never answered — or done, with `null` for a task that has
+/// written nothing.
+type Read = { state: "reading" } | { state: "failed" } | { state: "done"; text: string | null };
 
 /// A task's last message in full, read off the end of its own log — what a
 /// "Waiting on you" row shows when picked, in place of scrolling the bot's chat
@@ -12,28 +17,30 @@ import { readPreviews } from "@/lib/bots";
 ///
 /// Drawn in the task's own session context, not the bot chat's around it, so
 /// a relative file link resolves in the task's checkout and a picture loads
-/// from the task's machine.
+/// from the task's machine. A file clicked open still lands in the bot chat's
+/// panel, the one on screen.
 export default function TaskMessage({ sessionId, cwd }: { sessionId: string; cwd: string | null }) {
-  // `undefined` while reading; `failed` where the task's server errored or
-  // never answered, told apart from a task that has written nothing (`null`).
-  const [text, setText] = useState<string | null | "failed" | undefined>(undefined);
+  const [read, setRead] = useState<Read>({ state: "reading" });
   const [tries, setTries] = useState(0);
   useEffect(() => {
     let live = true;
-    setText(undefined);
+    setRead({ state: "reading" });
     // `readPreviews` drops a server that errors, so a missing entry is a failure.
-    const read = readPreviews([sessionId]).then((p) => (p[sessionId] ? p[sessionId].text : ("failed" as const)));
-    const timeout = new Promise<"failed">((done) => setTimeout(() => done("failed"), READ_TIMEOUT_MS));
-    Promise.race([read, timeout])
-      .catch(() => "failed" as const)
-      .then((found) => live && setText(found));
+    const done = readPreviews([sessionId]).then(
+      (p): Read => (p[sessionId] ? { state: "done", text: p[sessionId].text } : { state: "failed" }),
+    );
+    const timeout = new Promise<Read>((settle) => setTimeout(() => settle({ state: "failed" }), READ_TIMEOUT_MS));
+    Promise.race([done, timeout])
+      .catch((): Read => ({ state: "failed" }))
+      .then((r) => live && setRead(r));
     return () => {
       live = false;
     };
   }, [sessionId, tries]);
-  const context = useMemo(() => ({ cwd, sessionId }), [cwd, sessionId]);
+  const { sessionId: shown } = useChatSession();
+  const context = useMemo(() => ({ cwd, sessionId, opensIn: shown }), [cwd, sessionId, shown]);
 
-  if (text === undefined) {
+  if (read.state === "reading") {
     return (
       <div className="flex flex-col gap-2 py-1">
         <span className="h-3 w-3/4 animate-pulse rounded bg-muted-foreground/20" />
@@ -41,7 +48,7 @@ export default function TaskMessage({ sessionId, cwd }: { sessionId: string; cwd
       </div>
     );
   }
-  if (text === "failed") {
+  if (read.state === "failed") {
     return (
       <p className="flex items-center gap-2 text-ui text-muted-foreground">
         Couldn't read this task's last message.
@@ -51,10 +58,10 @@ export default function TaskMessage({ sessionId, cwd }: { sessionId: string; cwd
       </p>
     );
   }
-  if (!text) return <p className="text-ui text-muted-foreground">This task hasn't written anything yet.</p>;
+  if (!read.text) return <p className="text-ui text-muted-foreground">This task hasn't written anything yet.</p>;
   return (
     <ChatSessionContext value={context}>
-      <Markdown linkFilePaths>{text}</Markdown>
+      <Markdown linkFilePaths>{read.text}</Markdown>
     </ChatSessionContext>
   );
 }
