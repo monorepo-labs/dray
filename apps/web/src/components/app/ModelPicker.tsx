@@ -148,8 +148,10 @@ export function ModelPicker() {
           {models.map((model) => {
             const effort = model.label === pick.model ? pick.effort : model.effort;
             const current = model.label === selected.label;
+            const openSub = () => setSub(model.efforts.length ? model.label : null);
             return (
-              <div key={model.label} className="relative" onPointerEnter={() => setSub(model.efforts.length ? model.label : null)}>
+              // Focus opens the ladder as hover does, so Tab reaches its levels.
+              <div key={model.label} className="relative" onPointerEnter={openSub} onFocus={openSub}>
                 <button
                   type="button"
                   role="menuitem"
@@ -189,6 +191,7 @@ export function ModelPicker() {
               role="switch"
               aria-checked={fast}
               onPointerEnter={() => setSub(null)}
+              onFocus={() => setSub(null)}
               onClick={() => setFast((f) => !f)}
               className={cx(ROW, "gap-1.5")}
             >
@@ -210,6 +213,7 @@ export function ModelPicker() {
             type="button"
             role="menuitem"
             onPointerEnter={() => setSub(null)}
+            onFocus={() => setSub(null)}
             onClick={() => setOpen(false)}
             className={cx(ROW, "gap-2 text-muted-foreground")}
           >
