@@ -156,10 +156,7 @@ function initial(): Record<BotId, BotState> {
           todos: [{ text: "Decode bots from the serve wire", done: true }, { text: "Draw a row per bot chat", done: true }, { text: "Place bot chats in the list", done: false }],
           brief: "Show bot chats in the iOS session list.",
           tools: "9 tool calls · 3 files changed",
-          report:
-            "Bot chats show in the session list now: one row per bot, with its face, its last reply and an unread count. Tapping a row opens its chat.\n\n" +
-            "One question before I place them. Above projects puts a bot's reply first when you open the app; below keeps the list opening on your own work, as it does today.\n\n" +
-            "They sit below for now. Moving them is one line in `SessionList.swift`, so either answer lands in a minute.",
+          report: "Bot chats show in the list now, below projects for now. Above or below? Moving them is one line in `SessionList.swift`.",
           need: { text: "Should bot chats sit above or below projects in the iOS list?", age: "7m" },
         },
       ],

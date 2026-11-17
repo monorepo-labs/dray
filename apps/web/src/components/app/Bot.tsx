@@ -13,7 +13,6 @@ import {
   GitMerge,
   GitPullRequest,
   GitPullRequestDraft,
-  MousePointerClick,
   Play,
   Server,
   X,
@@ -21,7 +20,6 @@ import {
 
 import { Composer } from "./Chat";
 import { ModelPicker } from "./ModelPicker";
-import { Keys } from "./Sidebar";
 import { cx } from "./Window";
 
 /// A face's pick, as the app stores it: a shape by name and a hue in degrees.
@@ -538,8 +536,7 @@ export function WaitingRow({
             <span className="min-w-0 truncate text-ui text-foreground">{title}</span>
             {/* Held in place while hidden, so showing it moves nothing. Half
                 strength: it sits on every row the pointer crosses. */}
-            <span className="ml-auto flex shrink-0 items-center gap-1 opacity-0 group-focus-within:opacity-50 group-hover:opacity-50">
-              <Keys caps={["⌘", <MousePointerClick key="click" />]} />
+            <span className="ml-auto flex shrink-0 items-center opacity-0 group-focus-within:opacity-50 group-hover:opacity-50">
               <button
                 type="button"
                 onClick={(e) => {
