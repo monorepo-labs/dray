@@ -22,7 +22,7 @@ import type { MergeMethod, PrMark } from "@/types/events";
 const DISMISSED_CAP = 200;
 
 /// Rows drawn before "Show N more", so a long card doesn't push the chat off screen.
-const ROWS_SHOWN = 3;
+const ROWS_SHOWN = 5;
 
 /// The foot of a bot's chat while any of its tasks waits on the reader: an
 /// inbox row per task — its face, title, PR and how long it has sat. A PR
