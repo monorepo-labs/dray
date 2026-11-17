@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronRight, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { devRuns, DEV_RUN_STATES, setDevRunState, useDevRunState, type DevRunState } from "@/components/botRunsDev";
@@ -163,7 +163,7 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
                   className="flex cursor-default items-center gap-2.5 rounded-lg py-1 pr-2.5 pl-2.5 text-left text-ui text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:hover:bg-transparent"
                 >
                   <span className="flex h-4 w-7 shrink-0 items-center justify-center">
-                    {loading ? <Spinner className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+                    {loading ? <Spinner className="size-3.5" /> : <Plus className="size-3.5" />}
                   </span>
                   {loading ? "Loading…" : "Load more"}
                 </button>
