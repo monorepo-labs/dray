@@ -434,7 +434,7 @@ struct MergeCardView: View {
             if compact || pr?.state == "MERGED" || (read && pr == nil) {
                 HStack(spacing: 6) {
                     if let pr { PrGlyph(mark: pr, size: 14) }
-                    Link(pr?.state == "MERGED" ? "Merged #\(card.number)" : "#\(card.number)", destination: URL(string: card.url)!)
+                    Link(pr?.state == "MERGED" ? "Merged #\(String(card.number))" : "#\(String(card.number))", destination: URL(string: card.url)!)
                         .foregroundStyle(Theme.secondary)
                     Text("·").foregroundStyle(Theme.tertiary)
                     Button { task.map { openTask?($0) } } label: { Chip(face: BotFace(seed: card.taskId, size: 16), title: title) }
@@ -456,7 +456,7 @@ struct MergeCardView: View {
                         .disabled(task == nil)
                         HStack(spacing: 5) {
                             if let pr { PrGlyph(mark: pr, size: 14) }
-                            Link("#\(card.number)", destination: URL(string: card.url)!)
+                            Link("#\(String(card.number))", destination: URL(string: card.url)!)
                                 .foregroundStyle(Theme.secondary)
                                 .font(Theme.Font.footnote.font.monospacedDigit())
                             if pr?.state == "OPEN" && pr?.checksState == "RUNNING" { ChecksSpinner().frame(width: 13, height: 13) }
@@ -552,7 +552,7 @@ struct MergeTaskButton: View {
         }
         .buttonStyle(.plain)
         .disabled(merging)
-        .confirmationDialog("\(method.label) #\(number)?", isPresented: $confirming, titleVisibility: .visible) {
+        .confirmationDialog("\(method.label) #\(String(number))?", isPresented: $confirming, titleVisibility: .visible) {
             ForEach(MergeMethod.allCases, id: \.self) { m in
                 Button(m.label) {
                     method = m
@@ -674,6 +674,12 @@ struct StalledCard: View {
                 .overlay(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous).strokeBorder(Theme.border))
             }
         }
+        // Tasks are hidden, so the list never reads their repos' marks, and a ready PR
+        // would sit here as a plain waiting row with no Merge.
+        .task(id: tasks) {
+            let repos = Set(tasks.compactMap { key in store.items[key].map { ProjectKey(server: key.server, path: $0.projectPath) } })
+            for repo in repos { await store.ensureMarks(repo.server, repo.path) }
+        }
         .sheet(item: $picked) { s in
             TaskMessageSheet(task: s.task, title: s.item.title) {
                 picked = nil
@@ -694,7 +700,7 @@ struct StalledCard: View {
                             .font(Theme.Font.subhead).foregroundStyle(Theme.text).lineLimit(1)
                         if let pr = s.pr {
                             PrGlyph(mark: pr, size: 13)
-                            Text("#\(pr.number)").font(Theme.Font.footnote.font.monospacedDigit())
+                            Text("#\(String(pr.number))").font(Theme.Font.footnote.font.monospacedDigit())
                                 .foregroundStyle(s.ready ? Theme.add : Theme.secondary)
                         }
                         Spacer(minLength: 0)
@@ -738,6 +744,9 @@ struct TaskMessageSheet: View {
     @State private var read = Read.reading
     @State private var tries = 0
 
+    private var item: SessionItem? { store.items[task] }
+    private var pr: PrMark? { item.flatMap { store.prMark(task, $0) } }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -774,22 +783,41 @@ struct TaskMessageSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
-                ToolbarItem(placement: .primaryAction) {
-                    // An HStack, not a Label: a toolbar draws a Label as its icon alone.
+            }
+            // At the foot, Open task then Merge as on the desktop's row: in the bar, Merge
+            // was squeezed into Open task's glass and the title cut to a word.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                HStack(spacing: Theme.Space.s) {
+                    Spacer()
                     Button(action: open) {
                         HStack(spacing: 4) {
                             Text("Open task")
                             Image(systemName: "arrow.up.right").font(Theme.Font.footnoteStrong.font)
                         }
-                        .padding(.horizontal, 6)
+                        .font(Theme.Font.pill)
+                        .foregroundStyle(Theme.text)
+                        .padding(.horizontal, 16)
+                        .frame(height: 34)
+                        .background(Theme.raised, in: Capsule())
                     }
+                    .buttonStyle(.plain)
                     .accessibilityLabel("Open task")
+                    // The row's own Merge, held to the row's gate: a PR GitHub calls ready.
+                    if let item, let pr, prStatus(pr) == "ready" {
+                        MergeTaskButton(server: task.server, taskId: task.id, cwd: item.projectPath,
+                                        number: pr.number, branch: pr.headRefName)
+                    }
                 }
+                .padding(.horizontal, Theme.Space.l)
+                .padding(.vertical, Theme.Space.m)
+                .background(Theme.page)
             }
             .background(Theme.page.ignoresSafeArea())
         }
         .presentationDetents([.medium, .large])
         .presentationBackground(Theme.page)
+        // A merge settles the task: nothing left to read or open.
+        .onChange(of: item == nil || pr.map(prStatus) == "merged") { _, gone in if gone { dismiss() } }
         .task(id: tries) {
             read = .reading
             do {
@@ -896,7 +924,7 @@ struct BotTasksSheet: View {
                 if let pr {
                     if pr.state == "OPEN" && pr.checksState == "RUNNING" { ChecksSpinner().frame(width: 14, height: 14) }
                     else { PrGlyph(mark: pr, size: 14) }
-                    Text("#\(pr.number)").font(Theme.Font.footnote.font.monospacedDigit()).foregroundStyle(Theme.secondary)
+                    Text("#\(String(pr.number))").font(Theme.Font.footnote.font.monospacedDigit()).foregroundStyle(Theme.secondary)
                 }
             }
             .padding(.horizontal, Theme.Space.m)

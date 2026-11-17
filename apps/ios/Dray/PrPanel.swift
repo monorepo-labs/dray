@@ -189,7 +189,7 @@ private struct PrSection: View {
                         }
                     }
                     HStack(spacing: 6) {
-                        Text("#\(pr.number) · \(pr.author)").foregroundStyle(Theme.secondary)
+                        Text("#\(String(pr.number)) · \(pr.author)").foregroundStyle(Theme.secondary)
                         Text("+\(pr.additions)").foregroundStyle(Theme.add)
                         Text("−\(pr.deletions)").foregroundStyle(Theme.destructive)
                         Text("· \(pr.changedFiles) \(pr.changedFiles == 1 ? "file" : "files")").foregroundStyle(Theme.secondary)
@@ -374,7 +374,7 @@ private struct MergeButton: View {
         .accessibilityElement(children: .contain)
         // A poll can start or fail a check while the confirm is open; the hold covers it too.
         .onChange(of: pr.checksHold) { _, hold in if hold { confirming = false } }
-        .confirmationDialog("\(method.label) #\(pr.number)?", isPresented: $confirming, titleVisibility: .visible) {
+        .confirmationDialog("\(method.label) #\(String(pr.number))?", isPresented: $confirming, titleVisibility: .visible) {
             Button(method.label) {
                 // Read the model, not this view's copy, which can trail a refresh by a render.
                 guard model.prs.first(where: { $0.number == pr.number })?.checksHold == false else { return }

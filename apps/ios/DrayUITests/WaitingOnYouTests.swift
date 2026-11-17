@@ -25,6 +25,13 @@ final class WaitingOnYouTests: XCTestCase {
         XCTAssertTrue(text(app, "Should I open the PR?").exists)
         XCTAssertTrue(app.buttons["Open image"].waitForExistence(timeout: 5), "the picture drew no button")
         snap(app, "2-sheet")
+        // The button stands whether or not the read worked; the viewer labels a picture only once it loaded.
+        app.buttons["Open image"].tap()
+        let pager = app.descendants(matching: .any)["image-pager"]
+        XCTAssertTrue(pager.waitForExistence(timeout: 5), "no viewer")
+        XCTAssertTrue(pager.descendants(matching: .any)["Image"].waitForExistence(timeout: 10),
+                      "the picture never loaded from the task's server")
+        app.buttons["Close"].tap()
 
         app.buttons["Open task"].tap()
         XCTAssertTrue(app.navigationBars.staticTexts["Fix login redirect"].waitForExistence(timeout: 5)
