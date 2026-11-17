@@ -2,7 +2,11 @@ import XCTest
 
 /// A markdown table in a reply grows its rows and stays inside the bubble, and
 /// Settings lists five servers with the rest behind All servers. Against a real
-/// server holding a chat titled `DRAY_TABLE_CHAT` whose reply carries tables:
+/// server holding a chat titled `DRAY_TABLE_CHAT` whose reply carries this table:
+///   | PR | What it does |
+///   |---|---|
+///   | #888 | Accounts, stage 3: MCP sign-in through drayhq.com |
+///   | #889 | Accounts, stage 4: sign in from the app. Link on every server |
 ///   TEST_RUNNER_DRAY_URL=ws://127.0.0.1:… TEST_RUNNER_DRAY_TOKEN=… TEST_RUNNER_DRAY_TABLE_CHAT="Cloud PR table" xcodebuild test …
 final class TableAndServersTests: XCTestCase {
     private var env: [String: String] { ProcessInfo.processInfo.environment }
@@ -21,12 +25,18 @@ final class TableAndServersTests: XCTestCase {
         let row = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", chat)).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 20), "no row for \(chat)")
         row.tap()
-        XCTAssertTrue(app.staticTexts["#1015"].waitForExistence(timeout: 20), "the table never drew")
+        let wide = app.staticTexts["Accounts, stage 3: MCP sign-in through drayhq.com"]
+        XCTAssertTrue(wide.waitForExistence(timeout: 20), "the table never drew")
         sleep(2)
         snap(app, "table-end")
         app.swipeDown()
         sleep(1)
         snap(app, "table-top")
+        // The long cell wraps: taller than one line, clear of the next row, inside the screen.
+        let next = app.staticTexts["#889"]
+        XCTAssertGreaterThan(wide.frame.height, next.frame.height * 1.5, "the long cell did not wrap")
+        XCTAssertLessThanOrEqual(wide.frame.maxY, next.frame.minY + 1, "a wrapped cell ran into the next row")
+        XCTAssertLessThanOrEqual(wide.frame.maxX, app.windows.firstMatch.frame.maxX, "the table ran past the screen")
         app.navigationBars.buttons.element(boundBy: 0).tap()
 
         // Six more: unreachable ones are still servers in the list.
