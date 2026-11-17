@@ -414,6 +414,8 @@ enum Payload: Decodable {
     case backgroundTasks(count: Int)
     /// A merge card a bot posted, or Dray did once the PR was ready.
     case mergeCard(MergeCard)
+    /// A session a bot chat started, logged by the server as it made it.
+    case taskStarted(taskId: String)
     /// Lessons a bot turn filed, one per file, and one taken back.
     case learned(commit: String, files: [Lesson])
     case learnedUndone(commit: String, path: String)
@@ -472,6 +474,8 @@ enum Payload: Decodable {
                 self = .error(try c.decode(String.self, forKey: "message"))
             case "merge_card":
                 self = .mergeCard(try MergeCard(from: decoder))
+            case "task_started":
+                self = .taskStarted(taskId: try c.decode(String.self, forKey: "taskId"))
             case "learned":
                 self = .learned(commit: try c.decode(String.self, forKey: "commit"),
                                 files: try c.decode([Lesson].self, forKey: "files"))

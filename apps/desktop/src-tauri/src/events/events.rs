@@ -418,6 +418,12 @@ pub enum AgentEventPayload {
         model: Option<crate::models::ModelId>,
     },
 
+    /// A session this bot chat started, logged by the server as it creates it.
+    /// The chat's "Started a new task" row reads this, never the bot's shell
+    /// call, whose output a pipe or a script may hide. `title` is the one it
+    /// had then, for once the task is settled and gone from the index.
+    TaskStarted { task_id: String, title: String },
+
     /// A task's pull request, posted by the agent with `dray session merge-card`
     /// or by the app once it is ready, so the reader can land it from the chat.
     /// The PR's live state is read by the frontend; these fields are what the

@@ -88,6 +88,23 @@ final class BotTests: XCTestCase {
         snap(app, "unread-divider")
     }
 
+    /// #1159: needs `DRAY_BOT`'s chat to have started `DRAY_TASKS` tasks, however
+    /// its calls printed the ids — piped, scripted — and draws a row for each.
+    func testStartedTaskRows() throws {
+        guard let name = env["DRAY_BOT"], let want = env["DRAY_TASKS"].flatMap(Int.init) else {
+            throw XCTSkip("set TEST_RUNNER_DRAY_BOT and TEST_RUNNER_DRAY_TASKS")
+        }
+        let app = try connected()
+        let bot = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+        XCTAssertTrue(bot.waitForExistence(timeout: 20), "no bot row")
+        bot.tap()
+        let rows = app.staticTexts.matching(NSPredicate(format: "label == %@", "Started a new task"))
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10), "no task row")
+        sleep(2)
+        snap(app, "started-\(name)")
+        XCTAssertEqual(rows.count, want)
+    }
+
     /// A fresh app paired to the test server through its link.
     private func connected() throws -> XCUIApplication {
         guard let url = env["DRAY_URL"], let token = env["DRAY_TOKEN"] else {
