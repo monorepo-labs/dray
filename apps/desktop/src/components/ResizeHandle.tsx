@@ -116,6 +116,8 @@ export function useResizable({
   label,
   pane,
   floor,
+  rail,
+  widen = false,
 }: {
   storageKey: string;
   initial: number;
@@ -132,7 +134,12 @@ export function useResizable({
   /// for. Absent for a pane on some other row — the files list, whose siblings
   /// are inside the chat column rather than beside it.
   pane?: Pane;
-}): { style: CSSProperties; handle: ReactNode } {
+  /// A width below the floor the pane snaps to, its icon-only form.
+  rail?: number;
+  /// Drawn at `initial` while on the rail, without touching what is stored —
+  /// for a moment that needs the full pane, like the sidebar's search field.
+  widen?: boolean;
+}): { style: CSSProperties; handle: ReactNode; width: number; held: number } {
   const read = () => readLocalStorage(storageKey, initial);
   const [stored, setStored] = useState(read);
   // The key moves under a mounted pane — the right panel follows the selected
@@ -153,16 +160,19 @@ export function useResizable({
   const columnFloor = useChatFloor();
   const bounds = paneBounds(min, useViewportWidth(), useSeniorPanes(pane), floor ?? columnFloor);
   const clamp = useCallback(
-    (raw: number) => snapWidth(raw, bounds.min, bounds.max, initial),
-    [bounds.min, bounds.max, initial],
+    // A stored width is judged as if from the rail, so one saved under an
+    // older, lower floor opens rather than dropping to the rail.
+    (raw: number, fromRail = true) => snapWidth(raw, bounds.min, bounds.max, initial, rail, fromRail),
+    [bounds.min, bounds.max, initial, rail],
   );
 
   // Narrowing the window narrows the pane; widening it back restores what the
   // reader asked for, which is why the stored width is left alone.
-  const width = clamp(stored);
+  const held = clamp(stored);
+  const width = widen && held === rail ? clamp(initial) : held;
 
   // Published on every change and cleared on unmount, which is what a collapsed
-  // sidebar is — it returns null rather than rendering a rail.
+  // sidebar is — it returns null.
   useEffect(() => {
     if (!pane) return;
     widths[pane] = width;
@@ -185,7 +195,7 @@ export function useResizable({
   const end = () => {
     if (!from.current) return;
     from.current = null;
-    writeLocalStorage(storageKey, width);
+    writeLocalStorage(storageKey, held);
   };
 
   // Arrows widen and narrow, Home resets: the pointer's three verbs, since a
@@ -194,7 +204,13 @@ export function useResizable({
   const byKey = (key: string): number | null => {
     if (key === "Home") return clamp(initial);
     const step = key === "ArrowRight" ? STEP_PX : key === "ArrowLeft" ? -STEP_PX : null;
-    return step === null ? null : clamp(width + (edge === "right" ? step : -step));
+    if (step === null) return null;
+    const delta = edge === "right" ? step : -step;
+    // One press either way between the floor and the rail: a 16px step never
+    // crosses the halfway line the pointer snaps on.
+    if (rail !== undefined && width === rail) return delta > 0 ? clamp(bounds.min) : rail;
+    if (rail !== undefined && width === bounds.min && delta < 0) return clamp(rail);
+    return clamp(width + delta);
   };
 
   const handle = (
@@ -203,7 +219,7 @@ export function useResizable({
       aria-orientation="vertical"
       aria-label={label}
       aria-valuenow={width}
-      aria-valuemin={bounds.min}
+      aria-valuemin={rail ?? bounds.min}
       aria-valuemax={bounds.max}
       tabIndex={0}
       onPointerDown={(e) => {
@@ -219,7 +235,7 @@ export function useResizable({
         const start = from.current;
         if (!start) return;
         const moved = edge === "right" ? e.clientX - start.x : start.x - e.clientX;
-        setStored(clamp(start.width + moved));
+        setStored(clamp(start.width + moved, start.width === rail));
       }}
       onPointerUp={end}
       onPointerCancel={end}
@@ -241,5 +257,5 @@ export function useResizable({
     />
   );
 
-  return { style: { width }, handle };
+  return { style: { width }, handle, width, held };
 }
