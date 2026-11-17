@@ -325,6 +325,8 @@ struct AgentEvent: Decodable, Identifiable {
     let id: String
     let sessionId: String
     let ts: String?
+    /// `claude_code`, `fx`…; absent from an older server.
+    let harness: String?
     /// Set on a subagent's own events, which the chat does not draw.
     let subagent: JSON?
     let payload: Payload
@@ -411,7 +413,12 @@ enum Payload: Decodable {
     case permissionRequested(PermissionRequest)
     case questionsAsked(QuestionsRequest)
     case permissionDecided(requestId: String)
-    case backgroundTasks(count: Int)
+    case backgroundTasks([BackgroundTask])
+    /// A subagent or backgrounded shell's lifecycle; which run is on the event's `subagent`.
+    /// `agentId` is the harness's handle, what `stop_task` names; empty where it names none.
+    case subagentStarted(agentId: String, label: String?, description: String?)
+    case subagentProgress(agentId: String, description: String?)
+    case subagentCompleted(agentId: String)
     /// A merge card a bot posted, or Dray did once the PR was ready.
     case mergeCard(MergeCard)
     /// A session a bot chat started, logged by the server as it made it.
@@ -469,7 +476,16 @@ enum Payload: Decodable {
             case "permission_decided":
                 self = .permissionDecided(requestId: try c.decode(String.self, forKey: "requestId"))
             case "background_tasks_changed":
-                self = .backgroundTasks(count: try c.decode([JSON].self, forKey: "tasks").count)
+                self = .backgroundTasks(try c.decode([BackgroundTask].self, forKey: "tasks"))
+            case "subagent_started":
+                self = .subagentStarted(agentId: (try? c.decode(String.self, forKey: "agentId")) ?? "",
+                                        label: try? c.decode(String.self, forKey: "label"),
+                                        description: try? c.decode(String.self, forKey: "description"))
+            case "subagent_progress":
+                self = .subagentProgress(agentId: (try? c.decode(String.self, forKey: "agentId")) ?? "",
+                                         description: try? c.decode(String.self, forKey: "description"))
+            case "subagent_completed":
+                self = .subagentCompleted(agentId: (try? c.decode(String.self, forKey: "agentId")) ?? "")
             case "error":
                 self = .error(try c.decode(String.self, forKey: "message"))
             case "merge_card":
@@ -507,6 +523,14 @@ enum Payload: Decodable {
         default: nil
         }
     }
+}
+
+/// One task the child still holds: a backgrounded shell or a subagent.
+struct BackgroundTask: Decodable, Hashable {
+    let taskId: String
+    /// `local_bash`, `local_agent`; free-form.
+    let taskType: String?
+    let description: String?
 }
 
 /// `dray session merge-card`'s card: the task, its repo and the PR to land.

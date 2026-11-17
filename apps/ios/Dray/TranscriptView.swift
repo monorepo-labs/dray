@@ -6,6 +6,10 @@ struct TranscriptView: View {
     let key: SessionKey
     @State private var fixing = false
     @State private var showingTasks = false
+    @State private var showingRuns = false
+    /// The run a subagent row opened the sheet on.
+    @State private var runFocus: String?
+    @State private var subagent: SubagentRoute?
     @State private var editingBot = false
     @Environment(\.openTask) private var openTask
     /// The floating banner's height, kept clear above the first row so it never sits on "Load earlier".
@@ -70,8 +74,16 @@ struct TranscriptView: View {
                         }
                     } else if busy {
                         WorkingLine()
-                    } else if let n = store.tasks[key], n > 0 {
-                        OrbLine(activity: .background, label: n == 1 ? "1 background task running" : "\(n) background tasks running")
+                    } else if let n = store.tasks[key]?.count, n > 0 {
+                        // A bot's runs list under its tasks, as on desktop.
+                        Button {
+                            if bot != nil { showingTasks = true } else { runFocus = nil; showingRuns = true }
+                        } label: {
+                            OrbLine(activity: .background, label: n == 1 ? "1 background task running" : "\(n) background tasks running")
+                                .contentShape(.rect)
+                        }
+                        .buttonStyle(RowButtonStyle())
+                        .accessibilityIdentifier("backgroundTasks")
                     }
                     ForEach(asks) { AskCard(key: key, event: $0) }
                     // Answered by the task's own key, so the reply reaches its server, not this chat's.
@@ -152,7 +164,29 @@ struct TranscriptView: View {
         .task { await open() }
         .onChange(of: chatMark) { settleUnread() }
         .prPanel(key)
-        .sheet(isPresented: $showingTasks) { BotTasksSheet(server: key.server, tasks: botTasks) { openTask?($0) } }
+        .sheet(isPresented: $showingTasks) {
+            BotTasksSheet(server: key.server, tasks: botTasks, runs: runKeys(bot)) { openTask?($0) }
+        }
+        .sheet(isPresented: $showingRuns) { RunsSheet(key: key, focus: runFocus) }
+        .navigationDestination(item: $subagent) { SubagentChat(route: $0) }
+        .environment(\.openSubagent) { route in
+            showingRuns = false
+            showingTasks = false
+            subagent = route
+        }
+        // A subagent row opens its chat where it has one, else the sheet on it, as on desktop.
+        .environment(\.openRun) { id in
+            let live = Set((store.tasks[key] ?? []).map(\.taskId))
+            guard let run = buildRuns(transcript?.events ?? [], session: key, live: live, busy: busy).first(where: { $0.id == id })
+            else { return false }
+            if run.chat && !run.locked {
+                subagent = SubagentRoute(session: key, id: id)
+            } else {
+                runFocus = id
+                showingRuns = true
+            }
+            return true
+        }
         .sheet(isPresented: $fixing) { SettingsView(focus: key.server) }
         .sheet(isPresented: $editingBot) { if let bot { BotSheet(editing: (key.server, bot)) } }
     }
@@ -258,6 +292,14 @@ struct TranscriptView: View {
         while start > 0, let top = store.transcripts[chat[start]], top.olderBefore == nil,
               store.transcripts[chat[start - 1]] != nil { start -= 1 }
         return Array(chat[start...i])
+    }
+
+    /// The sessions whose runs list: a bot's whole chat up to this one, newest first.
+    private func runKeys(_ bot: Bot?) -> [SessionKey] {
+        guard let bot else { return [key] }
+        let chat = store.botChat(key.server, bot)
+        guard let i = chat.firstIndex(of: key) else { return [key] }
+        return chat[...i].reversed()
     }
 
     /// The session an agent switch left just above what is drawn, if any.
@@ -615,6 +657,7 @@ struct ToolRow: View {
     /// False inside a group, whose header already says the verb.
     var showLabel = true
     @State private var open = false
+    @Environment(\.openRun) private var openRun
 
     var body: some View {
         let pending = call.state == .pending
@@ -624,6 +667,8 @@ struct ToolRow: View {
         let summary = call.name.hasPrefix("mcp__") ? mcpSummary(call.name) : call.summary
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             Button {
+                // A subagent's row opens what it is doing, as the desktop's opens its panel.
+                if call.toolType == "subagent_spawn", let id = call.callId, openRun?(id) == true { return }
                 if expandable { withAnimation(Theme.motion) { open.toggle() } }
             } label: {
                 HStack(spacing: 6) {
