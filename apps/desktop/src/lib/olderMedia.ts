@@ -49,6 +49,13 @@ export async function loadOlderMedia(
   let found = 0;
   for (const log of logs) {
     let before = olderCursor(log, next[log.sessionId]);
+    // What the transcript holds now is kept before reading on past it: the
+    // cursor may start above pages the chat read back, and the chat lets
+    // those go once the reader returns to the bottom.
+    const held = sessionMedia(log.events);
+    const kept = next[log.sessionId]?.media ?? [];
+    const keys = new Set(held.map(mediaKey));
+    next[log.sessionId] = { before, media: [...held, ...kept.filter((m) => !keys.has(mediaKey(m)))] };
     while (before != null && found < want) {
       const read = await page(log.sessionId, before);
       const fresh = sessionMedia(read.events).filter((m) => !seen.has(mediaKey(m)));

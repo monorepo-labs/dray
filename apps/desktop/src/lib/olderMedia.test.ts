@@ -50,4 +50,14 @@ describe("loadOlderMedia", () => {
     expect(twice.a.before).toBeNull();
     expect(twice.b.before).toBeNull();
   });
+
+  it("keeps pictures from pages the chat read back and later let go", async () => {
+    // The chat paged back to byte 20 on its own, holding turns 2 and 3.
+    const scrolled: HeldLog = { sessionId: "a", events: [shot(2), shot(3), shot(4)], olderBefore: 20 };
+    const pages: Record<number, SessionPage> = { 20: { events: [shot(0), shot(1)], olderBefore: null } };
+    const older = await loadOlderMedia([scrolled], {}, (_, before) => Promise.resolve(pages[before]), 2);
+    // Back at the bottom, the chat holds its tail alone again.
+    const tail: HeldLog = { sessionId: "a", events: [shot(4)], olderBefore: 30 };
+    expect(allMedia([tail], older).map(mediaKey)).toEqual(["/p/4.png", "/p/3.png", "/p/2.png", "/p/1.png", "/p/0.png"]);
+  });
 });
