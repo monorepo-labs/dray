@@ -1,6 +1,6 @@
 ---
 title: Sessions
-description: Start, list and message Dray sessions from the command line, with every flag for model, effort, agent, base branch, issues and fast mode.
+description: Start, list and message Dray sessions from the command line, with every flag for model, effort, agent, base branch, worktree, issues and fast mode.
 sidebar:
   order: 2
 ---
@@ -21,11 +21,12 @@ Write the prompt for someone who has not read your conversation. The new session
 
 | Flag | What it does | Default |
 |---|---|---|
-| `--project <path>` | The repo to run in. | The git repo you are in, then the calling session's project. |
+| `--project <path>` | The repo to run in. With `--no-worktree`, any folder. | The git repo you are in, then the calling session's project. |
 | `--model <alias>` | A model the agent knows, like `opus`, `sonnet`, `fable` or `haiku` on Claude Code, or a `provider/model` id on pi. | The calling session's model, if the agent is the same. Otherwise the agent's own default. |
 | `--effort <level>` | `low`, `medium`, `high`, `xhigh`, `max` or `ultra`. | The calling session's effort, if the agent is the same. Otherwise the model's default. |
 | `--harness <name>` | Which agent runs it: `claude_code`, `codex`, `pi`, `fx` or `grok`. | The calling session's agent, else Claude Code. |
 | `--base <session\|ref>` | Start the worktree from existing work: a session id, a branch, a tag or a commit. Committed work only. | `origin/<default branch>` |
+| `--no-worktree` | Run in the `--project` folder as it is, with no worktree or branch. Any folder, including one that is no repo. Cannot be combined with `--base`. | A worktree. |
 | `--title <title>` | The session's title. | One generated from the prompt. |
 | `--issue <ID>` | An issue this work is against, like `DRA-53` or `owner/repo#12`. Repeat for several. | None. |
 | `--fast` | Run at the agent's faster tier, which uses more of your plan. | The calling session's setting, if the agent is the same. |
@@ -37,13 +38,20 @@ Write the prompt for someone who has not read your conversation. The new session
 dray session new --harness codex --effort high "Port the retry logic to the Go client"
 dray session new --model opus --fast "Rename the config keys listed below …"
 dray session new --issue DRA-53 --title "Add the issue panel" "Build the issue panel described in DRA-53"
+dray session new --no-worktree --project '~' "Set up Docker on this machine and report the version"
 ```
 
-### Always a worktree
+### Worktree
 
-Every session made here gets its own git worktree on its own branch, `worktree-<name>`. There is no flag to turn that off and no flag to pick the name. Sessions started this way run at the same time, and two agents in one checkout overwrite each other.
+A session made here gets its own git worktree on its own branch, `worktree-<name>`, unless you pass `--no-worktree`. There is no flag to pick the name. Two agents in one checkout overwrite each other, so work that edits a repo takes a worktree.
 
 The worktree starts at `origin/<default branch>`, not at the branch you are on. So a plain new session cannot see unpushed work. Pass `--base` to start it from a session's branch or any ref; see [Orchestration](/cli/orchestration#review-with-a-second-model).
+
+`--no-worktree` runs the session in the `--project` folder as it is: a repo's own checkout, or a folder that is no repo. It is for work that changes no files in a repo, such as setting up a machine, checking logs or research. It cannot go with `--base`. A folder that is no git repository is refused without the flag: "`<path>` is no git repository — pass --no-worktree to run in it as it is".
+
+`--project '~'` is the home folder of the machine that runs the session. Quote the tilde, or your own shell expands it first.
+
+`dray` says which happened: `Started "…" in worktree calm-owl`, or `Started "…" in /path, no worktree`. An older app ignores the flag, makes a worktree anyway, and tells you to update the app.
 
 ### What a new session inherits
 
@@ -124,7 +132,7 @@ dray session unset-aside <id>
 | `rename <id> <title>` | Renames the session. Your title stays: no generated one replaces it. |
 | `stop <id>` | Stops the running turn, like the Stop button. |
 | `settle <id>` | Stops the session and moves it out of the active list. Its worktree stays. Refused while a turn is running. |
-| `settle <id> --delete-worktree` | Also deletes the worktree and its branch, whatever they hold, uncommitted and unpushed work included. Nothing asks first. |
+| `settle <id> --delete-worktree` | Also deletes the worktree and its branch, whatever they hold, uncommitted and unpushed work included. Nothing asks first. Refused when the session has no worktree: "has no worktree of its own to delete". |
 | `unsettle <id>` | Brings a settled session back to the active list. |
 | `set-aside <id>` | Sinks the session to the bottom of the sidebar: started, not wanted now. |
 | `unset-aside <id>` | Takes it out of set-aside. |
@@ -158,6 +166,12 @@ Sets what a bot's task needs from you, in one line. It shows on the task's row i
 
 A task whose pull request is ready to merge gets a line only when it asked you to try or check something before merging. Otherwise its row shows **Merge** alone.
 
+Click a row and what the bot told you about that task opens under it: the bot's reply to the task's latest report, not the report itself, which was written for the bot. Click the row again to close it. If the bot has not written one, the click opens the task. Hover a row for **Open task**, or `⌘`-click the row, to open the task as a tab in the bot's row.
+
+A task whose machine is offline stays on the card. The offline mark takes the place of the time, and **Open task** is hidden, so the task itself cannot be opened until the machine answers. The bot's reply still opens under the row. With none, the row stays and says **Nothing from the bot about this task yet.** **Merge** still works from this card and from the **Tasks** tab, through this machine's GitHub account, when that account can merge the pull request. The task leaves the lists at once. The settle, and the removal of its worktree, land on the other machine when it reconnects. Where this account cannot merge — no write access, or a different GitHub login from the one the task's machine used — the mark's tooltip says why, and the merge card says **Can't merge from here**. A message to that task cancels a settle that is still waiting on the machine.
+
+Failing checks on a draft pull request do not send the task off to fix them. A draft waits on you, the same as any other draft.
+
 ## Reaction
 
 ```bash
@@ -180,7 +194,7 @@ The word works in place of the emoji. A new reaction on the same message replace
 
 ## Limits
 
-- No flag sets the permission mode, the worktree name, or turns the worktree off.
+- No flag sets the permission mode or the worktree name.
 - `--fast` can only turn fast mode on. Leaving it off inherits the caller's setting.
 - `--base` sees committed work only. Changes not yet committed are not in the new worktree.
 - A model that has no faster tier runs at its normal speed with `--fast`, and nothing says so.

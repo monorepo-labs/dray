@@ -21,7 +21,7 @@ Ask in the conversation, for example:
 
 The agent runs `dray session new` once per piece of work. Each new session:
 
-- gets its own worktree, starting at `origin/<default branch>`
+- gets its own worktree, starting at `origin/<default branch>`, unless the agent passes `--no-worktree`
 - inherits the caller's agent, model, effort, fast mode and permission mode, unless the agent passes flags
 - starts working at once, on the prompt the agent wrote for it
 
@@ -46,7 +46,9 @@ A bot is one ongoing chat you run everything from. It has its own instructions a
 - **Make one** with **New bot** in the sidebar: a name, a face, a colour, and the agent and model it runs on. Its chat opens with the bot introducing itself; tell it its job in reply. Bots sit above All Projects like an inbox, each with its face and its last message.
 - **It runs in its own folder**, not in a repository, and starts work in any project you name. Its folder holds `AGENTS.md` and a `memory` folder, both empty at first. The bot writes down its job in `AGENTS.md` from what you tell it, and the agent it runs on loads that file whenever its chat starts, as it would in any repository. An older bot's `INSTRUCTIONS.md` moves to `AGENTS.md`, rules and all, the next time it starts. It saves what is worth remembering as one dated file per memory, such as `2026-11-12-release-checklist.md`, and looks through them when it needs to.
 - **What it starts runs hidden.** Those sessions stay out of the sidebar. After every turn one of them ends, Dray sends its last message to the bot, so the bot always knows where its work stands. Their permission and question cards show in the bot's chat.
+- **Its chat stays free.** A bot answers there, and hands longer work off. The chat shows **Started a new task** with the task's name whenever the bot starts one. Work that changes a repo, or needs its own branch or pull request, becomes a task in a worktree. Other long work, such as setting up a machine, checking logs or doing research, goes to a background subagent on Claude Code and Grok Build, so the chat stays free while it runs. On Codex, pi and fx that work is a task started with `--no-worktree`, in the folder as it is. See [Sessions](/cli/sessions#worktree).
 - **The Tasks tab** in the bot's right panel lists everything it started, grouped Waiting on you, Working and Done. Click one to look inside.
+- **Under that list**, when the bot has any, the tab shows **Subagents** and **Background tasks**. Running subagents stay listed. Finished ones fold under the **Subagents** heading, which shows how many, and **Load more** brings the next ten. **Background tasks** are shells still running, such as a dev server. **Stop all** shows on a section with two or more you can stop.
 - **Right-click a bot** to start its chat fresh (instructions and memory stay) or to delete it.
 
 Bots live on this Mac.
@@ -98,5 +100,5 @@ Answer those cards above the parent's composer, or open the session. To have chi
 
 - **Two levels deep.** A spawned session may start sessions; those may not. Start the next batch from a top-level session.
 - **No reading transcripts.** A session can create, list and message others, but cannot read what another session wrote. Ask it to send a summary.
-- **No shared checkout.** Every spawned session gets its own worktree. Two sessions cannot run in one directory.
+- **A worktree by default.** A spawned session gets its own worktree, so two agents never share a checkout. `--no-worktree` is the exception, for work that changes no repo. See [Sessions](/cli/sessions#worktree).
 - **No permission flag.** Children always take the parent's permission mode.
