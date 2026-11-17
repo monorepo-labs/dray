@@ -35,6 +35,23 @@ describe("snapWidth", () => {
   });
 });
 
+describe("snapWidth with a rail", () => {
+  it("drops to the rail past halfway below the floor", () => {
+    expect(snapWidth(117, 180, 480, 240, 56)).toBe(56);
+    expect(snapWidth(20, 180, 480, 240, 56)).toBe(56);
+  });
+
+  it("holds at the floor short of halfway", () => {
+    expect(snapWidth(119, 180, 480, 240, 56)).toBe(180);
+    expect(snapWidth(170, 180, 480, 240, 56)).toBe(180);
+  });
+
+  it("leaves the range above the floor alone", () => {
+    expect(snapWidth(200, 180, 480, 240, 56)).toBe(200);
+    expect(snapWidth(236, 180, 480, 240, 56)).toBe(240);
+  });
+});
+
 describe("paneBounds", () => {
   // The whole rule, and the only one: whatever the window and whatever else is
   // on the row, the chat column comes away with its floor exactly.

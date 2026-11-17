@@ -80,6 +80,7 @@ import {
 } from "@/components/ResizeHandle";
 import Sidebar, {
   SIDEBAR_MIN,
+  SIDEBAR_RAIL,
   SEARCH_INPUT_ID,
   SettingsButton,
   SidebarToggle,
@@ -1192,9 +1193,10 @@ function App() {
   // the floor, and where it does not fit the cards stack above the composer.
   // Up to a 14" MacBook's width, an open panel stacks it even where the
   // minimums fit: all four at their floors reads as cramped, not as fitting.
-  const sidebarW = Math.max(SIDEBAR_MIN, usePaneWidth("sidebar"));
   // What the sidebar is drawn at, 0 while shut: where the sheet starts.
   const sidebarDrawn = usePaneWidth("sidebar");
+  // The rail is its own floor: a width the reader picked, never one clamped to.
+  const sidebarW = sidebarDrawn === SIDEBAR_RAIL ? SIDEBAR_RAIL : Math.max(SIDEBAR_MIN, sidebarDrawn);
   const viewportW = useViewportWidth();
   const crewFits =
     viewportW >= CHAT_MIN + CREW_W + (collapsed ? 0 : sidebarW) + (panelShown ? PANEL_MIN : 0);
@@ -3611,6 +3613,7 @@ function App() {
           updateBlocked={anyRunning}
           updateManual={updateManual}
           onInstallUpdate={() => void installUpdate()}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
       }
       header={
@@ -3646,8 +3649,9 @@ function App() {
           {/* Over the sidebar's right end, out of the flow so the tabs do not
               move. It belongs to the sidebar, so it goes when the sidebar does —
               and on a hidden session, whose way back to its parent runs
-              through this same strip. ⌘, still opens settings there. */}
-          {sidebarDrawn > 0 && !(!issuesOpen && shownSession && crumb) && (
+              through this same strip. ⌘, still opens settings there. The rail's
+              end sits under the traffic lights, so it draws its own gear. */}
+          {sidebarDrawn > SIDEBAR_RAIL && !(!issuesOpen && shownSession && crumb) && (
           <div
             className="absolute top-1/2 flex shrink-0 -translate-y-1/2 items-center gap-1"
             style={{ right: `calc(100% - ${sidebarDrawn}px + 0.5rem)` }}

@@ -36,7 +36,18 @@ export function paneBounds(
 /// hitting it by eye is a pixel hunt — so the drag stops there on its own. The
 /// hold point is clamped too: on a window too narrow to hold the default, it is
 /// not a width this pane can take and snapping to it would breach the range.
-export function snapWidth(raw: number, min: number, max: number, snapTo: number): number {
+///
+/// With a `rail`, a drag that ends more than halfway from the floor down to the
+/// rail lands on the rail instead: the band between is resistance before the
+/// snap, never a width the pane is drawn at.
+export function snapWidth(
+  raw: number,
+  min: number,
+  max: number,
+  snapTo: number,
+  rail?: number,
+): number {
+  if (rail !== undefined && raw < (Math.min(rail, max) + min) / 2) return Math.min(rail, max);
   const clamped = Math.max(min, Math.min(max, raw));
   const target = Math.max(min, Math.min(max, snapTo));
   return Math.abs(clamped - target) < SNAP_PX ? target : clamped;

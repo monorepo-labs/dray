@@ -202,7 +202,7 @@ function LiveWarning(props: Omit<Parameters<typeof Warning>[0], "now">) {
 
 /// A sandbox about to auto-stop, floating at the sidebar's foot. Drawn outside
 /// `<aside>` so collapsing it hides nothing, but sized to the default sidebar
-/// (`SIDEBAR_MIN`, 240) less its rows' inset, so it reads as part of it. Its
+/// (`SIDEBAR_DEFAULT`, 240) less its rows' inset, so it reads as part of it. Its
 /// bar drains like a notice card's but takes nothing down: the card stands
 /// until the reader extends or dismisses it or the sandbox stops, since missing
 /// it costs running work.

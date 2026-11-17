@@ -65,6 +65,7 @@ import { offlineLine, projectLabel, serverName, shownOffline, useServers } from 
 import { LOCAL, serverOfPath } from "@/lib/transport";
 import { useResizable } from "@/components/ResizeHandle";
 import { useJumpDigit } from "@/lib/digitChords";
+import type { ShortcutId } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import type {
   Bot,
@@ -198,6 +199,9 @@ type SidebarProps = {
   updateBlocked: boolean;
   updateManual: ManualCheck;
   onInstallUpdate: () => void;
+  /// The rail draws Settings at its foot, since the titlebar gear sits over
+  /// the sidebar's end and the rail has no end clear of the traffic lights.
+  onOpenSettings: () => void;
 };
 
 /// One drawn row: the session, how deep it sits, and the flags its connector
@@ -977,8 +981,52 @@ function DevBadge() {
 }
 
 /// The sidebar's floor, and the width the crew counts on it holding when it
-/// judges whether there is room to stand beside the chat.
-export const SIDEBAR_MIN = 240;
+/// judges whether there is room to stand beside the chat. Narrower than this,
+/// a row's timestamp leaves its title too little to read.
+export const SIDEBAR_MIN = 180;
+/// Where it opens, and where a double-click on its edge puts it back.
+export const SIDEBAR_DEFAULT = 240;
+/// The icon-only sidebar, which a drag past halfway below the floor snaps to.
+export const SIDEBAR_RAIL = 56;
+
+/// Names a control in the icon rail, where its label is gone. The child as it
+/// is in the full sidebar.
+function RailTip({
+  on,
+  label,
+  keys,
+  children,
+}: {
+  on: boolean;
+  label: React.ReactNode;
+  keys?: ShortcutId[];
+  children: React.ReactElement;
+}) {
+  if (!on) return children;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="right">
+        {label}
+        {keys && <ShortcutKeys ids={keys} />}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/// The top strip's buttons, drawn as session rows: see the note where they render.
+const STRIP =
+  "w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50";
+const STRIP_RAIL = "justify-center px-0";
+
+/// A row's stand-in in the rail: the first letter or digit of its title.
+function Monogram({ title }: { title: string }) {
+  return (
+    <span aria-hidden className="text-ui font-medium">
+      {(title.match(/[\p{L}\p{N}]/u)?.[0] ?? "·").toUpperCase()}
+    </span>
+  );
+}
 
 export default function Sidebar({
   items,
@@ -1023,6 +1071,7 @@ export default function Sidebar({
   updateBlocked,
   updateManual,
   onInstallUpdate,
+  onOpenSettings,
   drafts,
   openDraftId,
   onOpenDraft,
@@ -1030,13 +1079,14 @@ export default function Sidebar({
   draftsShown,
   onToggleDrafts,
 }: SidebarProps) {
-  // `SIDEBAR_MIN` is `w-60`, the width this opened at before it could be dragged — and
-  // its floor as well as its default: narrower, the rows' timestamps and marks
-  // start eating the title they sit beside, so this only ever widens.
-  const { style, handle } = useResizable({
+  const { style, handle, width } = useResizable({
     storageKey: "ade.sidebarWidth",
-    initial: SIDEBAR_MIN,
+    initial: SIDEBAR_DEFAULT,
     min: SIDEBAR_MIN,
+    rail: SIDEBAR_RAIL,
+    // The search field needs the full sidebar, so the rail opens out while it
+    // is up and folds back when it closes.
+    widen: searchOpen,
     edge: "right",
     label: "Resize the sidebar",
     // Dropped while collapsed, which is not an unmount: this component returns
@@ -1045,6 +1095,7 @@ export default function Sidebar({
     // on screen.
     pane: collapsed ? undefined : "sidebar",
   });
+  const iconOnly = width === SIDEBAR_RAIL;
 
   const closeSearch = () => {
     onSearchOpenChange(false);
@@ -1255,33 +1306,47 @@ export default function Sidebar({
           `dark:hover:bg-muted/50` on the variant out-specifies an unprefixed
           `hover:` and `tailwind-merge` cannot fold the two together. */}
       <div className="flex flex-col gap-px px-2 pt-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onNewSession}
-          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50"
-        >
-          <Plus />
-          New Task
-          <ShortcutKeys ids={["session.new"]} className="ml-auto" />
-        </Button>
+        <RailTip on={iconOnly} label="New Task" keys={["session.new"]}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onNewSession}
+            aria-label={iconOnly ? "New Task" : undefined}
+            className={cn(STRIP, iconOnly && STRIP_RAIL)}
+          >
+            <Plus />
+            {!iconOnly && <>
+              New Task
+              <ShortcutKeys ids={["session.new"]} className="ml-auto" />
+            </>}
+          </Button>
+        </RailTip>
 
         {/* Under New Task, because it is the other way a task starts — an
             issue is a task somebody already wrote down. Drawn whether or not a
             tracker is connected: the page's own empty state is where connecting
             is offered, and a row that only appears once you have found the
             settings page can only be found by people who did not need it. */}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onOpenIssues}
-          data-active={issuesOpen || undefined}
-          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50 data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground"
-        >
-          <CircleDot />
-          Issues
-          <ShortcutKeys ids={["issues.open"]} className="ml-auto" />
-        </Button>
+        <RailTip on={iconOnly} label="Issues" keys={["issues.open"]}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onOpenIssues}
+            data-active={issuesOpen || undefined}
+            aria-label={iconOnly ? "Issues" : undefined}
+            className={cn(
+              STRIP,
+              iconOnly && STRIP_RAIL,
+              "data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground",
+            )}
+          >
+            <CircleDot />
+            {!iconOnly && <>
+              Issues
+              <ShortcutKeys ids={["issues.open"]} className="ml-auto" />
+            </>}
+          </Button>
+        </RailTip>
 
         {/* The button *becomes* the field, on the same row at the same height:
             the icon holds its place, the caret lands where the label was, and
@@ -1328,27 +1393,35 @@ export default function Sidebar({
             <ShortcutKeys ids={["search"]} className="group-focus-within:hidden" />
           </div>
         ) : (
+          <RailTip on={iconOnly} label="Search" keys={["search"]}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onSearchOpenChange(true)}
+              aria-label={iconOnly ? "Search" : undefined}
+              className={cn(STRIP, iconOnly && STRIP_RAIL)}
+            >
+              <Search />
+              {!iconOnly && <>
+                Search
+                <ShortcutKeys ids={["search"]} className="ml-auto" />
+              </>}
+            </Button>
+          </RailTip>
+        )}
+
+        <RailTip on={iconOnly} label="New bot">
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => onSearchOpenChange(true)}
-            className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50"
+            onClick={onNewBot}
+            aria-label={iconOnly ? "New bot" : undefined}
+            className={cn(STRIP, iconOnly && STRIP_RAIL)}
           >
-            <Search />
-            Search
-            <ShortcutKeys ids={["search"]} className="ml-auto" />
+            <MessageCirclePlus />
+            {!iconOnly && "New bot"}
           </Button>
-        )}
-
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onNewBot}
-          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50"
-        >
-          <MessageCirclePlus />
-          New bot
-        </Button>
+        </RailTip>
       </div>
 
       {/* Above the project filter: a bot belongs to no project, it hands work
@@ -1370,18 +1443,26 @@ export default function Sidebar({
             onOpen={() => onOpenBot?.(bot)}
             onDelete={() => onDeleteBot?.(bot)}
             onEdit={() => onEditBot?.(bot)}
+            iconOnly={iconOnly}
           />;
         })}
       </div>}
 
-      {filterShown && <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
-        <ProjectFilter
+      {/* The rail keeps the view toggles, stacked, since they are the only
+          way back from drafts or settled; the project filter needs the width. */}
+      {filterShown && <div
+        className={cn(
+          "mt-4 flex py-1",
+          iconOnly ? "justify-center" : "items-start justify-between pr-2 pl-3",
+        )}
+      >
+        {!iconOnly && <ProjectFilter
           projects={projects}
           value={projectFilter}
           onChange={onProjectFilterChange}
-        />
+        />}
 
-        <div className="flex items-center gap-0.5">
+        <div className={cn("flex items-center gap-0.5", iconOnly && "flex-col")}>
           {/* Same bargain as settled beside it: the glyph names where the press
               goes, so it swaps to `Undo2` while the drafts are what is shown.
               A dashed circle, Linear's backlog shape in lucide's stroke: not yet on
@@ -1398,7 +1479,7 @@ export default function Sidebar({
                 {draftsShown ? <Undo2 /> : <CircleDashed />}
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">
+            <TooltipContent side={iconOnly ? "right" : "bottom"}>
               {draftsShown ? "Show active" : "Show drafts"}
             </TooltipContent>
           </Tooltip>
@@ -1419,7 +1500,7 @@ export default function Sidebar({
                 {archivedRequested ? <Undo2 /> : <CheckCheck />}
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">
+            <TooltipContent side={iconOnly ? "right" : "bottom"}>
               {archivedRequested ? "Show active" : "Show settled"}
             </TooltipContent>
           </Tooltip>
@@ -1428,12 +1509,13 @@ export default function Sidebar({
 
       {/* With classic scrollbars the reserved gutter is the right-hand spacing,
           and the rows balance the track's extra width with `pr-0.5`. Overlay
-          scrollbars reserve none, so the list takes `pr-2` to match above. */}
+          scrollbars reserve none, so the list takes `pr-2` to match above. The
+          rail has no width to spare for a gutter, so it scrolls without one. */}
       <div
         ref={listRef}
         className={cn(
-          "scrollbar-overlay flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pb-3 pl-2",
-          noGutter ? "pr-2" : "pr-0",
+          "flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pb-3 pl-2",
+          iconOnly ? "scrollbar-none pr-2" : ["scrollbar-overlay", noGutter ? "pr-2" : "pr-0"],
         )}
         // Nearing the bottom opens the settled window further. Bound to the
         // container that already scrolls rather than to a sentinel row and an
@@ -1442,7 +1524,7 @@ export default function Sidebar({
       >
         {runs.length === 0 ? (
           // A typed query still gets its answer: silence there reads as broken.
-          (filterShown || search.trim()) && <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
+          !iconOnly && (filterShown || search.trim()) && <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
         ) : (
           runs.flatMap((group, index) => {
             // A project heading is drawn only where the list spans projects:
@@ -1454,8 +1536,10 @@ export default function Sidebar({
             // it sits above. A stage names nothing: the break is the signal.
             const underProject = group.kind === "project" || group.kind === "drafts";
 
-            const heading =
-              group.kind === "pinned"
+            // The rail has no room for words; the gap between runs is the break.
+            const heading = iconOnly
+              ? null
+              : group.kind === "pinned"
                 ? "Pinned"
                 : group.kind === "group"
                   ? groupName(group)
@@ -1501,6 +1585,7 @@ export default function Sidebar({
                     active={draft.id === openDraftId}
                     onOpen={onOpenDraft}
                     onDelete={onDeleteDraft}
+                    iconOnly={iconOnly}
                   />
                 )) : []),
 
@@ -1557,6 +1642,7 @@ export default function Sidebar({
                     onDelete={onDelete}
                     onDetach={onDetach}
                     onMarkUnread={onMarkUnread}
+                    iconOnly={iconOnly}
                   />
                 )) : []),
             ];
@@ -1568,7 +1654,7 @@ export default function Sidebar({
             Pinning it to the sidebar's bottom edge would keep it on screen
             forever, which is a permanent line of chrome for a one-time hint.
             Hidden with only one row: there's nothing to jump or switch to. */}
-        {!draftsShown && rowCount > 1 && !more && (
+        {!iconOnly && !draftsShown && rowCount > 1 && !more && (
           <ShortcutHint
             selected={selectedSessionId !== null}
             grouped={!archivedShown && splits.length > 0}
@@ -1585,11 +1671,18 @@ export default function Sidebar({
         blocked={updateBlocked}
         manual={updateManual}
         onInstall={onInstallUpdate}
+        iconOnly={iconOnly}
       />
 
       {/* Under the update row, and last in the column: both are standing
           information, and this is the half nobody is waiting on. */}
-      {import.meta.env.DEV && <DevBadge />}
+      {import.meta.env.DEV && !iconOnly && <DevBadge />}
+
+      {iconOnly && (
+        <div className="flex shrink-0 justify-center pb-3">
+          <SettingsButton onOpen={onOpenSettings} />
+        </div>
+      )}
     </aside>
   );
 }
@@ -1782,8 +1875,11 @@ function BotRow({
   onOpen,
   onDelete,
   onEdit,
+  iconOnly = false,
 }: {
   bot: Bot;
+  /// The rail: the face alone, the name in a tooltip.
+  iconOnly?: boolean;
   /// The chat's last reply and the replies since the reader last wrote.
   preview?: BotPreview;
   /// Its chat, for the jump digit; absent before the first message.
@@ -1808,16 +1904,22 @@ function BotRow({
   const offline = offlineLine(serverOfPath(bot.path));
 
   // StalledTasks' row layout, so a bot and its stalled tasks read alike.
+  // The tooltip's root sits outside the menu and its trigger inside, since
+  // `asChild` cannot pass a ref through a provider. Held shut off the rail.
   return (
+    <Tooltip open={iconOnly ? undefined : false}>
     <ContextMenu>
       <ContextMenuTrigger asChild>
+        <TooltipTrigger asChild>
         <button
           type="button"
           onClick={onOpen}
           onPointerEnter={() => setHovered(true)}
           onPointerLeave={() => setHovered(false)}
+          aria-label={iconOnly ? bot.name : undefined}
           className={cn(
-            "group relative flex w-full cursor-pointer items-center gap-2 rounded-md py-1 pr-[5px] pl-1 text-left",
+            "group relative flex w-full cursor-pointer items-center gap-2 rounded-md text-left",
+            iconOnly ? "justify-center p-1" : "py-1 pr-[5px] pl-1",
             "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
             active
               ? "bg-sidebar-accent text-sidebar-accent-foreground"
@@ -1854,8 +1956,11 @@ function BotRow({
                 {preview?.replies || ""}
               </span>
             )}
+            {iconOnly && digit && (
+              <Kbd className="absolute top-1/2 left-1/2 -translate-1/2">{digit}</Kbd>
+            )}
           </span>
-          <span className="flex min-w-0 flex-1 flex-col">
+          {!iconOnly && <span className="flex min-w-0 flex-1 flex-col">
             <span className="relative flex items-baseline gap-2">
               <span
                 className={cn(
@@ -1891,8 +1996,9 @@ function BotRow({
             ) : (
               glimpse && <span className="truncate text-ui text-foreground/70">{glimpse}</span>
             )}
-          </span>
+          </span>}
         </button>
+        </TooltipTrigger>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-44">
         <ContextMenuItem className="text-ui" onSelect={onEdit}>
@@ -1903,6 +2009,8 @@ function BotRow({
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
+    <TooltipContent side="right">{bot.name}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -2482,11 +2590,14 @@ function DraftRow({
   active,
   onOpen,
   onDelete,
+  iconOnly = false,
 }: {
   draft: Draft;
   active: boolean;
   onOpen: (id: string) => void;
   onDelete: (id: string) => void;
+  /// The rail: a monogram, the title in a tooltip.
+  iconOnly?: boolean;
 }) {
   const [confirming, setConfirming] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -2494,13 +2605,17 @@ function DraftRow({
     if (active) ref.current?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
+  // Tooltip root outside the menu, trigger inside: see `BotRow`.
   return (
+    <Tooltip open={iconOnly ? undefined : false}>
     <ContextMenu onOpenChange={(open) => open && setConfirming(false)}>
       <ContextMenuTrigger asChild>
+      <TooltipTrigger asChild>
       <div
         ref={ref}
         role="button"
         tabIndex={0}
+        aria-label={iconOnly ? draftTitle(draft) : undefined}
         onClick={() => onOpen(draft.id)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -2509,7 +2624,8 @@ function DraftRow({
           }
         }}
         className={cn(
-          "relative flex min-h-7 w-full cursor-pointer items-center rounded-md pr-0.5 pl-2 transition-colors select-none",
+          "relative flex min-h-7 w-full cursor-pointer items-center rounded-md transition-colors select-none",
+          iconOnly ? "justify-center" : "pr-0.5 pl-2",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
           "data-[state=open]:bg-sidebar-accent/50",
           active
@@ -2517,11 +2633,18 @@ function DraftRow({
             : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
         )}
       >
-        <span className="min-w-0 flex-1 truncate text-ui">{draftTitle(draft)}</span>
-        <span className="shrink-0 pl-2 text-ui text-muted-foreground">
-          {relativeTime(draft.created)}
-        </span>
+        {iconOnly ? (
+          <Monogram title={draftTitle(draft)} />
+        ) : (
+          <>
+            <span className="min-w-0 flex-1 truncate text-ui">{draftTitle(draft)}</span>
+            <span className="shrink-0 pl-2 text-ui text-muted-foreground">
+              {relativeTime(draft.created)}
+            </span>
+          </>
+        )}
       </div>
+      </TooltipTrigger>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-40">
         {confirming ? (
@@ -2553,6 +2676,8 @@ function DraftRow({
         )}
       </ContextMenuContent>
     </ContextMenu>
+    <TooltipContent side="right">{draftTitle(draft)}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -2579,7 +2704,10 @@ function SessionRow({
   onDelete,
   onDetach,
   onMarkUnread,
+  iconOnly = false,
 }: {
+  /// The rail: the unread mark, the orb or a monogram, the title in a tooltip.
+  iconOnly?: boolean;
   item: SessionIndexItem;
   /// Levels below the top; 0 draws no connector at all. See [`sessionRows`] —
   /// these three come out of the same walk that ordered the list.
@@ -2650,7 +2778,9 @@ function SessionRow({
   // While the jump modifier is held, this row's digit takes the slot.
   const digit = useJumpDigit(item.sessionId);
 
+  // Tooltip root outside the menu, trigger inside: see `BotRow`.
   return (
+    <Tooltip open={iconOnly ? undefined : false}>
     <RowMenu
       onFork={(worktree) => void onFork(item.sessionId, worktree)}
       forkDisabled={status === "in_progress"}
@@ -2698,10 +2828,12 @@ function SessionRow({
     >
       {/* A button can't nest a button, so the row is a div with a click handler
           and the pin/settle controls are the only real buttons inside it. */}
+      <TooltipTrigger asChild>
       <div
         ref={ref}
         role="button"
         tabIndex={0}
+        aria-label={iconOnly ? item.title : undefined}
         onClick={() => void onSelect(item.sessionId)}
         onPointerEnter={() => {
           clearTimeout(hover.current);
@@ -2728,7 +2860,8 @@ function SessionRow({
           // indent that padding used to provide, so the title sits exactly where
           // it always did and the rail can still touch the row's edge. The one
           // gap that remains — title to hover controls — is `pl-2` on that slot.
-          "group relative flex min-h-7 w-full cursor-pointer items-center rounded-md pl-0 pr-0.5",
+          "group relative flex min-h-7 w-full cursor-pointer items-center rounded-md",
+          iconOnly ? "justify-center" : "pl-0 pr-0.5",
           // Opacity is in the transition list for the faded rows below. It has
           // to ride the same declaration: `transition-colors` and
           // `transition-opacity` both set `transition-property`, so `cn` would
@@ -2768,7 +2901,12 @@ function SessionRow({
             goes: a mark that reflows the title would shift the text of a row
             just because its agent finished. A fixed height rather than the row's
             own, so the rail reads the same length whatever the row grows to. */}
-        <span className="flex w-2 shrink-0 items-center self-stretch">
+        <span
+          className={cn(
+            "flex w-2 shrink-0 items-center self-stretch",
+            iconOnly && "absolute inset-y-0 left-0",
+          )}
+        >
           {(asking || status === "completed") && (
             <span
               role="img"
@@ -2780,6 +2918,23 @@ function SessionRow({
             />
           )}
         </span>
+
+        {iconOnly && (
+          <>
+            <span className={cn("flex items-center", digit && "invisible")}>
+              {offline ? (
+                <SignalSlashIcon className="size-3.5 text-muted-foreground" aria-label={offline} />
+              ) : status === "in_progress" ? (
+                <Orb state="working" label="Working" />
+              ) : (
+                <Monogram title={item.title} />
+              )}
+            </span>
+            {digit && <Kbd className="absolute top-1/2 left-1/2 -translate-1/2">{digit}</Kbd>}
+          </>
+        )}
+
+        {!iconOnly && <>
 
         {/* The lineage, drawn as rails: this row elbows onto its parent's, and
             an ancestor's carries straight through to the last row of its
@@ -3006,7 +3161,11 @@ function SessionRow({
             )}
           </div>
         </div>
+        </>}
       </div>
+      </TooltipTrigger>
     </RowMenu>
+    <TooltipContent side="right">{item.title}</TooltipContent>
+    </Tooltip>
   );
 }
