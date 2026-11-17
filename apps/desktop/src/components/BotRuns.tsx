@@ -1,7 +1,6 @@
 import { ChevronRight, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { devRuns, DEV_RUN_STATES, setDevRunState, useDevRunState, type DevRunState } from "@/components/botRunsDev";
 import { RunRow, RunSection } from "@/components/SubagentPanel";
 import { Button } from "@/components/ui/button";
 import Spinner from "@/components/ui/spinner";
@@ -9,8 +8,6 @@ import { canOpenTab, isShellRun, opensTab, type SubagentRun } from "@/lib/transc
 import { invoke } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { SubagentCursor, SubagentList, SubagentSummary, ToolResult } from "@/types/events";
-
-/// Finished runs per page: a page is read back from the log until it has these.
 
 type Props = {
   sessionId: string;
@@ -29,6 +26,7 @@ type Props = {
   onStopTask: (taskId: string) => void;
 };
 
+/// Finished runs per page: a page is read back from the log until it has these.
 const PAGE = 10;
 
 type Loader = (cursor: SubagentCursor | null) => Promise<SubagentList>;
@@ -37,22 +35,9 @@ type Loader = (cursor: SubagentCursor | null) => Promise<SubagentList>;
 /// subagents show; finished ones wait behind a toggle and page in off the
 /// server's logs, since the chat holds only its tail.
 export default function BotRuns(props: Props) {
-  const dev = useDevRunState();
-  const fake = import.meta.env.DEV && dev !== "live" ? devRuns(dev) : null;
   const { sessionId, also } = props;
-  const load: Loader =
-    fake?.load ?? ((cursor) => invoke<SubagentList>("list_subagents", { sessionId, also, cursor, limit: PAGE }));
-  return (
-    <>
-      <Sections
-        key={`${sessionId} ${dev}`}
-        {...props}
-        {...(fake && { runs: fake.runs, live: true, onOpen: () => {}, onStopTask: () => {} })}
-        load={load}
-      />
-      {import.meta.env.DEV && <DevPicker value={dev} onChange={setDevRunState} />}
-    </>
-  );
+  const load: Loader = (cursor) => invoke<SubagentList>("list_subagents", { sessionId, also, cursor, limit: PAGE });
+  return <Sections key={sessionId} {...props} load={load} />;
 }
 
 function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
@@ -198,27 +183,4 @@ function fromLog(s: SubagentSummary, live: ReadonlySet<string>): SubagentRun {
     spawn: null,
     lastAt: s.endedAt ?? s.startedAt,
   };
-}
-
-/// Dev builds only: puts the tasks and runs in each state over fake data.
-function DevPicker({ value, onChange }: { value: DevRunState; onChange: (v: DevRunState) => void }) {
-  return (
-    <div className="mx-3 mt-4 mb-3 flex flex-wrap items-center gap-1 rounded-md border border-dashed border-border p-1.5 text-xs text-muted-foreground">
-      <span className="px-1">Dev state</span>
-      {(Object.keys(DEV_RUN_STATES) as DevRunState[]).map((id) => (
-        <button
-          key={id}
-          type="button"
-          aria-pressed={value === id}
-          onClick={() => onChange(id)}
-          className={cn(
-            "rounded px-1.5 py-0.5 transition-colors",
-            value === id ? "bg-muted text-foreground" : "hover:text-foreground",
-          )}
-        >
-          {DEV_RUN_STATES[id]}
-        </button>
-      ))}
-    </div>
-  );
 }

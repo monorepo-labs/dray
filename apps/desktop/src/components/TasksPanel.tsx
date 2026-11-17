@@ -9,7 +9,6 @@ import PrStateIcon, { ChecksRunningIcon } from "@/components/PrStateIcon";
 import { RowAction, RowMenu, stageRuns } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
 import { useFixAsks } from "@/hooks/useFixAsks";
-import { DEV_PRS, DEV_TASKS, useDevRunState } from "@/components/botRunsDev";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -121,14 +120,6 @@ export default function TasksPanel({
   children?: React.ReactNode;
 }) {
   const fixAsks = useFixAsks();
-  const dev = useDevRunState();
-  // Dev builds: a fake run state draws fake tasks too, so the runs under the
-  // list are judged in place.
-  if (import.meta.env.DEV && dev !== "live") {
-    rows = DEV_TASKS;
-    const real = prOf;
-    prOf = (row) => DEV_PRS[row.item.sessionId] ?? real(row);
-  }
   if (rows.length === 0) {
     return (
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
