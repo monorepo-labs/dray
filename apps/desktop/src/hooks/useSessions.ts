@@ -29,7 +29,7 @@ import {
 import { hiddenChildren, leftToParent } from "@/lib/crew";
 import { repoChanged } from "@/lib/prSync";
 import { dropHeld, dropHeldAsks, heldFor, holdEarlyEvent, isAsk } from "@/lib/earlyEvents";
-import { flushHeld, heldFlagFor, holdFlags, noteFlagWrite, onLanded, overlayHeld, settleAfterSend, unholdFlags, useHeldFlags } from "@/lib/heldFlags";
+import { flushHeld, heldFlagFor, holdFlags, holdSettle, noteFlagWrite, onLanded, overlayHeld, settleAfterSend, unholdFlags, useHeldFlags } from "@/lib/heldFlags";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { lockedMidTurn } from "@/lib/liveControls";
@@ -888,7 +888,15 @@ const handleSendMsg = async (
   const sentPick = sessionId ? unsentPicks.current.get(sessionId) : undefined;
   // Kept until the send lands: one that fails before reaching the server —
   // a sandbox that will not resume — leaves the reader's pick standing.
-  const heldAtSend = sessionId ? heldFlagFor(sessionId) : undefined;
+  let heldAtSend = sessionId ? heldFlagFor(sessionId) : undefined;
+  // A settle held behind a merge goes before the message, never after it:
+  // landing later, it would stop the turn the message starts. It comes back
+  // below where the message never got there.
+  const droppedSettle = sessionId && heldAtSend?.archived ? heldAtSend : undefined;
+  if (droppedSettle) {
+    await unholdFlags(droppedSettle.sessionId).catch((e) => console.error("could not drop a held settle", e));
+    heldAtSend = undefined;
+  }
   const sentAt = Date.now();
 
   const existing = sessionId ? selected : undefined;
@@ -1191,6 +1199,9 @@ const handleSendMsg = async (
     applySentIssues();
     return true;
   } catch (e) {
+    if (droppedSettle) {
+      void holdSettle(droppedSettle.machine, droppedSettle.sessionId, !!droppedSettle.removeWorktree).catch(() => {});
+    }
     // A rejected invoke means the turn never started, so nothing will arrive to
     // clear the status — release it here rather than leaving the composer stuck.
     // Unless a turn was already running: that one is untouched by this prompt
@@ -3553,13 +3564,19 @@ useEffect(() => {
 // Rust over the orchestration socket, so the sidebar hears of them only here.
 const applyIndexItemRef = useRef(applyIndexItem);
 applyIndexItemRef.current = applyIndexItem;
+const reportWorktreeFailureRef = useRef(reportWorktreeFailure);
+reportWorktreeFailureRef.current = reportWorktreeFailure;
 useEffect(() => {
   const listenerPromise = listen<SessionIndexItem>("session_changed", (event) => {
     applyIndexItemRef.current(event.payload);
   });
   // A held flag written once its server came back: the row as that server
   // answered, in case its own `session_changed` is still on the way.
-  const unlanded = onLanded((item) => applyIndexItemRef.current(item));
+  // A held settle's worktree removal that failed says so as the app's own does.
+  const unlanded = onLanded(({ item, worktreeError }) => {
+    applyIndexItemRef.current(item);
+    if (worktreeError) reportWorktreeFailureRef.current(item.sessionId, item.title, worktreeError);
+  });
 
   return () => {
     unlanded();

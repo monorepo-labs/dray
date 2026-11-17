@@ -221,6 +221,10 @@ mod flush {
     pub struct Landed {
         pub server: String,
         pub item: Value,
+        /// Why a held settle's worktree removal failed, for the app's notice;
+        /// the settle itself landed and is not tried again.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub worktree_error: Option<String>,
     }
 
     /// Tells every client what is held now.
@@ -337,18 +341,20 @@ mod flush {
                         match call("set_session_flags", args).await {
                             Ok(mut item) => {
                                 // Tried once: the settle landed, and a refused
-                                // removal is no reason to settle again.
+                                // removal is no reason to settle again. The
+                                // app says it failed, as it does for its own.
+                                let mut worktree_error = None;
                                 if held.remove_worktree && !item.is_null() {
                                     match call("remove_session_worktree", json!({ "sessionId": held.session_id })).await {
                                         Ok(moved) => item = moved,
-                                        Err(e) => eprintln!("[held flags err] {}: worktree: {e}", saved.name),
+                                        Err(e) => worktree_error = Some(e),
                                     }
                                 }
                                 BACKOFF.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
                                 // Null is a session that server no longer has:
                                 // nothing left to write it to.
                                 if !item.is_null() {
-                                    landed.push(Landed { server: id.clone(), item });
+                                    landed.push(Landed { server: id.clone(), item, worktree_error });
                                 }
                                 note_landed(&held);
                                 done.push(held);

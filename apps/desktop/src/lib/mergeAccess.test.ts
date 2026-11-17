@@ -17,6 +17,12 @@ describe("blockReason", () => {
     );
   });
 
+  it("names the machine the merge runs through", () => {
+    expect(blockReason({ ...base, merger: "studio", can: false })).toBe(
+      "Studio's GitHub account (yo) can't merge into acme/app. Merge once box is back.",
+    );
+  });
+
   it("holds Merge without write access, and while it cannot tell", () => {
     expect(blockReason({ ...base, can: false })).toBe(
       "This machine's GitHub account (yo) can't merge into acme/app. Merge once box is back.",

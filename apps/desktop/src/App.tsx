@@ -3381,11 +3381,13 @@ function App() {
     readLogin(LOCAL);
     for (const id of connectedKey ? connectedKey.split("\n") : []) readLogin(id);
   }, [connectedKey]);
-  /// Why Merge is not offered here for a task on `server` whose PR is at
-  /// `url`: only a task whose machine is down merges as this machine's `gh`.
-  const taskMergeBlock = (server: ServerId, url: string | undefined): string | null => {
+  /// Why Merge is not offered for a task on `server` whose PR is at `url`,
+  /// merged through `via`: only a task whose machine is down merges as another
+  /// machine's `gh` — This Mac's from a row, the chat's server's from a card.
+  const taskMergeBlock = (server: ServerId, url: string | undefined, via: ServerId = LOCAL): string | null => {
     const slug = shownOffline(server) ? prRepoSlug(url) : undefined;
-    return slug ? mergeBlock(server, serverName(server), slug) : null;
+    if (!slug) return null;
+    return mergeBlock(server, serverName(server), slug, via, via === LOCAL ? "this machine" : serverName(via));
   };
 
   const cardsReread = useRef(new Set<string>());
@@ -3408,7 +3410,9 @@ function App() {
     titleOf: (id) => sessionIndexItems.find((i) => i.sessionId === id)?.title,
     mergeBlock: (card) => {
       const task = sessionIndexItems.find((i) => i.sessionId === card.taskId);
-      return taskMergeBlock(task ? serverOfPath(task.cwd) : serverOfSession(card.taskId), card.url);
+      // The card merges through its repo key, qualified with the chat's server.
+      const via = serverOfPath(card.projectPath);
+      return taskMergeBlock(task ? serverOfPath(task.cwd) : serverOfSession(card.taskId), card.url, via);
     },
     merge: async (card, method, settle) => {
       const item = settle

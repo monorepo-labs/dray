@@ -24,6 +24,7 @@ export type MergeCardHost = {
   missing: (repo: string, number: number) => void;
   titleOf: (taskId: string) => string | undefined;
   /// Why the card offers no Merge though GitHub would take it, or `null`.
+  /// `projectPath` is the qualified key the card merges through.
   mergeBlock: (card: MergeCardPayload) => string | null;
   /// `settle`: a bot's chat, where landed work is the bot's to tidy, so the
   /// task is settled and its worktree deleted after the merge.

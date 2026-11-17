@@ -555,6 +555,19 @@ async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Respo
         Request::SendMessage(send) => crate::held_flags::list().await.into_iter().find(|h| h.session_id == send.session_id),
         _ => None,
     };
+    // A settle held behind a merge goes before the message, never after it:
+    // landing later, it would stop the turn the message starts. It comes back
+    // where the message never got there.
+    let (held_at_send, dropped_settle) = match held_at_send {
+        Some(held) if held.archived == Some(true) => {
+            let dropped = crate::held_flags::unhold(&held.session_id).await?;
+            if dropped.is_some() {
+                crate::held_flags::announce(app, Vec::new()).await;
+            }
+            (None, dropped)
+        }
+        other => (other, None),
+    };
     let creates = matches!(request, Request::CreateSession(_));
     let starts = creates || matches!(request, Request::StartDraft(_));
     if machine == elsewhere::CLOUD && !creates {
@@ -578,6 +591,10 @@ async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Respo
         if unused {
             elsewhere::drop_cloud(id).await;
         }
+    }
+    if let (Some(settle), Err(_)) = (&dropped_settle, &response) {
+        crate::held_flags::hold_settle(&settle.machine, &settle.session_id, settle.remove_worktree).await?;
+        crate::held_flags::announce(app, Vec::new()).await;
     }
     let response = response?;
     // The task's server keeps its reports, and this server holds the link to

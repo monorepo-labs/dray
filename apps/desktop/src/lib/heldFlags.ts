@@ -24,12 +24,16 @@ export type HeldFlag = {
   at: string;
 };
 
-type Changed = { held: HeldFlag[]; landed: { server: ServerId; item: SessionIndexItem }[] };
+/// A row a flush wrote; `worktreeError` where a held settle's worktree removal
+/// failed after the settle landed.
+type Landed = { item: SessionIndexItem; worktreeError?: string };
+
+type Changed = { held: HeldFlag[]; landed: (Landed & { server: ServerId })[] };
 
 let held: HeldFlag[] = [];
 let started = false;
 const changed = channel<void>();
-const landedRows = channel<SessionIndexItem>();
+const landedRows = channel<Landed>();
 
 /// Bumped by every event, so a read outlived by one is dropped rather than
 /// putting back a list the event already replaced.
@@ -58,8 +62,8 @@ function start() {
     generation++;
     held = payload.held;
     changed.emit();
-    for (const { server: from, item } of payload.landed) {
-      landedRows.emit(qualifyRecord(item, from) as SessionIndexItem);
+    for (const { server: from, item, worktreeError } of payload.landed) {
+      landedRows.emit({ item: qualifyRecord(item, from) as SessionIndexItem, worktreeError });
     }
   });
   // This Mac's server restarting drops whatever it announced meanwhile, and
@@ -82,7 +86,7 @@ export function useHeldFlags(): HeldFlag[] {
 }
 
 /// Rows a flush just wrote, as their own servers answered them.
-export function onLanded(listener: (item: SessionIndexItem) => void): () => void {
+export function onLanded(listener: (landed: Landed) => void): () => void {
   start();
   return landedRows.subscribe(listener);
 }
