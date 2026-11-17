@@ -3,6 +3,7 @@ import { Check, Download, RotateCw, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { type ManualCheck, updateFailure } from "@/hooks/useUpdater";
+import { cn } from "@/lib/utils";
 import type { UpdateStatus } from "@/types/events";
 
 type UpdateRowProps = {
@@ -16,6 +17,8 @@ type UpdateRowProps = {
   /// button, which is the offer they are a failure of.
   manual: ManualCheck;
   onInstall: () => void;
+  /// The sidebar's icon rail: each line is its icon, the words in a tooltip.
+  iconOnly?: boolean;
 };
 
 /// The update notice, pinned to the sidebar's bottom edge.
@@ -30,7 +33,11 @@ export default function UpdateRow({
   blocked,
   manual,
   onInstall,
+  iconOnly = false,
 }: UpdateRowProps) {
+  const note = (icon: React.ReactNode, text: string) => (
+    <Note icon={icon} text={text} iconOnly={iconOnly} />
+  );
   // Nothing found, and a hand-triggered check waiting on or reporting that.
   // Still nothing at all for the scheduled check, which is the common case and
   // asked no question.
@@ -38,31 +45,22 @@ export default function UpdateRow({
     if (manual === "idle") return null;
     return (
       <Footer>
-        <Note>
-          {manual === "checking" && (
-            <>
-              <RotateCw className="size-4 shrink-0 animate-spin" />
-              Checking for updates…
-            </>
-          )}
-          {manual === "up_to_date" && (
-            <>
-              <Check className="size-4 shrink-0" />
-              Up to date
-            </>
-          )}
-          {manual === "failed" && (
-            <>
-              <TriangleAlert className="size-4 shrink-0" />
-              Couldn't check for updates
-            </>
-          )}
-        </Note>
+        {manual === "checking" &&
+          note(<RotateCw className="size-4 shrink-0 animate-spin" />, "Checking for updates…")}
+        {manual === "up_to_date" && note(<Check className="size-4 shrink-0" />, "Up to date")}
+        {manual === "failed" &&
+          note(<TriangleAlert className="size-4 shrink-0" />, "Couldn't check for updates")}
       </Footer>
     );
   }
 
   if (status.state === "downloading") {
+    if (iconOnly) {
+      const pct = status.percent !== null ? ` · ${status.percent}%` : "";
+      return (
+        <Footer>{note(<Download className="size-4 shrink-0" />, `Downloading v${status.version}${pct}`)}</Footer>
+      );
+    }
     return (
       <Footer>
         <div className="flex items-center gap-2 px-1.5 py-1 text-ui text-muted-foreground">
@@ -86,13 +84,19 @@ export default function UpdateRow({
       size="sm"
       aria-disabled={blocked}
       onClick={() => !blocked && onInstall()}
-      className="w-full justify-start px-1.5 text-ui aria-disabled:cursor-default aria-disabled:opacity-50"
+      aria-label={iconOnly ? `Restart to update to v${status.version}` : undefined}
+      className={cn(
+        "w-full text-ui aria-disabled:cursor-default aria-disabled:opacity-50",
+        iconOnly ? "justify-center px-0" : "justify-start px-1.5",
+      )}
     >
       <RotateCw />
-      Restart to update
-      <span className="ml-auto text-muted-foreground tabular-nums">
-        v{status.version}
-      </span>
+      {!iconOnly && <>
+        Restart to update
+        <span className="ml-auto text-muted-foreground tabular-nums">
+          v{status.version}
+        </span>
+      </>}
     </Button>
   );
 
@@ -103,17 +107,14 @@ export default function UpdateRow({
 
   return (
     <Footer>
-      {failure && (
-        <Note>
-          <TriangleAlert className="size-4 shrink-0" />
-          {failure}
-        </Note>
-      )}
-      {blocked ? (
+      {failure && note(<TriangleAlert className="size-4 shrink-0" />, failure)}
+      {blocked || iconOnly ? (
         <Tooltip>
           <TooltipTrigger asChild>{button}</TooltipTrigger>
-          <TooltipContent side="top">
-            Waiting for the running turn to finish.
+          <TooltipContent side={iconOnly ? "right" : "top"}>
+            {blocked
+              ? "Waiting for the running turn to finish."
+              : `Restart to update to v${status.version}`}
           </TooltipContent>
         </Tooltip>
       ) : (
@@ -129,10 +130,23 @@ function Footer({ children }: { children: React.ReactNode }) {
 
 /// A line the row states rather than offers — same metrics as the downloading
 /// line, so the footer doesn't change height as a check moves through it.
-function Note({ children }: { children: React.ReactNode }) {
+function Note({ icon, text, iconOnly }: { icon: React.ReactNode; text: string; iconOnly: boolean }) {
+  if (iconOnly) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div role="img" aria-label={text} className="flex justify-center py-1.5 text-muted-foreground">
+            {icon}
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="right">{text}</TooltipContent>
+      </Tooltip>
+    );
+  }
   return (
     <div className="flex items-center gap-2 px-1.5 py-1 text-ui text-muted-foreground">
-      {children}
+      {icon}
+      {text}
     </div>
   );
 }

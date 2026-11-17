@@ -13,6 +13,7 @@ import {
   mergeVerdict,
   pickPrMark,
   prBadgeCount,
+  prRepoSlug,
   prStatus,
   readyToMerge,
   sessionBranch,
@@ -53,6 +54,18 @@ const check = (state: PrCheck["state"]): PrCheck => ({
   url: null,
   workflow: null,
   avatar: null,
+});
+
+describe("prRepoSlug", () => {
+  it("names a github.com repo as owner/name and any other host in full", () => {
+    expect(prRepoSlug("https://github.com/acme/app/pull/7")).toBe("acme/app");
+    expect(prRepoSlug("https://git.corp.example/acme/app/pull/7")).toBe("git.corp.example/acme/app");
+  });
+
+  it("names nothing for a URL that is no pull request", () => {
+    expect(prRepoSlug("https://github.com/acme/app/issues/7")).toBeUndefined();
+    expect(prRepoSlug(undefined)).toBeUndefined();
+  });
 });
 
 describe("sessionBranch", () => {

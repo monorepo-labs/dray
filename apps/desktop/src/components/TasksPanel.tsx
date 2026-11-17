@@ -1,3 +1,4 @@
+import { SignalSlashIcon } from "@heroicons/react/16/solid";
 import { Check, ChevronDown, Ellipsis } from "lucide-react";
 import { useId, useState, useSyncExternalStore } from "react";
 
@@ -98,6 +99,7 @@ export default function TasksPanel({
   onDelete,
   onDetach,
   onMerge,
+  mergeBlock,
   onFixConflicts,
   now,
   children,
@@ -112,6 +114,8 @@ export default function TasksPanel({
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
+  /// Why a ready row offers no Merge, or `null` where it does.
+  mergeBlock: (row: CrewRow, pr: PrMark) => string | null;
   /// Asks the task's own agent, which holds the branch, to resolve and push.
   onFixConflicts: (row: CrewRow, pr: PrMark) => Promise<void>;
   /// The clock a fix's age is read against, ticking once a minute.
@@ -143,6 +147,7 @@ export default function TasksPanel({
       onDelete={onDelete}
       onDetach={onDetach}
       onMerge={onMerge}
+      mergeBlock={mergeBlock}
       onFixConflicts={onFixConflicts}
       fixAsk={fixAsks[row.item.sessionId]}
       now={now}
@@ -184,6 +189,7 @@ function TaskRow({
   onDelete,
   onDetach,
   onMerge,
+  mergeBlock,
   fixAsk,
   now,
 }: {
@@ -195,6 +201,7 @@ function TaskRow({
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
+  mergeBlock: (row: CrewRow, pr: PrMark) => string | null;
   onFixConflicts: (row: CrewRow, pr: PrMark) => Promise<void>;
   fixAsk: FixAsk | undefined;
   now: number;
@@ -208,6 +215,7 @@ function TaskRow({
   const id = item.sessionId;
   const working = row.busy && !row.asking;
   const mergeable = canMerge(pr);
+  const blocked = mergeable && pr ? mergeBlock(row, pr) : null;
   // Merging here or from a merge card settles already, so the button is only
   // for a PR merged elsewhere, say the PR panel in the task's own tab. Never
   // mid-turn either way: settling kills the child.
@@ -319,7 +327,15 @@ function TaskRow({
           </button>
         )}
 
-        {mergeable && pr && <MergeControl onMerge={(method) => onMerge(row, pr, method)} />}
+        {mergeable && pr && (blocked ? (
+          // Its machine is down and this one can't merge for it: the offline
+          // mark in Merge's place, saying why.
+          <span className="flex shrink-0 px-1" title={blocked}>
+            <SignalSlashIcon className="size-3.5 text-muted-foreground" aria-label={blocked} />
+          </span>
+        ) : (
+          <MergeControl onMerge={(method) => onMerge(row, pr, method)} />
+        ))}
         {/* Off while the bot fixes conflicts itself, on its nudge. */}
         {/* {status?.key === "conflict" && pr && <FixConflicts onFix={() => onFixConflicts(row, pr)} />} */}
         </span>

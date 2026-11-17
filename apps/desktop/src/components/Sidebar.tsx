@@ -15,6 +15,7 @@ import {
   Pin,
   Plus,
   Search,
+  Layers,
   Trash2,
   Undo2,
 } from "lucide-react";
@@ -25,6 +26,7 @@ import { greetingOf, previewLine, type BotEntry } from "@/lib/bots";
 
 import PrStateIcon, { ChecksRunningIcon, prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
+import { setRailSlot } from "@/components/RailPop";
 import PanelLeftIcon from "@/components/icons/PanelLeftIcon";
 import { Button } from "@/components/ui/button";
 import {
@@ -65,6 +67,7 @@ import { offlineLine, projectLabel, serverName, shownOffline, useServers } from 
 import { LOCAL, serverOfPath } from "@/lib/transport";
 import { useResizable } from "@/components/ResizeHandle";
 import { useJumpDigit } from "@/lib/digitChords";
+import type { ShortcutId } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import type {
   Bot,
@@ -87,6 +90,9 @@ type SidebarProps = {
   items: SessionIndexItem[];
   /// The Bots section: every bot with its ongoing chat, if it has one.
   bots?: BotEntry[];
+  /// The bot whose first chat the empty composer is aimed at: open, though it
+  /// has no chat session yet for `selectedSessionId` to name.
+  newBotId?: string;
   onOpenBot?: (bot: Bot) => void;
   onDeleteBot?: (bot: Bot) => void;
   onEditBot?: (bot: Bot) => void;
@@ -182,6 +188,10 @@ type SidebarProps = {
   projects: Project[];
   /// `null` is every project, whatever space it is filed under.
   space: string | null;
+  /// Every space there is, for the rail's own switcher: the titlebar's sits
+  /// over the sidebar's end, which the rail puts under the traffic lights.
+  spaces: string[];
+  onSpaceChange: (space: string | null) => void;
   // `null` is every project, and it is the entry the filter opens on.
   projectFilter: string | null;
   onProjectFilterChange: (path: string | null) => void;
@@ -198,6 +208,9 @@ type SidebarProps = {
   updateBlocked: boolean;
   updateManual: ManualCheck;
   onInstallUpdate: () => void;
+  /// The rail draws Settings at its foot, since the titlebar gear sits over
+  /// the sidebar's end and the rail has no end clear of the traffic lights.
+  onOpenSettings: () => void;
 };
 
 /// One drawn row: the session, how deep it sits, and the flags its connector
@@ -976,13 +989,49 @@ function DevBadge() {
   );
 }
 
-/// The sidebar's floor, and the width the crew counts on it holding when it
-/// judges whether there is room to stand beside the chat.
+/// The sidebar's floor and its default, and the width the crew counts on it
+/// holding when it judges whether there is room to stand beside the chat.
+/// Narrower, the rows' timestamps and marks eat the titles beside them, so a
+/// drag under it goes to the rail instead.
 export const SIDEBAR_MIN = 240;
+/// The icon-only sidebar: the top buttons and the bots, no tasks.
+export const SIDEBAR_RAIL = 56;
+
+/// Names a control in the icon rail, where its label is gone; held shut in the
+/// full sidebar. One shape either way, so folding the rail mid-click never
+/// remounts the button the press landed on.
+function RailTip({
+  on,
+  label,
+  keys,
+  children,
+}: {
+  on: boolean;
+  label: React.ReactNode;
+  keys?: ShortcutId[];
+  children: React.ReactElement;
+}) {
+  return (
+    <Tooltip open={on ? undefined : false}>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="right">
+        {label}
+        {keys && <ShortcutKeys ids={keys} />}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/// The top strip's buttons, drawn as session rows: see the note where they
+/// render. The rail's icons go up to 16px, at the row's height all the same.
+const STRIP =
+  "w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50";
+const STRIP_RAIL = "justify-center px-0 [&_svg:not([class*='size-'])]:size-4";
 
 export default function Sidebar({
   items,
   bots = [],
+  newBotId,
   onOpenBot,
   onDeleteBot,
   onEditBot,
@@ -1014,6 +1063,8 @@ export default function Sidebar({
   onToggleArchived,
   projects,
   space,
+  spaces,
+  onSpaceChange,
   projectFilter,
   onDetach,
   onProjectFilterChange,
@@ -1023,6 +1074,7 @@ export default function Sidebar({
   updateBlocked,
   updateManual,
   onInstallUpdate,
+  onOpenSettings,
   drafts,
   openDraftId,
   onOpenDraft,
@@ -1030,13 +1082,14 @@ export default function Sidebar({
   draftsShown,
   onToggleDrafts,
 }: SidebarProps) {
-  // `SIDEBAR_MIN` is `w-60`, the width this opened at before it could be dragged — and
-  // its floor as well as its default: narrower, the rows' timestamps and marks
-  // start eating the title they sit beside, so this only ever widens.
-  const { style, handle } = useResizable({
+  const { style, handle, width, held } = useResizable({
     storageKey: "ade.sidebarWidth",
     initial: SIDEBAR_MIN,
     min: SIDEBAR_MIN,
+    rail: SIDEBAR_RAIL,
+    // The search field needs the full sidebar, so the rail opens out while it
+    // is up and folds back when it closes.
+    widen: searchOpen,
     edge: "right",
     label: "Resize the sidebar",
     // Dropped while collapsed, which is not an unmount: this component returns
@@ -1045,6 +1098,13 @@ export default function Sidebar({
     // on screen.
     pane: collapsed ? undefined : "sidebar",
   });
+  const iconOnly = width === SIDEBAR_RAIL;
+  // A fold the search field's blur left waiting on the pointer's release.
+  const pendingFold = useRef<() => void>(undefined);
+  const cancelFold = () => {
+    if (pendingFold.current) window.removeEventListener("pointerup", pendingFold.current);
+    pendingFold.current = undefined;
+  };
 
   const closeSearch = () => {
     onSearchOpenChange(false);
@@ -1089,7 +1149,8 @@ export default function Sidebar({
   useLayoutEffect(() => {
     const el = listRef.current;
     if (el) setNoGutter(el.offsetWidth === el.clientWidth);
-  }, [collapsed]);
+  // The rail unmounts the list too, so coming off it measures again.
+  }, [collapsed, iconOnly]);
   // Reset on the press, not on the rows landing: the request moves first, so
   // the window is already at its first step by the time the settled rows
   // arrive, and the read's commit draws one step rather than wherever the
@@ -1155,7 +1216,9 @@ export default function Sidebar({
     const observer = new ResizeObserver(openMore);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [more, settledLimit]);
+  // `iconOnly` too: the rail unmounts the list, and the one drawn after it
+  // needs an observer of its own.
+  }, [more, settledLimit, iconOnly]);
 
   // Keys for a run's own break and heading. Rows are keyed by session id
   // alone, as siblings across every run, so these may change freely.
@@ -1255,33 +1318,47 @@ export default function Sidebar({
           `dark:hover:bg-muted/50` on the variant out-specifies an unprefixed
           `hover:` and `tailwind-merge` cannot fold the two together. */}
       <div className="flex flex-col gap-px px-2 pt-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onNewSession}
-          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50"
-        >
-          <Plus />
-          New Task
-          <ShortcutKeys ids={["session.new"]} className="ml-auto" />
-        </Button>
+        <RailTip on={iconOnly} label="New Task" keys={["session.new"]}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onNewSession}
+            aria-label={iconOnly ? "New Task" : undefined}
+            className={cn(STRIP, iconOnly && STRIP_RAIL)}
+          >
+            <Plus />
+            {!iconOnly && <>
+              New Task
+              <ShortcutKeys ids={["session.new"]} className="ml-auto" />
+            </>}
+          </Button>
+        </RailTip>
 
         {/* Under New Task, because it is the other way a task starts — an
             issue is a task somebody already wrote down. Drawn whether or not a
             tracker is connected: the page's own empty state is where connecting
             is offered, and a row that only appears once you have found the
             settings page can only be found by people who did not need it. */}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onOpenIssues}
-          data-active={issuesOpen || undefined}
-          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50 data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground"
-        >
-          <CircleDot />
-          Issues
-          <ShortcutKeys ids={["issues.open"]} className="ml-auto" />
-        </Button>
+        <RailTip on={iconOnly} label="Issues" keys={["issues.open"]}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onOpenIssues}
+            data-active={issuesOpen || undefined}
+            aria-label={iconOnly ? "Issues" : undefined}
+            className={cn(
+              STRIP,
+              iconOnly && STRIP_RAIL,
+              "data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground",
+            )}
+          >
+            <CircleDot />
+            {!iconOnly && <>
+              Issues
+              <ShortcutKeys ids={["issues.open"]} className="ml-auto" />
+            </>}
+          </Button>
+        </RailTip>
 
         {/* The button *becomes* the field, on the same row at the same height:
             the icon holds its place, the caret lands where the label was, and
@@ -1311,8 +1388,23 @@ export default function Sidebar({
               }}
               // Only where there is nothing to lose. Clicking away from a query
               // that is narrowing the list is not a request to drop it.
+              //
+              // Over the rail, closing folds it and moves everything under a
+              // press that took the focus, so the close waits for the release:
+              // the click then lands on what was pressed.
+              // Focus coming back takes it away, or a query typed after a Tab
+              // out would be closed over by the next click, still filtering.
+              onFocus={cancelFold}
               onBlur={() => {
-                if (!search) onSearchOpenChange(false);
+                if (search) return;
+                if (held !== SIDEBAR_RAIL) return onSearchOpenChange(false);
+                cancelFold();
+                const fold = () => {
+                  pendingFold.current = undefined;
+                  onSearchOpenChange(false);
+                };
+                pendingFold.current = fold;
+                window.addEventListener("pointerup", fold, { once: true });
               }}
               className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
             />
@@ -1328,27 +1420,35 @@ export default function Sidebar({
             <ShortcutKeys ids={["search"]} className="group-focus-within:hidden" />
           </div>
         ) : (
+          <RailTip on={iconOnly} label="Search" keys={["search"]}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onSearchOpenChange(true)}
+              aria-label={iconOnly ? "Search" : undefined}
+              className={cn(STRIP, iconOnly && STRIP_RAIL)}
+            >
+              <Search />
+              {!iconOnly && <>
+                Search
+                <ShortcutKeys ids={["search"]} className="ml-auto" />
+              </>}
+            </Button>
+          </RailTip>
+        )}
+
+        <RailTip on={iconOnly} label="New bot">
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => onSearchOpenChange(true)}
-            className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50"
+            onClick={onNewBot}
+            aria-label={iconOnly ? "New bot" : undefined}
+            className={cn(STRIP, iconOnly && STRIP_RAIL)}
           >
-            <Search />
-            Search
-            <ShortcutKeys ids={["search"]} className="ml-auto" />
+            <MessageCirclePlus />
+            {!iconOnly && "New bot"}
           </Button>
-        )}
-
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onNewBot}
-          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50"
-        >
-          <MessageCirclePlus />
-          New bot
-        </Button>
+        </RailTip>
       </div>
 
       {/* Above the project filter: a bot belongs to no project, it hands work
@@ -1366,14 +1466,18 @@ export default function Sidebar({
             status={status}
             unread={status === "completed" || (!!session && unreadWorking.has(session.sessionId))}
             asking={!!session && askingSessions.has(session.sessionId)}
-            active={!!session && session.sessionId === selectedSessionId}
+            active={(!!session && session.sessionId === selectedSessionId) || bot.id === newBotId}
             onOpen={() => onOpenBot?.(bot)}
             onDelete={() => onDeleteBot?.(bot)}
             onEdit={() => onEditBot?.(bot)}
+            iconOnly={iconOnly}
           />;
         })}
       </div>}
 
+      {/* The rail carries no tasks: the top strip and the bots are all it
+          holds, and this spacer keeps its foot at the bottom. */}
+      {iconOnly ? <div className="flex-1" /> : <>
       {filterShown && <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
         <ProjectFilter
           projects={projects}
@@ -1576,6 +1680,7 @@ export default function Sidebar({
           />
         )}
       </div>
+      </>}
 
       {/* Outside the scroll container, unlike the shortcut hint above it: that
           is a one-time tip that has earned its way off screen, and this is an
@@ -1585,11 +1690,40 @@ export default function Sidebar({
         blocked={updateBlocked}
         manual={updateManual}
         onInstall={onInstallUpdate}
+        iconOnly={iconOnly}
       />
 
       {/* Under the update row, and last in the column: both are standing
           information, and this is the half nobody is waiting on. */}
-      {import.meta.env.DEV && <DevBadge />}
+      {import.meta.env.DEV && !iconOnly && <DevBadge />}
+
+      {iconOnly && (
+        <div className="flex shrink-0 flex-col items-center gap-0.5 pb-3">
+          {/* The floating cards land here: pinned bottom-left they would
+              cover the chat, the rail being narrower than any of them. */}
+          <div ref={setRailSlot} className="flex flex-col items-center gap-0.5 empty:hidden" />
+          {/* The titlebar switcher's click, stepping to the next space, with
+              the one in force named in the tooltip. */}
+          {spaces.length > 0 && (
+            <RailTip on label={space ?? "All Spaces"}>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Space: ${space ?? "All Spaces"}`}
+                onClick={() => {
+                  const entries = spaceEntries(spaces);
+                  const at = Math.max(0, entries.indexOf(space));
+                  onSpaceChange(entries[(at + 1) % entries.length]);
+                }}
+                className="text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <Layers className="size-4" />
+              </Button>
+            </RailTip>
+          )}
+          <SettingsButton onOpen={onOpenSettings} />
+        </div>
+      )}
     </aside>
   );
 }
@@ -1782,8 +1916,11 @@ function BotRow({
   onOpen,
   onDelete,
   onEdit,
+  iconOnly = false,
 }: {
   bot: Bot;
+  /// The rail: the face alone, the name in a tooltip.
+  iconOnly?: boolean;
   /// The chat's last reply and the replies since the reader last wrote.
   preview?: BotPreview;
   /// Its chat, for the jump digit; absent before the first message.
@@ -1808,16 +1945,22 @@ function BotRow({
   const offline = offlineLine(serverOfPath(bot.path));
 
   // StalledTasks' row layout, so a bot and its stalled tasks read alike.
+  // The tooltip's root sits outside the menu and its trigger inside, since
+  // `asChild` cannot pass a ref through a provider. Held shut off the rail.
   return (
+    <Tooltip open={iconOnly ? undefined : false}>
     <ContextMenu>
       <ContextMenuTrigger asChild>
+        <TooltipTrigger asChild>
         <button
           type="button"
           onClick={onOpen}
           onPointerEnter={() => setHovered(true)}
           onPointerLeave={() => setHovered(false)}
+          aria-label={iconOnly ? bot.name : undefined}
           className={cn(
-            "group relative flex w-full cursor-pointer items-center gap-2 rounded-md py-1 pr-[5px] pl-1 text-left",
+            "group relative flex w-full cursor-pointer items-center gap-2 rounded-md text-left",
+            iconOnly ? "justify-center p-1" : "py-1 pr-[5px] pl-1",
             "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
             active
               ? "bg-sidebar-accent text-sidebar-accent-foreground"
@@ -1854,8 +1997,11 @@ function BotRow({
                 {preview?.replies || ""}
               </span>
             )}
+            {iconOnly && digit && (
+              <Kbd className="absolute top-1/2 left-1/2 -translate-1/2">{digit}</Kbd>
+            )}
           </span>
-          <span className="flex min-w-0 flex-1 flex-col">
+          {!iconOnly && <span className="flex min-w-0 flex-1 flex-col">
             <span className="relative flex items-baseline gap-2">
               <span
                 className={cn(
@@ -1891,8 +2037,9 @@ function BotRow({
             ) : (
               glimpse && <span className="truncate text-ui text-foreground/70">{glimpse}</span>
             )}
-          </span>
+          </span>}
         </button>
+        </TooltipTrigger>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-44">
         <ContextMenuItem className="text-ui" onSelect={onEdit}>
@@ -1903,6 +2050,8 @@ function BotRow({
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
+    <TooltipContent side="right">{bot.name}</TooltipContent>
+    </Tooltip>
   );
 }
 

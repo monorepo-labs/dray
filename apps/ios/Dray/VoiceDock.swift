@@ -12,6 +12,8 @@ struct VoiceDock: View {
     @Bindable var task: NewTask
     /// A task started: the list opens it.
     let started: (SessionKey) -> Void
+    /// The reader opened the keyboard, the picks or the orb.
+    var engaged: () -> Void = {}
     @State private var hint: String?
     @State private var confirming = false
     @State private var editing = false
@@ -74,6 +76,7 @@ struct VoiceDock: View {
         .sheet(isPresented: $picking) { RunWithSheet(task: task) }
         // A new phase asks its own question; one left up would answer the wrong one.
         .onChange(of: phase) { confirming = false }
+        .onChange(of: open || editing || picking) { if open || editing || picking { engaged() } }
     }
 
     /// The page showing through at rest, and nearly closed over the list once open.

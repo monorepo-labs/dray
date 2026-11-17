@@ -1,6 +1,6 @@
 import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { invoke, listen, LOCAL, serverOfPath, serverOfSession } from "@/lib/transport";
+import { invoke, listen, LOCAL, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { CircleDashed, Plus } from "lucide-react";
 import PrStateIcon from "@/components/PrStateIcon";
@@ -54,7 +54,7 @@ import { setLinkOpener } from "@/lib/openLink";
 import { repoChanged } from "@/lib/prSync";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useChanges } from "@/hooks/useChanges";
-import { usePrMarks } from "@/hooks/usePrMarks";
+import { keptPrMark, usePrMarks } from "@/hooks/usePrMarks";
 import { usePrReady } from "@/hooks/usePrReady";
 import { useAutoMergeCards } from "@/hooks/useAutoMergeCards";
 import { useWorkStatus } from "@/hooks/useWorkStatus";
@@ -80,6 +80,7 @@ import {
 } from "@/components/ResizeHandle";
 import Sidebar, {
   SIDEBAR_MIN,
+  SIDEBAR_RAIL,
   SEARCH_INPUT_ID,
   SettingsButton,
   SidebarToggle,
@@ -182,7 +183,7 @@ import { boatAsleep, restoreHeld } from "@/lib/boat";
 import { onCloud, setCloudFailure, useCloud, useCloudFailure, useCloudPicks, usePlacing } from "@/lib/cloud";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout, nextCheckout } from "@/lib/projectGroups";
-import { serverConnected, serverName, useServers } from "@/lib/servers";
+import { serverConnected, serverName, shownOffline, useServers } from "@/lib/servers";
 import { canTagFrom } from "@/lib/sessionTag";
 import { useReachableSessions } from "@/hooks/useReachableSessions";
 import AgentUpdateLine from "@/components/composer/AgentUpdateLine";
@@ -190,7 +191,7 @@ import { useAgentUpdates, useAutoUpdateAgents } from "@/hooks/useAgentUpdates";
 import { overwritesInPlace, turnRunningOn } from "@/lib/agentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import AutoContinueNotice from "@/components/composer/AutoContinueNotice";
-import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, SessionIndexItem, SessionSnapshot, WorktreeDisposition } from "@/types/events";
+import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, PrMark, SessionIndexItem, SessionSnapshot, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -204,7 +205,10 @@ import { changeRange, lastToolResult, writingTurns } from "@/lib/changes";
 import { useOlderWrites } from "@/hooks/useOlderWrites";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
-import { prBadgeCount, sessionBranch } from "@/lib/pr";
+import { prBadgeCount, prRepoSlug, sessionBranch, slugKey } from "@/lib/pr";
+import { holdSettle } from "@/lib/heldFlags";
+import { confirmMerge, mergeBlock, readLogin, useMergeAccess } from "@/lib/mergeAccess";
+import { keptRepo } from "@/lib/serverCache";
 import { botAt, botBrowser, botChat, botEntries, botSession, greetingOf, inBotTree, listenForBots, readPreviews, refreshBots, serverOfBot, useBots } from "@/lib/bots";
 import NewBotDialog from "@/components/NewBotDialog";
 import AgentIcon from "@/components/AgentIcon";
@@ -1196,9 +1200,10 @@ function App() {
   // the floor, and where it does not fit the cards stack above the composer.
   // Up to a 14" MacBook's width, an open panel stacks it even where the
   // minimums fit: all four at their floors reads as cramped, not as fitting.
-  const sidebarW = Math.max(SIDEBAR_MIN, usePaneWidth("sidebar"));
   // What the sidebar is drawn at, 0 while shut: where the sheet starts.
   const sidebarDrawn = usePaneWidth("sidebar");
+  // The rail is its own floor: a width the reader picked, never one clamped to.
+  const sidebarW = sidebarDrawn === SIDEBAR_RAIL ? SIDEBAR_RAIL : Math.max(SIDEBAR_MIN, sidebarDrawn);
   const viewportW = useViewportWidth();
   const crewFits =
     viewportW >= CHAT_MIN + CREW_W + (collapsed ? 0 : sidebarW) + (panelShown ? PANEL_MIN : 0);
@@ -1422,17 +1427,24 @@ function App() {
   // Every task's too, wherever the reader is, hidden or filtered away: its PR
   // turning ready posts a merge card in the chat that started it, and a bot's
   // stalled task is judged by its PR. A bot's tasks are tasks like any other.
-  const botRepoKey = useMemo(
-    () =>
-      [
-        ...new Set(
-          sessionIndexItems
-            .filter((i) => !i.archived && i.parentSessionId && i.parentSessionId !== i.sessionId)
-            .map((i) => i.projectPath),
-        ),
-      ].join("\n"),
-    [sessionIndexItems],
+  // A task whose machine is down is read by its GitHub repo through This Mac
+  // as well (#1178), so its PR stays current on the card and merges from here.
+  const offlineRepo = useCallback(
+    (item: SessionIndexItem) => {
+      void allServers; // re-made on every server change, so callers re-read
+      if (!shownOffline(serverOfPath(item.cwd))) return undefined;
+      return prRepoSlug(keptPrMark(item.projectPath, sessionBranch(item))?.url) ?? keptRepo(item);
+    },
+    [allServers],
   );
+  const botRepoKey = useMemo(() => {
+    const tasks = sessionIndexItems.filter((i) => !i.archived && i.parentSessionId && i.parentSessionId !== i.sessionId);
+    const offline = tasks.flatMap((i) => {
+      const repo = offlineRepo(i);
+      return repo ? [slugKey(repo)] : [];
+    });
+    return [...new Set([...tasks.map((i) => i.projectPath), ...offline])].join("\n");
+  }, [sessionIndexItems, offlineRepo]);
   // Whichever sidebar list is up: a card on screen is still being read.
   const repoPaths = useMemo(
     () => [
@@ -1458,11 +1470,24 @@ function App() {
 
   // Each bot's tasks that have sat untouched: drawn at the foot of its chat,
   // and a banner per bot when new ones land while the window is away.
+  // A task whose machine is down reads its repo's marks from here: its own
+  // key's are a relaunch away from gone, and stale until then.
   const taskPr = useCallback(
-    (row: CrewRow) => prMarks.prFor(row.item.projectPath, sessionBranch(row.item)),
-    [prMarks.prFor],
+    (row: CrewRow): PrMark | undefined => {
+      const branch = sessionBranch(row.item);
+      const repo = offlineRepo(row.item);
+      const own = prMarks.prFor(row.item.projectPath, branch);
+      return repo ? (prMarks.prFor(slugKey(repo), branch) ?? own) : own;
+    },
+    [prMarks.prFor, offlineRepo],
   );
-  const taskPrReadAt = useCallback((row: CrewRow) => prMarks.readAt(row.item.projectPath), [prMarks.readAt]);
+  const taskPrReadAt = useCallback(
+    (row: CrewRow) => {
+      const repo = offlineRepo(row.item);
+      return (repo && prMarks.readAt(slugKey(repo))) || prMarks.readAt(row.item.projectPath);
+    },
+    [prMarks.readAt, offlineRepo],
+  );
   const stalled = useStalledTasks({
     bots,
     items: sessionIndexItems,
@@ -1674,7 +1699,7 @@ function App() {
   // the chat itself hides counts: what plays there would put a row of tabs
   // over the task list for nothing.
   // A bot's runs live in its Tasks tab instead.
-  const hasMoreTab =
+  const moreForTasks =
     sessionTodos !== null ||
     (selectedBot
       ? hiddenInBotChat(selectedSession?.events ?? [], sessionAttachments).length > 0
@@ -1807,6 +1832,21 @@ function App() {
     setViewTabs((prev) => ({ ...prev, [owner]: "pick" }));
     if (selectedSessionId !== owner) void handleSelectSessionIndexItem(owner);
   };
+
+  // What the attachment grid pages through, newest session first: a bot's
+  // whole chat, since an agent switch splits it into several. `null` where
+  // there is nothing to show and nothing older to load, so More draws no grid.
+  const attachmentLogs = useMemo(() => {
+    if (!selectedSession) return null;
+    const logs = selectedBot ? [selectedSession, ...[...earlier].reverse()] : [selectedSession];
+    // Every log, not the selected one alone: a bot chat's earlier session may
+    // hold the only pictures, and its chat hides tool screenshots.
+    const shows = (log: SessionSnapshot) => log.olderBefore != null || sessionMedia(log.events).length > 0;
+    return sessionAttachments.length > 0 || logs.some(shows) ? logs : null;
+  }, [selectedBot, selectedSession, sessionAttachments, earlier]);
+  // Older history counts too: its pictures are reached only through the
+  // grid's Load more, so the tab has to be there to press it.
+  const hasMoreTab = moreForTasks || attachmentLogs !== null;
 
   const tabs = tabOrder({
     pr: hasPrTab,
@@ -3320,13 +3360,51 @@ function App() {
     prMarks.refreshAfterWrite();
     // Landed, so the task is done — unless it is still working,
     // which settling would kill mid-turn.
-    if (!task) return;
+    if (!task || task.busy) return;
     const { item } = task;
-    if (task.busy || !(await setSessionFlags(item.sessionId, { archived: true }))) return;
+    const removeTree = !!item.worktreeName && !item.worktreeRemoved;
+    // Its machine is down, so the settle waits for it there and lands on reconnect.
+    const server = serverOfPath(item.cwd);
+    if (shownOffline(server)) {
+      await holdSettle(server, item.sessionId, removeTree).catch((e) => console.error("[held settle]", e));
+      return;
+    }
+    if (!(await setSessionFlags(item.sessionId, { archived: true }))) return;
     // The merge landed the work, so whatever the tree still holds is leftover:
     // asking here put a "Delete worktree?" notice on every merge with a stray file.
     // "asked" so a refused delete still says so rather than orphaning the tree.
-    if (item.worktreeName && !item.worktreeRemoved) removeWorktree(item.sessionId, "asked");
+    if (removeTree) removeWorktree(item.sessionId, "asked");
+  };
+
+  /// A task row's Merge: from its own checkout, or by its GitHub repo through
+  /// This Mac while its machine is down, which the merge never needed.
+  const mergeRow = async (row: CrewRow, pr: PrMark, method: MergeMethod) => {
+    await taskMergeConfirm(serverOfPath(row.item.cwd), pr.url);
+    const repo = shownOffline(serverOfPath(row.item.cwd)) ? prRepoSlug(pr.url) : undefined;
+    return mergeTask(repo ? slugKey(repo) : row.item.projectPath, pr.number, method, row);
+  };
+
+  // Who each machine's `gh` is, read on every connect, so a machine that goes
+  // down is still known by the account it used.
+  useMergeAccess();
+  const connectedKey = allServers.flatMap((s) => (s.status === "connected" ? [s.id] : [])).join("\n");
+  useEffect(() => {
+    readLogin(LOCAL);
+    for (const id of connectedKey ? connectedKey.split("\n") : []) readLogin(id);
+  }, [connectedKey]);
+  /// Why Merge is not offered for a task on `server` whose PR is at `url`,
+  /// merged through `via`: only a task whose machine is down merges as another
+  /// machine's `gh` — This Mac's from a row, the chat's server's from a card.
+  const taskMergeBlock = (server: ServerId, url: string | undefined, via: ServerId = LOCAL): string | null => {
+    const slug = shownOffline(server) ? prRepoSlug(url) : undefined;
+    if (!slug) return null;
+    return mergeBlock(server, serverName(server), slug, via, via === LOCAL ? "this machine" : serverName(via));
+  };
+  /// The same rule asked afresh right before the merge, since the merging
+  /// machine's `gh` may have signed in as someone else since it was drawn.
+  const taskMergeConfirm = async (server: ServerId, url: string | undefined, via: ServerId = LOCAL) => {
+    const slug = shownOffline(server) ? prRepoSlug(url) : undefined;
+    if (slug) await confirmMerge(server, serverName(server), slug, via, via === LOCAL ? "this machine" : serverName(via));
   };
 
   const cardsReread = useRef(new Set<string>());
@@ -3347,7 +3425,19 @@ function App() {
       });
     },
     titleOf: (id) => sessionIndexItems.find((i) => i.sessionId === id)?.title,
+    mergeBlock: (card) => {
+      const task = sessionIndexItems.find((i) => i.sessionId === card.taskId);
+      // The card merges through its repo key, qualified with the chat's server.
+      const via = serverOfPath(card.projectPath);
+      return taskMergeBlock(task ? serverOfPath(task.cwd) : serverOfSession(card.taskId), card.url, via);
+    },
     merge: async (card, method, settle) => {
+      const task = sessionIndexItems.find((i) => i.sessionId === card.taskId);
+      await taskMergeConfirm(
+        task ? serverOfPath(task.cwd) : serverOfSession(card.taskId),
+        card.url,
+        serverOfPath(card.projectPath),
+      );
       const item = settle
         ? (sessionIndexItems.find((i) => i.sessionId === card.taskId) ??
           (await invoke<SessionIndexItem | null>("session_index_item", { sessionId: card.taskId }).catch(() => null)))
@@ -3526,6 +3616,7 @@ function App() {
         <Sidebar
           items={searchedSessions}
           bots={botList}
+          newBotId={issuesOpen ? undefined : newBot?.id}
           onOpenBot={openBot}
           // The new-task composer first: the dialog shares its picker, which on
           // an open chat would change that chat's model instead.
@@ -3548,6 +3639,8 @@ function App() {
           onSearchOpenChange={setSearchOpen}
           projects={spaceProjects}
           space={space}
+          spaces={spaces}
+          onSpaceChange={changeSpace}
           projectFilter={projectFilter}
           onProjectFilterChange={changeProjectFilter}
           onStepProjectFilter={stepProjectFilter}
@@ -3606,6 +3699,7 @@ function App() {
           updateBlocked={anyRunning}
           updateManual={updateManual}
           onInstallUpdate={() => void installUpdate()}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
       }
       header={
@@ -3641,8 +3735,9 @@ function App() {
           {/* Over the sidebar's right end, out of the flow so the tabs do not
               move. It belongs to the sidebar, so it goes when the sidebar does —
               and on a hidden session, whose way back to its parent runs
-              through this same strip. ⌘, still opens settings there. */}
-          {sidebarDrawn > 0 && !(!issuesOpen && shownSession && crumb) && (
+              through this same strip. ⌘, still opens settings there. The rail's
+              end sits under the traffic lights, so it draws its own gear. */}
+          {sidebarDrawn > SIDEBAR_RAIL && !(!issuesOpen && shownSession && crumb) && (
           <div
             className="absolute top-1/2 flex shrink-0 -translate-y-1/2 items-center gap-1"
             style={{ right: `calc(100% - ${sidebarDrawn}px + 0.5rem)` }}
@@ -3938,14 +4033,15 @@ function App() {
             <TabBody active={activeTab === "tasks"}>
               <TasksPanel
                 rows={crew}
-                prOf={(row) => prMarks.prFor(row.item.projectPath, sessionBranch(row.item))}
+                prOf={taskPr}
                 onOpen={(id, alone) => void openTask(id, alone)}
                 onSetFlags={handleSetSessionFlags}
                 onFork={forkSession}
                 onDelete={deleteTask}
                 onDetach={detachSession}
                 onFixConflicts={(row, pr) => askToFixConflicts(row.item, pr.number)}
-                onMerge={(row, pr, method) => mergeTask(row.item.projectPath, pr.number, method, row)}
+                onMerge={mergeRow}
+                mergeBlock={(row, pr) => taskMergeBlock(serverOfPath(row.item.cwd), pr.url)}
                 now={stalled.now}
               >
                 {selectedBot && (
@@ -3968,8 +4064,7 @@ function App() {
               <MorePanel
                 todos={sessionTodos}
                 live={busy}
-                media={sessionAttachments}
-                sessionId={shownSession.sessionId}
+                attachments={attachmentLogs}
                 subagents={{
                   runs: selectedBot ? [] : panelRuns,
                   selectedId: selectedSubagentId,
@@ -4279,7 +4374,8 @@ function App() {
                 stalls={stalls}
                 now={stalled.now}
                 onOpen={(id, alone) => void openTask(id, alone)}
-                onMerge={(row, pr, method) => mergeTask(row.item.projectPath, pr.number, method, row)}
+                onMerge={mergeRow}
+                mergeBlock={(row, pr) => taskMergeBlock(serverOfPath(row.item.cwd), pr.url)}
               />
             }
             unread={!!selectedSessionId && openedUnread === selectedSessionId}

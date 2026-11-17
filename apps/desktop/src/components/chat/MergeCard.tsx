@@ -23,6 +23,9 @@ export type MergeCardHost = {
   /// may predate the PR rather than the PR having left the window.
   missing: (repo: string, number: number) => void;
   titleOf: (taskId: string) => string | undefined;
+  /// Why the card offers no Merge though GitHub would take it, or `null`.
+  /// `projectPath` is the qualified key the card merges through.
+  mergeBlock: (card: MergeCardPayload) => string | null;
   /// `settle`: a bot's chat, where landed work is the bot's to tidy, so the
   /// task is settled and its worktree deleted after the merge.
   merge: (card: MergeCardPayload, method: MergeMethod, settle: boolean) => Promise<void>;
@@ -96,10 +99,12 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
   const pr = found ?? undefined;
   const merged = pr?.state === "MERGED";
   const title = host?.titleOf(card.taskId) ?? card.title;
-  const mergeable = pr?.state === "OPEN" && !pr.isDraft && readyToMerge(pr) === true;
+  const ready = pr?.state === "OPEN" && !pr.isDraft && readyToMerge(pr) === true;
+  const blocked = ready ? (host?.mergeBlock(card) ?? null) : null;
+  const mergeable = ready && !blocked;
   const conflicted = pr?.state === "OPEN" && mergeVerdict(pr) === "conflict";
   const running = pr?.state === "OPEN" && pr.checksState === "RUNNING";
-  const status = statusLine(pr);
+  const status = blocked ? "Can't merge from here" : statusLine(pr);
   // `null` is a PR no longer among the open or recently merged: nothing left
   // to land, so it draws one line without claiming which way it went.
   const compact = merged || found === null || (chat.after.get(event.id) ?? 0) >= FULL_FOR;
@@ -157,7 +162,14 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
             </button>
             {(running || status) && <span aria-hidden>·</span>}
             {running && <ChecksRunningIcon />}
-            {status && <span className={cn("truncate", statusTone(pr))}>{status}</span>}
+            {status && (
+              <span
+                className={cn("truncate", blocked ? "text-muted-foreground" : statusTone(pr))}
+                title={blocked ?? undefined}
+              >
+                {status}
+              </span>
+            )}
           </p>
         </div>
         {mergeable && merge && <MergeControl onMerge={merge} keep={event.id} named />}

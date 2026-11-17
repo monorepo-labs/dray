@@ -128,6 +128,19 @@ export function markDisagrees(mark: PrMark | undefined, prs: PullRequest[]): boo
   return failing && !pending;
 }
 
+/// The repo a pull request's URL names, as `gh --repo` takes it: `owner/name`
+/// on github.com, `host/owner/name` on any other host.
+export function prRepoSlug(url: string | undefined): string | undefined {
+  const match = url?.match(/^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/\d+/);
+  if (!match) return undefined;
+  const [, host, owner, name] = match;
+  return host.toLowerCase() === "github.com" ? `${owner}/${name}` : `${host}/${owner}/${name}`;
+}
+
+/// A marks key for `slug` read through This Mac's `gh`, which needs no
+/// checkout: how a task's PR is read and merged while its machine is down.
+export const slugKey = (slug: string): string => `github:${slug}`;
+
 /// The GitHub repo a marks read answered for, `host/owner/name`, off its PRs'
 /// URLs. Nothing for a repo with no PRs: there is no URL to read it from.
 ///

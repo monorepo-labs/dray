@@ -45,7 +45,7 @@ export type FixAsk = { pr: number; status: PrStatusKey; at: number };
 /// Whether `pr` has moved off what `ask` was about, so the ask is done with.
 /// `unknown` holds: it is GitHub's recompute after a push, not an answer.
 export function fixAskDone(ask: FixAsk, pr: PrMark): boolean {
-  const key = prStatus(pr).key;
+  const key = stallStatus(pr);
   return pr.number !== ask.pr || (key !== ask.status && key !== "unknown");
 }
 
@@ -54,6 +54,15 @@ export function fixAskDone(ask: FixAsk, pr: PrMark): boolean {
 export function fixLine(ask: FixAsk | undefined, pr: PrMark | undefined, now: number): string | undefined {
   const fixing = ask && pr && !fixAskDone(ask, pr) && FIXABLE[ask.status]?.fixing;
   return fixing ? `${fixing} · ${compactAge(new Date(ask.at).toISOString(), now)}` : undefined;
+}
+
+/// A PR's status as a stall reads it: a draft's failing checks read as a draft.
+/// A draft waits on the reader's look, with feedback committed locally and not
+/// pushed, so its red check (often Greptile's first review) is stale by design.
+/// Read as a fix, each poke of the bot's moved the task and nudged it again.
+function stallStatus(pr: PrMark): PrStatusKey {
+  const key = prStatus(pr).key;
+  return pr.isDraft && key === "checksFailing" ? "draft" : key;
 }
 
 /// The bot's tasks that have stalled, oldest stall first.
@@ -88,7 +97,7 @@ export function stalledTasks(
     const { item } = row;
     const id = item.sessionId;
     const pr = prOf(row);
-    const status = pr && prStatus(pr).key;
+    const status = pr && stallStatus(pr);
     const prKey = `${id}:${pr?.number}`;
     // Ready by the same word the Tasks tab says, so failing checks on a clean
     // merge state never read as mergeable.
