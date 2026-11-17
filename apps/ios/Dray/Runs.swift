@@ -336,7 +336,6 @@ struct RunRow: View {
                         if let at, let date = parseDate(at) {
                             Text(shortAge(date)).font(Theme.Font.footnote.font.monospacedDigit()).foregroundStyle(Theme.tertiary)
                         }
-                        if run.opens { Chevron(open: open) }
                     }
                     .frame(minHeight: 44)
                     .contentShape(.rect)
