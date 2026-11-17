@@ -570,16 +570,28 @@ final class Store {
             return false
         }
         await loadMarks(server, force: true, only: [cwd])
-        // A server from before `settle` answers null: settle a task it holds from here.
+        // A server from before `settle` answers null: settle a task it holds from
+        // here, off the tree's own HEAD, and remove the tree only where it is clean.
         let key = SessionKey(server: server, id: taskId)
-        guard settling != .bool(true), let item = items[key], item.archived != true, !item.busy,
-              sessionBranch(branch: item.branch, worktreeName: item.worktreeName,
-                            worktreeRemoved: item.worktreeRemoved ?? false, observed: nil) == branch else { return true }
+        guard settling != .bool(true), let item = items[key], item.archived != true, !item.busy else { return true }
+        let removed = item.worktreeRemoved ?? false
+        let observed = removed ? nil : (try? await call(server, "work_status", ["cwd": .string(item.cwd)]) as WorkStatus)?.branch
+        guard removed || observed != nil,
+              sessionBranch(branch: item.branch, worktreeName: item.worktreeName, worktreeRemoved: removed, observed: observed) == branch
+        else { return true }
         _ = try? await call(server, "set_session_flags", ["sessionId": .string(taskId), "archived": true], as: JSON.self)
-        if item.worktreeName != nil, item.worktreeRemoved != true {
+        if item.worktreeName != nil, !removed,
+           let d: WorktreeDisposition = try? await call(server, "worktree_disposition", ["sessionId": .string(taskId)]),
+           !d.exists || (d.changedFiles == 0 && d.unpushedCommits == 0) {
             _ = try? await call(server, "remove_session_worktree", ["sessionId": .string(taskId)], as: JSON.self)
         }
         return true
+    }
+
+    private struct WorktreeDisposition: Decodable {
+        let exists: Bool
+        let changedFiles: Int
+        let unpushedCommits: Int
     }
 
     /// A project list a command answered with, such as `add_project`'s.

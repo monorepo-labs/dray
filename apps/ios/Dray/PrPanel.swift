@@ -56,7 +56,7 @@ final class PrModel {
     }
 }
 
-private struct WorkStatus: Decodable {
+struct WorkStatus: Decodable {
     let branch: String?
 }
 

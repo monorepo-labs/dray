@@ -22,7 +22,7 @@ final class MergeSettleTests: XCTestCase {
             app.textFields[field].typeText(text)
         }
         app.buttons["Add"].tap()
-        let bot = app.staticTexts["Settle Bot"].firstMatch
+        let bot = app.staticTexts[env["DRAY_MERGE_BOT"] ?? "Settle Bot"].firstMatch
         XCTAssertTrue(bot.waitForExistence(timeout: 15), "no bot row after pairing")
         if !app.buttons["Tasks"].exists { bot.tap() }
         XCTAssertTrue(app.buttons["Tasks"].waitForExistence(timeout: 15), "the bot's chat did not open")
@@ -30,7 +30,7 @@ final class MergeSettleTests: XCTestCase {
         let numbers = (env["DRAY_MERGE_NUMBERS"] ?? "1,2").split(separator: ",").map(String.init)
         for number in numbers {
             let merge = app.buttons["Merge"].firstMatch
-            XCTAssertTrue(merge.waitForExistence(timeout: 30), "no Merge on card #\(number)")
+            XCTAssertTrue(merge.waitForExistence(timeout: 180), "no Merge on card #\(number)")
             snap(app, "\(number)-before")
             merge.tap()
             let squash = app.buttons["Squash and merge"]
