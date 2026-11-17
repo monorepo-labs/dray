@@ -587,6 +587,18 @@ final class Store {
         return true
     }
 
+    /// Takes a PR out of draft (`gh pr ready` on the server), then re-reads the repo's marks.
+    func markReady(_ server: UUID, cwd: String, number: Int) async -> Bool {
+        do {
+            let _: JSON = try await call(server, "mark_pr_ready", ["cwd": .string(cwd), "number": JSON(number)], timeout: .seconds(60))
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+        await loadMarks(server, force: true, only: [cwd])
+        return true
+    }
+
     /// A project list a command answered with, such as `add_project`'s.
     func attached(_ server: UUID, _ list: [Project]) { projects[server] = list }
 
