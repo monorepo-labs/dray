@@ -37,17 +37,22 @@ export function paneBounds(
 /// hold point is clamped too: on a window too narrow to hold the default, it is
 /// not a width this pane can take and snapping to it would breach the range.
 ///
-/// With a `rail`, a drag that ends more than halfway from the floor down to the
-/// rail lands on the rail instead: the band between is resistance before the
-/// snap, never a width the pane is drawn at.
+/// With a `rail`, any width under the floor lands on the rail: nothing between
+/// is ever drawn. `fromRail` is a drag starting there, which must cross halfway
+/// back to the floor to open, or a pane on the rail would only open once dragged
+/// the floor's whole width.
 export function snapWidth(
   raw: number,
   min: number,
   max: number,
   snapTo: number,
   rail?: number,
+  fromRail = false,
 ): number {
-  if (rail !== undefined && raw < (Math.min(rail, max) + min) / 2) return Math.min(rail, max);
+  if (rail !== undefined) {
+    const r = Math.min(rail, max);
+    if (raw < (fromRail ? (r + min) / 2 : min)) return r;
+  }
   const clamped = Math.max(min, Math.min(max, raw));
   const target = Math.max(min, Math.min(max, snapTo));
   return Math.abs(clamped - target) < SNAP_PX ? target : clamped;

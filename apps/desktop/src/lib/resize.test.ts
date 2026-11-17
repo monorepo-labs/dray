@@ -36,19 +36,20 @@ describe("snapWidth", () => {
 });
 
 describe("snapWidth with a rail", () => {
-  it("drops to the rail past halfway below the floor", () => {
-    expect(snapWidth(117, 180, 480, 240, 56)).toBe(56);
-    expect(snapWidth(20, 180, 480, 240, 56)).toBe(56);
+  it("drops to the rail the moment a drag goes under the floor", () => {
+    expect(snapWidth(239, 240, 480, 240, 56, false)).toBe(56);
+    expect(snapWidth(20, 240, 480, 240, 56, false)).toBe(56);
+    expect(snapWidth(240, 240, 480, 240, 56, false)).toBe(240);
   });
 
-  it("holds at the floor short of halfway", () => {
-    expect(snapWidth(119, 180, 480, 240, 56)).toBe(180);
-    expect(snapWidth(170, 180, 480, 240, 56)).toBe(180);
+  it("opens from the rail once a drag crosses halfway to the floor", () => {
+    expect(snapWidth(147, 240, 480, 240, 56, true)).toBe(56);
+    expect(snapWidth(149, 240, 480, 240, 56, true)).toBe(240);
   });
 
   it("leaves the range above the floor alone", () => {
-    expect(snapWidth(200, 180, 480, 240, 56)).toBe(200);
-    expect(snapWidth(236, 180, 480, 240, 56)).toBe(240);
+    expect(snapWidth(300, 240, 480, 240, 56, false)).toBe(300);
+    expect(snapWidth(246, 240, 480, 240, 56, false)).toBe(240);
   });
 });
 

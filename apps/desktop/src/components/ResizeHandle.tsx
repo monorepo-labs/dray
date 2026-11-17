@@ -160,7 +160,9 @@ export function useResizable({
   const columnFloor = useChatFloor();
   const bounds = paneBounds(min, useViewportWidth(), useSeniorPanes(pane), floor ?? columnFloor);
   const clamp = useCallback(
-    (raw: number) => snapWidth(raw, bounds.min, bounds.max, initial, rail),
+    // A stored width is judged as if from the rail, so one saved under an
+    // older, lower floor opens rather than dropping to the rail.
+    (raw: number, fromRail = true) => snapWidth(raw, bounds.min, bounds.max, initial, rail, fromRail),
     [bounds.min, bounds.max, initial, rail],
   );
 
@@ -233,7 +235,7 @@ export function useResizable({
         const start = from.current;
         if (!start) return;
         const moved = edge === "right" ? e.clientX - start.x : start.x - e.clientX;
-        setStored(clamp(start.width + moved));
+        setStored(clamp(start.width + moved, start.width === rail));
       }}
       onPointerUp={end}
       onPointerCancel={end}
