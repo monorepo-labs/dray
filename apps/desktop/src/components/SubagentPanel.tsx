@@ -86,7 +86,7 @@ export function RunSection({
           </Button>
         )}
       </div>
-      <div className="flex flex-col gap-0.5 px-1.5 pb-2">
+      <div className="flex flex-col gap-0.5 px-1 pb-2">
         {runs.map((run) => (
           <RunRow
             key={run.id}
@@ -135,11 +135,11 @@ function spawnCommand(run: SubagentRun): string | null {
 /// the chat's subagent row carries, or a check once a subagent is done. No
 /// tile, which read as a control; the slot keeps every title on one line.
 ///
-/// `bare` narrows the slot for a run with no Stop beside it (fx's), whose rows
-/// were never lined up with the others.
-function RunMark({ run, shell, bare }: { run: SubagentRun; shell: boolean; bare: boolean }) {
+/// The slot is a bot task row's face, 20px wide, so a bot's Tasks tab draws
+/// tasks and runs on one icon column and one title column.
+function RunMark({ run, shell }: { run: SubagentRun; shell: boolean }) {
   return (
-    <span className={cn("flex h-4 shrink-0 items-center justify-center", bare ? "w-4" : "w-7")}>
+    <span className="flex h-4 w-5 shrink-0 items-center justify-center">
       {shell ? (
         <SquareTerminal aria-label="Shell" className="size-3.5 text-muted-foreground" />
       ) : run.done ? (
@@ -237,8 +237,7 @@ export function RunRow({
           onClick={opens ? onOpen : onToggle}
           disabled={!opens && !expands}
           className={cn(
-            "flex min-w-0 flex-1 cursor-default items-center pl-2.5 text-left",
-            bare ? "gap-2" : "gap-2.5",
+            "flex min-w-0 flex-1 cursor-default items-center gap-2 pl-2 text-left",
             // A finished subagent is history: the shorter row is half of how it
             // steps back, the bare check the other. A bare row is one height
             // throughout, so nothing jumps when its run ends.
@@ -246,7 +245,7 @@ export function RunRow({
             stoppable ? "pr-1" : "pr-2.5",
           )}
         >
-          <RunMark run={run} shell={shell} bare={bare} />
+          <RunMark run={run} shell={shell} />
           <span className="min-w-0 flex-1">
             {/* Flex parents, because `shimmer-text` is inline-block: in a line
                 box it sits on the baseline and lifts the text off centre. */}
@@ -314,7 +313,7 @@ export function RunRow({
 
       {open && expands && (
         // Indented to the title, past the mark's tile and its gap.
-        <div className="flex flex-col gap-2 pr-2.5 pb-2 pl-12">
+        <div className="flex flex-col gap-2 pr-2.5 pb-2 pl-9">
           {command ? (
             <div className="rounded-md bg-muted/70 px-2 py-1.5 font-mono text-xs break-all whitespace-pre-wrap text-sidebar-foreground">
               <span className="text-muted-foreground">$ </span>

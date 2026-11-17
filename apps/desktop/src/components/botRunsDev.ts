@@ -182,6 +182,6 @@ export const DEV_TASKS: CrewRow[] = [
 
 export const DEV_PRS: Record<string, PrMark> = {
   "dev-task-ready": pr(1180, {}),
-  "dev-task-checks": pr(1183, { checksState: "RUNNING" }),
+  "dev-task-checks": pr(1183, { checksState: "RUNNING", mergeStateStatus: "BLOCKED" }),
   "dev-task-merged": pr(1171, { state: "MERGED" }),
 };

@@ -150,7 +150,7 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
             )}
           </div>
           {(running.length > 0 || open) && (
-            <div className="flex flex-col gap-0.5 px-1.5 pb-2">
+            <div className="flex flex-col gap-0.5 px-1 pb-2">
               {running.map((run) => row(run))}
               {open && completed.map((run) => row(run, run.lastAt))}
               {open && older?.next && (
@@ -160,9 +160,9 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
                   type="button"
                   disabled={loading}
                   onClick={() => void more()}
-                  className="flex cursor-default items-center gap-2.5 rounded-lg py-1 pr-2.5 pl-2.5 text-left text-ui text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:hover:bg-transparent"
+                  className="flex cursor-default items-center gap-2 rounded-lg py-1 pr-2.5 pl-2 text-left text-ui text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:hover:bg-transparent"
                 >
-                  <span className="flex h-4 w-7 shrink-0 items-center justify-center">
+                  <span className="flex h-4 w-5 shrink-0 items-center justify-center">
                     {loading ? <Spinner className="size-3.5" /> : <Plus className="size-3.5" />}
                   </span>
                   {loading ? "Loading…" : "Load more"}
