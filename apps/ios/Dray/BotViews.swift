@@ -230,6 +230,19 @@ struct BotChatRows: View {
     }
 }
 
+/// An agent's reply as a bot chat draws it: a card-filled bubble short of the trailing edge.
+struct ReplyBubble: View {
+    let text: String
+
+    var body: some View {
+        MarkdownText(text: text)
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, 10)
+            .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+            .padding(.trailing, 32)
+    }
+}
+
 /// Where the replies the reader has not seen begin, as a messenger marks it.
 struct NewDivider: View {
     var body: some View {
@@ -275,11 +288,7 @@ private struct BotRowView: View {
             case .user(_, let text, let images, let reaction, _):
                 UserBubble(text: text, from: nil, images: images, reaction: reaction)
             case .assistant(_, let text, _):
-                MarkdownText(text: text)
-                    .padding(.horizontal, Theme.Space.m)
-                    .padding(.vertical, 10)
-                    .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
-                    .padding(.trailing, 32)
+                ReplyBubble(text: text)
             case .notice(_, let text, _):
                 FailureRow(text: text)
             case .card(_, let card, _):
@@ -425,7 +434,7 @@ struct MergeCardView: View {
             if compact || pr?.state == "MERGED" || (read && pr == nil) {
                 HStack(spacing: 6) {
                     if let pr { PrGlyph(mark: pr, size: 14) }
-                    Link(pr?.state == "MERGED" ? "Merged #\(card.number)" : "#\(card.number)", destination: URL(string: card.url)!)
+                    Link(pr?.state == "MERGED" ? "Merged #\(String(card.number))" : "#\(String(card.number))", destination: URL(string: card.url)!)
                         .foregroundStyle(Theme.secondary)
                     Text("·").foregroundStyle(Theme.tertiary)
                     Button { task.map { openTask?($0) } } label: { Chip(face: BotFace(seed: card.taskId, size: 16), title: title) }
@@ -447,7 +456,7 @@ struct MergeCardView: View {
                         .disabled(task == nil)
                         HStack(spacing: 5) {
                             if let pr { PrGlyph(mark: pr, size: 14) }
-                            Link("#\(card.number)", destination: URL(string: card.url)!)
+                            Link("#\(String(card.number))", destination: URL(string: card.url)!)
                                 .foregroundStyle(Theme.secondary)
                                 .font(Theme.Font.footnote.font.monospacedDigit())
                             if pr?.state == "OPEN" && pr?.checksState == "RUNNING" { ChecksSpinner().frame(width: 13, height: 13) }
@@ -543,7 +552,7 @@ struct MergeTaskButton: View {
         }
         .buttonStyle(.plain)
         .disabled(merging)
-        .confirmationDialog("\(method.label) #\(number)?", isPresented: $confirming, titleVisibility: .visible) {
+        .confirmationDialog("\(method.label) #\(String(number))?", isPresented: $confirming, titleVisibility: .visible) {
             ForEach(MergeMethod.allCases, id: \.self) { m in
                 Button(m.label) {
                     method = m
@@ -615,19 +624,27 @@ func prStatus(_ pr: PrMark) -> String {
     }
 }
 
-/// The card at the foot of a bot's chat: its tasks that wait on the reader. X
-/// puts it away until one of them moves and stalls again.
+/// Rows drawn before "Show N more", so a long card doesn't push the chat off screen.
+private let stallRowsShown = 5
+
+/// The card at the foot of a bot's chat: its tasks that wait on the reader. A
+/// tap opens a task's last message in a sheet, read off the end of its own log,
+/// rather than the task itself or the bot's reply far up a long chat (#1181).
+/// X puts the card away until one of them moves and stalls again.
 struct StalledCard: View {
     @Environment(Store.self) private var store
     @Environment(\.openTask) private var openTask
     let tasks: [SessionKey]
     @AppStorage("bot.dismissedStalls") private var dismissedRaw = ""
+    @State private var picked: Stall?
+    @State private var all = false
 
     var body: some View {
         // Stalls ripen with time alone, so the card looks again each minute.
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let dismissed = Set(dismissedRaw.split(separator: "\n").map(String.init))
             let rows = store.stalls(tasks, now: context.date).filter { !dismissed.contains($0.id) }
+            let capped = !all && rows.count > stallRowsShown
             if !rows.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
@@ -643,10 +660,30 @@ struct StalledCard: View {
                         .accessibilityLabel("Dismiss")
                     }
                     .padding(.leading, Theme.Space.s)
-                    ForEach(rows) { row($0) }
+                    ForEach(capped ? Array(rows.prefix(stallRowsShown)) : rows) { row($0) }
+                    if rows.count > stallRowsShown {
+                        Button { withAnimation(Theme.motion) { all.toggle() } } label: {
+                            Text(capped ? "Show \(rows.count - stallRowsShown) more" : "Show less")
+                                .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
+                                .frame(maxWidth: .infinity, minHeight: 34)
+                        }
+                        .buttonStyle(RowButtonStyle())
+                    }
                 }
                 .padding(Theme.Space.xs)
                 .overlay(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous).strokeBorder(Theme.border))
+            }
+        }
+        // Tasks are hidden, so the list never reads their repos' marks, and a ready PR
+        // would sit here as a plain waiting row with no Merge.
+        .task(id: tasks) {
+            let repos = Set(tasks.compactMap { key in store.items[key].map { ProjectKey(server: key.server, path: $0.projectPath) } })
+            for repo in repos { await store.ensureMarks(repo.server, repo.path) }
+        }
+        .sheet(item: $picked) { s in
+            TaskMessageSheet(task: s.task, title: s.item.title) {
+                picked = nil
+                openTask?(s.task)
             }
         }
     }
@@ -654,7 +691,7 @@ struct StalledCard: View {
     private func row(_ s: Stall) -> some View {
         let need = s.item.need.flatMap { n in parseDate(n.at).flatMap { at in
             parseDate(s.item.modified).map { at >= $0 ? n.text : nil } } ?? nil }
-        return Button { openTask?(s.task) } label: {
+        return Button { picked = s } label: {
             HStack(alignment: .top, spacing: 10) {
                 BotFace(seed: s.task.id, size: 32)
                 VStack(alignment: .leading, spacing: 3) {
@@ -663,7 +700,7 @@ struct StalledCard: View {
                             .font(Theme.Font.subhead).foregroundStyle(Theme.text).lineLimit(1)
                         if let pr = s.pr {
                             PrGlyph(mark: pr, size: 13)
-                            Text("#\(pr.number)").font(Theme.Font.footnote.font.monospacedDigit())
+                            Text("#\(String(pr.number))").font(Theme.Font.footnote.font.monospacedDigit())
                                 .foregroundStyle(s.ready ? Theme.add : Theme.secondary)
                         }
                         Spacer(minLength: 0)
@@ -690,6 +727,111 @@ struct StalledCard: View {
             .contentShape(.rect)
         }
         .buttonStyle(RowButtonStyle())
+    }
+}
+
+/// A Waiting on you task's last message, the desktop's `TaskMessage` in a sheet.
+/// Drawn against the task's own server, so a picture loads from its machine.
+struct TaskMessageSheet: View {
+    @Environment(Store.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let task: SessionKey
+    let title: String
+    let open: () -> Void
+    /// `nil` inside `.done` is a task that has written nothing; a read that
+    /// errored or hung is `.failed`, never that.
+    private enum Read { case reading, failed, done(String?) }
+    @State private var read = Read.reading
+    @State private var tries = 0
+
+    private var item: SessionItem? { store.items[task] }
+    private var pr: PrMark? { item.flatMap { store.prMark(task, $0) } }
+
+    private func merge(_ item: SessionItem, _ pr: PrMark) -> some View {
+        // Fixed, or the bar proposes less than "Merge" needs and cuts it to "Me…".
+        MergeTaskButton(server: task.server, taskId: task.id, cwd: item.projectPath, number: pr.number, branch: pr.headRefName)
+            .fixedSize()
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Space.m) {
+                    // Over the message, not in the bar: there, Done and Merge left a long title a word or two.
+                    Text(title.isEmpty ? "Untitled" : title)
+                        .font(Theme.Font.headline).foregroundStyle(Theme.text)
+                    switch read {
+                    case .reading:
+                        VStack(alignment: .leading, spacing: 10) {
+                            Capsule().fill(Theme.tertiary.opacity(0.3)).frame(width: 240, height: 12)
+                            Capsule().fill(Theme.tertiary.opacity(0.3)).frame(width: 160, height: 12)
+                        }
+                        .shimmer()
+                        .accessibilityElement()
+                        .accessibilityLabel("Loading")
+                    case .failed:
+                        VStack(alignment: .leading, spacing: Theme.Space.s) {
+                            Text("Couldn't read this task's last message.").foregroundStyle(Theme.secondary)
+                            Button("Try again") { tries += 1 }.foregroundStyle(Theme.text)
+                        }
+                        .font(Theme.Font.subhead)
+                    case .done(let text?):
+                        ReplyBubble(text: text)
+                    case .done(nil):
+                        Text("This task hasn't written anything yet.")
+                            .font(Theme.Font.subhead).foregroundStyle(Theme.secondary)
+                    }
+                    Button(action: open) {
+                        HStack(spacing: 4) {
+                            Text("Open task")
+                            Image(systemName: "arrow.up.right").font(Theme.Font.footnoteStrong.font)
+                        }
+                        .font(Theme.Font.pill)
+                        .foregroundStyle(Theme.secondary)
+                        .padding(.horizontal, 14)
+                        .frame(height: 34)
+                        .background(Theme.raised, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open task")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(Theme.Space.l)
+            }
+            .environment(\.imageServer, store.connection(task.server))
+            // The bot chat's viewer pages its own turn; a picture here opens on its own.
+            .environment(\.openImage, nil)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                // The primary action, held to the row's gate: a PR GitHub calls ready.
+                if let item, let pr, prStatus(pr) == "ready" {
+                    if #available(iOS 26.0, *) {
+                        ToolbarItem(placement: .primaryAction) { merge(item, pr) }
+                            // Its own green capsule, not one inside the bar's glass.
+                            .sharedBackgroundVisibility(.hidden)
+                    } else {
+                        ToolbarItem(placement: .primaryAction) { merge(item, pr) }
+                    }
+                }
+            }
+            .background(Theme.page.ignoresSafeArea())
+        }
+        .presentationDetents([.medium, .large])
+        .presentationBackground(Theme.page)
+        // A merge settles the task: nothing left to read or open.
+        .onChange(of: item == nil || pr.map(prStatus) == "merged") { _, gone in if gone { dismiss() } }
+        .task(id: tries) {
+            read = .reading
+            do {
+                // The desktop's `READ_TIMEOUT_MS`: a hung server gives up rather than spin.
+                let got: [String: BotPreview] = try await store.call(
+                    task.server, "bot_previews", ["sessionIds": .array([.string(task.id)])], timeout: .seconds(8))
+                read = got[task.id].map { .done($0.text) } ?? .failed
+            } catch {
+                read = .failed
+            }
+        }
     }
 }
 
@@ -785,7 +927,7 @@ struct BotTasksSheet: View {
                 if let pr {
                     if pr.state == "OPEN" && pr.checksState == "RUNNING" { ChecksSpinner().frame(width: 14, height: 14) }
                     else { PrGlyph(mark: pr, size: 14) }
-                    Text("#\(pr.number)").font(Theme.Font.footnote.font.monospacedDigit()).foregroundStyle(Theme.secondary)
+                    Text("#\(String(pr.number))").font(Theme.Font.footnote.font.monospacedDigit()).foregroundStyle(Theme.secondary)
                 }
             }
             .padding(.horizontal, Theme.Space.m)
