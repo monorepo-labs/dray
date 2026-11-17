@@ -1,16 +1,21 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { after } from "next/server";
+import { markRunning, meter, settledMachines, standingOf } from "./billing";
 import { boat, BoatError, listByLabel, type Sandbox } from "./boat";
 
 /// Dray Cloud's control plane: one boat sandbox per task, each labelled
-/// `dray=cloud` and listed by label, so nothing here keeps state. The contract
-/// is issue #857.
+/// `dray=cloud` and listed by label, so nothing here keeps machine state. The
+/// contract is issue #857; billing's meter readings live in Postgres (#1014).
 
 const PORT = 7317;
 const TTL_SECONDS = 900;
 const LABEL = { dray: "cloud" };
 const SNAPSHOT = "dray-cloud";
 const SANDBOX_ID = /^bx_[23456789abcdefghjkmnpqrstuvwxyz]{8}$/;
+/// The label naming the user a machine bills to, their Dray account id. A
+/// machine without one, made under the shared `DRAY_CLOUD_KEY`, is never
+/// metered or stopped for hours.
+const USER_LABEL = "user";
 
 export type State = "starting" | "running" | "stopping" | "stopped" | "error";
 export type Machine = { id: string; state: State; url: string | null };
@@ -65,6 +70,16 @@ const error = (status: number, error: string, message?: string) =>
 type Secrets = { serveToken: string; machineSecret: string };
 type Who = "client" | "machine";
 
+/// The origin the client reached, which a new machine heartbeats back to and
+/// a refusal links to. Read off the headers: Next rewrites `req.url`'s host to
+/// its own idea of it.
+export function origin(req: Request) {
+  const url = new URL(req.url);
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? url.host;
+  const proto = req.headers.get("x-forwarded-proto")?.split(",")[0] ?? url.protocol.slice(0, -1);
+  return `${proto}://${host}`;
+}
+
 /// Wraps a route: 404 while `DRAY_CLOUD_KEY` is unset, 401 for the wrong
 /// bearer, and boat's failures turned into an answer. Env is read per request
 /// so a route never caches a value from build time.
@@ -112,19 +127,35 @@ export async function machines(serveToken: string) {
 }
 
 /// A new machine for one task, created from the saved snapshot. Never shared,
-/// so a task's checkout, agents and memory are its own.
-export async function startMachine(origin: string, secrets: Secrets): Promise<Response> {
-  return Response.json({ machine: await create(origin, secrets.serveToken, secrets.machineSecret) });
+/// so a task's checkout, agents and memory are its own. `user` is who pays for
+/// it, refused here while that user has no hours left.
+export async function startMachine(origin: string, secrets: Secrets, user: string | null = null): Promise<Response> {
+  const refused = user && (await refusal(user, origin));
+  if (refused) return refused;
+  return Response.json({ machine: await create(origin, secrets.serveToken, secrets.machineSecret, user) });
 }
 
-async function create(origin: string, serveToken: string, machineSecret: string) {
+/// A 402 naming what to do, or null while the user may run machines.
+async function refusal(user: string, origin: string): Promise<Response | null> {
+  const { standing } = await standingOf(user);
+  if (standing.canRun) return null;
+  const page = `${origin}/app/account/billing`;
+  return standing.plan
+    ? error(402, "out_of_hours", `This month's Dray Cloud hours are used up. Turn on overage or change plan at ${page}`)
+    : error(402, "no_plan", `Dray Cloud needs a plan. Choose one at ${page}`);
+}
+
+const ownerOf = (s: Sandbox) => s.labels?.[USER_LABEL] ?? null;
+const awake = (s: Sandbox) => ["starting", "running"].includes(stateOf(s));
+
+async function create(origin: string, serveToken: string, machineSecret: string, user: string | null) {
   const res = await boat<{ sandbox: Sandbox; hostedPorts?: { url?: string; error?: string }[] }>(
     "POST",
     "/sandboxes",
     {
       from: SNAPSHOT,
       noEnv: true,
-      labels: LABEL,
+      labels: user ? { ...LABEL, [USER_LABEL]: user } : LABEL,
       ttlSeconds: TTL_SECONDS,
       hostedPorts: [{ port: PORT, public: true, localhost: true }],
       files: [
@@ -178,12 +209,16 @@ function hostWhenUp(id: string) {
   });
 }
 
-export async function resumeMachine(id: string): Promise<Response> {
+export async function resumeMachine(id: string, origin: string): Promise<Response> {
   const s = await find(id);
   if (!s) return error(404, "not_found");
-  const state = stateOf(s);
-  if (state === "running" || state === "starting") return Response.json({ machine: machine(s) });
-  return Response.json({ machine: await resume(s) });
+  if (awake(s)) return Response.json({ machine: machine(s) });
+  const user = ownerOf(s);
+  const refused = user && (await refusal(user, origin));
+  if (refused) return refused;
+  const resumed = await resume(s);
+  if (user) await markRunning(s.id);
+  return Response.json({ machine: resumed });
 }
 
 export async function stopMachine(id: string): Promise<Response> {
@@ -198,6 +233,17 @@ export async function stopMachine(id: string): Promise<Response> {
 export async function deleteMachine(id: string): Promise<Response> {
   const s = await find(id);
   if (s) {
+    // Boat forgets a deleted sandbox's meter, so its last stretch is read now,
+    // and a reading that fails keeps the machine for the app's retry.
+    const user = ownerOf(s);
+    if (user) {
+      try {
+        await meter(user, [s.id], true);
+      } catch (e) {
+        console.error(`final usage ${s.id}:`, e);
+        return error(503, "usage_unread", "Couldn't read this machine's usage before deleting it. Try again.");
+      }
+    }
     // Boat refuses a delete whose confirm header does not name the sandbox.
     await boat("DELETE", `/sandboxes/${s.id}`, undefined, false, { "X-Ascii-Confirm-Delete": s.id });
   }
@@ -205,16 +251,58 @@ export async function deleteMachine(id: string): Promise<Response> {
 }
 
 /// A busy machine pushes its auto-stop out again; an idle one lets it run.
+/// Each beat also reads the machine's meter, and a user out of hours has every
+/// awake machine stopped rather than kept up.
 export async function heartbeat(req: Request): Promise<Response> {
   const body = await req.json().catch(() => null);
   if (typeof body?.sandbox !== "string" || typeof body?.busy !== "boolean") {
     return error(400, "invalid_body");
   }
-  if (body.busy) {
-    const s = await find(body.sandbox);
-    if (s && ["starting", "running"].includes(stateOf(s))) {
-      await boat("PATCH", `/sandboxes/${s.id}`, { ttlSeconds: TTL_SECONDS });
-    }
+  const s = await find(body.sandbox);
+  if (!s) return new Response(null, { status: 204 });
+  const user = ownerOf(s);
+  if (user && !(await meter(user, [s.id])).canRun) {
+    await stopAwake(user);
+    return new Response(null, { status: 204 });
+  }
+  if (body.busy && awake(s)) {
+    await boat("PATCH", `/sandboxes/${s.id}`, { ttlSeconds: TTL_SECONDS });
   }
   return new Response(null, { status: 204 });
+}
+
+/// Stops every awake machine of a user. A stop that fails is left for the
+/// next beat or sweep, which will find the user still out.
+async function stopAwake(user: string, all?: Sandbox[]) {
+  const mine = (all ?? (await listMachines())).filter((s) => ownerOf(s) === user && awake(s));
+  await Promise.all(
+    mine.map((s) =>
+      boat("POST", `/sandboxes/${s.id}/stop`).catch((e) => console.error(`stopping ${s.id} for hours:`, e)),
+    ),
+  );
+  return mine.length;
+}
+
+/// The cron's pass over every billed machine. It reads what heartbeats can't
+/// (a machine whose server died, the last stretch before an auto-stop) and
+/// stops a user that ran out between beats. A machine read while stopped this
+/// period is skipped: only a resume through here can wake it, and a resume
+/// makes it awake again.
+export async function sweep(): Promise<{ users: number; read: number; stopped: number }> {
+  const all = await listMachines();
+  const byUser = new Map<string, Sandbox[]>();
+  for (const s of all) {
+    const user = ownerOf(s);
+    if (user) byUser.set(user, [...(byUser.get(user) ?? []), s]);
+  }
+  let read = 0;
+  let stopped = 0;
+  for (const [user, machines] of byUser) {
+    const { billing } = await standingOf(user);
+    const settled = billing?.periodStart ? await settledMachines(user, billing.periodStart) : new Set<string>();
+    const ids = machines.filter((s) => awake(s) || !settled.has(s.id)).map((s) => s.id);
+    read += ids.length;
+    if (!(await meter(user, ids)).canRun) stopped += await stopAwake(user, all);
+  }
+  return { users: byUser.size, read, stopped };
 }

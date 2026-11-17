@@ -136,10 +136,31 @@ export async function fakeBoat({ key, org, pageSize = 2 }) {
       });
     }
 
-    const m = path.match(/^\/sandboxes\/(bx_[a-z0-9]{8})(?:\/(fork|resume|stop|host))?$/);
+    const m = path.match(/^\/sandboxes\/(bx_[a-z0-9]{8})(?:\/(fork|resume|stop|host|usage))?$/);
     const s = m && sandboxes.get(m[1]);
     if (!s) return fail(res, 404, "not_found");
     const action = m[2];
+
+    if (action === "usage" && req.method === "GET") {
+      const bad = [...url.searchParams.keys()].find((k) => k !== "since" && k !== "until");
+      if (bad) return fail(res, 400, "invalid_query", bad);
+      // A test sets `usageSeconds` to what boat's meter would read, and
+      // `usageFails` to have the read fail.
+      if (s.usageFails) return fail(res, 500, "internal_error");
+      return ok(res, 200, {
+        ok: true,
+        type: "sandbox.usage",
+        sandboxId: s.id,
+        sandboxType: "default",
+        billingMultiplier: 1,
+        since: url.searchParams.get("since") ?? s.createdAt,
+        until: url.searchParams.get("until") ?? new Date(clock).toISOString(),
+        seconds: s.usageSeconds ?? 0,
+        dollars: (s.usageSeconds ?? 0) / 100000,
+        secondsPerDollar: 100000,
+        running: RUNNING.has(s.state) || s.state === "provisioning",
+      });
+    }
 
     if (!action && req.method === "GET") {
       // Each read moves a starting sandbox on, so a poll ends.
