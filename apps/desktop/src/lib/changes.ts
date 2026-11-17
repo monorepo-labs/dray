@@ -47,13 +47,30 @@ type ChangeRange = Range & {
 /// — or the user in their editor — changed in the same repo since that prompt
 /// gets attributed to this one. A turn is short enough for that overlap to be
 /// unlikely; a session is not.
-export function changeRange(events: AgentEvent[]): ChangeRange {
+///
+/// `older` is what `writingTurns` found above the held events, for a transcript
+/// holding only its tail: the turn that wrote may sit above it.
+export function changeRange(events: AgentEvent[], older: readonly WritingRange[] = []): ChangeRange {
+  const { ranges, newest } = writingTurns(events, 2, true);
+  const [shown, previous] = [...ranges, ...older];
+  return { ...(shown ?? newest ?? { baseline: null, head: null }), previous: previous ?? null };
+}
+
+export type WritingRange = Range & { baseline: string };
+
+/// Up to `limit` turns that changed something, newest first, and the newest
+/// turn whatever it did, for when none did: the panel then says so, rather
+/// than claiming there is no snapshot at all. `running` lets the newest turn
+/// count while it has no head yet; a page read above a tail never holds it.
+export function writingTurns(
+  events: readonly AgentEvent[],
+  limit: number,
+  running: boolean,
+): { ranges: WritingRange[]; newest: WritingRange | null } {
   let head: string | null = null;
-  // The newest turn whatever it did, for when none changed anything: the panel
-  // then says so, rather than claiming there is no snapshot at all.
-  let newest: Range | null = null;
-  let shown: Range | null = null;
-  for (let i = events.length - 1; i >= 0; i--) {
+  let newest: WritingRange | null = null;
+  const ranges: WritingRange[] = [];
+  for (let i = events.length - 1; i >= 0 && ranges.length < limit; i--) {
     const payload = events[i].payload;
     // The newest head seen walking back to a prompt is that turn's end, which
     // also covers a background subagent's report-back turn: its closing
@@ -68,11 +85,10 @@ export function changeRange(events: AgentEvent[]): ChangeRange {
     if (range.head === range.baseline) continue;
     // Only the newest turn can still be running. An older one left open never
     // closed, and diffing it against "now" is what the frozen head avoids.
-    if (!range.head && range !== newest) continue;
-    if (shown) return { ...shown, previous: range };
-    shown = range;
+    if (!range.head && !(running && range === newest)) continue;
+    ranges.push(range);
   }
-  return { ...(shown ?? newest ?? { baseline: null, head: null }), previous: null };
+  return { ranges, newest };
 }
 
 /// The newest finished tool call's id, or "" where there is none.
