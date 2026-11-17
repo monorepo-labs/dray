@@ -8,7 +8,7 @@ import { fileSrc, invoke, qualify, serverOfSession } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { SessionPage } from "@/types/events";
 
-/// What one Load more press goes looking for.
+/// How many the grid opens on, and how many each Load more adds.
 const LOAD_MORE = 10;
 
 type MediaFilter = "all" | "you" | "ai";
@@ -19,9 +19,9 @@ const MEDIA_FILTERS: { id: MediaFilter; label: string }[] = [
 ];
 
 /// A contact sheet of every picture and recording in `logs`, each opening the
-/// transcript's own viewer to step through the set, with Load more reading
-/// further back than the transcript holds. Uncapped: a grid that can grow by
-/// a button has no business hiding rows behind a count.
+/// transcript's own viewer to step through the set. Opens on the newest ten
+/// and Load more adds ten, whatever the chat has paged in meanwhile: from
+/// what the transcript already holds where it can, from the log past that.
 ///
 /// `logs` is newest first and is more than one only for a bot's chat, which
 /// an agent switch splits into several sessions read as one conversation.
@@ -32,6 +32,9 @@ export default function AttachmentGrid({ logs }: { logs: HeldLog[] }) {
   const [filter, setFilter] = useState<MediaFilter>("all");
   // Per session, since the pane stays mounted across a session switch.
   const [older, setOlder] = useState<Record<string, OlderMedia>>({});
+  const [shownBy, setShownBy] = useState<Record<string, number>>({});
+  const key = logs[0]?.sessionId ?? "";
+  const shown = shownBy[key] ?? LOAD_MORE;
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
 
@@ -50,10 +53,14 @@ export default function AttachmentGrid({ logs }: { logs: HeldLog[] }) {
           },
     )
     .filter((item): item is LightboxImage => Boolean(item.src));
-  const at = items.findIndex((item) => item.src === openSrc);
-  const hasMore = logs.some((log) => olderCursor(log, older[log.sessionId]) != null);
+  const visible = items.slice(0, shown);
+  const at = visible.findIndex((item) => item.src === openSrc);
+  const hasMore = items.length > shown || logs.some((log) => olderCursor(log, older[log.sessionId]) != null);
 
   const loadMore = async () => {
+    const showMore = () => setShownBy((prev) => ({ ...prev, [key]: shown + LOAD_MORE }));
+    // Already in hand: nothing to read.
+    if (items.length >= shown + LOAD_MORE) return showMore();
     setLoading(true);
     setFailed(false);
     try {
@@ -63,7 +70,8 @@ export default function AttachmentGrid({ logs }: { logs: HeldLog[] }) {
         invoke<SessionPage>("list_attachments", { sessionId, before, limit: LOAD_MORE }).catch(() =>
           invoke<SessionPage>("get_session_page", { sessionId, before, turns: 16 }),
         );
-      setOlder(await loadOlderMedia(logs, older, page, LOAD_MORE));
+      setOlder(await loadOlderMedia(logs, older, page, shown + LOAD_MORE - items.length));
+      showMore();
     } catch (e) {
       console.error("failed to load older attachments", e);
       setFailed(true);
@@ -74,7 +82,7 @@ export default function AttachmentGrid({ logs }: { logs: HeldLog[] }) {
 
   // Empty cells finish the last row, so the lines run the whole width rather
   // than stopping where the pictures do.
-  const filler = (6 - (items.length % 6)) % 6;
+  const filler = (6 - (visible.length % 6)) % 6;
   const cell = "aspect-square border-b-[0.5px] border-border [&:not(:nth-child(6n))]:border-r-[0.5px]";
 
   return (
@@ -101,14 +109,14 @@ export default function AttachmentGrid({ logs }: { logs: HeldLog[] }) {
           ))}
         </div>
       )}
-      {items.length === 0 ? (
+      {visible.length === 0 ? (
         <p className="px-3 py-2 text-ui text-muted-foreground">
           {media.length > 0 ? "Nothing here." : hasMore ? "No attachments in recent messages." : "No attachments yet."}
         </p>
       ) : (
         // Edge to edge, with the panel's own sides as the outer frame.
         <div className="grid grid-cols-6 border-t-[0.5px] border-border">
-          {items.map((item) => (
+          {visible.map((item) => (
             <button
               key={item.src}
               type="button"
@@ -137,9 +145,9 @@ export default function AttachmentGrid({ logs }: { logs: HeldLog[] }) {
         </div>
       )}
       <ImageLightbox
-        images={items}
+        images={visible}
         index={at === -1 ? null : at}
-        onIndex={(i) => setOpenSrc(items[i].src)}
+        onIndex={(i) => setOpenSrc(visible[i].src)}
         onClose={() => setOpenSrc(null)}
       />
     </div>
