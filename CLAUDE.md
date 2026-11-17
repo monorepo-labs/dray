@@ -18,7 +18,7 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 **Default road = work → test → ready PR → `/greploop`.** No Codex reviewer sessions: that road only ran while Greptile credits were gone.
 
-1. Do the work, then test it for real — run it, not just compile it. A UI change = drive the running app yourself, screenshot or record it, fix what you find ([Testing in the app](#testing-in-the-app)).
+1. Do the work, then test it for real — run it, not just compile it. Tests = `pnpm test:affected`, never the whole of every suite. A UI change = drive the running app yourself, screenshot or record it, fix what you find ([Testing in the app](#testing-in-the-app)).
 2. Commit, push, open the PR **ready**. Greptile review it on its own.
 3. **Always run `/greploop` right after opening the PR**, unasked. It waits for Greptile's review and fixes what is real. Never post `@greptile review` — Greptile reviews every push on its own, so skip the loop's trigger step.
 4. **Inside greploop, push each round's fixes yourself and keep looping** — fix, test, commit, push, wait for the next review — until 5/5 or the loop's cap. That push is pre-approved and needs no ask. Retest a fix that touches UI the same way. Stop and wait instead when a fix changes something only a human can check (below), or when he says not to push.
@@ -103,6 +103,7 @@ That = real entry point. `pnpm tauri` = shim ([scripts/tauri.mjs](apps/desktop/s
 
 **Shim also pick dev port, and it only side that can.** Vite and Tauri have to agree on one, and both start from here — so shim ask the OS for a free one (`listen(0)`), hand it to Vite as `DRAY_DEV_PORT` and to Tauri as second `--config` carrying `build.devUrl`. Fixed 1420 was hard failure before, which = one worktree's dev build refusing to start because another's already running. `strictPort: true` **stay** on Vite side: port already known free, and Vite wandering off it leave Tauri loading URL nothing serve.
 
+- `pnpm test:affected` — **the test step**, run from anywhere in the repo: only the suites this branch's changes against `origin/main` can reach, uncommitted files included ([test-affected.mjs](scripts/test-affected.mjs)). A changed crate runs `cargo test` whole, and so does every crate depending on it by `path`; vitest runs `related` on the changed files; `apps/web` runs whole when touched. A file read by path rather than imported (`include_str!`, a fixture a test opens) counts against whatever names it. A root config or lockfile, or an app's own top-level config, runs everything. `--dry-run` prints the plan. **`--full` runs every suite, and is the rule before a release.**
 - `pnpm dev` — frontend only, port 1420 unless `DRAY_DEV_PORT` say otherwise. `invoke` do nothing in plain browser, so only useful for pure-CSS/layout work.
 - `pnpm build` — `tsc && vite build`. `pnpm tauri build` for bundled app.
 - `cd apps/desktop/src-tauri && cargo test` — Rust tests (parser + mapper + event-model compatibility, plus git and file index). Single test: `cargo test parses_complex_fixture`.
