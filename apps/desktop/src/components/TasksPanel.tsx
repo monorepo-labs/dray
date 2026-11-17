@@ -132,7 +132,7 @@ export default function TasksPanel({
   if (rows.length === 0) {
     return (
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <p className="px-4 py-6 text-ui text-muted-foreground">
+        <p className="px-3 py-6 text-ui text-muted-foreground">
           Nothing handed off yet. Work this bot starts shows up here.
         </p>
         {children}
