@@ -5,8 +5,9 @@
 //! `star-prompt.json` rather than the webview's storage, whose origin moves
 //! with the dev port.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
 
 use crate::{github, store};
 
@@ -15,7 +16,9 @@ const REPO: &str = "monorepo-labs/dray";
 /// The merge counts each ask waits for, in order.
 const ASK_AT: [u32; 2] = [1, 10];
 
-static LOCK: Mutex<()> = Mutex::const_new(());
+/// `gh` waits on the network with no deadline of its own, and the check runs
+/// under the file lock, so a stalled one would hold every later merge's count.
+const GH_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -50,11 +53,21 @@ fn home() -> Option<String> {
     std::env::home_dir()?.to_str().map(str::to_string)
 }
 
+/// `gh api` on Dray's star, against github.com whatever `GH_HOST` says, since
+/// that is where the card sends the reader.
+async fn star_api(method: &str) -> Result<String, String> {
+    let home = home().ok_or("no home directory")?;
+    let path = format!("user/starred/{REPO}");
+    let args = ["api", "--hostname", "github.com", "-X", method, &path];
+    tokio::time::timeout(GH_TIMEOUT, github::gh(&home, &args))
+        .await
+        .unwrap_or_else(|_| Err("gh timed out".into()))
+}
+
 /// Whether the reader's `gh` login has starred Dray, or `None` where it could
 /// not say — no `gh`, logged out, offline. The API answers 204 or 404.
 async fn has_starred() -> Option<bool> {
-    let home = home()?;
-    match github::gh(&home, &["api", &format!("user/starred/{REPO}")]).await {
+    match star_api("GET").await {
         Ok(_) => Some(true),
         Err(e) if e.contains("HTTP 404") => Some(false),
         Err(_) => None,
@@ -66,7 +79,8 @@ async fn has_starred() -> Option<bool> {
 /// and quitting with it open both count as asked.
 #[tauri::command]
 pub async fn note_merge_for_star() -> bool {
-    let _guard = LOCK.lock().await;
+    // Across processes: every worktree's dev build shares this file.
+    let _guard = store::lock_across_processes("star-prompt").await;
     let mut state = load().await;
     state.merges = state.merges.saturating_add(1);
     let ask = due(&state)
@@ -89,10 +103,9 @@ pub async fn note_merge_for_star() -> bool {
 /// repo page instead.
 #[tauri::command]
 pub async fn star_dray() -> Result<(), String> {
-    let home = home().ok_or("no home directory")?;
-    github::gh(&home, &["api", "-X", "PUT", &format!("user/starred/{REPO}")]).await?;
+    star_api("PUT").await?;
     crate::analytics::feature_used("github_starred");
-    let _guard = LOCK.lock().await;
+    let _guard = store::lock_across_processes("star-prompt").await;
     let mut state = load().await;
     state.starred = true;
     save(&state).await;
