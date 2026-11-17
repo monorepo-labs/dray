@@ -590,7 +590,7 @@ extension Store {
     // when it turned ready as the desktop tracks; a PR that goes green late shows sooner.
     func stalls(_ tasks: [SessionKey], now: Date = .now) -> [Stall] {
         tasks.compactMap { key -> Stall? in
-            guard let item = items[key], !item.busy, !isAsking(key), (self.tasks[key] ?? 0) == 0, item.aside != true,
+            guard let item = items[key], !item.busy, !isAsking(key), (self.tasks[key] ?? []).isEmpty, item.aside != true,
                   let touched = parseDate(item.modified), now.timeIntervalSince(touched) >= stallAfter else { return nil }
             let pr = prMark(key, item)
             // A draft's red check is stale by design, so it waits on the reader like any draft.
@@ -847,28 +847,28 @@ struct BotTasksSheet: View {
     /// The bot's server: a task on any other is marked with the server glyph, as on desktop.
     let server: UUID
     let tasks: [SessionKey]
+    /// The bot's chat, newest session first, whose subagents and shells list under the tasks.
+    var runs: [SessionKey] = []
     let open: (SessionKey) -> Void
 
     var body: some View {
         NavigationStack {
-            Group {
-                if tasks.isEmpty {
-                    Text("Nothing handed off yet. Work this bot starts shows up here.")
-                        .font(Theme.Font.subhead).foregroundStyle(Theme.secondary)
-                        .multilineTextAlignment(.center).frame(maxWidth: 280)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.bottom, 60)
-                } else {
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            ForEach(ordered, id: \.self) { key in
-                                if let item = store.items[key] { row(key, item) }
-                            }
-                        }
-                        .padding(.horizontal, Theme.Space.s)
-                        .padding(.top, Theme.Space.l)
+            ScrollView {
+                VStack(spacing: 0) {
+                    if tasks.isEmpty {
+                        Text("Nothing handed off yet. Work this bot starts shows up here.")
+                            .font(Theme.Font.subhead).foregroundStyle(Theme.secondary)
+                            .multilineTextAlignment(.center).frame(maxWidth: 280)
+                            .padding(.vertical, Theme.Space.xxl)
                     }
+                    ForEach(ordered, id: \.self) { key in
+                        if let item = store.items[key] { row(key, item) }
+                    }
+                    if !runs.isEmpty { RunsSections(keys: runs) }
                 }
+                .padding(.horizontal, Theme.Space.s)
+                .padding(.top, Theme.Space.l)
+                .padding(.bottom, Theme.Space.l)
             }
             .navigationTitle("Tasks")
             .navigationBarTitleDisplayMode(.inline)
@@ -894,7 +894,7 @@ struct BotTasksSheet: View {
                 if verdictOf(pr) == .ready { return 1 }
                 if ["checksRunning", "needsReview", "unknown"].contains(prStatus(pr)) { return 2 }
             }
-            if item.busy || (store.tasks[key] ?? 0) > 0 { return 4 }
+            if item.busy || !(store.tasks[key] ?? []).isEmpty { return 4 }
             return 3
         }
         return tasks.enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }.map(\.element)
@@ -910,7 +910,7 @@ struct BotTasksSheet: View {
             HStack(spacing: 10) {
                 Group {
                     if item.busy && !asking { Orb(.working) }
-                    else if (store.tasks[key] ?? 0) > 0 && !asking { Orb(.background) }
+                    else if !(store.tasks[key] ?? []).isEmpty && !asking { Orb(.background) }
                     else { BotFace(seed: key.id, size: 22) }
                 }
                 .frame(width: 22, height: 22)

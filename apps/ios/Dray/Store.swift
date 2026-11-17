@@ -88,7 +88,7 @@ final class Store {
     private(set) var serverRead: Set<SessionKey> = []
     /// An older page that could not be read; the newer turns stay on screen.
     private(set) var olderErrors: [SessionKey: String] = [:]
-    private(set) var tasks: [SessionKey: Int] = [:]
+    private(set) var tasks: [SessionKey: [BackgroundTask]] = [:]
     /// Each server's bots: any server can hold them (#887).
     private(set) var bots: [UUID: [Bot]] = [:] { didSet { keepList() } }
     /// Servers whose index was read since this launch: before that, an empty list
@@ -950,7 +950,7 @@ final class Store {
             for key in tasks.keys where key.server == server { tasks[key] = nil }
             for a in live.asks { asks[SessionKey(server: server, id: a.sessionId), default: []].append(a) }
             for t in live.tasks {
-                if case .backgroundTasks(let n) = t.payload { tasks[SessionKey(server: server, id: t.sessionId)] = n }
+                if case .backgroundTasks(let list) = t.payload { tasks[SessionKey(server: server, id: t.sessionId)] = list }
             }
             // This Mac's alone: its app reads the timers and answers Extend. Another
             // Mac's would name servers this one has never heard of.
@@ -1035,9 +1035,9 @@ final class Store {
             }
         case .permissionDecided(let id):
             retire(key, id)
-        case .backgroundTasks(let n):
-            tasks[key] = n
-            if n == 0 && items[key]?.busy != true { strand(key) }
+        case .backgroundTasks(let list):
+            tasks[key] = list
+            if list.isEmpty && items[key]?.busy != true { strand(key) }
         case .userMessage(let text, _, _, _, _, _, _):
             queued[key]?.removeAll { $0.text == text }
         default:
@@ -1049,7 +1049,7 @@ final class Store {
     /// Drops a session's cards once nothing could answer them: no turn
     /// running and no background task left — the server's own rule.
     private func strand(_ key: SessionKey) {
-        if items[key]?.busy != true && (tasks[key] ?? 0) == 0 { asks[key] = nil }
+        if items[key]?.busy != true && (tasks[key] ?? []).isEmpty { asks[key] = nil }
     }
 }
 

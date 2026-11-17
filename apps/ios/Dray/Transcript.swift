@@ -23,6 +23,8 @@ struct ToolCall: Identifiable {
     let output: String?
     let state: ToolState
     var images: [ImageRef] = []
+    /// The harness's id for the call, which a subagent's events name it by.
+    var callId: String?
 
     /// What the row names beside its verb — the desktop's `toolSummary`.
     var summary: String? { title ?? toolSummary(name, toolType, input) }
@@ -262,7 +264,7 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
             let state: ToolState = r.map { $0.isError ? .failed : .done }
                 ?? (busy && !abandoned.contains(callId) ? .pending : .done)
             let call = ToolCall(id: e.id, name: name, toolType: toolType, input: input,
-                                title: title, output: r?.text, state: state, images: r?.images ?? [])
+                                title: title, output: r?.text, state: state, images: r?.images ?? [], callId: callId)
             // A delegated run keeps its own row, as the desktop's panel link does, and so
             // does a call carrying a picture: a closed group would hide it.
             let alone = toolType == "subagent_spawn" || !call.images.isEmpty
