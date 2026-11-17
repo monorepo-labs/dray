@@ -39,7 +39,7 @@ export default function StarCard() {
     <div
       role="region"
       aria-label="Star Dray on GitHub"
-      className="fixed bottom-3 left-3 z-50 flex w-64 flex-col overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-(--shadow-ring) backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2"
+      className="fixed bottom-3 left-3 z-50 flex w-72 flex-col overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-(--shadow-ring) backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2"
     >
       {phase === "thanks" ? (
         <span className="flex items-center gap-1.5 p-3 text-ui font-medium text-foreground">
