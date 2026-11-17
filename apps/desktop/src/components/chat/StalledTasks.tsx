@@ -146,18 +146,21 @@ function StalledRow({
           <span
             className="ml-auto flex shrink-0 items-center gap-2"
           >
-            <Button
-              variant="ghost"
-              size="xs"
-              className="text-muted-foreground opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpen(id, isModClick(e));
-              }}
-            >
-              Open task
-              <ArrowUpRight data-icon="inline-end" />
-            </Button>
+            {/* A task whose machine is down has nothing to open. */}
+            {!offline && (
+              <Button
+                variant="ghost"
+                size="xs"
+                className="text-muted-foreground opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpen(id, isModClick(e));
+                }}
+              >
+                Open task
+                <ArrowUpRight data-icon="inline-end" />
+              </Button>
+            )}
             {stall.kind === "ready" &&
               pr &&
               (stall.checking ? (

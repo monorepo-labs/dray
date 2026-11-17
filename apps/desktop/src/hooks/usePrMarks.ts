@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { invoke } from "@/lib/transport";
+import { useServers } from "@/lib/servers";
+import { invoke, serverOfPath } from "@/lib/transport";
 
 import { channel } from "@/lib/channel";
 import { useWindowFocused } from "@/lib/focus";
@@ -426,6 +427,22 @@ export function usePrMarks(
     const id = setInterval(() => void load(true, backgroundKey.split("\n")), BACKGROUND_POLL_MS);
     return () => clearInterval(id);
   }, [backgroundKey, focused, load]);
+
+  // A machine coming back is read at once: its reads failed all the while it
+  // was down, and the backoff would leave its rows unmarked for minutes.
+  const connected = useServers()
+    .flatMap((s) => (s.status === "connected" ? [s.id] : []))
+    .join("\n");
+  const wasConnected = useRef(connected);
+  useEffect(() => {
+    const before = new Set(wasConnected.current.split("\n"));
+    wasConnected.current = connected;
+    const back = connected ? connected.split("\n").filter((id) => !before.has(id)) : [];
+    const due = pathsRef.current.filter((path) => back.includes(serverOfPath(path)));
+    if (due.length === 0) return;
+    for (const path of due) failures.delete(path);
+    void load(true, due);
+  }, [connected, load]);
 
   // A failed read is tried again until one lands, on the same terms as the
   // polls: everything on screen while focused, a bot's repos while not. A
