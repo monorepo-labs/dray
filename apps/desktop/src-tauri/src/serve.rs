@@ -1903,7 +1903,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         set_share_machines(on: bool) => crate::machines::set_sharing(on).await;
         get_session_by_id(session_id: String, turns: Option<u32>) => store::get_session_by_id(&session_id, turns).await;
         get_session_page(session_id: String, before: u64, turns: u32) => store::get_session_page(&session_id, before, turns).await;
-        list_subagents(session_id: String, also: Vec<String>, cursor: Option<store::SubagentCursor>, limit: u32) => store::list_subagents(session_id, also, cursor, limit).await;
+        list_subagents(session_id: String, also: Vec<String>, cursor: Option<store::SubagentCursor>, limit: u32, live: Option<Vec<String>>) => store::list_subagents(session_id, also, cursor, limit, live).await;
         get_session_since(session_id: String, after: Vec<String>) => store::get_session_since(&session_id, after).await;
 
         // Agents and models.

@@ -29,14 +29,17 @@ type Props = {
 /// Finished runs per page: a page is read back from the log until it has these.
 const PAGE = 10;
 
-type Loader = (cursor: SubagentCursor | null) => Promise<SubagentList>;
+/// `live`: running tasks no run here accounts for, which the server reads back
+/// until it has met.
+type Loader = (cursor: SubagentCursor | null, live: string[]) => Promise<SubagentList>;
 
 /// A bot's subagents and background shells, under its task list. Running
 /// subagents show; finished ones wait behind a toggle and page in off the
 /// server's logs, since the chat holds only its tail.
 export default function BotRuns(props: Props) {
   const { sessionId, also } = props;
-  const load: Loader = (cursor) => invoke<SubagentList>("list_subagents", { sessionId, also, cursor, limit: PAGE });
+  const load: Loader = (cursor, live) =>
+    invoke<SubagentList>("list_subagents", { sessionId, also, cursor, limit: PAGE, live });
   return <Sections key={sessionId} {...props} load={load} />;
 }
 
@@ -48,7 +51,7 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
   // Once per chat, for the count; an older server answering `unknown command`
   // leaves the loaded runs alone.
   useEffect(() => {
-    load(null).then(setOlder, () => {});
+    load(null, unseen(rest.liveTaskIds, runs, [])).then(setOlder, () => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -58,7 +61,7 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
     try {
       // The cursor is a byte offset, so runs landing since the first page
       // never shift what the next one reads.
-      const page = await load(older.next);
+      const page = await load(older.next, unseen(rest.liveTaskIds, runs, older.runs));
       setOlder({ next: page.next, runs: [...older.runs, ...page.runs] });
     } finally {
       setLoading(false);
@@ -160,6 +163,13 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
       {shells.length > 0 && <RunSection title="Background tasks" {...rest} runs={shells} />}
     </div>
   );
+}
+
+/// Live tasks no loaded run and no listed run accounts for, by either id a
+/// task goes by.
+function unseen(live: ReadonlySet<string>, runs: SubagentRun[], listed: SubagentSummary[]): string[] {
+  const known = new Set([...runs, ...listed].flatMap((r) => [r.id, r.taskId ?? ""]));
+  return [...live].filter((id) => !known.has(id));
 }
 
 /// A run the chat has not loaded, drawn as a row of its own. One the log never
