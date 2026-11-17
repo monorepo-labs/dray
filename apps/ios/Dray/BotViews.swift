@@ -593,7 +593,8 @@ extension Store {
             guard let item = items[key], !item.busy, !isAsking(key), (self.tasks[key] ?? 0) == 0, item.aside != true,
                   let touched = parseDate(item.modified), now.timeIntervalSince(touched) >= stallAfter else { return nil }
             let pr = prMark(key, item)
-            let status = pr.map(prStatus)
+            // A draft's red check is stale by design, so it waits on the reader like any draft.
+            let status = pr.map { $0.isDraft && prStatus($0) == "checksFailing" ? "draft" : prStatus($0) }
             if let status, ["unknown", "checksRunning", "merged"].contains(status) { return nil }
             if status == "ready" { return Stall(task: key, item: item, pr: pr, ready: true) }
             // The task's to mend, through its bot: never the reader's card.
