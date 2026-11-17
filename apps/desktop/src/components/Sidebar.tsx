@@ -1024,12 +1024,10 @@ function RailTip({
 }
 
 /// The top strip's buttons, drawn as session rows: see the note where they
-/// render. The rail's icons go up to 16px, at the row's height all the same.
+/// render. `--rail` (0 full, 1 rail) moves the icon from 14px at 6px in to 16px
+/// centred in the rail's 40px button, a frame at a time with the edge.
 const STRIP =
-  "w-full justify-start px-1.5 [&_svg]:transition-[width,height] text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50";
-/// Left-aligned like the full strip, padded to centre the icon in the rail's
-/// 40px button, so a snap slides the icon a few pixels rather than jumping it.
-const STRIP_RAIL = "pr-0 pl-[11px] [&_svg:not([class*='size-'])]:size-4";
+  "w-full justify-start pr-[calc(6px-6px*var(--rail,0))] pl-[calc(6px+5px*var(--rail,0))] transition-[color,background-color] [&_svg:not([class*='size-'])]:size-[calc(14px+2px*var(--rail,0))] text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50";
 
 export default function Sidebar({
   items,
@@ -1104,9 +1102,10 @@ export default function Sidebar({
   // The full sidebar stays drawn while it folds, clipped by the narrowing
   // aside, and turns into the rail once it lands.
   const iconOnly = width === SIDEBAR_RAIL && snap !== "toRail";
-  // The strip's icons take their rail size as the fold starts, growing while it
-  // runs rather than once it lands.
-  const railed = width === SIDEBAR_RAIL;
+  // How far toward the rail the drawn width is, 0 to 1. The strip's icons take
+  // their padding and size from it each frame, so they move in step with the
+  // edge rather than on a transition of their own.
+  const towardRail = Math.min(1, Math.max(0, (SIDEBAR_MIN - Number(style.width)) / (SIDEBAR_MIN - SIDEBAR_RAIL)));
   // The rail's foot slides in after a fold, never on a launch already there.
   const folded = useRef(false);
   if (snap === "toRail" || snap === "fromRail") folded.current = snap === "toRail";
@@ -1321,13 +1320,13 @@ export default function Sidebar({
         // each frame. No edge mask: at rail width it covered the icons, which
         // flashed back to full strength as the fold landed.
         (snap === "toRail" || snap === "fromRail") &&
-          "overflow-hidden [&>:not([role=separator],[data-rail-foot])]:w-60",
+          "overflow-hidden [&>:not([role=separator],[data-rail-foot],[data-rail-keep])]:w-60",
         // What the rail drops fades before the narrowing edge could show it cut
         // off behind the icons, and back in on the way out.
         snap === "toRail" && "[&_[data-rail-hide]]:opacity-0 [&_[data-rail-hide]]:transition-opacity [&_[data-rail-hide]]:duration-100",
         snap === "fromRail" && "[&_[data-rail-hide]]:animate-in [&_[data-rail-hide]]:fade-in [&_[data-rail-hide]]:duration-300",
       )}
-      style={style}
+      style={{ ...style, "--rail": towardRail } as React.CSSProperties}
       ref={asideRef}
     >
       {handle}
@@ -1340,14 +1339,16 @@ export default function Sidebar({
           brightened where a row's does not. The dark hover is named too, since
           `dark:hover:bg-muted/50` on the variant out-specifies an unprefixed
           `hover:` and `tailwind-merge` cannot fold the two together. */}
-      <div className="flex flex-col gap-px px-2 pt-3">
+      {/* Kept to the aside's width through a snap, unlike the list below: its
+          icons and highlights track the moving edge rather than being cut off. */}
+      <div data-rail-keep className="flex flex-col gap-px px-2 pt-3">
         <RailTip on={iconOnly} label="New Task" keys={["session.new"]}>
           <Button
             variant="ghost"
             size="sm"
             onClick={onNewSession}
             aria-label={iconOnly ? "New Task" : undefined}
-            className={cn(STRIP, railed && STRIP_RAIL)}
+            className={STRIP}
           >
             <Plus />
             {!iconOnly && <>
@@ -1373,7 +1374,6 @@ export default function Sidebar({
             aria-label={iconOnly ? "Issues" : undefined}
             className={cn(
               STRIP,
-              railed && STRIP_RAIL,
               "data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground",
             )}
           >
@@ -1453,7 +1453,7 @@ export default function Sidebar({
               size="sm"
               onClick={() => onSearchOpenChange(true)}
               aria-label={iconOnly ? "Search" : undefined}
-              className={cn(STRIP, railed && STRIP_RAIL)}
+              className={STRIP}
             >
               <Search />
               {!iconOnly && <>
@@ -1472,7 +1472,7 @@ export default function Sidebar({
             size="sm"
             onClick={onNewBot}
             aria-label={iconOnly ? "New bot" : undefined}
-            className={cn(STRIP, railed && STRIP_RAIL)}
+            className={STRIP}
           >
             <MessageCirclePlus />
             {!iconOnly && <span data-rail-hide>New bot</span>}
@@ -1483,7 +1483,7 @@ export default function Sidebar({
       {/* Above the project filter: a bot belongs to no project, it hands work
           to any of them. No heading — the face on a row is what says it is a
           bot. New bot sits in the strip above, beside the other ways in. */}
-      {bots.length > 0 && <div className="mt-4 flex flex-col gap-px px-2">
+      {bots.length > 0 && <div data-rail-keep className="mt-4 flex flex-col gap-px px-2">
         {bots.map(({ bot, session, preview }) => {
           const status = session ? (statusBySession[session.sessionId] ?? session.status) : "idle";
           return <BotRow

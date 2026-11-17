@@ -323,7 +323,9 @@ export function useResizable({
         const start = from.current;
         if (!start) return;
         const moved = edge === "right" ? e.clientX - start.x : start.x - e.clientX;
-        start.raw = start.width + moved;
+        // Out of the rail stops at the default for the rest of the drag:
+        // going wider is a second drag, through the detent.
+        start.raw = start.width === rail ? Math.min(start.width + moved, def) : start.width + moved;
         setStored(start.raw);
         setDrag((d) => d ?? "pull");
       }}
