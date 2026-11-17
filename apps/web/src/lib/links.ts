@@ -40,3 +40,4 @@ export const MONTHLY = [
 /// What the nav shows when GitHub cannot be asked. Bump it now and then so a
 /// rate-limited render does not undercount by much.
 export const STARS_FALLBACK = 58;
+// Vercel ignore-step test (#1174); reverted before merge.
