@@ -9,6 +9,7 @@ struct TranscriptView: View {
     @State private var showingRuns = false
     /// The run a subagent row opened the sheet on.
     @State private var runFocus: String?
+    @State private var subagent: SubagentRoute?
     @State private var editingBot = false
     @Environment(\.openTask) private var openTask
     /// The floating banner's height, kept clear above the first row so it never sits on "Load earlier".
@@ -167,10 +168,23 @@ struct TranscriptView: View {
             BotTasksSheet(server: key.server, tasks: botTasks, runs: runKeys(bot)) { openTask?($0) }
         }
         .sheet(isPresented: $showingRuns) { RunsSheet(key: key, focus: runFocus) }
+        .navigationDestination(item: $subagent) { SubagentChat(route: $0) }
+        .environment(\.openSubagent) { route in
+            showingRuns = false
+            showingTasks = false
+            subagent = route
+        }
+        // A subagent row opens its chat where it has one, else the sheet on it, as on desktop.
         .environment(\.openRun) { id in
-            guard store.transcripts[key]?.events.contains(where: { $0.subagent?["id"]?.string == id }) == true else { return false }
-            runFocus = id
-            showingRuns = true
+            let live = Set((store.tasks[key] ?? []).map(\.taskId))
+            guard let run = buildRuns(transcript?.events ?? [], session: key, live: live, busy: busy).first(where: { $0.id == id })
+            else { return false }
+            if run.chat && !run.locked {
+                subagent = SubagentRoute(session: key, id: id)
+            } else {
+                runFocus = id
+                showingRuns = true
+            }
             return true
         }
         .sheet(isPresented: $fixing) { SettingsView(focus: key.server) }

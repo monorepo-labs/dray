@@ -5,6 +5,14 @@ extension EnvironmentValues {
     /// Opens the runs sheet on one run, by its spawning call's id: a subagent row in the chat.
     /// False where the chat holds no such run, and the row opens its own output instead.
     @Entry var openRun: ((String) -> Bool)?
+    /// Pushes a subagent's conversation as a chat of its own.
+    @Entry var openSubagent: ((SubagentRoute) -> Void)?
+}
+
+/// A subagent's chat, by its session and spawning call's id.
+struct SubagentRoute: Hashable {
+    let session: SessionKey
+    let id: String
 }
 
 /// One subagent or backgrounded shell: the desktop's `SubagentRun`, built off the loaded events.
@@ -27,14 +35,27 @@ struct Run: Identifiable {
     var input: JSON = .null
     /// The spawning call's answer; a backgrounded shell's names the file its output goes to.
     var answer: String?
+    var harness: String?
+    /// Read off the log or the live task list alone, with no events here to open onto.
+    var logOnly = false
 
     /// Claude Code's `Bash` and `Monitor` register as `local_bash`; grok's task list says `bash`.
     var shell: Bool { tool == "Bash" || tool == "Monitor" || label == "local_bash" || label == "bash" }
     var title: String { description ?? label ?? (shell ? "Background task" : "Subagent") }
     var handle: String { taskId ?? id }
     var command: String? { input["command"]?.string }
-    var brief: String? { input["prompt"]?.string }
-    var opens: Bool { command != nil || !events.isEmpty || brief != nil }
+    /// fx nests its brief: `request.task`, or since 0.0.17 a message to a named child.
+    var brief: String? {
+        input["request"]?["task"]?.string ?? (fxAgent != nil ? input["message"]?.string : nil) ?? input["prompt"]?.string
+    }
+    /// The child fx 0.0.17 names, which `fx_subagent_events` reads back.
+    var fxAgent: String? { input["action"]?.string == "message" ? input["agent"]?.string : nil }
+    /// Opens as a chat of its own: a shell expands in place, and an older fx's run names no child to read.
+    var chat: Bool { !shell && !logOnly && (harness != "fx" || fxAgent != nil) }
+    /// fx saves a child's conversation only when its turn ends, so its chat waits for that.
+    var locked: Bool { harness == "fx" && !done }
+    /// What tapping does anything for: a chat to open, or something to expand.
+    var opens: Bool { chat ? !locked : (command != nil || !events.isEmpty || brief != nil) }
 }
 
 /// A session's runs, newest first: the desktop's `buildTranscript` pass over subagent envelopes.
@@ -67,6 +88,7 @@ func buildRuns(_ events: [AgentEvent], session: SessionKey, live: Set<String>, b
         if runs[id] == nil { order.append(id) }
         // The completion's envelope carries no label, so the first one sticks.
         run.label = run.label ?? e.subagent?["label"]?.string
+        run.harness = run.harness ?? e.harness
         if let ts = e.ts { run.lastAt = ts }
         switch e.payload {
         case .subagentStarted(let agent, let label, let description):
@@ -99,17 +121,23 @@ func buildRuns(_ events: [AgentEvent], session: SessionKey, live: Set<String>, b
 }
 
 /// A subagent's work as the chat's rows, its calls joined to their results.
-func runItems(_ run: Run) -> [Item] {
+func runItems(_ events: [AgentEvent], done: Bool) -> [Item] {
     var results: [String: ToolResult] = [:]
-    for e in run.events { if case .toolCompleted(let id, let r) = e.payload { results[id] = r } }
-    return run.events.compactMap { e in
+    for e in events { if case .toolCompleted(let id, let r) = e.payload { results[id] = r } }
+    return events.compactMap { e in
         switch e.payload {
         case .assistantText(let text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
             return .text(id: e.id, text: text)
+        // Claude Code logs the brief as the child's first message.
+        case .userMessage(let text, _, _, _, let images, _, _):
+            return .prompt(id: e.id, text: text, from: nil, images: images)
+        // A Claude subagent answers through this call; drawn as a tool row it hid the answer.
+        case .toolStarted(_, "SubagentHandback", _, let input, _):
+            return input["message"]?.string.map { .text(id: e.id, text: $0) }
         case .toolStarted(let callId, let name, let toolType, let input, let title):
             let r = results[callId]
             return .tool(ToolCall(id: e.id, name: name, toolType: toolType, input: input, title: title, output: r?.text,
-                                  state: r.map { $0.isError ? .failed : .done } ?? (run.done ? .done : .pending),
+                                  state: r.map { $0.isError ? .failed : .done } ?? (done ? .done : .pending),
                                   images: r?.images ?? []))
         default:
             return nil
@@ -142,6 +170,7 @@ private let runsPage = 10
 /// in off the server's logs, since the chat holds only its tail.
 struct RunsSections: View {
     @Environment(Store.self) private var store
+    @Environment(\.openSubagent) private var openSubagent
     let keys: [SessionKey]
     /// The run a chat row opened the sheet on.
     var focus: String?
@@ -195,12 +224,14 @@ struct RunsSections: View {
         let logged = older.filter { !ids.contains($0.id) }.map { s in
             let key = SessionKey(server: keys[0].server, id: s.sessionId)
             return Run(id: s.id, session: key, taskId: s.taskId, label: s.label, description: s.description,
-                       done: s.endedAt != nil || !live(key).contains(s.taskId ?? s.id), lastAt: s.endedAt ?? s.startedAt)
+                       done: s.endedAt != nil || !live(key).contains(s.taskId ?? s.id), lastAt: s.endedAt ?? s.startedAt,
+                       logOnly: true)
         }
         let known = Set((held + logged).flatMap { [$0.id, $0.taskId ?? ""] })
         let orphans = keys.flatMap { key in
             (store.tasks[key] ?? []).filter { !known.contains($0.taskId) }.map {
-                Run(id: $0.taskId, session: key, taskId: $0.taskId, label: $0.taskType, description: $0.description)
+                Run(id: $0.taskId, session: key, taskId: $0.taskId, label: $0.taskType, description: $0.description,
+                    logOnly: true)
             }
         }
         return held + logged + orphans
@@ -262,7 +293,10 @@ struct RunsSections: View {
 
     private func row(_ run: Run, at: String? = nil) -> some View {
         RunRow(run: run, open: expanded == run.id, at: at, stoppable: stoppable(run),
-               onToggle: { withAnimation(Theme.motion) { expanded = expanded == run.id ? nil : run.id } },
+               onToggle: {
+                   if run.chat { openSubagent?(SubagentRoute(session: run.session, id: run.id)) }
+                   else { withAnimation(Theme.motion) { expanded = expanded == run.id ? nil : run.id } }
+               },
                onStop: { stop(run) })
     }
 
@@ -352,7 +386,7 @@ struct RunRow: View {
                 }
             }
             .padding(.horizontal, Theme.Space.m)
-            if open && run.opens {
+            if open && run.opens && !run.chat {
                 RunDetail(run: run)
                     .padding(.leading, Theme.Space.m + 32)
                     .padding(.trailing, Theme.Space.m)
@@ -409,7 +443,7 @@ struct RunDetail: View {
                 if let brief = run.brief {
                     Text(brief).font(Theme.Font.footnote).foregroundStyle(Theme.secondary).lineLimit(6)
                 }
-                ForEach(runItems(run)) { ItemView(item: $0) }
+                ForEach(runItems(run.events, done: run.done)) { ItemView(item: $0) }
                 if run.events.isEmpty && !run.done {
                     Text("Nothing reported yet.").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                 }
@@ -463,5 +497,56 @@ struct RunsSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationBackground(Theme.card)
+    }
+}
+
+/// A subagent's conversation as a chat of its own: the desktop's `SubagentView`. Claude Code
+/// streams a child's work into the parent's log, so it is live here; fx streams none of it, so
+/// its run is read back from fx's own store once its turn ends.
+struct SubagentChat: View {
+    @Environment(Store.self) private var store
+    let route: SubagentRoute
+    @State private var fx: [AgentEvent]?
+    @State private var fxError: String?
+
+    var body: some View {
+        let key = route.session
+        let live = Set((store.tasks[key] ?? []).map(\.taskId))
+        let run = buildRuns(store.transcripts[key]?.events ?? [], session: key, live: live, busy: store.items[key]?.busy ?? false)
+            .first { $0.id == route.id }
+        let items = run.map { runItems(run?.fxAgent == nil ? $0.events : fx ?? [], done: $0.done) } ?? []
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                if let run {
+                    if let brief = run.brief, !items.contains(where: \.isPrompt) { UserBubble(text: brief, from: nil) }
+                    ForEach(items) { ItemView(item: $0) }
+                    if !run.done {
+                        OrbLine(activity: .delegating, label: run.status ?? "Working")
+                    } else if let fxError {
+                        Text(sentence(fxError)).font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
+                    }
+                }
+                Color.clear.frame(height: Theme.Space.m)
+            }
+            .padding(.horizontal, Theme.Space.l)
+            .padding(.top, Theme.Space.m)
+            .frame(maxWidth: 760)
+            .frame(maxWidth: .infinity)
+        }
+        .defaultScrollAnchor(.bottom)
+        .page()
+        .environment(\.imageServer, store.connection(key.server))
+        .navigationTitle(run?.title ?? "Subagent")
+        .navigationBarTitleDisplayMode(.inline)
+        // fx's report landing is when the child's turn is saved and worth reading again.
+        .task(id: run?.answer) {
+            guard let agent = run?.fxAgent else { return }
+            do {
+                fx = try await store.call(key.server, "fx_subagent_events", ["sessionId": .string(key.id), "agent": .string(agent)])
+                fxError = nil
+            } catch {
+                fxError = error.localizedDescription
+            }
+        }
     }
 }

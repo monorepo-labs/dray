@@ -325,6 +325,8 @@ struct AgentEvent: Decodable, Identifiable {
     let id: String
     let sessionId: String
     let ts: String?
+    /// `claude_code`, `fx`…; absent from an older server.
+    let harness: String?
     /// Set on a subagent's own events, which the chat does not draw.
     let subagent: JSON?
     let payload: Payload
