@@ -240,6 +240,9 @@ pub struct StatusTracker {
     shells_only: bool,
     /// The serving sweep's last published verdict for this task set.
     serving: Vec<u16>,
+    /// Moves on every task set, so a sweep can tell the set it scanned for
+    /// from one that replaced it mid-scan.
+    tasks_gen: u64,
     /// Main-thread tool calls started and not yet finished. Not a status input —
     /// it decides whether an arriving prompt is written now or held.
     open_tool_calls: usize,
@@ -312,6 +315,7 @@ impl StatusTracker {
                 self.shells_only = tasks.iter().all(|t| SHELL_TASKS.contains(&t.task_type.as_str()));
                 // Clients drop theirs on the same event, so the two never differ.
                 self.serving.clear();
+                self.tasks_gen += 1;
                 self.quiet_since = Some(Instant::now());
                 None
             }
@@ -385,20 +389,24 @@ impl StatusTracker {
         self.status
     }
 
-    /// How many background shells the serving sweep must find listening for
-    /// this session to read as waiting on the reader, or `None` where the
+    /// What the serving sweep asks of this session, or `None` where the
     /// question does not apply: a turn running, nothing in the background, or
     /// a subagent among it — that one is the agent working.
-    pub fn serving_question(&self) -> Option<usize> {
-        let n = self.background_tasks.len();
-        (!self.model_call_open && n > 0 && self.shells_only).then_some(n)
+    pub fn serving_question(&self) -> Option<ServingAsk> {
+        let shells = self.background_tasks.len();
+        (!self.model_call_open && shells > 0 && self.shells_only)
+            .then_some(ServingAsk { shells, at: (self.epoch, self.tasks_gen) })
     }
 
-    /// Records the sweep's verdict, answering whether it moved.
-    pub fn set_serving(&mut self, ports: Vec<u16>) -> bool {
-        let moved = self.serving != ports;
+    /// Records the sweep's verdict on `ask`, answering whether it moved. An
+    /// answer to an older ask is dropped: a turn or a task set came and went
+    /// during the scan, and what it found was said of something else.
+    pub fn set_serving(&mut self, ask: ServingAsk, ports: Vec<u16>) -> bool {
+        if self.serving_question() != Some(ask) || self.serving == ports {
+            return false;
+        }
         self.serving = ports;
-        moved
+        true
     }
 
     /// The outstanding background tasks — the latest reading, since the set is
@@ -683,6 +691,14 @@ pub async fn settle_dead_child(
 /// keeps its task working, which is today's reading.
 const SHELL_TASKS: &[&str] = &["local_bash", "bash", "shell"];
 
+/// One question the serving sweep asks: how many background shells must be
+/// found listening, and which turn and task set that was asked of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServingAsk {
+    pub shells: usize,
+    at: (u64, u64),
+}
+
 /// How often [`SessionManager::sweep_serving`] looks. A stall is two minutes,
 /// so a quarter minute late costs nothing.
 const SERVING_EVERY: Duration = Duration::from_secs(15);
@@ -899,21 +915,20 @@ impl SessionManager {
             let Some(session) = guard.as_ref() else { continue };
             let Some(root) = session.child.id() else { continue };
             let Ok(tracker) = session.status.try_lock() else { continue };
-            if let Some(shells) = tracker.serving_question() {
-                asks.push((id, session.status.clone(), root, shells));
+            if let Some(ask) = tracker.serving_question() {
+                asks.push((id, session.status.clone(), root, ask));
             }
         }
         if asks.is_empty() {
             return;
         }
-        let roots: Vec<(u32, usize)> = asks.iter().map(|(_, _, root, n)| (*root, *n)).collect();
+        let roots: Vec<(u32, usize)> = asks.iter().map(|(_, _, root, ask)| (*root, ask.shells)).collect();
         let verdicts = tokio::task::spawn_blocking(move || crate::local_servers::serving(&roots))
             .await
             .unwrap_or_default();
-        for ((id, status, _, _), ports) in asks.into_iter().zip(verdicts) {
+        for ((id, status, _, ask), ports) in asks.into_iter().zip(verdicts) {
             let mut tracker = status.lock().await;
-            // The set or the turn moved during the scan, so the verdict is stale.
-            if tracker.serving_question().is_none() || !tracker.set_serving(ports.clone()) {
+            if !tracker.set_serving(ask, ports.clone()) {
                 continue;
             }
             drop(tracker);
@@ -4989,18 +5004,43 @@ mod tests {
         tracker.on_event(&AgentEventPayload::BackgroundTasksChanged { tasks: vec![task("b1", "local_bash")] });
         assert_eq!(tracker.serving_question(), None, "the turn is still running");
         tracker.on_event(&turn_completed());
-        assert_eq!(tracker.serving_question(), Some(1));
-        assert!(tracker.set_serving(vec![1420]));
-        assert!(!tracker.set_serving(vec![1420]), "the same answer is no news");
+        let ask = tracker.serving_question().unwrap();
+        assert_eq!(ask.shells, 1);
+        assert!(tracker.set_serving(ask, vec![1420]));
+        assert!(!tracker.set_serving(ask, vec![1420]), "the same answer is no news");
 
         tracker.on_event(&AgentEventPayload::BackgroundTasksChanged {
             tasks: vec![task("b1", "local_bash"), task("a1", "local_agent")],
         });
         assert_eq!(tracker.serving_question(), None, "a subagent is the agent working");
         tracker.on_event(&AgentEventPayload::BackgroundTasksChanged { tasks: vec![task("b1", "local_bash")] });
-        assert!(tracker.set_serving(vec![1420]), "the moved set dropped the old answer");
+        let ask = tracker.serving_question().unwrap();
+        assert!(tracker.set_serving(ask, vec![1420]), "the moved set dropped the old answer");
         tracker.on_event(&AgentEventPayload::BackgroundTasksChanged { tasks: vec![] });
         assert_eq!(tracker.serving_question(), None);
+    }
+
+    /// A scan answers the set it was asked of. A turn that adds a build and
+    /// ends while the scan runs leaves the same question shape behind, and the
+    /// old answer must not land on it.
+    #[test]
+    fn a_verdict_for_a_replaced_task_set_is_dropped() {
+        let shell = |id: &str| crate::events::BackgroundTask {
+            task_id: id.to_string(),
+            task_type: "local_bash".to_string(),
+            description: String::new(),
+        };
+        let mut tracker = StatusTracker::default();
+        tracker.on_send();
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged { tasks: vec![shell("dev")] });
+        tracker.on_event(&turn_completed());
+        let ask = tracker.serving_question().unwrap();
+
+        tracker.on_send();
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged { tasks: vec![shell("build")] });
+        tracker.on_event(&turn_completed());
+        assert_eq!(tracker.serving_question().map(|a| a.shells), Some(1));
+        assert!(!tracker.set_serving(ask, vec![5173]), "said of the dev server, not the build");
     }
 
     #[test]

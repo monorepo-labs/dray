@@ -121,19 +121,50 @@ fn parse_ps(text: &str) -> Processes {
 
 /// Whether a command line is a test run: `npm test`, `pnpm test:e2e`,
 /// `npx playwright test`, `cargo test`, `go test`, `python -m pytest`, `jest`,
-/// `cypress run`. Read word by word, each cut to its file stem, so a runner's
-/// script path (`node_modules/.bin/jest`, `jest.js`) counts as its name.
+/// `cypress run`, `node --test`.
+///
+/// Read off two places only, so a server named or configured like a test
+/// (`node test_server.js`, `vite --config e2e.config.ts`) is still a server:
+/// the program — a runner's own name, or the script or module a `node`,
+/// `python` or `npx` runs, cut to its stem so `.bin/jest` and `jest.js` both
+/// say `jest` — and the bare words after it, a subcommand like `test` or a
+/// script name like `test:e2e`. Paths, options and an option's value are
+/// passed over.
 fn is_test_run(args: &str) -> bool {
-    const RUNNERS: &[&str] =
-        &["test", "tests", "e2e", "jest", "vitest", "mocha", "ava", "pytest", "nextest", "rspec", "phpunit", "karma", "cypress", "wdio"];
-    args.split_whitespace().any(|arg| {
-        let word = arg.rsplit('/').next().unwrap_or(arg).trim_start_matches('-').to_ascii_lowercase();
-        let stem = word.split('.').next().unwrap_or_default();
-        RUNNERS.contains(&stem)
-            || stem.starts_with("test:")
-            || stem.starts_with("test_")
-            || stem.ends_with(":test")
-            || stem.contains("e2e")
+    const RUNNERS: &[&str] = &["jest", "vitest", "mocha", "ava", "pytest", "nextest", "rspec", "phpunit", "karma", "cypress", "wdio"];
+    const HOSTS: &[&str] = &["node", "python", "python3", "bun", "deno", "ruby", "npx", "bunx", "uvx"];
+    let stem = |w: &str| w.rsplit('/').next().unwrap_or(w).split('.').next().unwrap_or_default().to_ascii_lowercase();
+    let words: Vec<&str> = args.split_whitespace().collect();
+    let mut at = 0;
+    while words.get(at).is_some_and(|w| HOSTS.contains(&stem(w).as_str())) {
+        at += 1;
+        while let Some(w) = words.get(at).filter(|w| w.starts_with('-')) {
+            at += 1;
+            match *w {
+                "--test" => return true,
+                "-m" => break,
+                _ => {}
+            }
+        }
+    }
+    let Some(program) = words.get(at) else { return false };
+    if RUNNERS.contains(&stem(program).as_str()) {
+        return true;
+    }
+    let mut option_value = false;
+    words[at + 1..].iter().any(|w| {
+        if w.starts_with('-') {
+            option_value = !w.contains('=');
+            return false;
+        }
+        if std::mem::take(&mut option_value) || w.contains('/') || w.contains('.') {
+            return false;
+        }
+        let w = w.to_ascii_lowercase();
+        matches!(w.as_str(), "test" | "tests" | "e2e")
+            || RUNNERS.contains(&w.as_str())
+            || ["test:", "e2e:"].iter().any(|p| w.starts_with(p))
+            || [":test", ":e2e"].iter().any(|s| w.ends_with(s))
     })
 }
 
@@ -409,6 +440,10 @@ mod tests {
             "node /app/node_modules/jest/bin/jest.js",
             "npx cypress run",
             "node --test",
+            "npm exec playwright test --reporter=line",
+            "pnpm --filter web test",
+            "sh -c playwright test",
+            "cargo nextest run",
         ] {
             assert!(is_test_run(run), "{run}");
         }
@@ -419,6 +454,10 @@ mod tests {
             "cargo run --bin api",
             "python -m http.server 8000",
             "next dev",
+            "node /repo/test_server.js",
+            "node_modules/.bin/vite --config e2e.config.ts",
+            "npm run dev -- --mode test",
+            "vite --root tests",
         ] {
             assert!(!is_test_run(server), "{server}");
         }
