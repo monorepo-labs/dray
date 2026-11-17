@@ -83,7 +83,7 @@ export default function StalledTasks({
         <Button
           variant="ghost"
           size="xs"
-          className="self-start text-muted-foreground"
+          className="w-full text-muted-foreground"
           onClick={() => setAll((a) => !a)}
         >
           {capped ? `Show all ${shown.length}` : "Show less"}
