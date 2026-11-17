@@ -73,6 +73,11 @@ describe("snapWidth's detent at the default", () => {
   it("never stretches under the floor", () => {
     expect(snapWidth(220, 240, 480, 240, 56, "drag")).toBe(240);
   });
+
+  // The detent lets go once per drag; after that the edge just follows.
+  it("follows the pointer through the detent once it has let go", () => {
+    expect(snapWidth(255, 180, 480, 240, undefined, "follow")).toBe(255);
+  });
 });
 
 describe("paneBounds", () => {
