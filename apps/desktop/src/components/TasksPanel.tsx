@@ -102,6 +102,7 @@ export default function TasksPanel({
   mergeBlock,
   onFixConflicts,
   now,
+  children,
 }: {
   rows: CrewRow[];
   /// The pull request a task's branch carries, for the mark the sidebar draws.
@@ -119,13 +120,18 @@ export default function TasksPanel({
   onFixConflicts: (row: CrewRow, pr: PrMark) => Promise<void>;
   /// The clock a fix's age is read against, ticking once a minute.
   now: number;
+  /// Drawn under the list in the same scroller: the bot's own runs.
+  children?: React.ReactNode;
 }) {
   const fixAsks = useFixAsks();
   if (rows.length === 0) {
     return (
-      <p className="px-4 py-6 text-ui text-muted-foreground">
-        Nothing handed off yet. Work this bot starts shows up here.
-      </p>
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <p className="px-3 py-6 text-ui text-muted-foreground">
+          Nothing handed off yet. Work this bot starts shows up here.
+        </p>
+        {children}
+      </div>
     );
   }
 
@@ -148,7 +154,8 @@ export default function TasksPanel({
     />
   );
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-1 py-2">
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="flex shrink-0 flex-col px-1 py-2">
       {pinned.length > 0 && (
         <>
           <div className="flex min-h-6 items-center px-2 text-ui text-muted-foreground/70">Pinned</div>
@@ -161,6 +168,8 @@ export default function TasksPanel({
         (i > 0 || pinned.length > 0) && <div key={`gap ${i}`} aria-hidden className="h-4 shrink-0" />,
         ...run.map(draw),
       ])}
+      </div>
+      {children}
     </div>
   );
 }

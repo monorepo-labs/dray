@@ -2337,6 +2337,44 @@ export type Subagent = { id: string,
 label: string | null, };
 
 /**
+ * Where the next page of [`list_subagents`] starts reading back from.
+ */
+export type SubagentCursor = { 
+/**
+ * Index into the session list the first page was asked with.
+ */
+session: number, 
+/**
+ * Byte offset to read back from; the file's end where `None`.
+ */
+before: number | null, 
+/**
+ * Completions already read whose starts lie further back, by run id. A
+ * run's two lines can straddle a page, and dropping these would read the
+ * run back as never finished.
+ */
+ends: Array<[string, string]>, };
+
+/**
+ * A page of [`SubagentSummary`], newest first, and where the next one starts.
+ */
+export type SubagentList = { runs: Array<SubagentSummary>, next: SubagentCursor | null, };
+
+/**
+ * One subagent a session ran, read off its log rather than off a transcript,
+ * so a bot's Tasks tab can list runs older than the chat has loaded.
+ */
+export type SubagentSummary = { 
+/**
+ * The spawning call's id, as on `SubagentRun`.
+ */
+id: string, sessionId: string, taskId: string | null, label: string | null, description: string | null, startedAt: string, 
+/**
+ * `None` for a run the log never closed: still going, or its child died.
+ */
+endedAt: string | null, };
+
+/**
  * What a server has before Dray is installed on it.
  */
 export type Survey = { 

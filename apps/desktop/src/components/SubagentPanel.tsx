@@ -4,6 +4,7 @@ import { ArrowUpRight, Check, ChevronRight, Square, SquareTerminal } from "lucid
 import Orb from "@/components/Orb";
 import EventRow from "@/components/chat/EventRow";
 import { Button } from "@/components/ui/button";
+import { relativeTime } from "@/lib/format";
 import { subagentBrief } from "@/lib/tools";
 import { canOpenTab, isShellRun, opensTab, type SubagentRun } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
@@ -54,7 +55,7 @@ export default function SubagentPanel({ runs, ...rest }: SubagentPanelProps) {
   );
 }
 
-function RunSection({
+export function RunSection({
   title,
   runs,
   selectedId,
@@ -85,7 +86,7 @@ function RunSection({
           </Button>
         )}
       </div>
-      <div className="flex flex-col gap-0.5 px-1.5 pb-2">
+      <div className="flex flex-col gap-0.5 px-1 pb-2">
         {runs.map((run) => (
           <RunRow
             key={run.id}
@@ -130,38 +131,21 @@ function spawnCommand(run: SubagentRun): string | null {
   return typeof command === "string" && command.trim().length > 0 ? command : null;
 }
 
-/// The row's mark: a filled tile holding the terminal glyph or the working orb
-/// the chat's subagent row carries, or a bare check once a subagent is done —
-/// no tile, so history reads quieter than what is live.
+/// The row's mark, bare in a fixed slot: the terminal glyph, the working orb
+/// the chat's subagent row carries, or a check once a subagent is done. No
+/// tile, which read as a control; the slot keeps every title on one line.
 ///
-/// `bare` drops the tile for a run with no Stop beside it (fx's): the tile
-/// reads as a control, and its width only lined titles up with tiled rows.
-function RunMark({ run, shell, bare }: { run: SubagentRun; shell: boolean; bare: boolean }) {
-  if (bare) {
-    return (
-      <span className="flex size-4 shrink-0 items-center justify-center">
-        {run.done ? (
-          <Check aria-label="Done" className="size-3.5 text-muted-foreground" />
-        ) : (
-          <Orb state="working" variant="gyro" size={16} label="Working" />
-        )}
-      </span>
-    );
-  }
-  if (!shell && run.done) {
-    // The tile's width without its height, so finished titles still line up.
-    return (
-      <span className="flex h-4 w-7 shrink-0 items-center justify-center">
-        <Check aria-label="Done" className="size-3.5 text-muted-foreground" />
-      </span>
-    );
-  }
+/// The slot is a bot task row's face, 20px wide, so a bot's Tasks tab draws
+/// tasks and runs on one icon column and one title column.
+function RunMark({ run, shell }: { run: SubagentRun; shell: boolean }) {
   return (
-    <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted">
+    <span className="flex size-5 shrink-0 items-center justify-center">
       {shell ? (
-        <SquareTerminal aria-label="Shell" className="size-3.5 text-muted-foreground" />
+        <SquareTerminal aria-label="Shell" className="size-4 text-muted-foreground" />
+      ) : run.done ? (
+        <Check aria-label="Done" className="size-3.5 text-muted-foreground" />
       ) : (
-        <Orb state="working" variant="gyro" size={16} label="Working" />
+        <Orb state="working" variant="gyro" size={20} label="Working" />
       )}
     </span>
   );
@@ -172,7 +156,7 @@ function RunMark({ run, shell, bare }: { run: SubagentRun; shell: boolean; bare:
 ///
 /// No tool name, token count or agent type: the harness's words for the
 /// mechanism ("Task", "local_bash", "general-purpose") rather than for the work.
-function RunRow({
+export function RunRow({
   run,
   open,
   resultByCallId,
@@ -181,6 +165,7 @@ function RunRow({
   onOpen,
   locked,
   onStopTask,
+  at,
 }: {
   run: SubagentRun;
   open: boolean;
@@ -192,6 +177,9 @@ function RunRow({
   /// The tab has nothing to show until the run ends, so the row waits.
   locked: boolean;
   onStopTask: (taskId: string) => void;
+  /// When a finished run ended, drawn at the row's end. Hover swaps it for
+  /// the arrow, so the time sits flush right at rest.
+  at?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -249,8 +237,7 @@ function RunRow({
           onClick={opens ? onOpen : onToggle}
           disabled={!opens && !expands}
           className={cn(
-            "flex min-w-0 flex-1 cursor-default items-center pl-2.5 text-left",
-            bare ? "gap-2" : "gap-2.5",
+            "flex min-w-0 flex-1 cursor-default items-center gap-2 pl-2 text-left",
             // A finished subagent is history: the shorter row is half of how it
             // steps back, the bare check the other. A bare row is one height
             // throughout, so nothing jumps when its run ends.
@@ -258,7 +245,7 @@ function RunRow({
             stoppable ? "pr-1" : "pr-2.5",
           )}
         >
-          <RunMark run={run} shell={shell} bare={bare} />
+          <RunMark run={run} shell={shell} />
           <span className="min-w-0 flex-1">
             {/* Flex parents, because `shimmer-text` is inline-block: in a line
                 box it sits on the baseline and lifts the text off centre. */}
@@ -284,8 +271,18 @@ function RunRow({
           </span>
           {/* Each kind says what a click does, on hover: a subagent opens a
               tab, a shell expands — and an open shell keeps its caret. */}
+          {at && (
+            <span className={cn("shrink-0 text-xs text-muted-foreground tabular-nums", opens && "group-hover:hidden")}>
+              {relativeTime(at)}
+            </span>
+          )}
           {opens ? (
-            <ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+            <ArrowUpRight
+              className={cn(
+                "size-3.5 shrink-0 text-muted-foreground",
+                at ? "hidden group-hover:block" : "opacity-0 transition-opacity group-hover:opacity-100",
+              )}
+            />
           ) : (
             expands && (
               <ChevronRight
@@ -316,7 +313,7 @@ function RunRow({
 
       {open && expands && (
         // Indented to the title, past the mark's tile and its gap.
-        <div className="flex flex-col gap-2 pr-2.5 pb-2 pl-12">
+        <div className="flex flex-col gap-2 pr-2.5 pb-2 pl-9">
           {command ? (
             <div className="rounded-md bg-muted/70 px-2 py-1.5 font-mono text-xs break-all whitespace-pre-wrap text-sidebar-foreground">
               <span className="text-muted-foreground">$ </span>

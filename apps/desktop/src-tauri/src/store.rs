@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -1917,6 +1917,236 @@ pub async fn find_newest<T>(session_id: &str, find: impl Fn(&[AgentEvent]) -> Op
     }
 }
 
+/// One subagent a session ran, read off its log rather than off a transcript,
+/// so a bot's Tasks tab can list runs older than the chat has loaded.
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentSummary {
+    /// The spawning call's id, as on `SubagentRun`.
+    pub id: String,
+    pub session_id: String,
+    pub task_id: Option<String>,
+    pub label: Option<String>,
+    pub description: Option<String>,
+    pub started_at: String,
+    /// `None` for a run the log never closed: still going, or its child died.
+    pub ended_at: Option<String>,
+}
+
+/// Where the next page of [`list_subagents`] starts reading back from.
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentCursor {
+    /// Index into the session list the first page was asked with.
+    pub session: u32,
+    /// Byte offset to read back from; the file's end where `None`.
+    pub before: Option<u64>,
+    /// Completions already read whose starts lie further back, by run id. A
+    /// run's two lines can straddle a page, and dropping these would read the
+    /// run back as never finished.
+    pub ends: Vec<(String, String)>,
+}
+
+/// A page of [`SubagentSummary`], newest first, and where the next one starts.
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentList {
+    pub runs: Vec<SubagentSummary>,
+    pub next: Option<SubagentCursor>,
+}
+
+/// The subagents `session_id` and then each of `also` ran, newest first, read
+/// backwards from `cursor` until `limit` finished ones are in hand and every
+/// task in `live` has been met: a running run older than both the loaded chat
+/// and the newest finished ones would otherwise show nowhere. Background
+/// shells are left out: a finished one is done with, and a running one is in
+/// the loaded tail.
+///
+/// A page costs what it shows rather than a scan of the log: chunks are read
+/// from the end, and only lifecycle lines, found by a substring check, are
+/// parsed.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn list_subagents(
+    session_id: String,
+    also: Vec<String>,
+    cursor: Option<SubagentCursor>,
+    limit: u32,
+    live: Option<Vec<String>>,
+) -> Result<SubagentList, Fail> {
+    let mut live: HashSet<String> = live.unwrap_or_default().into_iter().collect();
+    let ids: Vec<&String> = std::iter::once(&session_id).chain(&also).collect();
+    let mut cur = cursor.unwrap_or(SubagentCursor { session: 0, before: None, ends: Vec::new() });
+    let mut runs = Vec::new();
+    let want = limit.max(1) as usize;
+    while let Some(id) = ids.get(cur.session as usize) {
+        let path = get_session_path(id).await?;
+        let mut ends = cur.ends.drain(..).collect();
+        let stop = match fs::File::open(&path).await {
+            Ok(mut file) => {
+                let len = file.metadata().await.map_err(anyhow::Error::from)?.len();
+                let end = cur.before.map_or(len, |b| b.min(len));
+                subagents_back(id, &mut file, end, 256 * 1024, &mut ends, &mut live, want, &mut runs).await?
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(anyhow::Error::from(e).context("could not open session file").into()),
+        };
+        match stop {
+            Some(at) => {
+                cur.before = Some(at);
+                cur.ends = ends.into_iter().collect();
+                return Ok(SubagentList { runs, next: Some(cur) });
+            }
+            None => {
+                cur.session += 1;
+                cur.before = None;
+            }
+        }
+    }
+    Ok(SubagentList { runs, next: None })
+}
+
+/// Reads one log back from byte `end`, newest line first, pushing each agent
+/// run onto `out` as its start is met and crossing off each task of `live` it
+/// meets. Once `out` holds `want` finished runs the page is full: reading goes
+/// on only while `live` is not empty, keeping just the running runs it finds,
+/// and the answer is still the offset where the page filled, with `ends` as it
+/// stood there, so the next page reads what was passed over. `None` where the
+/// top of the file came first.
+async fn subagents_back(
+    session_id: &str,
+    file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
+    end: u64,
+    chunk: u64,
+    ends: &mut HashMap<String, String>,
+    live: &mut HashSet<String>,
+    want: usize,
+    out: &mut Vec<SubagentSummary>,
+) -> Result<Option<u64>> {
+    use std::io::SeekFrom;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    let mut finished = out.iter().filter(|r| r.ended_at.is_some()).count();
+    let mut start = end;
+    // The older end of the last chunk read, up to its first newline: a line
+    // the next chunk finishes.
+    let mut carry = Vec::new();
+    // Where the page filled, and the completions pending there.
+    let mut full: Option<(u64, HashMap<String, String>)> = None;
+    while start > 0 {
+        let from = start.saturating_sub(chunk);
+        let mut buf = vec![0; (start - from) as usize];
+        file.seek(SeekFrom::Start(from)).await?;
+        file.read_exact(&mut buf).await?;
+        buf.extend_from_slice(&carry);
+        start = from;
+        // Whole lines begin after the chunk's first newline, or at 0 at the
+        // top; what precedes it is finished by the next chunk.
+        let (carry_end, first) = match buf.iter().position(|&b| b == b'\n') {
+            _ if from == 0 => (0, 0),
+            Some(i) => (i, i + 1),
+            None => (buf.len(), buf.len()),
+        };
+        carry = buf[..carry_end].to_vec();
+        let mut lines = Vec::new();
+        let mut at = first;
+        for line in buf[first..].split(|&b| b == b'\n') {
+            lines.push((at, line));
+            at += line.len() + 1;
+        }
+        for (line_start, line) in lines.into_iter().rev() {
+            let at = from + line_start as u64;
+            match &full {
+                None => {
+                    finished += usize::from(subagent_line(session_id, line, ends, live, out));
+                    if finished >= want {
+                        if live.is_empty() {
+                            return Ok(Some(at));
+                        }
+                        full = Some((at, ends.clone()));
+                    }
+                }
+                Some((filled, kept)) => {
+                    let mut passed = Vec::new();
+                    subagent_line(session_id, line, ends, live, &mut passed);
+                    out.extend(passed.into_iter().filter(|r| r.ended_at.is_none()));
+                    if live.is_empty() {
+                        *ends = kept.clone();
+                        return Ok(Some(*filled));
+                    }
+                }
+            }
+        }
+    }
+    Ok(full.map(|(filled, kept)| {
+        *ends = kept;
+        filled
+    }))
+}
+
+/// Folds one log line into the walk. True where it completed a finished run.
+fn subagent_line(
+    session_id: &str,
+    line: &[u8],
+    ends: &mut HashMap<String, String>,
+    live: &mut HashSet<String>,
+    out: &mut Vec<SubagentSummary>,
+) -> bool {
+    let has = |needle: &[u8]| line.windows(needle.len()).any(|w| w == needle);
+    let (started, completed) = (has(br#""subagent_started""#), has(br#""subagent_completed""#));
+    if !started && !completed {
+        return false;
+    }
+    let Ok(event) = serde_json::from_slice::<AgentEvent>(line) else { return false };
+    let Some(sub) = event.subagent else { return false };
+    // A task is known by its harness handle, or by the spawning call's id
+    // where the harness names none (fx).
+    live.remove(&sub.id);
+    match event.payload {
+        // Codex logs no start, only a main-thread spawn call, so its run is
+        // known from the completion alone, which names the agent on the
+        // envelope.
+        AgentEventPayload::SubagentCompleted { agent_id, .. } if event.harness == Harness::Codex => {
+            live.remove(&agent_id);
+            out.push(SubagentSummary {
+                id: sub.id,
+                session_id: session_id.to_string(),
+                task_id: (!agent_id.is_empty()).then_some(agent_id),
+                label: sub.label,
+                description: None,
+                started_at: event.ts.clone(),
+                ended_at: Some(event.ts),
+            });
+            true
+        }
+        AgentEventPayload::SubagentCompleted { .. } => {
+            ends.insert(sub.id, event.ts);
+            false
+        }
+        AgentEventPayload::SubagentStarted { agent_id, label, description, .. } => {
+            live.remove(&agent_id);
+            let ended_at = ends.remove(&sub.id);
+            if label == "local_bash" || label == "bash" {
+                return false;
+            }
+            let done = ended_at.is_some();
+            out.push(SubagentSummary {
+                id: sub.id,
+                session_id: session_id.to_string(),
+                task_id: (!agent_id.is_empty()).then_some(agent_id),
+                label: sub.label.or(Some(label)),
+                description,
+                started_at: event.ts,
+                ended_at,
+            });
+            done
+        }
+        _ => false,
+    }
+}
+
 /// Events from one stretch of a session's log, and the byte offset the
 /// stretch starts at — `None` once it reaches the top. An offset stays valid
 /// for the life of the file, since the log is only ever appended to.
@@ -2531,6 +2761,66 @@ pub async fn get_session_path(session_id: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Newest first, a page ending on its `want`-th finished run, a run whose
+    /// completion and start straddle a page still closed, a shell left out,
+    /// and a Codex run known by its completion alone, across tiny chunks.
+    #[tokio::test]
+    async fn subagents_back_pages_newest_first() {
+        let line = |harness: &str, sub: &str, payload: &str, ts: &str| {
+            format!(r#"{{"id":"e","sessionId":"s","harness":"{harness}","seq":0,"ts":"{ts}","turnId":null,"subagent":{{"id":"{sub}","label":"{sub}"}},"payload":{payload}}}"#)
+        };
+        let start = |sub: &str, label: &str, ts: &str| {
+            line("claude_code", sub, &format!(r#"{{"type":"subagent_started","agentId":"x{sub}","label":"{label}","description":"do {sub}","prompt":null}}"#), ts)
+        };
+        let end = |harness: &str, sub: &str, ts: &str| {
+            line(harness, sub, r#"{"type":"subagent_completed","agentId":"y","status":"completed","summary":null,"usage":null}"#, ts)
+        };
+        let log = [
+            start("a", "Explore", "t1"),
+            start("b", "Explore", "t2"),
+            start("sh", "local_bash", "t3"),
+            end("claude_code", "b", "t4"),
+            start("c", "Explore", "t5"),
+            end("claude_code", "c", "t6"),
+            end("claude_code", "a", "t7"),
+            end("codex", "k", "t8"),
+            start("d", "Explore", "t9"),
+        ]
+        .join("\n")
+            + "\n";
+        let len = log.len() as u64;
+
+        let mut file = std::io::Cursor::new(log.into_bytes());
+        let (mut ends, mut out, mut live) = (HashMap::new(), Vec::new(), HashSet::new());
+        let stop = subagents_back("s", &mut file, len, 64, &mut ends, &mut live, 2, &mut out).await.unwrap();
+        // d is running, k (Codex) and c finished: the page ends at c's start.
+        assert_eq!(out.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["d", "k", "c"]);
+        assert_eq!(out[0].ended_at, None);
+        assert_eq!(out[2].ended_at.as_deref(), Some("t6"));
+        assert!(ends.contains_key("a"), "a's completion rides the cursor");
+
+        let mut rest = Vec::new();
+        let top = subagents_back("s", &mut file, stop.unwrap(), 64, &mut ends, &mut live, 10, &mut rest).await.unwrap();
+        assert_eq!(top, None);
+        assert_eq!(rest.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["b", "a"]);
+        assert_eq!(rest[1].ended_at.as_deref(), Some("t7"));
+        assert_eq!(rest[1].description.as_deref(), Some("do a"));
+
+        // A live task older than the full page keeps the read going until it
+        // is met, keeping only it: `d2` runs past c and b, and the page still
+        // resumes at c's start, as if nothing were hunted.
+        let log2 = [start("d2", "Explore", "t0"), String::from_utf8(file.into_inner()).unwrap()].join("\n");
+        let len2 = log2.len() as u64;
+        let mut file = std::io::Cursor::new(log2.into_bytes());
+        let (mut ends, mut out) = (HashMap::new(), Vec::new());
+        let mut live = HashSet::from(["xd2".to_string()]);
+        let hunted = subagents_back("s", &mut file, len2, 64, &mut ends, &mut live, 2, &mut out).await.unwrap();
+        assert!(live.is_empty());
+        assert_eq!(out.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["d", "k", "c", "d2"]);
+        assert_eq!(hunted, stop.map(|at| at + (len2 - len)));
+        assert!(ends.contains_key("a"), "ends as they stood where the page filled");
+    }
 
     /// Read in chunks, the answer is the whole read's: lines across a chunk's
     /// edge, a last line with no newline, a torn line, a payload's own `seq`.
