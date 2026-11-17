@@ -139,13 +139,13 @@ function spawnCommand(run: SubagentRun): string | null {
 /// tasks and runs on one icon column and one title column.
 function RunMark({ run, shell }: { run: SubagentRun; shell: boolean }) {
   return (
-    <span className="flex h-4 w-5 shrink-0 items-center justify-center">
+    <span className="flex size-5 shrink-0 items-center justify-center">
       {shell ? (
         <SquareTerminal aria-label="Shell" className="size-3.5 text-muted-foreground" />
       ) : run.done ? (
         <Check aria-label="Done" className="size-3.5 text-muted-foreground" />
       ) : (
-        <Orb state="working" variant="gyro" size={16} label="Working" />
+        <Orb state="working" variant="gyro" size={20} label="Working" />
       )}
     </span>
   );
