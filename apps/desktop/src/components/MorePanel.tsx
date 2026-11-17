@@ -18,9 +18,9 @@ export default function MorePanel({
   subagents,
 }: {
   todos: Todo[] | null;
-  /// The session's log, for its pictures and recordings. `null` where it
-  /// holds none, or where they open elsewhere — a bot's chat, from its button.
-  attachments: HeldLog | null;
+  /// The logs the attachment grid reads, newest first — see `AttachmentGrid`.
+  /// `null` where none holds a picture or recording.
+  attachments: HeldLog[] | null;
   /// Whether the session is mid-turn. The checklist's running item shimmers on
   /// this alone — a list is **kept** after the turn ends, so an item left at
   /// `in_progress` by a session that stopped would otherwise animate a claim
@@ -45,7 +45,7 @@ export default function MorePanel({
 
       {/* Untitled: a grid of pictures names itself. Last, since Load more
           grows it and anything under it would be pushed out of reach. */}
-      {attachments && <AttachmentGrid logs={[attachments]} />}
+      {attachments && <AttachmentGrid logs={attachments} />}
     </div>
   );
 }

@@ -39,10 +39,10 @@ const SOURCES = [
 ];
 // A held log of `count` pictures, each its own prompt, so the grid reads them
 // the way it reads a real session's.
-const attachments = (count: number): HeldLog | null =>
+const attachments = (count: number): HeldLog[] | null =>
   count === 0
     ? null
-    : {
+    : [{
         sessionId: "demo",
         olderBefore: null,
         events: Array.from(
@@ -69,7 +69,7 @@ const attachments = (count: number): HeldLog | null =>
               },
             }) as AgentEvent,
         ),
-      };
+      }];
 
 const TODOS: Todo[] = [
   { content: "Read the grok ACP capture end to end", status: "completed", id: "1" },

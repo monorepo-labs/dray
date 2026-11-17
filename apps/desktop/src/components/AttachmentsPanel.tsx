@@ -1,8 +1,5 @@
-import { useState, useSyncExternalStore } from "react";
-import { Images, ListChecks } from "lucide-react";
+import { useState } from "react";
 
-import IconToggle from "@/components/IconToggle";
-import TabButton from "@/components/TabButton";
 import ImageLightbox, { Thumb, type LightboxImage } from "@/components/chat/ImageLightbox";
 import { Button } from "@/components/ui/button";
 import { basename } from "@/lib/format";
@@ -141,94 +138,6 @@ export default function AttachmentGrid({ logs }: { logs: HeldLog[] }) {
         onIndex={(i) => setOpenSrc(items[i].src)}
         onClose={() => setOpenSrc(null)}
       />
-    </div>
-  );
-}
-
-/// Where a bot's attachments button stands. Dev builds only pick: Yogesh is
-/// comparing the three, and a release takes `pane` until one is chosen.
-export type AttachmentsPlace = "pane" | "toggle" | "titlebar";
-export const ATTACHMENTS_PLACES: { id: AttachmentsPlace; label: string }[] = [
-  { id: "pane", label: "Pane button" },
-  { id: "toggle", label: "Pane toggle" },
-  { id: "titlebar", label: "Titlebar" },
-];
-const PLACE_KEY = "dray.dev.attachmentsPlace";
-const placeListeners = new Set<() => void>();
-
-export function useAttachmentsPlace(): AttachmentsPlace {
-  return useSyncExternalStore(
-    (on) => {
-      placeListeners.add(on);
-      return () => placeListeners.delete(on);
-    },
-    () => (import.meta.env.DEV ? ((localStorage.getItem(PLACE_KEY) as AttachmentsPlace | null) ?? "pane") : "pane"),
-  );
-}
-
-export function setAttachmentsPlace(place: AttachmentsPlace) {
-  localStorage.setItem(PLACE_KEY, place);
-  for (const on of placeListeners) on();
-}
-
-/// A bot's way to its attachments: a labelled toggle lit while they are
-/// showing, or a Tasks/Attachments glyph pair where `place` is `toggle`.
-export function AttachmentsButton({
-  open,
-  onToggle,
-  place,
-}: {
-  open: boolean;
-  onToggle: (open: boolean) => void;
-  place: AttachmentsPlace;
-}) {
-  if (place === "toggle") {
-    return (
-      <IconToggle
-        value={open ? "attachments" : "tasks"}
-        onChange={(v) => onToggle(v === "attachments")}
-        tooltips
-        options={[
-          { value: "tasks", label: "Tasks", Icon: ListChecks },
-          { value: "attachments", label: "Attachments", Icon: Images },
-        ]}
-      />
-    );
-  }
-  // Labelled and lit like a tab rather than a bare glyph: it swaps what the
-  // pane shows, which is what the tabs beside it do.
-  return (
-    <TabButton
-      active={open}
-      aria-pressed={open}
-      onClick={() => onToggle(!open)}
-      className="flex shrink-0 items-center gap-1.5"
-    >
-      <Images className="size-3.5" strokeWidth={1.75} />
-      Attachments
-    </TabButton>
-  );
-}
-
-/// The dev-only pick between the button's places, at the foot of the view it
-/// opens, since that view is reachable from every one of them.
-export function AttachmentsPlacePicker() {
-  const place = useAttachmentsPlace();
-  if (!import.meta.env.DEV) return null;
-  return (
-    <div className="mt-auto flex flex-wrap items-center gap-x-3 gap-y-1 border-t-[0.5px] border-border px-3 py-2 font-mono text-[10px] text-muted-foreground/70">
-      <span>DEV · button in</span>
-      {ATTACHMENTS_PLACES.map(({ id, label }) => (
-        <button
-          key={id}
-          type="button"
-          aria-pressed={place === id}
-          onClick={() => setAttachmentsPlace(id)}
-          className={cn("transition-colors", place === id ? "text-foreground" : "hover:text-foreground")}
-        >
-          {label}
-        </button>
-      ))}
     </div>
   );
 }
