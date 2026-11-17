@@ -1,6 +1,7 @@
-import { Minus, Plus, X } from "lucide-react";
+import { Minus, Plus, Timer, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
+import { RailPop, useRailSlot } from "@/components/RailPop";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -205,7 +206,8 @@ function LiveWarning(props: Omit<Parameters<typeof Warning>[0], "now">) {
 /// (`SIDEBAR_DEFAULT`, 240) less its rows' inset, so it reads as part of it. Its
 /// bar drains like a notice card's but takes nothing down: the card stands
 /// until the reader extends or dismisses it or the sandbox stops, since missing
-/// it costs running work.
+/// it costs running work. On the icon rail it would cover the chat, so it folds
+/// to a countdown in the rail's foot that opens the cards beside it.
 export default function BoatWarnings({ busy }: { busy: (server: string) => boolean }) {
   const servers = useServers();
   const { auto } = useBoatPrefs();
@@ -214,6 +216,7 @@ export default function BoatWarnings({ busy }: { busy: (server: string) => boole
   const onAutoFail = useCallback((key: string, why: string) => setAutoFailed((f) => ({ ...f, [key]: why })), []);
   useAutoExtend(busy, onAutoFail);
   const offer = useSyncExternalStore(offerChanged.subscribe, () => showOffer);
+  const slot = useRailSlot();
   // By deadline, so an extend that runs out later warns again.
   const [dismissed, setDismissed] = useState<string[]>([]);
   // After every hook: auto-extend keeps running, silently, with the cards off.
@@ -224,8 +227,8 @@ export default function BoatWarnings({ busy }: { busy: (server: string) => boole
     return stopsAt && !handled && !dismissed.includes(`${server.id}:${stopsAt}`) ? [{ server, stopsAt }] : [];
   });
   if (!up.length && !offer) return null;
-  return (
-    <div className="pointer-events-none fixed bottom-2 left-2 z-50 flex w-56 flex-col gap-2">
+  const stack = (
+    <div className={cn("pointer-events-none flex w-56 flex-col gap-2", !slot && "fixed bottom-2 left-2 z-50")}>
       {offer && <AutoOffer />}
       {up.map(({ server, stopsAt }) => (
         <LiveWarning
@@ -237,5 +240,34 @@ export default function BoatWarnings({ busy }: { busy: (server: string) => boole
         />
       ))}
     </div>
+  );
+  if (!slot) return stack;
+  // The soonest stop is what the rail's button counts down to.
+  const soonest = up.map((u) => u.stopsAt).sort()[0];
+  const label = soonest ? `${up.length === 1 ? up[0].server.name : `${up.length} sandboxes`} stopping soon` : "Auto-extend";
+  return (
+    <RailPop
+      slot={slot}
+      label={label}
+      trigger={
+        <Button variant="ghost" size="sm" aria-label={label} className="w-10 px-0">
+          {soonest ? <RailCountdown stopsAt={soonest} /> : <Timer className="size-4 text-accent-command" />}
+        </Button>
+      }
+    >
+      {stack}
+    </RailPop>
+  );
+}
+
+/// The rail's stand-in for the cards: the clock alone, red for the last two
+/// minutes as on the card.
+function RailCountdown({ stopsAt }: { stopsAt: string }) {
+  const now = useNow();
+  const urgent = new Date(stopsAt).getTime() - now <= 2 * 60_000;
+  return (
+    <span className={cn("text-[11px] font-semibold tabular-nums", urgent ? "text-destructive" : "text-accent-command")}>
+      {countdown(stopsAt, now)}
+    </span>
   );
 }

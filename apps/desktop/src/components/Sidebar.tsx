@@ -26,6 +26,7 @@ import { greetingOf, previewLine, type BotEntry } from "@/lib/bots";
 
 import PrStateIcon, { ChecksRunningIcon, prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
+import { setRailSlot } from "@/components/RailPop";
 import PanelLeftIcon from "@/components/icons/PanelLeftIcon";
 import { Button } from "@/components/ui/button";
 import {
@@ -1708,6 +1709,9 @@ export default function Sidebar({
 
       {iconOnly && (
         <div className="flex shrink-0 flex-col items-center gap-0.5 pb-3">
+          {/* The floating cards land here: pinned bottom-left they would
+              cover the chat, the rail being narrower than any of them. */}
+          <div ref={setRailSlot} className="flex flex-col items-center gap-0.5 empty:hidden" />
           {/* The titlebar switcher's click, stepping to the next space, with
               the one in force named in the tooltip. */}
           {spaces.length > 0 && (
