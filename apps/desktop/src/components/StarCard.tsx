@@ -48,15 +48,12 @@ export default function StarCard() {
         </span>
       ) : (
         <>
-          <div className="flex flex-col gap-1 px-3 pt-2.5">
-            <span className="flex items-center gap-1.5 text-ui font-medium text-foreground">
-              <StarIcon className="size-3.5 text-accent-command" aria-hidden />
-              Star Dray on GitHub?
+          <span className="flex gap-1.5 px-3 pt-2.5 text-ui font-medium text-foreground">
+            <span aria-hidden className="flex h-[1lh] shrink-0 items-center">
+              <StarIcon className="size-3.5 text-accent-command" />
             </span>
-            <span className="text-ui text-muted-foreground">
-              Merged from Dray. If it helped, a star helps others find it.
-            </span>
-          </div>
+            Liking Dray so far? A star would help us.
+          </span>
           <div className="grid grid-cols-2 gap-1.5 p-2.5">
             <Button variant="ghost" size="sm" onClick={closeStarPrompt}>
               Not now
