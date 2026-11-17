@@ -62,6 +62,20 @@ pub struct SessionStatusEvent {
     pub modified: Option<String>,
 }
 
+/// Emitted as `session_serving` when the serving sweep's verdict on a session
+/// changes. Derived state like [`SessionStatusEvent`], never logged.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SessionServingEvent {
+    pub session_id: String,
+    /// The ports the session's background shells listen on, where those
+    /// servers are all it has left running: the turn is over and nothing will
+    /// wake the agent, so it waits on the reader. Empty otherwise. Holds for
+    /// the current task set alone; a new one drops it.
+    pub ports: Vec<u16>,
+}
+
 /// A prompt typed while a turn was running, held here until the turn reaches a
 /// point where handing it to the CLI costs nothing.
 ///
@@ -221,6 +235,11 @@ pub struct StatusTracker {
     /// that it is recorded as sent. The panel's per-task stop names an id off
     /// those same events, not off here.
     background_tasks: Vec<String>,
+    /// Every outstanding task is a shell, not a subagent: the precondition for
+    /// [`Self::serving_question`].
+    shells_only: bool,
+    /// The serving sweep's last published verdict for this task set.
+    serving: Vec<u16>,
     /// Main-thread tool calls started and not yet finished. Not a status input —
     /// it decides whether an arriving prompt is written now or held.
     open_tool_calls: usize,
@@ -290,6 +309,9 @@ impl StatusTracker {
             // and its own per-task Stop.
             AgentEventPayload::BackgroundTasksChanged { tasks } => {
                 self.background_tasks = tasks.iter().map(|t| t.task_id.clone()).collect();
+                self.shells_only = tasks.iter().all(|t| SHELL_TASKS.contains(&t.task_type.as_str()));
+                // Clients drop theirs on the same event, so the two never differ.
+                self.serving.clear();
                 self.quiet_since = Some(Instant::now());
                 None
             }
@@ -361,6 +383,22 @@ impl StatusTracker {
     /// against the word the frontend reads.
     pub fn status(&self) -> SessionStatus {
         self.status
+    }
+
+    /// How many background shells the serving sweep must find listening for
+    /// this session to read as waiting on the reader, or `None` where the
+    /// question does not apply: a turn running, nothing in the background, or
+    /// a subagent among it — that one is the agent working.
+    pub fn serving_question(&self) -> Option<usize> {
+        let n = self.background_tasks.len();
+        (!self.model_call_open && n > 0 && self.shells_only).then_some(n)
+    }
+
+    /// Records the sweep's verdict, answering whether it moved.
+    pub fn set_serving(&mut self, ports: Vec<u16>) -> bool {
+        let moved = self.serving != ports;
+        self.serving = ports;
+        moved
     }
 
     /// The outstanding background tasks — the latest reading, since the set is
@@ -640,6 +678,15 @@ pub async fn settle_dead_child(
     }
 }
 
+/// Task kinds that are a shell: Claude Code's `local_bash`, grok's `bash`.
+/// Named rather than "anything but a subagent", so a kind first seen tomorrow
+/// keeps its task working, which is today's reading.
+const SHELL_TASKS: &[&str] = &["local_bash", "bash", "shell"];
+
+/// How often [`SessionManager::sweep_serving`] looks. A stall is two minutes,
+/// so a quarter minute late costs nothing.
+const SERVING_EVERY: Duration = Duration::from_secs(15);
+
 /// How long a child may sit with nothing running before [`SessionManager::reap_idle`]
 /// stops it.
 const IDLE_LIMIT: Duration = Duration::from_secs(15 * 60);
@@ -654,6 +701,22 @@ fn start_idle_sweep() {
             loop {
                 tick.tick().await;
                 manager().reap_idle(Instant::now()).await;
+            }
+        });
+    });
+}
+
+/// Starts the serving sweep once, with the first child, on the sink that child
+/// reports through: a process has the one.
+fn start_serving_sweep(app: &Sink) {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        let app = app.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(SERVING_EVERY);
+            loop {
+                tick.tick().await;
+                manager().sweep_serving(&app).await;
             }
         });
     });
@@ -818,6 +881,44 @@ impl SessionManager {
             // Plain `kill`, as a respawn does: the next send stands in for one.
             if let Some(session) = guard.take() {
                 let _ = session.kill().await;
+            }
+        }
+    }
+
+    /// Asks of every session whose turn is over with only shells behind it
+    /// whether those shells are all servers, and tells clients where the
+    /// answer moved. One process scan covers every session, and none runs while
+    /// no session asks. A slot or tracker locked now is skipped, as
+    /// [`Self::reap_idle`] does: the next tick catches it.
+    async fn sweep_serving(&self, app: &Sink) {
+        let slots: Vec<(String, Slot)> =
+            self.sessions.lock().await.iter().map(|(id, s)| (id.clone(), s.clone())).collect();
+        let mut asks = Vec::new();
+        for (id, slot) in slots {
+            let Ok(guard) = slot.try_lock() else { continue };
+            let Some(session) = guard.as_ref() else { continue };
+            let Some(root) = session.child.id() else { continue };
+            let Ok(tracker) = session.status.try_lock() else { continue };
+            if let Some(shells) = tracker.serving_question() {
+                asks.push((id, session.status.clone(), root, shells));
+            }
+        }
+        if asks.is_empty() {
+            return;
+        }
+        let roots: Vec<(u32, usize)> = asks.iter().map(|(_, _, root, n)| (*root, *n)).collect();
+        let verdicts = tokio::task::spawn_blocking(move || crate::local_servers::serving(&roots))
+            .await
+            .unwrap_or_default();
+        for ((id, status, _, _), ports) in asks.into_iter().zip(verdicts) {
+            let mut tracker = status.lock().await;
+            // The set or the turn moved during the scan, so the verdict is stale.
+            if tracker.serving_question().is_none() || !tracker.set_serving(ports.clone()) {
+                continue;
+            }
+            drop(tracker);
+            if let Err(e) = app.emit("session_serving", &SessionServingEvent { session_id: id, ports }) {
+                eprintln!("[serving emit err] {e}");
             }
         }
     }
@@ -2276,6 +2377,7 @@ impl Session {
         app: &Sink,
     ) -> Result<Session> {
         start_idle_sweep();
+        start_serving_sweep(app);
         match harness {
             Harness::ClaudeCode => {
                 claude_code::init(
@@ -4873,6 +4975,34 @@ mod tests {
     /// never end, and the CLI's main thread is idle meanwhile (verified against
     /// v2.1.232, a prompt written in this state is answered in under two
     /// seconds).
+    /// Serving is asked only of a finished turn with shells alone behind it,
+    /// and a moved task set forgets the last answer.
+    #[test]
+    fn serving_is_asked_of_shells_behind_a_finished_turn() {
+        let task = |id: &str, kind: &str| crate::events::BackgroundTask {
+            task_id: id.to_string(),
+            task_type: kind.to_string(),
+            description: String::new(),
+        };
+        let mut tracker = StatusTracker::default();
+        tracker.on_send();
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged { tasks: vec![task("b1", "local_bash")] });
+        assert_eq!(tracker.serving_question(), None, "the turn is still running");
+        tracker.on_event(&turn_completed());
+        assert_eq!(tracker.serving_question(), Some(1));
+        assert!(tracker.set_serving(vec![1420]));
+        assert!(!tracker.set_serving(vec![1420]), "the same answer is no news");
+
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged {
+            tasks: vec![task("b1", "local_bash"), task("a1", "local_agent")],
+        });
+        assert_eq!(tracker.serving_question(), None, "a subagent is the agent working");
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged { tasks: vec![task("b1", "local_bash")] });
+        assert!(tracker.set_serving(vec![1420]), "the moved set dropped the old answer");
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged { tasks: vec![] });
+        assert_eq!(tracker.serving_question(), None);
+    }
+
     #[test]
     fn a_background_task_holds_the_child_but_not_the_turn() {
         let mut tracker = StatusTracker::default();

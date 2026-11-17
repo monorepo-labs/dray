@@ -2098,6 +2098,19 @@ export type SessionInfo = { cwd: string | null, model: string | null, harnessVer
 export type SessionPage = { events: Array<AgentEvent>, olderBefore: number | null, };
 
 /**
+ * Emitted as `session_serving` when the serving sweep's verdict on a session
+ * changes. Derived state like [`SessionStatusEvent`], never logged.
+ */
+export type SessionServingEvent = { sessionId: string, 
+/**
+ * The ports the session's background shells listen on, where those
+ * servers are all it has left running: the turn is over and nothing will
+ * wake the agent, so it waits on the reader. Empty otherwise. Holds for
+ * the current task set alone; a new one drops it.
+ */
+ports: Array<number>, };
+
+/**
  * What crosses the IPC boundary for one session: its index entry plus the
  * replayed event log. Distinct from [`crate::session::Session`], which owns a
  * child process and cannot be serialized.

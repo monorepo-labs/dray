@@ -25,6 +25,7 @@ function row(id: string, over: Partial<CrewRow> = {}, item: Partial<SessionIndex
     item: { sessionId: id, title: id, modified: new Date(T0).toISOString(), ...item } as SessionIndexItem,
     busy: false,
     background: false,
+    serving: [],
     asking: false,
     unread: false,
     ...over,
@@ -65,6 +66,13 @@ describe("stalledTasks", () => {
     expect(stalledTasks(rows, () => undefined, new Map(), T0 + 2 * STALL_MS, fresh)).toEqual([]);
     const conflict = () => pr({ mergeable: "CONFLICTING" });
     expect(stalledTasks(rows, conflict, new Map(), T0 + 2 * STALL_MS, fresh)).toEqual([]);
+  });
+
+  // "The dev app is running, try it": the server is for the reader, so the
+  // task waits on them like any idle one.
+  it("calls a task left only serving stalled", () => {
+    const [s] = stalledTasks([row("a", { serving: [1420] })], () => undefined, new Map(), T0 + STALL_MS, fresh);
+    expect(s.kind).toBe("waiting");
   });
 
   it("counts a PR already ready from the task's last activity", () => {

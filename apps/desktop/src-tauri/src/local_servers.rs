@@ -78,18 +78,87 @@ fn discover(root: Option<u32>, tree: Option<&Path>) -> Vec<LocalServer> {
 
 /// Every pid under `root`, `root` included.
 pub(crate) fn descendants(root: u32) -> HashSet<u32> {
-    let Ok(out) = Command::new("ps").args(["-axo", "pid=,ppid="]).output() else {
-        return HashSet::new();
+    subtree(&processes().children, root)
+}
+
+/// The machine's processes: who started whom, and each one's name.
+#[derive(Default)]
+struct Processes {
+    children: HashMap<u32, Vec<u32>>,
+    names: HashMap<u32, String>,
+}
+
+fn processes() -> Processes {
+    let Ok(out) = Command::new("ps").args(["-axo", "pid=,ppid=,comm="]).output() else {
+        return Processes::default();
     };
-    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let mut it = line.split_whitespace();
-        if let (Some(pid), Some(ppid)) = (it.next(), it.next()) {
-            if let (Ok(pid), Ok(ppid)) = (pid.parse(), ppid.parse()) {
-                children.entry(ppid).or_default().push(pid);
-            }
+    parse_ps(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// `ps -o pid=,ppid=,comm=`. A Mac's `comm` is the executable's whole path,
+/// spaces and all, where Linux's is the bare name; a login shell's carries a
+/// leading `-`. Both are cut to the bare name.
+fn parse_ps(text: &str) -> Processes {
+    let mut p = Processes::default();
+    for line in text.lines() {
+        let Some((pid, rest)) = line.trim_start().split_once(char::is_whitespace) else { continue };
+        let rest = rest.trim_start();
+        let (ppid, comm) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        let (Ok(pid), Ok(ppid)) = (pid.parse::<u32>(), ppid.parse::<u32>()) else { continue };
+        let name = comm.trim().rsplit('/').next().unwrap_or_default().trim_start_matches('-');
+        p.children.entry(ppid).or_default().push(pid);
+        p.names.insert(pid, name.to_string());
+    }
+    p
+}
+
+/// What the session manager's serving sweep asks, per `(agent pid, background
+/// shells)`: the ports those shells listen on where every one of them is a
+/// server, else nothing.
+///
+/// Read off the OS rather than any harness's wire, since none says whether a
+/// backgrounded command is a server, and a command's text is a poor guess at
+/// it (`pnpm dev`, `cargo run`, `make serve`, a script). A server is what
+/// listens on a port; a build or a test run, which the agent waits on, is not.
+/// Each background shell is its own child of the agent — Claude Code runs every
+/// Bash call as one — so a shell is serving when anything under it holds a
+/// localhost listener. Counted rather than matched to tasks, since the wire
+/// names no pid: a build beside a dev server is two tasks and one listening
+/// shell, and stays working. Only shells count, so an MCP server the agent
+/// spawned and that listens does not pass for one.
+pub(crate) fn serving(roots: &[(u32, usize)]) -> Vec<Vec<u16>> {
+    let procs = processes();
+    let mut ports_of: HashMap<u32, Vec<u16>> = HashMap::new();
+    for (pid, _, port) in listening() {
+        ports_of.entry(pid).or_default().push(port);
+    }
+    roots.iter().map(|&(root, shells)| serving_ports(&procs, &ports_of, root, shells)).collect()
+}
+
+fn serving_ports(procs: &Processes, ports_of: &HashMap<u32, Vec<u16>>, root: u32, shells: usize) -> Vec<u16> {
+    const SHELLS: &[&str] = &["bash", "zsh", "sh", "dash", "fish"];
+    let mut ports = Vec::new();
+    let mut listening = 0;
+    for &child in procs.children.get(&root).into_iter().flatten() {
+        if !procs.names.get(&child).is_some_and(|n| SHELLS.contains(&n.as_str())) {
+            continue;
+        }
+        let mut found: Vec<u16> =
+            subtree(&procs.children, child).iter().flat_map(|pid| ports_of.get(pid)).flatten().copied().collect();
+        if !found.is_empty() {
+            listening += 1;
+            ports.append(&mut found);
         }
     }
+    if listening < shells {
+        return Vec::new();
+    }
+    ports.sort_unstable();
+    ports.dedup();
+    ports
+}
+
+fn subtree(children: &HashMap<u32, Vec<u32>>, root: u32) -> HashSet<u32> {
     let mut set = HashSet::from([root]);
     let mut stack = vec![root];
     while let Some(pid) = stack.pop() {
@@ -278,6 +347,51 @@ mod tests {
         let me = std::process::id();
         assert!(listening().iter().any(|(pid, _, p)| *pid == me && *p == port), "port {port} not listed");
         assert_eq!(cwd_of(vec![me]).get(&me).map(|p| resolved(p)), Some(resolved(&std::env::current_dir().unwrap())));
+    }
+
+    #[test]
+    fn parses_ps_names() {
+        let p = parse_ps("  10     1 /bin/zsh\n  11    10 -zsh\n  12    10 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n13 12 node\n");
+        assert_eq!(p.names[&10], "zsh");
+        assert_eq!(p.names[&11], "zsh");
+        assert_eq!(p.names[&12], "Google Chrome");
+        assert_eq!(p.children[&10], vec![11, 12]);
+        assert_eq!(p.children[&12], vec![13]);
+    }
+
+    /// Agent 1 runs a dev server (bash 10 → node 11 on :5173), a build
+    /// (bash 20 → cargo 21) and an MCP server listening on its own (node 30).
+    #[test]
+    fn serving_counts_listening_shells() {
+        let procs = parse_ps("10 1 bash\n11 10 node\n20 1 bash\n21 20 cargo\n30 1 node\n");
+        let ports = HashMap::from([(11, vec![5173, 24678]), (30, vec![9000])]);
+        assert_eq!(serving_ports(&procs, &ports, 1, 1), vec![5173, 24678], "the server alone");
+        assert!(serving_ports(&procs, &ports, 1, 2).is_empty(), "a build beside it keeps the agent working");
+        let build_only = HashMap::from([(30, vec![9000])]);
+        assert!(serving_ports(&procs, &build_only, 1, 1).is_empty(), "an MCP server's port is no shell's");
+    }
+
+    /// The real read: a shell under this process listening through a child.
+    #[test]
+    fn finds_a_real_shell_serving() {
+        let mut shell = Command::new("sh")
+            // `; true`, or the shell execs python and there is no shell to find.
+            .args(["-c", "python3 -m http.server 0 --bind 127.0.0.1 >/dev/null 2>&1; true"])
+            .spawn()
+            .unwrap();
+        let me = std::process::id();
+        let mut found = Vec::new();
+        for _ in 0..50 {
+            found = serving(&[(me, 1)]).remove(0);
+            if !found.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let _ = Command::new("pkill").args(["-P", &shell.id().to_string()]).status();
+        let _ = shell.kill();
+        let _ = shell.wait();
+        assert!(!found.is_empty(), "the shell's server was not seen");
     }
 
     #[test]

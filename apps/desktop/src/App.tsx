@@ -355,6 +355,7 @@ function App() {
     botServer,
     setBotServer,
     tasksBySession,
+    servingBySession,
   } = useSessions();
 
   // Tasks saved to start later. One is open while the new-task composer shows
@@ -1185,8 +1186,8 @@ function App() {
   // session, not the space's: a bot hands work to whichever project it likes,
   // in any space.
   const crew = useMemo(
-    () => crewRows(sessionIndexItems, selectedSessionId, { statusBySession, askingSessions, tasksBySession }, earlierIds),
-    [sessionIndexItems, selectedSessionId, statusBySession, askingSessions, tasksBySession, earlierIds],
+    () => crewRows(sessionIndexItems, selectedSessionId, { statusBySession, askingSessions, tasksBySession, servingBySession }, earlierIds),
+    [sessionIndexItems, selectedSessionId, statusBySession, askingSessions, tasksBySession, servingBySession, earlierIds],
   );
   const crewAsks = useMemo(() => crew.filter((r) => r.asking), [crew]);
   // A split has no crew column: it is already several conversations side by
@@ -1494,6 +1495,7 @@ function App() {
     statusBySession,
     askingSessions,
     tasksBySession,
+    servingBySession,
     prOf: taskPr,
     prReadAt: taskPrReadAt,
   });

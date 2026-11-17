@@ -41,6 +41,7 @@ const row = (id: string, title: string, minutes: number, busy = false): CrewRow 
   } as unknown as SessionIndexItem,
   busy,
   background: false,
+  serving: [],
   asking: false,
   unread: false,
 });

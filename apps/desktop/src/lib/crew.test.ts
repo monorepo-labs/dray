@@ -147,6 +147,22 @@ describe("crewRows", () => {
     expect(c.background).toBe(false);
     expect(crewRows(items, "a", quiet)[0].background).toBe(false);
   });
+
+  // A task that ended its turn leaving a dev server up waits on the reader.
+  it("reads a task left only serving as not in the background", () => {
+    const items = [item("a", null), item("b", "a"), item("c", "a", { status: "in_progress" }), item("d", "a")];
+    const task = { taskId: "t", taskType: "local_bash", description: "dev server" } as BackgroundTask;
+    const live = {
+      statusBySession: {},
+      askingSessions: new Set<string>(),
+      tasksBySession: { b: [task], c: [task] },
+      servingBySession: { b: [5173], c: [5173], d: [5173] },
+    };
+    const [b, c, d] = crewRows(items, "a", live);
+    expect([b.background, b.serving]).toEqual([false, [5173]]);
+    expect([c.busy, c.serving]).toEqual([true, []]);
+    expect(d.serving).toEqual([]);
+  });
 });
 
 describe("crewSeen", () => {

@@ -309,6 +309,16 @@ function TaskRow({
 
         <MachineMark machine={machine} />
 
+        {/* Idle, not working: the server waits on the reader to try it. */}
+        {row.serving.length > 0 && (
+          <span
+            className="shrink-0 text-[12px] text-muted-foreground tabular-nums"
+            title={`Serving on ${row.serving.map((p) => `localhost:${p}`).join(", ")}`}
+          >
+            :{row.serving[0]}
+          </span>
+        )}
+
         {words && <span className={cn("shrink-0 text-[12px]", TONE_TEXT[words.tone])}>{words.label}</span>}
 
         {/* Opens the pull request in Dray's browser; ⌘-click, the system's. */}
