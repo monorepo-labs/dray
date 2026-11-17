@@ -41,6 +41,13 @@ phone reads and drives it over the same WebSocket the desktop uses
   it, on this phone, per agent; starred ones lead. With the worktree off a
   Branch row switches the checkout at once (`checkout_branch`), asking
   Bring or Stash first where files are uncommitted, as the desktop does.
+- **A lone bot opens itself** (#1169): a cold launch where one bot is all
+  the list would draw — no other bot, no session shown, or Hide sessions on —
+  opens its chat at once. It decides off the cached list, so the list never
+  shows first; a server with no cache waits on its index and its bots both,
+  and until both are in its rows stay hidden, or a bot's chat draws as a task.
+  Coming back from the background, a link, a tap first or ten seconds and the
+  list stays.
 - **Pairing** by paste or by QR, and every server's name, token and removal
   in one Settings screen.
 - **Shared machines** (#847): a paired server that shares its list

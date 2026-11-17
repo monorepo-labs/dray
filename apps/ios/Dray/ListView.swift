@@ -35,6 +35,9 @@ struct SessionList: View {
     /// Settings › Appearance: the list is bots alone, with nothing that serves sessions.
     @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
     @State private var newBot = false
+    @Environment(\.scenePhase) private var phase
+    /// This launch's one chance to open a lone bot's chat; anything the reader does first spends it.
+    @State private var autoOpen = true
 
     private static let pageSize = 40
 
@@ -70,6 +73,8 @@ struct SessionList: View {
         let strip = !hideSessions && names.count > 1 && (filter != nil || !(mode == .drafts ? drafts.isEmpty : all.isEmpty))
         // Bots only: a bot with no chat yet opens its own page, which carries the dock instead.
         let dock = !store.live.isEmpty && !hideSessions
+        let lone = autoOpen ? loneBot : nil
+        let read = store.live.allSatisfy { store.read($0.id) }
         VStack(spacing: 0) {
             List(selection: $selection) {
                 // Quiet about reconnects, never about a read that failed or a server waiting on the reader.
@@ -182,6 +187,14 @@ struct SessionList: View {
             }
         }
         .sheet(isPresented: $newBot) { BotSheet(editing: nil) { selection = $0 } }
+        .onChange(of: lone, initial: true) { open(lone) }
+        // Every server has answered and the list is more than one bot: the chance is gone.
+        .onChange(of: read) { if read && lone == nil { autoOpen = false } }
+        .onChange(of: selection) { if selection != nil { autoOpen = false } }
+        .onChange(of: sheet?.id) { autoOpen = false }
+        .onChange(of: phase) { if phase == .background { autoOpen = false } }
+        // ponytail: a server that takes longer than this to answer never opens its bot; a read-progress signal if that bites.
+        .task { try? await Task.sleep(for: .seconds(10)); autoOpen = false }
         // Again once a server comes up: a view opened before it connected read nothing from it.
         // Drafts and settled are read whatever the view: their buttons show only when there are some,
         // and an empty live list counts what was settled today.
@@ -260,6 +273,35 @@ struct SessionList: View {
         drafts = all.sorted { ($0.draft.created ?? "") > ($1.draft.created ?? "") }
     }
 
+    /// The bot to open at launch, where it would be the list's only row: one bot across every
+    /// server and no session shown beside it. Nil until every server's list is known, from the
+    /// cache or a read, so one still coming up never counts as empty — and the cache is what
+    /// lets a cold open go straight in without drawing the list first.
+    private var loneBot: BotStart? {
+        guard !store.live.isEmpty,
+              store.live.allSatisfy({ store.known($0.id) }),
+              store.allBots.count == 1, let b = store.allBots.first,
+              hideSessions || store.runs(project: nil).isEmpty else { return nil }
+        return BotStart(server: b.server, bot: b.bot)
+    }
+
+    /// Opens a lone bot as a tap on its row would, unanimated so the list never shows first.
+    private func open(_ b: BotStart?) {
+        guard let b, selection == nil, sheet == nil, starting == nil, mode == .live else { return }
+        autoOpen = false
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            if let chat = store.botChat(b.server, b.bot).last {
+                selection = chat
+            } else {
+                // No chat yet: its own page, which carries the dock aimed at it.
+                task.aim(at: b.bot, on: b.server)
+                starting = b
+            }
+        }
+    }
+
     /// What the list says with no rows: no server yet, one coming up, or nothing started.
     private var anyConnected: Bool { store.live.contains { store.serverState[$0.id] == .connected } }
 
@@ -290,7 +332,7 @@ struct SessionList: View {
             }
             .padding(.horizontal, Theme.Space.xxl)
             .padding(.bottom, 80)
-        } else if !anyConnected || !store.live.contains(where: { store.listed.contains($0.id) }) {
+        } else if !anyConnected || !store.live.contains(where: { store.read($0.id) }) {
             // Connected but not read yet is still connecting: "No tasks yet" there was a flash of a lie.
             Group {
                 if store.live.allSatisfy({ if case .connecting(0)? = store.serverState[$0.id] { true } else { false } }) {
