@@ -1,6 +1,6 @@
 #!/bin/sh
 # Pulls the channel resolver out of install.sh and runs it against fixed tag
-# lists, newest first as the releases API answers. Run by installer.rs, so
+# lists. Run by installer.rs, so
 # release-cli's test job runs it under Ubuntu's dash as well as macOS's sh.
 set -eu
 src="$1"
@@ -22,6 +22,13 @@ check beta   "cli-v0.9.5 cli-v0.10.0-beta.1" cli-v0.10.0-beta.1
 check beta   "cli-v0.11.0" cli-v0.11.0
 check beta   "cli-v0.12.0-beta.1" cli-v0.12.0-beta.1
 check stable "cli-v0.12.0-beta.1" ""
+# The API's order is not release order: app and CLI tags share a commit and a
+# created_at, and it listed cli-v0.14.9 above cli-v0.14.10 (#1202).
+check stable "cli-v0.14.9 cli-v0.14.10 cli-v0.14.8" cli-v0.14.10
+check beta   "cli-v0.14.9 cli-v0.14.10 cli-v0.14.8" cli-v0.14.10
+check stable "cli-v0.11.0 cli-v0.12.0-beta.1 cli-v0.12.0 cli-v0.11.1" cli-v0.12.0
+check beta   "cli-v0.12.0-beta.1 cli-v0.11.0 cli-v0.12.0-beta.10 cli-v0.12.0-beta.9" cli-v0.12.0-beta.10
+check beta   "cli-v0.11.1 cli-v0.12.0-beta.1 cli-v0.12.0 cli-v0.12.0-beta.2" cli-v0.12.0
 
 # Whether an update installs the resolved tag over the one running: the
 # installer stops unless it is newer, so leaving beta never downgrades.
