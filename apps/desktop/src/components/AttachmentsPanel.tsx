@@ -2,9 +2,9 @@ import { useState, useSyncExternalStore } from "react";
 import { Images, ListChecks } from "lucide-react";
 
 import IconToggle from "@/components/IconToggle";
+import TabButton from "@/components/TabButton";
 import ImageLightbox, { Thumb, type LightboxImage } from "@/components/chat/ImageLightbox";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { basename } from "@/lib/format";
 import { allMedia, loadOlderMedia, olderCursor, type HeldLog, type OlderMedia } from "@/lib/olderMedia";
 import { fileSrc, invoke, qualify, serverOfSession } from "@/lib/transport";
@@ -171,8 +171,8 @@ export function setAttachmentsPlace(place: AttachmentsPlace) {
   for (const on of placeListeners) on();
 }
 
-/// A bot's way to its attachments: one glyph that lights while they are
-/// showing, or a Tasks/Attachments pair where `place` is `toggle`.
+/// A bot's way to its attachments: a labelled toggle lit while they are
+/// showing, or a Tasks/Attachments glyph pair where `place` is `toggle`.
 export function AttachmentsButton({
   open,
   onToggle,
@@ -195,25 +195,18 @@ export function AttachmentsButton({
       />
     );
   }
+  // Labelled and lit like a tab rather than a bare glyph: it swaps what the
+  // pane shows, which is what the tabs beside it do.
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => onToggle(!open)}
-          aria-label="Attachments"
-          aria-pressed={open}
-          className={cn(
-            "shrink-0 transition-colors",
-            open ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <Images className="size-4" strokeWidth={1.75} />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="left">{open ? "Back to tasks" : "Attachments"}</TooltipContent>
-    </Tooltip>
+    <TabButton
+      active={open}
+      aria-pressed={open}
+      onClick={() => onToggle(!open)}
+      className="flex shrink-0 items-center gap-1.5"
+    >
+      <Images className="size-3.5" strokeWidth={1.75} />
+      Attachments
+    </TabButton>
   );
 }
 

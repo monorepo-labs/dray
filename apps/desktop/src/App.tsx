@@ -3942,7 +3942,6 @@ function App() {
             widthKey={shownSession.sessionId}
             refresh={panelRefresh}
             cwd={shownSession.cwd}
-            heading={activeTab === "attachments" && tabs.length === 1 ? "Attachments" : undefined}
             actions={
               selectedBot &&
               attachmentsPlace !== "titlebar" && (
