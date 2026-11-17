@@ -1,5 +1,8 @@
+import { useSyncExternalStore } from "react";
+
+import type { CrewRow } from "@/lib/crew";
 import type { SubagentRun } from "@/lib/transcript";
-import type { AgentEvent, SubagentList, SubagentSummary } from "@/types/events";
+import type { AgentEvent, PrMark, SessionIndexItem, SubagentList, SubagentSummary } from "@/types/events";
 
 /// Fake runs for the dev-only state picker under a bot's Tasks tab, so every
 /// state of the Subagents and Background tasks sections can be looked at in
@@ -132,3 +135,60 @@ export function devRuns(state: Exclude<DevRunState, "live">): {
       ),
   };
 }
+
+let current: DevRunState = "live";
+const listeners = new Set<() => void>();
+
+/// The picked dev state, shared by the task list and the run sections so a
+/// fake state draws both.
+export function useDevRunState(): DevRunState {
+  return useSyncExternalStore(
+    (l) => (listeners.add(l), () => listeners.delete(l)),
+    () => current,
+  );
+}
+
+export function setDevRunState(state: DevRunState) {
+  current = state;
+  listeners.forEach((l) => l());
+}
+
+function task(id: string, title: string, live: Partial<Omit<CrewRow, "item">> = {}): CrewRow {
+  const at = new Date().toISOString();
+  return {
+    item: { sessionId: `dev-task-${id}`, title, projectPath: "/dev/dray", cwd: "/dev/dray", created: at, modified: at } as unknown as SessionIndexItem,
+    busy: false,
+    asking: false,
+    unread: false,
+    background: false,
+    ...live,
+  };
+}
+
+const pr = (number: number, mark: Partial<PrMark>): PrMark => ({
+  number,
+  url: "",
+  headRefName: `dev-${number}`,
+  isDraft: false,
+  state: "OPEN",
+  checksState: "CLEAR",
+  mergeable: "MERGEABLE",
+  mergeStateStatus: "CLEAN",
+  reviewDecision: null,
+  ...mark,
+});
+
+/// A bot's handed-off work in every row state the tab sorts by.
+export const DEV_TASKS: CrewRow[] = [
+  task("ask", "Fix the iOS share sheet crash", { asking: true }),
+  task("ready", "Bot rows: inbox layout"),
+  task("checks", "Speed up transcript paging"),
+  task("busy", "Draft the 0.9 changelog", { busy: true }),
+  task("merged", "Sandbox TTL warning card"),
+];
+
+export const DEV_PRS: Record<string, PrMark> = {
+  "dev-task-ready": pr(1180, {}),
+  "dev-task-checks": pr(1183, { checksState: "RUNNING" }),
+  "dev-task-merged": pr(1171, { state: "MERGED" }),
+};

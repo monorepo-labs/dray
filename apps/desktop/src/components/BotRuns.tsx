@@ -1,7 +1,7 @@
 import { ChevronRight } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { DEV_DONE_STYLES, devRuns, DEV_RUN_STATES, type DevDoneStyle, type DevRunState } from "@/components/botRunsDev";
+import { DEV_DONE_STYLES, devRuns, DEV_RUN_STATES, setDevRunState, useDevRunState, type DevDoneStyle } from "@/components/botRunsDev";
 import { RunRow, RunSection } from "@/components/SubagentPanel";
 import { Button } from "@/components/ui/button";
 import { canOpenTab, isShellRun, opensTab, type SubagentRun } from "@/lib/transcript";
@@ -34,7 +34,7 @@ type Loader = (skip: number) => Promise<SubagentList>;
 /// subagents show; finished ones wait behind a toggle and page in off the
 /// server's logs, since the chat holds only its tail.
 export default function BotRuns(props: Props) {
-  const [dev, setDev] = useState<DevRunState>("live");
+  const dev = useDevRunState();
   const [style, setStyle] = useState<DevDoneStyle>("fold");
   const fake = import.meta.env.DEV && dev !== "live" ? devRuns(dev) : null;
   const { sessionId, also } = props;
@@ -51,7 +51,7 @@ export default function BotRuns(props: Props) {
       />
       {import.meta.env.DEV && (
         <div className="mx-3 mt-4 mb-3 flex flex-col gap-1">
-          <DevPicker label="Dev state" options={DEV_RUN_STATES} value={dev} onChange={setDev} />
+          <DevPicker label="Dev state" options={DEV_RUN_STATES} value={dev} onChange={setDevRunState} />
           <DevPicker label="All done" options={DEV_DONE_STYLES} value={style} onChange={setStyle} />
         </div>
       )}
