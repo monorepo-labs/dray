@@ -81,35 +81,60 @@ pub(crate) fn descendants(root: u32) -> HashSet<u32> {
     subtree(&processes().children, root)
 }
 
-/// The machine's processes: who started whom, and each one's name.
+/// The machine's processes: who started whom, and each one's command line.
 #[derive(Default)]
 struct Processes {
     children: HashMap<u32, Vec<u32>>,
-    names: HashMap<u32, String>,
+    args: HashMap<u32, String>,
+}
+
+impl Processes {
+    /// The bare program name: `bash` for `/bin/bash -c …`, `zsh` for a login
+    /// shell's `-zsh`.
+    fn name(&self, pid: u32) -> &str {
+        let first = self.args.get(&pid).and_then(|a| a.split_whitespace().next()).unwrap_or_default();
+        first.rsplit('/').next().unwrap_or_default().trim_start_matches('-')
+    }
 }
 
 fn processes() -> Processes {
-    let Ok(out) = Command::new("ps").args(["-axo", "pid=,ppid=,comm="]).output() else {
+    // `ww`, or a long command line is cut to the terminal's width.
+    let Ok(out) = Command::new("ps").args(["-axwwo", "pid=,ppid=,args="]).output() else {
         return Processes::default();
     };
     parse_ps(&String::from_utf8_lossy(&out.stdout))
 }
 
-/// `ps -o pid=,ppid=,comm=`. A Mac's `comm` is the executable's whole path,
-/// spaces and all, where Linux's is the bare name; a login shell's carries a
-/// leading `-`. Both are cut to the bare name.
+/// `ps -o pid=,ppid=,args=`.
 fn parse_ps(text: &str) -> Processes {
     let mut p = Processes::default();
     for line in text.lines() {
         let Some((pid, rest)) = line.trim_start().split_once(char::is_whitespace) else { continue };
         let rest = rest.trim_start();
-        let (ppid, comm) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        let (ppid, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
         let (Ok(pid), Ok(ppid)) = (pid.parse::<u32>(), ppid.parse::<u32>()) else { continue };
-        let name = comm.trim().rsplit('/').next().unwrap_or_default().trim_start_matches('-');
         p.children.entry(ppid).or_default().push(pid);
-        p.names.insert(pid, name.to_string());
+        p.args.insert(pid, args.trim().to_string());
     }
     p
+}
+
+/// Whether a command line is a test run: `npm test`, `pnpm test:e2e`,
+/// `npx playwright test`, `cargo test`, `go test`, `python -m pytest`, `jest`,
+/// `cypress run`. Read word by word, each cut to its file stem, so a runner's
+/// script path (`node_modules/.bin/jest`, `jest.js`) counts as its name.
+fn is_test_run(args: &str) -> bool {
+    const RUNNERS: &[&str] =
+        &["test", "tests", "e2e", "jest", "vitest", "mocha", "ava", "pytest", "nextest", "rspec", "phpunit", "karma", "cypress", "wdio"];
+    args.split_whitespace().any(|arg| {
+        let word = arg.rsplit('/').next().unwrap_or(arg).trim_start_matches('-').to_ascii_lowercase();
+        let stem = word.split('.').next().unwrap_or_default();
+        RUNNERS.contains(&stem)
+            || stem.starts_with("test:")
+            || stem.starts_with("test_")
+            || stem.ends_with(":test")
+            || stem.contains("e2e")
+    })
 }
 
 /// What the session manager's serving sweep asks, per `(agent pid, background
@@ -126,6 +151,18 @@ fn parse_ps(text: &str) -> Processes {
 /// names no pid: a build beside a dev server is two tasks and one listening
 /// shell, and stays working. Only shells count, so an MCP server the agent
 /// spawned and that listens does not pass for one.
+///
+/// A test run can host a server of its own — Playwright's `webServer`, an
+/// integration test binding a port — and it ends on its own, so the agent waits
+/// on it. A shell counts only while nothing live under it is a test runner
+/// ([`is_test_run`]), whose process lasts exactly as long as the run. The
+/// shell's own command line is skipped: it holds the agent's whole script, so
+/// a `cargo test && pnpm dev` already past its tests would still read as one.
+/// CPU was the rejected signal: a dev server the reader is clicking through
+/// burns it, and an e2e run waiting on a page sits idle. So was "the listener
+/// is the shell's own command": `npm run dev` and `pnpm tauri dev` put wrappers
+/// and a compiler around theirs, and Playwright puts its server under itself,
+/// so the shape is per tool, not per intent.
 pub(crate) fn serving(roots: &[(u32, usize)]) -> Vec<Vec<u16>> {
     let procs = processes();
     let mut ports_of: HashMap<u32, Vec<u16>> = HashMap::new();
@@ -140,12 +177,13 @@ fn serving_ports(procs: &Processes, ports_of: &HashMap<u32, Vec<u16>>, root: u32
     let mut ports = Vec::new();
     let mut listening = 0;
     for &child in procs.children.get(&root).into_iter().flatten() {
-        if !procs.names.get(&child).is_some_and(|n| SHELLS.contains(&n.as_str())) {
+        if !SHELLS.contains(&procs.name(child)) {
             continue;
         }
-        let mut found: Vec<u16> =
-            subtree(&procs.children, child).iter().flat_map(|pid| ports_of.get(pid)).flatten().copied().collect();
-        if !found.is_empty() {
+        let tree = subtree(&procs.children, child);
+        let testing = tree.iter().any(|&pid| pid != child && procs.args.get(&pid).is_some_and(|a| is_test_run(a)));
+        let mut found: Vec<u16> = tree.iter().flat_map(|pid| ports_of.get(pid)).flatten().copied().collect();
+        if !found.is_empty() && !testing {
             listening += 1;
             ports.append(&mut found);
         }
@@ -351,12 +389,52 @@ mod tests {
 
     #[test]
     fn parses_ps_names() {
-        let p = parse_ps("  10     1 /bin/zsh\n  11    10 -zsh\n  12    10 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n13 12 node\n");
-        assert_eq!(p.names[&10], "zsh");
-        assert_eq!(p.names[&11], "zsh");
-        assert_eq!(p.names[&12], "Google Chrome");
+        let p = parse_ps("  10     1 /bin/zsh -c eval 'pnpm dev'\n  11    10 -zsh\n  12    10 node /x/node_modules/.bin/vite --port 5173\n");
+        assert_eq!(p.name(10), "zsh");
+        assert_eq!(p.name(11), "zsh");
+        assert_eq!(p.name(12), "node");
+        assert_eq!(p.args[&12], "node /x/node_modules/.bin/vite --port 5173");
         assert_eq!(p.children[&10], vec![11, 12]);
-        assert_eq!(p.children[&12], vec![13]);
+    }
+
+    #[test]
+    fn tells_a_test_run_from_a_server() {
+        for run in [
+            "npm test",
+            "pnpm run test:e2e",
+            "node /app/node_modules/.bin/playwright test",
+            "cargo test --workspace",
+            "go test ./...",
+            "python -m pytest -x",
+            "node /app/node_modules/jest/bin/jest.js",
+            "npx cypress run",
+            "node --test",
+        ] {
+            assert!(is_test_run(run), "{run}");
+        }
+        for server in [
+            "npm run dev",
+            "node /app/node_modules/.bin/vite --port 5173",
+            "node /repo/apps/desktop/scripts/tauri.mjs dev",
+            "cargo run --bin api",
+            "python -m http.server 8000",
+            "next dev",
+        ] {
+            assert!(!is_test_run(server), "{server}");
+        }
+    }
+
+    /// Playwright's `webServer` listens under the runner, so the shell holding
+    /// it is a test run, not a server, until the runner exits.
+    #[test]
+    fn a_test_run_hosting_a_server_is_not_serving() {
+        let procs = parse_ps(
+            "10 1 bash -c eval 'npx playwright test'\n11 10 node /a/.bin/playwright test\n12 11 sh -c npm run dev\n13 12 node /a/.bin/vite\n\
+             20 1 bash -c eval 'npx playwright test && npm run dev'\n21 20 node /a/.bin/vite\n",
+        );
+        let ports = HashMap::from([(13, vec![5180]), (21, vec![5173])]);
+        assert_eq!(serving_ports(&procs, &ports, 1, 1), vec![5173], "the shell past its tests serves");
+        assert!(serving_ports(&procs, &ports, 1, 2).is_empty(), "the one mid-run does not");
     }
 
     /// Agent 1 runs a dev server (bash 10 → node 11 on :5173), a build
