@@ -29,7 +29,7 @@ import {
 import { hiddenChildren, leftToParent } from "@/lib/crew";
 import { repoChanged } from "@/lib/prSync";
 import { dropHeld, dropHeldAsks, heldFor, holdEarlyEvent, isAsk } from "@/lib/earlyEvents";
-import { flushHeld, heldFlagFor, holdFlags, holdSettle, noteFlagWrite, onLanded, overlayHeld, settleAfterSend, unholdFlags, useHeldFlags } from "@/lib/heldFlags";
+import { flushHeld, heldFlagFor, holdFlags, noteFlagWrite, onLanded, overlayHeld, settleAfterSend, unholdFlags, useHeldFlags } from "@/lib/heldFlags";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { lockedMidTurn } from "@/lib/liveControls";
@@ -890,11 +890,10 @@ const handleSendMsg = async (
   // a sandbox that will not resume — leaves the reader's pick standing.
   let heldAtSend = sessionId ? heldFlagFor(sessionId) : undefined;
   // A settle held behind a merge goes before the message, never after it:
-  // landing later, it would stop the turn the message starts. It comes back
-  // below where the message never got there.
-  const droppedSettle = sessionId && heldAtSend?.archived ? heldAtSend : undefined;
-  if (droppedSettle) {
-    await unholdFlags(droppedSettle.sessionId).catch((e) => console.error("could not drop a held settle", e));
+  // landing later, it would stop the turn the message starts. Not put back on
+  // a failed send, since a lost reply can hide a message that arrived.
+  if (sessionId && heldAtSend?.archived) {
+    await unholdFlags(sessionId).catch((e) => console.error("could not drop a held settle", e));
     heldAtSend = undefined;
   }
   const sentAt = Date.now();
@@ -1199,9 +1198,6 @@ const handleSendMsg = async (
     applySentIssues();
     return true;
   } catch (e) {
-    if (droppedSettle) {
-      void holdSettle(droppedSettle.machine, droppedSettle.sessionId, !!droppedSettle.removeWorktree).catch(() => {});
-    }
     // A rejected invoke means the turn never started, so nothing will arrive to
     // clear the status — release it here rather than leaving the composer stuck.
     // Unless a turn was already running: that one is untouched by this prompt

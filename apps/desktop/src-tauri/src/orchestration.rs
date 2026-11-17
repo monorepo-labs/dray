@@ -556,17 +556,17 @@ async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Respo
         _ => None,
     };
     // A settle held behind a merge goes before the message, never after it:
-    // landing later, it would stop the turn the message starts. It comes back
-    // where the message never got there.
-    let (held_at_send, dropped_settle) = match held_at_send {
+    // landing later, it would stop the turn the message starts. Not put back
+    // on a failed send, since a lost reply can hide a message that arrived;
+    // a task left unsettled is the cheaper mistake.
+    let held_at_send = match held_at_send {
         Some(held) if held.archived == Some(true) => {
-            let dropped = crate::held_flags::unhold(&held.session_id).await?;
-            if dropped.is_some() {
+            if crate::held_flags::unhold(&held.session_id).await?.is_some() {
                 crate::held_flags::announce(app, Vec::new()).await;
             }
-            (None, dropped)
+            None
         }
-        other => (other, None),
+        other => other,
     };
     let creates = matches!(request, Request::CreateSession(_));
     let starts = creates || matches!(request, Request::StartDraft(_));
@@ -591,10 +591,6 @@ async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Respo
         if unused {
             elsewhere::drop_cloud(id).await;
         }
-    }
-    if let (Some(settle), Err(_)) = (&dropped_settle, &response) {
-        crate::held_flags::hold_settle(&settle.machine, &settle.session_id, settle.remove_worktree).await?;
-        crate::held_flags::announce(app, Vec::new()).await;
     }
     let response = response?;
     // The task's server keeps its reports, and this server holds the link to
