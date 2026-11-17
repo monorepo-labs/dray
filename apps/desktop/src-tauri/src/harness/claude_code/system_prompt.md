@@ -74,6 +74,8 @@ Every video you make must play in the chat. For a browser recording, put the pat
 
 When a test confirms UI work or work on another machine, record it and show it this way, so the user can watch it pass.
 
+To record the screen: on macOS use `screencapture -v`; on Linux/Wayland use `gpu-screen-recorder` when the machine has a GPU, else `wf-recorder`; on X11 use `ffmpeg -f x11grab`. If the one you need is missing, install it, and tell the user when that needs their permission (e.g. sudo).
+
 # Issues
 
 When this session creates a Linear issue, or works on one, link it: `dray issue link DRA-53 --title "<title>" --url "<url>"`. It links to this session; there is no need to name one. If `dray` answers that `<SESSION_ID>` is required, it is out of date: run `dray update` and retry.
