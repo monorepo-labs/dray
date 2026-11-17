@@ -98,10 +98,10 @@ function logRuns(n: number, from: number): SubagentSummary[] {
 }
 
 /// The runs the chat holds and a loader standing in for `list_subagents`,
-/// running ones counted in its total as the server counts them.
+/// paged by an index riding the cursor's `before`.
 export function devRuns(state: Exclude<DevRunState, "live">): {
   runs: SubagentRun[];
-  load: (skip: number) => Promise<SubagentList>;
+  load: (cursor: { before: number | null } | null) => Promise<SubagentList>;
 } {
   const loaded = DONE_TITLES.slice(0, 4).map((t, i) => agent(`d${i}`, t, { doneAgo: 3 + i * 9 }));
   const { runs, log } = {
@@ -114,15 +114,16 @@ export function devRuns(state: Exclude<DevRunState, "live">): {
     background: { runs: [...SHELLS, RUNNING[0], ...loaded], log: [] },
     shells: { runs: SHELLS, log: [] },
   }[state];
-  const agents = runs.filter((r) => r.label !== "local_bash").length;
   return {
     runs,
-    load: (skip) =>
+    load: (cursor) =>
       new Promise((resolve) =>
         setTimeout(() => {
           // Page 0 covers the loaded runs too, as the server's does.
           const all = [...runs.filter((r) => r.label !== "local_bash").map((r) => ({ id: r.id }) as SubagentSummary), ...log];
-          resolve({ runs: all.slice(skip, skip + 20), more: all.length > skip + 20, total: agents + log.length });
+          const at = cursor?.before ?? 0;
+          const more = all.length > at + 10;
+          resolve({ runs: all.slice(at, at + 10), next: more ? { session: 0, before: at + 10, ends: [] } : null });
         }, 400),
       ),
   };

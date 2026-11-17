@@ -2337,13 +2337,28 @@ export type Subagent = { id: string,
 label: string | null, };
 
 /**
- * A page of [`SubagentSummary`], newest first.
+ * Where the next page of [`list_subagents`] starts reading back from.
  */
-export type SubagentList = { runs: Array<SubagentSummary>, more: boolean, 
+export type SubagentCursor = { 
 /**
- * Every agent run across the logs, running ones included.
+ * Index into the session list the first page was asked with.
  */
-total: number, };
+session: number, 
+/**
+ * Byte offset to read back from; the file's end where `None`.
+ */
+before: number | null, 
+/**
+ * Completions already read whose starts lie further back, by run id. A
+ * run's two lines can straddle a page, and dropping these would read the
+ * run back as never finished.
+ */
+ends: Array<[string, string]>, };
+
+/**
+ * A page of [`SubagentSummary`], newest first, and where the next one starts.
+ */
+export type SubagentList = { runs: Array<SubagentSummary>, next: SubagentCursor | null, };
 
 /**
  * One subagent a session ran, read off its log rather than off a transcript,

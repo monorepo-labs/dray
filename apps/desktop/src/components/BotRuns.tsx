@@ -7,9 +7,9 @@ import { Button } from "@/components/ui/button";
 import { canOpenTab, isShellRun, opensTab, type SubagentRun } from "@/lib/transcript";
 import { invoke } from "@/lib/transport";
 import { cn } from "@/lib/utils";
-import type { SubagentList, SubagentSummary, ToolResult } from "@/types/events";
+import type { SubagentCursor, SubagentList, SubagentSummary, ToolResult } from "@/types/events";
 
-const PAGE = 20;
+/// Finished runs per page: a page is read back from the log until it has these.
 
 type Props = {
   sessionId: string;
@@ -28,7 +28,9 @@ type Props = {
   onStopTask: (taskId: string) => void;
 };
 
-type Loader = (skip: number) => Promise<SubagentList>;
+const PAGE = 10;
+
+type Loader = (cursor: SubagentCursor | null) => Promise<SubagentList>;
 
 /// A bot's subagents and background shells, under its task list. Running
 /// subagents show; finished ones wait behind a toggle and page in off the
@@ -38,7 +40,7 @@ export default function BotRuns(props: Props) {
   const fake = import.meta.env.DEV && dev !== "live" ? devRuns(dev) : null;
   const { sessionId, also } = props;
   const load: Loader =
-    fake?.load ?? ((skip) => invoke<SubagentList>("list_subagents", { sessionId, also, skip, limit: PAGE }));
+    fake?.load ?? ((cursor) => invoke<SubagentList>("list_subagents", { sessionId, also, cursor, limit: PAGE }));
   return (
     <>
       <Sections
@@ -55,28 +57,23 @@ export default function BotRuns(props: Props) {
 function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
   const [open, setOpen] = useState(false);
   const [older, setOlder] = useState<SubagentList | null>(null);
-  // The server offset of the next page. Not the count held: runs landing
-  // between pages shift the list, and a page of nothing but repeats would
-  // otherwise ask for itself again.
-  const [next, setNext] = useState(PAGE);
   const [loading, setLoading] = useState(false);
 
   // Once per chat, for the count; an older server answering `unknown command`
   // leaves the loaded runs alone.
   useEffect(() => {
-    load(0).then(setOlder, () => {});
+    load(null).then(setOlder, () => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const more = async () => {
-    if (!older || loading) return;
+    if (!older?.next || loading) return;
     setLoading(true);
     try {
-      const page = await load(next);
-      setNext(next + PAGE);
-      // A run landing since the last page shifts the server's list down by one.
-      const had = new Set(older.runs.map((r) => r.id));
-      setOlder({ ...page, runs: [...older.runs, ...page.runs.filter((r) => !had.has(r.id))] });
+      // The cursor is a byte offset, so runs landing since the first page
+      // never shift what the next one reads.
+      const page = await load(older.next);
+      setOlder({ next: page.next, runs: [...older.runs, ...page.runs] });
     } finally {
       setLoading(false);
     }
@@ -89,7 +86,9 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
   ];
   const running = agents.filter((run) => !run.done);
   const completed = agents.filter((run) => run.done);
-  const count = Math.max(completed.length, (older?.total ?? 0) - running.length);
+  const count = completed.length;
+  // Pages stop at ten finished runs, so a total is never known up front.
+  const countLabel = older?.next ? `${count}+` : `${count}`;
   const shells = runs.filter((run) => isShellRun(run) && (!run.done || run.id === rest.selectedId));
   const stoppable = running.filter((run) => rest.live && run.taskId !== null);
 
@@ -113,41 +112,47 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
     <div className="flex shrink-0 flex-col">
       {(running.length > 0 || count > 0) && (
         <div className="flex flex-col">
-          {/* The heading folds the finished runs, its count and chevron at the
-              end; running ones stay out under it either way. Stop all sits
-              beside it, never inside, since a button cannot hold a button. */}
-          <div className="flex items-center gap-1 px-3 pt-4 pb-2 text-ui text-muted-foreground">
-            {count > 0 ? (
-              <button
-                type="button"
-                aria-expanded={open}
-                aria-label={`${open ? "Hide" : "Show"} ${count} completed subagents`}
-                onClick={() => setOpen(!open)}
-                className="flex min-w-0 flex-1 cursor-default items-center gap-1.5 transition-colors hover:text-foreground"
-              >
-                <span className="flex-1 text-left">Subagents</span>
-                <span className="tabular-nums">{count}</span>
-                <ChevronRight className={cn("size-3.5 shrink-0 transition", open && "rotate-90")} />
-              </button>
-            ) : (
-              <span className="flex-1">Subagents</span>
+          {/* The whole heading folds the finished runs; running ones stay out
+              under it either way. Stop all sits between the title and the
+              count, so the row takes the click and Stop all keeps its own. */}
+          <div
+            onClick={() => count > 0 && setOpen(!open)}
+            className={cn(
+              "group/heading flex items-center gap-1.5 px-3 pt-4 pb-2 text-ui text-muted-foreground",
+              count > 0 && "transition-colors hover:text-foreground",
             )}
+          >
+            <span className="flex-1">Subagents</span>
             {stoppable.length > 1 && (
               <Button
                 variant="ghost"
                 size="xs"
-                className="-my-1 -mr-1.5 shrink-0"
-                onClick={() => stoppable.forEach((run) => rest.onStopTask(run.taskId!))}
+                className="-my-1 shrink-0 text-muted-foreground"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  stoppable.forEach((run) => rest.onStopTask(run.taskId!));
+                }}
               >
                 Stop all
               </Button>
+            )}
+            {count > 0 && (
+              <button
+                type="button"
+                aria-expanded={open}
+                aria-label={`${open ? "Hide" : "Show"} completed subagents`}
+                className="flex shrink-0 cursor-default items-center gap-1.5"
+              >
+                <span className="tabular-nums">{countLabel}</span>
+                <ChevronRight className={cn("size-3.5 shrink-0 transition", open && "rotate-90")} />
+              </button>
             )}
           </div>
           {(running.length > 0 || open) && (
             <div className="flex flex-col gap-0.5 px-1.5 pb-2">
               {running.map((run) => row(run))}
               {open && completed.map((run) => row(run, run.lastAt))}
-              {open && older?.more && (
+              {open && older?.next && (
                 <Button variant="ghost" size="xs" className="mx-1 self-start text-muted-foreground" disabled={loading} onClick={() => void more()}>
                   {loading ? "Loading…" : "Load more"}
                 </Button>
