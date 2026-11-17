@@ -141,7 +141,7 @@ function RunMark({ run, shell }: { run: SubagentRun; shell: boolean }) {
   return (
     <span className="flex size-5 shrink-0 items-center justify-center">
       {shell ? (
-        <SquareTerminal aria-label="Shell" className="size-4.5 text-muted-foreground" />
+        <SquareTerminal aria-label="Shell" className="size-4 text-muted-foreground" />
       ) : run.done ? (
         <Check aria-label="Done" className="size-3.5 text-muted-foreground" />
       ) : (
