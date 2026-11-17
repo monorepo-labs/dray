@@ -981,6 +981,7 @@ function devBadgeLabel(branch: string | null): string {
 function DevBadge() {
   return (
     <div
+      data-rail-hide
       title={__DEV_BRANCH__ ?? undefined}
       className="shrink-0 truncate px-3.5 pb-2 font-mono text-[10px] leading-none text-muted-foreground/60"
     >
@@ -1023,10 +1024,10 @@ function RailTip({
 }
 
 /// The top strip's buttons, drawn as session rows: see the note where they
-/// render. The rail's icons go up to 16px, at the row's height all the same.
+/// render. `--rail` (0 full, 1 rail) moves the icon from 14px at 6px in to 16px
+/// centred in the rail's 40px button, a frame at a time with the edge.
 const STRIP =
-  "w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50";
-const STRIP_RAIL = "justify-center px-0 [&_svg:not([class*='size-'])]:size-4";
+  "w-full justify-start pr-[calc(6px-6px*var(--rail,0))] pl-[calc(6px+5px*var(--rail,0))] transition-[color,background-color] [&_svg:not([class*='size-'])]:size-[calc(14px+2px*var(--rail,0))] text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50";
 
 export default function Sidebar({
   items,
@@ -1082,7 +1083,7 @@ export default function Sidebar({
   draftsShown,
   onToggleDrafts,
 }: SidebarProps) {
-  const { style, handle, width, held } = useResizable({
+  const { style, handle, width, held, snap } = useResizable({
     storageKey: "ade.sidebarWidth",
     initial: SIDEBAR_MIN,
     min: SIDEBAR_MIN,
@@ -1098,7 +1099,16 @@ export default function Sidebar({
     // on screen.
     pane: collapsed ? undefined : "sidebar",
   });
-  const iconOnly = width === SIDEBAR_RAIL;
+  // The full sidebar stays drawn while it folds, clipped by the narrowing
+  // aside, and turns into the rail once it lands.
+  const iconOnly = width === SIDEBAR_RAIL && snap !== "toRail";
+  // How far toward the rail the drawn width is, 0 to 1. The strip's icons take
+  // their padding and size from it each frame, so they move in step with the
+  // edge rather than on a transition of their own.
+  const towardRail = Math.min(1, Math.max(0, (SIDEBAR_MIN - Number(style.width)) / (SIDEBAR_MIN - SIDEBAR_RAIL)));
+  // The rail's foot slides in after a fold, never on a launch already there.
+  const folded = useRef(false);
+  if (snap === "toRail" || snap === "fromRail") folded.current = snap === "toRail";
   // A fold the search field's blur left waiting on the pointer's release.
   const pendingFold = useRef<() => void>(undefined);
   const cancelFold = () => {
@@ -1303,8 +1313,20 @@ export default function Sidebar({
 
   return (
     <aside
-      className="relative flex shrink-0 flex-col"
-      style={style}
+      className={cn(
+        "relative flex shrink-0 flex-col",
+        // While a rail snap springs, every child keeps the full width and the
+        // aside clips it, so rows slide under the edge instead of re-wrapping
+        // each frame. No edge mask: at rail width it covered the icons, which
+        // flashed back to full strength as the fold landed.
+        (snap === "toRail" || snap === "fromRail") &&
+          "overflow-hidden [&>:not([role=separator],[data-rail-foot],[data-rail-keep])]:w-60",
+        // What the rail drops fades before the narrowing edge could show it cut
+        // off behind the icons, and back in on the way out.
+        snap === "toRail" && "[&_[data-rail-hide]]:opacity-0 [&_[data-rail-hide]]:transition-opacity [&_[data-rail-hide]]:duration-100",
+        snap === "fromRail" && "[&_[data-rail-hide]]:animate-in [&_[data-rail-hide]]:fade-in [&_[data-rail-hide]]:duration-300",
+      )}
+      style={{ ...style, "--rail": towardRail } as React.CSSProperties}
       ref={asideRef}
     >
       {handle}
@@ -1317,19 +1339,23 @@ export default function Sidebar({
           brightened where a row's does not. The dark hover is named too, since
           `dark:hover:bg-muted/50` on the variant out-specifies an unprefixed
           `hover:` and `tailwind-merge` cannot fold the two together. */}
-      <div className="flex flex-col gap-px px-2 pt-3">
+      {/* Kept to the aside's width through a snap, unlike the list below: its
+          icons and highlights track the moving edge rather than being cut off. */}
+      <div data-rail-keep className="flex flex-col gap-px px-2 pt-3">
         <RailTip on={iconOnly} label="New Task" keys={["session.new"]}>
           <Button
             variant="ghost"
             size="sm"
             onClick={onNewSession}
             aria-label={iconOnly ? "New Task" : undefined}
-            className={cn(STRIP, iconOnly && STRIP_RAIL)}
+            className={STRIP}
           >
             <Plus />
             {!iconOnly && <>
-              New Task
-              <ShortcutKeys ids={["session.new"]} className="ml-auto" />
+              <span data-rail-hide className="flex flex-1 items-center">
+                New Task
+                <ShortcutKeys ids={["session.new"]} className="ml-auto" />
+              </span>
             </>}
           </Button>
         </RailTip>
@@ -1348,14 +1374,15 @@ export default function Sidebar({
             aria-label={iconOnly ? "Issues" : undefined}
             className={cn(
               STRIP,
-              iconOnly && STRIP_RAIL,
               "data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground",
             )}
           >
             <CircleDot />
             {!iconOnly && <>
-              Issues
-              <ShortcutKeys ids={["issues.open"]} className="ml-auto" />
+              <span data-rail-hide className="flex flex-1 items-center">
+                Issues
+                <ShortcutKeys ids={["issues.open"]} className="ml-auto" />
+              </span>
             </>}
           </Button>
         </RailTip>
@@ -1426,12 +1453,14 @@ export default function Sidebar({
               size="sm"
               onClick={() => onSearchOpenChange(true)}
               aria-label={iconOnly ? "Search" : undefined}
-              className={cn(STRIP, iconOnly && STRIP_RAIL)}
+              className={STRIP}
             >
               <Search />
               {!iconOnly && <>
-                Search
-                <ShortcutKeys ids={["search"]} className="ml-auto" />
+                <span data-rail-hide className="flex flex-1 items-center">
+                  Search
+                  <ShortcutKeys ids={["search"]} className="ml-auto" />
+                </span>
               </>}
             </Button>
           </RailTip>
@@ -1443,10 +1472,10 @@ export default function Sidebar({
             size="sm"
             onClick={onNewBot}
             aria-label={iconOnly ? "New bot" : undefined}
-            className={cn(STRIP, iconOnly && STRIP_RAIL)}
+            className={STRIP}
           >
             <MessageCirclePlus />
-            {!iconOnly && "New bot"}
+            {!iconOnly && <span data-rail-hide>New bot</span>}
           </Button>
         </RailTip>
       </div>
@@ -1454,7 +1483,7 @@ export default function Sidebar({
       {/* Above the project filter: a bot belongs to no project, it hands work
           to any of them. No heading — the face on a row is what says it is a
           bot. New bot sits in the strip above, beside the other ways in. */}
-      {bots.length > 0 && <div className="mt-4 flex flex-col gap-px px-2">
+      {bots.length > 0 && <div data-rail-keep className="mt-4 flex flex-col gap-px px-2">
         {bots.map(({ bot, session, preview }) => {
           const status = session ? (statusBySession[session.sessionId] ?? session.status) : "idle";
           return <BotRow
@@ -1478,7 +1507,7 @@ export default function Sidebar({
       {/* The rail carries no tasks: the top strip and the bots are all it
           holds, and this spacer keeps its foot at the bottom. */}
       {iconOnly ? <div className="flex-1" /> : <>
-      {filterShown && <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
+      {filterShown && <div data-rail-hide className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
         <ProjectFilter
           projects={projects}
           value={projectFilter}
@@ -1534,6 +1563,7 @@ export default function Sidebar({
           and the rows balance the track's extra width with `pr-0.5`. Overlay
           scrollbars reserve none, so the list takes `pr-2` to match above. */}
       <div
+        data-rail-hide
         ref={listRef}
         className={cn(
           "scrollbar-overlay flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pb-3 pl-2",
@@ -1697,11 +1727,21 @@ export default function Sidebar({
           information, and this is the half nobody is waiting on. */}
       {import.meta.env.DEV && !iconOnly && <DevBadge />}
 
-      {iconOnly && (
-        <div className="flex shrink-0 flex-col items-center gap-0.5 pb-3">
+      {/* Kept through an unfold so it can slide back out, laid over the full
+          sidebar's foot rather than pushing it up. */}
+      {(iconOnly || snap === "fromRail") && (
+        <div
+          data-rail-foot
+          className={cn(
+            "flex shrink-0 flex-col items-center gap-0.5 pb-3",
+            folded.current && "animate-in duration-200 fade-in slide-in-from-bottom-3 motion-reduce:animate-none",
+            !iconOnly &&
+              "pointer-events-none absolute bottom-0 left-0 w-14 animate-out fill-mode-forwards duration-200 fade-out slide-out-to-bottom-3 motion-reduce:hidden",
+          )}
+        >
           {/* The floating cards land here: pinned bottom-left they would
               cover the chat, the rail being narrower than any of them. */}
-          <div ref={setRailSlot} className="flex flex-col items-center gap-0.5 empty:hidden" />
+          <div ref={iconOnly ? setRailSlot : undefined} className="flex flex-col items-center gap-0.5 empty:hidden" />
           {/* The titlebar switcher's click, stepping to the next space, with
               the one in force named in the tooltip. */}
           {spaces.length > 0 && (
@@ -1960,7 +2000,8 @@ function BotRow({
           aria-label={iconOnly ? bot.name : undefined}
           className={cn(
             "group relative flex w-full cursor-pointer items-center gap-2 rounded-md text-left",
-            iconOnly ? "justify-center p-1" : "py-1 pr-[5px] pl-1",
+            // One height both ways, so a snap never moves the rows under it.
+            "h-11", iconOnly ? "justify-center px-1" : "pr-[5px] pl-1",
             "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
             active
               ? "bg-sidebar-accent text-sidebar-accent-foreground"
@@ -2001,7 +2042,7 @@ function BotRow({
               <Kbd className="absolute top-1/2 left-1/2 -translate-1/2">{digit}</Kbd>
             )}
           </span>
-          {!iconOnly && <span className="flex min-w-0 flex-1 flex-col">
+          {!iconOnly && <span data-rail-hide className="flex min-w-0 flex-1 flex-col">
             <span className="relative flex items-baseline gap-2">
               <span
                 className={cn(

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { paneBounds, snapWidth, takenBy } from "@/lib/resize";
+import { paneBounds, snapWidth, springFrame, takenBy } from "@/lib/resize";
 
 /// The chat column's floor, as `ResizeHandle` publishes it.
 const CHAT_MIN = 360;
@@ -36,20 +36,88 @@ describe("snapWidth", () => {
 });
 
 describe("snapWidth with a rail", () => {
-  it("drops to the rail the moment a drag goes under the floor", () => {
-    expect(snapWidth(239, 240, 480, 240, 56, false)).toBe(56);
-    expect(snapWidth(20, 240, 480, 240, 56, false)).toBe(56);
-    expect(snapWidth(240, 240, 480, 240, 56, false)).toBe(240);
-  });
-
-  it("opens from the rail once a drag crosses halfway to the floor", () => {
-    expect(snapWidth(147, 240, 480, 240, 56, true)).toBe(56);
-    expect(snapWidth(149, 240, 480, 240, 56, true)).toBe(240);
+  // Under the floor but above halfway is the floor, so a drag in from a wide
+  // sidebar stops at the default before it can reach the rail.
+  it("holds at the floor until the drag crosses halfway to the rail", () => {
+    expect(snapWidth(239, 240, 480, 240, 56)).toBe(240);
+    expect(snapWidth(149, 240, 480, 240, 56)).toBe(240);
+    expect(snapWidth(147, 240, 480, 240, 56)).toBe(56);
+    expect(snapWidth(20, 240, 480, 240, 56)).toBe(56);
   });
 
   it("leaves the range above the floor alone", () => {
-    expect(snapWidth(300, 240, 480, 240, 56, false)).toBe(300);
-    expect(snapWidth(246, 240, 480, 240, 56, false)).toBe(240);
+    expect(snapWidth(300, 240, 480, 240, 56)).toBe(300);
+    expect(snapWidth(246, 240, 480, 240, 56)).toBe(240);
+  });
+});
+
+describe("snapWidth's detent at the default", () => {
+  it("stretches a little toward a drag, then lets go past the detent", () => {
+    expect(snapWidth(240, 180, 480, 240, undefined, "drag")).toBe(240);
+    const near = snapWidth(250, 180, 480, 240, undefined, "drag");
+    const far = snapWidth(278, 180, 480, 240, undefined, "drag");
+    expect(near).toBeGreaterThan(240);
+    expect(far).toBeGreaterThan(near);
+    expect(far).toBeLessThanOrEqual(250);
+    expect(snapWidth(280, 180, 480, 240, undefined, "drag")).toBe(280);
+  });
+
+  it("settles a release inside the detent on the default", () => {
+    expect(snapWidth(278, 180, 480, 240, undefined, "release")).toBe(240);
+    expect(snapWidth(205, 180, 480, 240, undefined, "release")).toBe(240);
+    expect(snapWidth(290, 180, 480, 240, undefined, "release")).toBe(290);
+  });
+
+  // The sidebar's default is its floor, so pulling in toward the rail stays at
+  // the floor rather than stretching under it.
+  it("never stretches under the floor", () => {
+    expect(snapWidth(220, 240, 480, 240, 56, "drag")).toBe(240);
+  });
+
+  // The detent lets go once per drag; after that the edge just follows.
+  it("follows the pointer through the detent once it has let go", () => {
+    expect(snapWidth(255, 180, 480, 240, undefined, "follow")).toBe(255);
+  });
+});
+
+describe("springFrame", () => {
+  /// Replays the hook's frame loop: the spring chases `path`, one target per
+  /// frame, and the target's speed is read off the last frame as it is there.
+  const chase = (path: number[], hz: number) => {
+    const dt = 1 / hz;
+    let [x, v] = [path[0], 0];
+    let prev = path[0];
+    const drawn: number[] = [];
+    for (const t of [...path, ...Array(40).fill(path.at(-1))]) {
+      [x, v] = springFrame(x, v, t, (t - prev) / dt, dt);
+      prev = t;
+      drawn.push(x);
+    }
+    return drawn;
+  };
+
+  // The case that slipped through: a fast pull that slows and stops, where
+  // the steps after a landing used to walk on past the pointer.
+  it("never passes a pointer that slows and stops", () => {
+    const path = [280];
+    for (let speed = 24; speed > 0; speed -= 1) path.push(path.at(-1)! + speed);
+    for (const hz of [60, 120]) {
+      const drawn = chase(path, hz);
+      const end = path.at(-1)!;
+      expect(Math.max(...drawn)).toBeLessThanOrEqual(end);
+      expect(drawn.at(-1)).toBeCloseTo(end, 0);
+    }
+  });
+
+  it("settles on a still target from either side without passing it", () => {
+    for (const from of [56, 400]) {
+      let [x, v] = [from, 0];
+      for (let i = 0; i < 60; i++) {
+        [x, v] = springFrame(x, v, 240, 0, 1 / 60);
+        expect(from < 240 ? x <= 240 : x >= 240).toBe(true);
+      }
+      expect(x).toBeCloseTo(240, 0);
+    }
   });
 });
 
