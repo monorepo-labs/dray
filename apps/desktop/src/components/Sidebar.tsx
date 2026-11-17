@@ -1316,7 +1316,7 @@ export default function Sidebar({
         // clips it, so rows slide under the edge instead of re-wrapping each
         // frame; the mask fades whatever the edge is passing over.
         snap &&
-          "overflow-hidden transition-[width] duration-200 ease-[cubic-bezier(0.2,0,0,1)] [mask-image:linear-gradient(to_right,black_calc(100%-40px),transparent)] motion-reduce:transition-none [&>:not([role=separator])]:min-w-60",
+          "overflow-hidden transition-[width] duration-200 ease-[cubic-bezier(0.2,0,0,1)] [mask-image:linear-gradient(to_right,black_calc(100%-40px),transparent)] motion-reduce:transition-none [&>:not([role=separator],[data-rail-foot])]:min-w-60",
       )}
       style={style}
       ref={asideRef}
@@ -1711,16 +1711,21 @@ export default function Sidebar({
           information, and this is the half nobody is waiting on. */}
       {import.meta.env.DEV && !iconOnly && <DevBadge />}
 
-      {iconOnly && (
+      {/* Kept through an unfold so it can slide back out, laid over the full
+          sidebar's foot rather than pushing it up. */}
+      {(iconOnly || snap === "fromRail") && (
         <div
+          data-rail-foot
           className={cn(
             "flex shrink-0 flex-col items-center gap-0.5 pb-3",
             folded.current && "animate-in duration-200 fade-in slide-in-from-bottom-3 motion-reduce:animate-none",
+            !iconOnly &&
+              "pointer-events-none absolute bottom-0 left-0 w-14 animate-out fill-mode-forwards duration-200 fade-out slide-out-to-bottom-3 motion-reduce:hidden",
           )}
         >
           {/* The floating cards land here: pinned bottom-left they would
               cover the chat, the rail being narrower than any of them. */}
-          <div ref={setRailSlot} className="flex flex-col items-center gap-0.5 empty:hidden" />
+          <div ref={iconOnly ? setRailSlot : undefined} className="flex flex-col items-center gap-0.5 empty:hidden" />
           {/* The titlebar switcher's click, stepping to the next space, with
               the one in force named in the tooltip. */}
           {spaces.length > 0 && (
