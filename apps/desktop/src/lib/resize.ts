@@ -7,9 +7,10 @@ export const DETENT = 40;
 /// The most the edge stretches toward the pointer while the default holds it.
 export const GIVE = 10;
 
-/// What a width is for: at `rest` (stored, keyed), mid-`drag`, or the
-/// `release` that ends one.
-export type Pull = "rest" | "drag" | "release";
+/// What a width is for: at `rest` (stored, keyed), mid-`drag`, the `release`
+/// that ends one, or a drag the detent has already let go of, which it does
+/// once: from then on the edge `follow`s the pointer.
+export type Pull = "rest" | "drag" | "release" | "follow";
 
 /// The range a pane can actually occupy right now — the one bounds the clamp,
 /// the keys and the ARIA values all read.
@@ -64,6 +65,7 @@ export function snapWidth(
   const within = (n: number) => Math.max(min, Math.min(max, n));
   const clamped = within(raw);
   const target = within(snapTo);
+  if (pull === "follow") return clamped;
   if (pull === "rest") return Math.abs(clamped - target) < SNAP_PX ? target : clamped;
   const off = raw - target;
   if (Math.abs(off) >= DETENT) return clamped;

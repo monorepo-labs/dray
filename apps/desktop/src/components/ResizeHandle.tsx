@@ -28,6 +28,9 @@ const DAMPING = 30;
 /// Looser for the default's detent, whose short travel would otherwise hide the
 /// bounce: about 7px past on a 40px snap.
 const DAMPING_DETENT = 22;
+/// Critical: catching the pointer after the detent lets go, which must not
+/// overshoot it.
+const DAMPING_CATCH = 2 * Math.sqrt(STIFFNESS);
 /// Fixed step, so the spring feels the same at 60Hz and 120Hz.
 const STEP_S = 1 / 240;
 /// A target moving further than this in a frame jumped rather than moved, and
@@ -171,7 +174,8 @@ export function useResizable({
   const from = useRef<{ x: number; width: number } | null>(null);
   // The pointer's speed in px/s, handed to a spring so a snap carries the throw.
   const fling = useRef({ x: 0, at: 0, v: 0 });
-  const [dragging, setDragging] = useState(false);
+  // A drag, and whether the default's detent has let go of it yet.
+  const [drag, setDrag] = useState<"pull" | "free" | null>(null);
 
   // One range for everything here, so what is drawn, what the keys move and
   // what assistive technology is told can never disagree. A CSS `max-width`
@@ -189,7 +193,7 @@ export function useResizable({
   // reader asked for, which is why the stored width is left alone. Mid-drag
   // `stored` is the pointer's own width, unclamped, so the detent can read how
   // hard it is being pulled.
-  const held = clamp(stored, dragging ? "drag" : "rest");
+  const held = clamp(stored, drag === "pull" ? "drag" : drag === "free" ? "follow" : "rest");
   const width = widen && held === rail ? clamp(initial) : held;
 
   // Every jump the pointer did not make — onto or off the rail, into or out of
@@ -199,16 +203,19 @@ export function useResizable({
   const def = clamp(initial);
   const zone = (w: number) => (w === rail ? "rail" : Math.abs(w - def) <= GIVE ? "detent" : "free");
   const [last, setLast] = useState(width);
-  const [spring, setSpring] = useState<{ id: number; from: number; snap: RailSnap } | null>(null);
+  const [spring, setSpring] = useState<{ id: number; from: number; snap: RailSnap; damping: number } | null>(null);
   const [drawn, setDrawn] = useState(width);
   if (last !== width) {
     setLast(width);
     const [a, b] = [zone(last), zone(width)];
     const snap: RailSnap = b === "rail" ? "toRail" : a === "rail" ? "fromRail" : "detent";
+    const letGo = a === "detent" && b === "free";
+    if (letGo && drag === "pull") setDrag("free");
     if (spring) {
       if (a !== b && (a === "rail" || b === "rail")) setSpring({ ...spring, snap });
     } else if (!(a === "free" && b === "free") && !reducedMotion()) {
-      setSpring({ id: Date.now(), from: last, snap });
+      const damping = letGo ? DAMPING_CATCH : snap === "detent" ? DAMPING_DETENT : DAMPING;
+      setSpring({ id: Date.now(), from: last, snap, damping });
       setDrawn(last);
     }
   }
@@ -223,7 +230,6 @@ export function useResizable({
     let v = performance.now() - fling.current.at < 60 ? Math.max(-1500, Math.min(1500, sign * fling.current.v)) : 0;
     let prev = performance.now();
     let chased = target.current;
-    const damping = spring.snap === "detent" ? DAMPING_DETENT : DAMPING;
     let frame = requestAnimationFrame(function step(now) {
       const dt = Math.min((now - prev) / 1000, 1 / 30);
       prev = now;
@@ -234,7 +240,7 @@ export function useResizable({
       chased = t;
       for (let left = dt; left > 0; left -= STEP_S) {
         const h = Math.min(STEP_S, left);
-        v += (-STIFFNESS * (x - t) - damping * (v - vt)) * h;
+        v += (-STIFFNESS * (x - t) - spring.damping * (v - vt)) * h;
         x += v * h;
       }
       // Ends only once it has caught the target, so handing back to the pointer
@@ -275,9 +281,9 @@ export function useResizable({
     if (!start) return;
     from.current = null;
     // A press with no move is not a drag, and must not pull a saved width in.
-    if (!dragging) return;
-    setDragging(false);
-    const next = clamp(stored, "release");
+    if (!drag) return;
+    setDrag(null);
+    const next = clamp(stored, drag === "free" ? "rest" : "release");
     setStored(next);
     writeLocalStorage(storageKey, next);
   };
@@ -324,7 +330,7 @@ export function useResizable({
         const now = performance.now();
         if (now - f.at >= 8) fling.current = { x: e.clientX, at: now, v: ((e.clientX - f.x) / (now - f.at)) * 1000 };
         setStored(start.width + moved);
-        setDragging(true);
+        setDrag((d) => d ?? "pull");
       }}
       onPointerUp={end}
       onPointerCancel={end}
