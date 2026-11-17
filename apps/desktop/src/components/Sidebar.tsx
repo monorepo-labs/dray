@@ -1103,6 +1103,12 @@ export default function Sidebar({
     pane: collapsed ? undefined : "sidebar",
   });
   const iconOnly = width === SIDEBAR_RAIL;
+  // A fold the search field's blur left waiting on the pointer's release.
+  const pendingFold = useRef<() => void>(undefined);
+  const cancelFold = () => {
+    if (pendingFold.current) window.removeEventListener("pointerup", pendingFold.current);
+    pendingFold.current = undefined;
+  };
 
   const closeSearch = () => {
     onSearchOpenChange(false);
@@ -1387,16 +1393,19 @@ export default function Sidebar({
               // Over the rail, closing folds it and moves everything under a
               // press that took the focus, so the close waits for the release:
               // the click then lands on what was pressed.
+              // Focus coming back takes it away, or a query typed after a Tab
+              // out would be closed over by the next click, still filtering.
+              onFocus={cancelFold}
               onBlur={() => {
                 if (search) return;
                 if (held !== SIDEBAR_RAIL) return onSearchOpenChange(false);
-                window.addEventListener(
-                  "pointerup",
-                  () => {
-                    if (document.activeElement?.id !== SEARCH_INPUT_ID) onSearchOpenChange(false);
-                  },
-                  { once: true },
-                );
+                cancelFold();
+                const fold = () => {
+                  pendingFold.current = undefined;
+                  onSearchOpenChange(false);
+                };
+                pendingFold.current = fold;
+                window.addEventListener("pointerup", fold, { once: true });
               }}
               className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
             />
