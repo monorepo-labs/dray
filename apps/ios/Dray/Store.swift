@@ -99,8 +99,8 @@ final class Store {
     /// Servers whose list this launch drew from the cache before any read.
     private(set) var cached: Set<UUID> = []
 
-    /// Servers that shared machines when last cached and have not said what they share this launch:
-    /// those machines are not in `servers` until they do, so their sessions are not counted yet.
+    /// Paired servers that have not said what they share this launch, bar one whose cache says it
+    /// shared nothing: shared machines are not in `servers` until they do, so nothing on them is counted yet.
     private(set) var awaitingShares: Set<UUID> = []
 
     /// Both of a server's reads are back, the index and its bots.
@@ -387,6 +387,7 @@ final class Store {
         }
         c.onEvent = { [weak self] name, data in self?.handle(s.id, name, data) }
         connections[s.id] = c
+        if s.via == nil { awaitingShares.insert(s.id) }
         restoreList(s.id)
         c.resume()
     }
@@ -413,7 +414,7 @@ final class Store {
         bots[id] = held.bots
         for (sid, p) in held.previews ?? [:] { previews[SessionKey(server: id, id: sid)] = p }
         cached.insert(id)
-        if held.shares == true { awaitingShares.insert(id) }
+        if held.shares != true { awaitingShares.remove(id) }
     }
 
     /// Writes every live server's list a moment after the last change, off the main thread.

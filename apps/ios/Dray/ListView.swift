@@ -74,7 +74,7 @@ struct SessionList: View {
         // Bots only: a bot with no chat yet opens its own page, which carries the dock instead.
         let dock = !store.live.isEmpty && !hideSessions
         let lone = autoOpen ? loneBot : nil
-        let read = store.live.allSatisfy { store.read($0.id) }
+        let read = store.live.allSatisfy { store.read($0.id) } && store.awaitingShares.isEmpty
         VStack(spacing: 0) {
             List(selection: $selection) {
                 // Quiet about reconnects, never about a read that failed or a server waiting on the reader.
@@ -190,7 +190,7 @@ struct SessionList: View {
         }
         .sheet(isPresented: $newBot) { BotSheet(editing: nil) { selection = $0 } }
         .onChange(of: lone, initial: true) { open(lone) }
-        // Every server has answered and the list is more than one bot: the chance is gone.
+        // Every server and shared machine has answered and the list is more than one bot: the chance is gone.
         .onChange(of: read) { if read && lone == nil { autoOpen = false } }
         .onChange(of: selection) { if selection != nil { autoOpen = false } }
         .onChange(of: sheet?.id) { autoOpen = false }
