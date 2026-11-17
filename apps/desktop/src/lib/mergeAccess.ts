@@ -63,8 +63,21 @@ async function readAccess(via: ServerId, slug: string): Promise<void> {
     () => null,
   );
   access.set(`${via} ${slug}`, { can: answer?.canMerge ?? null, at: Date.now() });
-  if (answer?.login) logins.set(via, answer.login);
+  // Logins are kept for github.com alone, the host `get_integrations` asks.
+  if (answer?.login && onGithubCom(slug)) logins.set(via, answer.login);
   bump();
+}
+
+/// A github.com repo: its slug is `owner/name`, where another host's carries
+/// the host first.
+const onGithubCom = (slug: string) => slug.split("/").length === 2;
+
+/// The two logins compared for a merge of `slug`. Only github.com's are known
+/// for both machines, so a repo on another host is judged on access alone.
+function accounts(server: ServerId, via: ServerId, slug: string) {
+  return onGithubCom(slug)
+    ? { here: logins.get(via), there: logins.get(server) }
+    : { here: undefined, there: undefined };
 }
 
 function askAccess(via: ServerId, slug: string, key: string): void {
@@ -87,8 +100,7 @@ export async function confirmMerge(
     machine: name,
     merger: viaName,
     slug,
-    here: logins.get(via),
-    there: logins.get(server),
+    ...accounts(server, via, slug),
     can: access.get(`${via} ${slug}`)?.can,
   });
   if (reason) throw new Error(reason);
@@ -122,8 +134,7 @@ export function mergeBlock(
     machine: name,
     merger: viaName,
     slug,
-    here: logins.get(via),
-    there: logins.get(server),
+    ...accounts(server, via, slug),
     can: known?.can,
   });
 }
