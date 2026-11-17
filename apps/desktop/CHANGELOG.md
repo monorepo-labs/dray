@@ -19,6 +19,16 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.12 · 2026-11-17
+
+### Improved
+
+- The sidebar stops at its normal width before snapping to the icon rail,
+  and the snap is smooth.
+- A task that finished and left a dev server running shows in Waiting on
+  you instead of reading as still working.
+- A bot's Tasks tab shows how many tasks it has.
+
 ## 0.30.11 · 2026-11-17
 
 ### Improved
