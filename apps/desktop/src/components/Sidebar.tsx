@@ -1103,6 +1103,9 @@ export default function Sidebar({
   // The full sidebar stays drawn while it folds, clipped by the narrowing
   // aside, and turns into the rail once it lands.
   const iconOnly = width === SIDEBAR_RAIL && snap !== "toRail";
+  // The rail's foot slides in after a fold, never on a launch already there.
+  const folded = useRef(false);
+  if (snap) folded.current = snap === "toRail";
   // A fold the search field's blur left waiting on the pointer's release.
   const pendingFold = useRef<() => void>(undefined);
   const cancelFold = () => {
@@ -1709,7 +1712,12 @@ export default function Sidebar({
       {import.meta.env.DEV && !iconOnly && <DevBadge />}
 
       {iconOnly && (
-        <div className="flex shrink-0 flex-col items-center gap-0.5 pb-3">
+        <div
+          className={cn(
+            "flex shrink-0 flex-col items-center gap-0.5 pb-3",
+            folded.current && "animate-in duration-200 fade-in slide-in-from-bottom-3 motion-reduce:animate-none",
+          )}
+        >
           {/* The floating cards land here: pinned bottom-left they would
               cover the chat, the rail being narrower than any of them. */}
           <div ref={setRailSlot} className="flex flex-col items-center gap-0.5 empty:hidden" />
