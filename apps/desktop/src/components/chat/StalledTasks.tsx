@@ -1,3 +1,4 @@
+import { SignalSlashIcon } from "@heroicons/react/16/solid";
 import { ArrowUpRight, MousePointerClick, X } from "lucide-react";
 import { useState } from "react";
 
@@ -14,7 +15,9 @@ import { seededAvatar } from "@/lib/botAvatar";
 import type { CrewRow } from "@/lib/crew";
 import { IS_MAC, isModClick } from "@/lib/platform";
 import { prStatus } from "@/lib/pr";
+import { offlineLine, useServers } from "@/lib/servers";
 import { cardRows, compactAge, DISMISSED_KEY, needLine, type Stall } from "@/lib/stalled";
+import { serverOfPath } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { MergeMethod, PrMark } from "@/types/events";
 
@@ -33,12 +36,17 @@ const ROWS_SHOWN = 5;
 /// It used to scroll the chat back to the bot's reply, which on a long chat
 /// meant reading days of log and stalled the app. ⌘-click and Open, shown on
 /// hover, open the task in a tab. A row clears the moment its task moves;
-/// dismissed, a stall stays gone until the task changes and stalls again.
+/// dismissed, a stall stays gone until the task changes and stalls again. A
+/// task whose machine is down stays, drawn from what was last known with the
+/// offline mark in its time's place and nothing to open; Merge still works,
+/// through GitHub from here, where `mergeBlock` allows it, and the offline mark
+/// says why where it does not.
 export default function StalledTasks({
   stalls,
   now,
   onOpen,
   onMerge,
+  mergeBlock,
 }: {
   /// The card's rows: `onCard` stalls alone.
   stalls: readonly Stall[];
@@ -46,8 +54,12 @@ export default function StalledTasks({
   /// `alone`: a ⌘-click, which switches to the task rather than opening its tab.
   onOpen: (sessionId: string, alone: boolean) => void;
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
+  /// Why a ready row offers no Merge, or `null` where it does.
+  mergeBlock: (row: CrewRow, pr: PrMark) => string | null;
 }) {
   const [dismissed, setDismissed] = useLocalStorage<string[]>(DISMISSED_KEY, []);
+  // Each row's offline mark follows its machine.
+  useServers();
   const [open, setOpen] = useState<string | null>(null);
   const [all, setAll] = useState(false);
   const shown = cardRows(stalls, dismissed);
@@ -77,6 +89,7 @@ export default function StalledTasks({
           onToggle={(id) => setOpen((o) => (o === id ? null : id))}
           onOpen={onOpen}
           onMerge={onMerge}
+          mergeBlock={mergeBlock}
         />
       ))}
       {shown.length > ROWS_SHOWN && (
@@ -105,6 +118,7 @@ function StalledRow({
   onToggle,
   onOpen,
   onMerge,
+  mergeBlock,
 }: {
   stall: Stall;
   now: number;
@@ -112,6 +126,7 @@ function StalledRow({
   onToggle: (sessionId: string) => void;
   onOpen: (sessionId: string, alone: boolean) => void;
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
+  mergeBlock: (row: CrewRow, pr: PrMark) => string | null;
 }) {
   const [hovered, setHovered] = useState(false);
   const { row, pr } = stall;
@@ -121,6 +136,8 @@ function StalledRow({
   const need = needLine(stall);
   const waiting = stall.kind === "waiting" && !need;
   const last = useStallLine(stall.key, id, waiting);
+  const offline = offlineLine(serverOfPath(item.cwd));
+  const blocked = stall.kind === "ready" && pr && !stall.checking ? mergeBlock(row, pr) : null;
 
   return (
     <div className={cn("flex flex-col rounded-lg", expanded && "bg-muted/30")}>
@@ -129,7 +146,7 @@ function StalledRow({
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
-        onClick={(e) => (isModClick(e) ? onOpen(id, false) : onToggle(id))}
+        onClick={(e) => (isModClick(e) && !offline ? onOpen(id, false) : onToggle(id))}
         onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onToggle(id)}
         onPointerEnter={() => setHovered(true)}
         onPointerLeave={() => setHovered(false)}
@@ -150,28 +167,31 @@ function StalledRow({
             {/* Held in place while hidden, so showing it moves nothing. Merge
                 sits before the time, so the time ends every row. */}
             <span className="ml-auto flex shrink-0 items-center gap-2">
-              {/* Half strength: it sits on every row the pointer crosses. */}
-              <span className="flex items-center gap-1 opacity-0 group-focus-within:opacity-50 group-hover:opacity-50">
-                {/* What the row does with ⌘ held. */}
-                <KbdGroup>
-                  <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
-                  <Kbd>
-                    <MousePointerClick />
-                  </Kbd>
-                </KbdGroup>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  className="text-muted-foreground"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpen(id, isModClick(e));
-                  }}
-                >
-                  Open task
-                  <ArrowUpRight data-icon="inline-end" />
-                </Button>
-              </span>
+              {/* Half strength: it sits on every row the pointer crosses. A
+                  task whose machine is down has nothing to open. */}
+              {!offline && (
+                <span className="flex items-center gap-1 opacity-0 group-focus-within:opacity-50 group-hover:opacity-50">
+                  {/* What the row does with ⌘ held. */}
+                  <KbdGroup>
+                    <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+                    <Kbd>
+                      <MousePointerClick />
+                    </Kbd>
+                  </KbdGroup>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpen(id, isModClick(e));
+                    }}
+                  >
+                    Open task
+                    <ArrowUpRight data-icon="inline-end" />
+                  </Button>
+                </span>
+              )}
               {stall.kind === "ready" &&
                 pr &&
                 (stall.checking ? (
@@ -179,12 +199,21 @@ function StalledRow({
                     Checking…
                   </span>
                 ) : (
-                  <MergeControl onMerge={(method) => onMerge(row, pr, method)} />
+                  !blocked && <MergeControl onMerge={(method) => onMerge(row, pr, method)} />
                 ))}
             </span>
-            <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">
-              {compactAge(item.modified, now)}
-            </span>
+            {offline ? (
+              <span
+                className="flex shrink-0"
+                title={blocked ? `${offline} · last known state\n${blocked}` : `${offline} · last known state`}
+              >
+                <SignalSlashIcon className="size-3.5 text-muted-foreground" aria-label={offline} />
+              </span>
+            ) : (
+              <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">
+                {compactAge(item.modified, now)}
+              </span>
+            )}
           </span>
           {need ? (
             <span className="min-w-0 truncate text-ui text-foreground/70">{need}</span>

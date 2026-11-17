@@ -555,6 +555,19 @@ async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Respo
         Request::SendMessage(send) => crate::held_flags::list().await.into_iter().find(|h| h.session_id == send.session_id),
         _ => None,
     };
+    // A settle held behind a merge goes before the message, never after it:
+    // landing later, it would stop the turn the message starts. Not put back
+    // on a failed send, since a lost reply can hide a message that arrived;
+    // a task left unsettled is the cheaper mistake.
+    let held_at_send = match held_at_send {
+        Some(held) if held.archived == Some(true) => {
+            if crate::held_flags::unhold(&held.session_id).await?.is_some() {
+                crate::held_flags::announce(app, Vec::new()).await;
+            }
+            None
+        }
+        other => other,
+    };
     let creates = matches!(request, Request::CreateSession(_));
     let starts = creates || matches!(request, Request::StartDraft(_));
     if machine == elsewhere::CLOUD && !creates {
@@ -598,7 +611,7 @@ async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Respo
         }
         // Only a flag the flush wrote: a newer choice, held or written
         // directly, is the reader's and stands.
-        if held.aside && released == crate::held_flags::Released::Landed {
+        if held.aside == Some(true) && released == crate::held_flags::Released::Landed {
             let back = elsewhere::prepare(Request::SetAside(SetAside { session_id: held.session_id, aside: false })).await?;
             if let Err(e) = elsewhere::forward(machine, &back).await {
                 eprintln!("[held flags] could not bring back after a send: {e:#}");

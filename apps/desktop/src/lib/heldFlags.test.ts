@@ -32,6 +32,11 @@ describe("overlayHeld", () => {
     expect(out[0].modified).toBe("2026-11-15T00:00:00Z");
   });
 
+  it("draws a held settle as settled and leaves set aside and the time alone", () => {
+    const out = overlayHeld([row("a", { aside: true })], [held("a", { aside: undefined, archived: true })]);
+    expect(out[0]).toMatchObject({ archived: true, aside: true, modified: "2026-11-10T00:00:00Z" });
+  });
+
   it("is the same list with nothing held", () => {
     const items = [row("a")];
     expect(overlayHeld(items, [])).toBe(items);

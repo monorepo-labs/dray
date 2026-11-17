@@ -1869,6 +1869,9 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         held_session_flags() => ok(crate::held_flags::list().await);
         hold_session_flags(machine: String, session_id: String, aside: bool, pinned: Option<bool>) =>
             crate::held_flags::hold_and_announce(machine, session_id, aside, pinned, sink).await;
+        // A bot task's PR merged from here while its server is down (#1178).
+        hold_session_settle(machine: String, session_id: String, remove_worktree: bool) =>
+            crate::held_flags::hold_settle_and_announce(machine, session_id, remove_worktree, sink).await;
         unhold_session_flags(session_id: String) => crate::held_flags::unhold_and_announce(session_id, sink).await;
         release_held_flag(session_id: String, at: String) =>
             crate::held_flags::release_and_announce(session_id, at, sink).await;
@@ -2013,6 +2016,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         reopen_pr(cwd: String, number: u64) => github::reopen_pr(cwd, number).await;
         mark_pr_ready(cwd: String, number: u64) => github::mark_pr_ready(cwd, number).await;
         recheck_gh() => ok(github::recheck_gh().await);
+        merge_access(cwd: String) => ok(github::merge_access(cwd).await);
         get_integrations() => ok(issues::get_integrations().await);
         github_repo(cwd: String) => ok(issues::github_repo(cwd).await);
         connect_linear(key: String) => issues::connect_linear(key).await;

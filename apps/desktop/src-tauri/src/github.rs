@@ -921,6 +921,95 @@ pub async fn prs_for_branch(
     }
 }
 
+/// Each login's answer per repo from [`can_merge_repo`], and when it was read.
+static MERGE_ACCESS: LazyLock<Mutex<HashMap<String, (std::time::Instant, bool)>>> = LazyLock::new(Default::default);
+
+/// How long a repo's access answer stands. Access changes rarely, and the card
+/// asks on every task row it draws.
+const MERGE_ACCESS_FOR: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Who this machine's `gh` is right now, and whether that account can merge
+/// into the repo `cwd` names (#1178).
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeAccess {
+    /// Read afresh on every ask, never from a cache: a merge runs as whoever
+    /// `gh` is at that moment, and an account switched since must not pass as
+    /// the one the task's machine used.
+    pub login: Option<String>,
+    /// Write access or above; `None` where GitHub could not be asked.
+    pub can_merge: Option<bool>,
+}
+
+/// [`MergeAccess`] for the repo `cwd` names. Asked before Merge is offered for
+/// a task whose own machine is down, since that merge runs as this `gh`. The
+/// permission is cached per login and repo, so a sign-in as someone else asks
+/// again; a failed ask is not cached.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn merge_access(cwd: String) -> MergeAccess {
+    let Some(slug) = (match slug_of(&cwd) {
+        Some(slug) => Some(slug.to_string()),
+        None => repo_slug(&cwd).await.ok().map(|(owner, name)| format!("{owner}/{name}")),
+    }) else {
+        return MergeAccess::default();
+    };
+    let key = format!("{SLUG_PREFIX}{slug}");
+    // The repo's own host: a lapsed github.com login says nothing of an
+    // enterprise one.
+    let mut args = vec!["api", "user", "--jq", ".login"];
+    if let (Some(host), _) = api_target(&slug) {
+        args.extend(["--hostname", host]);
+    }
+    let login = gh(&key, &args)
+        .await
+        .ok()
+        .map(|out| out.trim().to_string())
+        .filter(|login| !login.is_empty());
+    let Some(who) = login.clone() else { return MergeAccess::default() };
+    let can_merge = can_merge_repo(&slug, &who).await;
+    MergeAccess { login, can_merge }
+}
+
+/// Whether `login`, this `gh`'s account, can merge into `slug`.
+async fn can_merge_repo(slug: &str, login: &str) -> Option<bool> {
+    let cached = format!("{login}\n{slug}");
+    if let Some((at, can)) = MERGE_ACCESS.lock().await.get(&cached) {
+        if at.elapsed() < MERGE_ACCESS_FOR {
+            return Some(*can);
+        }
+    }
+    let (host, path) = api_target(slug);
+    let mut args = vec!["api", path.as_str(), "--jq", ".permissions"];
+    if let Some(host) = host {
+        args.extend(["--hostname", host]);
+    }
+    let can = match gh(&format!("{SLUG_PREFIX}{slug}"), &args).await {
+        Ok(out) => can_merge_from(&out)?,
+        // GitHub answers a private repo this account cannot see as missing.
+        Err(e) if e.contains("HTTP 404") => false,
+        Err(_) => return None,
+    };
+    MERGE_ACCESS.lock().await.insert(cached, (std::time::Instant::now(), can));
+    Some(can)
+}
+
+/// The `--hostname` and `repos/…` path `gh api` takes for `slug`: a
+/// `host/owner/name` slug is a repo on a GitHub that is not github.com.
+fn api_target(slug: &str) -> (Option<&str>, String) {
+    match slug.split('/').collect::<Vec<_>>().as_slice() {
+        [host, owner, name] => (Some(*host), format!("repos/{owner}/{name}")),
+        _ => (None, format!("repos/{slug}")),
+    }
+}
+
+/// Reads `gh api repos/…`'s `permissions`: merging takes write access, which
+/// maintain and admin include. Absent is a token that cannot see them.
+fn can_merge_from(permissions: &str) -> Option<bool> {
+    let value: serde_json::Value = serde_json::from_str(permissions.trim()).ok()?;
+    let object = value.as_object()?;
+    Some(["push", "maintain", "admin"].iter().any(|key| object.get(*key).and_then(|v| v.as_bool()) == Some(true)))
+}
+
 /// Probes for `gh` again, and answers whether it is there now.
 ///
 /// The panel's recheck button, pressed by a reader who has just installed the
@@ -929,6 +1018,7 @@ pub async fn prs_for_branch(
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn recheck_gh() -> bool {
     binpath::forget_gh();
+    MERGE_ACCESS.lock().await.clear();
     // The same absence, cached a second time: the issues side remembers *who*
     // `gh` answered as, and a reader pressing this has usually just installed
     // the CLI or signed in — so an answer taken before that must not outlive it.
@@ -1827,5 +1917,27 @@ mod tests {
         assert_eq!(slug_of("/github:monorepo-labs/dray"), Some("monorepo-labs/dray"));
         assert_eq!(slug_of("/home/me/dray"), None);
         assert_eq!(slug_of("github:nothing"), None);
+    }
+
+    /// Write access merges; read and triage do not; no permissions at all is
+    /// a token that cannot see them, which is not a yes.
+    #[test]
+    fn merge_access_needs_write() {
+        let perms = |push: bool, maintain: bool, admin: bool| {
+            format!(r#"{{"admin":{admin},"maintain":{maintain},"push":{push},"triage":true,"pull":true}}"#)
+        };
+        assert_eq!(can_merge_from(&perms(true, false, false)), Some(true));
+        assert_eq!(can_merge_from(&perms(false, true, false)), Some(true));
+        assert_eq!(can_merge_from(&perms(false, false, true)), Some(true));
+        assert_eq!(can_merge_from(&perms(false, false, false)), Some(false));
+        assert_eq!(can_merge_from("{}\n"), Some(false));
+        assert_eq!(can_merge_from(""), None);
+    }
+
+    /// An enterprise slug carries its host; a github.com one none.
+    #[test]
+    fn api_target_reads_the_host() {
+        assert_eq!(api_target("acme/app"), (None, "repos/acme/app".to_string()));
+        assert_eq!(api_target("git.corp.example/acme/app"), (Some("git.corp.example"), "repos/acme/app".to_string()));
     }
 }

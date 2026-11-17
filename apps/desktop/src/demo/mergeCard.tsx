@@ -78,6 +78,7 @@ function Demo() {
     prNumbered: (_repo, number) => marks.find((m) => m.number === number),
     missing: () => {},
     titleOf: () => undefined,
+    mergeBlock: () => null,
     merge: async (c) => {
       await new Promise((done) => setTimeout(done, 1000));
       setMarks((all) => all.map((m) => (m.number === c.number ? { ...m, state: "MERGED" } : m)));

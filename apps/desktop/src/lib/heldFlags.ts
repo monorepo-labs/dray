@@ -2,7 +2,8 @@
 // Mac's server holds the flag (`held_flags.rs`) and writes it to the session's
 // server once that answers; until then the sidebar draws the held value over
 // the row the server last sent, so the row sinks at once and does not bounce
-// back up when a reconnect re-reads the stale one.
+// back up when a reconnect re-reads the stale one. A bot task's PR merged
+// from here while its machine is down holds a settle the same way (#1178).
 
 import { useSyncExternalStore } from "react";
 
@@ -14,17 +15,25 @@ import type { SessionIndexItem } from "@/types/events";
 export type HeldFlag = {
   machine: ServerId;
   sessionId: string;
-  aside: boolean;
+  /// Absent on a held settle.
+  aside?: boolean;
   pinned?: boolean;
+  archived?: boolean;
+  /// The worktree goes too, once the settle lands.
+  removeWorktree?: boolean;
   at: string;
 };
 
-type Changed = { held: HeldFlag[]; landed: { server: ServerId; item: SessionIndexItem }[] };
+/// A row a flush wrote; `worktreeError` where a held settle's worktree removal
+/// failed after the settle landed.
+type Landed = { item: SessionIndexItem; worktreeError?: string };
+
+type Changed = { held: HeldFlag[]; landed: (Landed & { server: ServerId })[] };
 
 let held: HeldFlag[] = [];
 let started = false;
 const changed = channel<void>();
-const landedRows = channel<SessionIndexItem>();
+const landedRows = channel<Landed>();
 
 /// Bumped by every event, so a read outlived by one is dropped rather than
 /// putting back a list the event already replaced.
@@ -53,8 +62,8 @@ function start() {
     generation++;
     held = payload.held;
     changed.emit();
-    for (const { server: from, item } of payload.landed) {
-      landedRows.emit(qualifyRecord(item, from) as SessionIndexItem);
+    for (const { server: from, item, worktreeError } of payload.landed) {
+      landedRows.emit({ item: qualifyRecord(item, from) as SessionIndexItem, worktreeError });
     }
   });
   // This Mac's server restarting drops whatever it announced meanwhile, and
@@ -77,7 +86,7 @@ export function useHeldFlags(): HeldFlag[] {
 }
 
 /// Rows a flush just wrote, as their own servers answered them.
-export function onLanded(listener: (item: SessionIndexItem) => void): () => void {
+export function onLanded(listener: (landed: Landed) => void): () => void {
   start();
   return landedRows.subscribe(listener);
 }
@@ -92,6 +101,13 @@ export async function holdFlags(
   flags: { aside: boolean; pinned?: boolean },
 ): Promise<void> {
   await invoke("hold_session_flags", { machine: server, sessionId, aside: flags.aside, pinned: flags.pinned ?? null }, LOCAL);
+}
+
+/// Holds a settle for a bot task on `server`, which is down, after its PR was
+/// merged through GitHub from here: the work has landed, and only that server
+/// can stop the task's child and remove its worktree.
+export async function holdSettle(server: ServerId, sessionId: string, removeWorktree: boolean): Promise<void> {
+  await invoke("hold_session_settle", { machine: server, sessionId, removeWorktree }, LOCAL);
 }
 
 /// Drops a held flag before a newer write goes to its server. Answers once
@@ -136,9 +152,10 @@ export function overlayHeld(items: SessionIndexItem[], flags: HeldFlag[]): Sessi
     if (!h) return item;
     return {
       ...item,
-      aside: h.aside,
+      aside: h.aside ?? item.aside,
       pinned: h.pinned ?? item.pinned,
-      modified: !h.aside && Date.parse(h.at) > Date.parse(item.modified) ? h.at : item.modified,
+      archived: h.archived ?? item.archived,
+      modified: h.aside === false && Date.parse(h.at) > Date.parse(item.modified) ? h.at : item.modified,
     };
   });
 }

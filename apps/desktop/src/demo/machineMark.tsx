@@ -119,6 +119,7 @@ function Demo() {
             <TasksPanel
               rows={ROWS.map((r) => r.row)}
               prOf={(r) => PRS.get(r.item.sessionId)}
+              mergeBlock={() => null}
               onOpen={() => {}}
               onSetFlags={async () => {}}
               onFork={async () => {}}
