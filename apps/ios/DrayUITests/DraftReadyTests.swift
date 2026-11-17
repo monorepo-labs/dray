@@ -32,7 +32,7 @@ final class DraftReadyTests: XCTestCase {
         tasks.tap()
         let row = app.buttons["botTask"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10), "no task row")
-        XCTAssertTrue(app.descendants(matching: .any)["Pull request #1, draft"].waitForExistence(timeout: 20),
+        XCTAssertTrue(glyph(app, "draft").waitForExistence(timeout: 20),
                       "the row draws no draft glyph")
         sleep(2)
         snap(app, "0-tasks")
@@ -61,10 +61,16 @@ final class DraftReadyTests: XCTestCase {
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(tasks.waitForExistence(timeout: 10), "Back did not return to the bot")
         tasks.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["Pull request #1, open"].waitForExistence(timeout: 5),
+        XCTAssertTrue(glyph(app, "open").waitForExistence(timeout: 5),
                       "the row still reads draft")
         sleep(2)
         snap(app, "5-tasks-open")
+    }
+
+    /// `PrGlyph`'s label in a given state, whatever the PR's number.
+    private func glyph(_ app: XCUIApplication, _ state: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH 'Pull request #' AND label ENDSWITH %@", ", \(state)")).firstMatch
     }
 
     private func snap(_ app: XCUIApplication, _ name: String) {
