@@ -62,7 +62,10 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
       // The cursor is a byte offset, so runs landing since the first page
       // never shift what the next one reads.
       const page = await load(older.next, unseen(rest.liveTaskIds, runs, older.runs));
-      setOlder({ next: page.next, runs: [...older.runs, ...page.runs] });
+      // A running run found past a full page comes back again on the page
+      // that reaches it.
+      const had = new Set(older.runs.map((r) => r.id));
+      setOlder({ next: page.next, runs: [...older.runs, ...page.runs.filter((r) => !had.has(r.id))] });
     } finally {
       setLoading(false);
     }

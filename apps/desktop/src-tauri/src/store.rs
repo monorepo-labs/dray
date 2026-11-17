@@ -2010,8 +2010,11 @@ pub async fn list_subagents(
 
 /// Reads one log back from byte `end`, newest line first, pushing each agent
 /// run onto `out` as its start is met and crossing off each task of `live` it
-/// meets. Answers the offset to resume before once `out` holds `want` finished
-/// runs and `live` is empty, or `None` at the top of the file.
+/// meets. Once `out` holds `want` finished runs the page is full: reading goes
+/// on only while `live` is not empty, keeping just the running runs it finds,
+/// and the answer is still the offset where the page filled, with `ends` as it
+/// stood there, so the next page reads what was passed over. `None` where the
+/// top of the file came first.
 async fn subagents_back(
     session_id: &str,
     file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
@@ -2030,6 +2033,8 @@ async fn subagents_back(
     // The older end of the last chunk read, up to its first newline: a line
     // the next chunk finishes.
     let mut carry = Vec::new();
+    // Where the page filled, and the completions pending there.
+    let mut full: Option<(u64, HashMap<String, String>)> = None;
     while start > 0 {
         let from = start.saturating_sub(chunk);
         let mut buf = vec![0; (start - from) as usize];
@@ -2052,13 +2057,33 @@ async fn subagents_back(
             at += line.len() + 1;
         }
         for (line_start, line) in lines.into_iter().rev() {
-            finished += usize::from(subagent_line(session_id, line, ends, live, out));
-            if finished >= want && live.is_empty() {
-                return Ok(Some(from + line_start as u64));
+            let at = from + line_start as u64;
+            match &full {
+                None => {
+                    finished += usize::from(subagent_line(session_id, line, ends, live, out));
+                    if finished >= want {
+                        if live.is_empty() {
+                            return Ok(Some(at));
+                        }
+                        full = Some((at, ends.clone()));
+                    }
+                }
+                Some((filled, kept)) => {
+                    let mut passed = Vec::new();
+                    subagent_line(session_id, line, ends, live, &mut passed);
+                    out.extend(passed.into_iter().filter(|r| r.ended_at.is_none()));
+                    if live.is_empty() {
+                        *ends = kept.clone();
+                        return Ok(Some(*filled));
+                    }
+                }
             }
         }
     }
-    Ok(None)
+    Ok(full.map(|(filled, kept)| {
+        *ends = kept;
+        filled
+    }))
 }
 
 /// Folds one log line into the walk. True where it completed a finished run.
@@ -2685,14 +2710,19 @@ mod tests {
         assert_eq!(rest[1].ended_at.as_deref(), Some("t7"));
         assert_eq!(rest[1].description.as_deref(), Some("do a"));
 
-        // A live task older than the page's finished runs keeps the read going
-        // until it is met: here `a`'s handle, past both c and b.
+        // A live task older than the full page keeps the read going until it
+        // is met, keeping only it: `d2` runs past c and b, and the page still
+        // resumes at c's start, as if nothing were hunted.
+        let log2 = [start("d2", "Explore", "t0"), String::from_utf8(file.into_inner()).unwrap()].join("\n");
+        let len2 = log2.len() as u64;
+        let mut file = std::io::Cursor::new(log2.into_bytes());
         let (mut ends, mut out) = (HashMap::new(), Vec::new());
-        let mut live = HashSet::from(["xa".to_string()]);
-        let stop = subagents_back("s", &mut file, len, 64, &mut ends, &mut live, 2, &mut out).await.unwrap();
+        let mut live = HashSet::from(["xd2".to_string()]);
+        let hunted = subagents_back("s", &mut file, len2, 64, &mut ends, &mut live, 2, &mut out).await.unwrap();
         assert!(live.is_empty());
-        assert_eq!(out.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["d", "k", "c", "b", "a"]);
-        assert_eq!(stop, Some(0));
+        assert_eq!(out.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["d", "k", "c", "d2"]);
+        assert_eq!(hunted, stop.map(|at| at + (len2 - len)));
+        assert!(ends.contains_key("a"), "ends as they stood where the page filled");
     }
 
     /// Read in chunks, the answer is the whole read's: lines across a chunk's
