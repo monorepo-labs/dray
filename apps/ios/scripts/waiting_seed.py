@@ -1,6 +1,9 @@
 """Seeds a dray-serve home for WaitingOnYouTests (#1181): a bot whose chat runs
-1,500 turns long, with seven hidden tasks idle on the reader, the oldest a week
-back. The oldest's last message names a picture on the server's disk.
+400 turns long, with seven hidden tasks idle on the reader, the oldest a week
+back. Three reported into the chat: the oldest far up it, answered with a
+reply naming a picture on the server's disk; the newest near its end,
+answered; one with no reply. The rest never reported, so their rows open the
+task.
 
     python3 scripts/waiting_seed.py
     DRAY_HOME=/private/tmp/dray-waiting dray-serve --port 47111 &
@@ -28,16 +31,23 @@ def png(w, h, rgb):
 def write_log(sid, turns, start):
     with open(f"{ROOT}/sessions/{sid}.jsonl", "w") as f:
         seq = 0
-        for i, (prompt, reply) in enumerate(turns):
+        for i, (prompt, reply, *sender) in enumerate(turns):
             at = start + timedelta(minutes=i)
+            # A task's report carries the sender line `attribute` writes.
+            frm = sender and {"sessionId": sender[0], "title": sender[1], "machine": None}
+            if frm:
+                prompt = f'[message from the Dray session "{sender[1]}" ({sender[0]})]\n\n{prompt}'
+            said = [{"type": "assistant_text", "block": {"messageId": f"msg_{i}", "index": 0}, "text": reply}] if reply else []
             for p in (
                 {"type": "user_message", "text": prompt, "images": [], "issues": [], "baseline": None,
-                 "queued": False, "from": None, "cwd": None},
-                {"type": "assistant_text", "block": {"messageId": f"msg_{i}", "index": 0}, "text": reply},
-                {"type": "turn_completed", "status": "success", "stopReason": "end_turn", "finalText": reply},
+                 "queued": False, "from": frm or None, "cwd": None},
+                *said,
+                {"type": "turn_completed", "status": "success", "stopReason": "end_turn", "finalText": reply or ""},
             ):
+                # Compact, as serde writes it: the server finds lines by byte needles like `"type":"user_message"`.
                 f.write(json.dumps({"id": str(uuid.uuid4()), "sessionId": sid, "harness": "claude_code", "seq": seq,
-                                    "ts": stamp(at), "turnId": None, "subagent": None, "payload": p}) + "\n")
+                                    "ts": stamp(at), "turnId": None, "subagent": None, "payload": p},
+                                   separators=(",", ":")) + "\n")
                 seq += 1
 
 
@@ -66,7 +76,6 @@ bot = {"id": bid, "name": "Ops", "path": bot_path, "created": stamp(now - timede
 
 chat = str(uuid.uuid4())
 chat_start = now - timedelta(days=8)
-write_log(chat, [(f"Check {i}?", f"Chat reply number {i}.") for i in range(400)], chat_start)
 index = [entry(chat, bot_path, "Ops", now - timedelta(minutes=10))]
 
 # Oldest first: the first is a week back, its report far up the chat.
@@ -79,11 +88,21 @@ tasks = [
     ("Rename settings keys", "Renamed the keys. An old build will lose its picks. Ship anyway?", 3 * 60),
     ("Dark mode contrast", "Raised contrast on three tokens. Which palette should lead?", 60),
 ]
+ids = {}
 for title, last, minutes_ago in tasks:
-    sid = str(uuid.uuid4())
+    sid = ids[title] = str(uuid.uuid4())
     modified = now - timedelta(minutes=minutes_ago)
     write_log(sid, [(f"{title}.", "Working on it."), ("Go on.", last)], modified - timedelta(minutes=2))
     index.append(entry(sid, proj, title, modified, hidden=True, parent=chat))
+
+turns = [(f"Check {i}?", f"Chat reply number {i}.") for i in range(400)]
+# The oldest report sits near the top, so the server walks back nearly the whole chat for it.
+turns[5] = (tasks[0][1], f"The redirect task fixed the login loop and wants to open a PR. Its screenshot:\n\n{picture}\n\nSay yes and it opens one.",
+            ids["Fix login redirect"], "Fix login redirect")
+turns[200] = (tasks[1][1], None, ids["Bump deps"], "Bump deps")
+turns[396] = (tasks[6][1], "Dark mode task raised contrast on three tokens and asks which palette should lead.",
+              ids["Dark mode contrast"], "Dark mode contrast")
+write_log(chat, turns, chat_start)
 
 open(f"{ROOT}/serve-token", "w").write(TOKEN)
 os.chmod(f"{ROOT}/serve-token", 0o600)

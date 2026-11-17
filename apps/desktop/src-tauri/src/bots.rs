@@ -931,6 +931,129 @@ pub async fn bot_previews(
     Ok(previews)
 }
 
+/// How far back [`bot_task_reply`] reads a bot's chat: a task with no report
+/// anywhere must not read a very long chat whole.
+const REPLY_SCAN: u64 = 32 * 1024 * 1024;
+
+/// How many of a task's reports [`bot_task_reply`] looks past for one the bot
+/// answered.
+const REPORTS_TRIED: usize = 10;
+
+/// What a bot last told the reader about one of its tasks: its reply to the
+/// task's newest report it answered. A report it let pass — answered by
+/// messaging the task, or a turn that failed — is looked past, since its reply
+/// to the one before is still its latest word on the task. `None` where there
+/// is none to show, and the Waiting on you row opens the task instead.
+///
+/// Two passes, so a long chat costs a byte search: back from the end, each
+/// chunk searched for the task's id and only a line holding it parsed, to a
+/// report; then forward from there, parsing to the reply's end. Read where
+/// asked rather than recorded as it happens, since a record would still need
+/// this walk for every report logged before it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn bot_task_reply(session_id: String, task_id: String) -> Result<Option<String>, Fail> {
+    let finder = memchr::memmem::FinderRev::new(task_id.as_bytes());
+    let mut before = None;
+    for _ in 0..REPORTS_TRIED {
+        let report = crate::store::scan_back(&session_id, before, REPLY_SCAN, |chunk, at| {
+            finder.rfind_iter(chunk).find_map(|hit| {
+                let start = memchr::memrchr(b'\n', &chunk[..hit]).map_or(0, |i| i + 1);
+                let end = memchr::memchr(b'\n', &chunk[hit..]).map_or(chunk.len(), |i| hit + i);
+                let report = log_line(&chunk[start..end]).is_some_and(|l| l.report_from() == Some(&task_id));
+                report.then_some((at + start as u64, at + end as u64))
+            })
+        })
+        .await?;
+        let Some((start, end)) = report else { return Ok(None) };
+        let mut texts = Vec::new();
+        crate::store::scan_forward(&session_id, end, |line| reply_goes_on(line, &mut texts)).await?;
+        if !texts.is_empty() {
+            return Ok(Some(texts.join("\n\n")));
+        }
+        before = Some(start);
+    }
+    Ok(None)
+}
+
+/// The kinds of line [`bot_task_reply`] reads, parsed no further.
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ReplyPayload {
+    UserMessage {
+        text: String,
+        from: Option<ReplySender>,
+    },
+    AssistantText {
+        text: String,
+    },
+    TurnCompleted {
+        status: String,
+        #[serde(rename = "finalText")]
+        final_text: Option<String>,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReplySender {
+    session_id: String,
+    bot_id: Option<String>,
+}
+
+impl ReplyPayload {
+    /// The task a report came from: a relayed message from a session, not a
+    /// bot, and not a stall nudge, which is Dray's (`nudge_bot`) and gets no reply.
+    fn report_from(&self) -> Option<&str> {
+        let Self::UserMessage { text, from: Some(from) } = self else { return None };
+        // Past the sender line `attribute` writes, which ends in a blank line.
+        let said = text.split_once("]\n\n").map_or(text.as_str(), |(_, rest)| rest);
+        (from.bot_id.is_none() && !said.starts_with("Stall nudge:")).then_some(from.session_id.as_str())
+    }
+}
+
+/// A main-thread line of a kind [`ReplyPayload`] names; `None` for any other,
+/// tested by needle before parsing.
+fn log_line(line: &[u8]) -> Option<ReplyPayload> {
+    use memchr::memmem::Finder;
+    use std::sync::LazyLock;
+    static NEEDLES: LazyLock<[Finder; 3]> = LazyLock::new(|| {
+        [r#""type":"user_message""#, r#""type":"assistant_text""#, r#""type":"turn_completed""#]
+            .map(|n| Finder::new(n.as_bytes()).into_owned())
+    });
+    #[derive(Deserialize)]
+    struct Line {
+        subagent: Option<serde::de::IgnoredAny>,
+        payload: ReplyPayload,
+    }
+    if !NEEDLES.iter().any(|n| n.find(line).is_some()) {
+        return None;
+    }
+    serde_json::from_slice::<Line>(line).ok().filter(|l| l.subagent.is_none()).map(|l| l.payload)
+}
+
+/// Takes the bot's text after a report until the next message in. Reports
+/// landing back to back share the text after them, since a bot busy when they
+/// land answers them together; anything else coming in ends the reply. A failed
+/// turn's error sentence, which the harness also sends as text, is no reply.
+fn reply_goes_on(line: &[u8], texts: &mut Vec<String>) -> bool {
+    match log_line(line) {
+        Some(ReplyPayload::AssistantText { text }) => {
+            if crate::events::has_text(&text) {
+                texts.push(text);
+            }
+            true
+        }
+        Some(ReplyPayload::TurnCompleted { status, final_text }) => {
+            if status == "error" && final_text.is_some() && texts.last() == final_text.as_ref() {
+                texts.pop();
+            }
+            true
+        }
+        Some(message) => texts.is_empty() && message.report_from().is_some(),
+        None => true,
+    }
+}
+
 /// Dray's own prompts on their way into a bot's chat, as (session, text): a
 /// kickoff, or a review (#973). The transcript draws no bubble for either.
 /// Read where the prompt's event is built: threading a flag through
@@ -1509,6 +1632,57 @@ mod tests {
 
     fn bot() -> Bot {
         Bot { id: "b".into(), name: "Ops".into(), path: "/h/bots/b".into(), created: String::new(), avatar: None, welcome: None, greeting: Vec::new() }
+    }
+
+    #[test]
+    fn task_replies_pair_each_report_with_the_bot_text_after_it() {
+        let user = |text: &str, from: Option<&str>| {
+            let from = from.map(|id| serde_json::json!({ "sessionId": id, "title": id }));
+            serde_json::json!({ "type": "user_message", "text": text, "from": from })
+        };
+        let said = |text: &str| serde_json::json!({ "type": "assistant_text", "block": { "messageId": "m", "index": 0 }, "text": text });
+        let payloads = [
+            user("[message from the Dray session \"a\" (a)]\n\nOld report", Some("a")),
+            said("Old reply"),
+            user("[message from the Dray session \"a\" (a)]\n\nShould I keep it?", Some("a")),
+            user("[message from the Dray session \"b\" (b)]\n\nDone", Some("b")),
+            said("A asks whether to keep it."),
+            said("B is done."),
+            user("[message from the Dray session \"a\" (a)]\n\nStall nudge: this task has sat idle", Some("a")),
+            said("ignored"),
+            user("[message from the Dray session \"c\" (c)]\n\nWhich port?", Some("c")),
+            user("thanks", None),
+            said("You're welcome."),
+            user("[message from the Dray session \"d\" (d)]\n\nPick one?", Some("d")),
+            said("D asks you to pick one."),
+            // Answered by messaging the task, so nothing in the chat.
+            user("[message from the Dray session \"d\" (d)]\n\nGoing with the first.", Some("d")),
+            user("[message from the Dray session \"c\" (c)]\n\nWhich port, again?", Some("c")),
+            said("API Error: Can't reach the API server"),
+            serde_json::json!({ "type": "turn_completed", "status": "error", "finalText": "API Error: Can't reach the API server" }),
+        ];
+        // Serialized the way the log writes them, so the needle test is pinned too.
+        let mut lines: Vec<String> = payloads
+            .into_iter()
+            .map(|payload| serde_json::json!({ "id": "x", "subagent": null, "payload": payload }).to_string())
+            .collect();
+        let inner = serde_json::json!({ "subagent": { "id": "s" }, "payload": said("a subagent's word") });
+        lines.insert(6, inner.to_string());
+        // `bot_task_reply`'s passes, over lines in memory: reports newest first, each read forward.
+        let reply = |task: &str| {
+            let is_report = |l: &String| log_line(l.as_bytes()).is_some_and(|p| p.report_from() == Some(task));
+            (0..lines.len()).rev().filter(|&at| is_report(&lines[at])).find_map(|at| {
+                let mut texts = Vec::new();
+                lines[at + 1..].iter().take_while(|l| reply_goes_on(l.as_bytes(), &mut texts)).for_each(drop);
+                (!texts.is_empty()).then(|| texts.join("\n\n"))
+            })
+        };
+        let both = Some("A asks whether to keep it.\n\nB is done.".to_string());
+        assert_eq!(reply("a"), both);
+        assert_eq!(reply("b"), both);
+        assert_eq!(reply("c"), None, "an error sentence is no reply, and the reader's message closed the first unanswered");
+        assert_eq!(reply("d"), Some("D asks you to pick one.".into()), "a report let pass is looked past");
+        assert_eq!(reply("e"), None);
     }
 
     #[test]

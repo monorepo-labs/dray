@@ -50,7 +50,7 @@ export default function FileLink({
   // belongs in. Read from context rather than passed down: three components in
   // between would carry an id they never look at, and the transcript that drew
   // the link is the right answer even where it is not the selected session.
-  const { sessionId, opensIn } = useChatSession();
+  const { sessionId } = useChatSession();
 
   const open = (e: MouseEvent | KeyboardEvent) => {
     e.stopPropagation();
@@ -60,7 +60,7 @@ export default function FileLink({
     // markdown in the Docs panel, everything else in the Files view.
     // A remote file has no copy on this Mac for an editor to open.
     if ((e.metaKey || e.ctrlKey) && serverOfSession(sessionId) === LOCAL) return void openFile(path, line);
-    openPath(opensIn ?? sessionId, path, line, sessionId);
+    openPath(sessionId, path, line);
   };
 
   return (

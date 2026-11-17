@@ -83,7 +83,7 @@ struct TranscriptView: View {
                             AskCard(key: t.key, event: t.event)
                         }
                     }
-                    if bot != nil { StalledCard(tasks: botTasks) }
+                    if bot != nil { StalledCard(chat: key, tasks: botTasks) }
                     // The stack's bottom padding, and what a scroll to the end lands on.
                     Color.clear.frame(height: Theme.Space.m).id("bottom")
                 }

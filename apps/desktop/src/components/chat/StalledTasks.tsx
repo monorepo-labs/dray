@@ -3,14 +3,13 @@ import { ArrowUpRight, MousePointerClick, X } from "lucide-react";
 import { useState } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
-import TaskMessage from "@/components/chat/TaskMessage";
+import BotReply from "@/components/chat/BotReply";
 import { TONE_TEXT } from "@/components/PrPanel";
 import PrStateIcon from "@/components/PrStateIcon";
 import { MergeControl } from "@/components/TasksPanel";
 import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
-import { useStallLine } from "@/hooks/useStallLine";
 import { seededAvatar } from "@/lib/botAvatar";
 import type { CrewRow } from "@/lib/crew";
 import { IS_MAC, isModClick } from "@/lib/platform";
@@ -31,11 +30,12 @@ const ROWS_SHOWN = 5;
 /// inbox row per task — its face, title, PR and how long it has sat. A PR
 /// ready to merge carries Merge; a task idle on the reader carries the line its
 /// bot wrote for it (`dray session need`), and so does a ready PR the task
-/// asked the reader to try first. A click opens the task's last message under
-/// its row, read off the end of the task's own log; a second click closes it.
-/// It used to scroll the chat back to the bot's reply, which on a long chat
-/// meant reading days of log and stalled the app. ⌘-click and Open, shown on
-/// hover, open the task in a tab. A row clears the moment its task moves;
+/// asked the reader to try first. A click opens, under the row, what the bot
+/// said about the task: its reply to the task's last report, which the bot's
+/// server finds walking back from the end of its chat. A second click closes
+/// it; with no reply, the click opens the task. The task's own message is never
+/// shown, being written for the bot. ⌘-click and Open, shown on hover, open the
+/// task in a tab. A row clears the moment its task moves;
 /// dismissed, a stall stays gone until the task changes and stalls again. A
 /// task whose machine is down stays, drawn from what was last known with the
 /// offline mark in its time's place and nothing to open; Merge still works,
@@ -107,10 +107,9 @@ export default function StalledTasks({
 }
 
 /// One task as an inbox row: face, title, PR and time on top; what it needs
-/// under it where its bot wrote that. A waiting task with no need yet draws its
-/// own last message instead, read off its server, and holds a skeleton only
-/// while that read runs; most ready PRs never get a line at all. Expanded, the
-/// whole of that message sits under it.
+/// under it where its bot wrote that; most ready PRs never get a line at all.
+/// Expanded, the bot's reply to the task's last report sits under it, or, with
+/// none, the row closes and the task opens.
 function StalledRow({
   stall,
   now,
@@ -135,7 +134,6 @@ function StalledRow({
   const status = pr && prStatus(pr);
   const need = needLine(stall);
   const waiting = stall.kind === "waiting" && !need;
-  const last = useStallLine(stall.key, id, waiting);
   const offline = offlineLine(serverOfPath(item.cwd));
   const blocked = stall.kind === "ready" && pr && !stall.checking ? mergeBlock(row, pr) : null;
 
@@ -217,18 +215,22 @@ function StalledRow({
           </span>
           {need ? (
             <span className="min-w-0 truncate text-ui text-foreground/70">{need}</span>
-          ) : expanded || !waiting ? null : last.reading ? (
-            <span className="my-1 h-3 w-48 animate-pulse rounded bg-muted-foreground/20" />
-          ) : last.line ? (
-            <span className="min-w-0 truncate text-ui text-foreground/70">{last.line}</span>
-          ) : (
+          ) : expanded || !waiting ? null : (
             <span className="min-w-0 truncate text-ui text-muted-foreground">Waiting for your reply</span>
           )}
         </span>
       </div>
       {expanded && (
         <div className="pr-3 pb-3 pl-[52px] text-ui">
-          <TaskMessage sessionId={id} cwd={item.cwd} />
+          {/* A task whose machine is down cannot open, so its row stays and says so. */}
+          <BotReply
+            taskId={id}
+            onNone={() => {
+              if (offline) return;
+              onToggle(id);
+              onOpen(id, false);
+            }}
+          />
         </div>
       )}
     </div>

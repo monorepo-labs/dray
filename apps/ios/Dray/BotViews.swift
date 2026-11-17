@@ -629,16 +629,41 @@ func prStatus(_ pr: PrMark) -> String {
 private let stallRowsShown = 5
 
 /// The card at the foot of a bot's chat: its tasks that wait on the reader. A
-/// tap opens a task's last message in a sheet, read off the end of its own log,
-/// rather than the task itself or the bot's reply far up a long chat (#1181).
-/// X puts the card away until one of them moves and stalls again.
+/// tap opens in a sheet what the bot said about the task: its reply to the
+/// task's last report, which the bot's server finds walking back from the end of
+/// its chat (`bot_task_reply`). With none, the tap opens the task. The task's own
+/// message is never shown, being written for the bot. X puts the card away until
+/// one of them moves and stalls again.
 struct StalledCard: View {
     @Environment(Store.self) private var store
     @Environment(\.openTask) private var openTask
+    /// The bot's chat, whose server holds its replies.
+    let chat: SessionKey
     let tasks: [SessionKey]
     @AppStorage("bot.dismissedStalls") private var dismissedRaw = ""
-    @State private var picked: Stall?
+    /// A row's reply, held only while its sheet is up.
+    @State private var picked: Picked?
+    /// The row whose reply is being read.
+    @State private var reading: String?
     @State private var all = false
+
+    private struct Picked: Identifiable {
+        let stall: Stall
+        let text: String
+        var id: String { stall.id }
+    }
+
+    /// Reads the bot's reply before deciding: a sheet for it, or the task where
+    /// there is none, a read failed, or the server is too old to ask.
+    private func pick(_ s: Stall) async {
+        reading = s.id
+        defer { reading = nil }
+        // The desktop's `READ_TIMEOUT_MS`: an asleep machine gives up rather than spin.
+        let text = try? await store.call(chat.server, "bot_task_reply",
+                                         ["sessionId": .string(chat.id), "taskId": .string(s.task.id)],
+                                         as: String?.self, timeout: .seconds(8))
+        if let text = text ?? nil { picked = Picked(stall: s, text: text) } else { openTask?(s.task) }
+    }
 
     var body: some View {
         // Stalls ripen with time alone, so the card looks again each minute.
@@ -681,10 +706,10 @@ struct StalledCard: View {
             let repos = Set(tasks.compactMap { key in store.items[key].map { ProjectKey(server: key.server, path: $0.projectPath) } })
             for repo in repos { await store.ensureMarks(repo.server, repo.path) }
         }
-        .sheet(item: $picked) { s in
-            TaskMessageSheet(task: s.task, title: s.item.title) {
+        .sheet(item: $picked) { p in
+            BotReplySheet(chat: chat, task: p.stall.task, title: p.stall.item.title, text: p.text) {
                 picked = nil
-                openTask?(s.task)
+                openTask?(p.stall.task)
             }
         }
     }
@@ -692,7 +717,7 @@ struct StalledCard: View {
     private func row(_ s: Stall) -> some View {
         let need = s.item.need.flatMap { n in parseDate(n.at).flatMap { at in
             parseDate(s.item.modified).map { at >= $0 ? n.text : nil } } ?? nil }
-        return Button { picked = s } label: {
+        return Button { if reading == nil { Task { await pick(s) } } } label: {
             HStack(alignment: .top, spacing: 10) {
                 BotFace(seed: s.task.id, size: 32)
                 VStack(alignment: .leading, spacing: 3) {
@@ -709,7 +734,9 @@ struct StalledCard: View {
                             MergeTaskButton(server: s.task.server, taskId: s.task.id, cwd: s.item.projectPath,
                                             number: pr.number, branch: pr.headRefName)
                         }
-                        if let at = parseDate(s.item.modified) {
+                        if reading == s.id {
+                            ProgressView().controlSize(.mini).tint(Theme.tertiary)
+                        } else if let at = parseDate(s.item.modified) {
                             Text(shortAge(at)).font(Theme.Font.footnote.font.monospacedDigit()).foregroundStyle(Theme.tertiary)
                         }
                     }
@@ -731,19 +758,16 @@ struct StalledCard: View {
     }
 }
 
-/// A Waiting on you task's last message, the desktop's `TaskMessage` in a sheet.
-/// Drawn against the task's own server, so a picture loads from its machine.
-struct TaskMessageSheet: View {
+/// What the bot said about a Waiting on you task, the desktop's `BotReply` in a
+/// sheet. Drawn against the bot chat's server, so a picture loads from its machine.
+struct BotReplySheet: View {
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
+    let chat: SessionKey
     let task: SessionKey
     let title: String
+    let text: String
     let open: () -> Void
-    /// `nil` inside `.done` is a task that has written nothing; a read that
-    /// errored or hung is `.failed`, never that.
-    private enum Read { case reading, failed, done(String?) }
-    @State private var read = Read.reading
-    @State private var tries = 0
 
     private var item: SessionItem? { store.items[task] }
     private var pr: PrMark? { item.flatMap { store.prMark(task, $0) } }
@@ -761,27 +785,7 @@ struct TaskMessageSheet: View {
                     // Over the message, not in the bar: there, Done and Merge left a long title a word or two.
                     Text(title.isEmpty ? "Untitled" : title)
                         .font(Theme.Font.headline).foregroundStyle(Theme.text)
-                    switch read {
-                    case .reading:
-                        VStack(alignment: .leading, spacing: 10) {
-                            Capsule().fill(Theme.tertiary.opacity(0.3)).frame(width: 240, height: 12)
-                            Capsule().fill(Theme.tertiary.opacity(0.3)).frame(width: 160, height: 12)
-                        }
-                        .shimmer()
-                        .accessibilityElement()
-                        .accessibilityLabel("Loading")
-                    case .failed:
-                        VStack(alignment: .leading, spacing: Theme.Space.s) {
-                            Text("Couldn't read this task's last message.").foregroundStyle(Theme.secondary)
-                            Button("Try again") { tries += 1 }.foregroundStyle(Theme.text)
-                        }
-                        .font(Theme.Font.subhead)
-                    case .done(let text?):
-                        ReplyBubble(text: text)
-                    case .done(nil):
-                        Text("This task hasn't written anything yet.")
-                            .font(Theme.Font.subhead).foregroundStyle(Theme.secondary)
-                    }
+                    ReplyBubble(text: text)
                     Button(action: open) {
                         HStack(spacing: 4) {
                             Text("Open task")
@@ -799,7 +803,7 @@ struct TaskMessageSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(Theme.Space.l)
             }
-            .environment(\.imageServer, store.connection(task.server))
+            .environment(\.imageServer, store.connection(chat.server))
             // The bot chat's viewer pages its own turn; a picture here opens on its own.
             .environment(\.openImage, nil)
             .navigationBarTitleDisplayMode(.inline)
@@ -822,17 +826,6 @@ struct TaskMessageSheet: View {
         .presentationBackground(Theme.page)
         // A merge settles the task: nothing left to read or open.
         .onChange(of: item == nil || pr.map(prStatus) == "merged") { _, gone in if gone { dismiss() } }
-        .task(id: tries) {
-            read = .reading
-            do {
-                // The desktop's `READ_TIMEOUT_MS`: a hung server gives up rather than spin.
-                let got: [String: BotPreview] = try await store.call(
-                    task.server, "bot_previews", ["sessionIds": .array([.string(task.id)])], timeout: .seconds(8))
-                read = got[task.id].map { .done($0.text) } ?? .failed
-            } catch {
-                read = .failed
-            }
-        }
     }
 }
 
