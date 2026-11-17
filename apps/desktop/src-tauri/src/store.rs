@@ -1917,33 +1917,41 @@ pub async fn find_newest<T>(session_id: &str, find: impl Fn(&[AgentEvent]) -> Op
     }
 }
 
-/// Hands `visit` a log a chunk of whole lines at a time, newest first, with the
-/// byte offset each starts at, until it answers or reading back reaches `limit`
-/// bytes from the file's end. Starts at byte `before` where given, the end
-/// where not. Nothing is parsed here, so a caller searching each chunk for a
+/// A session's log opened for reading, with its length; `None` where it has none.
+pub async fn open_log(session_id: &str) -> Result<Option<(fs::File, u64)>> {
+    match fs::File::open(get_session_path(session_id).await?).await {
+        Ok(file) => {
+            let len = file.metadata().await?.len();
+            Ok(Some((file, len)))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).context("could not open session file"),
+    }
+}
+
+/// Hands `visit` a log `chunk` bytes of whole lines at a time, newest first,
+/// with the byte offset each starts at, until it answers or reading back
+/// reaches `limit` bytes from the end, `len`. Starts at byte `before` where
+/// given. Nothing is parsed here, so a caller searching each chunk for a
 /// needle walks a long log at the speed of that search.
 pub async fn scan_back<T>(
-    session_id: &str,
+    file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
+    len: u64,
     before: Option<u64>,
     limit: u64,
+    chunk: u64,
     mut visit: impl FnMut(&[u8], u64) -> Option<T>,
 ) -> Result<Option<T>> {
     use std::io::SeekFrom;
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
-    let mut file = match fs::File::open(get_session_path(session_id).await?).await {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e).context("could not open session file"),
-    };
-    let len = file.metadata().await?.len();
     let floor = len.saturating_sub(limit);
     let mut start = before.map_or(len, |b| b.min(len));
     // The older end of the last chunk read, up to its first newline: a line
     // the next chunk finishes.
     let mut carry = Vec::new();
     while start > floor {
-        let from = start.saturating_sub(256 * 1024).max(floor);
+        let from = start.saturating_sub(chunk).max(floor);
         let mut buf = vec![0; (start - from) as usize];
         file.seek(SeekFrom::Start(from)).await?;
         file.read_exact(&mut buf).await?;
@@ -1963,19 +1971,23 @@ pub async fn scan_back<T>(
     Ok(None)
 }
 
-/// Hands `visit` a log's lines from byte `from` on, oldest first, until it
-/// answers `false` or the file ends.
-pub async fn scan_forward(session_id: &str, from: u64, mut visit: impl FnMut(&[u8]) -> bool) -> Result<()> {
+/// Hands `visit` a log's lines from byte `from` on, oldest first, `chunk`
+/// bytes read at a time, until it answers `false` or the log ends.
+pub async fn scan_forward(
+    file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
+    from: u64,
+    chunk: usize,
+    mut visit: impl FnMut(&[u8]) -> bool,
+) -> Result<()> {
     use std::io::SeekFrom;
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
-    let mut file = fs::File::open(get_session_path(session_id).await?).await.context("could not open session file")?;
     file.seek(SeekFrom::Start(from)).await?;
     let mut buf = Vec::new();
-    let mut chunk = vec![0; 64 * 1024];
+    let mut read_into = vec![0; chunk];
     loop {
-        let read = file.read(&mut chunk).await?;
-        buf.extend_from_slice(&chunk[..read]);
+        let read = file.read(&mut read_into).await?;
+        buf.extend_from_slice(&read_into[..read]);
         // At the end, a last line with no newline yet is whole as far as it goes.
         let end = if read == 0 { buf.len() } else { memchr::memrchr(b'\n', &buf).map_or(0, |i| i + 1) };
         for line in buf[..end].split(|&b| b == b'\n').filter(|l| !l.is_empty()) {

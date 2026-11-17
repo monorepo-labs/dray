@@ -643,8 +643,10 @@ struct StalledCard: View {
     @AppStorage("bot.dismissedStalls") private var dismissedRaw = ""
     /// A row's reply, held only while its sheet is up.
     @State private var picked: Picked?
-    /// The row whose reply is being read.
+    /// The row whose reply is being read, and the read, cancelled when the
+    /// card goes so a late answer never opens a task over another chat.
     @State private var reading: String?
+    @State private var read: Task<Void, Never>?
     @State private var all = false
 
     private struct Picked: Identifiable {
@@ -662,6 +664,7 @@ struct StalledCard: View {
         let text = try? await store.call(chat.server, "bot_task_reply",
                                          ["sessionId": .string(chat.id), "taskId": .string(s.task.id)],
                                          as: String?.self, timeout: .seconds(8))
+        guard !Task.isCancelled else { return }
         if let text = text ?? nil { picked = Picked(stall: s, text: text) } else { openTask?(s.task) }
     }
 
@@ -706,6 +709,9 @@ struct StalledCard: View {
             let repos = Set(tasks.compactMap { key in store.items[key].map { ProjectKey(server: key.server, path: $0.projectPath) } })
             for repo in repos { await store.ensureMarks(repo.server, repo.path) }
         }
+        // The card can stay while its chat changes under it, so both end the read.
+        .onDisappear { read?.cancel() }
+        .onChange(of: chat) { read?.cancel() }
         .sheet(item: $picked) { p in
             BotReplySheet(chat: chat, task: p.stall.task, title: p.stall.item.title, text: p.text) {
                 picked = nil
@@ -717,7 +723,7 @@ struct StalledCard: View {
     private func row(_ s: Stall) -> some View {
         let need = s.item.need.flatMap { n in parseDate(n.at).flatMap { at in
             parseDate(s.item.modified).map { at >= $0 ? n.text : nil } } ?? nil }
-        return Button { if reading == nil { Task { await pick(s) } } } label: {
+        return Button { if reading == nil { read = Task { await pick(s) } } } label: {
             HStack(alignment: .top, spacing: 10) {
                 BotFace(seed: s.task.id, size: 32)
                 VStack(alignment: .leading, spacing: 3) {
