@@ -147,8 +147,18 @@ fn is_test_run(args: &str) -> bool {
             }
         }
     }
+    let test_word = |w: &str| {
+        let w = w.to_ascii_lowercase();
+        !w.contains('/')
+            && !w.contains('.')
+            && (matches!(w.as_str(), "test" | "tests" | "e2e")
+                || RUNNERS.contains(&w.as_str())
+                || ["test:", "e2e:"].iter().any(|p| w.starts_with(p))
+                || [":test", ":e2e"].iter().any(|s| w.ends_with(s)))
+    };
     let Some(program) = words.get(at) else { return false };
-    if RUNNERS.contains(&stem(program).as_str()) {
+    // `bun test` and `deno test`: past the host, the program is the subcommand.
+    if RUNNERS.contains(&stem(program).as_str()) || test_word(program) {
         return true;
     }
     let mut option_value = false;
@@ -157,14 +167,7 @@ fn is_test_run(args: &str) -> bool {
             option_value = !w.contains('=');
             return false;
         }
-        if std::mem::take(&mut option_value) || w.contains('/') || w.contains('.') {
-            return false;
-        }
-        let w = w.to_ascii_lowercase();
-        matches!(w.as_str(), "test" | "tests" | "e2e")
-            || RUNNERS.contains(&w.as_str())
-            || ["test:", "e2e:"].iter().any(|p| w.starts_with(p))
-            || [":test", ":e2e"].iter().any(|s| w.ends_with(s))
+        !std::mem::take(&mut option_value) && test_word(w)
     })
 }
 
@@ -444,6 +447,9 @@ mod tests {
             "pnpm --filter web test",
             "sh -c playwright test",
             "cargo nextest run",
+            "bun test",
+            "deno test --allow-net",
+            "bun run test:e2e",
         ] {
             assert!(is_test_run(run), "{run}");
         }
