@@ -427,6 +427,44 @@ async fn handle(stream: UnixStream, app: &Sink) -> Result<()> {
 /// round trip. A forwarded request never comes through here, so it cannot
 /// bounce on to a third machine.
 async fn route(request: Request, app: &Sink) -> Result<Response> {
+    let parent = started_under(&request).map(str::to_string);
+    let response = route_to(request, app).await?;
+    if let (Some(parent), Response::Created { session, .. }) = (parent, &response) {
+        announce_task(&parent, session, app).await;
+    }
+    Ok(response)
+}
+
+/// The session a request starting a new one names as its parent.
+fn started_under(request: &Request) -> Option<&str> {
+    match request {
+        Request::CreateSession(r) => r.parent_session_id.as_deref(),
+        Request::StartDraft(r) => r.parent_session_id.as_deref(),
+        Request::OnMachine(on) => started_under(&on.request),
+        _ => None,
+    }
+}
+
+/// Logs a task's start in the bot chat that started it, wherever the task
+/// runs, so the chat's "Started a new task" row never depends on reading the
+/// bot's shell call — a `| tail -1` or a script hides the id it prints. Only
+/// here, where the parent is: a far machine creating it holds no such chat.
+async fn announce_task(parent: &str, task: &SessionSummary, app: &Sink) {
+    let Ok(Some(chat)) = store::get_session_index_item(parent).await else { return };
+    if bots::bot_at(&chat.cwd).await.is_none() {
+        return;
+    }
+    let payload = crate::events::AgentEventPayload::TaskStarted {
+        task_id: task.session_id.clone(),
+        title: task.title.clone(),
+    };
+    // Logged, not posted: starting a task is not the bot saying anything.
+    if let Err(e) = manager().log_event(&chat.session_id, chat.harness, payload, app).await {
+        eprintln!("[orchestration] could not log task {} in {}: {e:#}", task.session_id, chat.session_id);
+    }
+}
+
+async fn route_to(request: Request, app: &Sink) -> Result<Response> {
     if let Request::OnMachine(on) = request {
         return on_machine(&on.machine, *on.request, app).await;
     }

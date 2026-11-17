@@ -9,8 +9,9 @@ enum BotItem: Identifiable {
     /// A failed turn's sentence, or an error the harness raised.
     case notice(id: String, text: String, ts: String?)
     case card(id: String, MergeCard, ts: String?)
-    /// "Started a new task", read off a `dray session new` and the id it printed.
-    case task(id: String, sessionId: String, ts: String?)
+    /// "Started a new task", from the server's `task_started`, or in an older
+    /// log a `dray session new` and the id it printed.
+    case task(id: String, sessionId: String, title: String?, ts: String?)
     /// "Messaged", from a `dray session send`; consecutive ones fold into one row.
     case sent(id: String, target: String, ts: String?)
     /// A message another bot sent this one.
@@ -24,7 +25,7 @@ enum BotItem: Identifiable {
     var id: String {
         switch self {
         case .user(let id, _, _, _, _), .assistant(let id, _, _), .notice(let id, _, _), .card(let id, _, _),
-             .task(let id, _, _), .sent(let id, _, _), .botMessage(let id, _, _, _, _), .botSent(let id, _, _, _),
+             .task(let id, _, _, _), .sent(let id, _, _), .botMessage(let id, _, _, _, _), .botSent(let id, _, _, _),
              .learned(let id, _, _, _, _), .switchTo(let id, _, _): id
         }
     }
@@ -32,7 +33,7 @@ enum BotItem: Identifiable {
     var ts: String? {
         switch self {
         case .user(_, _, _, _, let ts), .assistant(_, _, let ts), .notice(_, _, let ts), .card(_, _, let ts),
-             .task(_, _, let ts), .sent(_, _, let ts), .botMessage(_, _, _, _, let ts), .botSent(_, _, _, let ts),
+             .task(_, _, _, let ts), .sent(_, _, let ts), .botMessage(_, _, _, _, let ts), .botSent(_, _, _, let ts),
              .learned(_, _, _, _, let ts), .switchTo(_, _, let ts): ts
         }
     }
@@ -67,6 +68,10 @@ func botItems(_ events: [AgentEvent]) -> [BotItem] {
     // Read whole first, since a reaction lands after its message; the newest wins.
     var reactions: [String: String] = [:]
     for e in main { if case .reaction(let messageId, let emoji) = e.payload { reactions[messageId] = emoji } }
+    // Tasks the server logged; a bot's call is read only for an id none names,
+    // as a log from before that event holds.
+    var announced = Set<String>()
+    for e in main { if case .taskStarted(let id, _) = e.payload { announced.insert(id.lowercased()) } }
 
     var items: [BotItem] = []
     var starts = Set<String>()
@@ -92,6 +97,8 @@ func botItems(_ events: [AgentEvent]) -> [BotItem] {
             items.append(.notice(id: e.id, text: message, ts: e.ts))
         case .mergeCard(let card):
             items.append(.card(id: e.id, card, ts: e.ts))
+        case .taskStarted(let taskId, let title):
+            items.append(.task(id: e.id, sessionId: taskId.lowercased(), title: title, ts: e.ts))
         case .learned(let commit, let files):
             for f in files {
                 items.append(.learned(id: "\(e.id):\(f.path)", lesson: f, commit: commit,
@@ -112,8 +119,9 @@ func botItems(_ events: [AgentEvent]) -> [BotItem] {
             let s = sentMessages(cmd, plain)
             if !s.isEmpty { sends[callId] = s }
         case .toolCompleted(let callId, let result) where !result.isError:
-            if starts.contains(callId), let m = result.text.firstMatch(of: taskId) {
-                items.append(.task(id: callId, sessionId: String(m.output.1).lowercased(), ts: e.ts))
+            if starts.contains(callId), let m = result.text.firstMatch(of: taskId),
+               !announced.contains(String(m.output.1).lowercased()) {
+                items.append(.task(id: callId, sessionId: String(m.output.1).lowercased(), title: nil, ts: e.ts))
             }
             var botIds = result.text.matches(of: botSentLine).map { String($0.output.1).lowercased() }
             for (i, s) in (sends[callId] ?? []).enumerated() {

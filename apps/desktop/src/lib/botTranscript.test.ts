@@ -52,6 +52,15 @@ describe("botItems", () => {
     expect(items[2]).toMatchObject({ kind: "task", sessionId: ID });
   });
 
+  it("draws a task from the server's task_started, whatever the bot's call printed", () => {
+    const started = ev({ type: "task_started", taskId: ID, title: "Pricing" } as AgentEventPayload);
+    const piped = botItems([call("c1", `dray session new "Pricing" | tail -1`), started, result("c1", "Started")]);
+    expect(piped).toEqual([{ kind: "task", key: started.id, sessionId: ID, ts: undefined, title: "Pricing" }]);
+    // The call printed the id too: still one row.
+    const plain = botItems([call("c2", `dray session new "Pricing"`), started, result("c2", `${ID}\nStarted`)]);
+    expect(plain.map((i) => i.kind)).toEqual(["task"]);
+  });
+
   it("names a task from its merge card, which outlives the settled task", () => {
     const items = botItems([
       call("c1", `dray session new --project /repo "Write the changelog"`),

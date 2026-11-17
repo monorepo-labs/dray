@@ -323,9 +323,10 @@ export function hasText(text: string): boolean {
 
 /// The rows of a bot's chat, in log order.
 ///
-/// A task is found by its `dray session new` call and named by the id that
-/// command prints alone on its first stdout line — printed that way so a shell
-/// can capture it, which is what makes reading it back here safe.
+/// A task is the `task_started` the server logs as it creates one. A log from
+/// before that event has only the bot's `dray session new` call and the id it
+/// prints alone on its first stdout line, read as a fallback for an id no
+/// event names, so no task draws twice.
 export function botItems(events: readonly AgentEvent[]): BotItem[] {
   const starts = new Set<string>();
   const sends = new Map<string, ReturnType<typeof sentMessages>>();
@@ -337,6 +338,7 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
   const cardTitles = new Map(
     events.flatMap(({ payload }) => (payload.type === "merge_card" ? [[payload.taskId, payload.title] as const] : [])),
   );
+  const announced = new Set(events.flatMap(({ payload }) => (payload.type === "task_started" ? [payload.taskId] : [])));
   // Inside a turn Dray's review opened, whose words are for nobody: told to
   // write no reply, the bot sometimes explains itself anyway.
   let review = false;
@@ -356,6 +358,9 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       items.push({ kind: "notice", event });
     } else if (p.type === "merge_card") {
       items.push({ kind: "card", event });
+    } else if (p.type === "task_started") {
+      const title = cardTitles.get(p.taskId) ?? p.title;
+      items.push({ kind: "task", key: event.id, sessionId: p.taskId, ts: event.ts, title });
     } else if (p.type === "learned") {
       for (const file of p.files) {
         items.push({
@@ -392,7 +397,7 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       if (starts.has(p.callId)) {
         // `dray session new` prints the id alone on its line, unlike a send's.
         const id = p.result.text.match(TASK_ID)?.[1];
-        if (id) items.push({ kind: "task", key: p.callId, sessionId: id, ts: event.ts, title: cardTitles.get(id) });
+        if (id && !announced.has(id)) items.push({ kind: "task", key: p.callId, sessionId: id, ts: event.ts, title: cardTitles.get(id) });
       }
       // `dray bot send` names the bot it reached on a line of its own, one per
       // send in order; its id still names the bot after a rename. Matched on

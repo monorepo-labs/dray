@@ -284,8 +284,8 @@ private struct BotRowView: View {
                 FailureRow(text: text)
             case .card(_, let card, _):
                 MergeCardView(server: key.server, card: card, compact: late)
-            case .task(_, let id, _):
-                line("Started a new task") { taskChip(id) }
+            case .task(_, let id, let title, _):
+                line("Started a new task") { taskChip(id, title: title) }
             case .sent:
                 EmptyView()
             case .botMessage(_, let botId, let title, let text, _):
@@ -324,9 +324,10 @@ private struct BotRowView: View {
         return hits.count == 1 ? hits[0] : nil
     }
 
-    private func taskChip(_ id: String) -> some View {
+    /// `fallback` names a task gone from the index, as a settled one is.
+    private func taskChip(_ id: String, title fallback: String? = nil) -> some View {
         let found = task(id)
-        let title = found.flatMap { store.items[$0]?.title }.flatMap { $0.isEmpty ? nil : $0 } ?? "Task"
+        let title = found.flatMap { store.items[$0]?.title }.flatMap { $0.isEmpty ? nil : $0 } ?? fallback ?? "Task"
         return Button { if let found { openTask?(found) } } label: {
             Chip(face: BotFace(seed: found?.id ?? id, size: 18), title: title)
         }
