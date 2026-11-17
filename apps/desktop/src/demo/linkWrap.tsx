@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import ReactDOM from "react-dom/client";
 
 import AssistantMessage from "@/components/chat/AssistantMessage";
@@ -7,7 +7,9 @@ import UserMessage from "@/components/chat/UserMessage";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
 import { setMode, setTheme, useTheme } from "@/hooks/useTheme";
+import { refreshBots } from "@/lib/bots";
 import { hasLightMode, THEMES } from "@/lib/theme";
+import type { Bot } from "@/types/events";
 import "../App.css";
 
 /// Long links inside a sentence, in the reader's bubble and the agent's reply,
@@ -15,16 +17,31 @@ import "../App.css";
 /// on in the sentence's own line and wrap inside itself, never leave the line
 /// or centre its text.
 
+const BOT: Bot = {
+  id: "0b7e4a52-6f0d-4c1e-9a3b-2d5c8e1f4a70",
+  name: "Release captain for the weekly desktop and CLI train",
+  path: "/Users/you/.dray/bots/release",
+  created: "2026-11-01T10:00:00Z",
+  avatar: { shape: "blob", hue: 200 },
+};
+const SESSION_ID = "6a1d2c3e-4b5f-4a6b-8c7d-9e0f1a2b3c4d";
+
 /// Stubbed outside the components, so nothing in `src/` carries a demo seam.
 (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
   transformCallback: () => 0,
   invoke: async (called: string, given: Record<string, unknown>) => {
     const cmd = called === "server_invoke" ? (given.cmd as string) : called;
-    if (cmd === "list_bots") return [];
+    if (cmd === "list_bots") return [BOT];
     if (cmd === "plugin:event|listen") return 0;
     throw new Error(`demo: nothing stubbed for ${cmd}`);
   },
 };
+
+void refreshBots();
+
+/// Tags are the other clickable runs in a bubble, drawn as `InlineButton`, so a
+/// long one has to flow the same way and still answer Enter and Space.
+const TAGS = `ask &Rework the onboarding flow so the setup prompt opens inline (${SESSION_ID}) and @${BOT.name} (${BOT.id}) to look at it`;
 
 const PROMPTS = [
   'done. their setup prompt "Fetch and execute the appropriate instructions to set me up for Revyl from https://revyl.com/agent-setup/prompt.md?src=first_run&ref=41ff02a965fb773144a6130f"',
@@ -36,12 +53,17 @@ const PROMPTS = [
 const REPLY =
   "Set up from https://revyl.com/agent-setup/prompt.md?src=first_run&ref=41ff02a965fb773144a6130f — the [guide](https://revyl.com/agent-setup/prompt.md?src=first_run&ref=41ff02a965fb773144a6130f) is done.";
 
-function Chat({ bot }: { bot: boolean }) {
+function Chat({ bot, onOpen }: { bot: boolean; onOpen: (what: string) => void }) {
   return (
     <div className="flex flex-col gap-4" data-bot-chat={bot ? "" : undefined}>
       {PROMPTS.map((text) => (
         <UserMessage key={text} text={text} />
       ))}
+      <UserMessage
+        text={TAGS}
+        onOpenSession={(id) => onOpen(`session ${id}`)}
+        onOpenBot={(b) => onOpen(`bot ${b.name}`)}
+      />
       {bot ? (
         <BotBubble>
           <AssistantMessage text={REPLY} />
@@ -56,8 +78,12 @@ function Chat({ bot }: { bot: boolean }) {
 function Demo() {
   const { theme } = useTheme();
   const modes = hasLightMode(theme) ? (["light", "dark"] as const) : (["dark"] as const);
+  const [opened, setOpened] = useState("nothing");
   return (
     <main className="flex flex-col gap-6 pt-6 pr-6 pb-24 pl-56">
+      <p className="text-[13px] text-muted-foreground" data-opened>
+        Last opened: {opened}
+      </p>
       {[true, false].map((bot) => (
         <section key={String(bot)} className="flex flex-col gap-2">
           <p className="text-[13px] font-semibold">{bot ? "Bot chat" : "Task chat"}</p>
@@ -69,7 +95,7 @@ function Demo() {
                 data-mode={mode}
                 className="w-[560px] rounded-xl border border-border bg-background p-4 text-foreground"
               >
-                <Chat bot={bot} />
+                <Chat bot={bot} onOpen={setOpened} />
               </div>
             ))}
           </div>
