@@ -954,7 +954,13 @@ pub async fn merge_access(cwd: String) -> MergeAccess {
         return MergeAccess::default();
     };
     let key = format!("{SLUG_PREFIX}{slug}");
-    let login = gh(&key, &["api", "user", "--jq", ".login"])
+    // The repo's own host: a lapsed github.com login says nothing of an
+    // enterprise one.
+    let mut args = vec!["api", "user", "--jq", ".login"];
+    if let (Some(host), _) = api_target(&slug) {
+        args.extend(["--hostname", host]);
+    }
+    let login = gh(&key, &args)
         .await
         .ok()
         .map(|out| out.trim().to_string())
@@ -972,12 +978,7 @@ async fn can_merge_repo(slug: &str, login: &str) -> Option<bool> {
             return Some(*can);
         }
     }
-    // `host/owner/name` is a repo on a GitHub that is not github.com.
-    let parts: Vec<&str> = slug.split('/').collect();
-    let (host, path) = match parts.as_slice() {
-        [host, owner, name] => (Some(*host), format!("repos/{owner}/{name}")),
-        _ => (None, format!("repos/{slug}")),
-    };
+    let (host, path) = api_target(slug);
     let mut args = vec!["api", path.as_str(), "--jq", ".permissions"];
     if let Some(host) = host {
         args.extend(["--hostname", host]);
@@ -990,6 +991,15 @@ async fn can_merge_repo(slug: &str, login: &str) -> Option<bool> {
     };
     MERGE_ACCESS.lock().await.insert(cached, (std::time::Instant::now(), can));
     Some(can)
+}
+
+/// The `--hostname` and `repos/…` path `gh api` takes for `slug`: a
+/// `host/owner/name` slug is a repo on a GitHub that is not github.com.
+fn api_target(slug: &str) -> (Option<&str>, String) {
+    match slug.split('/').collect::<Vec<_>>().as_slice() {
+        [host, owner, name] => (Some(*host), format!("repos/{owner}/{name}")),
+        _ => (None, format!("repos/{slug}")),
+    }
 }
 
 /// Reads `gh api repos/…`'s `permissions`: merging takes write access, which
@@ -1922,5 +1932,12 @@ mod tests {
         assert_eq!(can_merge_from(&perms(false, false, false)), Some(false));
         assert_eq!(can_merge_from("{}\n"), Some(false));
         assert_eq!(can_merge_from(""), None);
+    }
+
+    /// An enterprise slug carries its host; a github.com one none.
+    #[test]
+    fn api_target_reads_the_host() {
+        assert_eq!(api_target("acme/app"), (None, "repos/acme/app".to_string()));
+        assert_eq!(api_target("git.corp.example/acme/app"), (Some("git.corp.example"), "repos/acme/app".to_string()));
     }
 }
