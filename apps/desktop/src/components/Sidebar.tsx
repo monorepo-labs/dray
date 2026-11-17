@@ -1971,7 +1971,8 @@ function BotRow({
           aria-label={iconOnly ? bot.name : undefined}
           className={cn(
             "group relative flex w-full cursor-pointer items-center gap-2 rounded-md text-left",
-            iconOnly ? "justify-center p-1" : "py-1 pr-[5px] pl-1",
+            // One height both ways, so a snap never moves the rows under it.
+            "h-11", iconOnly ? "justify-center px-1" : "pr-[5px] pl-1",
             "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
             active
               ? "bg-sidebar-accent text-sidebar-accent-foreground"
