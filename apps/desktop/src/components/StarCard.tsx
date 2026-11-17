@@ -56,8 +56,8 @@ export default function StarCard() {
               Not now
             </Button>
             <Button size="sm" disabled={phase === "starring"} onClick={() => void star()}>
-              <StarIcon data-icon="inline-start" aria-hidden />
               {phase === "starring" ? "Starring…" : "Star"}
+              <StarIcon data-icon="inline-end" aria-hidden />
             </Button>
           </div>
         </>
