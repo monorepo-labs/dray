@@ -553,6 +553,11 @@ final class Store {
         await loadMarks(server, force: false, only: [path])
     }
 
+    /// Reads a repo's PR marks now, after the PR sheet moved one, so rows don't wait for the next poll.
+    func refreshMarks(_ server: UUID, _ path: String) async {
+        await loadMarks(server, force: true, only: [path])
+    }
+
     /// Whether a repo's marks have been read at all: a PR missing from them then is one GitHub no longer lists.
     func marksRead(_ server: UUID, _ path: String) -> Bool { marks[ProjectKey(server: server, path: path)] != nil }
 

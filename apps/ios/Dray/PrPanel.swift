@@ -52,6 +52,7 @@ final class PrModel {
             actionError = error.localizedDescription
         }
         await load(store)
+        if let path = store.items[key]?.projectPath { await store.refreshMarks(key.server, path) }
         acting = false
     }
 }
