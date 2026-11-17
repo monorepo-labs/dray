@@ -488,7 +488,7 @@ struct MergeCardView: View {
 
     @ViewBuilder private func control(_ pr: PrMark, _ verdict: MergeVerdict) -> some View {
         if pr.state == "OPEN" && !pr.isDraft && verdict == .ready {
-            MergeTaskButton(server: server, taskId: card.taskId, cwd: card.prPath, number: card.number)
+            MergeTaskButton(server: server, taskId: card.taskId, cwd: card.prPath, number: card.number, branch: card.branch)
         } else if pr.state == "OPEN" && verdict == .conflict, let task = taskKey {
             Button(asked ? "Asked the task" : "Fix conflicts") {
                 asked = true
@@ -534,6 +534,7 @@ struct MergeTaskButton: View {
     let taskId: String
     let cwd: String
     let number: Int
+    let branch: String
     @AppStorage("pr.mergeMethod") private var method = MergeMethod.squash
     @State private var confirming = false
     @State private var merging = false
@@ -557,7 +558,7 @@ struct MergeTaskButton: View {
                     method = m
                     merging = true
                     Task {
-                        let ok = await store.mergeTask(server, taskId: taskId, cwd: cwd, number: number, method: m.rawValue)
+                        let ok = await store.mergeTask(server, taskId: taskId, cwd: cwd, number: number, branch: branch, method: m.rawValue)
                         ok ? Haptic.success() : Haptic.error()
                         merging = false
                     }
@@ -705,7 +706,8 @@ struct StalledCard: View {
                         }
                         Spacer(minLength: 0)
                         if s.ready, let pr = s.pr {
-                            MergeTaskButton(server: s.task.server, taskId: s.task.id, cwd: s.item.projectPath, number: pr.number)
+                            MergeTaskButton(server: s.task.server, taskId: s.task.id, cwd: s.item.projectPath,
+                                            number: pr.number, branch: pr.headRefName)
                         }
                         if let at = parseDate(s.item.modified) {
                             Text(shortAge(at)).font(Theme.Font.footnote.font.monospacedDigit()).foregroundStyle(Theme.tertiary)
@@ -748,7 +750,7 @@ struct TaskMessageSheet: View {
 
     private func merge(_ item: SessionItem, _ pr: PrMark) -> some View {
         // Fixed, or the bar proposes less than "Merge" needs and cuts it to "Me…".
-        MergeTaskButton(server: task.server, taskId: task.id, cwd: item.projectPath, number: pr.number)
+        MergeTaskButton(server: task.server, taskId: task.id, cwd: item.projectPath, number: pr.number, branch: pr.headRefName)
             .fixedSize()
     }
 

@@ -559,16 +559,26 @@ final class Store {
     /// Lands a bot task's PR. The server settles the task and removes its
     /// worktree once it lands (`settle`), wherever the task runs: a task on
     /// another machine is one this phone may hold no row for.
-    func mergeTask(_ server: UUID, taskId: String, cwd: String, number: Int, method: String) async -> Bool {
+    func mergeTask(_ server: UUID, taskId: String, cwd: String, number: Int, branch: String, method: String) async -> Bool {
+        let settling: JSON
         do {
-            let _: JSON = try await call(server, "merge_pr", ["cwd": .string(cwd), "number": JSON(number), "method": .string(method),
-                                                              "settle": .string(taskId)],
-                                         timeout: .seconds(120))
+            settling = try await call(server, "merge_pr", ["cwd": .string(cwd), "number": JSON(number), "method": .string(method),
+                                                           "settle": .string(taskId)],
+                                      timeout: .seconds(120))
         } catch {
             lastError = error.localizedDescription
             return false
         }
         await loadMarks(server, force: true, only: [cwd])
+        // A server from before `settle` answers null: settle a task it holds from here.
+        let key = SessionKey(server: server, id: taskId)
+        guard settling != .bool(true), let item = items[key], item.archived != true, !item.busy,
+              sessionBranch(branch: item.branch, worktreeName: item.worktreeName,
+                            worktreeRemoved: item.worktreeRemoved ?? false, observed: nil) == branch else { return true }
+        _ = try? await call(server, "set_session_flags", ["sessionId": .string(taskId), "archived": true], as: JSON.self)
+        if item.worktreeName != nil, item.worktreeRemoved != true {
+            _ = try? await call(server, "remove_session_worktree", ["sessionId": .string(taskId)], as: JSON.self)
+        }
         return true
     }
 

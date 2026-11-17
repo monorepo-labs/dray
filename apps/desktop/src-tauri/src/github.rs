@@ -1278,7 +1278,8 @@ fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
 ///
 /// `settle` names a bot's task the merge lands, settled here once it has
 /// rather than by each client: only the server reaches a task on another
-/// machine, which the phone never connects to.
+/// machine, which the phone never connects to. Answers whether it took one
+/// on, so a client can tell a server from before `settle` and settle itself.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn merge_pr(
     cwd: String,
@@ -1286,7 +1287,7 @@ pub async fn merge_pr(
     method: MergeMethod,
     settle: Option<String>,
     sink: crate::sink::Sink,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     // An unverifiable merge has to read as the failure it was reported as.
     if let Err(e) = gh(&cwd, &["pr", "merge", &number.to_string(), method.flag()]).await {
         if merged_state(&cwd, number).await != Some(true) {
@@ -1297,16 +1298,15 @@ pub async fn merge_pr(
     // Only ever the reader's merge, from a client: a bot and its tasks merge
     // with `gh` and never reach this, so the bot is told of it.
     crate::bots::note_merge(&cwd, number).await;
-    if let Some(task) = settle {
-        // Off the reply: a task on another machine can take a while to settle.
-        tokio::spawn(async move {
-            let Some(head) = pr_head(&cwd, number).await else { return };
-            if let Err(e) = crate::orchestration::settle_merged(&task, &head, &sink).await {
-                eprintln!("[merge] could not settle {task}: {e:#}");
-            }
-        });
-    }
-    Ok(())
+    let Some(task) = settle else { return Ok(false) };
+    // Off the reply: a task on another machine can take a while to settle.
+    tokio::spawn(async move {
+        let Some(head) = pr_head(&cwd, number).await else { return };
+        if let Err(e) = crate::orchestration::settle_merged(&task, &head, &sink).await {
+            eprintln!("[merge] could not settle {task}: {e:#}");
+        }
+    });
+    Ok(true)
 }
 
 /// The PR's head branch, where it is one of this repo's: a fork's branch can

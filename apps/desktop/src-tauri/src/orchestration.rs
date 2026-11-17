@@ -812,6 +812,17 @@ mod elsewhere {
         futures_util::future::join_all(asks).await.into_iter().flatten().next()
     }
 
+    /// The branch checked out at `cwd` on machine `id`, or `None` where it
+    /// does not answer or HEAD is detached.
+    pub async fn branch_at(id: &str, cwd: &str) -> Option<String> {
+        let saved = machines::on(id).await.ok()?;
+        let status = tokio::time::timeout(machines::SWEEP, machines::call(&saved, "work_status", json!({ "cwd": cwd })))
+            .await
+            .ok()?
+            .ok()?;
+        status.get("branch")?.as_str().map(str::to_string)
+    }
+
     /// The open pull request on `branch` of `project` on machine `id`: number
     /// and URL, read through that machine's own `gh` and checkout.
     pub async fn open_pr(id: &str, project: &str, branch: &str) -> Result<Option<(u64, String)>> {
@@ -1468,30 +1479,30 @@ async fn settle_session(settle: dray_proto::SettleSession, app: &Sink) -> Result
 /// machine holding it, and deletes its worktree: the merge landed the work, so
 /// what the tree still holds is leftover. A task moved off `head` holds work
 /// the merge did not land and is left be; a task mid-turn is refused by the
-/// settle itself. A machine that is down is held for and settles on reconnect.
+/// settle itself. A task whose machine does not answer is left for the bot,
+/// since its branch cannot be read.
 pub async fn settle_merged(id: &str, head: &str, app: &Sink) -> Result<()> {
     let (row, machine) = match store::get_session_index_item(id).await? {
         Some(row) => (row, None),
         #[cfg(any(feature = "serve", feature = "desktop"))]
         None => match elsewhere::session_row(id).await {
             Some(((machine, _), row)) => (row, Some(machine)),
-            None => {
-                if let Some(machine) = crate::remote_reports::machine_of(id).await {
-                    crate::held_flags::hold_settle(&machine, id, true).await?;
-                    crate::held_flags::announce(app, Vec::new()).await;
-                }
-                return Ok(());
-            }
+            None => return Ok(()),
         },
         #[cfg(not(any(feature = "serve", feature = "desktop")))]
         None => return Ok(()),
     };
-    // The tree's own HEAD where it is here: an agent may push from a branch it named.
-    let observed = match machine.is_none() && !row.worktree_removed {
-        true => crate::git::current_branch(&row.cwd).await,
-        false => None,
+    // The tree's own HEAD, never the branch saved at creation: an agent may
+    // push from a branch it named, or move on to new work after the PR.
+    let branch = match (&machine, row.worktree_removed) {
+        (_, true) => row.branch.clone(),
+        (None, false) => crate::git::current_branch(&row.cwd).await,
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        (Some(machine), false) => elsewhere::branch_at(machine, &row.cwd).await,
+        #[cfg(not(any(feature = "serve", feature = "desktop")))]
+        (Some(_), false) => None,
     };
-    if row.archived || store::session_branch(&row, observed.as_deref()).as_deref() != Some(head) {
+    if row.archived || branch.as_deref() != Some(head) {
         return Ok(());
     }
     let settle = dray_proto::SettleSession {
