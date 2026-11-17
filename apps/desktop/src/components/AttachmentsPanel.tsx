@@ -142,7 +142,7 @@ export default function AttachmentGrid({ logs }: { logs: HeldLog[] }) {
               aria-label={failed ? "Couldn't load more. Try again" : "Load more attachments"}
               className={cn(
                 cell,
-                "flex items-center justify-center px-1 text-center text-ui leading-tight text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:hover:bg-transparent",
+                "flex items-center justify-center bg-muted/25 px-1 text-center text-ui leading-tight text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:hover:bg-muted/25",
               )}
             >
               {loading ? <Spinner className="size-4" /> : failed ? "Try again" : "Load more"}
