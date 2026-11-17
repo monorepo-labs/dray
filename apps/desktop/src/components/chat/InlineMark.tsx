@@ -1,7 +1,8 @@
-import type { ReactElement } from "react";
+import type { KeyboardEvent, MouseEvent, ReactElement, ReactNode } from "react";
 
 import type { Segment } from "@/lib/highlight";
 import { openLink } from "@/lib/openLink";
+import { cn } from "@/lib/utils";
 
 /// The inline marks a prompt bubble draws, or `null` for a segment that is not
 /// one.
@@ -56,18 +57,78 @@ export function inlineMark(segment: Segment, key: number): ReactElement | null {
       // The same route a bare URL in the bubble takes, so both ask where to
       // open before leaving the app.
       return (
-        <button
+        <InlineLink
           key={key}
-          type="button"
+          href={segment.href ?? ""}
           title={segment.href}
-          className="cursor-pointer font-medium underline decoration-current/60 underline-offset-2"
-          onClick={(e) => segment.href && openLink(segment.href, e)}
+          className="font-medium underline decoration-current/60 underline-offset-2"
         >
           {inner}
-        </button>
+        </InlineLink>
       );
 
     default:
       return null;
   }
+}
+
+/// A link run inside a sentence, opened through `openLink` like every link in
+/// the transcript.
+///
+/// An anchor and never a `<button>`: a button is an atomic inline-block
+/// whatever `display` says, so a long URL left the line, wrapped inside its own
+/// box and centred its text there.
+export function InlineLink({
+  href,
+  title,
+  className,
+  children,
+}: {
+  href: string;
+  title?: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <a
+      href={href}
+      title={title}
+      className={cn("cursor-pointer", className)}
+      onClick={(e) => {
+        e.preventDefault();
+        if (href) openLink(href, e);
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
+/// A clickable run inside a sentence that is not a URL — an issue tag, a
+/// session, a bot. A `span` for the reason [InlineLink] is an anchor, with the
+/// keyboard a button would have given it.
+export function InlineButton({
+  onActivate,
+  className,
+  children,
+}: {
+  onActivate: (e: MouseEvent | KeyboardEvent) => void;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      className={cn("cursor-pointer", className)}
+      onClick={onActivate}
+      onKeyDown={(e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        onActivate(e);
+      }}
+    >
+      {children}
+    </span>
+  );
 }
