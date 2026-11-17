@@ -150,21 +150,8 @@ const EVENTS: AgentEvent[] = [
 function Demo() {
   const [rows, setRows] = useState(ROWS);
   const [shown, setShown] = useState(0);
-  const [focus, setFocus] = useState<{ sessionId: string; at: number } | null>(null);
   const [opened, setOpened] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
-  // What `Chat` does with a pick: the lit block at the top of the pane.
-  useEffect(() => {
-    if (!focus) return;
-    const frame = requestAnimationFrame(() => {
-      const pane = scroller.current;
-      const node = pane?.querySelector<HTMLElement>("[data-bot-focus]");
-      if (!pane || !node) return;
-      const top = node.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
-      pane.scrollTo({ top: Math.max(top - 12, 0), behavior: "smooth" });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [focus]);
   useEffect(() => {
     const pane = scroller.current;
     if (pane) pane.scrollTop = pane.scrollHeight;
@@ -192,7 +179,7 @@ function Demo() {
         <h1 className="text-lg font-medium">Stalled tasks in a bot's chat</h1>
         <p className="max-w-xl text-ui text-muted-foreground">
           Eleven tasks, eight stalled. A ready PR and a task idle on you reach the card; every stall goes to the bot. A row
-          scrolls the chat to the bot's reply about the task; Open task, on hover, opens it. Merge waits a
+          opens its task's last message under it, and a second click closes it; Open task or ⌘-click opens the task. Merge waits a
           second and takes the row away, as settling does, and the other PRs read Checking… for four seconds while
           GitHub works their mergeability out again.
         </p>
@@ -224,13 +211,11 @@ function Demo() {
                 return r && { sessionId: id, title: r.row.item.title };
               }}
               onOpenSession={() => {}}
-              focus={focus}
             />
             <StalledTasks
               key={shown}
               stalls={card}
               now={NOW}
-              onFocus={(sessionId) => setFocus({ sessionId, at: Date.now() })}
               onOpen={(id) => setOpened(ROWS.find((x) => x.row.item.sessionId === id)?.row.item.title ?? id)}
             onMerge={async (r) => {
               await new Promise((done) => setTimeout(done, 1000));
