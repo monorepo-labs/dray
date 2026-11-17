@@ -166,6 +166,8 @@ import {
 import { dismissNotice, getNotices, pushNotice } from "@/hooks/useNotices";
 import { checkChangelog, markChangelogSeen, type Release } from "@/lib/changelog";
 import WhatsNewCard from "@/components/WhatsNewCard";
+import StarCard from "@/components/StarCard";
+import { noteMergeForStar, useStarPrompt } from "@/hooks/useStarPrompt";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { useSessionIssues } from "@/hooks/useIssues";
 import { sessionsAnswered, useSessions } from "@/hooks/useSessions";
@@ -809,6 +811,7 @@ function App() {
   // Once a launch: a release flagged `notify` that the reader runs and has not
   // dismissed yet gets the what's-new card.
   const [whatsNew, setWhatsNew] = useState<{ release: Release; seen: string } | null>(null);
+  const starPrompt = useStarPrompt();
   useEffect(() => {
     checkChangelog().then(setWhatsNew, () => {});
   }, []);
@@ -3321,6 +3324,7 @@ function App() {
   ) => {
     // From the repo root: a task's worktree may already be gone.
     await invoke("merge_pr", { cwd: projectPath, number, method });
+    noteMergeForStar();
     prMarks.markMerged(projectPath, number);
     prMarks.refreshAfterWrite();
     // Landed, so the task is done — unless it is still working,
@@ -4392,6 +4396,8 @@ function App() {
         onView={() => closeWhatsNew(true)}
       />
     )}
+    {/* Same corner as What's New, so it waits for that card to go. */}
+    {starPrompt && !whatsNew && <StarCard />}
     <DragGhost />
     <QuitDialog />
     <LinkDialog />
