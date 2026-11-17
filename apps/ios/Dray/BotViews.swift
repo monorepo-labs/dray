@@ -489,8 +489,6 @@ struct MergeCardView: View {
     @ViewBuilder private func control(_ pr: PrMark, _ verdict: MergeVerdict) -> some View {
         if pr.state == "OPEN" && !pr.isDraft && verdict == .ready {
             MergeTaskButton(server: server, taskId: card.taskId, cwd: card.prPath, number: card.number, branch: card.branch)
-        } else if pr.state == "OPEN" && verdict == .draft {
-            MarkReadyButton(server: server, cwd: card.prPath, number: card.number)
         } else if pr.state == "OPEN" && verdict == .conflict, let task = taskKey {
             Button(asked ? "Asked the task" : "Fix conflicts") {
                 asked = true
@@ -572,38 +570,6 @@ struct MergeTaskButton: View {
     }
 }
 
-/// Takes a bot task's draft PR out of draft, the PR sheet's Ready for review.
-/// No confirm: unlike a merge, GitHub lets the reader turn it back.
-struct MarkReadyButton: View {
-    @Environment(Store.self) private var store
-    let server: UUID
-    let cwd: String
-    let number: Int
-    @State private var marking = false
-
-    var body: some View {
-        Button {
-            marking = true
-            Task {
-                let ok = await store.markReady(server, cwd: cwd, number: number)
-                ok ? Haptic.success() : Haptic.error()
-                marking = false
-            }
-        } label: {
-            Text(marking ? "Marking…" : "Mark ready")
-                // The row's title gives way first, never the button's words.
-                .fixedSize()
-                .font(Theme.Font.pill)
-                .foregroundStyle(Theme.page)
-                .padding(.horizontal, 16)
-                .frame(height: 34)
-                .background(Theme.text, in: Capsule())
-        }
-        .buttonStyle(.plain)
-        .disabled(marking)
-    }
-}
-
 // MARK: Waiting on you
 
 /// A bot's task that waits on the reader: a PR ready to merge, or a task gone
@@ -613,8 +579,6 @@ struct Stall: Identifiable {
     let item: SessionItem
     let pr: PrMark?
     let ready: Bool
-    /// An open draft: the reader's to mark ready, so its row carries that rather than wait on a bot line.
-    var draft: Bool { !ready && pr?.state == "OPEN" && pr?.isDraft == true }
     var id: String { "\(task.id):\(ready ? "ready:\(pr?.number ?? 0)" : "waiting"):\(item.modified)" }
 }
 
@@ -744,8 +708,6 @@ struct StalledCard: View {
                         if s.ready, let pr = s.pr {
                             MergeTaskButton(server: s.task.server, taskId: s.task.id, cwd: s.item.projectPath,
                                             number: pr.number, branch: pr.headRefName)
-                        } else if s.draft, let pr = s.pr {
-                            MarkReadyButton(server: s.task.server, cwd: s.item.projectPath, number: pr.number)
                         }
                         if let at = parseDate(s.item.modified) {
                             Text(shortAge(at)).font(Theme.Font.footnote.font.monospacedDigit()).foregroundStyle(Theme.tertiary)
@@ -754,7 +716,7 @@ struct StalledCard: View {
                     if let need {
                         Text(need).font(Theme.Font.subhead).foregroundStyle(Theme.text.opacity(0.7))
                             .multilineTextAlignment(.leading)
-                    } else if !s.ready && !s.draft {
+                    } else if !s.ready {
                         // The bot is still reading the task; its line lands here.
                         Capsule().fill(Theme.tertiary.opacity(0.3)).frame(width: 160, height: 10).shimmer()
                             .padding(.vertical, 4)
@@ -786,19 +748,10 @@ struct TaskMessageSheet: View {
     private var item: SessionItem? { store.items[task] }
     private var pr: PrMark? { item.flatMap { store.prMark(task, $0) } }
 
-    /// Merge for a PR GitHub calls ready, Mark ready for a draft: the row's own gates.
-    private func primary(_ pr: PrMark) -> Bool { prStatus(pr) == "ready" || (pr.state == "OPEN" && pr.isDraft) }
-
-    private func action(_ item: SessionItem, _ pr: PrMark) -> some View {
-        Group {
-            if prStatus(pr) == "ready" {
-                MergeTaskButton(server: task.server, taskId: task.id, cwd: item.projectPath, number: pr.number, branch: pr.headRefName)
-            } else {
-                MarkReadyButton(server: task.server, cwd: item.projectPath, number: pr.number)
-            }
-        }
+    private func merge(_ item: SessionItem, _ pr: PrMark) -> some View {
         // Fixed, or the bar proposes less than "Merge" needs and cuts it to "Me…".
-        .fixedSize()
+        MergeTaskButton(server: task.server, taskId: task.id, cwd: item.projectPath, number: pr.number, branch: pr.headRefName)
+            .fixedSize()
     }
 
     var body: some View {
@@ -852,13 +805,14 @@ struct TaskMessageSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
-                if let item, let pr, primary(pr) {
+                // The primary action, held to the row's gate: a PR GitHub calls ready.
+                if let item, let pr, prStatus(pr) == "ready" {
                     if #available(iOS 26.0, *) {
-                        ToolbarItem(placement: .primaryAction) { action(item, pr) }
-                            // Its own capsule, not one inside the bar's glass.
+                        ToolbarItem(placement: .primaryAction) { merge(item, pr) }
+                            // Its own green capsule, not one inside the bar's glass.
                             .sharedBackgroundVisibility(.hidden)
                     } else {
-                        ToolbarItem(placement: .primaryAction) { action(item, pr) }
+                        ToolbarItem(placement: .primaryAction) { merge(item, pr) }
                     }
                 }
             }

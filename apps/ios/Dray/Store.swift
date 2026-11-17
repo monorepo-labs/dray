@@ -553,6 +553,11 @@ final class Store {
         await loadMarks(server, force: false, only: [path])
     }
 
+    /// Reads a repo's PR marks now, after the PR sheet moved one, so rows don't wait for the next poll.
+    func refreshMarks(_ server: UUID, _ path: String) async {
+        await loadMarks(server, force: true, only: [path])
+    }
+
     /// Whether a repo's marks have been read at all: a PR missing from them then is one GitHub no longer lists.
     func marksRead(_ server: UUID, _ path: String) -> Bool { marks[ProjectKey(server: server, path: path)] != nil }
 
@@ -584,18 +589,6 @@ final class Store {
            !d.exists || (d.changedFiles == 0 && d.unpushedCommits == 0) {
             _ = try? await call(server, "remove_session_worktree", ["sessionId": .string(taskId)], as: JSON.self)
         }
-        return true
-    }
-
-    /// Takes a PR out of draft (`gh pr ready` on the server), then re-reads the repo's marks.
-    func markReady(_ server: UUID, cwd: String, number: Int) async -> Bool {
-        do {
-            let _: JSON = try await call(server, "mark_pr_ready", ["cwd": .string(cwd), "number": JSON(number)], timeout: .seconds(60))
-        } catch {
-            lastError = error.localizedDescription
-            return false
-        }
-        await loadMarks(server, force: true, only: [cwd])
         return true
     }
 

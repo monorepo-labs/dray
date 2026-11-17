@@ -1,8 +1,8 @@
 import XCTest
 
-/// #1207: a bot task whose PR is a draft carries Mark ready on its Waiting on
-/// you row and in the sheet the row opens. Against a real server holding bot
-/// `DRAY_BOT` and a task of its idle on a real draft PR for five minutes:
+/// #1207: a task whose PR is a draft carries the draft glyph top right, and its
+/// sheet marks the PR ready. Against a real server holding bot `DRAY_BOT` and a
+/// task of its on a real draft PR:
 ///   TEST_RUNNER_DRAY_URL=ws://127.0.0.1:… TEST_RUNNER_DRAY_TOKEN=… TEST_RUNNER_DRAY_BOT=Scout
 /// It marks that PR ready on GitHub.
 final class DraftReadyTests: XCTestCase {
@@ -13,7 +13,7 @@ final class DraftReadyTests: XCTestCase {
             throw XCTSkip("set TEST_RUNNER_DRAY_URL, TEST_RUNNER_DRAY_TOKEN and TEST_RUNNER_DRAY_BOT")
         }
         let app = XCUIApplication()
-        app.launchArguments = ["-servers", "", "-bot.dismissedStalls", ""]
+        app.launchArguments = ["-servers", ""]
         app.launch()
         var link = URLComponents(string: "dray://connect")!
         link.queryItems = [.init(name: "url", value: url), .init(name: "token", value: token), .init(name: "name", value: "Test Mac")]
@@ -25,31 +25,46 @@ final class DraftReadyTests: XCTestCase {
         sleep(1)
         botRow.tap()
 
-        XCTAssertTrue(app.staticTexts["Waiting on you"].waitForExistence(timeout: 30), "no Waiting on you card")
-        let rowReady = app.buttons["Mark ready"].firstMatch
-        XCTAssertTrue(rowReady.waitForExistence(timeout: 10), "the draft's row carries no Mark ready")
+        // The bot's Tasks sheet lists the task with its draft glyph, and a tap opens it.
+        let tasks = app.buttons["Tasks"]
+        XCTAssertTrue(tasks.waitForExistence(timeout: 20), "no Tasks button")
+        sleep(1)
+        tasks.tap()
+        let row = app.buttons["botTask"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "no task row")
+        XCTAssertTrue(app.descendants(matching: .any)["Pull request #1, draft"].waitForExistence(timeout: 20),
+                      "the row draws no draft glyph")
         sleep(2)
-        snap(app, "1-row")
+        snap(app, "0-tasks")
+        row.tap()
 
-        // The row opens its sheet; Mark ready is the sheet's primary action there.
-        // The card's row, not the chat's "Started a new task" line above it, which names the task too.
-        let card = app.staticTexts["Waiting on you"].frame.maxY
-        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "README")).allElementsBoundByIndex
-            .first { $0.frame.minY > card }
-        XCTAssertNotNil(row, "no task row")
-        row?.tap()
-        XCTAssertTrue(app.buttons["Open task"].waitForExistence(timeout: 10), "no sheet")
-        let sheetReady = app.navigationBars.buttons["Mark ready"]
-        XCTAssertTrue(sheetReady.waitForExistence(timeout: 10), "the sheet carries no Mark ready")
+        let button = app.buttons["Pull request"]
+        XCTAssertTrue(button.waitForExistence(timeout: 20), "no PR button on the task")
+        sleep(2)
+        snap(app, "1-task")
+        button.tap()
+
+        let ready = app.buttons["Ready for review"]
+        XCTAssertTrue(ready.waitForExistence(timeout: 10), "the sheet carries no Ready for review")
         sleep(2)
         snap(app, "2-sheet")
-        sheetReady.tap()
+        ready.tap()
 
-        // Out of draft, the PR is GitHub's to call ready, and Merge takes the slot.
-        XCTAssertTrue(app.navigationBars.buttons["Merge"].waitForExistence(timeout: 60), "Merge never replaced Mark ready")
-        XCTAssertFalse(app.buttons["Mark ready"].exists, "Mark ready stayed")
+        // Out of draft, the sheet's action is Merge's.
+        XCTAssertTrue(app.staticTexts["Ready to merge"].waitForExistence(timeout: 60)
+                      || app.staticTexts["Checking mergeability…"].exists, "the PR never left draft")
         sleep(2)
         snap(app, "3-ready")
+        app.buttons["Done"].tap()
+        sleep(3)
+        snap(app, "4-open")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(tasks.waitForExistence(timeout: 10), "Back did not return to the bot")
+        tasks.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["Pull request #1, open"].waitForExistence(timeout: 5),
+                      "the row still reads draft")
+        sleep(2)
+        snap(app, "5-tasks-open")
     }
 
     private func snap(_ app: XCUIApplication, _ name: String) {
