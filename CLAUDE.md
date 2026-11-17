@@ -16,12 +16,14 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 **PR nobody need review carry `no-review` label, put on before the push so Greptile skip it.** Copy tweak, doc, prompt wording, config. Anything touching behaviour = no label, reviewed.
 
-**Default road = work → test → ready PR → his feedback → his go → `/greploop`.** He sees the work before Greptile's loop runs, not after. Pushing every feedback round and looping before he had looked only made the work longer. No Codex reviewer sessions: that road only ran while Greptile credits were gone.
+**Default road = work → test → draft PR → his feedback → his go → ready → `/greploop`.** He sees the work before Greptile runs, not after. Draft because an open ready PR make Dray post a merge card and "ready to merge" nudges before he had looked or Greptile had run. No Codex reviewer sessions: that road only ran while Greptile credits were gone.
 
 1. Do the work, then test it for real — run it, not just compile it. Tests = `pnpm test:affected`, never the whole of every suite. A UI change = drive the running app yourself, screenshot or record it, fix what you find ([Testing in the app](#testing-in-the-app)).
-2. Commit, push, open the PR **ready**. Greptile review that first push on its own. Report: what changed, the proof (video, screenshots), and what was not tested.
-3. **No `/greploop` yet.** Wait for him to check the work. Feedback → apply it, retest, commit **locally**, report again with proof. **Never push a feedback round until he say push.**
-4. **He say final, or OK to push → push, then run `/greploop`** until 5/5 or the loop's cap, then report the PR ready to merge. From here each round's push is pre-approved: fix, test, commit, push, wait for the next review. Retest a fix that touches UI the same way. Stop and wait instead when a fix changes something only a human can check (below), or when he says not to push. Never post `@greptile review` — Greptile reviews every push on its own, so skip the loop's trigger step.
+2. Commit, push, open the PR as a **draft** (`gh pr create --draft`). Report: what changed, the proof (video, screenshots), and what was not tested. Then wait.
+3. Feedback → apply it, retest, commit **locally**, report again with proof. **Push nothing until he say final.**
+4. **He say final → push, `gh pr ready`, then run `/greploop`** until 5/5 or the loop's cap, then report the PR ready to merge. Marking it ready is what start Greptile's review. From here each round's push is pre-approved: fix, test, commit, push, wait for the next review. Retest a fix that touches UI the same way. Stop and wait instead when a fix changes something only a human can check (below), or when he says not to push. Never post `@greptile review` — Greptile reviews every push to a ready PR on its own, so skip the loop's trigger step.
+
+**Nothing for him to look at = no wait.** Backend or data fix, tooling, no UI change: open the PR ready and run `/greploop` right away.
 
 **One repo, `monorepo-labs/dray`. Assign every issue to `yogesharc`.** `gh issue create --repo monorepo-labs/dray --assignee yogesharc`.
 
@@ -29,7 +31,7 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 `gh` missing or logged out → say so, then carry on with the work. Tell reader at the end which issue still want creating.
 
-**Commit, push and open the PR unasked once the work is done and tested** — the default road above — then stop for his check. Loop Greptile only after his go. End with a short "what changed" and the proof, plus only what truly needs a human — never a list of steps to try. Still ask before anything rewriting history, and before a branch nobody asked for.
+**Commit, push and open the PR unasked once the work is done and tested** — draft, the default road above — then stop for his check. Mark it ready and loop Greptile only after his go. End with a short "what changed" and the proof, plus only what truly needs a human — never a list of steps to try. Still ask before anything rewriting history, and before a branch nobody asked for.
 
 **Always write commit message with `caveman-commit` skill.** Invoke it, don't imitate — skill carry format and it can change under you. Every commit here, amend included.
 
