@@ -50,6 +50,7 @@ export function useStalledTasks({
   statusBySession,
   askingSessions,
   tasksBySession,
+  servingBySession,
   prOf,
   prReadAt,
 }: {
@@ -58,6 +59,7 @@ export function useStalledTasks({
   statusBySession: Record<string, SessionStatus>;
   askingSessions: ReadonlySet<string>;
   tasksBySession: Record<string, BackgroundTask[]>;
+  servingBySession: Record<string, readonly number[]>;
   prOf: (row: CrewRow) => PrMark | undefined;
   prReadAt: (row: CrewRow) => number | undefined;
 }) {
@@ -76,7 +78,7 @@ export function useStalledTasks({
   const byBot = useMemo(() => {
     const markFresh = (row: CrewRow) => (prReadAt(row) ?? 0) > (movedAt.current.get(row.item.sessionId)?.at ?? Infinity);
     const out = new Map<string, { chatId: string; rows: CrewRow[]; stalls: Stall[]; card: Stall[] }>();
-    for (const { bot, chatId, rows } of botCrews(bots, items, { statusBySession, askingSessions, tasksBySession })) {
+    for (const { bot, chatId, rows } of botCrews(bots, items, { statusBySession, askingSessions, tasksBySession, servingBySession })) {
       for (const { item } of rows) {
         if (movedAt.current.get(item.sessionId)?.modified !== item.modified)
           movedAt.current.set(item.sessionId, { modified: item.modified, at: Date.now() });
@@ -85,7 +87,7 @@ export function useStalledTasks({
       out.set(bot.id, { chatId, rows, stalls, card: stalls.filter(onCard) });
     }
     return out;
-  }, [bots, items, statusBySession, askingSessions, tasksBySession, prOf, prReadAt, now]);
+  }, [bots, items, statusBySession, askingSessions, tasksBySession, servingBySession, prOf, prReadAt, now]);
 
   // Here rather than in the Tasks tab, which is on screen for one bot at most.
   useEffect(() => {

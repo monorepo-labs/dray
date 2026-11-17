@@ -89,6 +89,9 @@ final class Store {
     /// An older page that could not be read; the newer turns stay on screen.
     private(set) var olderErrors: [SessionKey: String] = [:]
     private(set) var tasks: [SessionKey: [BackgroundTask]] = [:]
+    /// The ports a session serves where servers are all its background work
+    /// is (`session_serving`). Said of one task set, so a new set drops it.
+    private(set) var serving: [SessionKey: [Int]] = [:]
     /// Each server's bots: any server can hold them (#887).
     private(set) var bots: [UUID: [Bot]] = [:] { didSet { keepList() } }
     /// Servers whose index was read since this launch: before that, an empty list
@@ -223,6 +226,7 @@ final class Store {
         // Or a reconnect inside the poll's gap skips the read that would bring them back.
         for key in marksAt.keys where key.server == id { marksAt[key] = nil }
         for key in tasks.keys where key.server == id { tasks[key] = nil }
+        for key in serving.keys where key.server == id { serving[key] = nil }
         for key in queued.keys where key.server == id { queued[key] = nil }
         projects[id] = nil
         bots[id] = nil
@@ -737,6 +741,12 @@ final class Store {
 
     func isAsking(_ key: SessionKey) -> Bool { !(asks[key]?.isEmpty ?? true) }
 
+    /// Background work the agent waits on: tasks, unless they are only a
+    /// server left up for the reader, which waits on the reader instead.
+    func inBackground(_ key: SessionKey) -> Bool {
+        !(tasks[key] ?? []).isEmpty && (serving[key] ?? []).isEmpty
+    }
+
     func open(_ key: SessionKey) async {
         await load(key)
         if items[key]?.status == "completed" {
@@ -971,6 +981,11 @@ final class Store {
                 for key in queued.keys where key.server == server { queued[key] = nil }
                 for q in held where !q.queued.isEmpty { queued[SessionKey(server: server, id: q.sessionId)] = q.queued }
             }
+            for key in serving.keys where key.server == server { serving[key] = nil }
+            for s in live.serving ?? [] where !s.ports.isEmpty { serving[SessionKey(server: server, id: s.sessionId)] = s.ports }
+        case "session_serving":
+            guard let s = try? decoder.decode(EventFrame<ServingEvent>.self, from: data).payload else { return }
+            serving[SessionKey(server: server, id: s.sessionId)] = s.ports.isEmpty ? nil : s.ports
         case "boat_alerts":
             guard server == home,
                   let frame = try? decoder.decode(EventFrame<BoatAlerts>.self, from: data).payload else { return }
@@ -1049,6 +1064,7 @@ final class Store {
             retire(key, id)
         case .backgroundTasks(let list):
             tasks[key] = list
+            serving[key] = nil
             if list.isEmpty && items[key]?.busy != true { strand(key) }
         case .userMessage(let text, _, _, _, _, _, _):
             queued[key]?.removeAll { $0.text == text }

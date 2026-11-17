@@ -80,7 +80,8 @@ function stallStatus(pr: PrMark): PrStatusKey {
 /// checks the task had just fixed.
 ///
 /// Left out: a task mid-turn or with a background shell or subagent still
-/// running, one behind a card (the card is in the chat already), one set aside
+/// running — bar one left only serving, which waits on the reader like any
+/// idle task (`CrewRow.serving`) — one behind a card (the card is in the chat already), one set aside
 /// or waiting on its usage limit, one whose PR is running checks or still being
 /// worked out by GitHub — those wait on CI, not on anyone — and one whose PR
 /// has merged, which is done. A PR last seen ready stays a `ready` stall while
@@ -172,6 +173,7 @@ export function botCrews(
     statusBySession: Record<string, SessionStatus>;
     askingSessions: ReadonlySet<string>;
     tasksBySession?: Record<string, BackgroundTask[]>;
+    servingBySession?: Record<string, readonly number[]>;
   },
 ): { bot: Bot; chatId: string; rows: CrewRow[] }[] {
   return bots.flatMap((bot) => {

@@ -48,7 +48,7 @@ import { activeSpace, allowedInSpace, moveSpace, orderProjects, PROJECT_ORDER_KE
 import { FIRST_MOUNT } from "@/lib/turnWindow";
 import { forget, stopWaiting, upload, waitFor } from "@/lib/uploads";
 import type { Draft } from "./useDrafts";
-import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueueChangedEvent, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueueChangedEvent, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionServingEvent, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
 
@@ -395,6 +395,10 @@ export function useSessions() {
     // current — and a stale non-empty set survives there across a restart. Only
     // an event this run writes here, which is what makes it honest.
     const [tasksBySession, setTasksBySession] = useState<Record<string, BackgroundTask[]>>({});
+    // sessionId → the ports its background shells serve, where serving is all
+    // that is left of its work (`session_serving`). Valid for the task set it
+    // was said of, so a moved set drops it here as on the server.
+    const [servingBySession, setServingBySession] = useState<Record<string, number[]>>({});
     // sessionId → prompts typed during a running turn, oldest first, still
     // waiting for the backend to hand them to the CLI. Mirrors the queue in
     // `Session`, which is the authority and says so on every `queue_changed`,
@@ -2062,6 +2066,7 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
   setStatusBySession(({ [sessionId]: _, ...rest }) => rest);
   setWorkingBySession(({ [sessionId]: _, ...rest }) => rest);
   setTasksBySession(({ [sessionId]: _, ...rest }) => rest);
+  setServingBySession(({ [sessionId]: _, ...rest }) => rest);
   setQueuedBySession(({ [sessionId]: _, ...rest }) => rest);
   // Every kind: a card about a session that is gone opens nothing.
   dismissNotice(sessionId);
@@ -2560,6 +2565,7 @@ useEffect(() => {
             if (agentEvent.payload.type === "background_tasks_changed") {
               const { tasks } = agentEvent.payload;
               setTasksBySession((prev) => ({ ...prev, [agentEvent.sessionId]: tasks }));
+              setServingBySession(({ [agentEvent.sessionId]: _, ...rest }) => rest);
               // The other half of the guard in `session_status`: a turn that
               // ended with a task still open kept its asks, since the task's
               // subagent could be the one asking. With the set drained and no
@@ -2910,6 +2916,10 @@ useEffect(() => {
         void applyQueue(id, queued);
       }
     }
+    setServingBySession((prev) => ({
+      ...without(prev),
+      ...Object.fromEntries((payload.serving ?? []).map((s) => [s.sessionId, s.ports])),
+    }));
     readServer(server);
     if (server !== LOCAL) flushHeld(server);
 
@@ -3524,6 +3534,16 @@ useEffect(() => {
   };
 }, []);
 
+useEffect(() => {
+  const listenerPromise = listen<SessionServingEvent>("session_serving", ({ payload }) => {
+    const { sessionId, ports } = payload;
+    setServingBySession(({ [sessionId]: _, ...rest }) => (ports.length ? { ...rest, [sessionId]: ports } : rest));
+  });
+  return () => {
+    listenerPromise.then((unlisten) => unlisten());
+  };
+}, []);
+
 // A session created by something other than the composer — an agent calling the
 // `dray` CLI, which reaches the backend over its own socket. The row has to
 // appear without a refetch, the way a composer-created one does.
@@ -3783,6 +3803,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems: shownIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems: shownIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, servingBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
 
 }
