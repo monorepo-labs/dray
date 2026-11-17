@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { Button } from "@/components/ui/button";
 import { closeStarPrompt } from "@/hooks/useStarPrompt";
+import { trackFeature } from "@/lib/analytics";
 import { invoke } from "@/lib/transport";
 
 const REPO_URL = "https://github.com/monorepo-labs/dray";
@@ -30,9 +31,18 @@ export default function StarCard() {
       await invoke("star_dray");
       setPhase("thanks");
     } catch {
-      void openUrl(REPO_URL).catch(() => {});
+      // The opener plugin hands the URL to the system browser, where the
+      // reader's GitHub login is; Dray's own browser holds none.
+      void openUrl(REPO_URL)
+        .then(() => trackFeature("github_star_fallback_opened"))
+        .catch(() => {});
       closeStarPrompt();
     }
+  };
+
+  const dismiss = () => {
+    trackFeature("github_star_dismissed");
+    closeStarPrompt();
   };
 
   return (
@@ -52,7 +62,7 @@ export default function StarCard() {
             Liking Dray so far? A star would help us.
           </span>
           <div className="grid grid-cols-2 gap-1.5 p-2.5">
-            <Button variant="ghost" size="sm" onClick={closeStarPrompt}>
+            <Button variant="ghost" size="sm" onClick={dismiss}>
               Not now
             </Button>
             <Button size="sm" disabled={phase === "starring"} onClick={() => void star()}>
