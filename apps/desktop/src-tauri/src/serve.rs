@@ -2013,7 +2013,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         // GitHub and issues.
         prs_for_branch(cwd: String, branch: String) => github::prs_for_branch(cwd, branch).await;
         pr_marks(cwd: String) => github::pr_marks(cwd).await;
-        merge_pr(cwd: String, number: u64, method: MergeMethod) => github::merge_pr(cwd, number, method).await;
+        merge_pr(cwd: String, number: u64, method: MergeMethod, settle: Option<String>) =>
+            github::merge_pr(cwd, number, method, settle, sink).await;
         delete_branch(cwd: String, number: u64) => github::delete_branch(cwd, number).await;
         reopen_pr(cwd: String, number: u64) => github::reopen_pr(cwd, number).await;
         mark_pr_ready(cwd: String, number: u64) => github::mark_pr_ready(cwd, number).await;

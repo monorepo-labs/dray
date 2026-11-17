@@ -474,13 +474,8 @@ pub async fn note_merge(cwd: &str, number: u64) {
     if tasks.is_empty() {
         return;
     }
-    let Ok(out) = crate::github::gh(cwd, &["pr", "view", &number.to_string(), "--json", "headRefName,isCrossRepository"]).await
-    else {
-        return;
-    };
-    let pr: serde_json::Value = serde_json::from_str(&out).unwrap_or_default();
-    // A fork's branch can share a task's name; unknown counts as a fork.
-    let (Some(branch), Some(false)) = (pr["headRefName"].as_str(), pr["isCrossRepository"].as_bool()) else { return };
+    let Some(branch) = crate::github::pr_head(cwd, number).await else { return };
+    let branch = branch.as_str();
     for task in tasks {
         // The tree's own HEAD first: a task can move off the branch it was made on.
         let observed = if task.worktree_removed { None } else { crate::git::current_branch(&task.cwd).await };

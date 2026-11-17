@@ -556,34 +556,19 @@ final class Store {
     /// Whether a repo's marks have been read at all: a PR missing from them then is one GitHub no longer lists.
     func marksRead(_ server: UUID, _ path: String) -> Bool { marks[ProjectKey(server: server, path: path)] != nil }
 
-    private struct WorktreeDisposition: Decodable {
-        let exists: Bool
-        let changedFiles: Int
-        let unpushedCommits: Int
-    }
-
-    /// Lands a bot task's PR the desktop's way (`mergeTask`): merge, then settle
-    /// the task and remove its worktree where nothing in it would be lost. A task
-    /// mid-turn, or one whose branch moved on, keeps both.
-    func mergeTask(_ server: UUID, taskId: String, cwd: String, number: Int, branch: String, method: String) async -> Bool {
+    /// Lands a bot task's PR. The server settles the task and removes its
+    /// worktree once it lands (`settle`), wherever the task runs: a task on
+    /// another machine is one this phone may hold no row for.
+    func mergeTask(_ server: UUID, taskId: String, cwd: String, number: Int, method: String) async -> Bool {
         do {
-            let _: JSON = try await call(server, "merge_pr", ["cwd": .string(cwd), "number": JSON(number), "method": .string(method)],
+            let _: JSON = try await call(server, "merge_pr", ["cwd": .string(cwd), "number": JSON(number), "method": .string(method),
+                                                              "settle": .string(taskId)],
                                          timeout: .seconds(120))
         } catch {
             lastError = error.localizedDescription
             return false
         }
         await loadMarks(server, force: true, only: [cwd])
-        let key = SessionKey(server: server, id: taskId)
-        guard let item = items[key], item.archived != true, !item.busy,
-              sessionBranch(branch: item.branch, worktreeName: item.worktreeName,
-                            worktreeRemoved: item.worktreeRemoved ?? false, observed: nil) == branch else { return true }
-        _ = try? await call(server, "set_session_flags", ["sessionId": .string(taskId), "archived": true], as: JSON.self)
-        if item.worktreeName != nil, item.worktreeRemoved != true,
-           let d: WorktreeDisposition = try? await call(server, "worktree_disposition", ["sessionId": .string(taskId)]),
-           !d.exists || (d.changedFiles == 0 && d.unpushedCommits == 0) {
-            _ = try? await call(server, "remove_session_worktree", ["sessionId": .string(taskId)], as: JSON.self)
-        }
         return true
     }
 

@@ -1464,6 +1464,55 @@ async fn settle_session(settle: dray_proto::SettleSession, app: &Sink) -> Result
     answer_session(id).await
 }
 
+/// Settles task `id` once the reader merged its PR on `head`, here or on the
+/// machine holding it, and deletes its worktree: the merge landed the work, so
+/// what the tree still holds is leftover. A task moved off `head` holds work
+/// the merge did not land and is left be; a task mid-turn is refused by the
+/// settle itself. A machine that is down is held for and settles on reconnect.
+pub async fn settle_merged(id: &str, head: &str, app: &Sink) -> Result<()> {
+    let (row, machine) = match store::get_session_index_item(id).await? {
+        Some(row) => (row, None),
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        None => match elsewhere::session_row(id).await {
+            Some(((machine, _), row)) => (row, Some(machine)),
+            None => {
+                if let Some(machine) = crate::remote_reports::machine_of(id).await {
+                    crate::held_flags::hold_settle(&machine, id, true).await?;
+                    crate::held_flags::announce(app, Vec::new()).await;
+                }
+                return Ok(());
+            }
+        },
+        #[cfg(not(any(feature = "serve", feature = "desktop")))]
+        None => return Ok(()),
+    };
+    // The tree's own HEAD where it is here: an agent may push from a branch it named.
+    let observed = match machine.is_none() && !row.worktree_removed {
+        true => crate::git::current_branch(&row.cwd).await,
+        false => None,
+    };
+    if row.archived || store::session_branch(&row, observed.as_deref()).as_deref() != Some(head) {
+        return Ok(());
+    }
+    let settle = dray_proto::SettleSession {
+        session_id: id.to_string(),
+        settled: true,
+        delete_worktree: row.worktree_name.is_some() && !row.worktree_removed,
+    };
+    let response = match machine {
+        None => settle_session(settle, app).await?,
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        Some(machine) => on_machine(&machine, Request::SettleSession(settle), app).await?,
+        #[cfg(not(any(feature = "serve", feature = "desktop")))]
+        Some(_) => unreachable!(),
+    };
+    // Another machine's refusal comes back as an answer, not an error.
+    if let Response::Error { message } = response {
+        bail!(message);
+    }
+    Ok(())
+}
+
 /// Index entries changed from here, re-read and handed to the sidebar, which
 /// otherwise only learns of a change it made itself.
 pub(crate) async fn announce_change(ids: &[String], app: &Sink) {

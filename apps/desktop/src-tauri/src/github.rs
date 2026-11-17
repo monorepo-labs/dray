@@ -1275,31 +1275,49 @@ fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
 /// merge` can fail with the merge already through (a post-merge step, a lost
 /// connection), and reporting the exit code alone tells the reader their merge
 /// failed when it is on `main`.
+///
+/// `settle` names a bot's task the merge lands, settled here once it has
+/// rather than by each client: only the server reaches a task on another
+/// machine, which the phone never connects to.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn merge_pr(cwd: String, number: u64, method: MergeMethod) -> Result<(), String> {
-    let arg = number.to_string();
-
+pub async fn merge_pr(
+    cwd: String,
+    number: u64,
+    method: MergeMethod,
+    settle: Option<String>,
+    sink: crate::sink::Sink,
+) -> Result<(), String> {
+    // An unverifiable merge has to read as the failure it was reported as.
+    if let Err(e) = gh(&cwd, &["pr", "merge", &number.to_string(), method.flag()]).await {
+        if merged_state(&cwd, number).await != Some(true) {
+            return Err(e);
+        }
+    }
+    crate::analytics::feature_used("pr_merged");
     // Only ever the reader's merge, from a client: a bot and its tasks merge
     // with `gh` and never reach this, so the bot is told of it.
-    let Err(e) = gh(&cwd, &["pr", "merge", &arg, method.flag()]).await else {
-        crate::analytics::feature_used("pr_merged");
-        crate::bots::note_merge(&cwd, number).await;
-        return Ok(());
-    };
-
-    match merged_state(&cwd, number).await {
-        // Reported on both paths rather than once around the whole function:
-        // the two are the same answer, but only one of them is a call that
-        // reported failure and turned out to have worked.
-        Some(true) => {
-            crate::analytics::feature_used("pr_merged");
-            crate::bots::note_merge(&cwd, number).await;
-            Ok(())
-        }
-        // Either it genuinely didn't merge, or we couldn't find out — and an
-        // unverifiable merge has to read as the failure it was reported as.
-        _ => Err(e),
+    crate::bots::note_merge(&cwd, number).await;
+    if let Some(task) = settle {
+        // Off the reply: a task on another machine can take a while to settle.
+        tokio::spawn(async move {
+            let Some(head) = pr_head(&cwd, number).await else { return };
+            if let Err(e) = crate::orchestration::settle_merged(&task, &head, &sink).await {
+                eprintln!("[merge] could not settle {task}: {e:#}");
+            }
+        });
     }
+    Ok(())
+}
+
+/// The PR's head branch, where it is one of this repo's: a fork's branch can
+/// share a task's name, and unknown counts as a fork.
+pub(crate) async fn pr_head(cwd: &str, number: u64) -> Option<String> {
+    let out = gh(cwd, &["pr", "view", &number.to_string(), "--json", "headRefName,isCrossRepository"]).await.ok()?;
+    let pr: serde_json::Value = serde_json::from_str(&out).ok()?;
+    if pr["isCrossRepository"].as_bool() != Some(false) {
+        return None;
+    }
+    pr["headRefName"].as_str().map(str::to_string)
 }
 
 /// Whether the PR is merged, or `None` where asking failed too.
