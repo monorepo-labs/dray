@@ -812,6 +812,17 @@ mod elsewhere {
         futures_util::future::join_all(asks).await.into_iter().flatten().next()
     }
 
+    /// The branch checked out at `cwd` on machine `id`, or `None` where it
+    /// does not answer or HEAD is detached.
+    pub async fn branch_at(id: &str, cwd: &str) -> Option<String> {
+        let saved = machines::on(id).await.ok()?;
+        let status = tokio::time::timeout(machines::SWEEP, machines::call(&saved, "work_status", json!({ "cwd": cwd })))
+            .await
+            .ok()?
+            .ok()?;
+        status.get("branch")?.as_str().map(str::to_string)
+    }
+
     /// The open pull request on `branch` of `project` on machine `id`: number
     /// and URL, read through that machine's own `gh` and checkout.
     pub async fn open_pr(id: &str, project: &str, branch: &str) -> Result<Option<(u64, String)>> {
@@ -1462,6 +1473,55 @@ async fn settle_session(settle: dray_proto::SettleSession, app: &Sink) -> Result
         removed.context("settled, but the worktree was not deleted")?;
     }
     answer_session(id).await
+}
+
+/// Settles task `id` once the reader merged its PR on `head`, here or on the
+/// machine holding it, and deletes its worktree: the merge landed the work, so
+/// what the tree still holds is leftover. A task moved off `head` holds work
+/// the merge did not land and is left be; a task mid-turn is refused by the
+/// settle itself. A task whose machine does not answer is left for the bot,
+/// since its branch cannot be read.
+pub async fn settle_merged(id: &str, head: &str, app: &Sink) -> Result<()> {
+    let (row, machine) = match store::get_session_index_item(id).await? {
+        Some(row) => (row, None),
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        None => match elsewhere::session_row(id).await {
+            Some(((machine, _), row)) => (row, Some(machine)),
+            None => return Ok(()),
+        },
+        #[cfg(not(any(feature = "serve", feature = "desktop")))]
+        None => return Ok(()),
+    };
+    // The tree's own HEAD, never the branch saved at creation: an agent may
+    // push from a branch it named, or move on to new work after the PR.
+    let branch = match (&machine, row.worktree_removed) {
+        (_, true) => row.branch.clone(),
+        (None, false) => crate::git::current_branch(&row.cwd).await,
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        (Some(machine), false) => elsewhere::branch_at(machine, &row.cwd).await,
+        #[cfg(not(any(feature = "serve", feature = "desktop")))]
+        (Some(_), false) => None,
+    };
+    if row.archived || branch.as_deref() != Some(head) {
+        return Ok(());
+    }
+    let settle = dray_proto::SettleSession {
+        session_id: id.to_string(),
+        settled: true,
+        delete_worktree: row.worktree_name.is_some() && !row.worktree_removed,
+    };
+    let response = match machine {
+        None => settle_session(settle, app).await?,
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        Some(machine) => on_machine(&machine, Request::SettleSession(settle), app).await?,
+        #[cfg(not(any(feature = "serve", feature = "desktop")))]
+        Some(_) => unreachable!(),
+    };
+    // Another machine's refusal comes back as an answer, not an error.
+    if let Response::Error { message } = response {
+        bail!(message);
+    }
+    Ok(())
 }
 
 /// Index entries changed from here, re-read and handed to the sidebar, which

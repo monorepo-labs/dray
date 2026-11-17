@@ -57,10 +57,6 @@ final class PrModel {
     }
 }
 
-private struct WorkStatus: Decodable {
-    let branch: String?
-}
-
 extension PrUnavailable {
     /// `prs_for_branch` rejects with a typed object, which the connection
     /// hands over as its JSON text; anything else is the call itself failing.
