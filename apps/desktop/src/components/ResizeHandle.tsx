@@ -211,10 +211,20 @@ export function useResizable({
     const snap: RailSnap = b === "rail" ? "toRail" : a === "rail" ? "fromRail" : "detent";
     const letGo = a === "detent" && b === "free";
     if (letGo && drag === "pull") setDrag("free");
-    if (spring) {
+    if (reducedMotion()) {
+      // Drawn as stored, no spring.
+    } else if (letGo) {
+      // Out of the default is the plain way out: caught without a bounce,
+      // replacing whatever spring was running.
+      const from = spring ? drawn : last;
+      setSpring({ id: Date.now(), from, snap, damping: DAMPING_CATCH });
+      setDrawn(from);
+    } else if (spring) {
       if (a !== b && (a === "rail" || b === "rail")) setSpring({ ...spring, snap });
-    } else if (!(a === "free" && b === "free") && !reducedMotion()) {
-      const damping = letGo ? DAMPING_CATCH : snap === "detent" ? DAMPING_DETENT : DAMPING;
+    } else if (a !== b || (a === "detent" && !drag)) {
+      // The stretch inside the detent follows the pointer; only a jump springs.
+      // Into the default bounces; a release settling back onto it does not.
+      const damping = a === "free" && b === "detent" ? DAMPING_DETENT : a === b ? DAMPING_CATCH : DAMPING;
       setSpring({ id: Date.now(), from: last, snap, damping });
       setDrawn(last);
     }

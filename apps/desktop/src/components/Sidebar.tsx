@@ -1104,6 +1104,9 @@ export default function Sidebar({
   // The full sidebar stays drawn while it folds, clipped by the narrowing
   // aside, and turns into the rail once it lands.
   const iconOnly = width === SIDEBAR_RAIL && snap !== "toRail";
+  // The strip's icons take their rail size as the fold starts, growing while it
+  // runs rather than once it lands.
+  const railed = width === SIDEBAR_RAIL;
   // The rail's foot slides in after a fold, never on a launch already there.
   const folded = useRef(false);
   if (snap === "toRail" || snap === "fromRail") folded.current = snap === "toRail";
@@ -1343,7 +1346,7 @@ export default function Sidebar({
             size="sm"
             onClick={onNewSession}
             aria-label={iconOnly ? "New Task" : undefined}
-            className={cn(STRIP, iconOnly && STRIP_RAIL)}
+            className={cn(STRIP, railed && STRIP_RAIL)}
           >
             <Plus />
             {!iconOnly && <>
@@ -1369,7 +1372,7 @@ export default function Sidebar({
             aria-label={iconOnly ? "Issues" : undefined}
             className={cn(
               STRIP,
-              iconOnly && STRIP_RAIL,
+              railed && STRIP_RAIL,
               "data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground",
             )}
           >
@@ -1449,7 +1452,7 @@ export default function Sidebar({
               size="sm"
               onClick={() => onSearchOpenChange(true)}
               aria-label={iconOnly ? "Search" : undefined}
-              className={cn(STRIP, iconOnly && STRIP_RAIL)}
+              className={cn(STRIP, railed && STRIP_RAIL)}
             >
               <Search />
               {!iconOnly && <>
@@ -1468,7 +1471,7 @@ export default function Sidebar({
             size="sm"
             onClick={onNewBot}
             aria-label={iconOnly ? "New bot" : undefined}
-            className={cn(STRIP, iconOnly && STRIP_RAIL)}
+            className={cn(STRIP, railed && STRIP_RAIL)}
           >
             <MessageCirclePlus />
             {!iconOnly && <span data-rail-hide>New bot</span>}
