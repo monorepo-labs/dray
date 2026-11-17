@@ -36,20 +36,47 @@ describe("snapWidth", () => {
 });
 
 describe("snapWidth with a rail", () => {
-  it("drops to the rail the moment a drag goes under the floor", () => {
-    expect(snapWidth(239, 240, 480, 240, 56, false)).toBe(56);
-    expect(snapWidth(20, 240, 480, 240, 56, false)).toBe(56);
-    expect(snapWidth(240, 240, 480, 240, 56, false)).toBe(240);
-  });
-
-  it("opens from the rail once a drag crosses halfway to the floor", () => {
-    expect(snapWidth(147, 240, 480, 240, 56, true)).toBe(56);
-    expect(snapWidth(149, 240, 480, 240, 56, true)).toBe(240);
+  // Under the floor but above halfway is the floor, so a drag in from a wide
+  // sidebar stops at the default before it can reach the rail.
+  it("holds at the floor until the drag crosses halfway to the rail", () => {
+    expect(snapWidth(239, 240, 480, 240, 56)).toBe(240);
+    expect(snapWidth(149, 240, 480, 240, 56)).toBe(240);
+    expect(snapWidth(147, 240, 480, 240, 56)).toBe(56);
+    expect(snapWidth(20, 240, 480, 240, 56)).toBe(56);
   });
 
   it("leaves the range above the floor alone", () => {
-    expect(snapWidth(300, 240, 480, 240, 56, false)).toBe(300);
-    expect(snapWidth(246, 240, 480, 240, 56, false)).toBe(240);
+    expect(snapWidth(300, 240, 480, 240, 56)).toBe(300);
+    expect(snapWidth(246, 240, 480, 240, 56)).toBe(240);
+  });
+});
+
+describe("snapWidth's detent at the default", () => {
+  it("stretches a little toward a drag, then lets go past the detent", () => {
+    expect(snapWidth(240, 180, 480, 240, undefined, "drag")).toBe(240);
+    const near = snapWidth(250, 180, 480, 240, undefined, "drag");
+    const far = snapWidth(278, 180, 480, 240, undefined, "drag");
+    expect(near).toBeGreaterThan(240);
+    expect(far).toBeGreaterThan(near);
+    expect(far).toBeLessThanOrEqual(250);
+    expect(snapWidth(280, 180, 480, 240, undefined, "drag")).toBe(280);
+  });
+
+  it("settles a release inside the detent on the default", () => {
+    expect(snapWidth(278, 180, 480, 240, undefined, "release")).toBe(240);
+    expect(snapWidth(205, 180, 480, 240, undefined, "release")).toBe(240);
+    expect(snapWidth(290, 180, 480, 240, undefined, "release")).toBe(290);
+  });
+
+  // The sidebar's default is its floor, so pulling in toward the rail stays at
+  // the floor rather than stretching under it.
+  it("never stretches under the floor", () => {
+    expect(snapWidth(220, 240, 480, 240, 56, "drag")).toBe(240);
+  });
+
+  // The detent lets go once per drag; after that the edge just follows.
+  it("follows the pointer through the detent once it has let go", () => {
+    expect(snapWidth(255, 180, 480, 240, undefined, "follow")).toBe(255);
   });
 });
 

@@ -657,7 +657,6 @@ export default function ViewTabs({
   const align = {
     marginLeft:
       alignX > 0 ? `max(-0.25rem, calc(${alignX}px - 0.25rem - var(--tabs-lead)))` : "-0.25rem",
-    transition: "margin-left 125ms cubic-bezier(0.2, 0, 0, 1)",
     // Here rather than as classes so `duration-300` does not also ease the
     // margin at entrance speed.
     animation: "enter 300ms ease-out 150ms backwards",

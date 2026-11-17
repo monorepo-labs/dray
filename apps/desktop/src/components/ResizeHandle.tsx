@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -10,7 +11,7 @@ import {
 
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { channel } from "@/lib/channel";
-import { paneBounds, snapWidth, takenBy } from "@/lib/resize";
+import { GIVE, paneBounds, snapWidth, takenBy, type Pull } from "@/lib/resize";
 import { cn } from "@/lib/utils";
 
 /// Which edge of the pane the strip sits on. Dragging *away* from the pane
@@ -21,6 +22,22 @@ type Edge = "left" | "right";
 /// a few presses, since the keyboard cannot aim the way a pointer does; Home is
 /// there for the default.
 const STEP_PX = 16;
+
+/// The snap's spring, critically damped: settles in about a quarter second and
+/// never passes its target. A bouncier one was tried and read as jank.
+const STIFFNESS = 520;
+const DAMPING = 2 * Math.sqrt(STIFFNESS);
+/// Fixed step, so the spring feels the same at 60Hz and 120Hz.
+const STEP_S = 1 / 240;
+/// A target moving further than this in a frame jumped rather than moved, and
+/// is chased from rest rather than matched.
+const JUMP_PX = 24;
+
+/// A snap while its spring runs: onto or off the rail, or into or out of the
+/// default's detent.
+export type RailSnap = "toRail" | "fromRail" | "detent" | null;
+
+const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const subscribeToResize = (fn: () => void) => {
   window.addEventListener("resize", fn);
@@ -139,7 +156,7 @@ export function useResizable({
   /// Drawn at `initial` while on the rail, without touching what is stored —
   /// for a moment that needs the full pane, like the sidebar's search field.
   widen?: boolean;
-}): { style: CSSProperties; handle: ReactNode; width: number; held: number } {
+}): { style: CSSProperties; handle: ReactNode; width: number; held: number; snap: RailSnap } {
   const read = () => readLocalStorage(storageKey, initial);
   const [stored, setStored] = useState(read);
   // The key moves under a mounted pane — the right panel follows the selected
@@ -150,7 +167,11 @@ export function useResizable({
     setReadFor(storageKey);
     setStored(read());
   }
-  const from = useRef<{ x: number; width: number } | null>(null);
+  // `raw` is the pointer's last width, kept here as well as in state: a release
+  // landing in the same frame as a move must not read the width before it.
+  const from = useRef<{ x: number; width: number; raw?: number } | null>(null);
+  // A drag, and whether the default's detent has let go of it yet.
+  const [drag, setDrag] = useState<"pull" | "free" | null>(null);
 
   // One range for everything here, so what is drawn, what the keys move and
   // what assistive technology is told can never disagree. A CSS `max-width`
@@ -160,28 +181,89 @@ export function useResizable({
   const columnFloor = useChatFloor();
   const bounds = paneBounds(min, useViewportWidth(), useSeniorPanes(pane), floor ?? columnFloor);
   const clamp = useCallback(
-    // A stored width is judged as if from the rail, so one saved under an
-    // older, lower floor opens rather than dropping to the rail.
-    (raw: number, fromRail = true) => snapWidth(raw, bounds.min, bounds.max, initial, rail, fromRail),
+    (raw: number, pull?: Pull) => snapWidth(raw, bounds.min, bounds.max, initial, rail, pull),
     [bounds.min, bounds.max, initial, rail],
   );
 
   // Narrowing the window narrows the pane; widening it back restores what the
-  // reader asked for, which is why the stored width is left alone.
-  const held = clamp(stored);
+  // reader asked for, which is why the stored width is left alone. Mid-drag
+  // `stored` is the pointer's own width, unclamped, so the detent can read how
+  // hard it is being pulled.
+  const held = clamp(stored, drag === "pull" ? "drag" : drag === "free" ? "follow" : "rest");
   const width = widen && held === rail ? clamp(initial) : held;
 
-  // Published on every change and cleared on unmount, which is what a collapsed
-  // sidebar is — it returns null.
+  // Every jump the pointer did not make — onto or off the rail, into or out of
+  // the detent, a release settling — springs; a drag in open range follows the
+  // pointer with no lag. Decided during render so the frame that changes the
+  // width is the frame the spring starts from.
+  const def = clamp(initial);
+  const zone = (w: number) => (w === rail ? "rail" : Math.abs(w - def) <= GIVE ? "detent" : "free");
+  const [last, setLast] = useState(width);
+  const [spring, setSpring] = useState<{ id: number; from: number; snap: RailSnap } | null>(null);
+  const [drawn, setDrawn] = useState(width);
+  if (last !== width) {
+    setLast(width);
+    const [a, b] = [zone(last), zone(width)];
+    const snap: RailSnap = b === "rail" ? "toRail" : a === "rail" ? "fromRail" : "detent";
+    const letGo = a === "detent" && b === "free";
+    if (letGo && drag === "pull") setDrag("free");
+    if (reducedMotion()) {
+      // Drawn as stored, no spring.
+    } else if (spring) {
+      if (a !== b && (a === "rail" || b === "rail")) setSpring({ ...spring, snap });
+    } else if (a !== b || (a === "detent" && !drag)) {
+      // The stretch inside the detent follows the pointer; only a jump springs.
+      setSpring({ id: Date.now(), from: last, snap });
+      setDrawn(last);
+    }
+  }
+  const target = useRef(width);
   useEffect(() => {
+    target.current = width;
+  });
+  useEffect(() => {
+    if (!spring) return;
+    let x = spring.from;
+    let v = 0;
+    let prev = performance.now();
+    let chased = target.current;
+    let frame = requestAnimationFrame(function step(now) {
+      const dt = Math.min((now - prev) / 1000, 1 / 30);
+      prev = now;
+      // Damping works on the speed relative to the target's own, so a spring
+      // chasing a moving pointer closes on it instead of trailing it.
+      const t = target.current;
+      const vt = Math.abs(t - chased) > JUMP_PX || !dt ? 0 : (t - chased) / dt;
+      chased = t;
+      for (let left = dt; left > 0; left -= STEP_S) {
+        const h = Math.min(STEP_S, left);
+        v += (-STIFFNESS * (x - t) - DAMPING * (v - vt)) * h;
+        x += v * h;
+      }
+      // Ends only once it has caught the target, so handing back to the pointer
+      // never jumps.
+      if (Math.abs(x - t) < (vt ? 3 : 1.5) && Math.abs(v - vt) < 100) return setSpring(null);
+      setDrawn(x);
+      frame = requestAnimationFrame(step);
+    });
+    return () => cancelAnimationFrame(frame);
+    // The spring chases `target`; only a new spring restarts it.
+  }, [spring?.id]);
+  const shown = spring ? Math.round(drawn) : width;
+
+  // Published on every change and cleared on unmount, which is what a collapsed
+  // sidebar is — it returns null. The drawn width, so chrome placed against the
+  // pane's edge moves with the spring — before paint, or the titlebar's tabs
+  // draw a frame behind the pane they line up with.
+  useLayoutEffect(() => {
     if (!pane) return;
-    widths[pane] = width;
+    widths[pane] = shown;
     layoutChanged.emit();
     return () => {
       delete widths[pane];
       layoutChanged.emit();
     };
-  }, [pane, width]);
+  }, [pane, shown]);
 
   const commit = (next: number) => {
     setStored(next);
@@ -193,9 +275,15 @@ export function useResizable({
   // press live and every later pointer move resized the pane with nothing held
   // down. The write lands here because only the last frame is a preference.
   const end = () => {
-    if (!from.current) return;
+    const start = from.current;
+    if (!start) return;
     from.current = null;
-    writeLocalStorage(storageKey, held);
+    // A press with no move is not a drag, and must not pull a saved width in.
+    if (start.raw === undefined) return;
+    setDrag(null);
+    const next = clamp(start.raw, drag === "free" ? "rest" : "release");
+    setStored(next);
+    writeLocalStorage(storageKey, next);
   };
 
   // Arrows widen and narrow, Home resets: the pointer's three verbs, since a
@@ -235,7 +323,11 @@ export function useResizable({
         const start = from.current;
         if (!start) return;
         const moved = edge === "right" ? e.clientX - start.x : start.x - e.clientX;
-        setStored(clamp(start.width + moved, start.width === rail));
+        // Out of the rail stops at the default for the rest of the drag:
+        // going wider is a second drag, through the detent.
+        start.raw = start.width === rail ? Math.min(start.width + moved, def) : start.width + moved;
+        setStored(start.raw);
+        setDrag((d) => d ?? "pull");
       }}
       onPointerUp={end}
       onPointerCancel={end}
@@ -257,5 +349,5 @@ export function useResizable({
     />
   );
 
-  return { style: { width }, handle, width, held };
+  return { style: { width: shown }, handle, width, held, snap: spring?.snap ?? null };
 }
