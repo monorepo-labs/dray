@@ -10,6 +10,7 @@ const row = (sessionId: string, state: Partial<CrewRow> = {}, flags: Partial<Ses
   asking: false,
   unread: false,
   background: false,
+  serving: [],
   ...state,
 });
 
