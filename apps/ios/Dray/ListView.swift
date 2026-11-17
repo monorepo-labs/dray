@@ -166,8 +166,6 @@ struct SessionList: View {
                 VoiceDock(task: task) { selection = $0 }.opacity(blank && !anyConnected ? 0.3 : 1)
             }
         }
-        // Any tap on the list or its dock is the reader starting something of their own.
-        .simultaneousGesture(TapGesture().onEnded { autoOpen = false })
         // A new view or filter starts on its first page.
         .onChange(of: "\(mode)\(filter ?? "")") { shown = Self.pageSize }
         // Its buttons go with the sessions, so a view left open would have no way back; the dock
@@ -192,7 +190,11 @@ struct SessionList: View {
         .onChange(of: lone, initial: true) { open(lone) }
         // Every server and shared machine has answered and the list is more than one bot: the chance is gone.
         .onChange(of: read) { if read && lone == nil { autoOpen = false } }
+        // Anything the reader starts spends it. Never a tap gesture over the list: one cancels
+        // the List's own touches, and no row could be selected (#1196).
         .onChange(of: selection) { if selection != nil { autoOpen = false } }
+        .onChange(of: task.bot?.bot.id) { autoOpen = false }
+        .onChange(of: "\(mode)\(project ?? "")") { autoOpen = false }
         .onChange(of: sheet?.id) { autoOpen = false }
         .onChange(of: newBot) { autoOpen = false }
         .onChange(of: phase) { if phase == .background { autoOpen = false } }
