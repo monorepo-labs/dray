@@ -131,36 +131,19 @@ function spawnCommand(run: SubagentRun): string | null {
   return typeof command === "string" && command.trim().length > 0 ? command : null;
 }
 
-/// The row's mark: a filled tile holding the terminal glyph or the working orb
-/// the chat's subagent row carries, or a bare check once a subagent is done —
-/// no tile, so history reads quieter than what is live.
+/// The row's mark, bare in a fixed slot: the terminal glyph, the working orb
+/// the chat's subagent row carries, or a check once a subagent is done. No
+/// tile, which read as a control; the slot keeps every title on one line.
 ///
-/// `bare` drops the tile for a run with no Stop beside it (fx's): the tile
-/// reads as a control, and its width only lined titles up with tiled rows.
+/// `bare` narrows the slot for a run with no Stop beside it (fx's), whose rows
+/// were never lined up with the others.
 function RunMark({ run, shell, bare }: { run: SubagentRun; shell: boolean; bare: boolean }) {
-  if (bare) {
-    return (
-      <span className="flex size-4 shrink-0 items-center justify-center">
-        {run.done ? (
-          <Check aria-label="Done" className="size-3.5 text-muted-foreground" />
-        ) : (
-          <Orb state="working" variant="gyro" size={16} label="Working" />
-        )}
-      </span>
-    );
-  }
-  if (!shell && run.done) {
-    // The tile's width without its height, so finished titles still line up.
-    return (
-      <span className="flex h-4 w-7 shrink-0 items-center justify-center">
-        <Check aria-label="Done" className="size-3.5 text-muted-foreground" />
-      </span>
-    );
-  }
   return (
-    <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted">
+    <span className={cn("flex h-4 shrink-0 items-center justify-center", bare ? "w-4" : "w-7")}>
       {shell ? (
         <SquareTerminal aria-label="Shell" className="size-3.5 text-muted-foreground" />
+      ) : run.done ? (
+        <Check aria-label="Done" className="size-3.5 text-muted-foreground" />
       ) : (
         <Orb state="working" variant="gyro" size={16} label="Working" />
       )}
