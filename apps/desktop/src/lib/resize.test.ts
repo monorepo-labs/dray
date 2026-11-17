@@ -51,6 +51,30 @@ describe("snapWidth with a rail", () => {
   });
 });
 
+describe("snapWidth's detent at the default", () => {
+  it("stretches a little toward a drag, then lets go past the detent", () => {
+    expect(snapWidth(240, 180, 480, 240, undefined, "drag")).toBe(240);
+    const near = snapWidth(250, 180, 480, 240, undefined, "drag");
+    const far = snapWidth(278, 180, 480, 240, undefined, "drag");
+    expect(near).toBeGreaterThan(240);
+    expect(far).toBeGreaterThan(near);
+    expect(far).toBeLessThanOrEqual(250);
+    expect(snapWidth(280, 180, 480, 240, undefined, "drag")).toBe(280);
+  });
+
+  it("settles a release inside the detent on the default", () => {
+    expect(snapWidth(278, 180, 480, 240, undefined, "release")).toBe(240);
+    expect(snapWidth(205, 180, 480, 240, undefined, "release")).toBe(240);
+    expect(snapWidth(290, 180, 480, 240, undefined, "release")).toBe(290);
+  });
+
+  // The sidebar's default is its floor, so pulling in toward the rail stays at
+  // the floor rather than stretching under it.
+  it("never stretches under the floor", () => {
+    expect(snapWidth(220, 240, 480, 240, 56, "drag")).toBe(240);
+  });
+});
+
 describe("paneBounds", () => {
   // The whole rule, and the only one: whatever the window and whatever else is
   // on the row, the chat column comes away with its floor exactly.

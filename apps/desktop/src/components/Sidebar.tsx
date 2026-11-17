@@ -981,6 +981,7 @@ function devBadgeLabel(branch: string | null): string {
 function DevBadge() {
   return (
     <div
+      data-rail-hide
       title={__DEV_BRANCH__ ?? undefined}
       className="shrink-0 truncate px-3.5 pb-2 font-mono text-[10px] leading-none text-muted-foreground/60"
     >
@@ -1105,7 +1106,7 @@ export default function Sidebar({
   const iconOnly = width === SIDEBAR_RAIL && snap !== "toRail";
   // The rail's foot slides in after a fold, never on a launch already there.
   const folded = useRef(false);
-  if (snap) folded.current = snap === "toRail";
+  if (snap === "toRail" || snap === "fromRail") folded.current = snap === "toRail";
   // A fold the search field's blur left waiting on the pointer's release.
   const pendingFold = useRef<() => void>(undefined);
   const cancelFold = () => {
@@ -1312,11 +1313,15 @@ export default function Sidebar({
     <aside
       className={cn(
         "relative flex shrink-0 flex-col",
-        // While a snap animates, every child keeps the full width and the aside
-        // clips it, so rows slide under the edge instead of re-wrapping each
-        // frame; the mask fades whatever the edge is passing over.
-        snap &&
-          "overflow-hidden transition-[width] duration-200 ease-[cubic-bezier(0.2,0,0,1)] [mask-image:linear-gradient(to_right,black_calc(100%-40px),transparent)] motion-reduce:transition-none [&>:not([role=separator],[data-rail-foot])]:min-w-60",
+        // While a rail snap springs, every child keeps the full width and the
+        // aside clips it, so rows slide under the edge instead of re-wrapping
+        // each frame; the mask fades whatever the edge is passing over.
+        (snap === "toRail" || snap === "fromRail") &&
+          "overflow-hidden [mask-image:linear-gradient(to_right,black_calc(100%-40px),transparent)] [&>:not([role=separator],[data-rail-foot])]:w-60",
+        // What the rail drops fades before the spring's bounce could show it
+        // behind the icons, and back in on the way out.
+        snap === "toRail" && "[&_[data-rail-hide]]:opacity-0 [&_[data-rail-hide]]:transition-opacity [&_[data-rail-hide]]:duration-100",
+        snap === "fromRail" && "[&_[data-rail-hide]]:animate-in [&_[data-rail-hide]]:fade-in [&_[data-rail-hide]]:duration-300",
       )}
       style={style}
       ref={asideRef}
@@ -1342,8 +1347,10 @@ export default function Sidebar({
           >
             <Plus />
             {!iconOnly && <>
-              New Task
-              <ShortcutKeys ids={["session.new"]} className="ml-auto" />
+              <span data-rail-hide className="flex flex-1 items-center">
+                New Task
+                <ShortcutKeys ids={["session.new"]} className="ml-auto" />
+              </span>
             </>}
           </Button>
         </RailTip>
@@ -1368,8 +1375,10 @@ export default function Sidebar({
           >
             <CircleDot />
             {!iconOnly && <>
-              Issues
-              <ShortcutKeys ids={["issues.open"]} className="ml-auto" />
+              <span data-rail-hide className="flex flex-1 items-center">
+                Issues
+                <ShortcutKeys ids={["issues.open"]} className="ml-auto" />
+              </span>
             </>}
           </Button>
         </RailTip>
@@ -1444,8 +1453,10 @@ export default function Sidebar({
             >
               <Search />
               {!iconOnly && <>
-                Search
-                <ShortcutKeys ids={["search"]} className="ml-auto" />
+                <span data-rail-hide className="flex flex-1 items-center">
+                  Search
+                  <ShortcutKeys ids={["search"]} className="ml-auto" />
+                </span>
               </>}
             </Button>
           </RailTip>
@@ -1460,7 +1471,7 @@ export default function Sidebar({
             className={cn(STRIP, iconOnly && STRIP_RAIL)}
           >
             <MessageCirclePlus />
-            {!iconOnly && "New bot"}
+            {!iconOnly && <span data-rail-hide>New bot</span>}
           </Button>
         </RailTip>
       </div>
@@ -1492,7 +1503,7 @@ export default function Sidebar({
       {/* The rail carries no tasks: the top strip and the bots are all it
           holds, and this spacer keeps its foot at the bottom. */}
       {iconOnly ? <div className="flex-1" /> : <>
-      {filterShown && <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
+      {filterShown && <div data-rail-hide className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
         <ProjectFilter
           projects={projects}
           value={projectFilter}
@@ -1548,6 +1559,7 @@ export default function Sidebar({
           and the rows balance the track's extra width with `pr-0.5`. Overlay
           scrollbars reserve none, so the list takes `pr-2` to match above. */}
       <div
+        data-rail-hide
         ref={listRef}
         className={cn(
           "scrollbar-overlay flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pb-3 pl-2",
@@ -2026,7 +2038,7 @@ function BotRow({
               <Kbd className="absolute top-1/2 left-1/2 -translate-1/2">{digit}</Kbd>
             )}
           </span>
-          {!iconOnly && <span className="flex min-w-0 flex-1 flex-col">
+          {!iconOnly && <span data-rail-hide className="flex min-w-0 flex-1 flex-col">
             <span className="relative flex items-baseline gap-2">
               <span
                 className={cn(
