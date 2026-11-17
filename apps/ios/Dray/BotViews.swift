@@ -230,6 +230,19 @@ struct BotChatRows: View {
     }
 }
 
+/// An agent's reply as a bot chat draws it: a card-filled bubble short of the trailing edge.
+struct ReplyBubble: View {
+    let text: String
+
+    var body: some View {
+        MarkdownText(text: text)
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, 10)
+            .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+            .padding(.trailing, 32)
+    }
+}
+
 /// Where the replies the reader has not seen begin, as a messenger marks it.
 struct NewDivider: View {
     var body: some View {
@@ -275,11 +288,7 @@ private struct BotRowView: View {
             case .user(_, let text, let images, let reaction, _):
                 UserBubble(text: text, from: nil, images: images, reaction: reaction)
             case .assistant(_, let text, _):
-                MarkdownText(text: text)
-                    .padding(.horizontal, Theme.Space.m)
-                    .padding(.vertical, 10)
-                    .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
-                    .padding(.trailing, 32)
+                ReplyBubble(text: text)
             case .notice(_, let text, _):
                 FailureRow(text: text)
             case .card(_, let card, _):
@@ -615,19 +624,27 @@ func prStatus(_ pr: PrMark) -> String {
     }
 }
 
-/// The card at the foot of a bot's chat: its tasks that wait on the reader. X
-/// puts it away until one of them moves and stalls again.
+/// Rows drawn before "Show N more", so a long card doesn't push the chat off screen.
+private let stallRowsShown = 5
+
+/// The card at the foot of a bot's chat: its tasks that wait on the reader. A
+/// tap opens a task's last message in a sheet, read off the end of its own log,
+/// rather than the task itself or the bot's reply far up a long chat (#1181).
+/// X puts the card away until one of them moves and stalls again.
 struct StalledCard: View {
     @Environment(Store.self) private var store
     @Environment(\.openTask) private var openTask
     let tasks: [SessionKey]
     @AppStorage("bot.dismissedStalls") private var dismissedRaw = ""
+    @State private var picked: Stall?
+    @State private var all = false
 
     var body: some View {
         // Stalls ripen with time alone, so the card looks again each minute.
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let dismissed = Set(dismissedRaw.split(separator: "\n").map(String.init))
             let rows = store.stalls(tasks, now: context.date).filter { !dismissed.contains($0.id) }
+            let capped = !all && rows.count > stallRowsShown
             if !rows.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
@@ -643,10 +660,24 @@ struct StalledCard: View {
                         .accessibilityLabel("Dismiss")
                     }
                     .padding(.leading, Theme.Space.s)
-                    ForEach(rows) { row($0) }
+                    ForEach(capped ? Array(rows.prefix(stallRowsShown)) : rows) { row($0) }
+                    if rows.count > stallRowsShown {
+                        Button { withAnimation(Theme.motion) { all.toggle() } } label: {
+                            Text(capped ? "Show \(rows.count - stallRowsShown) more" : "Show less")
+                                .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
+                                .frame(maxWidth: .infinity, minHeight: 34)
+                        }
+                        .buttonStyle(RowButtonStyle())
+                    }
                 }
                 .padding(Theme.Space.xs)
                 .overlay(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous).strokeBorder(Theme.border))
+            }
+        }
+        .sheet(item: $picked) { s in
+            TaskMessageSheet(task: s.task, title: s.item.title) {
+                picked = nil
+                openTask?(s.task)
             }
         }
     }
@@ -654,7 +685,7 @@ struct StalledCard: View {
     private func row(_ s: Stall) -> some View {
         let need = s.item.need.flatMap { n in parseDate(n.at).flatMap { at in
             parseDate(s.item.modified).map { at >= $0 ? n.text : nil } } ?? nil }
-        return Button { openTask?(s.task) } label: {
+        return Button { picked = s } label: {
             HStack(alignment: .top, spacing: 10) {
                 BotFace(seed: s.task.id, size: 32)
                 VStack(alignment: .leading, spacing: 3) {
@@ -690,6 +721,86 @@ struct StalledCard: View {
             .contentShape(.rect)
         }
         .buttonStyle(RowButtonStyle())
+    }
+}
+
+/// A Waiting on you task's last message, the desktop's `TaskMessage` in a sheet.
+/// Drawn against the task's own server, so a picture loads from its machine.
+struct TaskMessageSheet: View {
+    @Environment(Store.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let task: SessionKey
+    let title: String
+    let open: () -> Void
+    /// `nil` inside `.done` is a task that has written nothing; a read that
+    /// errored or hung is `.failed`, never that.
+    private enum Read { case reading, failed, done(String?) }
+    @State private var read = Read.reading
+    @State private var tries = 0
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Group {
+                    switch read {
+                    case .reading:
+                        VStack(alignment: .leading, spacing: 10) {
+                            Capsule().fill(Theme.tertiary.opacity(0.3)).frame(width: 240, height: 12)
+                            Capsule().fill(Theme.tertiary.opacity(0.3)).frame(width: 160, height: 12)
+                        }
+                        .shimmer()
+                        .accessibilityElement()
+                        .accessibilityLabel("Loading")
+                    case .failed:
+                        VStack(alignment: .leading, spacing: Theme.Space.s) {
+                            Text("Couldn't read this task's last message.").foregroundStyle(Theme.secondary)
+                            Button("Try again") { tries += 1 }.foregroundStyle(Theme.text)
+                        }
+                        .font(Theme.Font.subhead)
+                    case .done(let text?):
+                        ReplyBubble(text: text)
+                    case .done(nil):
+                        Text("This task hasn't written anything yet.")
+                            .font(Theme.Font.subhead).foregroundStyle(Theme.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(Theme.Space.l)
+            }
+            .environment(\.imageServer, store.connection(task.server))
+            // The bot chat's viewer pages its own turn; a picture here opens on its own.
+            .environment(\.openImage, nil)
+            .navigationTitle(title.isEmpty ? "Untitled" : title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .primaryAction) {
+                    // An HStack, not a Label: a toolbar draws a Label as its icon alone.
+                    Button(action: open) {
+                        HStack(spacing: 4) {
+                            Text("Open task")
+                            Image(systemName: "arrow.up.right").font(Theme.Font.footnoteStrong.font)
+                        }
+                        .padding(.horizontal, 6)
+                    }
+                    .accessibilityLabel("Open task")
+                }
+            }
+            .background(Theme.page.ignoresSafeArea())
+        }
+        .presentationDetents([.medium, .large])
+        .presentationBackground(Theme.page)
+        .task(id: tries) {
+            read = .reading
+            do {
+                // The desktop's `READ_TIMEOUT_MS`: a hung server gives up rather than spin.
+                let got: [String: BotPreview] = try await store.call(
+                    task.server, "bot_previews", ["sessionIds": .array([.string(task.id)])], timeout: .seconds(8))
+                read = got[task.id].map { .done($0.text) } ?? .failed
+            } catch {
+                read = .failed
+            }
+        }
     }
 }
 
