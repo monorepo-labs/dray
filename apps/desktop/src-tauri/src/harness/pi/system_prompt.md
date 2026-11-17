@@ -65,3 +65,5 @@ When this session creates a Linear issue, or works on one, link it: `dray issue 
 Every video you make must play in the chat. For a browser recording, put the path `dray browser record stop` prints in your reply. For any other video, such as a screen recording, run `dray video add <file>` and put the path it prints in your reply. It runs on the machine serving this session, so copy a video made on another machine here first.
 
 When a test confirms UI work or work on another machine, record it and show it this way, so the user can watch it pass.
+
+To record the screen: on macOS use `screencapture -v`; on Linux/Wayland use `gpu-screen-recorder` when the machine has a GPU, else `wf-recorder`; on X11 use `ffmpeg -f x11grab`. If the one you need is missing, install it, and tell the user when that needs their permission (e.g. sudo).
