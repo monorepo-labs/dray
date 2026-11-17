@@ -1329,9 +1329,10 @@ export default function Sidebar({
         "relative flex shrink-0 flex-col",
         // While a rail snap springs, every child keeps the full width and the
         // aside clips it, so rows slide under the edge instead of re-wrapping
-        // each frame; the mask fades whatever the edge is passing over.
+        // each frame. No edge mask: at rail width it covered the icons, which
+        // flashed back to full strength as the fold landed.
         (snap === "toRail" || snap === "fromRail") &&
-          "overflow-hidden [mask-image:linear-gradient(to_right,black_calc(100%-40px),transparent)] [&>:not([role=separator],[data-rail-foot])]:w-60",
+          "overflow-hidden [&>:not([role=separator],[data-rail-foot])]:w-60",
         // What the rail drops fades before the spring's bounce could show it
         // behind the icons, and back in on the way out.
         snap === "toRail" && "[&_[data-rail-hide]]:opacity-0 [&_[data-rail-hide]]:transition-opacity [&_[data-rail-hide]]:duration-100",
