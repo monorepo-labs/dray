@@ -22,6 +22,13 @@ type Edge = "left" | "right";
 /// there for the default.
 const STEP_PX = 16;
 
+/// How long a snap onto or off the rail animates. Matches the aside's CSS
+/// transition, which is what actually draws it.
+const RAIL_SNAP_MS = 200;
+
+/// A width crossing onto or off the rail, while it animates.
+export type RailSnap = "toRail" | "fromRail" | null;
+
 const subscribeToResize = (fn: () => void) => {
   window.addEventListener("resize", fn);
   return () => window.removeEventListener("resize", fn);
@@ -139,7 +146,7 @@ export function useResizable({
   /// Drawn at `initial` while on the rail, without touching what is stored —
   /// for a moment that needs the full pane, like the sidebar's search field.
   widen?: boolean;
-}): { style: CSSProperties; handle: ReactNode; width: number; held: number } {
+}): { style: CSSProperties; handle: ReactNode; width: number; held: number; snap: RailSnap } {
   const read = () => readLocalStorage(storageKey, initial);
   const [stored, setStored] = useState(read);
   // The key moves under a mounted pane — the right panel follows the selected
@@ -168,6 +175,24 @@ export function useResizable({
   // reader asked for, which is why the stored width is left alone.
   const held = clamp(stored);
   const width = widen && held === rail ? clamp(initial) : held;
+
+  // Set during render, not in an effect, so the frame that changes the width is
+  // the frame that turns the transition on — a frame later and the browser has
+  // already drawn the jump. Only a rail crossing animates; an ordinary drag must
+  // follow the pointer with no lag.
+  const [last, setLast] = useState(width);
+  const [snap, setSnap] = useState<RailSnap>(null);
+  if (last !== width) {
+    setLast(width);
+    if (rail !== undefined && (last === rail) !== (width === rail)) {
+      setSnap(width === rail ? "toRail" : "fromRail");
+    }
+  }
+  useEffect(() => {
+    if (!snap) return;
+    const t = setTimeout(() => setSnap(null), RAIL_SNAP_MS);
+    return () => clearTimeout(t);
+  }, [snap]);
 
   // Published on every change and cleared on unmount, which is what a collapsed
   // sidebar is — it returns null.
@@ -255,5 +280,5 @@ export function useResizable({
     />
   );
 
-  return { style: { width }, handle, width, held };
+  return { style: { width }, handle, width, held, snap };
 }

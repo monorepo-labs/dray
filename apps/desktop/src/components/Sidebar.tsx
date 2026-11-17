@@ -1025,8 +1025,10 @@ function RailTip({
 /// The top strip's buttons, drawn as session rows: see the note where they
 /// render. The rail's icons go up to 16px, at the row's height all the same.
 const STRIP =
-  "w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50";
-const STRIP_RAIL = "justify-center px-0 [&_svg:not([class*='size-'])]:size-4";
+  "w-full justify-start px-1.5 [&_svg]:transition-[width,height] text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50";
+/// Left-aligned like the full strip, padded to centre the icon in the rail's
+/// 40px button, so a snap slides the icon a few pixels rather than jumping it.
+const STRIP_RAIL = "pr-0 pl-[11px] [&_svg:not([class*='size-'])]:size-4";
 
 export default function Sidebar({
   items,
@@ -1082,7 +1084,7 @@ export default function Sidebar({
   draftsShown,
   onToggleDrafts,
 }: SidebarProps) {
-  const { style, handle, width, held } = useResizable({
+  const { style, handle, width, held, snap } = useResizable({
     storageKey: "ade.sidebarWidth",
     initial: SIDEBAR_MIN,
     min: SIDEBAR_MIN,
@@ -1098,7 +1100,9 @@ export default function Sidebar({
     // on screen.
     pane: collapsed ? undefined : "sidebar",
   });
-  const iconOnly = width === SIDEBAR_RAIL;
+  // The full sidebar stays drawn while it folds, clipped by the narrowing
+  // aside, and turns into the rail once it lands.
+  const iconOnly = width === SIDEBAR_RAIL && snap !== "toRail";
   // A fold the search field's blur left waiting on the pointer's release.
   const pendingFold = useRef<() => void>(undefined);
   const cancelFold = () => {
@@ -1303,7 +1307,14 @@ export default function Sidebar({
 
   return (
     <aside
-      className="relative flex shrink-0 flex-col"
+      className={cn(
+        "relative flex shrink-0 flex-col",
+        // While a snap animates, every child keeps the full width and the aside
+        // clips it, so rows slide under the edge instead of re-wrapping each
+        // frame; the mask fades whatever the edge is passing over.
+        snap &&
+          "overflow-hidden transition-[width] duration-200 ease-[cubic-bezier(0.2,0,0,1)] [mask-image:linear-gradient(to_right,black_calc(100%-40px),transparent)] motion-reduce:transition-none [&>:not([role=separator])]:min-w-60",
+      )}
       style={style}
       ref={asideRef}
     >
