@@ -16,12 +16,12 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 **PR nobody need review carry `no-review` label, put on before the push so Greptile skip it.** Copy tweak, doc, prompt wording, config. Anything touching behaviour = no label, reviewed.
 
-**Default road = work → test → ready PR → `/greploop`.** No Codex reviewer sessions: that road only ran while Greptile credits were gone.
+**Default road = work → test → ready PR → his feedback → his go → `/greploop`.** He sees the work before Greptile's loop runs, not after. Pushing every feedback round and looping before he had looked only made the work longer. No Codex reviewer sessions: that road only ran while Greptile credits were gone.
 
 1. Do the work, then test it for real — run it, not just compile it. A UI change = drive the running app yourself, screenshot or record it, fix what you find ([Testing in the app](#testing-in-the-app)).
-2. Commit, push, open the PR **ready**. Greptile review it on its own.
-3. **Always run `/greploop` right after opening the PR**, unasked. It waits for Greptile's review and fixes what is real. Never post `@greptile review` — Greptile reviews every push on its own, so skip the loop's trigger step.
-4. **Inside greploop, push each round's fixes yourself and keep looping** — fix, test, commit, push, wait for the next review — until 5/5 or the loop's cap. That push is pre-approved and needs no ask. Retest a fix that touches UI the same way. Stop and wait instead when a fix changes something only a human can check (below), or when he says not to push.
+2. Commit, push, open the PR **ready**. Greptile review that first push on its own. Report: what changed, the proof (video, screenshots), and what was not tested.
+3. **No `/greploop` yet.** Wait for him to check the work. Feedback → apply it, retest, commit **locally**, report again with proof. **Never push a feedback round until he say push.**
+4. **He say final, or OK to push → push, then run `/greploop`** until 5/5 or the loop's cap, then report the PR ready to merge. From here each round's push is pre-approved: fix, test, commit, push, wait for the next review. Retest a fix that touches UI the same way. Stop and wait instead when a fix changes something only a human can check (below), or when he says not to push. Never post `@greptile review` — Greptile reviews every push on its own, so skip the loop's trigger step.
 
 **One repo, `monorepo-labs/dray`. Assign every issue to `yogesharc`.** `gh issue create --repo monorepo-labs/dray --assignee yogesharc`.
 
@@ -29,7 +29,7 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 `gh` missing or logged out → say so, then carry on with the work. Tell reader at the end which issue still want creating.
 
-**Commit, push and open the PR unasked once the work is done and tested** — the default road above — and loop Greptile to 5/5. End with a short "what changed", plus only what truly needs a human — never a list of steps to try. **Hold the PR only where he says he wants to test first**: it is his call per task, not a rule to infer. Still ask before anything rewriting history, and before a branch nobody asked for.
+**Commit, push and open the PR unasked once the work is done and tested** — the default road above — then stop for his check. Loop Greptile only after his go. End with a short "what changed" and the proof, plus only what truly needs a human — never a list of steps to try. Still ask before anything rewriting history, and before a branch nobody asked for.
 
 **Always write commit message with `caveman-commit` skill.** Invoke it, don't imitate — skill carry format and it can change under you. Every commit here, amend included.
 
