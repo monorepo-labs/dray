@@ -281,7 +281,9 @@ export default function RightPanel({
         ) : tabs.length === 1 && tabs[0] === "tasks" ? (
           // A bot's pane with nothing beside its task list: the tab's words
           // with nothing to switch to, so no fill and no weight over its count.
-          <span className="px-2 py-1 text-ui text-muted-foreground">
+          // Inset to the faces' drawn edge below rather than a tab's padding,
+          // so the label lines up with the list it heads.
+          <span className="py-1 pr-2 pl-1.5 text-ui text-muted-foreground">
             {PANEL_LABELS.tasks}
             <TabCount n={counts?.tasks} />
           </span>
