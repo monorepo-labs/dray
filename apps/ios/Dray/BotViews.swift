@@ -860,7 +860,13 @@ struct BotTasksSheet: View {
                             .multilineTextAlignment(.center).frame(maxWidth: 280)
                             .padding(.vertical, Theme.Space.xxl)
                     }
-                    ForEach(ordered, id: \.self) { key in
+                    let (active, aside) = split
+                    ForEach(active, id: \.self) { key in
+                        if let item = store.items[key] { row(key, item) }
+                    }
+                    // Set aside is a run of its own, after the desktop Tasks tab's break.
+                    if !active.isEmpty && !aside.isEmpty { Color.clear.frame(height: 16) }
+                    ForEach(aside, id: \.self) { key in
                         if let item = store.items[key] { row(key, item) }
                     }
                     if !runs.isEmpty { RunsSections(keys: runs) }
@@ -897,6 +903,12 @@ struct BotTasksSheet: View {
             return 3
         }
         return tasks.enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }.map(\.element)
+    }
+
+    private var split: (active: [SessionKey], aside: [SessionKey]) {
+        let keys = ordered
+        let aside = keys.filter { store.items[$0]?.aside == true }
+        return (keys.filter { store.items[$0]?.aside != true }, aside)
     }
 
     private func row(_ key: SessionKey, _ item: SessionItem) -> some View {
@@ -936,6 +948,7 @@ struct BotTasksSheet: View {
         }
         .buttonStyle(RowButtonStyle())
         .accessibilityIdentifier("botTask")
-        .opacity(item.aside == true ? 0.5 : 1)
+        // The list's set-aside fade: these rows start at full text, where the desktop's start muted.
+        .opacity(item.aside == true ? 0.3 : 1)
     }
 }
