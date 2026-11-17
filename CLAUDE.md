@@ -104,7 +104,7 @@ That = real entry point. `pnpm tauri` = shim ([scripts/tauri.mjs](apps/desktop/s
 **Shim also pick dev port, and it only side that can.** Vite and Tauri have to agree on one, and both start from here — so shim ask the OS for a free one (`listen(0)`), hand it to Vite as `DRAY_DEV_PORT` and to Tauri as second `--config` carrying `build.devUrl`. Fixed 1420 was hard failure before, which = one worktree's dev build refusing to start because another's already running. `strictPort: true` **stay** on Vite side: port already known free, and Vite wandering off it leave Tauri loading URL nothing serve.
 
 - `pnpm dev` — frontend only, port 1420 unless `DRAY_DEV_PORT` say otherwise. `invoke` do nothing in plain browser, so only useful for pure-CSS/layout work.
-- `pnpm build` — `tsc && vite build`. `pnpm tauri build` for bundled app.
+- `pnpm build` — `tsc && vite build`. `pnpm tauri build` for bundled app. **`tsc` here is already the native Go compiler** — TypeScript 7 is what `tsgo`/`@typescript/native-preview` shipped as, in desktop and web alike, so there is no faster checker to switch to.
 - `cd apps/desktop/src-tauri && cargo test` — Rust tests (parser + mapper + event-model compatibility, plus git and file index). Single test: `cargo test parses_complex_fixture`.
 - `cd apps/desktop/src-tauri && cargo check` — fast type check, no linking whole app.
 - `cd apps/desktop/src-tauri && cargo check --no-default-features --features serve --bin dray-serve --tests` — the headless build. **Run it after any core change**: nothing else compiles it.
