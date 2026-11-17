@@ -237,8 +237,15 @@ export function useResizable({
       chased = t;
       for (let left = dt; left > 0; left -= STEP_S) {
         const h = Math.min(STEP_S, left);
+        const before = x - t;
         v += (-STIFFNESS * (x - t) - DAMPING * (v - vt)) * h;
         x += v * h;
+        // Critical damping alone still carries a chase's speed past a pointer
+        // that stops, so a step that would cross the target lands on it.
+        if (before * (x - t) < 0) {
+          x = t;
+          v = vt;
+        }
       }
       // Ends only once it has caught the target, so handing back to the pointer
       // never jumps.
