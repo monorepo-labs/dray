@@ -125,4 +125,3 @@ final class NewSessionTests: XCTestCase {
         add(shot)
     }
 }
-// Vercel ignore-step test (#1174); reverted before merge.
