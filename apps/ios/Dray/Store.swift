@@ -94,6 +94,19 @@ final class Store {
     /// Servers whose index was read since this launch: before that, an empty list
     /// is one not read yet, never "No tasks yet".
     private(set) var listed: Set<UUID> = []
+    /// Servers whose `list_bots` came back since this launch, answered or refused.
+    private(set) var botsRead: Set<UUID> = []
+    /// Servers whose list this launch drew from the cache before any read.
+    private(set) var cached: Set<UUID> = []
+
+    /// Paired servers that have not said what they share this launch, bar one whose cache says it
+    /// shared nothing: shared machines are not in `servers` until they do, so nothing on them is counted yet.
+    private(set) var awaitingShares: Set<UUID> = []
+
+    /// Both of a server's reads are back, the index and its bots.
+    func read(_ id: UUID) -> Bool { listed.contains(id) && botsRead.contains(id) }
+    /// The list can tell a server's bot chats from its tasks: read, or drawn from the cache.
+    func known(_ id: UUID) -> Bool { cached.contains(id) || read(id) }
     /// Servers down long enough to say so (`lostAfter`), or refused outright.
     /// A quick drop — the app back from the background, a blip — says nothing.
     private(set) var lost: Set<UUID> = []
@@ -215,6 +228,9 @@ final class Store {
         bots[id] = nil
         loadErrors[id] = nil
         listed.remove(id)
+        botsRead.remove(id)
+        cached.remove(id)
+        awaitingShares.remove(id)
         lost.remove(id)
         downSince[id] = nil
     }
@@ -350,8 +366,9 @@ final class Store {
     private func loadShared(_ server: UUID) async {
         guard home == nil, servers.first(where: { $0.id == server })?.via == nil else { return }
         // A server from before sharing answers `unknown command`, and shares nothing.
-        guard let sharing: Sharing = try? await connections[server]?.call("share_machines") else { return }
-        share(server, sharing.machines)
+        let sharing: Sharing? = try? await connections[server]?.call("share_machines")
+        if let sharing { share(server, sharing.machines) }
+        awaitingShares.remove(server)
     }
 
     private func start(_ s: Server, read: (() -> (url: String, token: String)?)? = nil, client: String? = nil) {
@@ -370,6 +387,7 @@ final class Store {
         }
         c.onEvent = { [weak self] name, data in self?.handle(s.id, name, data) }
         connections[s.id] = c
+        if s.via == nil { awaitingShares.insert(s.id) }
         restoreList(s.id)
         c.resume()
     }
@@ -382,6 +400,8 @@ final class Store {
         var projects: [Project]
         var bots: [Bot]
         var previews: [String: BotPreview]?
+        /// It shared machines, which the next launch waits to hear about before trusting the rest.
+        var shares: Bool?
     }
 
     /// The phone's alone: the Island reads This Mac, which answers before a cache would.
@@ -393,6 +413,9 @@ final class Store {
         projects[id] = held.projects
         bots[id] = held.bots
         for (sid, p) in held.previews ?? [:] { previews[SessionKey(server: id, id: sid)] = p }
+        cached.insert(id)
+        // Absent from a cache older than the field, which says nothing either way.
+        if held.shares == false { awaitingShares.remove(id) }
     }
 
     /// Writes every live server's list a moment after the last change, off the main thread.
@@ -403,11 +426,13 @@ final class Store {
             try? await Task.sleep(for: .seconds(2))
             listSaving = false
             for s in live {
-                // Only what a read answered: a server not reached yet keeps its file as it was.
-                guard listed.contains(s.id) else { continue }
+                // Only what both reads answered: a server not reached yet keeps its file as it was,
+                // and a launch trusts this file to say which rows are bots.
+                guard read(s.id) else { continue }
                 let held = CachedList(items: items.filter { $0.key.server == s.id && $0.value.archived != true }.map(\.value),
                                       projects: projects[s.id] ?? [], bots: bots[s.id] ?? [],
-                                      previews: Dictionary(uniqueKeysWithValues: previews.filter { $0.key.server == s.id }.map { ($0.key.id, $0.value) }))
+                                      previews: Dictionary(uniqueKeysWithValues: previews.filter { $0.key.server == s.id }.map { ($0.key.id, $0.value) }),
+                                      shares: servers.contains { $0.via?.parent == s.id })
                 Cache.write(Cache.list(s.id)) { try JSONEncoder().encode(held) }
             }
         }
@@ -446,7 +471,9 @@ final class Store {
 
     func loadBots(_ server: UUID) async {
         // A server from before bots answers `unknown command`, and holds none.
-        guard let list: [Bot] = try? await connections[server]?.call("list_bots") else { return }
+        let list: [Bot]? = try? await connections[server]?.call("list_bots")
+        botsRead.insert(server)
+        guard let list else { return }
         bots[server] = list
         await loadPreviews(server)
     }
@@ -678,6 +705,8 @@ final class Store {
             item.hidden != true && (item.archived == true) == settled
                 && (project.map { $0 == item.project } ?? true)
                 && !(settled == false && (chats[key.server] ?? []).contains { samePath($0, item.cwd) })
+                // The index lands before the bots, and a bot's chat would draw as a task row until they do.
+                && (settled || known(key.server))
         }.map { (key: $0.key, item: $0.value) }
         return stageRuns(list) { stage($0.key, $0.item) }
     }
