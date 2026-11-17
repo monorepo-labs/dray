@@ -143,6 +143,17 @@ describe("stalledTasks", () => {
     expect(stalledTasks([row("a")], blocked, new Map(), T0 + STALL_MS, fresh)[0].kind).toBe("waiting");
   });
 
+  it("reads a draft's failing checks as the draft waiting on the reader, never a fix", () => {
+    const draft = () => pr({ isDraft: true, checksState: "FAILING", mergeStateStatus: "DRAFT" });
+    expect(stalledTasks([row("a")], draft, new Map(), T0, fresh)).toEqual([]);
+    const [s] = stalledTasks([row("a")], draft, new Map(), T0 + STALL_MS, fresh);
+    expect(s.kind).toBe("waiting");
+    expect(s.problem).toBeUndefined();
+    const conflict = () => pr({ isDraft: true, checksState: "FAILING", mergeable: "CONFLICTING" });
+    expect(stalledTasks([row("a")], conflict, new Map(), T0, fresh)[0].kind).toBe("fix");
+    expect(fixAskDone({ pr: 908, status: "checksFailing", at: T0 }, draft())).toBe(true);
+  });
+
   it("waits out the stall on a fix judged by a mark older than the task's last move", () => {
     const failing = () => pr({ checksState: "FAILING" });
     const stale = () => false;
