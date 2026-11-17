@@ -1020,9 +1020,9 @@ function RailTip({
 }
 
 /// The top strip's buttons, drawn as session rows: see the note where they
-/// render. Icons a step up from `sm`'s 14px, at the row's height all the same.
+/// render. The rail's icons go up to 18px, at the row's height all the same.
 const STRIP =
-  "w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50 [&_svg:not([class*='size-'])]:size-4";
+  "w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50";
 const STRIP_RAIL = "justify-center px-0 [&_svg:not([class*='size-'])]:size-[18px]";
 
 export default function Sidebar({
@@ -1362,7 +1362,7 @@ export default function Sidebar({
             would sit a pixel further out without it. */}
         {searchOpen ? (
           <div className="group flex h-7 w-full items-center gap-1 border border-transparent px-1.5 text-ui">
-            <Search className="size-4 shrink-0" />
+            <Search className="size-3.5 shrink-0" />
             <input
               autoFocus
               id={SEARCH_INPUT_ID}
