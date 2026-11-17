@@ -1,4 +1,4 @@
-import { ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { devRuns, DEV_RUN_STATES, setDevRunState, useDevRunState, type DevRunState } from "@/components/botRunsDev";
@@ -154,6 +154,7 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
               {open && completed.map((run) => row(run, run.lastAt))}
               {open && older?.next && (
                 <Button variant="ghost" size="xs" className="mx-1 self-start text-muted-foreground" disabled={loading} onClick={() => void more()}>
+                  <ChevronDown />
                   {loading ? "Loading…" : "Load more"}
                 </Button>
               )}
