@@ -414,7 +414,8 @@ final class Store {
         bots[id] = held.bots
         for (sid, p) in held.previews ?? [:] { previews[SessionKey(server: id, id: sid)] = p }
         cached.insert(id)
-        if held.shares != true { awaitingShares.remove(id) }
+        // Absent from a cache older than the field, which says nothing either way.
+        if held.shares == false { awaitingShares.remove(id) }
     }
 
     /// Writes every live server's list a moment after the last change, off the main thread.
