@@ -2,7 +2,8 @@ import XCTest
 
 /// #1207: a task whose PR is a draft carries the draft glyph top right, and its
 /// sheet marks the PR ready. Against a real server holding bot `DRAY_BOT` and a
-/// task of its on a real draft PR:
+/// task of its on a real draft PR with no checks (a running check swaps the
+/// Tasks row's glyph for a spinner):
 ///   TEST_RUNNER_DRAY_URL=ws://127.0.0.1:… TEST_RUNNER_DRAY_TOKEN=… TEST_RUNNER_DRAY_BOT=Scout
 /// It marks that PR ready on GitHub.
 final class DraftReadyTests: XCTestCase {
@@ -30,10 +31,9 @@ final class DraftReadyTests: XCTestCase {
         XCTAssertTrue(tasks.waitForExistence(timeout: 20), "no Tasks button")
         sleep(1)
         tasks.tap()
-        let row = app.buttons["botTask"].firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "no task row")
-        XCTAssertTrue(glyph(app, "draft").waitForExistence(timeout: 20),
-                      "the row draws no draft glyph")
+        // The row holding the draft glyph: a task asking or ready to merge sorts above it.
+        let row = app.buttons.matching(identifier: "botTask").containing(state("draft")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "no task row with a draft glyph")
         sleep(2)
         snap(app, "0-tasks")
         row.tap()
@@ -61,16 +61,15 @@ final class DraftReadyTests: XCTestCase {
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(tasks.waitForExistence(timeout: 10), "Back did not return to the bot")
         tasks.tap()
-        XCTAssertTrue(glyph(app, "open").waitForExistence(timeout: 5),
+        XCTAssertTrue(app.descendants(matching: .any).matching(state("open")).firstMatch.waitForExistence(timeout: 5),
                       "the row still reads draft")
         sleep(2)
         snap(app, "5-tasks-open")
     }
 
-    /// `PrGlyph`'s label in a given state, whatever the PR's number.
-    private func glyph(_ app: XCUIApplication, _ state: String) -> XCUIElement {
-        app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label BEGINSWITH 'Pull request #' AND label ENDSWITH %@", ", \(state)")).firstMatch
+    /// `PrGlyph`'s label in a given state, whatever the PR's number or a ", checks failing" after it.
+    private func state(_ state: String) -> NSPredicate {
+        NSPredicate(format: "label BEGINSWITH 'Pull request #' AND label CONTAINS %@", ", \(state)")
     }
 
     private func snap(_ app: XCUIApplication, _ name: String) {

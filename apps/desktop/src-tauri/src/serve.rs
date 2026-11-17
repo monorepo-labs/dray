@@ -858,6 +858,8 @@ struct Live {
     tasks: HashMap<String, Value>,
     running: std::collections::HashSet<String>,
     queued: HashMap<String, Value>,
+    /// Each session's last non-empty `session_serving`, which no event repeats.
+    serving: HashMap<String, Value>,
     /// The boat sandboxes about to stop, which only the app reads timers for.
     boat: Value,
 }
@@ -875,6 +877,8 @@ impl Live {
                     .retain(|a| !(a["sessionId"] == session.as_str() && &a["payload"]["requestId"] == id));
             }
             ("agent_event", Some("background_tasks_changed")) => {
+                // A moved set voids the verdict, on clients and here alike.
+                self.serving.remove(&session);
                 if payload["payload"]["tasks"].as_array().is_some_and(|t| t.is_empty()) {
                     self.tasks.remove(&session);
                     self.strand(&session);
@@ -887,6 +891,13 @@ impl Live {
                     self.queued.remove(&session);
                 } else {
                     self.queued.insert(session, payload.clone());
+                }
+            }
+            ("session_serving", _) => {
+                if payload["ports"].as_array().is_some_and(|p| p.is_empty()) {
+                    self.serving.remove(&session);
+                } else {
+                    self.serving.insert(session, payload.clone());
                 }
             }
             ("boat_alerts", _) => self.boat = payload["alerts"].clone(),
@@ -917,7 +928,8 @@ impl Live {
     fn payload(&self) -> Value {
         let tasks: Vec<&Value> = self.tasks.values().collect();
         let queued: Vec<&Value> = self.queued.values().collect();
-        json!({ "asks": self.asks, "tasks": tasks, "queued": queued, "boat": self.boat })
+        let serving: Vec<&Value> = self.serving.values().collect();
+        json!({ "asks": self.asks, "tasks": tasks, "queued": queued, "serving": serving, "boat": self.boat })
     }
 }
 
@@ -2249,6 +2261,19 @@ mod tests {
         assert_eq!(live.payload()["queued"][0]["queued"].as_array().unwrap().len(), 2);
         live.note("queue_changed", &json!({ "sessionId": "s", "queued": [] }));
         assert!(live.queued.is_empty());
+    }
+
+    #[test]
+    fn live_state_holds_serving_until_the_task_set_moves() {
+        let mut live = Live::default();
+        live.note("session_serving", &json!({ "sessionId": "s", "ports": [1420] }));
+        assert_eq!(live.payload()["serving"][0]["ports"][0], 1420);
+        live.note("session_serving", &json!({ "sessionId": "s", "ports": [] }));
+        assert!(live.serving.is_empty());
+        live.note("session_serving", &json!({ "sessionId": "s", "ports": [1420] }));
+        let tasks = json!({ "sessionId": "s", "payload": { "type": "background_tasks_changed", "tasks": [{}] } });
+        live.note("agent_event", &tasks);
+        assert!(live.serving.is_empty(), "a moved set voids the verdict");
     }
 
     #[tokio::test]

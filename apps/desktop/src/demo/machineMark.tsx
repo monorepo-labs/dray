@@ -49,6 +49,7 @@ const row = (item: SessionIndexItem, more: Partial<CrewRow> = {}): CrewRow => ({
   asking: false,
   unread: false,
   background: false,
+  serving: [],
   ...more,
 });
 

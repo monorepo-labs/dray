@@ -13,8 +13,13 @@ export type CrewRow = {
   /// A turn finished and nobody has read it. The sidebar's green.
   unread: boolean;
   /// No turn running, but a background shell or subagent still is: the same
-  /// set the chat's Background Tasks row counts.
+  /// set the chat's Background Tasks row counts. False where `serving` says
+  /// what is left.
   background: boolean;
+  /// No turn running, and all that is left in the background is servers, on
+  /// these ports: a dev server left up for the reader to try. The task waits
+  /// on the reader, not on work. Empty otherwise.
+  serving: readonly number[];
 };
 
 /// The live maps a row is read off.
@@ -22,7 +27,11 @@ type Live = {
   statusBySession: Record<string, SessionStatus>;
   askingSessions: ReadonlySet<string>;
   tasksBySession?: Record<string, BackgroundTask[]>;
+  /// The server's `session_serving` verdict per session.
+  servingBySession?: Record<string, readonly number[]>;
 };
+
+const NOT_SERVING: readonly number[] = [];
 
 /// Everything the selected session started, at any depth: depth-first, each
 /// level newest first. The crew column draws the rows asking.
@@ -94,12 +103,16 @@ function rowState(item: SessionIndexItem, live: Live): CrewRow {
   const status = live.statusBySession[item.sessionId] ?? item.status;
   const asking = live.askingSessions.has(item.sessionId);
   const busy = !asking && status === "in_progress";
+  const tasked = !asking && !busy && (live.tasksBySession?.[item.sessionId]?.length ?? 0) > 0;
+  const ports = live.servingBySession?.[item.sessionId];
+  const serving = tasked && ports?.length ? ports : NOT_SERVING;
   return {
     item,
     asking,
     busy,
     unread: status === "completed",
-    background: !asking && !busy && (live.tasksBySession?.[item.sessionId]?.length ?? 0) > 0,
+    background: tasked && !serving.length,
+    serving,
   };
 }
 

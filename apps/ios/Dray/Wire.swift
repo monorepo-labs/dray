@@ -232,6 +232,8 @@ struct LiveState: Decodable {
     let tasks: [AgentEvent]
     /// Every non-empty queue; absent from a server that predates `queue_changed`.
     let queued: [QueueChanged]?
+    /// Every session left only serving; absent from a server that predates `session_serving`.
+    let serving: [ServingEvent]?
     /// Null until the app first reads a sandbox's timer.
     let boat: [BoatAlert]?
 }
@@ -286,6 +288,13 @@ struct BoatAlerts: Decodable {
 struct QueueChanged: Decodable {
     let sessionId: String
     let queued: [Queued]
+}
+
+/// `session_serving`: the ports a session's background shells serve, where
+/// that is all its background work is. Empty once it is not.
+struct ServingEvent: Decodable {
+    let sessionId: String
+    let ports: [Int]
 }
 
 struct StatusEvent: Decodable {

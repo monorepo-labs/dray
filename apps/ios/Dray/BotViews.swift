@@ -590,7 +590,7 @@ extension Store {
     // when it turned ready as the desktop tracks; a PR that goes green late shows sooner.
     func stalls(_ tasks: [SessionKey], now: Date = .now) -> [Stall] {
         tasks.compactMap { key -> Stall? in
-            guard let item = items[key], !item.busy, !isAsking(key), (self.tasks[key] ?? []).isEmpty, item.aside != true,
+            guard let item = items[key], !item.busy, !isAsking(key), !inBackground(key), item.aside != true,
                   let touched = parseDate(item.modified), now.timeIntervalSince(touched) >= stallAfter else { return nil }
             let pr = prMark(key, item)
             // A draft's red check is stale by design, so it waits on the reader like any draft.
@@ -904,7 +904,7 @@ struct BotTasksSheet: View {
             if verdictOf(pr) == .ready { return 1 }
             if ["checksRunning", "needsReview", "unknown"].contains(prStatus(pr)) { return 2 }
         }
-        if item.busy || !(store.tasks[key] ?? []).isEmpty { return 4 }
+        if item.busy || store.inBackground(key) { return 4 }
         return 3
     }
 
@@ -945,7 +945,7 @@ struct BotTasksSheet: View {
             HStack(spacing: 10) {
                 Group {
                     if item.busy && !asking { Orb(.working) }
-                    else if !(store.tasks[key] ?? []).isEmpty && !asking { Orb(.background) }
+                    else if store.inBackground(key) && !asking { Orb(.background) }
                     else { BotFace(seed: key.id, size: 22) }
                 }
                 .frame(width: 22, height: 22)
