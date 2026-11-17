@@ -52,6 +52,7 @@ export const PANEL_TABS = [
   "issue",
   "docs",
   "plan",
+  "attachments",
 ] as const;
 
 export type PanelTab = (typeof PANEL_TABS)[number];
@@ -78,6 +79,9 @@ export const PANEL_LABELS: Record<PanelTab, string> = {
   // Singular: a session is working to one plan, and putting up a second
   // replaces the first.
   plan: "Plan",
+  // Never drawn as a tab: a bot's pane opens it from its own button, so
+  // `tabOrder` leaves it out and the strip names it instead.
+  attachments: "Attachments",
 };
 
 /// Which tabs exist, and in what order.

@@ -255,7 +255,7 @@ export function segmentMedia(
 /// `byYou` is the reader's own attachment, against anything the agent produced.
 export type SessionMedia = Media & { byYou: boolean };
 
-/// Every picture and recording in a session, newest first, for the More tab's
+/// Every picture and recording in a session, newest first, for the
 /// attachment grid: what the reader attached and what the agent produced.
 /// Main thread only — a subagent's screenshots are its own working material.
 export function sessionMedia(events: AgentEvent[]): SessionMedia[] {
@@ -287,17 +287,6 @@ export function sessionMedia(events: AgentEvent[]): SessionMedia[] {
     } else if (payload.type === "assistant_text") scan(payload.text);
   }
   return media.reverse();
-}
-
-/// The media a bot's chat draws nowhere, so the More tab is still their home:
-/// tool-result screenshots and task reports' pictures, which the chat hides,
-/// and a recording no reply names. The reader's own pictures and the videos
-/// a reply names play in the chat.
-export function hiddenInBotChat(events: AgentEvent[], media: SessionMedia[]): SessionMedia[] {
-  const said = events
-    .flatMap(({ subagent, payload }) => (!subagent && payload.type === "assistant_text" ? [payload.text] : []))
-    .join("\n");
-  return media.filter((m) => ("video" in m ? !said.includes(m.video) : !m.byYou));
 }
 
 export type Turn = {

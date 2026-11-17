@@ -21,6 +21,7 @@ import type { SettingsTab } from "@/components/SettingsPage";
 import WorktreeDialog, { type WorktreePrompt } from "@/components/WorktreeDialog";
 import { useInstallWithServers } from "@/components/ServerUpdateDialog";
 import MorePanel from "@/components/MorePanel";
+import AttachmentGrid, { AttachmentsButton, AttachmentsPlacePicker, useAttachmentsPlace } from "@/components/AttachmentsPanel";
 import PlanPanel from "@/components/PlanPanel";
 
 // Nothing here is on first paint, so each is its own chunk, fetched the first
@@ -252,7 +253,7 @@ import {
 import { worktreeNoticeDetail } from "@/lib/worktree";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import { useHandoffConfig } from "@/hooks/useHandoffConfig";
-import { buildTranscript, canOpenTab, hiddenInBotChat, opensTab, runningRuns, sessionMedia } from "@/lib/transcript";
+import { buildTranscript, canOpenTab, opensTab, runningRuns, sessionMedia } from "@/lib/transcript";
 import SubagentView from "@/components/SubagentView";
 import { cn } from "@/lib/utils";
 import { onUnhandledEscape } from "@/lib/escape";
@@ -1669,16 +1670,13 @@ function App() {
 
   // A live background task counts even where no run is built for it yet, and a
   // task list counts on its own — the tab is a catch-all, so any one of its
-  // sections having something is enough to draw it. In a bot chat only media
-  // the chat itself hides counts: what plays there would put a row of tabs
-  // over the task list for nothing.
+  // sections having something is enough to draw it. A bot chat's media opens
+  // from its own button instead, so it never counts there.
   const hasMoreTab =
     panelRuns.length > 0 ||
     backgroundTasks.length > 0 ||
     sessionTodos !== null ||
-    (selectedBot
-      ? hiddenInBotChat(selectedSession?.events ?? [], sessionAttachments).length > 0
-      : sessionAttachments.length > 0);
+    (!selectedBot && sessionAttachments.length > 0);
 
   const taskSources = useRef({ crew, sessionIndexItems });
   taskSources.current = { crew, sessionIndexItems };
@@ -1821,7 +1819,24 @@ function App() {
   // still names a tab this session draws, and otherwise the derived default
   // stands in. Not written back, so switching to a session without a PR keeps
   // the reader's pick for when they switch to one that has it.
-  const activeTab: PanelTab = panelTab && tabs.includes(panelTab) ? panelTab : selectedBot ? "tasks" : defaultTab;
+  const activeTab: PanelTab =
+    panelTab && (tabs.includes(panelTab) || (panelTab === "attachments" && selectedBot))
+      ? panelTab
+      : selectedBot
+        ? "tasks"
+        : defaultTab;
+  // A bot's attachments button: where it stands, and what pressing it does.
+  // Off goes back to Tasks rather than shutting the pane, since the button
+  // swaps what the pane shows.
+  const attachmentsPlace = useAttachmentsPlace();
+  const attachmentsShown = panelShown && activeTab === "attachments";
+  const toggleAttachments = (open: boolean) =>
+    open ? showPanel("attachments") : setPanelTab("tasks");
+  // The whole chat, newest session first, since an agent switch splits it.
+  const botLogs = useMemo(
+    () => (selectedBot && selectedSession ? [selectedSession, ...[...earlier].reverse()] : []),
+    [selectedBot, selectedSession, earlier],
+  );
 
 
   // Drops the Browser view's claim, `toggleSidebar`'s reason: a pane moved by
@@ -3836,6 +3851,9 @@ function App() {
                         ? openFiles.find((f) => f.path === activeFile)
                         : litPickFile}
                   />
+                  {selectedBot && attachmentsPlace === "titlebar" && (
+                    <AttachmentsButton open={attachmentsShown} onToggle={toggleAttachments} place="titlebar" />
+                  )}
                   {/* A pull request, open or merged, stands in for the toggle and opens
                       the pane on itself; the pane's own tabs are inside it. */}
                   {prFace ? (
@@ -3924,6 +3942,13 @@ function App() {
             widthKey={shownSession.sessionId}
             refresh={panelRefresh}
             cwd={shownSession.cwd}
+            heading={activeTab === "attachments" && tabs.length === 1 ? "Attachments" : undefined}
+            actions={
+              selectedBot &&
+              attachmentsPlace !== "titlebar" && (
+                <AttachmentsButton open={activeTab === "attachments"} onToggle={toggleAttachments} place={attachmentsPlace} />
+              )
+            }
           >
             <TabBody active={activeTab === "changes"}>
               <MountOnce when={panelShown && activeTab === "changes"}>
@@ -3953,8 +3978,7 @@ function App() {
               <MorePanel
                 todos={sessionTodos}
                 live={busy}
-                media={sessionAttachments}
-                sessionId={shownSession.sessionId}
+                attachments={!selectedBot && selectedSession && sessionAttachments.length > 0 ? selectedSession : null}
                 subagents={{
                   runs: panelRuns,
                   selectedId: selectedSubagentId,
@@ -3965,6 +3989,12 @@ function App() {
                   onStopTask: handleStopTask,
                 }}
               />
+            </TabBody>
+            <TabBody active={activeTab === "attachments"}>
+              <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+                {botLogs.length > 0 && <AttachmentGrid logs={botLogs} />}
+                <AttachmentsPlacePicker />
+              </div>
             </TabBody>
             <TabBody active={hasPrTab && activeTab === "pr"}>
               <MountOnce when={panelShown && hasPrTab && activeTab === "pr"}>
