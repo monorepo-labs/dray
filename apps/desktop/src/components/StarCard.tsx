@@ -48,10 +48,7 @@ export default function StarCard() {
         </span>
       ) : (
         <>
-          <span className="flex gap-1.5 px-3 pt-2.5 text-ui font-medium text-foreground">
-            <span aria-hidden className="flex h-[1lh] shrink-0 items-center">
-              <StarIcon className="size-3.5 text-accent-command" />
-            </span>
+          <span className="px-3 pt-2.5 text-ui font-medium text-balance text-foreground">
             Liking Dray so far? A star would help us.
           </span>
           <div className="grid grid-cols-2 gap-1.5 p-2.5">
@@ -59,6 +56,7 @@ export default function StarCard() {
               Not now
             </Button>
             <Button size="sm" disabled={phase === "starring"} onClick={() => void star()}>
+              <StarIcon data-icon="inline-start" aria-hidden />
               {phase === "starring" ? "Starring…" : "Star"}
             </Button>
           </div>
