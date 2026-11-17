@@ -2016,7 +2016,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         reopen_pr(cwd: String, number: u64) => github::reopen_pr(cwd, number).await;
         mark_pr_ready(cwd: String, number: u64) => github::mark_pr_ready(cwd, number).await;
         recheck_gh() => ok(github::recheck_gh().await);
-        can_merge_repo(cwd: String) => ok(github::can_merge_repo(cwd).await);
+        merge_access(cwd: String) => ok(github::merge_access(cwd).await);
         get_integrations() => ok(issues::get_integrations().await);
         github_repo(cwd: String) => ok(issues::github_repo(cwd).await);
         connect_linear(key: String) => issues::connect_linear(key).await;

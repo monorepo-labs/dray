@@ -205,7 +205,7 @@ import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, prRepoSlug, sessionBranch, slugKey } from "@/lib/pr";
 import { holdSettle } from "@/lib/heldFlags";
-import { mergeBlock, readLogin, useMergeAccess } from "@/lib/mergeAccess";
+import { confirmMerge, mergeBlock, readLogin, useMergeAccess } from "@/lib/mergeAccess";
 import { keptRepo } from "@/lib/serverCache";
 import { botAt, botBrowser, botChat, botEntries, botSession, greetingOf, inBotTree, listenForBots, readPreviews, refreshBots, serverOfBot, useBots } from "@/lib/bots";
 import NewBotDialog from "@/components/NewBotDialog";
@@ -3362,8 +3362,7 @@ function App() {
   /// A task row's Merge: from its own checkout, or by its GitHub repo through
   /// This Mac while its machine is down, which the merge never needed.
   const mergeRow = async (row: CrewRow, pr: PrMark, method: MergeMethod) => {
-    const blocked = taskMergeBlock(serverOfPath(row.item.cwd), pr.url);
-    if (blocked) throw new Error(blocked);
+    await taskMergeConfirm(serverOfPath(row.item.cwd), pr.url);
     const repo = shownOffline(serverOfPath(row.item.cwd)) ? prRepoSlug(pr.url) : undefined;
     return mergeTask(repo ? slugKey(repo) : row.item.projectPath, pr.number, method, row);
   };
@@ -3383,6 +3382,12 @@ function App() {
     const slug = shownOffline(server) ? prRepoSlug(url) : undefined;
     if (!slug) return null;
     return mergeBlock(server, serverName(server), slug, via, via === LOCAL ? "this machine" : serverName(via));
+  };
+  /// The same rule asked afresh right before the merge, since the merging
+  /// machine's `gh` may have signed in as someone else since it was drawn.
+  const taskMergeConfirm = async (server: ServerId, url: string | undefined, via: ServerId = LOCAL) => {
+    const slug = shownOffline(server) ? prRepoSlug(url) : undefined;
+    if (slug) await confirmMerge(server, serverName(server), slug, via, via === LOCAL ? "this machine" : serverName(via));
   };
 
   const cardsReread = useRef(new Set<string>());
@@ -3410,6 +3415,12 @@ function App() {
       return taskMergeBlock(task ? serverOfPath(task.cwd) : serverOfSession(card.taskId), card.url, via);
     },
     merge: async (card, method, settle) => {
+      const task = sessionIndexItems.find((i) => i.sessionId === card.taskId);
+      await taskMergeConfirm(
+        task ? serverOfPath(task.cwd) : serverOfSession(card.taskId),
+        card.url,
+        serverOfPath(card.projectPath),
+      );
       const item = settle
         ? (sessionIndexItems.find((i) => i.sessionId === card.taskId) ??
           (await invoke<SessionIndexItem | null>("session_index_item", { sessionId: card.taskId }).catch(() => null)))

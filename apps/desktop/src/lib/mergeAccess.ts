@@ -15,10 +15,10 @@ import type { IntegrationsView } from "@/types/events";
 /// down cannot be asked who it was.
 const logins = new Map<ServerId, string | null>();
 
-/// How long an answer stands: the backend's own cache, so a sign-in as
-/// someone else is seen within it. One GitHub could not give is asked again
-/// sooner, or a blip would hold Merge back for the whole window.
-const ACCESS_FOR = 10 * 60_000;
+/// How long an answer stands before the merging machine is asked again, login
+/// and all; the merge itself asks once more first (`confirmMerge`). One GitHub
+/// could not give is asked again sooner, or a blip would hold Merge back.
+const ACCESS_FOR = 2 * 60_000;
 const UNKNOWN_FOR = 60_000;
 
 /// Each merging machine's answer per repo, keyed `<server> <slug>`: `null`
@@ -54,17 +54,44 @@ export function seedLogin(server: ServerId, login: string | null | undefined): v
 /// `server`'s login as last heard, for its cache; `undefined` never heard.
 export const loginOf = (server: ServerId): string | null | undefined => logins.get(server);
 
+/// The merging machine's answer: its `gh` login as it is now, and that
+/// account's access. Its login replaces the one heard on connect, so an
+/// account switched since is what gets compared.
+async function readAccess(via: ServerId, slug: string): Promise<void> {
+  const cwd = via === LOCAL ? slugKey(slug) : qualify(`/${slugKey(slug)}`, via);
+  const answer = await invoke<{ login: string | null; canMerge: boolean | null }>("merge_access", { cwd }).catch(
+    () => null,
+  );
+  access.set(`${via} ${slug}`, { can: answer?.canMerge ?? null, at: Date.now() });
+  if (answer?.login) logins.set(via, answer.login);
+  bump();
+}
+
 function askAccess(via: ServerId, slug: string, key: string): void {
   if (asking.has(key)) return;
   asking.add(key);
-  const cwd = via === LOCAL ? slugKey(slug) : qualify(`/${slugKey(slug)}`, via);
-  invoke<boolean | null>("can_merge_repo", { cwd })
-    .catch(() => null)
-    .then((can) => {
-      asking.delete(key);
-      access.set(key, { can: can ?? null, at: Date.now() });
-      bump();
-    });
+  void readAccess(via, slug).finally(() => asking.delete(key));
+}
+
+/// Asks the merging machine again right before a merge it would run, login
+/// and all, and throws the reason where that answer no longer allows it.
+export async function confirmMerge(
+  server: ServerId,
+  name: string,
+  slug: string,
+  via: ServerId = LOCAL,
+  viaName = "this machine",
+): Promise<void> {
+  await readAccess(via, slug);
+  const reason = blockReason({
+    machine: name,
+    merger: viaName,
+    slug,
+    here: logins.get(via),
+    there: logins.get(server),
+    can: access.get(`${via} ${slug}`)?.can,
+  });
+  if (reason) throw new Error(reason);
 }
 
 /// Re-renders the caller whenever a login or an access answer lands.

@@ -921,27 +921,53 @@ pub async fn prs_for_branch(
     }
 }
 
-/// Each repo's answer to [`can_merge_repo`], and when it was read.
+/// Each login's answer per repo from [`can_merge_repo`], and when it was read.
 static MERGE_ACCESS: LazyLock<Mutex<HashMap<String, (std::time::Instant, bool)>>> = LazyLock::new(Default::default);
 
 /// How long a repo's access answer stands. Access changes rarely, and the card
 /// asks on every task row it draws.
 const MERGE_ACCESS_FOR: std::time::Duration = std::time::Duration::from_secs(600);
 
-/// Whether this machine's `gh` account can merge into the repo `cwd` names:
-/// write access or above (#1178). Asked before Merge is offered here for a task
-/// whose own machine is down, since a merge from here runs as whoever this
-/// `gh` is. `None` where GitHub could not be asked; that is not cached.
+/// Who this machine's `gh` is right now, and whether that account can merge
+/// into the repo `cwd` names (#1178).
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeAccess {
+    /// Read afresh on every ask, never from a cache: a merge runs as whoever
+    /// `gh` is at that moment, and an account switched since must not pass as
+    /// the one the task's machine used.
+    pub login: Option<String>,
+    /// Write access or above; `None` where GitHub could not be asked.
+    pub can_merge: Option<bool>,
+}
+
+/// [`MergeAccess`] for the repo `cwd` names. Asked before Merge is offered for
+/// a task whose own machine is down, since that merge runs as this `gh`. The
+/// permission is cached per login and repo, so a sign-in as someone else asks
+/// again; a failed ask is not cached.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn can_merge_repo(cwd: String) -> Option<bool> {
-    let slug = match slug_of(&cwd) {
-        Some(slug) => slug.to_string(),
-        None => {
-            let (owner, name) = repo_slug(&cwd).await.ok()?;
-            format!("{owner}/{name}")
-        }
+pub async fn merge_access(cwd: String) -> MergeAccess {
+    let Some(slug) = (match slug_of(&cwd) {
+        Some(slug) => Some(slug.to_string()),
+        None => repo_slug(&cwd).await.ok().map(|(owner, name)| format!("{owner}/{name}")),
+    }) else {
+        return MergeAccess::default();
     };
-    if let Some((at, can)) = MERGE_ACCESS.lock().await.get(&slug) {
+    let key = format!("{SLUG_PREFIX}{slug}");
+    let login = gh(&key, &["api", "user", "--jq", ".login"])
+        .await
+        .ok()
+        .map(|out| out.trim().to_string())
+        .filter(|login| !login.is_empty());
+    let Some(who) = login.clone() else { return MergeAccess::default() };
+    let can_merge = can_merge_repo(&slug, &who).await;
+    MergeAccess { login, can_merge }
+}
+
+/// Whether `login`, this `gh`'s account, can merge into `slug`.
+async fn can_merge_repo(slug: &str, login: &str) -> Option<bool> {
+    let cached = format!("{login}\n{slug}");
+    if let Some((at, can)) = MERGE_ACCESS.lock().await.get(&cached) {
         if at.elapsed() < MERGE_ACCESS_FOR {
             return Some(*can);
         }
@@ -962,7 +988,7 @@ pub async fn can_merge_repo(cwd: String) -> Option<bool> {
         Err(e) if e.contains("HTTP 404") => false,
         Err(_) => return None,
     };
-    MERGE_ACCESS.lock().await.insert(slug, (std::time::Instant::now(), can));
+    MERGE_ACCESS.lock().await.insert(cached, (std::time::Instant::now(), can));
     Some(can)
 }
 
