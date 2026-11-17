@@ -16,12 +16,14 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 **PR nobody need review carry `no-review` label, put on before the push so Greptile skip it.** Copy tweak, doc, prompt wording, config. Anything touching behaviour = no label, reviewed.
 
-**Default road = work → test → ready PR → `/greploop`.** No Codex reviewer sessions: that road only ran while Greptile credits were gone.
+**Default road = work → test → draft PR → his feedback → his go → ready → `/greploop`.** He sees the work before Greptile runs, not after. Draft because an open ready PR make Dray post a merge card and "ready to merge" nudges before he had looked or Greptile had run. No Codex reviewer sessions: that road only ran while Greptile credits were gone.
 
-1. Do the work, then test it for real — run it, not just compile it. A UI change = drive the running app yourself, screenshot or record it, fix what you find ([Testing in the app](#testing-in-the-app)).
-2. Commit, push, open the PR **ready**. Greptile review it on its own.
-3. **Always run `/greploop` right after opening the PR**, unasked. It waits for Greptile's review and fixes what is real. Never post `@greptile review` — Greptile reviews every push on its own, so skip the loop's trigger step.
-4. **Inside greploop, push each round's fixes yourself and keep looping** — fix, test, commit, push, wait for the next review — until 5/5 or the loop's cap. That push is pre-approved and needs no ask. Retest a fix that touches UI the same way. Stop and wait instead when a fix changes something only a human can check (below), or when he says not to push.
+1. Do the work, then test it for real — run it, not just compile it. Tests = `pnpm test:affected`, never the whole of every suite. A UI change = drive the running app yourself, screenshot or record it, fix what you find ([Testing in the app](#testing-in-the-app)).
+2. Commit, push, open the PR as a **draft** (`gh pr create --draft`). Report: what changed, the proof (video, screenshots), and what was not tested. Then wait.
+3. Feedback → apply it, retest, commit **locally**, report again with proof. **Push nothing until he say final.**
+4. **He say final → push, `gh pr ready`, then run `/greploop`** until 5/5 or the loop's cap, then report the PR ready to merge. Marking it ready is what start Greptile's review. From here each round's push is pre-approved: fix, test, commit, push, wait for the next review. Retest a fix that touches UI the same way. Stop and wait instead when a fix changes something only a human can check (below), or when he says not to push. Never post `@greptile review` — Greptile reviews every push to a ready PR on its own, so skip the loop's trigger step.
+
+**Nothing for him to look at = no wait.** Backend or data fix, tooling, no UI change: open the PR ready and run `/greploop` right away.
 
 **One repo, `monorepo-labs/dray`. Assign every issue to `yogesharc`.** `gh issue create --repo monorepo-labs/dray --assignee yogesharc`.
 
@@ -29,7 +31,7 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 `gh` missing or logged out → say so, then carry on with the work. Tell reader at the end which issue still want creating.
 
-**Commit, push and open the PR unasked once the work is done and tested** — the default road above — and loop Greptile to 5/5. End with a short "what changed", plus only what truly needs a human — never a list of steps to try. **Hold the PR only where he says he wants to test first**: it is his call per task, not a rule to infer. Still ask before anything rewriting history, and before a branch nobody asked for.
+**Commit, push and open the PR unasked once the work is done and tested** — draft, the default road above — then stop for his check. Mark it ready and loop Greptile only after his go. End with a short "what changed" and the proof, plus only what truly needs a human — never a list of steps to try. Still ask before anything rewriting history, and before a branch nobody asked for.
 
 **Always write commit message with `caveman-commit` skill.** Invoke it, don't imitate — skill carry format and it can change under you. Every commit here, amend included.
 
@@ -103,6 +105,7 @@ That = real entry point. `pnpm tauri` = shim ([scripts/tauri.mjs](apps/desktop/s
 
 **Shim also pick dev port, and it only side that can.** Vite and Tauri have to agree on one, and both start from here — so shim ask the OS for a free one (`listen(0)`), hand it to Vite as `DRAY_DEV_PORT` and to Tauri as second `--config` carrying `build.devUrl`. Fixed 1420 was hard failure before, which = one worktree's dev build refusing to start because another's already running. `strictPort: true` **stay** on Vite side: port already known free, and Vite wandering off it leave Tauri loading URL nothing serve.
 
+- `pnpm test:affected` — **the test step**, run from anywhere in the repo: only the suites this branch's changes against `origin/main` can reach, uncommitted files included ([test-affected.mjs](scripts/test-affected.mjs)). A changed crate runs `cargo test` whole, and so does every crate depending on it by `path` — bar `apps/gpui`, an unshipped experiment it never runs; vitest runs `related` on the changed files, or whole when one was deleted or renamed; `apps/web` runs whole when touched. A file read by path rather than imported (`include_str!`, a fixture a test opens) counts against whatever names it. A root config or lockfile, or an app's own top-level config, runs everything. `--dry-run` prints the plan. **`--full` runs every suite, and is the rule before a release.**
 - `pnpm dev` — frontend only, port 1420 unless `DRAY_DEV_PORT` say otherwise. `invoke` do nothing in plain browser, so only useful for pure-CSS/layout work.
 - `pnpm build` — `tsc && vite build`. `pnpm tauri build` for bundled app. **`tsc` here is already the native Go compiler** — TypeScript 7 is what `tsgo`/`@typescript/native-preview` shipped as, in desktop and web alike, so there is no faster checker to switch to.
 - `cd apps/desktop/src-tauri && cargo test` — Rust tests (parser + mapper + event-model compatibility, plus git and file index). Single test: `cargo test parses_complex_fixture`.

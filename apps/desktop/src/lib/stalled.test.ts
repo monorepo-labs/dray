@@ -87,6 +87,15 @@ describe("stalledTasks", () => {
     expect(s.since).toBe(turned);
   });
 
+  // A draft waits on the reader's look, so the bot hears "waiting", never "ready to merge".
+  it("never calls a draft PR ready, even once it is clean", () => {
+    const draft = () => pr({ isDraft: true, mergeStateStatus: "DRAFT" });
+    const [s] = stalledTasks([row("a")], draft, new Map(), T0 + STALL_MS, fresh);
+    expect(s.kind).toBe("waiting");
+    const [clean] = stalledTasks([row("a")], () => pr({ isDraft: true }), new Map(), T0 + STALL_MS, fresh);
+    expect(clean.kind).toBe("waiting");
+  });
+
   it("keeps a ready PR on the card, checking, while GitHub recomputes it", () => {
     const seen = new Map<string, number>();
     const [ready] = stalledTasks([row("a")], () => pr(), seen, T0 + STALL_MS, fresh);

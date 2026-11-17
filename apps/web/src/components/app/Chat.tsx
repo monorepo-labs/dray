@@ -162,6 +162,7 @@ export function Composer({
   agent,
   model,
   effort,
+  picker,
   mode,
   context = 0.3,
   trailing,
@@ -189,11 +190,15 @@ export function Composer({
   /// The harness's brand glyph, drawn at `size-3.5` before the model's name.
   /// A slot rather than a table: the site already owns those marks.
   agent?: ReactNode;
-  model: string;
+  model?: string;
   effort?: string;
-  mode: string;
-  /// How full the ring is drawn, 0–1. Ignored where `trailing` stands in.
-  context?: number;
+  /// A live model picker in the drawn label's place, where the visitor can open it.
+  picker?: ReactNode;
+  /// The stance. A bot runs on Auto and draws none, as the app's does.
+  mode?: string;
+  /// How full the ring is drawn, 0–1, or `null` for no ring: a bot chat has
+  /// none. Ignored where `trailing` stands in.
+  context?: number | null;
   /// Takes the ring's place at the row's right end.
   trailing?: ReactNode;
   /// The box's corner. The app's own is `rounded-2xl`; a composer drawn
@@ -256,21 +261,27 @@ export function Composer({
 
             {/* Effort is a qualifier on the model, not part of its name, so it
                 is held back a step rather than reading as one long label. */}
-            <span className="flex h-7 shrink-0 items-center gap-1 rounded-[min(var(--radius-md),12px)] px-1.5 text-ui font-medium text-muted-foreground">
-              {agent}
-              <span>{model}</span>
-              {effort && <span className="text-muted-foreground/60">{effort}</span>}
-            </span>
+            {picker ?? (
+              <span className="flex h-7 shrink-0 items-center gap-1 rounded-[min(var(--radius-md),12px)] px-1.5 text-ui font-medium text-muted-foreground">
+                {agent}
+                <span>{model}</span>
+                {effort && <span className="text-muted-foreground/60">{effort}</span>}
+              </span>
+            )}
 
-            <span className="flex h-7 shrink-0 items-center rounded-[min(var(--radius-md),12px)] px-1.5 text-ui font-medium text-muted-foreground">
-              {mode}
-            </span>
+            {mode && (
+              <span className="flex h-7 shrink-0 items-center rounded-[min(var(--radius-md),12px)] px-1.5 text-ui font-medium text-muted-foreground">
+                {mode}
+              </span>
+            )}
 
             {/* `ml-auto` rather than a spacer, so a long branch name still gets
                 the whole middle of the row. */}
-            <div className="ml-auto flex items-center">
-              {trailing ?? <ContextRing fraction={context} />}
-            </div>
+            {(trailing || context !== null) && (
+              <div className="ml-auto flex items-center">
+                {trailing ?? <ContextRing fraction={context ?? 0} />}
+              </div>
+            )}
           </div>
         </div>
         )}

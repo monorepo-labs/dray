@@ -1942,17 +1942,18 @@ async fn read_session_page(session_id: &str, end: Option<u64>, turns: u32) -> Re
     };
     let len = file.metadata().await?.len();
 
-    read_page(&mut file, end.map_or(len, |end| end.min(len)), turns, 256 * 1024).await
+    read_page(session_id, &mut file, end.map_or(len, |end| end.min(len)), turns, 256 * 1024).await
 }
 
 async fn read_page(
+    session_id: &str,
     file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
     end: u64,
     turns: u32,
     chunk: u64,
 ) -> Result<SessionPage> {
     let cut = |buf: &[u8], at_top: bool| turn_cut(buf, at_top, turns.max(1)).or(at_top.then_some(0));
-    let (events, begins) = read_back(file, end, chunk, cut).await?.unwrap_or_default();
+    let (events, begins) = read_back(session_id, file, end, chunk, cut).await?.unwrap_or_default();
 
     Ok(SessionPage { events, older_before: (begins > 0).then_some(begins) })
 }
@@ -1961,6 +1962,7 @@ async fn read_page(
 /// in what is in hand to start, and parses only from there. `None` where `cut`
 /// finds nothing all the way to the top.
 async fn read_back(
+    session_id: &str,
     file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
     end: u64,
     mut chunk: u64,
@@ -1988,14 +1990,42 @@ async fn read_back(
         }
     };
 
-    let events = std::str::from_utf8(&buf[cut..])
-        .context("malformed session file")?
-        .lines()
-        .map(serde_json::from_str::<AgentEvent>)
-        .collect::<Result<Vec<_>, _>>()
-        .context("malformed session file")?;
+    Ok(Some((parse_log(session_id, &buf[cut..]), start + cut as u64)))
+}
 
-    Ok(Some((events, start + cut as u64)))
+/// Every event in a stretch of log, skipping lines that hold none rather than
+/// failing the read: one torn line must never make a whole chat unopenable.
+fn parse_log(session_id: &str, buf: &[u8]) -> Vec<AgentEvent> {
+    let mut skipped = 0;
+    let events = buf
+        .split(|&b| b == b'\n')
+        .filter(|line| !line.trim_ascii().is_empty())
+        .filter_map(|line| {
+            let event = parse_line(line);
+            skipped += usize::from(event.is_none());
+            event
+        })
+        .collect();
+    if skipped > 0 {
+        eprintln!("[session log] {session_id}: skipped {skipped} unreadable line(s)");
+    }
+    events
+}
+
+/// One log line read as `T`, recovering the event a torn line carries.
+///
+/// A process killed mid-append leaves a fragment with no newline, and the next
+/// append used to land on the same line (`…"subagent":null{"id":…`). Every
+/// event opens with `{"id":"`, which can only be the log's own structure since
+/// quotes inside strings are escaped, so the event is the first such suffix
+/// that parses whole. A fragment alone parses as nothing.
+fn parse_line<T: serde::de::DeserializeOwned>(line: &[u8]) -> Option<T> {
+    const OPEN: &[u8] = br#"{"id":""#;
+    serde_json::from_slice(line).ok().or_else(|| {
+        (1..line.len())
+            .filter(|&at| line[at..].starts_with(OPEN))
+            .find_map(|at| serde_json::from_slice(&line[at..]).ok())
+    })
 }
 
 /// The newest whole line in `buf` that `matches`, as its start and its end
@@ -2035,9 +2065,7 @@ fn after_held(buf: &[u8], at_top: bool, held: &HashSet<String>) -> Option<usize>
     struct Line {
         id: String,
     }
-    newest_line(buf, at_top, |line| {
-        serde_json::from_slice::<Line>(line).is_ok_and(|line| held.contains(&line.id))
-    })
+    newest_line(buf, at_top, |line| parse_line::<Line>(line).is_some_and(|line| held.contains(&line.id)))
     .map(|(_, end)| end)
 }
 
@@ -2063,7 +2091,7 @@ async fn read_since(session_id: &str, held: HashSet<String>) -> Result<Option<Ve
         Err(e) => return Err(e).context("could not open session file"),
     };
     let len = file.metadata().await?.len();
-    let found = read_back(&mut file, len, 64 * 1024, |buf, at_top| after_held(buf, at_top, &held)).await?;
+    let found = read_back(session_id, &mut file, len, 64 * 1024, |buf, at_top| after_held(buf, at_top, &held)).await?;
 
     Ok(found.map(|(events, _)| events))
 }
@@ -2087,11 +2115,9 @@ fn opens_turn(line: &[u8]) -> bool {
         queued: bool,
     }
 
-    let Ok(line) = std::str::from_utf8(line) else {
-        return false;
-    };
-    line.contains(r#""type":"user_message""#)
-        && serde_json::from_str::<Line>(line).is_ok_and(|line| {
+    const NEEDLE: &[u8] = br#""type":"user_message""#;
+    line.windows(NEEDLE.len()).any(|w| w == NEEDLE)
+        && parse_line::<Line>(line).is_some_and(|line| {
             line.subagent.is_none() && line.payload.kind == "user_message" && !line.payload.queued
         })
 }
@@ -2101,19 +2127,13 @@ fn opens_turn(line: &[u8]) -> bool {
 pub async fn list_session_events(session_id: &str) -> Result<Vec<AgentEvent>> {
     let path = get_session_path(session_id).await?;
 
-    let buffer = match fs::read_to_string(&path).await {
+    let buffer = match fs::read(&path).await {
         Ok(buf) => buf,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e).context("could not open session file"),
     };
 
-    let events = buffer
-        .lines()
-        .map(serde_json::from_str::<AgentEvent>)
-        .collect::<Result<Vec<_>, _>>()
-        .context("malformed session file")?;
-
-    Ok(events)
+    Ok(parse_log(session_id, &buffer))
 }
 
 /// Copies a session's log onto a new id, repointing every archived image at the
@@ -2246,8 +2266,8 @@ pub async fn append_session_event(session_id: &str, event: AgentEvent) -> Result
 /// `line` onto `path`, creating `dir` only when the open finds it missing, as
 /// `get_sessions_dir` would have before every append.
 fn append_line(dir: &Path, path: &Path, line: &[u8]) -> Result<()> {
-    use std::io::Write;
-    let open = || std::fs::OpenOptions::new().create(true).append(true).open(path);
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let open = || std::fs::OpenOptions::new().read(true).create(true).append(true).open(path);
     let mut file = match open() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             std::fs::create_dir_all(dir)
@@ -2257,6 +2277,15 @@ fn append_line(dir: &Path, path: &Path, line: &[u8]) -> Result<()> {
         opened => opened,
     }
     .context("failed to open session file")?;
+    // A process killed mid-append leaves a line with no newline; writing on
+    // after it glues this event onto the fragment.
+    let mut last = [b'\n'];
+    if file.seek(SeekFrom::End(-1)).is_ok() {
+        file.read_exact(&mut last).context("failed to read session file")?;
+    }
+    if last[0] != b'\n' {
+        file.write_all(b"\n").context("failed to write session file")?;
+    }
     file.write_all(line).context("failed to write session file")
 }
 
@@ -2360,9 +2389,8 @@ fn max_seq_of(mut file: impl std::io::Read) -> std::io::Result<Option<u64>> {
                 continue;
             }
         };
-        let text = std::str::from_utf8(&buf[..whole])
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        max = max.max(max_seq(text));
+        // Lossy, since a write cut mid-character must not block a resume.
+        max = max.max(max_seq(&String::from_utf8_lossy(&buf[..whole])));
         if read == 0 {
             return Ok(max);
         }
@@ -2389,7 +2417,7 @@ fn max_seq(buf: &str) -> Option<u64> {
     }
 
     buf.lines()
-        .filter_map(|line| serde_json::from_str::<SeqLine>(line).ok())
+        .filter_map(|line| parse_line::<SeqLine>(line.as_bytes()))
         .map(|line| line.seq)
         .max()
 }
@@ -2438,7 +2466,25 @@ mod tests {
         let big = (0..40_000).map(|seq| format!(r#"{{"seq":{seq},"payload":{{"pad":"{}"}}}}"#, "x".repeat(seq % 90))).collect::<Vec<_>>().join("\n");
         assert_eq!(max_seq_of(big.as_bytes()).unwrap(), max_seq(&big));
         assert_eq!(max_seq_of(&b""[..]).unwrap(), None);
-        assert_eq!(max_seq_of(&b"{\"seq\":1}\n\xff\n"[..]).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(max_seq_of(&b"{\"seq\":1}\n\xff\n{\"seq\":2}\n"[..]).unwrap(), Some(2));
+    }
+
+    /// An append after a write cut short starts a line of its own, and an
+    /// append onto a whole line or an empty file adds no blank one.
+    #[test]
+    fn an_append_after_a_torn_line_starts_a_new_one() {
+        let dir = std::env::temp_dir().join(format!("dray-torn-{}", Uuid::now_v7()));
+        let path = dir.join("s.jsonl");
+        append_line(&dir, &path, b"one\n").unwrap();
+        append_line(&dir, &path, b"two\n").unwrap();
+        std::fs::write(&path, b"one\ntw").unwrap();
+        append_line(&dir, &path, b"three\n").unwrap();
+        append_line(&dir, &path, b"four\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\ntw\nthree\nfour\n");
+        std::fs::write(&path, b"").unwrap();
+        append_line(&dir, &path, b"five\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "five\n");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// An append after the sessions directory went away recreates it and the
@@ -3766,7 +3812,7 @@ mod page_tests {
         let mut end = log.len() as u64;
         let mut pages = 0;
         loop {
-            let page = read_page(&mut file, end, 2, 7).await.unwrap();
+            let page = read_page("s", &mut file, end, 2, 7).await.unwrap();
             pages += 1;
             let mut these: Vec<u64> = page.events.iter().map(|e| e.seq).collect();
             these.extend(seqs);
@@ -3793,7 +3839,7 @@ mod page_tests {
             let held: HashSet<String> = held.iter().cloned().collect();
             let len = log.len() as u64;
             async move {
-                read_back(&mut file, len, 7, |buf, top| after_held(buf, top, &held))
+                read_back("s", &mut file, len, 7, |buf, top| after_held(buf, top, &held))
                     .await
                     .unwrap()
                     .map(|(events, _)| events.iter().map(|e| e.seq).collect::<Vec<_>>())
@@ -3803,5 +3849,53 @@ mod page_tests {
         assert_eq!(since(&[id(&events[1]), id(&events[3]), "unlogged".into()]).await, Some(vec![4, 5]));
         assert_eq!(since(&[id(&events[5])]).await, Some(vec![]));
         assert_eq!(since(&["unlogged".into()]).await, None);
+    }
+
+    /// A log as a server killed mid-append leaves it: a line cut off with the
+    /// next event glued on, one cut inside a character, and a fragment at the
+    /// end. Every reader keeps each whole event, glued ones included.
+    #[tokio::test]
+    async fn torn_lines_cost_only_themselves() {
+        // `json!` sorts keys; the log is written in field order, `id` first.
+        let real = |line: String| {
+            let event: AgentEvent = serde_json::from_str(&line).unwrap();
+            format!("{}\n", serde_json::to_string(&event).unwrap())
+        };
+        let prompt = |seq| real(prompt(seq, false));
+        let text = |seq| real(text(seq, false));
+        let torn = |line: String, at: usize| line[..at].as_bytes().to_vec();
+        let cut_prompt = prompt(2);
+        let cut_prompt = torn(cut_prompt.clone(), cut_prompt.find(r#""subagent":null"#).unwrap() + 15);
+        let wide = real(line(5, false, serde_json::json!({ "type": "assistant_text", "text": "é ✓ done" })));
+        let mut cut_wide = wide.as_bytes()[..wide.find('✓').unwrap() + 1].to_vec();
+        let tail = text(8);
+        let log: Vec<u8> = [
+            prompt(0).into_bytes(),
+            text(1).into_bytes(),
+            cut_prompt,
+            text(3).into_bytes(),
+            prompt(4).into_bytes(),
+            {
+                cut_wide.extend(prompt(6).into_bytes());
+                cut_wide
+            },
+            text(7).into_bytes(),
+            torn(tail.clone(), tail.len() / 2),
+        ]
+        .concat();
+        let seqs = |events: &[AgentEvent]| events.iter().map(|e| e.seq).collect::<Vec<_>>();
+
+        assert_eq!(seqs(&parse_log("s", &log)), [0, 1, 3, 4, 6, 7]);
+        assert_eq!(max_seq_of(&log[..]).unwrap(), Some(7));
+
+        let mut file = std::io::Cursor::new(log.clone());
+        let page = read_page("s", &mut file, log.len() as u64, 1, 7).await.unwrap();
+        assert_eq!(seqs(&page.events), [6, 7], "the glued prompt opens a turn");
+        let page = read_page("s", &mut file, page.older_before.unwrap(), 2, 7).await.unwrap();
+        assert_eq!((seqs(&page.events), page.older_before), (vec![0, 1, 3, 4], None));
+
+        let held = HashSet::from(["e3".to_string()]);
+        let since = read_back("s", &mut file, log.len() as u64, 7, |buf, top| after_held(buf, top, &held)).await;
+        assert_eq!(seqs(&since.unwrap().unwrap().0), [4, 6, 7]);
     }
 }
