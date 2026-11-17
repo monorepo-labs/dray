@@ -37,10 +37,11 @@ final class BotTapTests: XCTestCase {
         opened(app, "Fix login redirect")
     }
 
-    /// The list's Settings button is gone once a chat is pushed over it.
+    /// The list is gone and that chat is up: the seed's prompt is its title and a "?", drawn only in the chat.
     private func opened(_ app: XCUIApplication, _ what: String) {
         let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["Settings"])
         XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 5), .completed, "\(what) did not open")
+        XCTAssertTrue(app.staticTexts["\(what)?"].waitForExistence(timeout: 5), "not \(what)'s chat")
     }
 
     private func back(_ app: XCUIApplication) {

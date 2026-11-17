@@ -163,7 +163,7 @@ struct SessionList: View {
         .overlay(alignment: .bottom) {
             if dock {
                 // Dim while nothing is connected: the screen above says why.
-                VoiceDock(task: task) { selection = $0 }.opacity(blank && !anyConnected ? 0.3 : 1)
+                VoiceDock(task: task, started: { selection = $0 }, engaged: { autoOpen = false }).opacity(blank && !anyConnected ? 0.3 : 1)
             }
         }
         // A new view or filter starts on its first page.
