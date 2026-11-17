@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -266,8 +267,9 @@ export function useResizable({
 
   // Published on every change and cleared on unmount, which is what a collapsed
   // sidebar is — it returns null. The drawn width, so chrome placed against the
-  // pane's edge moves with the spring.
-  useEffect(() => {
+  // pane's edge moves with the spring — before paint, or the titlebar's tabs
+  // draw a frame behind the pane they line up with.
+  useLayoutEffect(() => {
     if (!pane) return;
     widths[pane] = shown;
     layoutChanged.emit();
