@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { invoke } from "@/lib/transport";
 
+import { noteMergeForStar } from "@/hooks/useStarPrompt";
 import { useWindowFocused } from "@/lib/focus";
 import { isSettling } from "@/lib/pr";
 import { branchChanged, inRepo, panelRead } from "@/lib/prSync";
@@ -301,6 +302,7 @@ export function usePullRequest(
       try {
         if (action.kind === "merge") {
           await invoke("merge_pr", { cwd, number, method: action.method });
+          noteMergeForStar();
         } else if (action.kind === "delete_branch") {
           await invoke("delete_branch", { cwd, number });
         } else {

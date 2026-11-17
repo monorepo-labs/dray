@@ -172,6 +172,8 @@ export const APP_COMMANDS = new Set([
   "install_on_server",
   "run_server_login",
   "run_gh_login",
+  "note_merge_for_star",
+  "star_dray",
   "upload_attachment",
   "resume_boat",
   "extend_boat",
