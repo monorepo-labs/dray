@@ -1906,6 +1906,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         set_share_machines(on: bool) => crate::machines::set_sharing(on).await;
         get_session_by_id(session_id: String, turns: Option<u32>) => store::get_session_by_id(&session_id, turns).await;
         get_session_page(session_id: String, before: u64, turns: u32) => store::get_session_page(&session_id, before, turns).await;
+        list_attachments(session_id: String, before: u64, limit: u32) => store::list_attachments(&session_id, before, limit).await;
         get_session_since(session_id: String, after: Vec<String>) => store::get_session_since(&session_id, after).await;
 
         // Agents and models.

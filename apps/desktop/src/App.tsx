@@ -1697,7 +1697,7 @@ function App() {
   // sections having something is enough to draw it. In a bot chat only media
   // the chat itself hides counts: what plays there would put a row of tabs
   // over the task list for nothing.
-  const hasMoreTab =
+  const moreForTasks =
     panelRuns.length > 0 ||
     backgroundTasks.length > 0 ||
     sessionTodos !== null ||
@@ -1832,6 +1832,21 @@ function App() {
     setViewTabs((prev) => ({ ...prev, [owner]: "pick" }));
     if (selectedSessionId !== owner) void handleSelectSessionIndexItem(owner);
   };
+
+  // What the attachment grid pages through, newest session first: a bot's
+  // whole chat, since an agent switch splits it into several. `null` where
+  // there is nothing to show and nothing older to load, so More draws no grid.
+  const attachmentLogs = useMemo(() => {
+    if (!selectedSession) return null;
+    const logs = selectedBot ? [selectedSession, ...[...earlier].reverse()] : [selectedSession];
+    // Every log, not the selected one alone: a bot chat's earlier session may
+    // hold the only pictures, and its chat hides tool screenshots.
+    const shows = (log: SessionSnapshot) => log.olderBefore != null || sessionMedia(log.events).length > 0;
+    return sessionAttachments.length > 0 || logs.some(shows) ? logs : null;
+  }, [selectedBot, selectedSession, sessionAttachments, earlier]);
+  // Older history counts too: its pictures are reached only through the
+  // grid's Load more, so the tab has to be there to press it.
+  const hasMoreTab = moreForTasks || attachmentLogs !== null;
 
   const tabs = tabOrder({
     pr: hasPrTab,
@@ -4034,8 +4049,7 @@ function App() {
               <MorePanel
                 todos={sessionTodos}
                 live={busy}
-                media={sessionAttachments}
-                sessionId={shownSession.sessionId}
+                attachments={attachmentLogs}
                 subagents={{
                   runs: panelRuns,
                   selectedId: selectedSubagentId,
