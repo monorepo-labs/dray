@@ -19,6 +19,13 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.9 · 2026-11-17
+
+### Improved
+
+- Long task chats open at once on their latest turns and load older ones
+  as you scroll up. The checkpoint rail is gone.
+
 ## 0.30.8 · 2026-11-16
 
 ### Improved
