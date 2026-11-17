@@ -199,7 +199,7 @@ function StalledRow({
       </div>
       {expanded && (
         <div className="pr-3 pb-3 pl-[52px] text-ui">
-          <TaskMessage sessionId={id} />
+          <TaskMessage sessionId={id} cwd={item.cwd} />
         </div>
       )}
     </div>
