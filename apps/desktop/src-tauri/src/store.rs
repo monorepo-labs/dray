@@ -1991,9 +1991,21 @@ fn subagents_in(session_id: &str, text: &str) -> Vec<SubagentSummary> {
                     ended_at: None,
                 });
             }
-            AgentEventPayload::SubagentCompleted { .. } => {
-                if let Some(run) = runs.iter_mut().rev().find(|r| r.id == sub.id) {
-                    run.ended_at = Some(event.ts);
+            AgentEventPayload::SubagentCompleted { agent_id, .. } => {
+                match runs.iter_mut().rev().find(|r| r.id == sub.id) {
+                    Some(run) => run.ended_at = Some(event.ts),
+                    // Codex logs no start, only a main-thread spawn call, so
+                    // its run is known from the completion alone, which names
+                    // the agent on the envelope.
+                    None => runs.push(SubagentSummary {
+                        id: sub.id,
+                        session_id: session_id.to_string(),
+                        task_id: (!agent_id.is_empty()).then_some(agent_id),
+                        label: sub.label,
+                        description: None,
+                        started_at: event.ts.clone(),
+                        ended_at: Some(event.ts),
+                    }),
                 }
             }
             _ => {}
@@ -2539,6 +2551,13 @@ mod tests {
         assert_eq!(runs[0].description.as_deref(), Some("Find it"));
         assert_eq!(runs[1].task_id, None);
         assert_eq!(runs[1].ended_at, None);
+
+        // Codex: a completion with no start before it is the run's only line.
+        let codex = r#"{"id":"e","sessionId":"s","harness":"codex","seq":0,"ts":"t9","turnId":null,"subagent":{"id":"call_1","label":"read_footer"},"payload":{"type":"subagent_completed","agentId":"thr","status":"completed","summary":null,"usage":null}}"#;
+        let runs = subagents_in("s", codex);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].label.as_deref(), Some("read_footer"));
+        assert_eq!(runs[0].ended_at.as_deref(), Some("t9"));
     }
 
     /// Read in chunks, the answer is the whole read's: lines across a chunk's

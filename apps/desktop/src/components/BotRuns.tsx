@@ -20,6 +20,9 @@ type Props = {
   selectedId: string | null;
   resultByCallId: Map<string, ToolResult>;
   live: boolean;
+  /// Tasks the child still holds, by handle: a log-only run with no end is
+  /// running only while its task is here.
+  liveTaskIds: ReadonlySet<string>;
   onSelect: (id: string | null) => void;
   onOpen?: (run: SubagentRun) => void;
   onStopTask: (taskId: string) => void;
@@ -52,6 +55,10 @@ export default function BotRuns(props: Props) {
 function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
   const [open, setOpen] = useState(false);
   const [older, setOlder] = useState<SubagentList | null>(null);
+  // The server offset of the next page. Not the count held: runs landing
+  // between pages shift the list, and a page of nothing but repeats would
+  // otherwise ask for itself again.
+  const [next, setNext] = useState(PAGE);
   const [loading, setLoading] = useState(false);
 
   // Once per chat, for the count; an older server answering `unknown command`
@@ -65,7 +72,8 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
     if (!older || loading) return;
     setLoading(true);
     try {
-      const page = await load(older.runs.length);
+      const page = await load(next);
+      setNext(next + PAGE);
       // A run landing since the last page shifts the server's list down by one.
       const had = new Set(older.runs.map((r) => r.id));
       setOlder({ ...page, runs: [...older.runs, ...page.runs.filter((r) => !had.has(r.id))] });
@@ -74,13 +82,13 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
     }
   };
 
-  const agents = runs.filter((run) => !isShellRun(run));
-  const running = agents.filter((run) => !run.done);
   const held = new Set(runs.map((run) => run.id));
-  const completed = [
-    ...agents.filter((run) => run.done),
-    ...(older?.runs ?? []).filter((s) => !held.has(s.id)).map(fromLog),
+  const agents = [
+    ...runs.filter((run) => !isShellRun(run)),
+    ...(older?.runs ?? []).filter((s) => !held.has(s.id)).map((s) => fromLog(s, rest.liveTaskIds)),
   ];
+  const running = agents.filter((run) => !run.done);
+  const completed = agents.filter((run) => run.done);
   const count = Math.max(completed.length, (older?.total ?? 0) - running.length);
   const shells = runs.filter((run) => isShellRun(run) && (!run.done || run.id === rest.selectedId));
 
@@ -104,7 +112,13 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
     <div className="flex shrink-0 flex-col">
       {(running.length > 0 || count > 0) && (
         <>
-          <RunSection title="Subagents" {...rest} runs={running} />
+          <RunSection title="Subagents" {...rest} runs={running.filter((run) => held.has(run.id))} />
+          {/* Running but older than the loaded chat: no events here to open. */}
+          {running.some((run) => !held.has(run.id)) && (
+            <div className="-mt-2 flex flex-col gap-0.5 px-1.5 pb-2">
+              {running.filter((run) => !held.has(run.id)).map((run) => row(run))}
+            </div>
+          )}
           {count > 0 && (
             <div className="-mt-2 flex flex-col gap-0.5 px-1.5 pb-2">
               <button
@@ -131,8 +145,11 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
   );
 }
 
-/// A finished run the chat has not loaded, drawn as a row of its own.
-function fromLog(s: SubagentSummary): SubagentRun {
+/// A run the chat has not loaded, drawn as a row of its own. One the log never
+/// closed is still going only while its child holds the task; otherwise it died
+/// with its child.
+function fromLog(s: SubagentSummary, live: ReadonlySet<string>): SubagentRun {
+  const done = s.endedAt !== null || !live.has(s.taskId ?? s.id);
   return {
     id: s.id,
     taskId: s.taskId,
@@ -140,7 +157,7 @@ function fromLog(s: SubagentSummary): SubagentRun {
     description: s.description,
     status: null,
     lastTool: null,
-    done: true,
+    done,
     background: false,
     usage: null,
     events: [],

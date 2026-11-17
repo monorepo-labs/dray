@@ -3956,6 +3956,7 @@ function App() {
                     selectedId={selectedSubagentId}
                     resultByCallId={resultByCallId}
                     live={busy || backgroundTasks.length > 0}
+                    liveTaskIds={liveTaskIds}
                     onSelect={setSelectedSubagentId}
                     onOpen={(run) => openSubagentTab(shownSession.sessionId, run)}
                     onStopTask={handleStopTask}
