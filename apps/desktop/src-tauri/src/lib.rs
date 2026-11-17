@@ -103,6 +103,8 @@ pub mod tunnel;
 pub mod ssh;
 pub mod settings;
 pub mod sink;
+#[cfg(feature = "desktop")]
+pub mod star;
 pub mod store;
 pub mod title;
 #[cfg(feature = "desktop")]
@@ -1009,6 +1011,8 @@ pub fn run() {
             servers::install_on_server,
             servers::run_server_login,
             servers::run_gh_login,
+            star::note_merge_for_star,
+            star::star_dray,
             servers::upload_attachment,
             servers::resume_boat,
             servers::extend_boat,

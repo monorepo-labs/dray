@@ -17,9 +17,14 @@ import { qualify, serverOfSession } from "@/lib/transport";
 /// Both `null` is the resting state, not an error. A message can be drawn with
 /// no session behind it, and a mention there stays inert rather than resolving
 /// against wherever the app happens to be running.
+///
+/// `opensIn` is the session whose panel a file opens in where that is not
+/// `sessionId`: a task's message drawn inside its bot's chat, which is the one
+/// on screen.
 export const ChatSessionContext = createContext<{
   cwd: string | null;
   sessionId: string | null;
+  opensIn?: string | null;
 }>({ cwd: null, sessionId: null });
 
 export function useChatSession() {

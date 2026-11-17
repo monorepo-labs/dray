@@ -207,10 +207,13 @@ function patchReady(sid: string, path: string, next: (body: Ready) => Ready) {
 /// The decision lives here rather than in [openWith](../lib/openWith.ts): that
 /// module is about the apps on this machine, and having it reach into a panel's
 /// store would put this rule somewhere it cannot be read from.
-export function openPath(sid: string | null, raw: string, line?: number): void {
+///
+/// `from` is the session that named the path, where that is not the one whose
+/// panel it opens in: a task's message drawn in its bot's chat.
+export function openPath(sid: string | null, raw: string, line?: number, from = sid): void {
   // An agent names its own machine's paths, so a remote session's are keyed
   // on its server before either panel reads one.
-  const path = qualify(raw, serverOfSession(sid));
+  const path = qualify(raw, serverOfSession(from));
   if (isMarkdownPath(path)) return openDoc(sid, path);
   openInFiles(sid, path, line);
 }

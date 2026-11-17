@@ -83,7 +83,13 @@ function Anchor({ href, children, className, ...rest }: React.ComponentProps<"a"
     <a
       {...rest}
       href={href}
-      className={cn("wrap-anywhere font-medium text-primary underline underline-offset-2", className)}
+      className={cn(
+        "wrap-anywhere font-medium text-primary underline underline-offset-2",
+        // A URL written out breaks wherever the line ends, as the bubble's
+        // does; a link of words still wraps between them.
+        typeof children === "string" && /^(https?:\/\/|www\.)/i.test(children) && "break-all",
+        className,
+      )}
       onClick={(e) => {
         if (!href) return;
         e.preventDefault();

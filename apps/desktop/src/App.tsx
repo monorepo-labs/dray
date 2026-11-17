@@ -166,6 +166,8 @@ import {
 import { dismissNotice, getNotices, pushNotice } from "@/hooks/useNotices";
 import { checkChangelog, markChangelogSeen, type Release } from "@/lib/changelog";
 import WhatsNewCard from "@/components/WhatsNewCard";
+import StarCard from "@/components/StarCard";
+import { noteMergeForStar, useStarPrompt } from "@/hooks/useStarPrompt";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { useSessionIssues } from "@/hooks/useIssues";
 import { sessionsAnswered, useSessions } from "@/hooks/useSessions";
@@ -809,6 +811,7 @@ function App() {
   // Once a launch: a release flagged `notify` that the reader runs and has not
   // dismissed yet gets the what's-new card.
   const [whatsNew, setWhatsNew] = useState<{ release: Release; seen: string } | null>(null);
+  const starPrompt = useStarPrompt();
   useEffect(() => {
     checkChangelog().then(setWhatsNew, () => {});
   }, []);
@@ -1469,15 +1472,6 @@ function App() {
     prReadAt: taskPrReadAt,
   });
   const stalls = (selectedBot && stalled.byBot.get(selectedBot.id)?.card) || NO_STALLS;
-  // The card's row the reader last picked, which the bot's chat scrolls to.
-  // Named with its bot, so another bot's chat never acts on it.
-  const [stallFocus, setStallFocus] = useState<{ botId: string; sessionId: string; at: number } | null>(null);
-  const botFocus = stallFocus && stallFocus.botId === selectedBot?.id ? stallFocus : null;
-  // A pick is honoured once. Kept past leaving its bot, it came back as a new
-  // `botFocus` on every return and the chat jumped to it again.
-  useEffect(() => {
-    setStallFocus((focus) => (focus && focus.botId !== selectedBot?.id ? null : focus));
-  }, [selectedBot?.id]);
 
   // Read here rather than inside the panel: the tab row needs to know whether
   // there is an open PR before that tab has ever been shown, so ordering it
@@ -3321,6 +3315,7 @@ function App() {
   ) => {
     // From the repo root: a task's worktree may already be gone.
     await invoke("merge_pr", { cwd: projectPath, number, method });
+    noteMergeForStar();
     prMarks.markMerged(projectPath, number);
     prMarks.refreshAfterWrite();
     // Landed, so the task is done — unless it is still working,
@@ -4268,18 +4263,10 @@ function App() {
               <StalledTasks
                 stalls={stalls}
                 now={stalled.now}
-                onFocus={(sessionId) =>
-                  selectedBot && setStallFocus({ botId: selectedBot.id, sessionId, at: Date.now() })
-                }
                 onOpen={(id, alone) => void openTask(id, alone)}
                 onMerge={(row, pr, method) => mergeTask(row.item.projectPath, pr.number, method, row)}
               />
             }
-            botFocus={botFocus}
-            onBotFocusMissed={(id) => {
-              setStallFocus(null);
-              void openTask(id);
-            }}
             unread={!!selectedSessionId && openedUnread === selectedSessionId}
             // Its own chords only while the chat tab is on screen.
             active={!issuesOpen && viewTab === "chat"}
@@ -4392,6 +4379,8 @@ function App() {
         onView={() => closeWhatsNew(true)}
       />
     )}
+    {/* Same corner as What's New, so it waits for that card to go. */}
+    {starPrompt && !whatsNew && <StarCard />}
     <DragGhost />
     <QuitDialog />
     <LinkDialog />
