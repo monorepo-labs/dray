@@ -1917,6 +1917,91 @@ pub async fn find_newest<T>(session_id: &str, find: impl Fn(&[AgentEvent]) -> Op
     }
 }
 
+/// One subagent a session ran, read off its log rather than off a transcript,
+/// so a bot's Tasks tab can list runs older than the chat has loaded.
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentSummary {
+    /// The spawning call's id, as on `SubagentRun`.
+    pub id: String,
+    pub session_id: String,
+    pub task_id: Option<String>,
+    pub label: Option<String>,
+    pub description: Option<String>,
+    pub started_at: String,
+    /// `None` for a run the log never closed: still going, or its child died.
+    pub ended_at: Option<String>,
+}
+
+/// A page of [`SubagentSummary`], newest first.
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentList {
+    pub runs: Vec<SubagentSummary>,
+    pub more: bool,
+    /// Every agent run across the logs, running ones included.
+    pub total: u32,
+}
+
+/// The subagents `session_id` and then each of `also` ran, newest first,
+/// `limit` of them after skipping `skip`. Background shells are left out: a
+/// finished one is done with, and a running one is in the loaded tail.
+///
+/// Only lifecycle lines are parsed, found by a substring check, so a 36MB log
+/// costs a read and a scan rather than a parse.
+// ponytail: rescans every log per page; keep an offset cursor if pages get slow.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn list_subagents(session_id: String, also: Vec<String>, skip: u32, limit: u32) -> Result<SubagentList, Fail> {
+    let mut all = Vec::new();
+    for id in std::iter::once(&session_id).chain(&also) {
+        let path = get_session_path(id).await?;
+        let text = match fs::read_to_string(&path).await {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(anyhow::Error::from(e).context("could not read session file").into()),
+        };
+        all.extend(subagents_in(id, &text).into_iter().rev());
+    }
+    let total = all.len() as u32;
+    let more = total > skip + limit;
+    let runs = all.into_iter().skip(skip as usize).take(limit as usize).collect();
+    Ok(SubagentList { runs, more, total })
+}
+
+/// The agent runs in one log, oldest first.
+fn subagents_in(session_id: &str, text: &str) -> Vec<SubagentSummary> {
+    let mut runs: Vec<SubagentSummary> = Vec::new();
+    for line in text.lines().filter(|l| l.contains("\"subagent_started\"") || l.contains("\"subagent_completed\"")) {
+        let Ok(event) = serde_json::from_str::<AgentEvent>(line) else { continue };
+        let Some(sub) = event.subagent else { continue };
+        match event.payload {
+            AgentEventPayload::SubagentStarted { agent_id, label, description, .. } => {
+                if label == "local_bash" || label == "bash" {
+                    continue;
+                }
+                runs.push(SubagentSummary {
+                    id: sub.id,
+                    session_id: session_id.to_string(),
+                    task_id: (!agent_id.is_empty()).then_some(agent_id),
+                    label: sub.label.or(Some(label)),
+                    description,
+                    started_at: event.ts,
+                    ended_at: None,
+                });
+            }
+            AgentEventPayload::SubagentCompleted { .. } => {
+                if let Some(run) = runs.iter_mut().rev().find(|r| r.id == sub.id) {
+                    run.ended_at = Some(event.ts);
+                }
+            }
+            _ => {}
+        }
+    }
+    runs
+}
+
 /// Events from one stretch of a session's log, and the byte offset the
 /// stretch starts at — `None` once it reaches the top. An offset stays valid
 /// for the life of the file, since the log is only ever appended to.
@@ -2434,6 +2519,27 @@ pub async fn get_session_path(session_id: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Agents only, closed by their completion's time; a shell is left out.
+    #[test]
+    fn subagents_in_reads_agent_runs() {
+        let line = |sub: &str, payload: &str, ts: &str| {
+            format!(r#"{{"id":"e","sessionId":"s","harness":"claude_code","seq":0,"ts":"{ts}","turnId":null,"subagent":{{"id":"{sub}","label":null}},"payload":{payload}}}"#)
+        };
+        let log = [
+            line("a", r#"{"type":"subagent_started","agentId":"x","label":"general-purpose","description":"Find it","prompt":null}"#, "t1"),
+            line("b", r#"{"type":"subagent_started","agentId":"y","label":"local_bash","description":"Shell","prompt":null}"#, "t2"),
+            line("c", r#"{"type":"subagent_started","agentId":"","label":"Explore","description":null,"prompt":null}"#, "t3"),
+            line("a", r#"{"type":"subagent_completed","agentId":"x","status":"completed","summary":null,"usage":null}"#, "t4"),
+        ]
+        .join("\n");
+        let runs = subagents_in("s", &log);
+        assert_eq!(runs.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["a", "c"]);
+        assert_eq!(runs[0].ended_at.as_deref(), Some("t4"));
+        assert_eq!(runs[0].description.as_deref(), Some("Find it"));
+        assert_eq!(runs[1].task_id, None);
+        assert_eq!(runs[1].ended_at, None);
+    }
 
     /// Read in chunks, the answer is the whole read's: lines across a chunk's
     /// edge, a last line with no newline, a torn line, a payload's own `seq`.

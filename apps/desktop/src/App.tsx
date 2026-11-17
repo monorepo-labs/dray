@@ -93,6 +93,7 @@ import { useChord } from "@/hooks/useShortcuts";
 import { type Chord, formatChords } from "@/lib/shortcuts";
 import Crew, { CREW_BESIDE, CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
 import TasksPanel from "@/components/TasksPanel";
+import BotRuns from "@/components/BotRuns";
 import StalledTasks from "@/components/chat/StalledTasks";
 import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/MergeCard";
 import { cardRepos } from "@/lib/mergeCard";
@@ -1672,13 +1673,12 @@ function App() {
   // sections having something is enough to draw it. In a bot chat only media
   // the chat itself hides counts: what plays there would put a row of tabs
   // over the task list for nothing.
+  // A bot's runs live in its Tasks tab instead.
   const hasMoreTab =
-    panelRuns.length > 0 ||
-    backgroundTasks.length > 0 ||
     sessionTodos !== null ||
     (selectedBot
       ? hiddenInBotChat(selectedSession?.events ?? [], sessionAttachments).length > 0
-      : sessionAttachments.length > 0);
+      : panelRuns.length > 0 || backgroundTasks.length > 0 || sessionAttachments.length > 0);
 
   const taskSources = useRef({ crew, sessionIndexItems });
   taskSources.current = { crew, sessionIndexItems };
@@ -1856,7 +1856,7 @@ function App() {
       return;
     }
     setSelectedSubagentId(id);
-    showPanel("more");
+    showPanel(selectedBot ? "tasks" : "more");
   };
   const openSubagentTab = (sessionId: string, run: { id: string; description: string | null; label: string | null }) => {
     const title = run.description ?? run.label ?? "Subagent";
@@ -3372,7 +3372,7 @@ function App() {
     onOpenSubagent: openSubagent,
     onOpenSession: (id, alone) =>
       selectedBot ? void openTask(id, alone) : void handleSelectSessionIndexItem(id),
-    onOpenSubagentPanel: () => showPanel("more"),
+    onOpenSubagentPanel: () => showPanel(selectedBot ? "tasks" : "more"),
     onOpenPlan: () => showPanel("plan"),
     onRespondPermission: handleRespondPermission,
     onAnswerQuestions: handleAnswerQuestions,
@@ -3947,7 +3947,21 @@ function App() {
                 onFixConflicts={(row, pr) => askToFixConflicts(row.item, pr.number)}
                 onMerge={(row, pr, method) => mergeTask(row.item.projectPath, pr.number, method, row)}
                 now={stalled.now}
-              />
+              >
+                {selectedBot && (
+                  <BotRuns
+                    sessionId={shownSession.sessionId}
+                    also={[...earlierIds].reverse()}
+                    runs={subagents}
+                    selectedId={selectedSubagentId}
+                    resultByCallId={resultByCallId}
+                    live={busy || backgroundTasks.length > 0}
+                    onSelect={setSelectedSubagentId}
+                    onOpen={(run) => openSubagentTab(shownSession.sessionId, run)}
+                    onStopTask={handleStopTask}
+                  />
+                )}
+              </TasksPanel>
             </TabBody>
             <TabBody active={activeTab === "more"}>
               <MorePanel
@@ -3956,7 +3970,7 @@ function App() {
                 media={sessionAttachments}
                 sessionId={shownSession.sessionId}
                 subagents={{
-                  runs: panelRuns,
+                  runs: selectedBot ? [] : panelRuns,
                   selectedId: selectedSubagentId,
                   resultByCallId,
                   live: busy || backgroundTasks.length > 0,

@@ -2337,6 +2337,29 @@ export type Subagent = { id: string,
 label: string | null, };
 
 /**
+ * A page of [`SubagentSummary`], newest first.
+ */
+export type SubagentList = { runs: Array<SubagentSummary>, more: boolean, 
+/**
+ * Every agent run across the logs, running ones included.
+ */
+total: number, };
+
+/**
+ * One subagent a session ran, read off its log rather than off a transcript,
+ * so a bot's Tasks tab can list runs older than the chat has loaded.
+ */
+export type SubagentSummary = { 
+/**
+ * The spawning call's id, as on `SubagentRun`.
+ */
+id: string, sessionId: string, taskId: string | null, label: string | null, description: string | null, startedAt: string, 
+/**
+ * `None` for a run the log never closed: still going, or its child died.
+ */
+endedAt: string | null, };
+
+/**
  * What a server has before Dray is installed on it.
  */
 export type Survey = { 

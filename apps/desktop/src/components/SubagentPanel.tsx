@@ -4,6 +4,7 @@ import { ArrowUpRight, Check, ChevronRight, Square, SquareTerminal } from "lucid
 import Orb from "@/components/Orb";
 import EventRow from "@/components/chat/EventRow";
 import { Button } from "@/components/ui/button";
+import { relativeTime } from "@/lib/format";
 import { subagentBrief } from "@/lib/tools";
 import { canOpenTab, isShellRun, opensTab, type SubagentRun } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
@@ -54,7 +55,7 @@ export default function SubagentPanel({ runs, ...rest }: SubagentPanelProps) {
   );
 }
 
-function RunSection({
+export function RunSection({
   title,
   runs,
   selectedId,
@@ -172,7 +173,7 @@ function RunMark({ run, shell, bare }: { run: SubagentRun; shell: boolean; bare:
 ///
 /// No tool name, token count or agent type: the harness's words for the
 /// mechanism ("Task", "local_bash", "general-purpose") rather than for the work.
-function RunRow({
+export function RunRow({
   run,
   open,
   resultByCallId,
@@ -181,6 +182,7 @@ function RunRow({
   onOpen,
   locked,
   onStopTask,
+  at,
 }: {
   run: SubagentRun;
   open: boolean;
@@ -192,6 +194,9 @@ function RunRow({
   /// The tab has nothing to show until the run ends, so the row waits.
   locked: boolean;
   onStopTask: (taskId: string) => void;
+  /// When a finished run ended, drawn at the row's end. Hover swaps it for
+  /// the arrow, so the time sits flush right at rest.
+  at?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -284,8 +289,18 @@ function RunRow({
           </span>
           {/* Each kind says what a click does, on hover: a subagent opens a
               tab, a shell expands — and an open shell keeps its caret. */}
+          {at && (
+            <span className={cn("shrink-0 text-xs text-muted-foreground tabular-nums", opens && "group-hover:hidden")}>
+              {relativeTime(at)}
+            </span>
+          )}
           {opens ? (
-            <ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+            <ArrowUpRight
+              className={cn(
+                "size-3.5 shrink-0 text-muted-foreground",
+                at ? "hidden group-hover:block" : "opacity-0 transition-opacity group-hover:opacity-100",
+              )}
+            />
           ) : (
             expands && (
               <ChevronRight

@@ -48,6 +48,9 @@ export type SubagentRun = {
   /// no events of its own, so a run built from the envelope alone is empty —
   /// and for an agent run it carries the prompt and the final report.
   spawn: AgentEvent | null;
+  /// When the run last filed anything, its completion included: the time a
+  /// finished row shows.
+  lastAt?: string;
 };
 
 /// A run of consecutive same-tool calls, collapsed behind one row. Built from
@@ -898,6 +901,7 @@ function build(
     // The envelope label is null on some events (the completion, notably), so
     // keep the first non-null rather than letting a later one erase it.
     run.label ??= ref.label;
+    if (event.ts) run.lastAt = event.ts;
 
     switch (event.payload.type) {
       // An empty `agentId` is "this harness names no handle for the child",
