@@ -166,6 +166,8 @@ struct SessionList: View {
                 VoiceDock(task: task) { selection = $0 }.opacity(blank && !anyConnected ? 0.3 : 1)
             }
         }
+        // Any tap on the list or its dock is the reader starting something of their own.
+        .simultaneousGesture(TapGesture().onEnded { autoOpen = false })
         // A new view or filter starts on its first page.
         .onChange(of: "\(mode)\(filter ?? "")") { shown = Self.pageSize }
         // Its buttons go with the sessions, so a view left open would have no way back; the dock
@@ -192,6 +194,7 @@ struct SessionList: View {
         .onChange(of: read) { if read && lone == nil { autoOpen = false } }
         .onChange(of: selection) { if selection != nil { autoOpen = false } }
         .onChange(of: sheet?.id) { autoOpen = false }
+        .onChange(of: newBot) { autoOpen = false }
         .onChange(of: phase) { if phase == .background { autoOpen = false } }
         // ponytail: a server that takes longer than this to answer never opens its bot; a read-progress signal if that bites.
         .task { try? await Task.sleep(for: .seconds(10)); autoOpen = false }
@@ -279,7 +282,7 @@ struct SessionList: View {
     /// lets a cold open go straight in without drawing the list first.
     private var loneBot: BotStart? {
         guard !store.live.isEmpty,
-              store.live.allSatisfy({ store.known($0.id) }),
+              store.live.allSatisfy({ store.known($0.id) }), store.awaitingShares.isEmpty,
               store.allBots.count == 1, let b = store.allBots.first,
               hideSessions || store.runs(project: nil).isEmpty else { return nil }
         return BotStart(server: b.server, bot: b.bot)
@@ -287,7 +290,9 @@ struct SessionList: View {
 
     /// Opens a lone bot as a tap on its row would, unanimated so the list never shows first.
     private func open(_ b: BotStart?) {
-        guard let b, selection == nil, sheet == nil, starting == nil, mode == .live else { return }
+        // A held orb is no tap, and a recording must not be carried off under the reader.
+        guard let b, selection == nil, sheet == nil, starting == nil, !newBot, mode == .live,
+              Dictations.shared.state(.newSession) == .idle else { return }
         autoOpen = false
         var t = Transaction()
         t.disablesAnimations = true

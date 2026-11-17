@@ -1,9 +1,10 @@
 import XCTest
 
 /// #1169: a cold launch where one bot is all the list would draw opens its chat.
-/// Each case wants a scratch server of its own on one token, seeded by `/tmp/dray1169-seed.py`:
-///   TEST_RUNNER_DRAY_TOKEN=… TEST_RUNNER_DRAY_LONE_URL=… TEST_RUNNER_DRAY_HIDDEN_URL=…
-///   TEST_RUNNER_DRAY_VISIBLE_URL=… TEST_RUNNER_DRAY_TWO_URL=… TEST_RUNNER_DRAY_FRESH_URL=…
+/// Each case wants a scratch server of its own on one token, seeded by `scripts/lone_bot_seed.py`
+/// (which prints the token and says how to start them):
+///   TEST_RUNNER_DRAY_TOKEN=… TEST_RUNNER_DRAY_LONE_URL=ws://127.0.0.1:47101 TEST_RUNNER_DRAY_HIDDEN_URL=…:47102
+///   TEST_RUNNER_DRAY_VISIBLE_URL=…:47103 TEST_RUNNER_DRAY_TWO_URL=…:47104 TEST_RUNNER_DRAY_FRESH_URL=…:47105
 final class LoneBotTests: XCTestCase {
     private var env: [String: String] { ProcessInfo.processInfo.environment }
 
@@ -44,6 +45,9 @@ final class LoneBotTests: XCTestCase {
         sleep(4)
         XCTAssertTrue(app.buttons["Settings"].exists, "left the list")
         snap(app, "5-two-stay")
+        // A row still opens on a tap, under the list's own tap watch.
+        app.staticTexts["Scout"].tap()
+        XCTAssertTrue(app.staticTexts["Hi."].waitForExistence(timeout: 10), "the row did not open")
     }
 
     /// Settings › Hide sessions leaves the bot alone on the list, whatever sessions there are.
