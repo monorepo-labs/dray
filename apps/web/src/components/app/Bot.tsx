@@ -19,9 +19,8 @@ import {
   X,
 } from "lucide-react";
 
-import { ClaudeGlyph } from "@/components/ClaudeGlyph";
-
 import { Composer } from "./Chat";
+import { ModelPicker } from "./ModelPicker";
 import { Keys } from "./Sidebar";
 import { cx } from "./Window";
 
@@ -620,8 +619,9 @@ export function TaskBreak() {
   return <div aria-hidden className="h-4 shrink-0" />;
 }
 
-/// A bot's composer: the same one a task has, the model and stance row under
-/// it, with a box the visitor types in. Enter sends.
+/// A bot's composer: the same one a task has, with a box the visitor types
+/// in. Enter sends. Under it the model picker alone, which opens: a bot runs
+/// on Auto and keeps no context ring, so the app draws neither stance nor ring.
 export function BotComposer({
   value,
   onChange,
@@ -636,11 +636,8 @@ export function BotComposer({
   return (
     <Composer
       mic
-      agent={<ClaudeGlyph className="size-3.5" />}
-      model="Opus 5.5"
-      effort="High"
-      mode="Auto"
-      context={0.18}
+      picker={<ModelPicker />}
+      context={null}
       onSend={{ send: onSend, disabled: !value.trim() }}
       editor={
         <textarea
