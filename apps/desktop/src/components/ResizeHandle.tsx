@@ -24,7 +24,7 @@ const STEP_PX = 16;
 
 /// How long a snap onto or off the rail animates. Matches the aside's CSS
 /// transition, which is what actually draws it.
-const RAIL_SNAP_MS = 200;
+const RAIL_SNAP_MS = 260;
 
 /// A width crossing onto or off the rail, while it animates.
 export type RailSnap = "toRail" | "fromRail" | null;

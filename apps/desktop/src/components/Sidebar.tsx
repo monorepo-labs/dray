@@ -1316,7 +1316,7 @@ export default function Sidebar({
         // clips it, so rows slide under the edge instead of re-wrapping each
         // frame; the mask fades whatever the edge is passing over.
         snap &&
-          "overflow-hidden transition-[width] duration-200 ease-[cubic-bezier(0.2,0,0,1)] [mask-image:linear-gradient(to_right,black_calc(100%-40px),transparent)] motion-reduce:transition-none [&>:not([role=separator],[data-rail-foot])]:min-w-60",
+          "overflow-hidden transition-[width] duration-[260ms] ease-[cubic-bezier(0.34,1.36,0.64,1)] [mask-image:linear-gradient(to_right,black_calc(100%-40px),transparent)] motion-reduce:transition-none [&>:not([role=separator],[data-rail-foot])]:min-w-60",
       )}
       style={style}
       ref={asideRef}
