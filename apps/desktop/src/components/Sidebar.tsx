@@ -65,8 +65,7 @@ import { sessionBranch } from "@/lib/pr";
 import { checkoutsOf, groupProjects, keyOfPath, leadPath, soleServer } from "@/lib/projectGroups";
 import { offlineLine, projectLabel, serverName, shownOffline, useServers } from "@/lib/servers";
 import { LOCAL, serverOfPath } from "@/lib/transport";
-import { SNAP_BOUNCE_KEY, useResizable } from "@/components/ResizeHandle";
-import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { useResizable } from "@/components/ResizeHandle";
 import { useJumpDigit } from "@/lib/digitChords";
 import type { ShortcutId } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
@@ -980,23 +979,13 @@ function devBadgeLabel(branch: string | null): string {
 /// fact its loudest. One line — a long branch truncates rather than pushing the
 /// row, with `title` restoring it.
 function DevBadge() {
-  const [bounce, setBounce] = useLocalStorage(SNAP_BOUNCE_KEY, false);
   return (
     <div
       data-rail-hide
-      className="flex shrink-0 items-center gap-2 px-3.5 pb-2 font-mono text-[10px] leading-none text-muted-foreground/60"
+      title={__DEV_BRANCH__ ?? undefined}
+      className="shrink-0 truncate px-3.5 pb-2 font-mono text-[10px] leading-none text-muted-foreground/60"
     >
-      <span title={__DEV_BRANCH__ ?? undefined} className="min-w-0 truncate">
-        {devBadgeLabel(__DEV_BRANCH__)}
-      </span>
-      {/* Dev-only A/B for the sidebar snap, while the bounce is decided. */}
-      <button
-        type="button"
-        onClick={() => setBounce((b) => !b)}
-        className="ml-auto shrink-0 cursor-pointer rounded px-1 py-0.5 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-      >
-        Snap: {bounce ? "bounce" : "flat"}
-      </button>
+      {devBadgeLabel(__DEV_BRANCH__)}
     </div>
   );
 }
@@ -1333,8 +1322,8 @@ export default function Sidebar({
         // flashed back to full strength as the fold landed.
         (snap === "toRail" || snap === "fromRail") &&
           "overflow-hidden [&>:not([role=separator],[data-rail-foot])]:w-60",
-        // What the rail drops fades before the spring's bounce could show it
-        // behind the icons, and back in on the way out.
+        // What the rail drops fades before the narrowing edge could show it cut
+        // off behind the icons, and back in on the way out.
         snap === "toRail" && "[&_[data-rail-hide]]:opacity-0 [&_[data-rail-hide]]:transition-opacity [&_[data-rail-hide]]:duration-100",
         snap === "fromRail" && "[&_[data-rail-hide]]:animate-in [&_[data-rail-hide]]:fade-in [&_[data-rail-hide]]:duration-300",
       )}

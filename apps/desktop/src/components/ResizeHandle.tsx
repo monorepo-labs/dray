@@ -23,15 +23,10 @@ type Edge = "left" | "right";
 /// there for the default.
 const STEP_PX = 16;
 
-/// The snap's spring: about 5% past the target, settled in a quarter second.
+/// The snap's spring, critically damped: settles in about a quarter second and
+/// never passes its target. A bouncier one was tried and read as jank.
 const STIFFNESS = 520;
-const DAMPING = 30;
-/// Looser for the default's detent, whose short travel would otherwise hide the
-/// bounce: about 7px past on a 40px snap.
-const DAMPING_DETENT = 22;
-/// Critical: catching the pointer after the detent lets go, which must not
-/// overshoot it.
-const DAMPING_CATCH = 2 * Math.sqrt(STIFFNESS);
+const DAMPING = 2 * Math.sqrt(STIFFNESS);
 /// Fixed step, so the spring feels the same at 60Hz and 120Hz.
 const STEP_S = 1 / 240;
 /// A target moving further than this in a frame jumped rather than moved, and
@@ -41,11 +36,6 @@ const JUMP_PX = 24;
 /// A snap while its spring runs: onto or off the rail, or into or out of the
 /// default's detent.
 export type RailSnap = "toRail" | "fromRail" | "detent" | null;
-
-/// Dev builds only, while the bounce is judged against a flat snap: set, every
-/// snap bounces as a release build does; unset, every one settles flat.
-export const SNAP_BOUNCE_KEY = "dev.snapBounce";
-const bounces = () => !import.meta.env.DEV || readLocalStorage(SNAP_BOUNCE_KEY, false);
 
 const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -180,8 +170,6 @@ export function useResizable({
   // `raw` is the pointer's last width, kept here as well as in state: a release
   // landing in the same frame as a move must not read the width before it.
   const from = useRef<{ x: number; width: number; raw?: number } | null>(null);
-  // The pointer's speed in px/s, handed to a spring so a snap carries the throw.
-  const fling = useRef({ x: 0, at: 0, v: 0 });
   // A drag, and whether the default's detent has let go of it yet.
   const [drag, setDrag] = useState<"pull" | "free" | null>(null);
 
@@ -211,7 +199,7 @@ export function useResizable({
   const def = clamp(initial);
   const zone = (w: number) => (w === rail ? "rail" : Math.abs(w - def) <= GIVE ? "detent" : "free");
   const [last, setLast] = useState(width);
-  const [spring, setSpring] = useState<{ id: number; from: number; snap: RailSnap; damping: number } | null>(null);
+  const [spring, setSpring] = useState<{ id: number; from: number; snap: RailSnap } | null>(null);
   const [drawn, setDrawn] = useState(width);
   if (last !== width) {
     setLast(width);
@@ -221,19 +209,11 @@ export function useResizable({
     if (letGo && drag === "pull") setDrag("free");
     if (reducedMotion()) {
       // Drawn as stored, no spring.
-    } else if (letGo) {
-      // Out of the default is the plain way out: caught without a bounce,
-      // replacing whatever spring was running.
-      const from = spring ? drawn : last;
-      setSpring({ id: Date.now(), from, snap, damping: DAMPING_CATCH });
-      setDrawn(from);
     } else if (spring) {
       if (a !== b && (a === "rail" || b === "rail")) setSpring({ ...spring, snap });
     } else if (a !== b || (a === "detent" && !drag)) {
       // The stretch inside the detent follows the pointer; only a jump springs.
-      // Into the default bounces; a release settling back onto it does not.
-      const damping = !bounces() ? DAMPING_CATCH : a === "free" && b === "detent" ? DAMPING_DETENT : a === b ? DAMPING_CATCH : DAMPING;
-      setSpring({ id: Date.now(), from: last, snap, damping });
+      setSpring({ id: Date.now(), from: last, snap });
       setDrawn(last);
     }
   }
@@ -244,8 +224,7 @@ export function useResizable({
   useEffect(() => {
     if (!spring) return;
     let x = spring.from;
-    const sign = edge === "right" ? 1 : -1;
-    let v = performance.now() - fling.current.at < 60 ? Math.max(-1500, Math.min(1500, sign * fling.current.v)) : 0;
+    let v = 0;
     let prev = performance.now();
     let chased = target.current;
     let frame = requestAnimationFrame(function step(now) {
@@ -258,7 +237,7 @@ export function useResizable({
       chased = t;
       for (let left = dt; left > 0; left -= STEP_S) {
         const h = Math.min(STEP_S, left);
-        v += (-STIFFNESS * (x - t) - spring.damping * (v - vt)) * h;
+        v += (-STIFFNESS * (x - t) - DAMPING * (v - vt)) * h;
         x += v * h;
       }
       // Ends only once it has caught the target, so handing back to the pointer
@@ -339,15 +318,11 @@ export function useResizable({
         e.preventDefault();
         e.currentTarget.setPointerCapture(e.pointerId);
         from.current = { x: e.clientX, width };
-        fling.current = { x: e.clientX, at: performance.now(), v: 0 };
       }}
       onPointerMove={(e) => {
         const start = from.current;
         if (!start) return;
         const moved = edge === "right" ? e.clientX - start.x : start.x - e.clientX;
-        const f = fling.current;
-        const now = performance.now();
-        if (now - f.at >= 8) fling.current = { x: e.clientX, at: now, v: ((e.clientX - f.x) / (now - f.at)) * 1000 };
         start.raw = start.width + moved;
         setStored(start.raw);
         setDrag((d) => d ?? "pull");
