@@ -32,9 +32,11 @@ const changed = [
 ];
 const tracked = lines(git("ls-files"));
 
+// The GPUI rewrite is an unshipped experiment; nothing here tests it, --full included.
+const skipped = ["apps/gpui"];
 const suites = [
   ...tracked
-    .filter((f) => f.endsWith("/Cargo.toml"))
+    .filter((f) => f.endsWith("/Cargo.toml") && !skipped.includes(posix.dirname(f)))
     .map((f) => ({ kind: "cargo", dir: posix.dirname(f) })),
   ...tracked
     .filter((f) => /^apps\/[^/]+\/package\.json$/.test(f))
