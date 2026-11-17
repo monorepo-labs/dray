@@ -525,7 +525,12 @@ export function WaitingRow({
         tabIndex={0}
         aria-expanded={expanded}
         onClick={(e) => (e.metaKey || e.ctrlKey ? onOpen?.() : onToggle?.())}
-        onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onToggle?.()}
+        onKeyDown={(e) => {
+          if ((e.key !== "Enter" && e.key !== " ") || e.target !== e.currentTarget) return;
+          // Space would scroll the page, as it does on any non-button.
+          e.preventDefault();
+          onToggle?.();
+        }}
         onPointerEnter={() => setHovered(true)}
         onPointerLeave={() => setHovered(false)}
         className="group flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
