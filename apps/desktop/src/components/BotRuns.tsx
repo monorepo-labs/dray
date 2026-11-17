@@ -48,10 +48,25 @@ function Sections({ runs, load, ...rest }: Props & { load: Loader }) {
   const [older, setOlder] = useState<SubagentList | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Once per chat, for the count; an older server answering `unknown command`
-  // leaves the loaded runs alone.
+  // Once per chat, for the count. A failure is retried with backoff, since a
+  // drop or a server restart would otherwise leave the history missing until
+  // the chat is reopened; an older server answering `unknown command` gives up
+  // after the last try and leaves the loaded runs alone.
   useEffect(() => {
-    load(null, unseen(rest.liveTaskIds, runs, [])).then(setOlder, () => {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let gone = false;
+    const attempt = (n: number) =>
+      load(null, unseen(rest.liveTaskIds, runs, [])).then(
+        (page) => !gone && setOlder(page),
+        () => {
+          if (!gone && n < 5) timer = setTimeout(() => attempt(n + 1), 1000 * 2 ** n);
+        },
+      );
+    void attempt(0);
+    return () => {
+      gone = true;
+      clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
