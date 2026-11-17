@@ -1,16 +1,28 @@
 "use client";
 
-import { useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Children, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Blobatar } from "@blobatar/react";
 import { useGaze } from "@blobatar/react/gaze";
 import { idle } from "blobatar/expression";
 import "blobatar/motion.css";
 import "blobatar/gaze.css";
-import { ChevronDown, CircleDashed, GitMerge, GitPullRequest, GitPullRequestDraft, Play, Server, X } from "lucide-react";
+import {
+  ArrowUpRight,
+  ChevronDown,
+  CircleDashed,
+  GitMerge,
+  GitPullRequest,
+  GitPullRequestDraft,
+  MousePointerClick,
+  Play,
+  Server,
+  X,
+} from "lucide-react";
 
 import { ClaudeGlyph } from "@/components/ClaudeGlyph";
 
 import { Composer } from "./Chat";
+import { Keys } from "./Sidebar";
 import { cx } from "./Window";
 
 /// A face's pick, as the app stores it: a shape by name and a hue in degrees.
@@ -450,6 +462,9 @@ export function MergeCard({
 /// The foot of a bot's chat while any of its tasks waits on the reader: an
 /// inbox row per task. Rows go as their tasks move; the card goes with the last.
 export function WaitingCard({ onDismiss, children }: { onDismiss?: () => void; children: ReactNode }) {
+  const [all, setAll] = useState(false);
+  const rows = Children.toArray(children);
+  const capped = !all && rows.length > ROWS_SHOWN;
   return (
     <div className="flex w-full flex-col rounded-xl border border-border/60 p-1">
       <div className="flex items-center py-0.5 pr-0.5 pl-2 text-ui text-muted-foreground">
@@ -458,34 +473,92 @@ export function WaitingCard({ onDismiss, children }: { onDismiss?: () => void; c
           type="button"
           aria-label="Dismiss"
           onClick={onDismiss}
-          className="grid size-6 place-items-center rounded-[min(var(--radius-md),10px)] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className={cx(GHOST, "grid size-6 place-items-center text-muted-foreground")}
         >
           <X className="size-3" />
         </button>
       </div>
-      {children}
+      {capped ? rows.slice(0, ROWS_SHOWN) : rows}
+      {rows.length > ROWS_SHOWN && (
+        <button type="button" onClick={() => setAll((a) => !a)} className={cx(XS, GHOST, "w-full text-muted-foreground")}>
+          {capped ? `Show ${rows.length - ROWS_SHOWN} more` : "Show less"}
+        </button>
+      )}
     </div>
   );
 }
 
+/// Rows drawn before "Show N more", so a long card doesn't push the chat off screen.
+const ROWS_SHOWN = 5;
+
+/// The app's ghost button: a fill only under the pointer.
+const GHOST =
+  "rounded-[min(var(--radius-md),10px)] transition-colors hover:bg-muted/50 hover:text-foreground light:hover:bg-muted/70";
+
 /// One task on the card: face, title and how long it has sat; under them,
-/// the line its bot wrote for what it needs.
-export function WaitingRow({ id, title, age, need }: { id: string; title: string; age: string; need?: string }) {
+/// the line its bot wrote for what it needs. A click opens the task's last
+/// message under the row and a second closes it, as the app's does; ⌘-click
+/// and Open task, shown on hover, open the task itself.
+export function WaitingRow({
+  id,
+  title,
+  age,
+  need,
+  message,
+  expanded = false,
+  onToggle,
+  onOpen,
+}: {
+  id: string;
+  title: string;
+  age: string;
+  need?: string;
+  /// The task's last message, drawn whole under the row while it is open.
+  message?: ReactNode;
+  expanded?: boolean;
+  onToggle?: () => void;
+  onOpen?: () => void;
+}) {
   const [hovered, setHovered] = useState(false);
   return (
-    <div
-      onPointerEnter={() => setHovered(true)}
-      onPointerLeave={() => setHovered(false)}
-      className="group flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-muted/50"
-    >
-      <BotFace seed={id} follow={hovered} className="block size-8 shrink-0 scale-[1.18]" />
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="flex items-center gap-2">
-          <span className="min-w-0 truncate text-ui text-foreground">{title}</span>
-          <span className="ml-auto shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">{age}</span>
+    <div className={cx("flex flex-col rounded-lg", expanded && "bg-muted/30")}>
+      {/* A div, since a button cannot hold Open task inside it. */}
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={(e) => (e.metaKey || e.ctrlKey ? onOpen?.() : onToggle?.())}
+        onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onToggle?.()}
+        onPointerEnter={() => setHovered(true)}
+        onPointerLeave={() => setHovered(false)}
+        className="group flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <BotFace seed={id} follow={hovered} className="block size-8 shrink-0 scale-[1.18]" />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="flex items-center gap-2">
+            <span className="min-w-0 truncate text-ui text-foreground">{title}</span>
+            {/* Held in place while hidden, so showing it moves nothing. Half
+                strength: it sits on every row the pointer crosses. */}
+            <span className="ml-auto flex shrink-0 items-center gap-1 opacity-0 group-focus-within:opacity-50 group-hover:opacity-50">
+              <Keys caps={["⌘", <MousePointerClick key="click" />]} />
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpen?.();
+                }}
+                className={cx(XS, GHOST, "pr-1.5 text-muted-foreground")}
+              >
+                Open task
+                <ArrowUpRight className="size-3" />
+              </button>
+            </span>
+            <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">{age}</span>
+          </span>
+          {need && <span className="min-w-0 truncate text-ui text-foreground/70">{need}</span>}
         </span>
-        {need && <span className="min-w-0 truncate text-ui text-foreground/70">{need}</span>}
-      </span>
+      </div>
+      {expanded && message && <div className="pr-3 pb-3 pl-[52px]">{message}</div>}
     </div>
   );
 }

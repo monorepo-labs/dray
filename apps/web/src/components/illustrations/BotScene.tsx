@@ -156,7 +156,10 @@ function initial(): Record<BotId, BotState> {
           todos: [{ text: "Decode bots from the serve wire", done: true }, { text: "Draw a row per bot chat", done: true }, { text: "Place bot chats in the list", done: false }],
           brief: "Show bot chats in the iOS session list.",
           tools: "9 tool calls · 3 files changed",
-          report: "Bot chats show in the list now. One question before I place them: above or below projects?",
+          report:
+            "Bot chats show in the session list now: one row per bot, with its face, its last reply and an unread count. Tapping a row opens its chat.\n\n" +
+            "One question before I place them. Above projects puts a bot's reply first when you open the app; below keeps the list opening on your own work, as it does today.\n\n" +
+            "They sit below for now. Moving them is one line in `SessionList.swift`, so either answer lands in a minute.",
           need: { text: "Should bot chats sit above or below projects in the iOS list?", age: "7m" },
         },
       ],
@@ -447,7 +450,11 @@ function TaskChat({ task }: { task: Task }) {
         <Turn>
           <UserBubble>{task.brief}</UserBubble>
           <ToolGroup label={task.tools} />
-          {task.report && <AssistantText>{task.report}</AssistantText>}
+          {task.report && (
+            <AssistantText>
+              <Message text={task.report} />
+            </AssistantText>
+          )}
           {task.working && (
             <div className="flex h-6 items-center">
               <Orb />
@@ -468,12 +475,36 @@ function TaskChat({ task }: { task: Task }) {
   );
 }
 
+/// A task's message as the app's markdown draws it, cut to what these
+/// scripts use: paragraphs on blank lines, `backticks` as inline code.
+function Message({ text }: { text: string }) {
+  return (
+    <div className="flex flex-col gap-3 text-chat">
+      {text.split("\n\n").map((para, i) => (
+        <p key={i}>
+          {para.split(/(`[^`]+`)/).map((part, j) =>
+            part.startsWith("`") ? (
+              <code key={j} className="rounded bg-muted px-1 py-0.5 font-mono text-code">
+                {part.slice(1, -1)}
+              </code>
+            ) : (
+              part
+            ),
+          )}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 /// A bot's chat, both sides as bubbles: from the top while it fits, then
 /// pinned to its newest line as the app's is, older lines running off the top.
 function BotChat({ scene, bot }: { scene: BotScene; bot: BotId }) {
   const state = scene.bots[bot];
   const taskOf = (id: string) => state.tasks.find((t) => t.id === id);
   const waiting = state.dismissed ? [] : state.tasks.filter((t) => !t.settled && t.need);
+  // The one row on the card showing its task's last message, as the app keeps one.
+  const [open, setOpen] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   // Every render: anything new lands at the foot. `scrollTop` moves even an
   // `overflow-hidden` box, which keeps the page's wheel off the drawing.
@@ -548,7 +579,17 @@ function BotChat({ scene, bot }: { scene: BotScene; bot: BotId }) {
         <div className="mx-auto w-full max-w-3xl shrink-0 px-6 pb-3">
           <WaitingCard onDismiss={() => scene.dismiss(bot)}>
             {waiting.map((t) => (
-              <WaitingRow key={t.id} id={t.id} title={t.title} age={t.need?.age ?? ""} need={t.need?.text} />
+              <WaitingRow
+                key={t.id}
+                id={t.id}
+                title={t.title}
+                age={t.need?.age ?? ""}
+                need={t.need?.text}
+                message={t.report && <Message text={t.report} />}
+                expanded={open === t.id}
+                onToggle={() => setOpen((o) => (o === t.id ? null : t.id))}
+                onOpen={() => scene.openTask(bot, t.id)}
+              />
             ))}
           </WaitingCard>
         </div>
