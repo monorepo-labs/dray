@@ -37,21 +37,20 @@ export function paneBounds(
 /// hold point is clamped too: on a window too narrow to hold the default, it is
 /// not a width this pane can take and snapping to it would breach the range.
 ///
-/// With a `rail`, any width under the floor lands on the rail: nothing between
-/// is ever drawn. `fromRail` is a drag starting there, which must cross halfway
-/// back to the floor to open, or a pane on the rail would only open once dragged
-/// the floor's whole width.
+/// With a `rail`, nothing between it and the floor is ever drawn: a width under
+/// halfway lands on the rail, one above it holds at the floor. One line both
+/// ways, as Finder's sidebar does. With the line at the floor itself, the first
+/// pixel past the default dropped to the rail with no stop at the floor.
 export function snapWidth(
   raw: number,
   min: number,
   max: number,
   snapTo: number,
   rail?: number,
-  fromRail = false,
 ): number {
   if (rail !== undefined) {
     const r = Math.min(rail, max);
-    if (raw < (fromRail ? (r + min) / 2 : min)) return r;
+    if (raw < (r + min) / 2) return r;
   }
   const clamped = Math.max(min, Math.min(max, raw));
   const target = Math.max(min, Math.min(max, snapTo));

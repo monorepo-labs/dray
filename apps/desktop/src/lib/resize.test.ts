@@ -36,20 +36,18 @@ describe("snapWidth", () => {
 });
 
 describe("snapWidth with a rail", () => {
-  it("drops to the rail the moment a drag goes under the floor", () => {
-    expect(snapWidth(239, 240, 480, 240, 56, false)).toBe(56);
-    expect(snapWidth(20, 240, 480, 240, 56, false)).toBe(56);
-    expect(snapWidth(240, 240, 480, 240, 56, false)).toBe(240);
-  });
-
-  it("opens from the rail once a drag crosses halfway to the floor", () => {
-    expect(snapWidth(147, 240, 480, 240, 56, true)).toBe(56);
-    expect(snapWidth(149, 240, 480, 240, 56, true)).toBe(240);
+  // Under the floor but above halfway is the floor, so a drag in from a wide
+  // sidebar stops at the default before it can reach the rail.
+  it("holds at the floor until the drag crosses halfway to the rail", () => {
+    expect(snapWidth(239, 240, 480, 240, 56)).toBe(240);
+    expect(snapWidth(149, 240, 480, 240, 56)).toBe(240);
+    expect(snapWidth(147, 240, 480, 240, 56)).toBe(56);
+    expect(snapWidth(20, 240, 480, 240, 56)).toBe(56);
   });
 
   it("leaves the range above the floor alone", () => {
-    expect(snapWidth(300, 240, 480, 240, 56, false)).toBe(300);
-    expect(snapWidth(246, 240, 480, 240, 56, false)).toBe(240);
+    expect(snapWidth(300, 240, 480, 240, 56)).toBe(300);
+    expect(snapWidth(246, 240, 480, 240, 56)).toBe(240);
   });
 });
 
