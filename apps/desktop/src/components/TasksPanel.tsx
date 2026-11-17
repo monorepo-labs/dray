@@ -60,13 +60,31 @@ function rowState(row: CrewRow, pr: PrMark | undefined): TaskState {
   return row.busy || row.background ? "busy" : "idle";
 }
 
+/// Each state's heading where groups carry one. The app's own words where it
+/// has them: the stalled card's "Waiting on you", the notice's "Ready to merge".
+const STATE_LABEL: Record<TaskState, string> = {
+  asking: "Waiting on you",
+  ready: "Ready to merge",
+  soon: "Almost ready",
+  idle: "Idle",
+  busy: "Working",
+};
+
+/// One group under a break, headed by `label` where it has one.
+export type TaskRun = { label: string | null; rows: CrewRow[] };
+
 /// The Pinned rows, then the runs drawn under them with a break between each.
 /// Sorted by state first, since a short list draws as one run and would
 /// otherwise keep newest-first, an idle task above one waiting on the reader.
+///
+/// `labelled` gives every state its own run under a heading. The heading says
+/// what a shared run left to each row's mark, so no run is shared and a short
+/// list splits too. Set aside stays unheaded: its fade already says it.
 export function taskRuns(
   rows: CrewRow[],
   prOf: (row: CrewRow) => PrMark | undefined,
-): { pinned: CrewRow[]; runs: CrewRow[][] } {
+  labelled = false,
+): { pinned: CrewRow[]; runs: TaskRun[] } {
   const rank = new Map(rows.map((r) => [r, TASK_STATES.indexOf(rowState(r, prOf(r)))]));
   const sorted = [...rows].sort((a, b) => rank.get(a)! - rank.get(b)!);
   // A run takes its strongest state, which only matters for the one run a
@@ -76,14 +94,33 @@ export function taskRuns(
   // unpins, so the two never meet.
   const pinned = sorted.filter((r) => r.item.pinned && !r.item.aside);
   const aside = sorted.filter((r) => r.item.aside);
-  const byState = stageRuns(
-    sorted.filter((r) => !r.item.aside && !pinned.includes(r)).map((r) => [r]),
-    runState,
-    SHARED_BREAKS,
-  );
-  const runs = [...TASK_STATES.map((s) => byState.get(s) ?? []), aside].filter((run) => run.length);
+  const rest = sorted.filter((r) => !r.item.aside && !pinned.includes(r));
+  const byState = labelled
+    ? new Map(TASK_STATES.map((s) => [s, rest.filter((r) => TASK_STATES[rank.get(r)!] === s)]))
+    : stageRuns(rest.map((r) => [r]), runState, SHARED_BREAKS);
+  const runs = [
+    ...TASK_STATES.map((s) => ({ label: labelled ? STATE_LABEL[s] : null, rows: byState.get(s) ?? [] })),
+    { label: null, rows: aside },
+  ].filter((run) => run.rows.length);
   return { pinned, runs };
 }
+
+const LABELS_KEY = "dray.dev.taskLabels";
+const labelsChanged = new Set<() => void>();
+// `typeof`, since the tests import this module with no DOM.
+let labelsOn = import.meta.env.DEV && typeof localStorage !== "undefined" && localStorage.getItem(LABELS_KEY) !== "off";
+const subscribeLabels = (l: () => void) => {
+  labelsChanged.add(l);
+  return () => labelsChanged.delete(l);
+};
+function toggleLabels() {
+  labelsOn = !labelsOn;
+  localStorage.setItem(LABELS_KEY, labelsOn ? "on" : "off");
+  labelsChanged.forEach((l) => l());
+}
+
+/// Pinned's heading, which every labelled group borrows.
+const HEADING = "flex min-h-6 items-center px-2 text-ui text-muted-foreground/70";
 
 /// A bot's Tasks tab: every session it handed work to, at any depth. They run
 /// hidden from the sidebar, so this is where they are found and handled: each
@@ -124,6 +161,9 @@ export default function TasksPanel({
   children?: React.ReactNode;
 }) {
   const fixAsks = useFixAsks();
+  // Dev-only switch between headed groups and bare breaks, so the two are
+  // judged in the whole app. Release builds keep the bare breaks.
+  const labelled = useSyncExternalStore(subscribeLabels, () => labelsOn);
   if (rows.length === 0) {
     return (
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -135,7 +175,7 @@ export default function TasksPanel({
     );
   }
 
-  const { pinned, runs } = taskRuns(rows, prOf);
+  const { pinned, runs } = taskRuns(rows, prOf, labelled);
   const draw = (row: CrewRow) => (
     <TaskRow
       key={row.item.sessionId}
@@ -156,9 +196,18 @@ export default function TasksPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <div className="flex shrink-0 flex-col px-1 py-2">
+      {import.meta.env.DEV && (
+        <button
+          type="button"
+          onClick={toggleLabels}
+          className="self-end rounded px-2 pb-1 font-mono text-[10px] leading-none text-muted-foreground/60 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Dev · group labels {labelled ? "on" : "off"}
+        </button>
+      )}
       {pinned.length > 0 && (
         <>
-          <div className="flex min-h-6 items-center px-2 text-ui text-muted-foreground/70">Pinned</div>
+          <div className={HEADING}>Pinned</div>
           {pinned.map(draw)}
         </>
       )}
@@ -166,7 +215,12 @@ export default function TasksPanel({
           Rows keep their keys across runs, so a task changing state moves. */}
       {runs.flatMap((run, i) => [
         (i > 0 || pinned.length > 0) && <div key={`gap ${i}`} aria-hidden className="h-4 shrink-0" />,
-        ...run.map(draw),
+        run.label && (
+          <div key={`label ${run.label}`} className={HEADING}>
+            {run.label}
+          </div>
+        ),
+        ...run.rows.map(draw),
       ])}
       </div>
       {children}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { taskRuns } from "@/components/TasksPanel";
+import { taskRuns, type TaskRun } from "@/components/TasksPanel";
 import type { CrewRow } from "@/lib/crew";
 import type { PrMark, SessionIndexItem } from "@/types/events";
 
@@ -26,7 +26,7 @@ const mark = (over: Partial<PrMark> = {}): PrMark => ({
   ...over,
 });
 
-const ids = (runs: CrewRow[][]) => runs.map((run) => run.map((r) => r.item.sessionId));
+const ids = (runs: TaskRun[]) => runs.map((run) => run.rows.map((r) => r.item.sessionId));
 
 const none = () => undefined;
 
@@ -98,5 +98,42 @@ describe("taskRuns", () => {
       ["failing", "merged", "draft"],
       ["busy"],
     ]);
+  });
+});
+
+describe("taskRuns, labelled", () => {
+  const labels = (runs: TaskRun[]) => runs.map((run) => run.label);
+
+  it("heads every state's run and leaves set aside bare", () => {
+    const prs: Record<string, PrMark> = {
+      ready: mark(),
+      running: mark({ checksState: "RUNNING", mergeStateStatus: "BLOCKED" }),
+    };
+    const { runs } = taskRuns(
+      [
+        row("busy", { busy: true }),
+        row("idle"),
+        row("ready"),
+        row("running"),
+        row("ask", { asking: true }),
+        row("old", {}, { aside: true }),
+      ],
+      (r) => prs[r.item.sessionId],
+      true,
+    );
+    expect(ids(runs)).toEqual([["ask"], ["ready"], ["running"], ["idle"], ["busy"], ["old"]]);
+    expect(labels(runs)).toEqual(["Waiting on you", "Ready to merge", "Almost ready", "Idle", "Working", null]);
+  });
+
+  it("splits a list too short to split unlabelled", () => {
+    const { runs } = taskRuns([row("idle"), row("ask", { asking: true })], none, true);
+    expect(ids(runs)).toEqual([["ask"], ["idle"]]);
+    expect(labels(runs)).toEqual(["Waiting on you", "Idle"]);
+  });
+
+  it("draws no heading for a state with nothing in it", () => {
+    const { pinned, runs } = taskRuns([row("pin", {}, { pinned: true }), row("idle1"), row("idle2")], none, true);
+    expect(pinned.map((r) => r.item.sessionId)).toEqual(["pin"]);
+    expect(labels(runs)).toEqual(["Idle"]);
   });
 });
