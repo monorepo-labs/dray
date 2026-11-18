@@ -800,11 +800,10 @@ async fn pass(sink: &Sink) {
         }
     }
     // A machine that is down has its tasks' PRs read by their GitHub repo.
+    // A task further on may be down while the machine that passed it along is not.
     for remote in state.remote.values() {
-        if !remote.machine.as_ref().is_some_and(|m| m.offline) {
-            continue;
-        }
-        for f in &remote.facts {
+        let down = remote.machine.as_ref().is_some_and(|m| m.offline);
+        for f in remote.facts.iter().filter(|f| down || f.offline) {
             if let Some(slug) = f.pr.as_ref().and_then(|p| crate::github::slug_from_pr_url(&p.url)) {
                 repos.insert(format!("{}{slug}", crate::github::SLUG_PREFIX));
             }
@@ -860,7 +859,7 @@ async fn pass(sink: &Sink) {
         let Some(machine) = &r.machine else { continue };
         for f in &r.facts {
             let mut f = f.clone();
-            if machine.offline {
+            if machine.offline || f.offline {
                 // Liveness is as last known; the PR is read afresh by its repo.
                 let slug = f.pr.as_ref().and_then(|p| crate::github::slug_from_pr_url(&p.url));
                 if let (Some(slug), Some(old)) = (slug, f.pr.clone()) {
