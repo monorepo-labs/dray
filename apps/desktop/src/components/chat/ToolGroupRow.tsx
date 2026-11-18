@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 
 import EventRow from "@/components/chat/EventRow";
 import { countChanges, editSides } from "@/lib/diff";
+import { completeCall } from "@/lib/olderPages";
+import { isCut } from "@/lib/thin";
 import { groupLabel, groupVerb } from "@/lib/tools";
 import type { ToolGroup } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
@@ -43,6 +45,21 @@ export default function ToolGroupRow({
   // Keyed on the call count rather than on `calls`: a committed call's input is
   // immutable, so a run can only ever grow, and re-parsing every diff in the
   // group on each of a streaming turn's renders is the cost this avoids.
+  // …bar a call out of a first frame, whose input its own read replaces. The
+  // header sums every edit in the group, so it asks for each one cut.
+  const cutEdits = group.calls.flatMap((e) =>
+    e.payload.type === "tool_call_started" && e.payload.toolType === "file_edit" && isCut(e.payload.input)
+      ? [`${e.sessionId}\n${e.payload.callId}`]
+      : [],
+  );
+  const cut = cutEdits.length > 0;
+  const cutKey = cutEdits.join();
+  useEffect(() => {
+    for (const key of cutKey ? cutKey.split(",") : []) {
+      const [sessionId, callId] = key.split("\n");
+      completeCall(sessionId, callId);
+    }
+  }, [cutKey]);
   const changes = useMemo(() => {
     let added = 0;
     let removed = 0;
@@ -55,6 +72,8 @@ export default function ToolGroupRow({
       if (payload.type !== "tool_call_started") continue;
       if (payload.toolType !== "file_edit" || payload.rawInput) continue;
 
+      // A sum over fragments is a wrong figure; the calls' own reads bring it.
+      if (isCut(payload.input)) return null;
       const sides = editSides(payload.input);
       if (!sides) continue;
 
@@ -65,7 +84,7 @@ export default function ToolGroupRow({
     }
 
     return any ? { added, removed } : null;
-  }, [group.key, group.calls.length]);
+  }, [group.key, group.calls.length, cut]);
 
   return (
     <div className="flex flex-col gap-1.5">

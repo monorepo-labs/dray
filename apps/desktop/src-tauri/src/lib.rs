@@ -108,6 +108,7 @@ pub mod sink;
 #[cfg(feature = "desktop")]
 pub mod star;
 pub mod store;
+pub mod thin;
 pub mod title;
 #[cfg(feature = "desktop")]
 #[path = "transcription/transcription.rs"]

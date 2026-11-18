@@ -36,7 +36,7 @@ import { lockedMidTurn } from "@/lib/liveControls";
 import { AGENT_LABELS, DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
 import { islandOn } from "@/lib/island";
 import { notifyOS } from "@/lib/notify";
-import { setOlderDropper, setOlderLoader } from "@/lib/olderPages";
+import { setCallReader, setOlderDropper, setOlderLoader } from "@/lib/olderPages";
 import { EMPTY_TASKS } from "@/lib/transcript";
 import { botStance, stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId } from "@/lib/provisional";
@@ -1010,6 +1010,7 @@ const handleSendMsg = async (
     const shell: SessionSnapshot = {
       events: [provisionalPrompt(provisional, sessionId, harness, message, attachments)],
       olderBefore: null,
+      lite: false,
       sessionId,
       harness,
       cwd,
@@ -2829,7 +2830,8 @@ const catchUpOrDrop = (sessionId: string, held?: AgentEvent[], queueKnown?: bool
 const refreshHeld = (sessionId: string) => {
   const server = serverOfSession(sessionId);
   if (server === LOCAL || !serverConnected(server)) return;
-  if (!sessionsRef.current.some((s) => s.sessionId === sessionId)) return;
+  const held = sessionsRef.current.find((s) => s.sessionId === sessionId);
+  if (!held) return;
   if (!sessionIndexItemsRef.current.some((i) => i.sessionId === sessionId)) return;
   catchUpOrDrop(sessionId, undefined, true);
 };
@@ -3013,6 +3015,56 @@ const setCrewSeen = (ids: string[]) => {
   crewSeenRef.current = new Set(ids);
 };
 
+/// How a transcript is asked for. A bot's chat draws the conversation and the
+/// tasks it started, never the work between, so it is read as that alone, on
+/// every server, older pages included: most of a bot's log is tool calls its
+/// chat has no row for. Anything else over a network comes with its tool
+/// bodies cut, the first frame and every page above it alike, and a row that
+/// needs one asks for its call (`readCalls`). This Mac reads its own disk and
+/// asks whole. So does a cloud machine: what is read from one is saved as the
+/// copy its task opens from once the machine is gone (`keepCloudTranscript`),
+/// when no call could be asked for. A server older than either argument
+/// answers whole.
+const readAs = (server: ServerId, cwd: string | null | undefined): { bot?: true; lite?: true } =>
+  isBotPath(cwd) ? { bot: true } : server !== LOCAL && !isCloud(server) ? { lite: true } : {};
+
+/// The whole events of tool calls a first frame cut, asked for by the rows
+/// that need them (`completeCall`) and laid over the cut ones by id. One call
+/// is a few KB where the tail it sits in is hundreds, and most rows are never
+/// opened. Asks made in one frame go out as one read. An id is held only
+/// while its read is out, so a row re-rendering meanwhile does not ask twice,
+/// and one whose read failed, or whose page was let go and read cut again
+/// (`dropOlder`), asks afresh the next time it needs its body.
+const callAsks = useRef(new Map<string, Set<string>>());
+const callBatch = useRef(new Map<string, Set<string>>());
+const readCalls = (sessionId: string, callId: string) => {
+  const asked = callAsks.current.get(sessionId) ?? new Set<string>();
+  if (asked.has(callId)) return;
+  callAsks.current.set(sessionId, asked.add(callId));
+  const first = callBatch.current.size === 0;
+  callBatch.current.set(sessionId, (callBatch.current.get(sessionId) ?? new Set<string>()).add(callId));
+  if (!first) return;
+  setTimeout(() => {
+    const batch = callBatch.current;
+    callBatch.current = new Map();
+    for (const [id, callIds] of batch) {
+      invoke<AgentEvent[]>("get_session_calls", { sessionId: id, callIds: [...callIds] })
+        .then((whole) => {
+          const byId = new Map(whole.map((e) => [e.id, e]));
+          if (!byId.size) return;
+          setSessions((prev) =>
+            prev.map((s) => (s.sessionId === id ? { ...s, events: s.events.map((e) => byId.get(e.id) ?? e) } : s)),
+          );
+        })
+        .catch((e) => console.error("could not read calls", id, e))
+        .finally(() => {
+          for (const callId of callIds) callAsks.current.get(id)?.delete(callId);
+        });
+    }
+  }, 16);
+};
+useEffect(() => setCallReader(readCalls), []);
+
 /// Reads a session's newest `FIRST_MOUNT` turns and lands them, answering
 /// whether the id resolved to anything. The rest of the log is read by
 /// `loadOlder` as the reader scrolls up toward it — a 21MB log is ~1.8MB of
@@ -3058,6 +3110,7 @@ const loadTail = (sessionId: string, touch = true, hover = false): Promise<boole
           {
             sessionId,
             turns: FIRST_MOUNT,
+            ...readAs(server, item?.cwd),
           },
           undefined,
           abort.signal,
@@ -3176,6 +3229,7 @@ const loadOlder = async (sessionId: string, turns = OLDER_PAGE_TURNS, attempt = 
       sessionId,
       before,
       turns,
+      ...readAs(serverOfSession(sessionId), session?.cwd),
     });
     setSessions((prev) =>
       prev.map((s) => {
