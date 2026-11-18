@@ -60,6 +60,29 @@ function rowState(row: CrewRow, pr: PrMark | undefined): TaskState {
   return row.busy || row.background ? "busy" : "idle";
 }
 
+export type TaskCounts = {
+  working: number;
+  ready: number;
+  /// Every other task: needs you, waiting on its PR, idle.
+  other: number;
+};
+
+/// What the bot composer's status counts, off `rowState` so it files a task
+/// where the Tasks tab does. Set-aside tasks count nowhere, as the tab's own
+/// count leaves them out. A task whose only activity is a background task is
+/// idle here: the status counts tasks, not what runs under them.
+export function taskCounts(rows: CrewRow[], prOf: (row: CrewRow) => PrMark | undefined): TaskCounts {
+  const counts: TaskCounts = { working: 0, ready: 0, other: 0 };
+  for (const row of rows) {
+    if (row.item.aside) continue;
+    const state = rowState(row, prOf(row));
+    if (state === "ready") counts.ready++;
+    else if (state === "busy" && row.busy) counts.working++;
+    else counts.other++;
+  }
+  return counts;
+}
+
 /// The Pinned rows, then the runs drawn under them with a break between each.
 /// Sorted by state first, since a short list draws as one run and would
 /// otherwise keep newest-first, an idle task above one waiting on the reader.
