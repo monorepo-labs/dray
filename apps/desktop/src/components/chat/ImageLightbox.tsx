@@ -5,6 +5,7 @@ import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, Play, X } from "lucid
 import VideoPlayer from "@/components/chat/VideoPlayer";
 import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import { useFirstFrame } from "@/hooks/useFirstFrame";
 import { cn } from "@/lib/utils";
 
 export type LightboxImage = { src: string; name: string; video?: boolean };
@@ -20,6 +21,7 @@ export function Thumb({ item, className }: { item: LightboxImage; className?: st
   const loading = loadedSrc !== item.src && "animate-pulse bg-muted";
   // An error stops the pulse too, or a broken file shimmers forever.
   const done = () => setLoadedSrc(item.src);
+  const first = useFirstFrame();
   if (!item.video) {
     return (
       <img
@@ -35,10 +37,11 @@ export function Thumb({ item, className }: { item: LightboxImage; className?: st
   }
   return (
     <span className={cn("relative block", loading, className)}>
-      {/* `#t` paints the first frame; `metadata` keeps it to that. */}
+      {/* `metadata` keeps the load to what the first frame needs. */}
       <video
-        src={`${item.src}#t=0.001`}
+        src={item.src}
         preload="metadata"
+        onLoadedMetadata={first.onLoadedMetadata}
         muted
         playsInline
         onLoadedData={done}

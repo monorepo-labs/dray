@@ -6,6 +6,7 @@ import { File, Virtualizer } from "@pierre/diffs/react";
 import Note from "@/components/changes/Note";
 import FileIcon from "@/components/FileIcon";
 import { useCodeThemeWithMode } from "@/hooks/useCodeTheme";
+import { useFirstFrame } from "@/hooks/useFirstFrame";
 import { useHighlighter } from "@/hooks/useHighlighter";
 import type { OpenFile } from "@/hooks/useOpenFiles";
 import type { DirEntry, FileBody } from "@/types/events";
@@ -234,6 +235,7 @@ function Body({
 /// note up over a file that may be fine now.
 function Video({ body }: { body: { path: string } }) {
   const [failed, setFailed] = useState<{ for: object; message: string } | null>(null);
+  const first = useFirstFrame();
   if (failed?.for === body) return <Note text={failed.message} error />;
 
   // The media error cannot tell a missing file from a codec it lacks, so ask
@@ -248,7 +250,13 @@ function Video({ body }: { body: { path: string } }) {
 
   return (
     <div className="flex min-h-full items-center justify-center bg-black">
-      <video src={fileSrc(body.path)} controls className="max-h-full max-w-full" onError={onError} />
+      <video
+        src={fileSrc(body.path)}
+        controls
+        className="max-h-full max-w-full"
+        onLoadedMetadata={first.onLoadedMetadata}
+        onError={onError}
+      />
     </div>
   );
 }
