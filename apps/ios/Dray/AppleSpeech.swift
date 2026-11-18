@@ -31,12 +31,14 @@ final class AppleSpeech {
         guard #available(iOS 26, *) else { return }
         if case .downloading = status { return }
         guard let module = await Self.module() else { status = .unsupported; return }
-        status = switch await AssetInventory.status(forModules: [module]) {
+        let asset = await AssetInventory.status(forModules: [module])
+        status = switch asset {
         case .installed: .ready
-        case .downloading: .downloading(0)
-        case .supported: .needsDownload
+        case .supported, .downloading: .needsDownload
         default: .unsupported
         }
+        // A download started elsewhere: joined, so its progress shows and it ends at ready.
+        if asset == .downloading { download() }
     }
 
     /// Fetches the model ahead of the first dictation: Settings' pick, or a recording starting.

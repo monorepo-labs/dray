@@ -187,7 +187,8 @@ final class Dictations {
             release()
         }
         since[draft] = nil
-        pending[draft] = nil
+        // A read in flight owns the note (Apple's download line); its own clear skips a cancelled run.
+        if pending.removeValue(forKey: draft) != nil { notes[draft] = nil }
         phase[draft] = nil
     }
 
