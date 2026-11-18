@@ -131,11 +131,10 @@ jobs:
             echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"
 
-      # The release Mac keeps its disk, so a run killed before the action's own
-      # cleanup leaves a keychain the next import would trip over.
-      - if: runner.environment == 'self-hosted'
-        run: security delete-keychain signing_temp.keychain 2>/dev/null || true
-      - uses: apple-actions/import-codesign-certs@63fff01cd422d4b7b855d40ca1e9d34d2de9427d # v3
+      # The release Mac signs from its user's login keychain, which already
+      # holds the certificate; importing would add keychains to that account.
+      - if: runner.environment == 'github-hosted'
+        uses: apple-actions/import-codesign-certs@63fff01cd422d4b7b855d40ca1e9d34d2de9427d # v3
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -295,11 +294,10 @@ jobs:
       # wrong shape even if the bundler offered one. The bundler imports the
       # certificate only once it starts signing, which is after the hook, so
       # it is imported here first.
-      # The release Mac keeps its disk, so a run killed before the action's own
-      # cleanup leaves a keychain the next import would trip over.
-      - if: runner.environment == 'self-hosted'
-        run: security delete-keychain signing_temp.keychain 2>/dev/null || true
-      - uses: apple-actions/import-codesign-certs@63fff01cd422d4b7b855d40ca1e9d34d2de9427d # v3
+      # The release Mac signs from its user's login keychain, which already
+      # holds the certificate; importing would add keychains to that account.
+      - if: runner.environment == 'github-hosted'
+        uses: apple-actions/import-codesign-certs@63fff01cd422d4b7b855d40ca1e9d34d2de9427d # v3
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -325,8 +323,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        # The Tauri CLI the aarch64 leg carried over; see there.
-        run: node src-tauri/target/tauri-cli/node_modules/@tauri-apps/cli/tauri.js bundle --target universal-apple-darwin --features cef --config src-tauri/tauri.cef.conf.json --config src-tauri/tauri.island.conf.json --config src-tauri/tauri.cli.conf.json
+        # The Tauri CLI the aarch64 leg carried over; see there. On the release
+        # Mac the certificate is unset so the bundler signs from the login
+        # keychain instead of making one of its own.
+        run: |
+          if [ "$RUNNER_ENVIRONMENT" = self-hosted ]; then unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD; fi
+          node src-tauri/target/tauri-cli/node_modules/@tauri-apps/cli/tauri.js bundle --target universal-apple-darwin --features cef --config src-tauri/tauri.cef.conf.json --config src-tauri/tauri.island.conf.json --config src-tauri/tauri.cli.conf.json
 
       # The bundler *warns* and carries on when notarization credentials are
       # missing or rejected — only an absent team id is fatal. So a release
