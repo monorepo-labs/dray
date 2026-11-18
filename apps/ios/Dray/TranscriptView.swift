@@ -126,6 +126,7 @@ struct TranscriptView: View {
         }
         .page()
         .environment(\.imageServer, store.connection(key.server))
+        .environment(\.callSession, key)
         // A card arriving is the agent stopping to ask: felt, once per card.
         .onChange(of: asks.count + taskAsks.count) { old, new in if new > old { Haptic.warning() } }
         .safeAreaInset(edge: .bottom, spacing: 0) { ReplyDock(key: key) }
@@ -319,8 +320,19 @@ struct TranscriptView: View {
         return chat.firstIndex(of: segments[0]).flatMap { $0 > 0 ? chat[$0 - 1] : nil }
     }
 
-    /// Earlier turns are paged in by asking, so the screen never jumps under a reader mid-sentence.
-    /// Past the top session's start, the next ask draws the session before it.
+    /// Reads what sits above the top: the page above, or past the top session's start, the
+    /// session before it, held once read, which is what draws it (`segments`).
+    private func loadEarlier(_ bot: Bot?, _ segments: [SessionKey]) async {
+        let top = segments[0]
+        if store.transcripts[top]?.olderBefore != nil {
+            await store.loadOlder(top)
+        } else if let before = hidden(bot, segments) {
+            await store.load(before)
+        }
+    }
+
+    /// Earlier turns are paged in by asking, so the screen never jumps under a reader mid-sentence:
+    /// the button, a spinner while the page reads, or why it failed and Retry.
     @ViewBuilder private func older(_ bot: Bot?, _ segments: [SessionKey]) -> some View {
         let top = segments[0]
         HStack {
@@ -329,23 +341,21 @@ struct TranscriptView: View {
                     .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
                 Spacer(minLength: Theme.Space.s)
             }
-            Button(store.olderErrors[top] == nil ? "Load earlier" : "Retry") {
-                Task {
-                    if store.transcripts[top]?.olderBefore != nil {
-                        await store.loadOlder(top)
-                    } else if let before = hidden(bot, segments) {
-                        // Held once read, which is what draws it (`segments`).
-                        await store.load(before)
-                    }
+            if store.olderLoading.contains(top), store.olderErrors[top] == nil {
+                ProgressView().accessibilityIdentifier("loadingEarlier")
+            } else {
+                Button(store.olderErrors[top] == nil ? "Load earlier" : "Retry") {
+                    Task { await loadEarlier(bot, segments) }
                 }
+                    .font(Theme.Font.footnoteStrong)
+                    .foregroundStyle(Theme.secondary)
+                    .padding(.horizontal, Theme.Space.m)
+                    .padding(.vertical, Theme.Space.s)
+                    .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.sm, style: .continuous))
             }
-                .font(Theme.Font.footnoteStrong)
-                .foregroundStyle(Theme.secondary)
-                .padding(.horizontal, Theme.Space.m)
-                .padding(.vertical, Theme.Space.s)
-                .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.sm, style: .continuous))
         }
-        .frame(maxWidth: .infinity)
+        // One height for the button and the spinner, so the swap moves nothing under it.
+        .frame(maxWidth: .infinity, minHeight: 40)
     }
 }
 
@@ -661,6 +671,11 @@ struct ImageButton<Content: View>: View {
     }
 }
 
+extension EnvironmentValues {
+    /// The session whose rows are drawn, for a row cut by a `lite` read to ask for its call.
+    @Entry var callSession: SessionKey?
+}
+
 /// One call: its verb, what it acted on, and its output on tap.
 struct ToolRow: View {
     let call: ToolCall
@@ -668,6 +683,8 @@ struct ToolRow: View {
     var showLabel = true
     @State private var open = false
     @Environment(\.openRun) private var openRun
+    @Environment(\.callSession) private var session
+    @Environment(Store.self) private var store
 
     var body: some View {
         let pending = call.state == .pending
@@ -706,7 +723,8 @@ struct ToolRow: View {
             ForEach(Array(call.images.enumerated()), id: \.offset) { _, ref in
                 ImageButton(ref: ref) { InlineImage(ref: ref) }
             }
-            if open, let output = call.output {
+            // A cut output opens onto nothing until its call lands, never onto a fragment.
+            if open, !call.cut, let output = call.output {
                 ScrollView(.horizontal) {
                     Text(output.count > 6000 ? String(output.prefix(6000)) + "\n…" : output)
                         .font(Theme.Font.footnote)
@@ -717,6 +735,13 @@ struct ToolRow: View {
                 .well()
                 .transition(.opacity)
             }
+        }
+        // Asked once needed: opened, or an edit, whose collapsed row counts its lines. On `open`
+        // too, so a read that failed is asked again by opening the row again.
+        .task(id: "\(open)|\(call.cut)") {
+            guard call.cut, open || (call.toolType == "file_edit" && isCut(call.input)),
+                  let session, let id = call.callId else { return }
+            store.completeCall(session, id)
         }
     }
 }
@@ -731,10 +756,14 @@ struct GroupRow: View {
     /// The one target the whole run hit, named instead of counted.
     let target: String?
     @State private var open = false
+    @Environment(\.callSession) private var session
+    @Environment(Store.self) private var store
 
     var body: some View {
         let pending = calls.contains { $0.state == .pending }
-        let counts = calls.compactMap(editCounts)
+        // The header sums every edit, so it asks for each one cut and shows no sum of some of them.
+        let cutEdits = calls.filter { $0.toolType == "file_edit" && isCut($0.input) }.compactMap(\.callId)
+        let counts = cutEdits.isEmpty ? calls.compactMap(editCounts) : []
         let added = counts.reduce(0) { $0 + $1.added }, removed = counts.reduce(0) { $0 + $1.removed }
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             Button {
@@ -762,6 +791,10 @@ struct GroupRow: View {
                 .overlay(alignment: .leading) { Rectangle().fill(Theme.border).frame(width: 1) }
                 .transition(.opacity)
             }
+        }
+        .task(id: cutEdits) {
+            guard let session else { return }
+            for id in cutEdits { store.completeCall(session, id) }
         }
     }
 }

@@ -167,7 +167,7 @@ No `Origin` header is sent, so the server's browser check does not apply; the
 token answers for the connection.
 
 Commands used: `list_session_index_items`, `get_session_by_id`,
-`get_session_page`, `send_msg`, `interrupt_session`, `respond_permission`,
+`get_session_page`, `get_session_calls`, `send_msg`, `interrupt_session`, `respond_permission`,
 `answer_questions`, `list_projects`, `agent_availability`, `list_models`,
 `list_branches`, `checkout_branch`, `mark_session_read`, `work_status`,
 `prs_for_branch`, `merge_pr`, `mark_pr_ready`, `reopen_pr`, `set_last_selected_project`,

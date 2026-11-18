@@ -847,25 +847,18 @@ final class Store {
     /// Re-reads the newest turns and lays them over what is held: older pages
     /// the read starts inside are kept, the read's own events follow in log
     /// order, and anything that arrived live while it was out goes last.
-    /// Matched on id, since a subagent restarts `seq`.
-    ///
-    /// Over a network the read is asked for `lite` first: the newest screen in
-    /// a frame small enough to cross in one flight, where the whole one takes
-    /// two to four round trips on a connection that sat idle. It draws, and
-    /// the whole read is laid over it the same way. This Mac's is asked whole.
-    private func reload(_ key: SessionKey, whole: Bool = false) async {
+    /// Matched on id, since a subagent restarts `seq`. An event already held
+    /// keeps its held copy: a logged event never changes, and a call a row
+    /// read whole stays whole under the cut copy the read brings.
+    private func reload(_ key: SessionKey) async {
         guard let c = connections[key.server] else { return }
         let before = transcripts[key]?.ids ?? []
         let drop = drops
-        let lite = !whole && key.server != home
         do {
-            var args: [String: JSON] = ["sessionId": .string(key.id), "turns": 8]
-            if lite { args["lite"] = true }
-            let raw = try await c.callRaw("get_session_by_id", args)
+            let args: [String: JSON] = ["sessionId": .string(key.id), "turns": 8]
+            let raw = try await c.callRaw("get_session_by_id", args.merging(readAs(key)) { $1 })
             let snap = try await decodeReply(raw, as: Snapshot?.self)
-            let thin = snap?.lite == true
-            // Never a first frame: the cache is what the next launch draws.
-            if snap != nil, !thin, home == nil { Cache.write(Cache.transcript(key)) { raw } }
+            if snap != nil, home == nil { Cache.write(Cache.transcript(key)) { raw } }
             // Dropped while the read was out: writing it back would hold it, growing, until the next drop.
             guard drop == drops || key == kept else { return }
             // Deleted from another client. Said, or the transcript waits on a read that already answered.
@@ -875,27 +868,79 @@ final class Store {
             }
             let read = Set(snap.events.map(\.id))
             let held = transcripts[key]?.events ?? []
+            let heldById = Dictionary(held.map { ($0.id, $0) }) { a, _ in a }
             let live = held.filter { !before.contains($0.id) && !read.contains($0.id) }
             var t = Transcript(olderBefore: snap.olderBefore)
             if let first = snap.events.first, let i = held.firstIndex(where: { $0.id == first.id }) {
                 for e in held[..<i] { t.append(e) }
                 t.olderBefore = transcripts[key]?.olderBefore
             }
-            for e in snap.events + live { t.append(e) }
+            for e in snap.events.map({ heldById[$0.id] ?? $0 }) + live { t.append(e) }
             transcripts[key] = t
             transcriptErrors[key] = nil
             serverRead.insert(key)
-            if thin { await reload(key, whole: true) }
         } catch {
             transcriptErrors[key] = error.localizedDescription
         }
     }
 
+    /// How a transcript is asked for, the desktop's `readAs`. A bot's chat draws
+    /// the conversation and the tasks it started, so it is read as that alone,
+    /// older pages included. Anything else over a network comes with its tool
+    /// bodies cut, and a row that needs one asks for its call (`completeCall`).
+    /// The Island's This Mac reads whole. A server older than both answers whole.
+    private func readAs(_ key: SessionKey) -> [String: JSON] {
+        if bot(key) != nil { return ["bot": true] }
+        return key.server == home ? [:] : ["lite": true]
+    }
+
+    /// Calls asked for whole and not back yet, so a row drawn again meanwhile asks once.
+    /// One whose read failed asks again the next time it needs its body.
+    @ObservationIgnored private var callAsks: [SessionKey: Set<String>] = [:]
+    @ObservationIgnored private var callBatch: [SessionKey: Set<String>] = [:]
+
+    /// Reads one tool call's whole events, for a row whose body a `lite` read cut,
+    /// and lays them over the cut ones by id. Asks made within a frame go out as one read.
+    func completeCall(_ key: SessionKey, _ callId: String) {
+        guard callAsks[key]?.contains(callId) != true else { return }
+        callAsks[key, default: []].insert(callId)
+        let first = callBatch.isEmpty
+        callBatch[key, default: []].insert(callId)
+        guard first else { return }
+        Task {
+            try? await Task.sleep(for: .milliseconds(16))
+            let batch = callBatch
+            callBatch = [:]
+            for (key, ids) in batch { Task { await readCalls(key, ids) } }
+        }
+    }
+
+    private func readCalls(_ key: SessionKey, _ ids: Set<String>) async {
+        defer { callAsks[key]?.subtract(ids) }
+        do {
+            let whole: [AgentEvent] = try await call(key.server, "get_session_calls",
+                                                     ["sessionId": .string(key.id), "callIds": .array(ids.map { .string($0) })])
+            let byId = Dictionary(whole.map { ($0.id, $0) }) { a, _ in a }
+            guard !byId.isEmpty, var t = transcripts[key] else { return }
+            t.events = t.events.map { byId[$0.id] ?? $0 }
+            transcripts[key] = t
+        } catch {
+            print("could not read calls", key.id, error)
+        }
+    }
+
+    /// Pages above being read: the button draws a spinner, and a second tap reads nothing.
+    private(set) var olderLoading: Set<SessionKey> = []
+
     func loadOlder(_ key: SessionKey) async {
-        guard let c = connections[key.server], let before = transcripts[key]?.olderBefore else { return }
+        guard let c = connections[key.server], let before = transcripts[key]?.olderBefore,
+              !olderLoading.contains(key) else { return }
+        olderLoading.insert(key)
+        defer { olderLoading.remove(key) }
         olderErrors[key] = nil
         do {
-            let page: Snapshot = try await c.call("get_session_page", ["sessionId": .string(key.id), "before": JSON(before), "turns": 16])
+            let args: [String: JSON] = ["sessionId": .string(key.id), "before": JSON(before), "turns": 16]
+            let page: Snapshot = try await c.call("get_session_page", args.merging(readAs(key)) { $1 })
             guard var t = transcripts[key] else { return }
             let older = page.events.filter { !t.ids.contains($0.id) }
             t.events.insert(contentsOf: older, at: 0)
