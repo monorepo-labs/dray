@@ -161,7 +161,7 @@ struct TranscriptView: View {
                     Button { showingTasks = true } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "checklist")
-                            if !botTasks.isEmpty { Text("\(botTasks.count)").font(Theme.Font.footnoteStrong.font.monospacedDigit()) }
+                            if !botTasks.isEmpty { Text("\(botTasks.count)").font(Theme.Font.headline.font.monospacedDigit()) }
                         }
                     }
                     // The label stays "Tasks", which UI tests find the button by.
