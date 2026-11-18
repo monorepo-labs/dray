@@ -33,7 +33,7 @@ struct RunWithSheet: View {
                         }
                     }
                 }
-                PickSection("Model", footer: "Double-tap a model to star it. Starred ones come first.") {
+                PickSection("Model") {
                     ModelChips(models: task.list, harness: task.harness, selected: task.modelId, pick: task.pickModel)
                 }
                 settingsCard
@@ -392,22 +392,17 @@ struct ChipRow<Content: View>: View {
     }
 }
 
-/// One choice in a chip row: white when picked. An agent carries its mark, a starred model its star.
+/// One choice in a chip row: white when picked. An agent carries its mark.
 struct PickChip: View {
     let label: String
     let selected: Bool
     var harness: String?
-    var starred = false
-    var star: (() -> Void)?
     let pick: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
             if let harness {
                 AgentMark(harness: harness).frame(width: 13, height: 13).padding(.trailing, 6)
-            }
-            if starred {
-                Image(systemName: "star.fill").font(.system(size: 10)).foregroundStyle(Theme.accent).padding(.trailing, 5)
             }
             Text(label).font(selected ? Theme.Font.pill : Theme.Font.subhead)
         }
@@ -417,8 +412,6 @@ struct PickChip: View {
         .frame(height: 36)
         .background(selected ? Theme.text : Theme.tile, in: Capsule())
         .contentShape(Capsule())
-        // Double first: a single tap waits out the second, which is the price of starring by double-tap.
-        .onTapGesture(count: 2) { (star ?? pick)() }
         .onTapGesture {
             Haptic.select()
             pick()
@@ -426,53 +419,41 @@ struct PickChip: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityValue(starred ? "Starred" : "")
-        .accessibilityActions {
-            if let star { Button(starred ? "Unstar" : "Star", action: star) }
-        }
     }
 }
 
-/// An agent's models as chips, starred ones first. Stars live on this phone, per agent.
+/// An agent's shortlisted models as chips, and More models to edit the list. It lives on this phone, per agent.
 struct ModelChips: View {
     let models: [Model]
     let harness: String
     let selected: String
     let pick: (String) -> Void
-    @State private var stars: [String] = []
     /// The models the row draws, per agent; nil until the reader edits it, which
-    /// draws every row the server doesn't mark secondary, as the desktop seeds its stars.
+    /// draws every row the server doesn't mark secondary, as the desktop seeds its shortlist.
     @State private var shortlist: [String]?
     @State private var library = false
 
-    private var key: String { "stars." + harness }
     private var listKey: String { "shortlist." + harness }
     private func listed(_ m: Model) -> Bool { shortlist?.contains(m.id) ?? (m.secondary != true) }
     /// The shortlist, and the pick if it is off it. pi and fx run their own default where
     /// nothing is picked, so that is a choice too.
     private var choices: [(id: String, label: String)] {
-        let all = (Picks.defaultModel[harness] == "" ? [("", "Default")] : [])
+        (Picks.defaultModel[harness] == "" ? [("", "Default")] : [])
             + models.filter { listed($0) || $0.id == selected }.map { ($0.id, $0.label) }
-        return all.filter { stars.contains($0.0) } + all.filter { !stars.contains($0.0) }
     }
 
     var body: some View {
         ChipRow(focus: selected) {
             ForEach(choices, id: \.id) { m in
-                PickChip(label: m.label, selected: m.id == selected, starred: stars.contains(m.id),
-                         star: m.id.isEmpty ? nil : { toggle(m.id) }) { pick(m.id) }
+                PickChip(label: m.label, selected: m.id == selected) { pick(m.id) }
                     .id(m.id)
             }
             if !models.isEmpty {
                 PickChip(label: "More models", selected: false) { library = true }
             }
         }
-        .animation(Theme.motion, value: stars)
         .animation(Theme.motion, value: shortlist)
-        .task(id: harness) {
-            stars = UserDefaults.standard.stringArray(forKey: key) ?? []
-            shortlist = UserDefaults.standard.stringArray(forKey: listKey)
-        }
+        .task(id: harness) { shortlist = UserDefaults.standard.stringArray(forKey: listKey) }
         .sheet(isPresented: $library) {
             PickSheet(title: "Models") {
                 PickSection(nil, footer: "Models switched on show in the picker.") {
@@ -498,12 +479,6 @@ struct ModelChips: View {
         if on { ids.append(m.id) }
         shortlist = ids
         UserDefaults.standard.set(ids, forKey: listKey)
-    }
-
-    private func toggle(_ id: String) {
-        if let i = stars.firstIndex(of: id) { stars.remove(at: i) } else { stars.append(id) }
-        UserDefaults.standard.set(stars, forKey: key)
-        Haptic.firm()
     }
 }
 
