@@ -54,12 +54,13 @@ export async function boat<T>(
   return json as T;
 }
 
-/// Every sandbox carrying `label`, across pages.
-export async function listByLabel(label: string): Promise<Sandbox[]> {
+/// Every sandbox carrying all of `labels` (`key=value` each), across pages.
+/// Boat ANDs a repeated `label`.
+export async function listByLabel(...labels: string[]): Promise<Sandbox[]> {
   const out: Sandbox[] = [];
   let cursor: string | null = null;
   do {
-    const query = new URLSearchParams({ label, limit: "200" });
+    const query = new URLSearchParams([...labels.map((l) => ["label", l]), ["limit", "200"]]);
     if (cursor) query.set("cursor", cursor);
     const page: { sandboxes: Sandbox[]; pageInfo?: { hasMore: boolean; nextCursor: string | null } } =
       await boat("GET", `/sandboxes?${query}`, undefined, true);

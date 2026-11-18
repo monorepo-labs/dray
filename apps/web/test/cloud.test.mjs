@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { createServer } from "node:net";
 import { after, before, describe, test } from "node:test";
 import { fakeBoat } from "./fake-boat.mjs";
+import { call as callAt, next } from "./next-dev.mjs";
 
 /// The Dray Cloud routes (#857) under a real `next dev`, against a faked boat.
 /// Run with `pnpm test` from apps/web.
@@ -15,45 +14,6 @@ const ORG = "dray-cloud-org";
 const hmac = (what) => createHmac("sha256", SECRET).update(what).digest("hex");
 const SERVE_TOKEN = hmac("serve-token");
 const MACHINE_SECRET = hmac("machine");
-
-async function freePort() {
-  const server = createServer();
-  await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  const { port } = server.address();
-  await new Promise((r) => server.close(r));
-  return port;
-}
-
-/// Starts `next dev` with `env` and waits until it answers.
-async function next(env) {
-  const port = await freePort();
-  const child = spawn("node_modules/.bin/next", ["dev", "-p", String(port), "-H", "127.0.0.1"], {
-    cwd: new URL("..", import.meta.url),
-    env: { ...process.env, ...env, NEXT_TELEMETRY_DISABLED: "1" },
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: true,
-  });
-  let log = "";
-  child.stdout.on("data", (d) => (log += d));
-  child.stderr.on("data", (d) => (log += d));
-  const base = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 240; i++) {
-    if (child.exitCode !== null) throw new Error(`next dev exited:\n${log}`);
-    try {
-      await fetch(`${base}/api/cloud/machines`);
-      const stop = () => {
-        const exited = new Promise((r) => child.once("exit", r));
-        process.kill(-child.pid, "SIGTERM");
-        return exited;
-      };
-      return { base, log: () => log, stop };
-    } catch {
-      await new Promise((r) => setTimeout(r, 500));
-    }
-  }
-  child.kill();
-  throw new Error(`next dev never answered:\n${log}`);
-}
 
 const ROUTES = [
   ["GET", "/api/cloud/machines"],
@@ -97,15 +57,7 @@ describe("with DRAY_CLOUD_KEY", () => {
     await boat?.close();
   });
 
-  const call = async (method, path, { key = KEY, body } = {}) => {
-    const res = await fetch(app.base + path, {
-      method,
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    const text = await res.text();
-    return { status: res.status, json: text ? JSON.parse(text) : null };
-  };
+  const call = (method, path, { key = KEY, body } = {}) => callAt(app.base, method, path, { key, body });
   const callsTo = (method, path) => boat.calls.filter((c) => c.method === method && c.path === path);
   const waitFor = async (what, check) => {
     for (let i = 0; i < 100; i++) {
@@ -119,6 +71,8 @@ describe("with DRAY_CLOUD_KEY", () => {
   test("wrong keys answer 401", async () => {
     assert.equal((await call("GET", "/api/cloud/machines", { key: "nope" })).status, 401);
     assert.equal((await call("GET", "/api/cloud/machines", { key: MACHINE_SECRET })).status, 401);
+    // Accounts are off here, so an app credential is refused unread.
+    assert.equal((await call("GET", "/api/cloud/machines", { key: "dra_someone" })).status, 401);
     const beat = await call("POST", "/api/cloud/heartbeat", { key: KEY, body: { sandbox: "bx_23456789", busy: true } });
     assert.equal(beat.status, 401);
   });
@@ -148,7 +102,12 @@ describe("with DRAY_CLOUD_KEY", () => {
       ],
     });
     first = boat.sandboxes.get(json.machine.id);
-    assert.deepEqual(json.machine, { id: first.id, state: "starting", url: `wss://${first.subdomain}-7317.on.boat.dev` });
+    assert.deepEqual(json.machine, {
+      id: first.id,
+      state: "starting",
+      url: `wss://${first.subdomain}-7317.on.boat.dev`,
+      token: SERVE_TOKEN,
+    });
     assert.notEqual(MACHINE_SECRET, KEY);
     // Hosted again once running though the create already hosted it: boat
     // never starts a create's localhost relay (#1003).

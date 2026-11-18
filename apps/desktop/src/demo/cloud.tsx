@@ -14,9 +14,9 @@
 //
 // Attach a project with a GitHub remote on This Mac, pick Cloud beside it and
 // send. A clone onto a cloud machine runs `gh repo clone` for real, into
-// `~/dray/<repo>`, which every machine here shares. `&key=` starts with a key
-// saved; without it, Settings → Servers asks for one, and any key but `bad` is
-// taken.
+// `~/dray/<repo>`, which every machine here shares. `&account=1` starts signed
+// in to Dray, `&key=1` with the old shared key saved, both at once as the switch
+// from key to account starts. Settings → Servers takes any key but `bad`.
 
 import { emit } from "@tauri-apps/api/event";
 import { mockConvertFileSrc, mockIPC } from "@tauri-apps/api/mocks";
@@ -55,7 +55,8 @@ type Machine = {
 };
 
 const machines: Machine[] = [];
-let cloud: CloudInfo = { on: !!query.get("key"), keyed: !!query.get("key"), error: null };
+const keyed = { key: !!query.get("key"), signedIn: !!query.get("account") };
+let cloud: CloudInfo = { on: keyed.key || keyed.signedIn, keyed: keyed.key || keyed.signedIn, ...keyed, error: null };
 const changed = channel<void>();
 
 const announce = () => {
@@ -105,7 +106,7 @@ const kept = new Map<string, unknown>();
 
 /// `POST /machines`: a spare `dray-serve` becomes this task's machine.
 async function start(): Promise<string> {
-  if (!cloud.keyed) throw "Dray Cloud has no key. Add it in Settings, Servers.";
+  if (!cloud.keyed) throw "Sign in to Dray in Settings, Account, to use Dray Cloud.";
   if (failNext) {
     failNext = false;
     changed.emit();
@@ -135,7 +136,9 @@ mockIPC(
         return cloud;
       case "set_cloud_key":
         if (a.key === "bad") throw "Dray Cloud didn't accept this key.";
-        cloud = { on: !!a.key, keyed: !!a.key, error: null };
+        cloud = a.key
+          ? { ...cloud, on: true, keyed: true, key: true, error: null }
+          : { ...cloud, on: cloud.signedIn && cloud.on, keyed: cloud.signedIn, key: false, error: null };
         announceCloud();
         for (const m of machines) setState(m, m.state);
         return null;
