@@ -210,14 +210,19 @@ final class Store {
     }
 
     /// Folds the copies an older build let in into the first, on the newest copy's address and token.
+    /// Every address and token a kept entry has taken in stays a match, or a copy naming one it moved off survives.
     private func dedupe() {
         var kept: [Server] = []
+        var names: [Set<String>] = []
         for s in servers {
             let token = Keychain.get(s.id.uuidString)
-            guard let i = kept.firstIndex(where: { address($0.url) == address(s.url) || (token != nil && Keychain.get($0.id.uuidString) == token) }) else {
+            let own = Set([address(s.url)] + [token].compactMap { $0 })
+            guard let i = names.firstIndex(where: { !$0.isDisjoint(with: own) }) else {
                 kept.append(s)
+                names.append(own)
                 continue
             }
+            names[i].formUnion(own)
             kept[i].on = kept[i].on || s.on
             kept[i].url = s.url
             if let token { Keychain.set(token, for: kept[i].id.uuidString) }

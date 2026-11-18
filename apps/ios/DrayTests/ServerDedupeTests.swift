@@ -43,6 +43,19 @@ final class ServerDedupeTests: XCTestCase {
         XCTAssertEqual(saved.map(\.id), [first.id, other.id], "the fold is saved")
     }
 
+    /// The kept entry moves to B, yet a later copy at A still folds in.
+    func testFoldKeepsEveryAddress() {
+        let a1 = Server(id: UUID(), name: "Studio Mac", url: "ws://10.0.0.5:7777")
+        let b1 = Server(id: UUID(), name: "Tunnel", url: "wss://tunnel.example")
+        let a2 = Server(id: UUID(), name: "Again", url: "ws://10.0.0.5:7777")
+        save([(a1, String(repeating: "1", count: 64)), (b1, String(repeating: "1", count: 64)), (a2, String(repeating: "2", count: 64))])
+
+        let store = Store()
+        XCTAssertEqual(store.servers.map(\.id), [a1.id])
+        XCTAssertEqual(store.servers[0].url, "ws://10.0.0.5:7777")
+        XCTAssertEqual(Keychain.get(a1.id.uuidString), String(repeating: "2", count: 64))
+    }
+
     func testMovedAddressUpdatesTheEntry() {
         let token = String(repeating: "d", count: 64)
         let s = Server(id: UUID(), name: "Studio Mac", url: "wss://old.example")
