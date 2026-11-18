@@ -47,6 +47,11 @@ struct SessionKey: Hashable {
     let id: String
 }
 
+/// One address however it was typed: `http`, a missing scheme, case or a trailing slash.
+private func address(_ url: String) -> String {
+    (socketURL(url)?.absoluteString ?? url).lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+}
+
 /// One folder however it was written: a bot's path and its chat's cwd differ by a trailing slash at most.
 func samePath(_ a: String, _ b: String) -> Bool {
     a.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == b.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -140,6 +145,7 @@ final class Store {
         if let data = UserDefaults.standard.data(forKey: "servers"),
            let saved = try? JSONDecoder().decode([Server].self, from: data) {
             servers = saved
+            dedupe()
         }
         for s in servers where s.on { start(s) }
         watchNetwork()
@@ -174,12 +180,42 @@ final class Store {
 
     // MARK: Servers
 
+    /// Adds a server, or where it is already saved, takes the new token and turns it on.
     func addServer(name: String, url: String, token: String) {
+        if let held = saved(url: url, token: token) {
+            if Keychain.get(held.id.uuidString) != token { updateToken(held.id, token) }
+            return setServerOn(held.id, true)
+        }
         let s = Server(id: UUID(), name: name, url: url)
         Keychain.set(token, for: s.id.uuidString)
         servers.append(s)
         save()
         start(s)
+    }
+
+    /// The saved server this address or token names. A token is the server's own, so
+    /// either matching is the same machine, however it was reached or named.
+    func saved(url: String, token: String) -> Server? {
+        servers.first { $0.via == nil && (address($0.url) == address(url) || Keychain.get($0.id.uuidString) == token) }
+    }
+
+    /// Folds the copies an older build let in into the first, on the newest copy's token.
+    private func dedupe() {
+        var kept: [Server] = []
+        for s in servers {
+            let token = Keychain.get(s.id.uuidString)
+            guard let i = kept.firstIndex(where: { address($0.url) == address(s.url) || (token != nil && Keychain.get($0.id.uuidString) == token) }) else {
+                kept.append(s)
+                continue
+            }
+            kept[i].on = kept[i].on || s.on
+            if let token { Keychain.set(token, for: kept[i].id.uuidString) }
+            Keychain.delete(s.id.uuidString)
+            try? FileManager.default.removeItem(at: Cache.folder(s.id))
+        }
+        guard kept.count < servers.count else { return }
+        servers = kept
+        save()
     }
 
     func removeServer(_ s: Server) {

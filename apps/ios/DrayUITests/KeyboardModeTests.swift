@@ -107,6 +107,64 @@ final class KeyboardModeTests: XCTestCase {
         }
     }
 
+    /// The field's keyboard goes on a tap outside it and a swipe down below it, on the
+    /// list and in a task's chat, and a tap inside keeps it (#1244).
+    func testKeyboardCloses() throws {
+        guard let url = env["DRAY_URL"], let token = env["DRAY_TOKEN"], let task = env["DRAY_TASK"] else {
+            throw XCTSkip("set TEST_RUNNER_DRAY_URL, _TOKEN and _TASK")
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["-servers", ""]
+        app.launch()
+        var link = URLComponents(string: "dray://connect")!
+        link.queryItems = [.init(name: "url", value: url), .init(name: "token", value: token), .init(name: "name", value: "Test server")]
+        app.open(link.url!)
+        XCTAssertTrue(app.buttons["Add"].waitForExistence(timeout: 10))
+        app.buttons["Add"].tap()
+
+        let input = app.descendants(matching: .any)["chatInput"]
+        let keyboard = app.keyboards.firstMatch
+        func open(_ words: String) {
+            input.tap()
+            XCTAssertTrue(keyboard.waitForExistence(timeout: 5), "the field opened no keyboard")
+            input.typeText(words)
+            sleep(1)
+        }
+        func closed(_ how: String) {
+            XCTAssertTrue(keyboard.waitForNonExistence(timeout: 3), "\(how) left the keyboard up")
+            sleep(1)
+        }
+        func swipeBelow() {
+            let start = input.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1)).withOffset(CGVector(dx: 0, dy: 24))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 160)))
+        }
+        func tapAbove() { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap() }
+
+        XCTAssertTrue(input.waitForExistence(timeout: 20), "no text field on the list")
+        sleep(1)
+        snap(app, "one-line-empty")
+        open("Add a dark mode toggle")
+        snap(app, "one-line")
+        input.tap()
+        sleep(1)
+        XCTAssertTrue(keyboard.exists, "a tap inside the field closed the keyboard")
+        tapAbove()
+        closed("a tap above the field")
+        open(" now")
+        swipeBelow()
+        closed("a swipe below the field")
+
+        app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", task)).firstMatch.tap()
+        sleep(3)
+        open("Add a test for it")
+        snap(app, "task-one-line")
+        tapAbove()
+        closed("a tap above the task's field")
+        open(" too")
+        swipeBelow()
+        closed("a swipe below the task's field")
+    }
+
     private func snap(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
