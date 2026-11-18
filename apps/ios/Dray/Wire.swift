@@ -256,6 +256,9 @@ struct BotStalls: Decodable, Hashable {
     let rows: [StallRow]
     /// The bot's tasks, set-aside ones left out.
     let tasks: Int
+    /// The tasks the server judged; the rest, on machines too old to send it
+    /// their facts, the phone judges itself.
+    let judged: [String]
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Key.self)
@@ -263,6 +266,7 @@ struct BotStalls: Decodable, Hashable {
         chatId = try c.decode(String.self, forKey: "chatId")
         rows = ((try? c.decode([Lenient<StallRow>].self, forKey: "rows")) ?? []).compactMap(\.value)
         tasks = (try? c.decode(Int.self, forKey: "tasks")) ?? 0
+        judged = (try? c.decode([String].self, forKey: "judged")) ?? []
     }
 }
 

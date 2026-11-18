@@ -2519,9 +2519,15 @@ pub async fn nudge_bot(
     session_id: String,
     problem: Option<String>,
     ready: Option<u32>,
+    // The task's `modified` as the server judged it: a task that moved since
+    // is no longer that stall. An app judges as it sends, so it names none.
+    judged: Option<String>,
     sink: Sink,
 ) -> Result<bool, crate::Fail> {
     let task = store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
+    if task.status == store::SessionStatus::InProgress || judged.is_some_and(|m| m != task.modified) {
+        return Ok(false);
+    }
     let chat = bots::bot_chat_of(&task).await;
     let owed = chat.is_none() && crate::remote_reports::owed(&session_id).await;
     // A sub-task's nudge goes where its reports do: the task that started it
@@ -2534,14 +2540,25 @@ pub async fn nudge_bot(
     // The server judges stalls itself now (#1259), and an older app still
     // nudges beside it: whichever asks second is told it went.
     let mark = crate::stalls::nudge_mark(&task, problem.as_deref(), ready);
-    if crate::stalls::nudged(&mark).await {
+    if !crate::stalls::claim_nudge(&mark).await {
         return Ok(true);
     }
+    let sent = send_nudge(&task, problem, ready, route, &sink).await;
+    match sent {
+        Ok(()) => crate::stalls::note_nudged(mark).await,
+        Err(_) => crate::stalls::release_nudge(&mark).await,
+    }
+    sent.map(|()| true).map_err(Into::into)
+}
+
+/// Delivers a stall nudge on `route`, for [`nudge_bot`], which holds its claim.
+async fn send_nudge(task: &SessionIndexItem, problem: Option<String>, ready: Option<u32>, route: NudgeRoute, sink: &Sink) -> Result<()> {
+    let session_id = task.session_id.clone();
     // A need written while the PR waited on review would outlive the review
     // on the ready row, since approving a PR does not move its task.
     if ready.is_some() && problem.is_none() && task.need.is_some() {
         store::set_session_need(&session_id, None).await?;
-        announce_change(std::slice::from_ref(&session_id), &sink).await;
+        announce_change(std::slice::from_ref(&session_id), sink).await;
     }
     let idle = idle_since(&task.modified);
     let prompt = match (problem, ready) {
@@ -2558,15 +2575,14 @@ pub async fn nudge_bot(
     match route {
         NudgeRoute::Chat(chat) => {
             let send = SendMessage { session_id: chat, prompt, from_session_id: Some(session_id) };
-            send_message(send, None, &sink).await?;
+            send_message(send, None, sink).await?;
         }
         NudgeRoute::Outbox => {
             let parent = task.parent_session_id.as_deref().unwrap_or_default();
             crate::remote_reports::keep(&session_id, parent, &task.title, prompt).await?;
         }
     }
-    crate::stalls::note_nudged(mark).await;
-    Ok(true)
+    Ok(())
 }
 
 /// Where a stall nudge goes: into the bot's chat or the live task above it on

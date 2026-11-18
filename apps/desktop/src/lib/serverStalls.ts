@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 
 import type { CrewRow } from "@/lib/crew";
 import type { Stall } from "@/lib/stalled";
+import { prRepoSlug } from "@/lib/pr";
 import { invoke, listen, qualifyRecord, serverOfPath, type ServerId } from "@/lib/transport";
 import type { BotStalls, SessionIndexItem, StallRow } from "@/types/events";
 
@@ -77,6 +78,7 @@ export function serverCard(card: BotStalls | undefined, rows: readonly CrewRow[]
     if (own && (own.item.modified !== r.item.modified || own.busy || own.asking)) return [];
     const row = own ?? farRow(r, server);
     const machine = r.machine ?? "Its machine";
+    const repo = own ? undefined : (r.repo ?? prRepoSlug(r.pr?.url));
     return [
       {
         row,
@@ -87,13 +89,15 @@ export function serverCard(card: BotStalls | undefined, rows: readonly CrewRow[]
         key: r.key,
         judged: { need: r.need ?? null, repo: r.repo ?? null },
         offline: own ? undefined : r.offline ? `${machine} is offline` : `${machine} is not connected here`,
+        via: repo ? { server, repo } : undefined,
       },
     ];
   });
 }
 
 /// A row for a task this app does not hold, keyed under a server id no list
-/// names, so it reads as offline everywhere a row's server is asked about.
+/// names, so it reads as offline wherever a row's server is asked about. For
+/// drawing only: its merge goes by `Stall.via`, never by this id.
 function farRow(r: StallRow, server: ServerId): CrewRow {
   const where = r.machine ? `machine:${r.machine}` : server;
   const item = (r.machine ? qualifyRecord(r.item, where) : qualifyRecord(r.item, server)) as SessionIndexItem;

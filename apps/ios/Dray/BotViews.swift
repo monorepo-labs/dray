@@ -597,10 +597,14 @@ extension Store {
     /// The card `botId`'s server judged, as rows to draw; `nil` where that server
     /// is too old to judge stalls or is not connected, and the phone judges them.
     /// A task the phone holds is drawn from its own row, and one that moved since
-    /// the server's last pass is left out, as the desktop does.
-    func judgedStalls(_ server: UUID, botId: String?) -> [Stall]? {
+    /// the server's last pass is left out, as the desktop does. A task the server
+    /// could not judge, on a machine too old to send it facts, is judged here.
+    func judgedStalls(_ server: UUID, botId: String?, tasks: [SessionKey], now: Date) -> [Stall]? {
         guard let botId, serverState[server] == .connected, let cards = stallCards[server] else { return nil }
-        return (cards[botId]?.rows ?? []).compactMap { r in
+        let card = cards[botId]
+        let known = Set(card?.judged ?? [])
+        let local = stalls(tasks.filter { !known.contains($0.id) }, now: now)
+        let judged: [Stall] = (card?.rows ?? []).compactMap { r in
             let key = items.keys.first { $0.id == r.item.sessionId }
             if let key, let own = items[key] {
                 if own.modified != r.item.modified || own.busy || isAsking(key) { return nil }
@@ -609,6 +613,8 @@ extension Store {
             return Stall(task: SessionKey(server: server, id: r.item.sessionId), item: r.item, pr: r.pr,
                          ready: r.kind == "ready", judged: r, held: false)
         }
+        // The server's rows hold their order; the phone's own go after them.
+        return judged + local
     }
 
 
@@ -700,8 +706,9 @@ struct StalledCard: View {
         // Stalls ripen with time alone, so the card looks again each minute.
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let dismissed = Set(dismissedRaw.split(separator: "\n").map(String.init))
-            let all = store.judgedStalls(chat.server, botId: botId) ?? store.stalls(tasks, now: context.date)
-            let rows = all.filter { !dismissed.contains($0.id) }
+            let card = store.judgedStalls(chat.server, botId: botId, tasks: tasks, now: context.date)
+                ?? store.stalls(tasks, now: context.date)
+            let rows = card.filter { !dismissed.contains($0.id) }
             let capped = !all && rows.count > stallRowsShown
             if !rows.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {

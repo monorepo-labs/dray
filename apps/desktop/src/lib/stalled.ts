@@ -33,6 +33,9 @@ export type Stall = {
   /// Why the row has nothing to open, where the server said so rather than
   /// this app's own server list.
   offline?: string;
+  /// A task this app holds no connection to merges through the bot's server,
+  /// by repo, which also settles it on the task's own machine.
+  via?: { server: string; repo: string };
 };
 
 /// What a task can mend itself, by PR status: `problem` as its bot is told

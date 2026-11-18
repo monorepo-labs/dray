@@ -660,7 +660,12 @@ rows: Array<StallRow>,
 /**
  * The bot's tasks, set-aside ones left out: the Tasks tab's count.
  */
-tasks: number, fixes: Array<FixAsk>, };
+tasks: number, fixes: Array<FixAsk>, 
+/**
+ * Every task of the bot's this server judged. One it could not — on a
+ * machine too old to send its facts — is left to the client to judge.
+ */
+judged: Array<string>, };
 
 /**
  * What the composer's branch picker needs to render and guard itself.

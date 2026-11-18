@@ -121,6 +121,9 @@ pub struct BotStalls {
     /// The bot's tasks, set-aside ones left out: the Tasks tab's count.
     pub tasks: u32,
     pub fixes: Vec<FixAsk>,
+    /// Every task of the bot's this server judged. One it could not — on a
+    /// machine too old to send its facts — is left to the client to judge.
+    pub judged: Vec<String>,
 }
 
 /// What a task's server knows about it: what the judge reads. A machine
@@ -414,6 +417,9 @@ struct Kept {
     nudged: Vec<String>,
     #[serde(default)]
     fixes: Vec<FixAsk>,
+    /// Nudges being sent now, so a second sender of the same one waits it out.
+    #[serde(skip)]
+    sending: HashSet<String>,
 }
 
 static KEPT: tokio::sync::Mutex<Option<Kept>> = tokio::sync::Mutex::const_new(None);
@@ -449,9 +455,22 @@ pub async fn nudged(mark: &str) -> bool {
     with_kept(|k| (k.nudged.iter().any(|m| m == mark), false)).await
 }
 
+/// Takes the nudge with this mark for sending: false where it went out
+/// already or another sender has it, so the app and this server never both
+/// deliver one. A taker ends with [`note_nudged`] or [`release_nudge`].
+pub async fn claim_nudge(mark: &str) -> bool {
+    with_kept(|k| (!k.nudged.iter().any(|m| m == mark) && k.sending.insert(mark.to_string()), false)).await
+}
+
+/// Gives a claimed nudge back after a failed send, for the next try.
+pub async fn release_nudge(mark: &str) {
+    with_kept(|k| (k.sending.remove(mark), false)).await;
+}
+
 /// Notes that a nudge with this mark went out.
 pub async fn note_nudged(mark: String) {
     with_kept(|k| {
+        k.sending.remove(&mark);
         if k.nudged.contains(&mark) {
             return ((), false);
         }
@@ -674,6 +693,17 @@ async fn here() -> Here {
     Here { items, bots, owed }
 }
 
+/// Every task here whose stalls matter: each bot's, and each owed tree.
+fn ours_of(here: &Here) -> Vec<&SessionIndexItem> {
+    let mut ours: Vec<&SessionIndexItem> = Vec::new();
+    for (_, chat) in &here.bots {
+        let roots: Vec<&str> = chat.iter().map(String::as_str).collect();
+        ours.extend(crew(&here.items, &roots));
+    }
+    ours.extend(owed_tree(&here.items, &here.owed));
+    ours
+}
+
 /// The tasks under `owed` and the owed tasks themselves, unsettled.
 fn owed_tree<'a>(items: &'a [SessionIndexItem], owed: &'a [String]) -> Vec<&'a SessionIndexItem> {
     let roots: Vec<&str> = owed.iter().map(String::as_str).collect();
@@ -722,20 +752,7 @@ async fn pass(sink: &Sink) {
     load_remote(&mut state).await;
     drop_untracked(&mut state).await;
 
-    let mut ours: Vec<&SessionIndexItem> = Vec::new();
-    for (_, chat) in &here.bots {
-        let roots: Vec<&str> = chat.iter().map(String::as_str).collect();
-        ours.extend(crew(&here.items, &roots));
-    }
-    ours.extend(owed_tree(&here.items, &here.owed));
-    for item in &ours {
-        let moved = state.moved_at.get(&item.session_id).is_none_or(|(m, _)| m != &item.modified);
-        if moved {
-            state.moved_at.insert(item.session_id.clone(), (item.modified.clone(), now));
-        }
-    }
-    let ids: HashSet<&str> = ours.iter().map(|i| i.session_id.as_str()).collect();
-    state.moved_at.retain(|id, _| ids.contains(id.as_str()));
+    let ours = ours_of(&here);
 
     // Only repos where a task could stall are read: a busy task waits on work.
     let mut repos: HashSet<String> = HashSet::new();
@@ -766,7 +783,21 @@ async fn pass(sink: &Sink) {
         (repo, issued, answer)
     });
     let answers = futures_util::future::join_all(reads).await;
+    // Judged on what holds once GitHub has answered, not before: a task may
+    // have moved or gone back to work while the reads ran.
+    let here = self::here().await;
+    let live = crate::serve::live_flags();
+    let now = now_ms();
+    let ours = ours_of(&here);
     let mut state = STATE.lock().await;
+    for item in &ours {
+        let moved = state.moved_at.get(&item.session_id).is_none_or(|(m, _)| m != &item.modified);
+        if moved {
+            state.moved_at.insert(item.session_id.clone(), (item.modified.clone(), now));
+        }
+    }
+    let ids: HashSet<&str> = ours.iter().map(|i| i.session_id.as_str()).collect();
+    state.moved_at.retain(|id, _| ids.contains(id.as_str()));
     for (repo, issued, answer) in answers {
         let marks = state.marks.entry(repo).or_default();
         marks.tried_at = issued;
@@ -846,7 +877,8 @@ async fn pass(sink: &Sink) {
         }
         let rows: Vec<StallRow> = stalls.into_iter().filter(|s| s.fix.is_none()).map(|s| s.row).collect();
         let count = tasks.iter().filter(|t| !t.aside).count() as u32;
-        cards.push(BotStalls { bot_id: bot.id.clone(), chat_id: chat_id.clone(), rows, tasks: count, fixes: Vec::new() });
+        let judged = judged.iter().map(|j| j.facts.item.session_id.clone()).collect();
+        cards.push(BotStalls { bot_id: bot.id.clone(), chat_id: chat_id.clone(), rows, tasks: count, fixes: Vec::new(), judged });
     }
     let live_keys: HashSet<String> = state.ready_since.keys().filter(|k| by_id.contains_key(k.split(':').next().unwrap_or_default())).cloned().collect();
     state.ready_since.retain(|k, _| live_keys.contains(k));
@@ -896,11 +928,17 @@ async fn nudge(due: Vec<(Stall, Option<Remote>)>, tried: HashMap<String, i64>, n
         }
         STATE.lock().await.tried.insert(mark.clone(), now);
         let sent = match &machine {
-            None => crate::orchestration::nudge_bot(item.session_id.clone(), problem.clone(), ready, sink.clone())
+            None => crate::orchestration::nudge_bot(
+                item.session_id.clone(),
+                problem.clone(),
+                ready,
+                Some(item.modified.clone()),
+                sink.clone(),
+            )
                 .await
                 .map(Some)
                 .map_err(|e| format!("{e:?}")),
-            Some(machine) => nudge_remote(machine, &item.session_id, problem.as_deref(), ready).await,
+            Some(machine) => nudge_remote(machine, item, problem.as_deref(), ready).await,
         };
         match sent {
             // Nobody will read it yet: tried again after `NUDGE_RETRY`.
@@ -921,9 +959,11 @@ async fn nudge(due: Vec<(Stall, Option<Remote>)>, tried: HashMap<String, i64>, n
 
 /// A task on another machine is nudged by its own server, which keeps the
 /// nudge with its reports for the poll to bring here.
-async fn nudge_remote(machine: &Remote, session_id: &str, problem: Option<&str>, ready: Option<u32>) -> Result<Option<bool>, String> {
+async fn nudge_remote(machine: &Remote, task: &SessionIndexItem, problem: Option<&str>, ready: Option<u32>) -> Result<Option<bool>, String> {
     let saved = crate::machines::load().await.into_iter().find(|m| m.id == machine.id).ok_or("machine removed")?;
-    let args = serde_json::json!({ "sessionId": session_id, "problem": problem, "ready": ready });
+    let args = serde_json::json!({
+        "sessionId": task.session_id, "problem": problem, "ready": ready, "judged": task.modified,
+    });
     let answer = tokio::time::timeout(crate::machines::SWEEP, crate::machines::call(&saved, "nudge_bot", args))
         .await
         .map_err(|_| format!("{} did not answer in time", machine.name))??;

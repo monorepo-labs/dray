@@ -94,15 +94,20 @@ export function useStalledTasks({
     const markFresh = (row: CrewRow) => (prReadAt(row) ?? 0) > (movedAt.current.get(row.item.sessionId)?.at ?? Infinity);
     const out = new Map<
       string,
-      { chatId: string; rows: CrewRow[]; stalls: Stall[]; card: Stall[]; served: boolean; fixes: BotStalls["fixes"] }
+      { chatId: string; rows: CrewRow[]; stalls: Stall[]; card: Stall[]; local: Stall[]; fixes: BotStalls["fixes"] }
     >();
     for (const { bot, chatId, rows } of botCrews(bots, items, { statusBySession, askingSessions, tasksBySession, servingBySession })) {
       const server = serverOfPath(bot.path);
       const judged = serverConnected(server) ? served.get(server) : undefined;
       if (judged) {
         const card = judged.find((c) => c.botId === bot.id);
-        const stalls = serverCard(card, rows, server);
-        out.set(bot.id, { chatId, rows, stalls, card: stalls, served: true, fixes: card?.fixes ?? [] });
+        // A task on a machine too old to send the server its facts is
+        // judged here, and nudged from here, as before.
+        const known = new Set(card?.judged ?? []);
+        const rest = rows.filter((r) => !known.has(r.item.sessionId));
+        const local = rest.length ? stalledTasks(rest, prOf, readySince.current, now, markFresh) : [];
+        const stalls = [...serverCard(card, rows, server), ...local].sort((a, b) => a.since - b.since);
+        out.set(bot.id, { chatId, rows, stalls, card: stalls.filter(onCard), local, fixes: card?.fixes ?? [] });
         continue;
       }
       for (const { item } of rows) {
@@ -110,7 +115,7 @@ export function useStalledTasks({
           movedAt.current.set(item.sessionId, { modified: item.modified, at: Date.now() });
       }
       const stalls = stalledTasks(rows, prOf, readySince.current, now, markFresh);
-      out.set(bot.id, { chatId, rows, stalls, card: stalls.filter(onCard), served: false, fixes: [] });
+      out.set(bot.id, { chatId, rows, stalls, card: stalls.filter(onCard), local: stalls, fixes: [] });
     }
     return out;
   }, [bots, items, statusBySession, askingSessions, tasksBySession, servingBySession, prOf, prReadAt, now, served]);
@@ -135,8 +140,7 @@ export function useStalledTasks({
     if (now - mountedAt.current < NUDGE_HOLD_MS) return;
     const nudged = new Set(readLocalStorage<string[]>(NUDGED_KEY, []));
     const due = [...byBot.values()]
-      .filter((b) => !b.served)
-      .flatMap((b) => b.stalls)
+      .flatMap((b) => b.local)
       // A ready stall is nudged even under a need, which a waiting stall
       // wrote and `nudge_bot` clears for the bot to judge afresh.
       .filter(

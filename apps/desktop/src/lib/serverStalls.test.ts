@@ -20,7 +20,14 @@ function stall(id: string, over: Partial<StallRow> = {}): StallRow {
   return { key: `${id}:waiting:${MODIFIED}`, kind: "waiting", checking: false, since: 1, item: item(id), offline: false, ...over };
 }
 
-const card = (rows: StallRow[]): BotStalls => ({ botId: "b", chatId: "c", rows, tasks: rows.length, fixes: [] });
+const card = (rows: StallRow[]): BotStalls => ({
+  botId: "b",
+  chatId: "c",
+  rows,
+  tasks: rows.length,
+  fixes: [],
+  judged: rows.map((r) => r.item.sessionId),
+});
 
 describe("serverCard", () => {
   it("draws a held task from its own row, in the server's order and with its need", () => {
@@ -48,6 +55,14 @@ describe("serverCard", () => {
     const [s] = serverCard(card([stall("far", { machine: "boat", offline: true })]), [], "local");
     expect(s.offline).toBe("boat is offline");
     expect(serverOfPath(s.row.item.cwd)).toBe("machine:boat");
+  });
+
+  it("merges a task it cannot reach through the bot's server, by repo", () => {
+    const pr = { number: 7, url: "https://github.com/acme/widgets/pull/7" } as StallRow["pr"];
+    const [far] = serverCard(card([stall("far", { kind: "ready", machine: "boat", pr })]), [], "srv");
+    expect(far.via).toEqual({ server: "srv", repo: "acme/widgets" });
+    const [held] = serverCard(card([stall("a", { kind: "ready", pr })]), [crew("a")], "srv");
+    expect(held.via).toBeUndefined();
   });
 
   it("draws nothing for a bot with no card", () => {

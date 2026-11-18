@@ -3386,6 +3386,14 @@ function App() {
     if (removeTree) removeWorktree(item.sessionId, "asked");
   };
 
+  /// A card row for a task this app reaches no machine for: merged by its repo
+  /// through the bot's server, which settles it on the task's own machine.
+  const mergeVia = async (via: { server: string; repo: string }, row: CrewRow, pr: PrMark, method: MergeMethod) => {
+    await invoke("merge_pr", { cwd: slugKey(via.repo), number: pr.number, method, settle: row.item.sessionId }, via.server);
+    noteMergeForStar();
+    prMarks.refreshAfterWrite();
+  };
+
   /// A task row's Merge: from its own checkout, or by its GitHub repo through
   /// This Mac while its machine is down, which the merge never needed.
   const mergeRow = async (row: CrewRow, pr: PrMark, method: MergeMethod) => {
@@ -4385,8 +4393,10 @@ function App() {
                 stalls={stalls}
                 now={stalled.now}
                 onOpen={(id, alone) => void openTask(id, alone)}
-                onMerge={mergeRow}
-                mergeBlock={(row, pr) => taskMergeBlock(serverOfPath(row.item.cwd), pr.url)}
+                onMerge={(row, pr, method, stall) =>
+                  stall.via ? mergeVia(stall.via, row, pr, method) : mergeRow(row, pr, method)
+                }
+                mergeBlock={(row, pr, stall) => (stall.via ? null : taskMergeBlock(serverOfPath(row.item.cwd), pr.url))}
               />
             }
             unread={!!selectedSessionId && openedUnread === selectedSessionId}

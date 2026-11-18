@@ -2072,7 +2072,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         create_bot(name: String, avatar: Option<crate::bots::BotAvatar>) => crate::bots::create_bot(name, avatar).await;
         bot_previews(session_ids: Vec<String>) => crate::bots::bot_previews(session_ids).await;
         bot_task_reply(session_id: String, task_id: String) => crate::bots::bot_task_reply(session_id, task_id).await;
-        nudge_bot(session_id: String, problem: Option<String>, ready: Option<u32>) => crate::orchestration::nudge_bot(session_id, problem, ready, sink).await;
+        nudge_bot(session_id: String, problem: Option<String>, ready: Option<u32>, judged: Option<String>) => crate::orchestration::nudge_bot(session_id, problem, ready, judged, sink).await;
         auto_merge_card(session_id: String, task_id: String, number: u64, url: String, branch: String) =>
             crate::orchestration::auto_merge_card(session_id, task_id, number, url, branch, sink).await;
         start_bot(id: String, harness: crate::session::Harness, model: crate::models::ModelId, effort: Option<crate::models::Effort>, permission_mode: crate::events::ApprovalPolicy, fast: bool) =>
