@@ -3,15 +3,27 @@
 <!--
   Merged into the bundle's own Info.plist by Tauri's bundler.
 
-  NSMicrophoneUsageDescription is not optional: macOS kills a process that
-  reaches for the microphone without one, rather than refusing the request, so
-  its absence presents as the app disappearing the first time the mic button is
-  pressed. The sentence is what the system prompt shows, so it says what the
-  audio is for and where it goes.
+  These keys are not optional: macOS kills a process that reaches for the
+  microphone, Bluetooth or camera without one, rather than refusing the
+  request, so a missing key presents as the app disappearing. The sentence is
+  what the system prompt shows, so it says what the access is for.
+
+  Everything past the microphone is for web pages in the in-app browser.
+  Bluetooth is a passkey's "Use phone or tablet" (hybrid transport). Camera
+  and location are refused anyway until Entitlements.plist grants them under
+  the hardened runtime; the strings are here so a page asking can never crash.
 -->
 <plist version="1.0">
   <dict>
     <key>NSMicrophoneUsageDescription</key>
     <string>Dray transcribes what you say into the composer. Audio is processed on this Mac and never leaves it.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Websites in Dray's browser use Bluetooth to sign in with a passkey on your phone or tablet.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Websites in Dray's browser may ask to use your camera.</string>
+    <key>NSLocationUsageDescription</key>
+    <string>Websites in Dray's browser may ask for your location.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Websites in Dray's browser may ask for your location.</string>
   </dict>
 </plist>
