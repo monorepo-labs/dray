@@ -69,8 +69,10 @@ runs:
     # that nothing reads again. The version bump in every release changes
     # Cargo.lock, so the exact key misses once per release by design and the
     # prefix restore carries the tree across; only `dray` itself moved.
-    # Skipped on the release Mac: its cargo build dir persists between runs,
-    # and a restore would only lay older artifacts over it.
+    # Skipped on the release Mac. Its runners set CARGO_BUILD_BUILD_DIR to a
+    # folder outside the checkout, so checkout's `git clean` never reaches the
+    # intermediates and they persist between runs; a restore would only lay
+    # older artifacts over them.
     - id: cache
       if: runner.environment == 'github-hosted'
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
