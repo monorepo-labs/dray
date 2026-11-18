@@ -368,7 +368,7 @@ jobs:
           CLI="$APP/Contents/MacOS/dray-cli"
           codesign --verify --strict "$CLI"
           codesign -d --verbose=2 "$CLI" 2>&1 | grep -q 'flags=.*runtime'
-          lipo "$CLI" -verify_arch arm64 x86_64
+          for a in arm64 x86_64; do lipo "$CLI" -verify_arch "$a"; done
           "$CLI" --version
 
       # What tauri-action published, under its names: the bundler's
