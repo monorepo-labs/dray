@@ -625,6 +625,13 @@ pub async fn remote_answered(id: &str, name: &str, facts: Option<Vec<Value>>) {
     POKE.notify_one();
 }
 
+/// A task on another machine as that machine last described it.
+pub async fn last_known(id: &str) -> Option<SessionIndexItem> {
+    let mut state = STATE.lock().await;
+    load_remote(&mut state).await;
+    state.remote.values().flat_map(|r| &r.facts).find(|f| f.item.session_id == id).map(|f| f.item.clone())
+}
+
 /// A machine failed the reports poll, or is turned off: its tasks stay, from
 /// what it last said, marked offline.
 pub async fn remote_down(id: &str) {
@@ -792,6 +799,8 @@ async fn pass(sink: &Sink) {
     let ours = ours_of(&here);
 
     // Only repos where a task could stall are read: a busy task waits on work.
+    // Every task's repo keeps what it last read, so a pause is not a forgetting.
+    let mut kept: HashSet<String> = ours.iter().map(|i| i.project_path.clone()).collect();
     let mut repos: HashSet<String> = HashSet::new();
     for item in &ours {
         let f = facts_of(item, &live, &state.marks, &state.moved_at);
@@ -808,8 +817,13 @@ async fn pass(sink: &Sink) {
                 repos.insert(format!("{}{slug}", crate::github::SLUG_PREFIX));
             }
         }
+        for f in &remote.facts {
+            if let Some(slug) = f.pr.as_ref().and_then(|p| crate::github::slug_from_pr_url(&p.url)) {
+                kept.insert(format!("{}{slug}", crate::github::SLUG_PREFIX));
+            }
+        }
     }
-    state.marks.retain(|repo, _| repos.contains(repo));
+    state.marks.retain(|repo, _| kept.contains(repo));
     let due: Vec<String> =
         repos.into_iter().filter(|r| state.marks.get(r).is_none_or(|m| now >= m.due)).collect();
     drop(state);
@@ -837,17 +851,20 @@ async fn pass(sink: &Sink) {
     for (repo, issued, answer) in answers {
         let marks = state.marks.entry(repo).or_default();
         marks.tried_at = issued;
-        marks.known = true;
         match answer {
             Ok(Ok(prs)) => {
                 marks.prs = prs;
                 marks.read_at = issued;
                 marks.due = issued + MARKS_FRESH;
+                marks.known = true;
             }
             // A failed read changes nothing, so the last good answer stands.
+            // Only one no retry can mend answers "no PR" outright; any other
+            // leaves an unread repo unread, its tasks unjudged until one lands.
             Ok(Err(e)) => {
                 let gave_up = matches!(e, crate::github::PrUnavailable::NoCli | crate::github::PrUnavailable::NoRemote);
                 marks.due = issued + if gave_up { MARKS_GAVE_UP } else { MARKS_RETRY };
+                marks.known |= gave_up;
             }
             Err(_) => marks.due = issued + MARKS_RETRY,
         }

@@ -13,8 +13,12 @@ const cards = new Map<ServerId, BotStalls[] | null>();
 let snapshot: ReadonlyMap<ServerId, BotStalls[] | null> = new Map();
 const listeners = new Set<() => void>();
 const asking = new Set<ServerId>();
+/// Bumped by every write, so a `bot_stalls` reply overtaken by an event or a
+/// `live_state` (the server's writer lets them pass each other) is dropped.
+const version = new Map<ServerId, number>();
 
 function set(server: ServerId, next: BotStalls[] | null) {
+  version.set(server, (version.get(server) ?? 0) + 1);
   cards.set(server, next);
   snapshot = new Map(cards);
   listeners.forEach((l) => l());
@@ -32,10 +36,13 @@ function setCard(server: ServerId, card: BotStalls) {
 export async function askStalls(server: ServerId): Promise<void> {
   if (cards.has(server) || asking.has(server)) return;
   asking.add(server);
+  const at = version.get(server);
+  const current = () => version.get(server) === at;
   try {
-    set(server, await invoke<BotStalls[]>("bot_stalls", {}, server));
+    const answer = await invoke<BotStalls[]>("bot_stalls", {}, server);
+    if (current()) set(server, answer);
   } catch (e) {
-    if (String(e).includes("unknown command")) set(server, null);
+    if (current() && String(e).includes("unknown command")) set(server, null);
   } finally {
     asking.delete(server);
   }

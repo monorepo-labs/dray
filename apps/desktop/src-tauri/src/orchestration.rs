@@ -1487,7 +1487,17 @@ pub async fn settle_merged(id: &str, head: &str, app: &Sink) -> Result<()> {
         #[cfg(any(feature = "serve", feature = "desktop"))]
         None => match elsewhere::session_row(id).await {
             Some(((machine, _), row)) => (row, Some(machine)),
-            None => return Ok(()),
+            None => {
+                // A bot's task whose machine is down, merged from its card: the
+                // settle waits there for the machine to come back (#1178).
+                if let Some(machine) = crate::remote_reports::machine_of(id).await {
+                    let tree = crate::stalls::last_known(id).await.is_some_and(|i| i.worktree_name.is_some() && !i.worktree_removed);
+                    crate::held_flags::hold_settle_and_announce(machine, id.to_string(), tree, app.clone())
+                        .await
+                        .map_err(anyhow::Error::msg)?;
+                }
+                return Ok(());
+            }
         },
         #[cfg(not(any(feature = "serve", feature = "desktop")))]
         None => return Ok(()),
