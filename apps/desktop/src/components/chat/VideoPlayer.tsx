@@ -1,6 +1,7 @@
 import { Maximize, Pause, Play } from "lucide-react";
 import { useRef, useState } from "react";
 
+import { useFirstFrame } from "@/hooks/useFirstFrame";
 import { cn } from "@/lib/utils";
 
 /// A recording, played inline. Its own controls rather than the native ones:
@@ -15,10 +16,19 @@ export default function VideoPlayer({ src, className }: { src: string; className
   // A path the agent named that holds no video draws nothing, rather than a
   // player stuck at 0:00 that never plays. Keyed on `src` so a new one is tried.
   const [failed, setFailed] = useState<string | null>(null);
+  const first = useFirstFrame();
+  // Its play while it paints is not the user's, and draws no Pause.
+  const painting = () => first.paint.current?.active() ?? false;
 
   const toggle = () => {
     const v = video.current;
-    if (v) void (v.paused ? v.play() : v.pause());
+    if (!v) return;
+    if (painting()) {
+      first.paint.current?.stop();
+      void v.play();
+      return;
+    }
+    void (v.paused ? v.play() : v.pause());
   };
   // The element API where the webview allows it, WebKit's video-only one
   // where it refuses.
@@ -36,16 +46,19 @@ export default function VideoPlayer({ src, className }: { src: string; className
     <span className="group/video relative isolate mt-1.5 block w-fit max-w-full overflow-hidden rounded-xl border border-border">
       <video
         ref={video}
-        // `#t` paints the first frame as a thumbnail; `metadata` alone paints
-        // nothing, and `auto` downloads every recording in the transcript.
-        src={`${src}#t=0.001`}
+        // `auto` would download every recording in the transcript, so the
+        // thumbnail is painted once metadata is in.
+        src={src}
         preload="metadata"
         playsInline
         onClick={toggle}
-        onPlay={() => setPlaying(true)}
+        onPlay={() => setPlaying(!painting())}
         onPause={() => setPlaying(false)}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
-        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+        onLoadedMetadata={(e) => {
+          setDuration(e.currentTarget.duration);
+          first.onLoadedMetadata(e);
+        }}
         onError={() => setFailed(src)}
         className={cn("block max-h-96 max-w-full cursor-pointer", className)}
       />
@@ -76,6 +89,7 @@ export default function VideoPlayer({ src, className }: { src: string; className
           step={0.01}
           value={time}
           onChange={(e) => {
+            first.paint.current?.stop();
             if (video.current) video.current.currentTime = Number(e.target.value);
           }}
           className="h-1 min-w-0 flex-1 cursor-pointer accent-white"
