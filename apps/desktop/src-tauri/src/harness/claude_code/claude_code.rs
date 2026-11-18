@@ -484,21 +484,22 @@ mod tests {
         assert_eq!(statuses.last(), Some(&SessionStatus::Completed));
     }
 
-    /// A notice queued transcript-only after its subagent already handed back
-    /// (v2.1.327): the turn has ended, then a promptless `init` and a model-less
-    /// `result`, the same two lines a resume files. Nothing waits on a prompt
-    /// here, so that `result` is the only thing able to close the turn.
+    /// A notice-only turn with no prompt behind it, captured live from v2.1.327:
+    /// a resume with nothing sent, whose stranded task's notice opens a turn
+    /// with `init` and ends it with a model-less `result`. A notice queued
+    /// transcript-only after a subagent's handback runs the same turn. Nothing
+    /// waits on a prompt here, so that `result` is the only close it gets.
     #[test]
     fn a_notice_only_turn_with_no_prompt_waiting_closes() {
         let mut tracker = StatusTracker::default();
-        tracker.on_send();
-        let lines: Vec<&str> = STRANDED.lines().filter(|l| !l.trim().is_empty()).collect();
-        // The prompt's own close, then the notice's init and result.
-        let statuses = replay(&mut tracker, [lines[10], lines[1], lines[2]]);
+        let statuses = replay(
+            &mut tracker,
+            include_str!("fixtures/notice_only_turn.jsonl").lines().filter(|l| !l.trim().is_empty()),
+        );
 
         assert_eq!(
             statuses,
-            vec![SessionStatus::Completed, SessionStatus::InProgress, SessionStatus::Completed]
+            vec![SessionStatus::Idle, SessionStatus::InProgress, SessionStatus::Completed]
         );
         assert!(!tracker.turn_in_flight());
     }
