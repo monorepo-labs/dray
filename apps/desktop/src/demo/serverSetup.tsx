@@ -213,6 +213,7 @@ const account = (label: string, state: Account["state"], authType: string | null
   authType,
   canSignOut: state === "logged_in",
   canChangeMethod: true,
+  signsInElsewhere: false,
 });
 // `providers_of` in accounts.rs, cut down: fx's three, and a few of pi's.
 const PROVIDERS: Partial<Record<Harness, ProviderChoice[]>> = {

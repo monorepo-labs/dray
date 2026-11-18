@@ -51,7 +51,13 @@ canSignOut: boolean,
  * reader with an expired token actually wants and the only thing one
  * method allows.
  */
-canChangeMethod: boolean, };
+canChangeMethod: boolean, 
+/**
+ * Whether the credential is held by something Dray cannot drive — a pi
+ * extension's provider, which signs in its own way. Such a row offers no
+ * Sign in, Reauthorize or Sign out, since none of them would reach it.
+ */
+signsInElsewhere: boolean, };
 
 /**
  * Whether a credential will serve.

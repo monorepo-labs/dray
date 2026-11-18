@@ -116,7 +116,11 @@ pub fn find(id: &ModelId) -> Option<Model> {
     }
 
     known().into_iter().find(|m| &m.id == id).or_else(|| {
-        id.as_str().starts_with("claude-").then(|| Model {
+        // No `/`: that is pi's `provider/model`, and a pi plugin provider named
+        // `claude-…` (pi-claude-bridge) otherwise read as Claude Code's, which
+        // refused every one of its models as "not a pi model".
+        let id_str = id.as_str();
+        (id_str.starts_with("claude-") && !id_str.contains('/')).then(|| Model {
             id: id.clone(),
             label: id.to_string(),
             efforts: Vec::new(),
@@ -315,6 +319,19 @@ mod tests {
         assert_eq!(id_for_arg("claude-opus-4-6", Harness::ClaudeCode), Some(pinned.clone()));
         assert_eq!(id_for_arg("claude-opus-4-6", Harness::Codex), None);
         assert!(find_model(&ModelId::new("opus-4-1-20250805")).is_none());
+    }
+
+    /// A pi plugin provider can be named `claude-…`, and its models are pi's.
+    #[test]
+    fn a_pi_plugin_provider_named_claude_is_not_claude_codes() {
+        use crate::harness::Harness;
+        use crate::models::{id_for_arg, runs_on};
+
+        let bridged = ModelId::new("claude-bridge/claude-opus-5-5");
+        assert!(find(&bridged).is_none());
+        assert!(runs_on(&bridged, Harness::Pi));
+        assert!(!runs_on(&bridged, Harness::ClaudeCode));
+        assert_eq!(id_for_arg("claude-bridge/claude-opus-5-5", Harness::Pi), Some(bridged));
     }
 
     /// Hits the real CLI: `cargo test -- --ignored asks_the_real_cli_for_its_models`.

@@ -1023,8 +1023,11 @@ impl SessionManager {
         // searched what Codex reported *and* the table, where `runs_on`
         // knows only the table and would refuse a model newer than this
         // build.
+        // pi's own list is the authority on pi too, plugin providers included;
+        // `runs_on` is the fallback for a probe that has not answered.
         let runnable = match harness {
             Harness::Codex => model_spec.is_some(),
+            Harness::Pi => model_spec.is_some() || runs_on(&model, harness),
             _ => runs_on(&model, harness),
         };
 
