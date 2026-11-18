@@ -42,6 +42,7 @@ import type {
   ServerStatus,
   Stage,
 } from "@/types/events";
+import { newId } from "@/lib/id";
 
 type TrustHost = Extract<Fix, { kind: "trust_host" }>;
 
@@ -1018,7 +1019,7 @@ function AddServerDialog({
 
   const add = async () => {
     const mine = (run.current += 1);
-    const id = crypto.randomUUID();
+    const id = newId();
     ticket.current = id;
     setStarted(true);
     setBusy(true);

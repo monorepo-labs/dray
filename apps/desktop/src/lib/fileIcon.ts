@@ -13,5 +13,5 @@ import { getIconForDirectoryPath, getIconForFilePath } from "vscode-material-ico
 ///
 /// [FileIcon]: ../components/FileIcon.tsx
 export function fileIconSrc(path: string, dir = false): string {
-  return `/file-icons/${dir ? getIconForDirectoryPath(path) : getIconForFilePath(path)}.svg`;
+  return `${import.meta.env.BASE_URL}file-icons/${dir ? getIconForDirectoryPath(path) : getIconForFilePath(path)}.svg`;
 }

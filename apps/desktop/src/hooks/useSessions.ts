@@ -49,6 +49,7 @@ import { FIRST_MOUNT } from "@/lib/turnWindow";
 import { forget, stopWaiting, upload, waitFor } from "@/lib/uploads";
 import type { Draft } from "./useDrafts";
 import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueueChangedEvent, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionServingEvent, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { newId } from "@/lib/id";
 
 const DEFAULT_EFFORT: Effort = "high";
 
@@ -956,7 +957,7 @@ const handleSendMsg = async (
   const worktree = (useWorktree || placed !== null) && !isBotPath(cwd);
   const stance = isBotPath(cwd) ? botStance(harness, permissionMode) : stanceFor(harness, permissionMode);
   if (!sessionId) {
-    sessionId = crypto.randomUUID();
+    sessionId = newId();
     // Before the selection moves, so the composer reads this server's models
     // on the very frame it lands on the new session.
     noteSession(sessionId, serverOfPath(cwd));
@@ -1994,7 +1995,7 @@ const removeWorktree = (sessionId: string, origin: "asked" | "tidy" = "asked") =
 // reading exactly like the one it came from.
 const forkSession = async (sessionId: string, worktree: boolean) => {
   const fail = failUnlessLeft();
-  const forkId = crypto.randomUUID();
+  const forkId = newId();
 
   let snapshot: SessionSnapshot;
   try {

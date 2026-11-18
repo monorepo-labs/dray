@@ -6,6 +6,7 @@ import { channel } from "@/lib/channel";
 import { remoteServers } from "@/lib/servers";
 import { invoke, LOCAL, type ServerId } from "@/lib/transport";
 import type { ServerInfo } from "@/types/events";
+import { newId } from "@/lib/id";
 
 /// A sandbox with nothing to send to: stopped, or on its way back.
 export const boatAsleep = (server: ServerInfo | undefined): boolean =>
@@ -76,7 +77,7 @@ type Held = { id: string; key: string | null; message: string };
 /// Keeps a prompt on disk while its sandbox wakes, which takes minutes: the send
 /// is in memory until then, and a quit would lose it. Answers what lets it go.
 export function holdThroughResume(key: string | null, message: string): () => void {
-  const id = crypto.randomUUID();
+  const id = newId();
   writeLocalStorage<Held[]>(HELD, [...readLocalStorage<Held[]>(HELD, []), { id, key, message }]);
   return () => writeLocalStorage<Held[]>(HELD, readLocalStorage<Held[]>(HELD, []).filter((h) => h.id !== id));
 }

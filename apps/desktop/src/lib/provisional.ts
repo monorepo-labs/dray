@@ -1,4 +1,5 @@
 import type { AgentEvent } from "@/types/events";
+import { newId } from "@/lib/id";
 
 /// The user's own prompt, drawn before the backend has answered for the session.
 ///
@@ -19,7 +20,7 @@ export const isProvisional = (e: AgentEvent) => e.id.startsWith(PROVISIONAL_PREF
 /// wait, so a second prompt can be typed and sent while the first is still out.
 /// Sharing an id there gave the transcript two rows under one React key and let
 /// either send's answer take the other's row away.
-export const provisionalId = () => `${PROVISIONAL_PREFIX}${crypto.randomUUID()}`;
+export const provisionalId = () => `${PROVISIONAL_PREFIX}${newId()}`;
 
 /// Past every main-thread event the session holds, so a merge that sorts — a
 /// snapshot arriving while the row is up — cannot lift it above the history it

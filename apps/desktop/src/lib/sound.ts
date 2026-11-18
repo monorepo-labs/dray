@@ -2,6 +2,9 @@ import startUrl from "@/assets/dictate-start.wav";
 import stopUrl from "@/assets/dictate-stop.wav";
 
 const clips = new Map<string, HTMLAudioElement>();
+// Under the base the app was built for, which the web build moves to `/web/`.
+const CELEBRATION = `${import.meta.env.BASE_URL}celebration.wav`;
+const NOTIFICATION = `${import.meta.env.BASE_URL}notification.wav`;
 
 /// Plays a clip from the top, and never lets a failure reach the caller.
 ///
@@ -26,14 +29,14 @@ function play(url: string, volume = 1) {
 }
 
 // Fetched and decoded while the app is idle instead of on the first settle.
-for (const url of ["/celebration.wav", "/notification.wav"]) {
+for (const url of [CELEBRATION, NOTIFICATION]) {
   const clip = new Audio(url);
   clip.preload = "auto";
   clips.set(url, clip);
 }
 
 export function playCelebration() {
-  play("/celebration.wav");
+  play(CELEBRATION);
 }
 
 /// The in-app half of a session handing itself back to the reader.
@@ -43,7 +46,7 @@ export function playCelebration() {
 /// carries with the eyes anywhere on screen. Silent when the window is in the
 /// background, since the desktop notification makes its own noise there.
 export function playNotification() {
-  play("/notification.wav");
+  play(NOTIFICATION);
 }
 
 /// The two ends of a dictation: Handy's own marimba pair (MIT, see
