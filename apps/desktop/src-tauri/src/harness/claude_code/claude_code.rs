@@ -381,6 +381,10 @@ async fn read_stdout(
             record_failure(ClaudeCode, session_id, "unknown_subtype", detail, &line).await;
         }
 
+        if is_notice_only_result(&claude_event) && status.lock().await.prompt_waiting() {
+            continue;
+        }
+
         let agent_event = match mapper.map(claude_event) {
             Ok(Some(ev)) => ev,
             Ok(None) => continue,
@@ -412,6 +416,19 @@ async fn read_stdout(
     Ok(())
 }
 
+/// A model-less task notification turn's `result`, which closes a turn only
+/// where no prompt is waiting.
+///
+/// A resume files a stranded task's notice ahead of the reader's prompt, and
+/// that `result` ended the reader's turn early, so `/compact` read as done for
+/// the whole compaction (#330, v2.1.282). But a notice queued transcript-only
+/// after a subagent already handed back runs the same model-less turn with no
+/// prompt behind it, and its `init` opens a turn only this `result` can close.
+/// Dropped there too, the session sat `in_progress` until Stop (#1227, v2.1.327).
+fn is_notice_only_result(event: &ClaudeCodeEvent) -> bool {
+    matches!(event, ClaudeCodeEvent::Result(r) if r.is_notice_only())
+}
+
 /// Puts the bot's `react` call on the user's newest message, through the same
 /// counter and log as the turn it closes. Answers the emoji used, or why not.
 async fn react(ingest: &crate::session::Ingest<'_>, seq: &AtomicU64, said: &str, app: &Sink) -> Result<&'static str, String> {
@@ -426,7 +443,65 @@ async fn react(ingest: &crate::session::Ingest<'_>, seq: &AtomicU64, said: &str,
 
 #[cfg(test)]
 mod tests {
-    use super::APPEND_SYSTEM_PROMPT;
+    use super::{is_notice_only_result, APPEND_SYSTEM_PROMPT};
+    use crate::harness::claude_code::{mapper::Mapper, parser};
+    use crate::session::StatusTracker;
+    use crate::store::SessionStatus;
+
+    const STRANDED: &str = include_str!("fixtures/stranded_task_resume.jsonl");
+
+    /// Each line through what `read_stdout` does to it — the notice-only skip,
+    /// the mapper, the tracker — answering the status after every line.
+    fn replay<'a>(tracker: &mut StatusTracker, lines: impl IntoIterator<Item = &'a str>) -> Vec<SessionStatus> {
+        let mut mapper = Mapper::default();
+        lines
+            .into_iter()
+            .map(|line| {
+                let event = parser::parse_line(line).unwrap();
+                if !(is_notice_only_result(&event) && tracker.prompt_waiting()) {
+                    if let Ok(Some(event)) = mapper.map(event) {
+                        tracker.on_event(&event.payload);
+                    }
+                }
+                tracker.status()
+            })
+            .collect()
+    }
+
+    /// `/compact` sent to a resumed session whose last child left a background
+    /// task behind: the stranded notice's model-less turn must not close the
+    /// prompt's, or the compaction runs behind a turn that already reads done.
+    #[test]
+    fn a_stranded_task_notice_does_not_end_the_prompt_turn() {
+        let mut tracker = StatusTracker::default();
+        tracker.on_send();
+        let lines: Vec<&str> = STRANDED.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert!(is_notice_only_result(&parser::parse_line(lines[2]).unwrap()));
+
+        let statuses = replay(&mut tracker, lines);
+
+        assert_eq!(statuses[2], SessionStatus::InProgress, "the notice's result closed the prompt's turn");
+        assert_eq!(statuses.last(), Some(&SessionStatus::Completed));
+    }
+
+    /// A notice queued transcript-only after its subagent already handed back
+    /// (v2.1.327): the turn has ended, then a promptless `init` and a model-less
+    /// `result`, the same two lines a resume files. Nothing waits on a prompt
+    /// here, so that `result` is the only thing able to close the turn.
+    #[test]
+    fn a_notice_only_turn_with_no_prompt_waiting_closes() {
+        let mut tracker = StatusTracker::default();
+        tracker.on_send();
+        let lines: Vec<&str> = STRANDED.lines().filter(|l| !l.trim().is_empty()).collect();
+        // The prompt's own close, then the notice's init and result.
+        let statuses = replay(&mut tracker, [lines[10], lines[1], lines[2]]);
+
+        assert_eq!(
+            statuses,
+            vec![SessionStatus::Completed, SessionStatus::InProgress, SessionStatus::Completed]
+        );
+        assert!(!tracker.turn_in_flight());
+    }
 
     /// Same undefined word Codex read as a git parent. Claude has not been seen
     /// to get it wrong, which is not the same as the prompt saying what it means.

@@ -228,6 +228,10 @@ pub struct StatusTracker {
     status: SessionStatus,
     /// An `init` opened a model call that no `result` has closed yet.
     model_call_open: bool,
+    /// A prompt went to the child and its turn has not closed yet. A promptless
+    /// `init` never sets it, which is how [`Self::prompt_waiting`] tells the
+    /// two kinds of turn apart.
+    prompt_waiting: bool,
     /// The outstanding background tasks. Only whether the set is empty is read
     /// in anger — by `has_outstanding_work` and by the stranded-task sweep a
     /// dying child runs — and the ids are kept rather than a count because the
@@ -263,6 +267,7 @@ impl StatusTracker {
     /// The user sent a prompt; work is starting regardless of what stdout says.
     pub fn on_send(&mut self) -> Option<SessionStatus> {
         self.model_call_open = true;
+        self.prompt_waiting = true;
         self.epoch += 1;
         self.quiet_since = Some(Instant::now());
         self.set(SessionStatus::InProgress)
@@ -303,6 +308,7 @@ impl StatusTracker {
             // notice hanging until the reader clicked Stop.
             AgentEventPayload::TurnCompleted { auth_failed, .. } => {
                 self.model_call_open = false;
+                self.prompt_waiting = false;
                 self.epoch += 1;
                 self.quiet_since = Some(Instant::now());
                 self.auth_failed = *auth_failed;
@@ -351,6 +357,15 @@ impl StatusTracker {
     /// whole wait.
     pub fn turn_in_flight(&self) -> bool {
         self.model_call_open
+    }
+
+    /// Whether a prompt sent to the child is still waiting for the turn that
+    /// answers it. Read by Claude Code's read loop on a model-less task
+    /// notification turn: ahead of such a prompt its `result` is not the
+    /// prompt's and must not close it (#330); with none waiting it is the only
+    /// close the turn its `init` opened will ever get (#1227).
+    pub fn prompt_waiting(&self) -> bool {
+        self.prompt_waiting
     }
 
     /// How long nothing has run, or `None` while anything does — background
@@ -450,6 +465,7 @@ impl StatusTracker {
     /// state the ending turn would have left had nothing been queued behind it.
     pub fn release_reserved_turn(&mut self) -> Option<SessionStatus> {
         self.model_call_open = false;
+        self.prompt_waiting = false;
         self.set(SessionStatus::Completed)
     }
 
