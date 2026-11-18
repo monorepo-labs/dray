@@ -9,11 +9,13 @@ import PermissionSelector, {
   offersPermissionModes,
 } from "@/components/composer/PermissionSelector";
 import ProjectSelector from "@/components/composer/ProjectSelector";
+import TaskStatus from "@/components/composer/TaskStatus";
+import type { TaskCounts } from "@/components/TasksPanel";
 import WorktreeToggle from "@/components/composer/WorktreeToggle";
 import { Button } from "@/components/ui/button";
 import type { ServerId } from "@/lib/transport";
 import ShortcutKeys from "@/components/ShortcutKeys";
-import { onCloud, useCloud, useCloudPicks } from "@/lib/cloud";
+import { onCloud, useCloud } from "@/lib/cloud";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { botPicksStance } from "@/lib/permission";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -80,6 +82,8 @@ type ComposerToolbarProps = {
   /// it. Sits at the far end of the row rather than among the pickers: it
   /// reports rather than sets, and nothing here changes it.
   contextUsage: { used: number; max: number } | null;
+  /// A bot chat's tasks, drawn where the context ring sits elsewhere.
+  tasks?: { counts: TaskCounts; onOpen: () => void };
 
   /// Where the session runs is fixed at creation, so the last three controls
   /// only exist before one starts.
@@ -133,13 +137,13 @@ export default function ComposerToolbar({
   onToggleWorktree,
   onAttach,
   contextUsage,
+  tasks,
   isNewSession,
   agentSwitch = false,
   bot,
   busy,
 }: ComposerToolbarProps) {
   useCloud();
-  useCloudPicks();
   // Placement picks the checkout, so a branch checked out here would be one
   // the task never runs on.
   const cloud = onCloud(projects, projectPath);
@@ -252,6 +256,11 @@ export default function ComposerToolbar({
       {contextUsage && !(bot || agentSwitch) && (
         <div className="ml-auto">
           <ContextMeter used={contextUsage.used} max={contextUsage.max} />
+        </div>
+      )}
+      {tasks && (
+        <div className="ml-auto">
+          <TaskStatus counts={tasks.counts} onOpen={tasks.onOpen} />
         </div>
       )}
     </div>

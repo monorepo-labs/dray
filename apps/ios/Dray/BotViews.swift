@@ -701,6 +701,8 @@ struct StalledCard: View {
                 }
                 .padding(Theme.Space.xs)
                 .overlay(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous).strokeBorder(Theme.border))
+                // The chat's last row: the transcript's row spacing down to the dock, drawn only with the card.
+                .padding(.bottom, 28)
             }
         }
         // Tasks are hidden, so the list never reads their repos' marks, and a ready PR

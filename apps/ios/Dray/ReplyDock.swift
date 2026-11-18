@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The foot of a session: the voice orb, held to reply, and under it the
 /// session's model, its stance behind "···", the keyboard and, while a turn
@@ -10,6 +11,9 @@ struct ReplyDock: View {
     let key: SessionKey
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
     @State private var models: [Model] = []
+    @State private var keyboard = false
+    /// The home indicator's inset, which the dock sits on rather than ignores.
+    @State private var homeInset: CGFloat = 0
     /// Picks for the next reply; nil is the session's own.
     @State private var model: String?
     @State private var effort: String?
@@ -82,17 +86,24 @@ struct ReplyDock: View {
             picks.opacity(away ? 0.4 : 1).typingAligned(typing)
         }
         .padding(.horizontal, 20)
-        .padding(.top, 40)
-        .padding(.bottom, 30)
+        .padding(.top, Theme.Space.m)
+        .padding(.bottom, typing && keyboard ? 30 : max(0, 30 - homeInset))
         .frame(maxWidth: 760)
         .frame(maxWidth: .infinity)
+        // Everything in the dock's frame is inset the chat stops at, so the fade reaches up past it
+        // rather than padding it, and the dock sits on the home indicator's inset rather than
+        // ignoring it, which `safeAreaInset` counts under the dock either way: 80pt of gap between them.
         .background {
             LinearGradient(stops: [.init(color: Theme.page.opacity(0), location: 0), .init(color: Theme.page, location: 0.3)],
                            startPoint: .top, endPoint: .bottom)
+                .padding(.top, -28)
                 .ignoresSafeArea()
+                .onGeometryChange(for: CGFloat.self, of: { $0.safeAreaInsets.bottom }) { if !keyboard { homeInset = $0 } }
         }
-        // The container alone while typing, so the keyboard lifts the field over it.
-        .ignoresSafeArea(typing ? .container : .all, edges: .bottom)
+        // The keyboard lifts the field, never the orb.
+        .ignoresSafeArea(typing ? [] : .keyboard, edges: .bottom)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboard = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboard = false }
         .animation(Theme.motion, value: phase)
         .animation(Theme.motion, value: confirming)
         .animation(Theme.motion, value: hint)

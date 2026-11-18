@@ -94,7 +94,7 @@ import Sidebar, {
 import { useChord } from "@/hooks/useShortcuts";
 import { type Chord, formatChords } from "@/lib/shortcuts";
 import Crew, { CREW_BESIDE, CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
-import TasksPanel from "@/components/TasksPanel";
+import TasksPanel, { taskCounts } from "@/components/TasksPanel";
 import BotRuns from "@/components/BotRuns";
 import StalledTasks from "@/components/chat/StalledTasks";
 import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/MergeCard";
@@ -181,7 +181,7 @@ import BoatNotice from "@/components/composer/BoatNotice";
 import { CloudFailedNotice, CloudNotice } from "@/components/composer/CloudNotice";
 import BoatWarnings from "@/components/BoatWarnings";
 import { boatAsleep, restoreHeld } from "@/lib/boat";
-import { onCloud, setCloudFailure, useCloud, useCloudFailure, useCloudPicks, usePlacing } from "@/lib/cloud";
+import { onCloud, setCloudFailure, useCloud, useCloudFailure, usePlacing } from "@/lib/cloud";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout, nextCheckout } from "@/lib/projectGroups";
 import { serverConnected, serverName, shownOffline, useServers } from "@/lib/servers";
@@ -573,7 +573,6 @@ function App() {
   const placing = usePlacing();
   const cloudFailure = useCloudFailure();
   useCloud();
-  useCloudPicks();
   // A new task bound for Cloud runs wherever placement puts it, so an agent
   // missing from the picked checkout's machine says nothing about it.
   const cloudTask = !selectedSessionId && onCloud(projects, projectPath);
@@ -1497,6 +1496,7 @@ function App() {
     },
     [prMarks.readAt, offlineRepo],
   );
+  const taskCount = useMemo(() => taskCounts(crew, taskPr), [crew, taskPr]);
   const stalled = useStalledTasks({
     bots,
     items: sessionIndexItems,
@@ -4310,6 +4310,7 @@ function App() {
               onToggleWorktree={() => setUseWorktree((v) => !v)}
               onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
               contextUsage={contextUsage}
+              tasks={selectedBot ? { counts: taskCount, onOpen: () => showPanel("tasks") } : undefined}
               isNewSession={!selectedSessionId}
               agentSwitch={!!selectedBot}
               bot={newBot}
