@@ -1492,9 +1492,8 @@ pub async fn settle_merged(id: &str, head: &str, app: &Sink) -> Result<()> {
                 // settle waits there for the machine to come back (#1178).
                 if let Some(machine) = crate::remote_reports::machine_of(id).await {
                     let tree = crate::stalls::last_known(id).await.is_some_and(|i| i.worktree_name.is_some() && !i.worktree_removed);
-                    crate::held_flags::hold_settle_and_announce(machine, id.to_string(), tree, app.clone())
-                        .await
-                        .map_err(anyhow::Error::msg)?;
+                    crate::held_flags::hold_settle_on(&machine, id, tree, Some(head)).await?;
+                    crate::held_flags::announce(app, Vec::new()).await;
                 }
                 return Ok(());
             }

@@ -13,12 +13,13 @@ const cards = new Map<ServerId, BotStalls[] | null>();
 let snapshot: ReadonlyMap<ServerId, BotStalls[] | null> = new Map();
 const listeners = new Set<() => void>();
 const asking = new Set<ServerId>();
-/// Bumped by every write, so a `bot_stalls` reply overtaken by an event or a
-/// `live_state` (the server's writer lets them pass each other) is dropped.
-const version = new Map<ServerId, number>();
+/// A `bot_stalls` reply can be overtaken by events, since the server's writer
+/// lets them pass each other: a whole snapshot since the ask voids it, and a
+/// bot's own card since the ask outranks that bot's part of it.
+const snapshots = new Map<ServerId, number>();
+const movedSince = new Map<ServerId, Set<string>>();
 
 function set(server: ServerId, next: BotStalls[] | null) {
-  version.set(server, (version.get(server) ?? 0) + 1);
   cards.set(server, next);
   snapshot = new Map(cards);
   listeners.forEach((l) => l());
@@ -26,6 +27,7 @@ function set(server: ServerId, next: BotStalls[] | null) {
 
 /// One bot's card from `server` replacing what it held for that bot.
 function setCard(server: ServerId, card: BotStalls) {
+  movedSince.get(server)?.add(card.botId);
   const held = cards.get(server) ?? [];
   set(server, [...held.filter((c) => c.botId !== card.botId), card]);
 }
@@ -36,15 +38,21 @@ function setCard(server: ServerId, card: BotStalls) {
 export async function askStalls(server: ServerId): Promise<void> {
   if (cards.has(server) || asking.has(server)) return;
   asking.add(server);
-  const at = version.get(server);
-  const current = () => version.get(server) === at;
+  const at = snapshots.get(server);
+  const moved = new Set<string>();
+  movedSince.set(server, moved);
+  const current = () => snapshots.get(server) === at;
   try {
     const answer = await invoke<BotStalls[]>("bot_stalls", {}, server);
-    if (current()) set(server, answer);
+    if (current()) {
+      const newer = (cards.get(server) ?? []).filter((c) => moved.has(c.botId));
+      set(server, [...answer.filter((c) => !moved.has(c.botId)), ...newer]);
+    }
   } catch (e) {
     if (current() && String(e).includes("unknown command")) set(server, null);
   } finally {
     asking.delete(server);
+    movedSince.delete(server);
   }
 }
 
@@ -52,15 +60,19 @@ export async function askStalls(server: ServerId): Promise<void> {
 /// all, or says by their absence that the server does not judge stalls, and
 /// `bot_stalls_changed` carries each bot's as it moves.
 export function listenForStalls(): () => void {
-  const connects = listen<{ stalls?: BotStalls[] }>("live_state", ({ server, payload }) =>
-    set(server, payload.stalls ?? null),
-  );
+  const connects = listen<{ stalls?: BotStalls[] }>("live_state", ({ server, payload }) => {
+    snapshots.set(server, (snapshots.get(server) ?? 0) + 1);
+    set(server, payload.stalls ?? null);
+  });
   const changes = listen<BotStalls>("bot_stalls_changed", ({ server, payload }) => setCard(server, payload));
   return () => {
     void connects.then((off) => off());
     void changes.then((off) => off());
   };
 }
+
+/// What `server` last said, for code outside React.
+export const cardsOf = (server: ServerId): BotStalls[] | null | undefined => cards.get(server);
 
 export function useServerStalls(): ReadonlyMap<ServerId, BotStalls[] | null> {
   return useSyncExternalStore(

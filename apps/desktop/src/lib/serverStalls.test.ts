@@ -1,9 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { CrewRow } from "@/lib/crew";
-import { serverCard } from "@/lib/serverStalls";
+import { askStalls, cardsOf, listenForStalls, serverCard } from "@/lib/serverStalls";
 import { needLine } from "@/lib/stalled";
-import { serverOfPath } from "@/lib/transport";
+import { invoke, listen, serverOfPath } from "@/lib/transport";
+
+vi.mock("@/lib/transport", async (actual) => ({
+  ...(await actual<typeof import("@/lib/transport")>()),
+  invoke: vi.fn(),
+  listen: vi.fn(),
+}));
 import type { BotStalls, SessionIndexItem, StallRow } from "@/types/events";
 
 const MODIFIED = "2026-11-12T10:00:00Z";
@@ -67,5 +73,26 @@ describe("serverCard", () => {
 
   it("draws nothing for a bot with no card", () => {
     expect(serverCard(undefined, [crew("a")], "local")).toEqual([]);
+  });
+});
+
+describe("askStalls", () => {
+  it("keeps a bot's newer card when the reply was overtaken, and takes the rest from the reply", async () => {
+    const handlers: Record<string, (e: { server: string; payload: unknown }) => void> = {};
+    vi.mocked(listen).mockImplementation(async (name, handler) => {
+      handlers[name] = handler as never;
+      return () => {};
+    });
+    let answer: (v: BotStalls[]) => void = () => {};
+    vi.mocked(invoke).mockReturnValue(new Promise((resolve) => (answer = resolve as never)));
+    listenForStalls();
+    const asked = askStalls("srv");
+    const newer = { ...card([stall("a2")]), botId: "A" };
+    handlers.bot_stalls_changed({ server: "srv", payload: newer });
+    answer([{ ...card([stall("a1")]), botId: "A" }, { ...card([stall("b1")]), botId: "B" }]);
+    await asked;
+    const held = cardsOf("srv") ?? [];
+    expect(held.find((c) => c.botId === "A")).toBe(newer);
+    expect(held.find((c) => c.botId === "B")?.rows[0].key).toBe(`b1:waiting:${MODIFIED}`);
   });
 });

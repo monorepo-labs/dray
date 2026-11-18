@@ -38,6 +38,11 @@ pub struct Held {
     /// Remove the session's worktree once the settle lands, as Merge does.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub remove_worktree: bool,
+    /// The branch the merged PR came from, on a settle the server held for a
+    /// card merge. The settle lands only while the task is still idle on it:
+    /// one that moved on while its machine was down keeps its work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
     /// When it was held. Bringing one back restarts the sidebar's three-day
     /// clock, so the app reads this as the row's `modified` until it lands.
     pub at: String,
@@ -85,6 +90,7 @@ pub async fn hold(machine: &str, session_id: &str, aside: bool, pinned: Option<b
         pinned,
         archived: None,
         remove_worktree: false,
+        head: None,
         at: now_rfc3339(),
     })
     .await
@@ -93,6 +99,11 @@ pub async fn hold(machine: &str, session_id: &str, aside: bool, pinned: Option<b
 /// Holds a settle for `session_id` on `machine`, whose PR was merged from here
 /// while it was down.
 pub async fn hold_settle(machine: &str, session_id: &str, remove_worktree: bool) -> anyhow::Result<Held> {
+    hold_settle_on(machine, session_id, remove_worktree, None).await
+}
+
+/// [`hold_settle`] checked against `head` when it lands.
+pub async fn hold_settle_on(machine: &str, session_id: &str, remove_worktree: bool, head: Option<&str>) -> anyhow::Result<Held> {
     put(Held {
         machine: machine.into(),
         session_id: session_id.into(),
@@ -100,6 +111,7 @@ pub async fn hold_settle(machine: &str, session_id: &str, remove_worktree: bool)
         pinned: None,
         archived: Some(true),
         remove_worktree,
+        head: head.map(str::to_string),
         at: now_rfc3339(),
     })
     .await
@@ -298,6 +310,28 @@ mod flush {
         flush(&sink, Some(&machine)).await;
     }
 
+    /// Whether `session_id` on `saved` is still idle and unsettled on `head`,
+    /// the branch its PR merged from. `None` where the machine does not answer.
+    async fn still_on(saved: &machines::Saved, session_id: &str, head: &str) -> Option<bool> {
+        let ask = |cmd: &'static str, args: Value| async move {
+            tokio::time::timeout(machines::SWEEP, machines::call(saved, cmd, args)).await.ok()?.ok()
+        };
+        let row = ask("session_index_item", json!({ "sessionId": session_id })).await?;
+        let Ok(Some(item)) = serde_json::from_value::<Option<crate::store::SessionIndexItem>>(row) else {
+            return Some(false);
+        };
+        if item.archived || item.status == crate::store::SessionStatus::InProgress {
+            return Some(false);
+        }
+        let branch = if item.worktree_removed {
+            item.branch.clone()
+        } else {
+            let status = ask("work_status", json!({ "cwd": item.cwd })).await?;
+            status.get("branch").and_then(Value::as_str).map(str::to_string)
+        };
+        Some(branch.as_deref() == Some(head))
+    }
+
     /// Writes each held flag to its server, `only` that machine's where given.
     /// A reconnect's flush and the timer's can overlap; each machine's lock
     /// and the re-read under it keep one flag from being written twice.
@@ -327,6 +361,18 @@ mod flush {
                         continue;
                     }
                     for held in mine {
+                        // A card merge's settle lands only on the task as it was merged.
+                        if let Some(head) = &held.head {
+                            match still_on(saved, &held.session_id, head).await {
+                                Some(true) => {}
+                                Some(false) => {
+                                    done.push(held);
+                                    continue;
+                                }
+                                // Not answering: the next flush asks again.
+                                None => break,
+                            }
+                        }
                         let args = json!({
                             "sessionId": held.session_id,
                             "aside": held.aside,
@@ -403,6 +449,7 @@ mod tests {
             pinned: None,
             archived: None,
             remove_worktree: false,
+            head: None,
             at: "2026-11-14T00:00:00Z".into(),
         }
     }
