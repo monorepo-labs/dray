@@ -66,8 +66,8 @@ phone reads and drives it over the same WebSocket the desktop uses
 - **Dictation**, transcribed on the Mac: the phone records a 16kHz mono WAV,
   uploads it through `POST /upload` and calls `transcribe_upload`. Only the
   Mac's server has that command, and its welcome frame says `dictation: true`,
-  so the orb says "Type instead" where no server can. The Island's `VoiceOrb`
-  draws it.
+  so where no server can, every dock trades the orb for a text field and
+  send. The Island's `VoiceOrb` draws it.
 
 Left out: push, attachments, the Diff/Files/Browser views,
 forks, settle/pin, the settled list, spaces, issues.

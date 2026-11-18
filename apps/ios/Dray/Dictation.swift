@@ -30,6 +30,13 @@ extension Store {
         serverState[server] == .connected && connection(server)?.dictation == true
     }
 
+    /// No server can transcribe, so the docks trade the orb for a text field. Read off each
+    /// server's last welcome, kept across a drop, so a blip never swaps the dock mid-reply;
+    /// one not yet reached counts as able.
+    var typesOnly: Bool {
+        !live.contains { connection($0.id)?.welcome.map { $0.dictation == true } ?? true }
+    }
+
     /// Where dictation is transcribed: `pick`, Settings' choice, while it can;
     /// otherwise the first server that can. Words come back to the phone, so
     /// any session's draft can take them.

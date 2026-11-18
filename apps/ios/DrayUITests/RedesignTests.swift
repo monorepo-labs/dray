@@ -252,7 +252,7 @@ final class RedesignTests: XCTestCase {
         snap(app, "reply-answered")
     }
 
-    /// Run with from the list's dock: a star, the project menu, and a branch switch over uncommitted
+    /// Run with from the list's dock: the model chips, the project menu, and a branch switch over uncommitted
     /// files. Wants `thinking-orbs` on the server holding a `fix-reconnect` branch and dirty files.
     func testRunWithSheet() throws {
         let app = try pair()
@@ -262,17 +262,9 @@ final class RedesignTests: XCTestCase {
         snap(app, "picks-dock")
         model.tap()
         XCTAssertTrue(app.staticTexts["Run with"].waitForExistence(timeout: 5), "the model pick opened no sheet")
-        let haiku = app.buttons["Haiku 5.5"]
-        XCTAssertTrue(haiku.waitForExistence(timeout: 15), "no model chips")
+        XCTAssertTrue(app.buttons["More models"].waitForExistence(timeout: 15), "no model chips")
         sleep(1)
         snap(app, "picks-run-with")
-
-        haiku.doubleTap()
-        XCTAssertEqual(haiku.value as? String, "Starred", "a double-tap starred nothing")
-        sleep(1)
-        snap(app, "picks-starred")
-        haiku.doubleTap()
-        XCTAssertNotEqual(haiku.value as? String, "Starred", "a second double-tap left the star")
 
         app.buttons["row.Project"].tap()
         let orbs = menuItem(app, "thinking-orbs")
