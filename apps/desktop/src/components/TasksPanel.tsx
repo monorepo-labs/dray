@@ -63,9 +63,8 @@ function rowState(row: CrewRow, pr: PrMark | undefined): TaskState {
 export type TaskCounts = {
   working: number;
   ready: number;
-  /// Every other task, as `[label, count]` in the Tasks tab's order: needs
-  /// you, waiting on the PR by its status, then idle.
-  extras: [string, number][];
+  /// Every other task: needs you, waiting on its PR, idle.
+  other: number;
 };
 
 /// What the bot composer's status counts, off `rowState` so it files a task
@@ -73,25 +72,15 @@ export type TaskCounts = {
 /// count leaves them out. A task whose only activity is a background task is
 /// idle here: the status counts tasks, not what runs under them.
 export function taskCounts(rows: CrewRow[], prOf: (row: CrewRow) => PrMark | undefined): TaskCounts {
-  let working = 0;
-  let ready = 0;
-  const extras = new Map<string, number>([["need you", 0]]);
-  const add = (label: string) => extras.set(label, (extras.get(label) ?? 0) + 1);
+  const counts: TaskCounts = { working: 0, ready: 0, other: 0 };
   for (const row of rows) {
     if (row.item.aside) continue;
-    const pr = prOf(row);
-    const state = rowState(row, pr);
-    if (state === "ready") ready++;
-    else if (state === "asking") add("need you");
-    else if (state === "soon" && pr) add(prStatus(pr).label.toLowerCase());
-    else if (row.busy) working++;
-    else add("idle");
+    const state = rowState(row, prOf(row));
+    if (state === "ready") counts.ready++;
+    else if (state === "busy" && row.busy) counts.working++;
+    else counts.other++;
   }
-  // Idle last, after whatever the PRs are waiting on.
-  const idle = extras.get("idle");
-  extras.delete("idle");
-  if (idle) extras.set("idle", idle);
-  return { working, ready, extras: [...extras].filter(([, n]) => n > 0) };
+  return counts;
 }
 
 /// The Pinned rows, then the runs drawn under them with a break between each.

@@ -124,18 +124,10 @@ describe("taskCounts", () => {
       ],
       (r) => prs[r.item.sessionId],
     );
-    expect(counts).toEqual({
-      working: 1,
-      ready: 2,
-      extras: [
-        ["need you", 1],
-        ["checks running", 1],
-        ["idle", 3],
-      ],
-    });
+    expect(counts).toEqual({ working: 1, ready: 2, other: 5 });
   });
 
   it("counts nothing for no tasks, or only set-aside ones", () => {
-    expect(taskCounts([row("a", {}, { aside: true })], none)).toEqual({ working: 0, ready: 0, extras: [] });
+    expect(taskCounts([row("a", {}, { aside: true })], none)).toEqual({ working: 0, ready: 0, other: 0 });
   });
 });
