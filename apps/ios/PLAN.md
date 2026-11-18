@@ -35,6 +35,8 @@ phone reads and drives it over the same WebSocket the desktop uses
   and the recording runs hands-free until Done or Cancel. The words land as
   the task's text; holding again adds to them, the keyboard edits them in a
   sheet, and Cancel offers Save draft (`create_draft`), Keep or Discard.
+  Run with offers Save draft too once there are words, the one way to it
+  in keyboard mode, whose field has no Cancel.
   Every pick under the orb opens **Run with**: server (where two hold the
   project), project with Attach inside its menu, worktree, the agent and its
   model as chips, effort, fast mode and stance. Double-tapping a model stars

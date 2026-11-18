@@ -52,7 +52,20 @@ final class KeyboardModeTests: XCTestCase {
         XCTAssertTrue(row(bot).waitForExistence(timeout: 20), "no bot row")
         sleep(1)
         check("list", type: "Add a dark mode toggle")
-        if keyboard { XCTAssertTrue(app.buttons["Save draft"].exists, "typing a task offers no Save draft") }
+        if keyboard {
+            // Save draft lives in Run with, never over the field.
+            XCTAssertFalse(app.buttons["Save draft"].exists, "Save draft still floats over the field")
+            app.buttons["More picks"].tap()
+            let save = app.buttons["Save draft"]
+            XCTAssertTrue(save.waitForExistence(timeout: 5), "Run with offers no Save draft")
+            snap(app, "run-with-save")
+            save.tap()
+            XCTAssertTrue(save.waitForNonExistence(timeout: 10), "saving left Run with open")
+            XCTAssertFalse((input.value as? String ?? "").contains("dark mode"), "saving left the words in the field")
+            snap(app, "saved")
+            input.tap()
+            input.typeText("Add a dark mode toggle")
+        }
 
         // More models opens the shortlist: a toggle per model, and one switched on joins the chips.
         app.buttons["Model"].firstMatch.tap()

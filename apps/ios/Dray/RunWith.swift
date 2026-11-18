@@ -12,6 +12,9 @@ struct RunWithSheet: View {
     /// A branch picked while the checkout has uncommitted files: Bring or Stash decides.
     @State private var switching: String?
     @State private var branchError: String?
+    /// Read off the save that failed, never `task.failure` on open: that may be an older start's.
+    @State private var saveError: String?
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
@@ -37,6 +40,7 @@ struct RunWithSheet: View {
                     ModelChips(models: task.list, harness: task.harness, selected: task.modelId, pick: task.pickModel)
                 }
                 settingsCard
+                if task.hasText { saveCard }
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(isPresented: $attaching) {
@@ -147,6 +151,29 @@ struct RunWithSheet: View {
                     }
                 }
             }
+        }
+    }
+
+    /// The words written so far, kept in Dray's drafts on these picks; a failure says why here, the dock being covered.
+    @ViewBuilder private var saveCard: some View {
+        PickCard {
+            Button {
+                Task { if await task.saveDraft() { dismiss() } else { saveError = task.failure } }
+            } label: {
+                HStack(spacing: Theme.Space.s) {
+                    Image(systemName: "tray.and.arrow.down").font(.system(size: 14, weight: .semibold)).frame(width: 16)
+                    Text("Save draft").frame(maxWidth: .infinity, alignment: .leading)
+                    if task.sending { ProgressView() }
+                }
+                .font(Theme.Font.body)
+                .foregroundStyle(Theme.text)
+                .rowFrame()
+            }
+            .disabled(task.sending)
+        }
+        if let saveError {
+            Text(sentence(saveError)).font(Theme.Font.footnote).foregroundStyle(Theme.destructive)
+                .padding(.horizontal, Theme.Space.l)
         }
     }
 
