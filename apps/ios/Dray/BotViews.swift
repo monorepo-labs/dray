@@ -625,6 +625,21 @@ func prStatus(_ pr: PrMark) -> String {
     }
 }
 
+/// A sheet's title with its count beside it, quieter, as the desktop's tab headers draw it.
+struct CountTitle: View {
+    let title: String
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title).foregroundStyle(Theme.text)
+            Text("\(count)").foregroundStyle(Theme.tertiary).monospacedDigit()
+        }
+        .font(Theme.Font.headline)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 /// Rows drawn before "Show N more", which opens them all in a sheet, so a long card doesn't push the chat off screen.
 private let stallRowsShown = 2
 
@@ -742,9 +757,11 @@ struct StalledCard: View {
                             .padding(Theme.Space.s)
                     }
                 }
-                .navigationTitle("Waiting on you")
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar { Button("Done") { all = false } }
+                .toolbar {
+                    ToolbarItem(placement: .principal) { CountTitle(title: "Waiting on you", count: visible(.now).count) }
+                    ToolbarItem(placement: .primaryAction) { Button("Done") { all = false } }
+                }
                 .background(Theme.page.ignoresSafeArea())
             }
             .presentationDetents([.medium, .large])
@@ -910,9 +927,11 @@ struct BotTasksSheet: View {
                 .padding(.top, Theme.Space.l)
                 .padding(.bottom, Theme.Space.l)
             }
-            .navigationTitle("Tasks")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { Button("Done") { dismiss() } }
+            .toolbar {
+                ToolbarItem(placement: .principal) { CountTitle(title: "Tasks", count: tasks.count) }
+                ToolbarItem(placement: .primaryAction) { Button("Done") { dismiss() } }
+            }
             .background(Theme.card.ignoresSafeArea())
         }
         .presentationDetents([.medium, .large])
