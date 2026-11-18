@@ -1,0 +1,51 @@
+# Where a release's Mac jobs run: the release Mac (a self-hosted runner labelled
+# `dray-mac`) when it is online, GitHub's `macos-latest` otherwise. GitHub's Mac
+# pool runs short often enough to cancel whole releases, and the release Mac
+# never queues.
+#
+# The repo variable MAC_RUNNER overrides the check: `local` or `github`. Without
+# it, the runners API decides. That API needs a token with Administration: read
+# (RUNNER_STATUS_TOKEN), since GITHUB_TOKEN cannot list runners; a missing or
+# failing token reads as offline, so the fallback is always GitHub.
+#
+# Online is checked once, up front. A Mac that sleeps after this answers leaves
+# its jobs queued until it wakes.
+name: Pick Mac runner
+
+on:
+  workflow_call:
+    outputs:
+      mac:
+        description: A runs-on value, as JSON.
+        value: ${{ jobs.pick.outputs.mac }}
+
+permissions:
+  contents: read
+
+jobs:
+  pick:
+    runs-on: ubuntu-latest
+    outputs:
+      mac: ${{ steps.pick.outputs.mac }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+          FORCE: ${{ vars.MAC_RUNNER }}
+          REPO: ${{ github.repository }}
+        run: |
+          online=0
+          if [ "$FORCE" = local ]; then
+            online=1
+          elif [ "$FORCE" != github ] && [ -n "$GH_TOKEN" ]; then
+            online=$(gh api "repos/$REPO/actions/runners" \
+              -q '[.runners[] | select(.status == "online") | select(any(.labels[]; .name == "dray-mac"))] | length' \
+              2>/dev/null || echo 0)
+          fi
+          if [ "${online:-0}" -gt 0 ]; then
+            echo 'mac=["self-hosted","dray-mac"]' >> "$GITHUB_OUTPUT"
+            echo "Mac jobs: release Mac"
+          else
+            echo 'mac="macos-latest"' >> "$GITHUB_OUTPUT"
+            echo "Mac jobs: GitHub"
+          fi

@@ -72,7 +72,10 @@ runs:
     # tag build can read; a tag saving writes under its own ref, which no later
     # tag reads. The prefix carries a dependency change across until the warm
     # run saves the new key.
+    # Skipped on the release Mac: its cargo build dir persists between runs,
+    # and a restore would only lay older artifacts over it.
     - id: cache
+      if: runner.environment == 'github-hosted'
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: ${{ steps.key.outputs.paths }}
