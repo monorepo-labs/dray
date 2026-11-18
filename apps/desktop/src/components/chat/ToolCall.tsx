@@ -1,4 +1,4 @@
-import { Suspense, lazy, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 
 import Orb from "@/components/Orb";
@@ -9,6 +9,8 @@ import { basename, truncate } from "@/lib/format";
 import { isTodoCall, todoList } from "@/lib/todos";
 import { cn } from "@/lib/utils";
 import { countChanges, countUnifiedChanges, editSides, readRange } from "@/lib/diff";
+import { completeTranscript } from "@/lib/olderPages";
+import { isCut } from "@/lib/thin";
 import {
   fileTarget,
   formatToolInput,
@@ -130,6 +132,15 @@ export default function ToolCall({
 }: ToolCallProps) {
   const [open, setOpen] = useState(defaultOpen);
 
+  // A row out of a first frame, its arguments or output cut by the server.
+  // Being drawn at all is what asks for the whole transcript — a finished
+  // turn is collapsed, so most opens never draw one — and until that lands
+  // the row shows no figure counted from a fragment and opens onto nothing.
+  const cut = isCut(input) || isCut(result?.structured);
+  useEffect(() => {
+    if (cut) completeTranscript();
+  }, [cut]);
+
   // An MCP call names a server and a method, and both harnesses spell that for
   // a machine. The label becomes "MCP" the way a shell row's is "Bash", and the
   // method sits beside it as something readable.
@@ -160,7 +171,7 @@ export default function ToolCall({
   // A file edit renders as a diff rather than as its raw arguments. `rawInput`
   // wins when present — it means the call is still streaming and the JSON has
   // not parsed yet, so there is nothing to diff.
-  const sides = toolType === "file_edit" && !rawInput ? editSides(input) : null;
+  const sides = toolType === "file_edit" && !rawInput && !cut ? editSides(input) : null;
 
   // Shown on the collapsed row, so the size of an edit is legible without
   // opening it. Memoized because it parses the diff to stay consistent with the
@@ -500,7 +511,7 @@ export default function ToolCall({
 
       {todos && <TodoList todos={todos} />}
 
-      {open && sides && (
+      {open && !cut && sides && (
         <Suspense fallback={null}>
           <DiffView sides={sides} />
         </Suspense>
@@ -508,9 +519,9 @@ export default function ToolCall({
 
       {/* The harness reported the change itself, so this is a real unified diff
           rather than two sides reconstructed from the call's arguments. */}
-      {open && edits && edits.length > 0 && <FileEdits edits={edits} />}
+      {open && !cut && edits && edits.length > 0 && <FileEdits edits={edits} />}
 
-      {open && range && (
+      {open && !cut && range && (
         <Suspense fallback={null}>
           <CodeView range={range} />
         </Suspense>
@@ -518,17 +529,17 @@ export default function ToolCall({
 
       {/* Unboxed and sans, for the reason an answered question is: this is a
           sentence somebody wrote, and a code box frames prose as output. */}
-      {open && brief && (
+      {open && !cut && brief && (
         <p className="whitespace-pre-wrap text-chat text-foreground/90">{brief}</p>
       )}
 
-      {open && command && (
+      {open && !cut && command && (
         <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-surface-raised px-2.5 py-2 font-mono text-tool text-muted-foreground">
           {command}
         </pre>
       )}
 
-      {open && body && (
+      {open && !cut && body && (
         <pre className="overflow-x-auto rounded-md bg-surface-raised px-2.5 py-2 font-mono text-tool text-muted-foreground">
           {body}
         </pre>
@@ -540,7 +551,7 @@ export default function ToolCall({
           it as a sentence and a code box would frame prose as output. Neither is
           tinted — the "Error:" lead-in names the text on its own, which is also
           what carries a routine failure that the label above left uncoloured. */}
-      {open && shown && (
+      {open && !cut && shown && (
         <pre
           className={cn(
             "max-h-96 overflow-auto whitespace-pre-wrap",

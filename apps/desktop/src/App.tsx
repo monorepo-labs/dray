@@ -1,6 +1,7 @@
 import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { invoke, listen, LOCAL, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
+import { completeTranscript } from "@/lib/olderPages";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { CircleDashed, Plus } from "lucide-react";
 import PrStateIcon from "@/components/PrStateIcon";
@@ -1161,6 +1162,12 @@ function App() {
   /// preference is kept, so coming back restores the pane exactly as it was;
   /// everything that draws or reads reads this instead.
   const panelShown = panelOpen && !issuesOpen;
+  // The panel's tabs read the transcript's events — subagents, pictures, the
+  // todo list — so one held as a first frame is completed for them.
+  const panelNeedsWhole = panelShown && !!selectedSession?.lite;
+  useEffect(() => {
+    if (panelNeedsWhole && selectedSessionId) completeTranscript(selectedSessionId);
+  }, [panelNeedsWhole, selectedSessionId]);
 
   const selectedBot = useMemo(() => {
     // The held transcript answers too: a session an agent switch just started
@@ -1625,7 +1632,7 @@ function App() {
   // — see `startsNewList`. Held rather than derived, since only the previous
   // reading can say which this is; per session, since each has its own.
   const seenTodosRef = useRef(
-    new Map<string, { todos: Todo[] | null; olderBefore: number | null }>(),
+    new Map<string, { todos: Todo[] | null; olderBefore: number | null; lite: boolean }>(),
   );
   useEffect(() => {
     // Waiting on the transcript, not just the id: `sessionTodos` reads an empty
@@ -1633,12 +1640,14 @@ function App() {
     // record "no list" and then read the real one as news.
     if (!selectedSession) return;
     const { sessionId, olderBefore } = selectedSession;
+    const lite = !!selectedSession.lite;
     const seen = seenTodosRef.current;
     const previous = seen.get(sessionId);
-    seen.set(sessionId, { todos: sessionTodos, olderBefore });
+    seen.set(sessionId, { todos: sessionTodos, olderBefore, lite });
     // A page of older turns landing is history arriving, not a list being
     // written, so it re-seeds silently like the first reading does.
-    if (previous === undefined || previous.olderBefore !== olderBefore) return;
+    // So is a first frame being completed: the turns it left out arriving.
+    if (previous === undefined || previous.olderBefore !== olderBefore || previous.lite !== lite) return;
     if (sessionTodos && startsNewList(previous.todos, sessionTodos)) showPanel("more");
   }, [selectedSession, sessionTodos]);
 

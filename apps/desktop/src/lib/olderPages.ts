@@ -12,6 +12,20 @@ export function loadOlder(sessionId: string, turns?: number) {
   loader(sessionId, turns);
 }
 
+let completer: (sessionId?: string) => void = () => {};
+
+export function setCompleter(complete: (sessionId?: string) => void) {
+  completer = complete;
+}
+
+/// Asks for the whole of a transcript held as a first frame
+/// (`SessionSnapshot.lite`): every transcript on screen with no id named, for
+/// a row that knows its body was cut but not whose it is. Nothing to do for
+/// one already whole.
+export function completeTranscript(sessionId?: string) {
+  completer(sessionId);
+}
+
 let dropper: (sessionId: string, keepFrom?: string) => void = () => {};
 
 export function setOlderDropper(drop: (sessionId: string, keepFrom?: string) => void) {
