@@ -172,6 +172,10 @@ A task whose machine is offline stays on the card. The offline mark takes the pl
 
 Failing checks on a draft pull request do not send the task off to fix them. A draft waits on you, the same as any other draft.
 
+A task that finished and left a dev server running shows in **Waiting on you** instead of reading as still working. Its row in the **Tasks** tab shows the port, like `:3000`. A test that starts a server only for itself still counts as working.
+
+Which tasks are waiting on you is decided on the bot's machine. The card is the same for every client of that machine, and the bot still hears about a stalled task while the app is closed.
+
 ## Reaction
 
 ```bash
