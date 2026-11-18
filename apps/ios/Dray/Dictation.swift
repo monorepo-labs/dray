@@ -25,24 +25,46 @@ enum TranscribeOutcome: Decodable {
     }
 }
 
+/// What turns the phone's voice into words: Apple's model on the phone, or a server's.
+enum DictationEngine: Equatable {
+    case apple
+    case server(UUID)
+}
+
 extension Store {
     func canDictate(_ server: UUID) -> Bool {
         serverState[server] == .connected && connection(server)?.dictation == true
     }
 
-    /// No server can transcribe, so the docks trade the orb for a text field. Read off each
+    func canDictate(_ engine: DictationEngine) -> Bool {
+        switch engine {
+        case .apple: AppleSpeech.shared.usable
+        case .server(let id): canDictate(id)
+        }
+    }
+
+    /// Nothing can transcribe, so the docks trade the orb for a text field. Read off each
     /// server's last welcome, kept across a drop, so a blip never swaps the dock mid-reply;
     /// one not yet reached counts as able.
     var typesOnly: Bool {
-        !live.contains { connection($0.id)?.welcome.map { $0.dictation == true } ?? true }
+        !AppleSpeech.shared.usable && !live.contains { connection($0.id)?.welcome.map { $0.dictation == true } ?? true }
     }
 
-    /// Where dictation is transcribed: `pick`, Settings' choice, while it can;
-    /// otherwise the first server that can. Words come back to the phone, so
-    /// any session's draft can take them.
-    func dictationServer(_ pick: String) -> UUID? {
-        if let id = UUID(uuidString: pick), canDictate(id) { return id }
-        return servers.first { canDictate($0.id) }?.id
+    /// Settings' pick while it can; otherwise the first server that can, then
+    /// Apple's model on the phone. Words come back to the phone, so any
+    /// session's draft can take them.
+    func dictationEngine(_ pick: String) -> DictationEngine? {
+        if pick == AppleSpeech.pick, AppleSpeech.shared.usable { return .apple }
+        if let id = UUID(uuidString: pick), canDictate(id) { return .server(id) }
+        if let id = servers.first(where: { canDictate($0.id) })?.id { return .server(id) }
+        return AppleSpeech.shared.usable ? .apple : nil
+    }
+
+    func name(of engine: DictationEngine) -> String {
+        switch engine {
+        case .apple: AppleSpeech.device
+        case .server(let id): name(of: id)
+        }
     }
 
     /// Uploads a recording and has the server's model read it. A long
@@ -71,8 +93,8 @@ final class Dictations {
     var notes: [SessionKey: String] = [:]
     /// A recording the server never answered for, kept for Retry: the only copy of the speech.
     private(set) var kept: [SessionKey: URL] = [:]
-    /// The server each draft's recording goes to, taken at the press.
-    @ObservationIgnored private var servers: [SessionKey: UUID] = [:]
+    /// What reads each draft's recording, taken at the press.
+    @ObservationIgnored private var engines: [SessionKey: DictationEngine] = [:]
     @ObservationIgnored private var recorders: [SessionKey: AVAudioRecorder] = [:]
     /// The transcription each draft is waiting on. Cancel clears it, so an
     /// answer landing after that is dropped rather than written in.
@@ -91,6 +113,7 @@ final class Dictations {
 
     /// Settings, Dictation's "Start and stop sounds": the system's own record tones.
     static let soundsKey = "dictation.sounds"
+    /// A server's id, or `AppleSpeech.pick`. Named for when servers were the only engine.
     static let serverKey = "dictation.server"
     private static var sounds: Bool { UserDefaults.standard.object(forKey: soundsKey) as? Bool ?? true }
 
@@ -101,7 +124,7 @@ final class Dictations {
         return pow(10, r.peakPower(forChannel: 0) / 20)
     }
 
-    func start(_ store: Store, server: UUID, draft: SessionKey) async {
+    func start(_ store: Store, engine: DictationEngine, draft: SessionKey) async {
         guard state(draft) == .idle, kept[draft] == nil else { return }
         phase[draft] = .starting
         notes[draft] = nil
@@ -110,6 +133,8 @@ final class Dictations {
             notes[draft] = "Dray can't use the microphone. Allow it in Settings, under Privacy, Microphone."
             return
         }
+        // Apple's model comes down while the reader talks, rather than after.
+        if engine == .apple { AppleSpeech.shared.download() }
         // Cancelled while the prompt was up: no microphone nothing can stop.
         guard phase[draft] == .starting else { return }
         // Before the record category, which mutes output.
@@ -131,7 +156,7 @@ final class Dictations {
             r.isMeteringEnabled = true
             guard r.record() else { throw DrayError("The microphone would not start") }
             recorders[draft] = r
-            servers[draft] = server
+            engines[draft] = engine
             since[draft] = Date()
             phase[draft] = .recording
             Haptic.firm()
@@ -145,13 +170,13 @@ final class Dictations {
     /// Ends the recording and sends it. The draft is captured here, so words
     /// land in the draft they were spoken into even if the reader has moved on.
     func stop(_ store: Store, draft: SessionKey) async {
-        guard let r = recorders.removeValue(forKey: draft), let server = servers[draft] else { return }
+        guard let r = recorders.removeValue(forKey: draft), let engine = engines[draft] else { return }
         r.stop()
         release()
         if Self.sounds { AudioServicesPlaySystemSound(1114) }
         since[draft] = nil
         Haptic.tap()
-        await send(store, server, draft, r.url)
+        await send(store, engine, draft, r.url)
     }
 
     /// Two controls, as on the desktop: Cancel throws the words away, Stop keeps them.
@@ -162,14 +187,15 @@ final class Dictations {
             release()
         }
         since[draft] = nil
-        pending[draft] = nil
+        // A read in flight owns the note (Apple's download line); its own clear skips a cancelled run.
+        if pending.removeValue(forKey: draft) != nil { notes[draft] = nil }
         phase[draft] = nil
     }
 
     func retry(_ store: Store, draft: SessionKey) async {
-        guard let url = kept.removeValue(forKey: draft), let server = servers[draft] else { return }
+        guard let url = kept.removeValue(forKey: draft), let engine = engines[draft] else { return }
         notes[draft] = nil
-        await send(store, server, draft, url)
+        await send(store, engine, draft, url)
     }
 
     /// Closing the note without retrying is the reader letting the recording go.
@@ -178,11 +204,11 @@ final class Dictations {
         if let url = kept.removeValue(forKey: draft) { try? FileManager.default.removeItem(at: url) }
     }
 
-    /// The file goes once the server has answered, whatever it said; a send
+    /// The file goes once the engine has answered, whatever it said; a send
     /// that never reached it keeps the file for Retry. Leaving the app keeps
     /// it running for the system's grace; a send cut off by suspension goes
     /// again once the app is back, since the server dropped the reply with the socket.
-    private func send(_ store: Store, _ server: UUID, _ draft: SessionKey, _ url: URL) async {
+    private func send(_ store: Store, _ engine: DictationEngine, _ draft: SessionKey, _ url: URL) async {
         let run = UUID()
         pending[draft] = run
         phase[draft] = .transcribing
@@ -200,14 +226,21 @@ final class Dictations {
             }
         }
         do {
-            let outcome = try await store.transcribe(server, wav: url)
+            let outcome: TranscribeOutcome
+            switch engine {
+            case .server(let server): outcome = try await store.transcribe(server, wav: url)
+            case .apple:
+                if AppleSpeech.shared.status != .ready { notes[draft] = "Downloading Apple's speech model. This happens once." }
+                defer { if pending[draft] == run { notes[draft] = nil } }
+                outcome = try await AppleSpeech.shared.transcribe(url)
+            }
             try? FileManager.default.removeItem(at: url)
             guard pending[draft] == run else { return }
             switch outcome {
             case .text(let words):
                 store.appendToDraft(draft, words)
                 Haptic.success()
-            case .needsModel: notes[draft] = "\(store.name(of: server)) has no transcription model. Download one in Dray's settings, under Transcription."
+            case .needsModel: notes[draft] = "\(store.name(of: engine)) has no transcription model. Download one in Dray's settings, under Transcription."
             case .noAudio: notes[draft] = "No sound reached the microphone."
             case .empty: notes[draft] = "No words heard."
             case .failed(let message): notes[draft] = sentence(message)
@@ -220,12 +253,12 @@ final class Dictations {
             if leaves != left {
                 // Polled: a suspended app spends nothing on it.
                 while UIApplication.shared.applicationState != .active { try? await Task.sleep(for: .seconds(1)) }
-                for _ in 0..<40 where !store.canDictate(server) { try? await Task.sleep(for: .milliseconds(500)) }
+                for _ in 0..<40 where !store.canDictate(engine) { try? await Task.sleep(for: .milliseconds(500)) }
                 guard pending[draft] == run else {
                     try? FileManager.default.removeItem(at: url)
                     return
                 }
-                if store.canDictate(server) { return await send(store, server, draft, url) }
+                if store.canDictate(engine) { return await send(store, engine, draft, url) }
             }
             kept[draft] = url
             notes[draft] = "Couldn't transcribe: \(error.localizedDescription)"

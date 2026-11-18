@@ -23,6 +23,8 @@ struct DrayApp: App {
                 .font(Theme.Font.body)
                 // Neutral, so yellow stays the one colour that means "this is for you".
                 .tint(Theme.text)
+                // Before the docks decide between the orb and keyboard mode.
+                .task { await AppleSpeech.shared.refresh() }
         }
         .onChange(of: phase) { _, now in
             if now == .active { store.resume() }

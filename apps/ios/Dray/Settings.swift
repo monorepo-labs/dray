@@ -30,7 +30,7 @@ struct SettingsView: View {
                     RowGroup {
                         NavigationLink(value: SettingsPage.dictation) {
                             SettingsRow("Dictation", icon: "mic",
-                                        value: store.dictationServer(dictationPick).map { store.name(of: $0) } ?? "None")
+                                        value: store.dictationEngine(dictationPick).map { store.name(of: $0) } ?? "None")
                         }
                         RowDivider(inset: 48)
                         NavigationLink(value: SettingsPage.appearance) {
@@ -706,29 +706,29 @@ struct AddServerView: View {
 
 // MARK: Dictation
 
-/// Which server turns the phone's voice into text, the record tones, and the
-/// microphone's permission.
+/// What turns the phone's voice into text — Apple's model on the phone or a
+/// server — the record tones, and the microphone's permission.
 struct DictationSettings: View {
     @Environment(Store.self) private var store
     @AppStorage(Dictations.serverKey) private var pick = ""
     @AppStorage(Dictations.soundsKey) private var sounds = true
     @Environment(\.scenePhase) private var phase
     @State private var mic = AVAudioApplication.shared.recordPermission
+    private var apple: AppleSpeech { .shared }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 28) {
-                if !store.servers.isEmpty {
-                    VStack(alignment: .leading, spacing: Theme.Space.s) {
-                        GroupLabel("Transcribe on").padding(.horizontal, Theme.Space.m)
-                        RowGroup {
-                            ForEach(Array(store.servers.enumerated()), id: \.element.id) { i, s in
-                                if i > 0 { RowDivider(inset: 48) }
-                                serverRow(s)
-                            }
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    GroupLabel("Transcribe on").padding(.horizontal, Theme.Space.m)
+                    RowGroup {
+                        appleRow
+                        ForEach(store.servers, id: \.id) { s in
+                            RowDivider(inset: 48)
+                            serverRow(s)
                         }
-                        GroupLabel("Your voice is turned into text on this server.").padding(.horizontal, Theme.Space.m)
                     }
+                    if let footer { GroupLabel(footer).padding(.horizontal, Theme.Space.m) }
                 }
                 RowGroup {
                     Toggle("Start and stop sounds", isOn: $sounds)
@@ -750,20 +750,54 @@ struct DictationSettings: View {
         .foregroundStyle(Theme.text)
         .navigationTitle("Dictation")
         .navigationBarTitleDisplayMode(.inline)
+        .task { await apple.refresh() }
         // Back from the system's Settings, where it may have changed.
         .onChange(of: phase) { _, now in if now == .active { mic = AVAudioApplication.shared.recordPermission } }
     }
 
+    private var footer: String? {
+        switch store.dictationEngine(pick) {
+        case .apple: "Your voice is turned into text on this \(AppleSpeech.device) and never leaves it."
+        case .server: "Your voice is turned into text on this server."
+        case nil: nil
+        }
+    }
+
+    /// Shown on every iOS, so an older phone learns what it is missing.
+    private var appleRow: some View {
+        let detail: String? = switch apple.status {
+        case .needsNewerOS: "Needs iOS 26 and above"
+        case .unsupported: "Not available in your language"
+        case .checking, .needsDownload, .ready: "On device, private"
+        case .downloading(let done): "Downloading model, \(Int(done * 100))%"
+        }
+        return row(able: apple.usable, chosen: store.dictationEngine(pick) == .apple, name: AppleSpeech.device, detail: detail) {
+            Image(systemName: AppleSpeech.device == "iPad" ? "ipad" : "iphone").font(.system(size: 17)).foregroundStyle(Theme.secondary)
+        } pick: {
+            pick = AppleSpeech.pick
+            apple.download()
+        }
+    }
+
     private func serverRow(_ s: Server) -> some View {
-        let able = store.canDictate(s.id)
-        let chosen = store.dictationServer(pick) == s.id
-        return Button { pick = s.id.uuidString } label: {
+        row(able: store.canDictate(s.id), chosen: store.dictationEngine(pick) == .server(s.id), name: s.name, detail: nil) {
+            ServerGlyph().fill(Theme.secondary, style: FillStyle(eoFill: true))
+        } pick: {
+            pick = s.id.uuidString
+        }
+    }
+
+    private func row(able: Bool, chosen: Bool, name: String, detail: String?,
+                     @ViewBuilder icon: () -> some View, pick: @escaping () -> Void) -> some View {
+        Button(action: pick) {
             HStack(spacing: Theme.Space.m) {
-                ServerGlyph().fill(Theme.secondary, style: FillStyle(eoFill: true))
-                    .frame(width: 20, height: 20).opacity(able ? 1 : 0.45)
-                Text(s.name).foregroundStyle(able ? Theme.text : Theme.tertiary).lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if !able {
+                icon().frame(width: 20, height: 20).opacity(able ? 1 : 0.45)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name).foregroundStyle(able ? Theme.text : Theme.tertiary).lineLimit(1)
+                    if let detail { Text(detail).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if !able && detail == nil {
                     Text("Unavailable").foregroundStyle(Theme.tertiary)
                 } else if chosen {
                     Image(systemName: "checkmark").font(Theme.Font.headline.font).foregroundStyle(Theme.text)
@@ -771,6 +805,7 @@ struct DictationSettings: View {
             }
             .font(Theme.Font.body)
             .padding(.leading, Theme.Space.l).padding(.trailing, 14)
+            .padding(.vertical, detail == nil ? 0 : Theme.Space.s)
             .frame(minHeight: 52)
             .contentShape(.rect)
         }

@@ -32,7 +32,7 @@ struct ReplyDock: View {
     private var busy: Bool { item?.busy ?? false }
     private var dictation: Dictation { Dictations.shared.state(key) }
     private var text: String { (store.drafts[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
-    /// No server can transcribe: a text field stands where the orb would. Never mid-recording,
+    /// Nothing can transcribe: a text field stands where the orb would. Never mid-recording,
     /// or losing the one server that could would take Done away with the mic still on.
     private var typing: Bool { store.typesOnly && dictation == .idle }
     private var phase: DockPhase {
@@ -47,8 +47,8 @@ struct ReplyDock: View {
     private var connected: Bool { store.serverState[key.server] == .connected }
     /// Down long enough that its session says so; a quick reconnect dims nothing.
     private var away: Bool { store.lost.contains(key.server) }
-    /// Settings' pick, else any machine that can: the words come back to this draft whoever reads them.
-    private var transcriber: UUID? { store.dictationServer(dictationPick) }
+    /// Settings' pick, else anything that can: the words come back to this draft whoever reads them.
+    private var transcriber: DictationEngine? { store.dictationEngine(dictationPick) }
     /// The bot sheet's agent and model, waiting for this reply.
     private var pick: AgentPick? { store.unsent[key] }
     /// The reply moves a bot chat to another agent.
@@ -336,12 +336,12 @@ struct ReplyDock: View {
             return
         }
         guard phase == .rest || phase == .ready else { return }
-        guard let transcriber else { return flash("This server can't transcribe. Type instead.") }
+        guard let transcriber else { return flash("Nothing can transcribe right now. Type instead.") }
         // A kept recording is the only copy of what was said; it goes by Retry or Discard, never by a new tap.
         guard Dictations.shared.kept[key] == nil else { return }
         Dictations.shared.dismiss(key)
         failed = nil
-        Task { await Dictations.shared.start(store, server: transcriber, draft: key) }
+        Task { await Dictations.shared.start(store, engine: transcriber, draft: key) }
     }
 
     private func flash(_ line: String) {

@@ -7,6 +7,7 @@ import XCTest
 ///   TEST_RUNNER_DRAY_URL=ws://127.0.0.1:… TEST_RUNNER_DRAY_TOKEN=… TEST_RUNNER_DRAY_BOT=Ops \
 ///   TEST_RUNNER_DRAY_TASK="Fix login redirect" TEST_RUNNER_DRAY_GH_TASK="Bump deps" \
 ///   TEST_RUNNER_DRAY_EXPECT=keyboard|orb xcodebuild test …
+/// Apple's model keeps the orb from iOS 26 on, so `keyboard` wants an older runtime.
 final class KeyboardModeTests: XCTestCase {
     private var env: [String: String] { ProcessInfo.processInfo.environment }
 
