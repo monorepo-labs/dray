@@ -113,6 +113,41 @@ pub async fn resume(key: &str, id: &str) -> Result<Machine, String> {
     one(call(key, reqwest::Method::POST, &format!("/machines/{id}/resume"), START).await?)
 }
 
+/// The signed-in reader's Dray Cloud account (#1021): plan, usage, GitHub and
+/// agents, as `GET /account` describes them. Passed through untyped, since
+/// only the setup sheet reads it and its shape is the site's. Asked with the
+/// app's own Dray credential, which #889 keeps in `<home>/account.json`; no
+/// credential, or one the site no longer takes, reads as `{ "user": null }`.
+/// The app's to answer: it and its server share one home, so one file.
+#[tauri::command]
+pub async fn cloud_account() -> Result<Value, String> {
+    let signed_out = || serde_json::json!({ "user": null });
+    let Some(token) = account_token().await else { return Ok(signed_out()) };
+    let answer = crate::http()
+        .get(format!("{}/account", base()))
+        .bearer_auth(token)
+        .timeout(READ)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Dray Cloud: {e}"))?;
+    let status = answer.status().as_u16();
+    let body: Value = answer.json().await.unwrap_or(Value::Null);
+    match status {
+        200..=299 => Ok(body),
+        // A revoked credential; #889's own recheck forgets the file.
+        401 => Ok(signed_out()),
+        _ => Err(refusal(status, &body)),
+    }
+}
+
+/// The token #889's `dray_account` writes on sign-in. Read off the file
+/// rather than through that module, so this lands before it; switch once it has.
+async fn account_token() -> Option<String> {
+    let home = crate::store::get_home_app_dir().await.ok()?;
+    let held: Value = serde_json::from_slice(&tokio::fs::read(home.join("account.json")).await.ok()?).ok()?;
+    held["token"].as_str().filter(|t| !t.is_empty()).map(str::to_owned)
+}
+
 fn one(body: Value) -> Result<Machine, String> {
     serde_json::from_value::<One>(body)
         .map(|one| one.machine)
