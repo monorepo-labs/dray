@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { taskRuns } from "@/components/TasksPanel";
+import { taskCounts, taskRuns } from "@/components/TasksPanel";
 import type { CrewRow } from "@/lib/crew";
 import type { PrMark, SessionIndexItem } from "@/types/events";
 
@@ -99,5 +99,43 @@ describe("taskRuns", () => {
       ["failing", "merged", "draft"],
       ["busy"],
     ]);
+  });
+});
+
+describe("taskCounts", () => {
+  it("counts working and ready apart and files the rest as extras, aside left out", () => {
+    const prs: Record<string, PrMark> = {
+      ready: mark(),
+      readyBusy: mark(),
+      running: mark({ checksState: "RUNNING", mergeStateStatus: "BLOCKED" }),
+      failing: mark({ checksState: "FAILING", mergeStateStatus: "BLOCKED" }),
+    };
+    const counts = taskCounts(
+      [
+        row("busy", { busy: true }),
+        row("readyBusy", { busy: true }),
+        row("ready"),
+        row("running"),
+        row("failing"),
+        row("ask", { asking: true, busy: true }),
+        row("bg", { background: true }),
+        row("idle"),
+        row("aside", { busy: true }, { aside: true }),
+      ],
+      (r) => prs[r.item.sessionId],
+    );
+    expect(counts).toEqual({
+      working: 1,
+      ready: 2,
+      extras: [
+        ["need you", 1],
+        ["checks running", 1],
+        ["idle", 3],
+      ],
+    });
+  });
+
+  it("counts nothing for no tasks, or only set-aside ones", () => {
+    expect(taskCounts([row("a", {}, { aside: true })], none)).toEqual({ working: 0, ready: 0, extras: [] });
   });
 });
