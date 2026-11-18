@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import "streamdown/styles.css";
 import App from "./App";
 import CrashScreen from "@/components/CrashScreen";
+import WebTokenGate from "@/components/WebTokenGate";
 import { trackActiveDay } from "@/lib/analytics";
 import { onFocusChange } from "@/lib/focus";
 import { cancelsWindow, runUnhandledEscape } from "@/lib/escape";
@@ -39,8 +40,10 @@ window.addEventListener("keydown", (e) => {
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <CrashScreen>
-      <App />
-    </CrashScreen>
+    <WebTokenGate>
+      <CrashScreen>
+        <App />
+      </CrashScreen>
+    </WebTokenGate>
   </React.StrictMode>,
 );

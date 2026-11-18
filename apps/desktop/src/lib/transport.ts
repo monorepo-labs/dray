@@ -6,9 +6,13 @@
 //
 // A browser names its server by the page's URL: `?token=…`, plus
 // `&server=ws://…` for anything but the default. That server is `local` there.
+// The web build `dray-serve` hands out at `/web/` talks to the server that
+// served it instead, with the token it was given once (`webApp.ts`).
 
 import { convertFileSrc, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen, type Event, type UnlistenFn } from "@tauri-apps/api/event";
+
+import { IS_WEB_APP, refuseWebToken, webServerUrl, webToken } from "./webApp";
 
 /// `"local"` for the in-process core, an id from `servers.json` for a remote one.
 export type ServerId = string;
@@ -361,6 +365,10 @@ type Remote = { url: string; token: string };
 
 function browserServer(): Remote | null {
   if (typeof location === "undefined") return null;
+  if (IS_WEB_APP) {
+    const token = webToken();
+    return token ? { url: webServerUrl(), token } : null;
+  }
   const query = new URLSearchParams(location.search);
   const token = query.get("token");
   return token ? { url: query.get("server") ?? DEFAULT_SERVER, token } : null;
@@ -383,7 +391,10 @@ function connect(server: Remote): Promise<WebSocket> {
     ws.onmessage = ({ data }) => {
       const frame = JSON.parse(data);
       if (!admitted) {
-        if ("err" in frame) return reject(new Error(`dray-serve refused: ${frame.err}`));
+        if ("err" in frame) {
+          if (IS_WEB_APP && frame.err === "wrong token") refuseWebToken();
+          return reject(new Error(`dray-serve refused: ${frame.err}`));
+        }
         admitted = true;
         return resolve(ws);
       }
