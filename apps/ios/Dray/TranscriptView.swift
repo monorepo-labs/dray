@@ -32,6 +32,8 @@ struct TranscriptView: View {
         // A bot's chat draws the conversation alone, so its turns are never built.
         let turns = bot == nil ? buildTurns(transcript?.events ?? [], busy: busy) : []
         let botTasks = bot.map { store.botTasks(store.botChat(key.server, $0)) } ?? []
+        // Set-aside tasks are listed but not counted, as on the Tasks sheet and the desktop.
+        let taskCount = botTasks.filter { store.items[$0]?.aside != true }.count
         let asks = store.asks[key] ?? []
         let taskAsks = store.hiddenAsks(bot == nil ? store.botTasks([key]) : botTasks)
         let segments = segments(bot)
@@ -161,12 +163,12 @@ struct TranscriptView: View {
                     Button { showingTasks = true } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "checklist")
-                            if !botTasks.isEmpty { Text("\(botTasks.count)").font(Theme.Font.headline.font.monospacedDigit()) }
+                            if taskCount > 0 { Text("\(taskCount)").font(Theme.Font.headline.font.monospacedDigit()) }
                         }
                     }
                     // The label stays "Tasks", which UI tests find the button by.
                     .accessibilityLabel("Tasks")
-                    .accessibilityValue(botTasks.isEmpty ? "" : "\(botTasks.count)")
+                    .accessibilityValue(taskCount == 0 ? "" : "\(taskCount)")
                 }
             }
         }
