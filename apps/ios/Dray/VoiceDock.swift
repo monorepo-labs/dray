@@ -57,17 +57,6 @@ struct VoiceDock: View {
                     .transition(.opacity)
             }
             if typing {
-                // Cancel's Save draft lives with the orb's actions, which typing never opens.
-                if task.hasText {
-                    Button("Save draft") { Task { _ = await task.saveDraft() } }
-                        .font(Theme.Font.footnote)
-                        .foregroundStyle(Theme.secondary)
-                        .disabled(task.sending)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .padding(.trailing, Theme.Space.xs)
-                        .padding(.bottom, Theme.Space.s)
-                        .transition(.opacity)
-                }
                 ChatInput(placeholder: task.bot.map { "Message \($0.bot.name)" } ?? "New task", text: $task.text,
                           sending: task.sending, sendable: task.ready) {
                     Task { if let key = await task.start() { started(key) } }
