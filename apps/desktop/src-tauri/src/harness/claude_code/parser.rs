@@ -560,8 +560,8 @@ pub enum ResultEvent {
         model_usage: Value,
         #[serde(default)]
         origin: Option<ResultOrigin>,
-        /// Model calls the turn made. Zero on a notification turn is the CLI
-        /// filing a stranded task's notice ahead of a queued prompt.
+        /// Model calls the turn made. Zero on a notification turn: see
+        /// [`ResultEvent::is_notice_only`].
         #[serde(default)]
         num_turns: u32,
     },
@@ -826,6 +826,15 @@ pub struct Usage {
     /// Tokens written *into* the cache, billed at a premium.
     #[serde(default, deserialize_with = "crate::harness::null_as_default")]
     pub cache_creation_input_tokens: u64,
+}
+
+impl ResultEvent {
+    /// A turn the CLI ran for a task notification without calling the model:
+    /// a resume filing a stranded task's notice, or a notice queued
+    /// transcript-only after a subagent already handed back.
+    pub fn is_notice_only(&self) -> bool {
+        matches!(self, Self::Success { origin: Some(o), num_turns: 0, .. } if o.kind == "task-notification")
+    }
 }
 
 /// A `result` line that failed to parse even so. It still ends the turn, so the
