@@ -3013,16 +3013,20 @@ const setCrewSeen = (ids: string[]) => {
 /// chat has no row for. Anything else over a network comes with its tool
 /// bodies cut, the first frame and every page above it alike, and a row that
 /// needs one asks for its call (`readCalls`). This Mac reads its own disk and
-/// asks whole. A server older than either argument answers whole.
+/// asks whole. So does a cloud machine: what is read from one is saved as the
+/// copy its task opens from once the machine is gone (`keepCloudTranscript`),
+/// when no call could be asked for. A server older than either argument
+/// answers whole.
 const readAs = (server: ServerId, cwd: string | null | undefined): { bot?: true; lite?: true } =>
-  isBotPath(cwd) ? { bot: true } : server !== LOCAL ? { lite: true } : {};
+  isBotPath(cwd) ? { bot: true } : server !== LOCAL && !isCloud(server) ? { lite: true } : {};
 
 /// The whole events of tool calls a first frame cut, asked for by the rows
 /// that need them (`completeCall`) and laid over the cut ones by id. One call
 /// is a few KB where the tail it sits in is hundreds, and most rows are never
-/// opened. Asks made in one frame go out as one read; an id is asked once per
-/// load of its session, so a row re-rendering while its read is out does not
-/// ask again, and one whose read failed asks when it is next drawn.
+/// opened. Asks made in one frame go out as one read. An id is held only
+/// while its read is out, so a row re-rendering meanwhile does not ask twice,
+/// and one whose read failed, or whose page was let go and read cut again
+/// (`dropOlder`), asks afresh the next time it needs its body.
 const callAsks = useRef(new Map<string, Set<string>>());
 const callBatch = useRef(new Map<string, Set<string>>());
 const readCalls = (sessionId: string, callId: string) => {
@@ -3044,8 +3048,8 @@ const readCalls = (sessionId: string, callId: string) => {
             prev.map((s) => (s.sessionId === id ? { ...s, events: s.events.map((e) => byId.get(e.id) ?? e) } : s)),
           );
         })
-        .catch((e) => {
-          console.error("could not read calls", id, e);
+        .catch((e) => console.error("could not read calls", id, e))
+        .finally(() => {
           for (const callId of callIds) callAsks.current.get(id)?.delete(callId);
         });
     }
@@ -3066,8 +3070,6 @@ const deletedRef = useRef(new Set<string>());
 const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
   const running = tailReads.current.get(sessionId);
   if (running) return running;
-  // A fresh load holds cut calls again, whatever an earlier one had read.
-  callAsks.current.delete(sessionId);
   // An evicted remote transcript draws now and asks only for what is new. Its
   // index fields are taken from the live index, which may have moved since.
   const copy = takeTranscript(sessionId);

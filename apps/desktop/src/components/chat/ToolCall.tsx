@@ -142,9 +142,10 @@ export default function ToolCall({
   // fragment and opens onto nothing.
   const cut = isCut(input) || isCut(result?.structured);
   const wanted = cut && (open || (toolType === "file_edit" && isCut(input)));
+  // On `open` too, so a read that failed is asked again by opening the row.
   useEffect(() => {
     if (wanted && source) completeCall(source.sessionId, source.callId);
-  }, [wanted, source?.sessionId, source?.callId]);
+  }, [wanted, open, source?.sessionId, source?.callId]);
 
   // An MCP call names a server and a method, and both harnesses spell that for
   // a machine. The label becomes "MCP" the way a shell row's is "Bash", and the
