@@ -2,23 +2,21 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-/// Where Settings can go: a server's page, every server, Dictation, Notifications, Appearance.
+/// Where Settings can go: a server's page, every server, Dictation, Appearance.
 enum SettingsPage: Hashable {
     case server(UUID)
     case servers
     case dictation
-    case notifications
     case appearance
 }
 
 /// The one Settings screen: a card per server, then Add server, Dictation,
-/// Notifications and about. Opened on one server's page when a banner's Fix asks.
+/// Appearance and about. Opened on one server's page when a banner's Fix asks.
 struct SettingsView: View {
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var path: [SettingsPage]
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
-    @AppStorage(NotificationSettings.allowKey) private var notify = true
     @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
 
     init(focus: UUID?) { _path = State(initialValue: focus.map { [.server($0)] } ?? []) }
@@ -33,10 +31,6 @@ struct SettingsView: View {
                         NavigationLink(value: SettingsPage.dictation) {
                             SettingsRow("Dictation", icon: "mic",
                                         value: store.dictationServer(dictationPick).map { store.name(of: $0) } ?? "None")
-                        }
-                        RowDivider(inset: 48)
-                        NavigationLink(value: SettingsPage.notifications) {
-                            SettingsRow("Notifications", icon: "bell", value: notify ? "On" : "Off")
                         }
                         RowDivider(inset: 48)
                         NavigationLink(value: SettingsPage.appearance) {
@@ -72,7 +66,6 @@ struct SettingsView: View {
                         .navigationTitle("Servers")
                         .navigationBarTitleDisplayMode(.inline)
                 case .dictation: DictationSettings()
-                case .notifications: NotificationSettings()
                 case .appearance: AppearanceSettings()
                 }
             }
@@ -652,8 +645,16 @@ struct AddServerView: View {
                             RowDivider(inset: 0)
                             FieldRow(label: "Name", text: $name, prompt: "Optional")
                         }
-                        Text(filled ? "Filled from the pasted connect line." : "A whole connect line fills both at once.")
-                            .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
+                        Group {
+                            if let existing {
+                                Text("This server is already added as \(existing.name).")
+                                    .foregroundStyle(Theme.secondary)
+                            } else {
+                                Text(filled ? "Filled from the pasted connect line." : "A whole connect line fills both at once.")
+                                    .foregroundStyle(Theme.tertiary)
+                            }
+                        }
+                        .font(Theme.Font.footnote)
                             .padding(.horizontal, Theme.Space.xs)
                     }
                 }
@@ -667,7 +668,7 @@ struct AddServerView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
+                    Button(existing == nil ? "Add" : "Update") {
                         guard let parsed else { return }
                         let trimmed = name.trimmingCharacters(in: .whitespaces)
                         store.addServer(name: trimmed.isEmpty ? (host ?? "Server") : trimmed, url: parsed.url, token: parsed.token)
@@ -699,6 +700,8 @@ struct AddServerView: View {
         parseConnectLine("\(address) \(token.trimmingCharacters(in: .whitespacesAndNewlines))")
     }
     private var host: String? { parsed.flatMap { socketURL($0.url)?.host } }
+    /// Already saved: Add would draw its bots and sessions twice.
+    private var existing: Server? { parsed.flatMap { store.saved(url: $0.url, token: $0.token) } }
 }
 
 // MARK: Dictation
@@ -782,60 +785,6 @@ struct DictationSettings: View {
         case .denied: "Not allowed"
         default: "Not asked yet"
         }
-    }
-}
-
-// MARK: Notifications
-
-/// What the phone should tell the reader about. Only the picks exist so far:
-/// nothing sends a notification yet, and the screen says so.
-struct NotificationSettings: View {
-    static let allowKey = "notify.allow"
-    @AppStorage(allowKey) private var allow = true
-    @AppStorage("notify.needsMe") private var needsMe = true
-    @AppStorage("notify.done") private var done = true
-    @AppStorage("notify.prReady") private var prReady = false
-    @AppStorage("notify.autoStop") private var autoStop = true
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 28) {
-                RowGroup { toggle("Allow notifications", $allow) }
-                VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    GroupLabel("Tell me when").padding(.horizontal, Theme.Space.m)
-                    RowGroup {
-                        toggle("A task needs me", $needsMe)
-                        RowDivider()
-                        toggle("A task is done", $done)
-                        RowDivider()
-                        toggle("A PR is ready to merge", $prReady)
-                        RowDivider()
-                        toggle("A server is about to auto-stop", $autoStop)
-                    }
-                    .disabled(!allow)
-                    .opacity(allow ? 1 : 0.45)
-                    GroupLabel("Never while you're looking at that task.").padding(.horizontal, Theme.Space.m)
-                }
-                // ponytail: picks only; delivery lands with push from the server.
-                GroupLabel("Dray doesn't send these yet. Your picks are kept for when it does.")
-                    .padding(.horizontal, Theme.Space.m)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.horizontal, Theme.Space.l)
-            .padding(.top, Theme.Space.m)
-        }
-        .background(Theme.card.ignoresSafeArea())
-        .foregroundStyle(Theme.text)
-        .navigationTitle("Notifications")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func toggle(_ label: String, _ on: Binding<Bool>) -> some View {
-        Toggle(label, isOn: on)
-            .toggleStyle(SwitchStyle())
-            .font(Theme.Font.body)
-            .padding(.leading, Theme.Space.l).padding(.trailing, 14)
-            .frame(minHeight: 52)
     }
 }
 

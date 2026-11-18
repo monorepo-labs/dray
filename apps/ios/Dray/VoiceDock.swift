@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Where the dock is: resting under the list, or open over it.
 enum DockPhase { case rest, recording, transcribing, ready }
@@ -359,6 +360,7 @@ struct ChatInput: View {
     let sendable: Bool
     let send: () -> Void
     @FocusState private var focused: Bool
+    @State private var closer = KeyboardCloser()
 
     var body: some View {
         HStack(alignment: .bottom, spacing: Theme.Space.s) {
@@ -368,7 +370,9 @@ struct ChatInput: View {
                 .tint(Theme.accent)
                 .lineLimit(1...5)
                 .focused($focused)
-                .padding(.vertical, 11)
+                .padding(.vertical, 8)
+                // Send's height, so one line sits centred beside it; more grow from the bottom.
+                .frame(minHeight: 44)
                 .padding(.leading, Theme.Space.l)
                 .accessibilityIdentifier("chatInput")
             Button(action: send) {
@@ -388,7 +392,52 @@ struct ChatInput: View {
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous).stroke(Theme.border, lineWidth: 1))
         .contentShape(.rect)
         .onTapGesture { focused = true }
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { closer.field = $0 }
+        .onChange(of: focused) { focused ? closer.install { focused = false } : closer.remove() }
+        .onDisappear { closer.remove() }
     }
+}
+
+/// Closes the keyboard the way Messages does: a tap anywhere but the field, or a swipe
+/// down from the field's top or below it. Above, over a list or a chat, the scroll
+/// view's own interactive dismissal has the swipe. On the window, beside every
+/// other touch and cancelling none, so a row or button under it still works (#1196).
+@MainActor private final class KeyboardCloser: NSObject, UIGestureRecognizerDelegate {
+    var field: CGRect = .zero
+    private var close: () -> Void = {}
+    private var recognizers: [UIGestureRecognizer] = []
+
+    func install(_ close: @escaping () -> Void) {
+        self.close = close
+        guard recognizers.isEmpty, let window = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
+        recognizers = [UITapGestureRecognizer(target: self, action: #selector(tapped)),
+                       UIPanGestureRecognizer(target: self, action: #selector(panned))]
+        for r in recognizers {
+            r.cancelsTouchesInView = false
+            r.delegate = self
+            window.addGestureRecognizer(r)
+        }
+    }
+
+    func remove() {
+        for r in recognizers { r.view?.removeGestureRecognizer(r) }
+        recognizers = []
+    }
+
+    @objc private func tapped() { close() }
+
+    @objc private func panned(_ pan: UIPanGestureRecognizer) {
+        let moved = pan.translation(in: nil)
+        if pan.state == .changed, moved.y > 16, moved.y > abs(moved.x) { close() }
+    }
+
+    func gestureRecognizer(_ r: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        let at = touch.location(in: nil)
+        return r is UIPanGestureRecognizer ? at.y >= field.minY : !field.contains(at)
+    }
+
+    func gestureRecognizer(_ r: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }
 
 extension View {

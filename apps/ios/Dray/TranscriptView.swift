@@ -95,9 +95,12 @@ struct TranscriptView: View {
                             AskCard(key: t.key, event: t.event)
                         }
                     }
-                    if bot != nil { StalledCard(chat: key, tasks: botTasks) }
-                    // The stack's bottom padding, and what a scroll to the end lands on.
-                    Color.clear.frame(height: Theme.Space.m).id("bottom")
+                    // One child with what a scroll to the end lands on, so the stack's spacing above it is the
+                    // whole gap to the dock: the card draws nothing with no stalls, yet as a child of its own took spacing.
+                    VStack(alignment: .leading, spacing: 0) {
+                        if bot != nil { StalledCard(chat: key, tasks: botTasks) }
+                        Color.clear.frame(height: 0).id("bottom")
+                    }
                 }
                 .padding(.horizontal, Theme.Space.l)
                 .padding(.top, Theme.Space.m)
