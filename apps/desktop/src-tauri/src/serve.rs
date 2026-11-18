@@ -664,6 +664,7 @@ pub async fn listen(
                 Some(line) if relayed(&line) => relay_http(stream, &token).await,
                 Some(line) if line.starts_with("GET /file?") => file(stream, &token).await,
                 Some(line) if line.starts_with("POST /upload?") => upload(stream, &token).await,
+                Some(line) if web_route(&line) => web(stream).await,
                 // Its own sign-in, never the serve token: an assistant's cloud
                 // must not hold the key to every other door here.
                 Some(line) if dray_proto::REMOTE_MCP && crate::mcp::routes(&line) =>crate::mcp::serve(stream, sink).await,
@@ -1465,6 +1466,85 @@ async fn servable_under(home: &std::path::Path, path: &str) -> Option<PathBuf> {
     None
 }
 
+/// `GET /web/…`: the app itself, for a browser on a machine with no Dray. Built
+/// by `pnpm build:web` into `<home>/web`, or wherever `DRAY_WEB_DIR` points. No
+/// token: the bundle holds nothing private, and its socket asks for one.
+async fn web(stream: TcpStream) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let (head, reader) = read_head(stream).await?;
+    let mut stream = reader.into_inner().into_inner();
+    let root = match std::env::var_os("DRAY_WEB_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => store::get_home_app_dir().await?.join("web"),
+    };
+    let target = head.target.split('?').next().unwrap_or_default();
+    let Some(path) = web_file(&root, target) else {
+        let body = "No web build here. Run `pnpm build:web` in apps/desktop and copy dist-web to <home>/web.";
+        let refused = format!(
+            "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(refused.as_bytes()).await?;
+        return Ok(());
+    };
+    let bytes = tokio::fs::read(&path).await?;
+    // Vite names every bundled file by its hash, so those never change under
+    // their name. `index.html` and `public/` files keep theirs across builds.
+    let hashed = path.parent().is_some_and(|dir| dir.ends_with("assets"))
+        && path.extension().is_some_and(|e| e == "js" || e == "css");
+    let cache = if hashed { "public, max-age=31536000, immutable" } else { "no-cache" };
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: {cache}\r\nConnection: close\r\n\r\n",
+        web_content_type(&path),
+        bytes.len()
+    );
+    stream.write_all(head.as_bytes()).await?;
+    stream.write_all(&bytes).await?;
+    stream.shutdown().await.ok();
+    Ok(())
+}
+
+/// Whether a request line asks for the web app: `/web` and below, not a
+/// sibling such as `/webhook`.
+fn web_route(line: &str) -> bool {
+    line.strip_prefix("GET /web")
+        .is_some_and(|rest| rest.starts_with([' ', '/', '?']))
+}
+
+/// The file under `root` that `target` names, else the app's `index.html`, so
+/// a reload on any path under `/web` still opens the app. Resolved by the
+/// filesystem, so neither `..` nor a symlink reaches outside `root`.
+fn web_file(root: &Path, target: &str) -> Option<PathBuf> {
+    let root = root.canonicalize().ok()?;
+    let rel = target.strip_prefix("/web").unwrap_or(target).trim_start_matches('/');
+    match root.join(rel).canonicalize() {
+        Ok(path) if path.starts_with(&root) && path.is_file() => Some(path),
+        _ => Some(root.join("index.html")).filter(|index| index.is_file()),
+    }
+}
+
+/// [`content_type`] plus what a page is built from. Kept apart: `/file` serves
+/// attachments on this same origin, where an HTML or SVG one would run script
+/// beside the app and read its token.
+fn web_content_type(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js" | "mjs") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json" | "map") => "application/json",
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        Some("wasm") => "application/wasm",
+        Some("wav") => "audio/wav",
+        Some("mp3") => "audio/mpeg",
+        _ => content_type(path),
+    }
+}
+
 fn content_type(path: &std::path::Path) -> &'static str {
     match path
         .extension()
@@ -2131,6 +2211,54 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_web_route_is_web_and_below() {
+        use super::web_route;
+        assert!(web_route("GET /web HTTP/1.1"));
+        assert!(web_route("GET /web/ HTTP/1.1"));
+        assert!(web_route("GET /web/assets/index-1a2b.js HTTP/1.1"));
+        assert!(web_route("GET /web?token=ab HTTP/1.1"));
+        assert!(!web_route("GET /webhook HTTP/1.1"));
+        assert!(!web_route("POST /web/ HTTP/1.1"));
+        assert!(!web_route("GET / HTTP/1.1"));
+    }
+
+    #[test]
+    fn active_types_stay_off_the_file_route() {
+        use super::{content_type, web_content_type};
+        use std::path::Path;
+        for name in ["a.html", "a.svg", "a.js"] {
+            assert_eq!(content_type(Path::new(name)), "application/octet-stream", "{name}");
+        }
+        assert_eq!(web_content_type(Path::new("index.html")), "text/html; charset=utf-8");
+        assert_eq!(web_content_type(Path::new("icon.svg")), "image/svg+xml");
+        assert_eq!(web_content_type(Path::new("clip.png")), "image/png");
+    }
+
+    #[test]
+    fn web_files_stay_inside_the_build() {
+        use super::web_file;
+        let base =
+            std::env::temp_dir().join(format!("dray-web-{}-{}", std::process::id(), uuid::Uuid::now_v7()));
+        let root = base.join("web");
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(root.join("index.html"), "app").unwrap();
+        std::fs::write(root.join("assets/index-1a2b.js"), "js").unwrap();
+        std::fs::write(base.join("serve-token"), "secret").unwrap();
+        let root_real = root.canonicalize().unwrap();
+        let index = root_real.join("index.html");
+
+        let script = root_real.join("assets/index-1a2b.js");
+        assert_eq!(web_file(&root, "/web/assets/index-1a2b.js"), Some(script));
+        assert_eq!(web_file(&root, "/web/"), Some(index.clone()));
+        assert_eq!(web_file(&root, "/web"), Some(index.clone()));
+        assert_eq!(web_file(&root, "/web/sessions/abc"), Some(index.clone()), "a client route opens the app");
+        assert_eq!(web_file(&root, "/web/../serve-token"), Some(index.clone()), "a .. never leaves the build");
+        assert_eq!(web_file(&root, "/web/assets"), Some(index), "a directory is not served");
+        assert_eq!(web_file(&base.join("missing"), "/web/"), None);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
     #[test]
     fn a_range_is_read_as_http_writes_it() {
         use super::{byte_span, ByteSpan::*};
