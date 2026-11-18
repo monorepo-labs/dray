@@ -123,6 +123,10 @@ export default function FilesView({
     (path: string) => openInFiles(sessionId, `${cwd}/${path}`, undefined, bring),
     [sessionId, cwd, bring],
   );
+  const openAbsolute = useCallback(
+    (path: string) => openInFiles(sessionId, path, undefined, bring),
+    [sessionId, bring],
+  );
   const selected = activePath?.startsWith(`${cwd}/`)
     ? activePath.slice(cwd.length + 1)
     : null;
@@ -247,7 +251,7 @@ export default function FilesView({
       {list}
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <FileViewer file={file} />
+        <FileViewer file={file} onOpen={openAbsolute} />
       </div>
     </div>
   );

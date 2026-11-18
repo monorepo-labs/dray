@@ -29,6 +29,11 @@ export type OpenFile = {
   state: FileState;
 };
 
+/// Whether a tab holds a folder's listing, for its icon. Unknown until read.
+export function isFolder(file: OpenFile): boolean {
+  return file.state.status === "ready" && file.state.body.kind === "dir";
+}
+
 type SessionFiles = { open: OpenFile[]; active: string | null };
 
 /// Open files, per session, in the order they were opened.
