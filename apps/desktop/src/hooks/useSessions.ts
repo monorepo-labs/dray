@@ -42,7 +42,7 @@ import { botStance, stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
 import { appendLive, mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
-import { forgetTranscript, keepTranscript, takeTranscript } from "@/lib/keptTranscripts";
+import { forgetTranscript, hasTranscript, keepTranscript, takeTranscript, warmPicks } from "@/lib/keptTranscripts";
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, moveSpace, orderProjects, PROJECT_ORDER_KEY, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { FIRST_MOUNT } from "@/lib/turnWindow";
@@ -2276,6 +2276,7 @@ const readServer = (server: ServerId) => {
       }
       setSessionIndexItems((prev) => mergeFrom(prev, server, items, (i) => i.cwd));
       if (server === LOCAL) setIndexSide(archived);
+      else if (!archived) void warmServerRef.current(server, items);
     })
     .catch((e) => {
       if (server === LOCAL) setError(String(e));
@@ -3018,6 +3019,9 @@ const deletedRef = useRef(new Set<string>());
 const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
   const running = tailReads.current.get(sessionId);
   if (running) return running;
+  // A read-ahead still out is this read now, and its answer lands here.
+  const warming = warmReads.current.get(sessionId);
+  warmReads.current.delete(sessionId);
   // An evicted remote transcript draws now and asks only for what is new. Its
   // index fields are taken from the live index, which may have moved since.
   const copy = takeTranscript(sessionId);
@@ -3036,8 +3040,9 @@ const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
   const kept = isCloud(server) && !serverConnected(server) ? keptCloudTranscript(server, sessionId) : null;
   const read = Promise.resolve(kept)
     .then(
-      (copy) =>
+      async (copy) =>
         copy ??
+        (await warming) ??
         invoke<SessionSnapshot | null>("get_session_by_id", {
           sessionId,
           turns: FIRST_MOUNT,
@@ -3060,6 +3065,39 @@ const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
   tailReads.current.set(sessionId, read);
   return read;
 };
+
+/// Reads a remote transcript's tail into the kept copies before anyone asks
+/// for it, so the open that follows is `loadTail`'s copy path: drawn at once,
+/// caught up behind. `fresh` re-reads over a copy already held, for a turn
+/// that just ended. Never This Mac, which reads its own disk in milliseconds.
+const warmReads = useRef(new Map<string, Promise<SessionSnapshot | null>>());
+const warm = (sessionId: string, fresh = false): Promise<void> => {
+  if (serverOfSession(sessionId) === LOCAL) return Promise.resolve();
+  if (sessionsRef.current.some((s) => s.sessionId === sessionId)) return Promise.resolve();
+  if (tailReads.current.has(sessionId) || warmReads.current.has(sessionId)) return Promise.resolve();
+  if (!fresh && hasTranscript(sessionId)) return Promise.resolve();
+  const read = invoke<SessionSnapshot | null>("get_session_by_id", { sessionId, turns: FIRST_MOUNT }).catch(() => null);
+  warmReads.current.set(sessionId, read);
+  return read.then((snapshot) => {
+    // Taken by a `loadTail` meanwhile, which lands it in state instead.
+    if (warmReads.current.get(sessionId) !== read) return;
+    warmReads.current.delete(sessionId);
+    if (!snapshot || deletedRef.current.has(sessionId)) return;
+    if (sessionsRef.current.some((s) => s.sessionId === sessionId)) return;
+    keepTranscript(snapshot);
+  });
+};
+/// One at a time, so a click during the run waits behind one tail at most.
+const warmServer = async (server: ServerId, items: SessionIndexItem[]) => {
+  for (const id of warmPicks(items)) {
+    if (!serverConnected(server)) return;
+    await warm(id);
+  }
+};
+const warmServerRef = useRef(warmServer);
+warmServerRef.current = warmServer;
+const warmRef = useRef(warm);
+warmRef.current = warm;
 
 /// Loads a transcript without selecting it — a split pane, or a sidebar row
 /// hovered long enough to be worth warming. Touches no selection ref, so a
@@ -3514,6 +3552,13 @@ useEffect(() => {
       if (!tasksBySessionRef.current[sessionId]?.length) {
         setAsksBySession((prev) => (prev[sessionId]?.length ? { ...prev, [sessionId]: [] } : prev));
       }
+    }
+
+    // A finished turn is the transcript most likely opened next — where it
+    // has a row to open it from, which a bot's hidden children do not.
+    if (status === "completed") {
+      const row = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
+      if (row && !row.hidden && !row.archived) void warmRef.current(sessionId, true);
     }
 
     // Finishing in front of the reader is read the moment it does; everything
