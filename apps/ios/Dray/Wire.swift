@@ -225,9 +225,6 @@ struct PrMark: Decodable, Hashable {
 struct Snapshot: Decodable {
     let events: [AgentEvent]
     let olderBefore: Int?
-    /// A first frame: bodies shortened, maybe the page's oldest events missing,
-    /// with the whole read still to ask for. Absent from an older server.
-    var lite: Bool? = nil
 }
 
 struct LiveState: Decodable {
@@ -459,12 +456,15 @@ struct ToolResult: Decodable {
     let text: String
     let isError: Bool
     let images: [ImageRef]
+    /// `text` is a prefix the server cut (`lite`); the call's own read brings the rest.
+    let cut: Bool
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Key.self)
         text = try c.decode(String.self, forKey: "text")
         isError = try c.decodeIfPresent(Bool.self, forKey: "isError") ?? false
         images = decodeImages(c)
+        cut = isCut(try? c.decode(JSON.self, forKey: "structured"))
     }
 }
 
