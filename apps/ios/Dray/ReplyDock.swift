@@ -28,11 +28,14 @@ struct ReplyDock: View {
     private var busy: Bool { item?.busy ?? false }
     private var dictation: Dictation { Dictations.shared.state(key) }
     private var text: String { (store.drafts[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// No server can transcribe: a text field stands where the orb would.
+    private var typing: Bool { store.typesOnly }
     private var phase: DockPhase {
+        if typing { return .rest }
         switch dictation {
-        case .starting, .recording: .recording
-        case .transcribing: .transcribing
-        case .idle: text.isEmpty ? .rest : .ready
+        case .starting, .recording: return .recording
+        case .transcribing: return .transcribing
+        case .idle: return text.isEmpty ? .rest : .ready
         }
     }
     private var open: Bool { phase != .rest }
@@ -64,13 +67,18 @@ struct ReplyDock: View {
                 KeptNote(line: line, draft: key).transition(.opacity)
             }
             // Dim while the server or the network is away; the banner up top says why, and typing still works.
-            DockOrb(draft: key, size: 76, tap: tapped).opacity(away ? 0.4 : 1)
+            if typing {
+                ChatInput(placeholder: "Message", text: Binding(get: { store.drafts[key] ?? "" }, set: { store.drafts[key] = $0 }),
+                          sending: sending, sendable: !text.isEmpty && !sending && connected, send: send)
+            } else {
+                DockOrb(draft: key, size: 76, tap: tapped).opacity(away ? 0.4 : 1)
+            }
             if open {
                 actions
                     .padding(.top, 6)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            picks.opacity(away ? 0.4 : 1)
+            picks.opacity(away ? 0.4 : 1).typingAligned(typing)
         }
         .padding(.horizontal, 20)
         .padding(.top, 40)
@@ -82,7 +90,8 @@ struct ReplyDock: View {
                            startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
         }
-        .ignoresSafeArea(edges: .bottom)
+        // The container alone while typing, so the keyboard lifts the field over it.
+        .ignoresSafeArea(typing ? .container : .all, edges: .bottom)
         .animation(Theme.motion, value: phase)
         .animation(Theme.motion, value: confirming)
         .animation(Theme.motion, value: hint)
@@ -212,10 +221,12 @@ struct ReplyDock: View {
                 Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold)).frame(width: 24, height: 20)
             }
             .accessibilityLabel("More picks")
-            Button { edit() } label: {
-                Image(systemName: "keyboard").font(.system(size: 16)).frame(width: 24, height: 20)
+            if !typing {
+                Button { edit() } label: {
+                    Image(systemName: "keyboard").font(.system(size: 16)).frame(width: 24, height: 20)
+                }
+                .accessibilityLabel("Keyboard")
             }
-            .accessibilityLabel("Keyboard")
             if busy {
                 Button {
                     Haptic.firm()

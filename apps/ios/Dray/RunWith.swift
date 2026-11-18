@@ -440,13 +440,19 @@ struct ModelChips: View {
     let selected: String
     let pick: (String) -> Void
     @State private var stars: [String] = []
+    /// The models the row draws, per agent; nil until the reader edits it, which
+    /// draws every row the server doesn't mark secondary, as the desktop seeds its stars.
+    @State private var shortlist: [String]?
+    @State private var library = false
 
     private var key: String { "stars." + harness }
+    private var listKey: String { "shortlist." + harness }
+    private func listed(_ m: Model) -> Bool { shortlist?.contains(m.id) ?? (m.secondary != true) }
     /// The shortlist, and the pick if it is off it. pi and fx run their own default where
     /// nothing is picked, so that is a choice too.
     private var choices: [(id: String, label: String)] {
         let all = (Picks.defaultModel[harness] == "" ? [("", "Default")] : [])
-            + models.filter { $0.secondary != true || $0.id == selected }.map { ($0.id, $0.label) }
+            + models.filter { listed($0) || $0.id == selected }.map { ($0.id, $0.label) }
         return all.filter { stars.contains($0.0) } + all.filter { !stars.contains($0.0) }
     }
 
@@ -457,9 +463,41 @@ struct ModelChips: View {
                          star: m.id.isEmpty ? nil : { toggle(m.id) }) { pick(m.id) }
                     .id(m.id)
             }
+            if !models.isEmpty {
+                PickChip(label: "More models", selected: false) { library = true }
+            }
         }
         .animation(Theme.motion, value: stars)
-        .task(id: harness) { stars = UserDefaults.standard.stringArray(forKey: key) ?? [] }
+        .animation(Theme.motion, value: shortlist)
+        .task(id: harness) {
+            stars = UserDefaults.standard.stringArray(forKey: key) ?? []
+            shortlist = UserDefaults.standard.stringArray(forKey: listKey)
+        }
+        .sheet(isPresented: $library) {
+            PickSheet(title: "Models") {
+                PickSection(nil, footer: "Models switched on show in the picker.") {
+                    PickCard {
+                        ForEach(Array(models.enumerated()), id: \.element.id) { i, m in
+                            if i > 0 { PickDivider() }
+                            PickRow(m.label) {
+                                PickSwitch(label: m.label, isOn: Binding(get: { listed(m) }, set: { list(m, $0) }))
+                            }
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(38)
+            .presentationBackground(Theme.card)
+        }
+    }
+
+    private func list(_ m: Model, _ on: Bool) {
+        var ids = (shortlist ?? models.filter { $0.secondary != true }.map(\.id)).filter { $0 != m.id }
+        if on { ids.append(m.id) }
+        shortlist = ids
+        UserDefaults.standard.set(ids, forKey: listKey)
     }
 
     private func toggle(_ id: String) {

@@ -913,8 +913,9 @@ pub async fn prs_for_branch(
         // keeps its tab for that reason so the install can be offered. So git
         // is asked the question `gh` would have answered, or a machine without
         // the CLI grows a PR tab on sessions that have nothing to do with
-        // GitHub.
-        Err(PrUnavailable::NoCli) if !git::has_github_remote(&cwd).await => {
+        // GitHub. A logged-out `gh` likewise answers before the checkout is
+        // read, and a local repo has no PR to log in for.
+        Err(PrUnavailable::NoCli | PrUnavailable::NotAuthenticated) if !git::has_github_remote(&cwd).await => {
             Err(PrUnavailable::NoRemote)
         }
         answer => answer,
