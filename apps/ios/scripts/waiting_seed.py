@@ -3,7 +3,7 @@
 back. Three reported into the chat: the oldest far up it, answered with a
 reply naming a picture on the server's disk; the newest near its end,
 answered; one with no reply. The rest never reported, so their rows open the
-task. "Flaky upload test" carries a need line; every other row has none.
+task. "Bump deps" carries a need line; every other row has none.
 
     python3 scripts/waiting_seed.py
     DRAY_HOME=/private/tmp/dray-waiting dray-serve --port 47111 &
@@ -95,7 +95,7 @@ for title, last, minutes_ago in tasks:
     write_log(sid, [(f"{title}.", "Working on it."), ("Go on.", last)], modified - timedelta(minutes=2))
     index.append(entry(sid, proj, title, modified, hidden=True, parent=chat))
 # One row carries a need line its bot wrote; the rest have none and must not wait on one.
-next(e for e in index if e["sessionId"] == ids["Flaky upload test"])["need"] = {"text": "Say yes to a fake-timer rewrite of the upload test.", "at": stamp(now)}
+next(e for e in index if e["sessionId"] == ids["Bump deps"])["need"] = {"text": "Say whether to pin React 20 or wait for a fix.", "at": stamp(now)}
 
 turns = [(f"Check {i}?", f"Chat reply number {i}.") for i in range(400)]
 # The oldest report sits near the top, so the server walks back nearly the whole chat for it.

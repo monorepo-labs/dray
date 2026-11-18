@@ -625,8 +625,8 @@ func prStatus(_ pr: PrMark) -> String {
     }
 }
 
-/// Rows drawn before "Show N more", so a long card doesn't push the chat off screen.
-private let stallRowsShown = 5
+/// Rows drawn before "Show N more", which opens them all in a sheet, so a long card doesn't push the chat off screen.
+private let stallRowsShown = 2
 
 /// The card at the foot of a bot's chat: its tasks that wait on the reader. A
 /// tap opens in a sheet what the bot said about the task: its reply to the
@@ -647,6 +647,7 @@ struct StalledCard: View {
     /// card goes so a late answer never opens a task over another chat.
     @State private var reading: String?
     @State private var read: Task<Void, Never>?
+    /// Every row, in a sheet.
     @State private var all = false
 
     private struct Picked: Identifiable {
@@ -665,15 +666,31 @@ struct StalledCard: View {
                                          ["sessionId": .string(chat.id), "taskId": .string(s.task.id)],
                                          as: String?.self, timeout: .seconds(8))
         guard !Task.isCancelled else { return }
-        if let text = text ?? nil { picked = Picked(stall: s, text: text) } else { openTask?(s.task) }
+        if let text = text ?? nil {
+            picked = Picked(stall: s, text: text)
+        } else {
+            all = false
+            openTask?(s.task)
+        }
+    }
+
+    private func visible(_ now: Date) -> [Stall] {
+        let dismissed = Set(dismissedRaw.split(separator: "\n").map(String.init))
+        return store.stalls(tasks, now: now).filter { !dismissed.contains($0.id) }
+    }
+
+    private func replySheet(_ p: Picked) -> some View {
+        BotReplySheet(chat: chat, task: p.stall.task, title: p.stall.item.title, text: p.text) {
+            picked = nil
+            all = false
+            openTask?(p.stall.task)
+        }
     }
 
     var body: some View {
         // Stalls ripen with time alone, so the card looks again each minute.
         TimelineView(.periodic(from: .now, by: 60)) { context in
-            let dismissed = Set(dismissedRaw.split(separator: "\n").map(String.init))
-            let rows = store.stalls(tasks, now: context.date).filter { !dismissed.contains($0.id) }
-            let capped = !all && rows.count > stallRowsShown
+            let rows = visible(context.date)
             if !rows.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
@@ -681,7 +698,8 @@ struct StalledCard: View {
                         Spacer()
                         Button {
                             // Capped, so years of dismissals never grow the defaults without end.
-                            dismissedRaw = (Array(dismissed) + rows.map(\.id)).suffix(200).joined(separator: "\n")
+                            let dismissed = dismissedRaw.split(separator: "\n").map(String.init)
+                            dismissedRaw = (dismissed + rows.map(\.id)).suffix(200).joined(separator: "\n")
                         } label: {
                             Image(systemName: "xmark").font(Theme.Font.footnoteStrong.font).foregroundStyle(Theme.tertiary)
                                 .frame(width: 28, height: 28)
@@ -689,10 +707,10 @@ struct StalledCard: View {
                         .accessibilityLabel("Dismiss")
                     }
                     .padding(.leading, Theme.Space.s)
-                    ForEach(capped ? Array(rows.prefix(stallRowsShown)) : rows) { row($0) }
+                    ForEach(rows.prefix(stallRowsShown)) { row($0) }
                     if rows.count > stallRowsShown {
-                        Button { withAnimation(Theme.motion) { all.toggle() } } label: {
-                            Text(capped ? "Show \(rows.count - stallRowsShown) more" : "Show less")
+                        Button { all = true } label: {
+                            Text("Show \(rows.count - stallRowsShown) more")
                                 .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
                                 .frame(maxWidth: .infinity, minHeight: 34)
                         }
@@ -714,11 +732,24 @@ struct StalledCard: View {
         // The card can stay while its chat changes under it, so both end the read.
         .onDisappear { read?.cancel() }
         .onChange(of: chat) { read?.cancel() }
-        .sheet(item: $picked) { p in
-            BotReplySheet(chat: chat, task: p.stall.task, title: p.stall.item.title, text: p.text) {
-                picked = nil
-                openTask?(p.stall.task)
+        // While the list is up, a reply opens over it instead, since one presenter shows one sheet.
+        .sheet(item: Binding(get: { all ? nil : picked }, set: { picked = $0 }), content: replySheet)
+        .sheet(isPresented: $all, onDismiss: { picked = nil }) {
+            NavigationStack {
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) { ForEach(visible(context.date)) { row($0) } }
+                            .padding(Theme.Space.s)
+                    }
+                }
+                .navigationTitle("Waiting on you")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { Button("Done") { all = false } }
+                .background(Theme.page.ignoresSafeArea())
             }
+            .presentationDetents([.medium, .large])
+            .presentationBackground(Theme.page)
+            .sheet(item: $picked, content: replySheet)
         }
     }
 
