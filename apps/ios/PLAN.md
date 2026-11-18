@@ -65,11 +65,17 @@ phone reads and drives it over the same WebSocket the desktop uses
   it lands; it stays shut while checks run or fail. Mark ready, reopen.
   Hidden when the branch has none. Reads and merges only: no comment, reply
   or close.
-- **Dictation**, transcribed on the Mac: the phone records a 16kHz mono WAV,
-  uploads it through `POST /upload` and calls `transcribe_upload`. Only the
-  Mac's server has that command, and its welcome frame says `dictation: true`,
-  so where no server can, every dock trades the orb for a text field and
-  send. The Island's `VoiceOrb` draws it.
+- **Dictation**, transcribed on the Mac or on the phone: the phone records a
+  16kHz mono WAV, then either uploads it through `POST /upload` and calls
+  `transcribe_upload` — only the Mac's server has that command, and its
+  welcome frame says `dictation: true` — or, from iOS 26, reads it with
+  Apple's `SpeechAnalyzer` (#1261). Settings › Dictation picks one; with no
+  pick a server that can goes first, then Apple. Below iOS 26 Apple shows
+  disabled. Apple asks no speech recognition permission: that prompt is the
+  old `SFSpeechRecognizer`'s and says speech goes to Apple. The simulator's
+  analyzer offers no audio format, so a read there fails; test it on a phone.
+  Where nothing can transcribe, every dock trades the orb for a text field
+  and send. The Island's `VoiceOrb` draws it.
 
 Left out: push, attachments, the Diff/Files/Browser views,
 forks, settle/pin, the settled list, spaces, issues.

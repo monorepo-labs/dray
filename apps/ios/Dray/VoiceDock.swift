@@ -23,7 +23,7 @@ struct VoiceDock: View {
 
     private let draft = SessionKey.newSession
     private var dictation: Dictation { Dictations.shared.state(draft) }
-    /// No server can transcribe: a text field stands where the orb would. Never mid-recording,
+    /// Nothing can transcribe: a text field stands where the orb would. Never mid-recording,
     /// or losing the one server that could would take Done away with the mic still on.
     private var typing: Bool { store.typesOnly && dictation == .idle }
     private var phase: DockPhase {
@@ -36,10 +36,10 @@ struct VoiceDock: View {
     }
     private var open: Bool { phase != .rest }
     private var busy: Bool { phase == .recording || phase == .transcribing }
-    /// The machine that turns speech into words: only a Mac's server can.
+    /// Settings' pick: a server's id, or Apple's model on the phone.
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
-    /// The machine that turns speech into words: Settings' pick, else any that can.
-    private var transcriber: UUID? { store.dictationServer(dictationPick) }
+    /// What turns speech into words: Settings' pick, else any server that can, else Apple.
+    private var transcriber: DictationEngine? { store.dictationEngine(dictationPick) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -118,12 +118,12 @@ struct VoiceDock: View {
             return
         }
         guard !busy else { return }
-        guard let transcriber else { return flash("This server can't transcribe. Type instead.") }
+        guard let transcriber else { return flash("Nothing can transcribe right now. Type instead.") }
         // A kept recording is the only copy of what was said; it goes by Retry or Discard, never by a new tap.
         guard Dictations.shared.kept[draft] == nil else { return }
         Dictations.shared.dismiss(draft)
         task.failure = nil
-        Task { await Dictations.shared.start(store, server: transcriber, draft: draft) }
+        Task { await Dictations.shared.start(store, engine: transcriber, draft: draft) }
     }
 
     /// The title is read once, or typing into an empty task retitles the sheet mid-word.
