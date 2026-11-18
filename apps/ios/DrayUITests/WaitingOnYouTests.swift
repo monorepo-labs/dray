@@ -3,7 +3,7 @@ import XCTest
 /// A Waiting on you row opens what the bot said about its task, in a sheet:
 /// its reply to the task's last report, found by the server however far back it
 /// sits in a long bot chat. A row with no reply opens the task itself. The card
-/// holds five rows behind "Show N more".
+/// holds two rows; "Show N more" lists them all in a sheet.
 /// Against a server seeded by `scripts/waiting_seed.py`:
 ///   TEST_RUNNER_DRAY_WAITING_URL=ws://127.0.0.1:47111 TEST_RUNNER_DRAY_TOKEN=1181…
 final class WaitingOnYouTests: XCTestCase {
@@ -15,10 +15,13 @@ final class WaitingOnYouTests: XCTestCase {
         XCTAssertTrue(card.waitForExistence(timeout: 20), "no Waiting on you card")
         snap(app, "1-card")
 
-        // Five of seven, the newest held back.
-        XCTAssertFalse(row(app, "Dark mode contrast").exists, "more than five rows shown")
-        let more = app.buttons["Show 2 more"]
-        XCTAssertTrue(more.exists, "no Show 2 more")
+        // A need line where the bot wrote one; elsewhere a plain line, never a skeleton waiting on one.
+        XCTAssertTrue(text(app, "pin React 20").exists, "the need line did not draw")
+        XCTAssertTrue(text(app, "Waiting for your reply").exists, "a row with no need drew no line")
+
+        // Two of seven, the newer five held back.
+        XCTAssertFalse(row(app, "Flaky upload test").exists, "more than two rows shown")
+        XCTAssertTrue(app.buttons["Show 5 more"].exists, "no Show 5 more")
 
         // The week-old task, its report hundreds of turns up the chat.
         row(app, "Fix login redirect").tap()
@@ -49,16 +52,28 @@ final class WaitingOnYouTests: XCTestCase {
         snap(app, "4-no-reply-task")
         back(app, card)
 
-        app.buttons["Show 2 more"].tap()
+        // Show more lists every row in a sheet, and a reply opens over it.
+        app.buttons["Show 5 more"].tap()
         XCTAssertTrue(row(app, "Dark mode contrast").waitForExistence(timeout: 3), "Show more drew no rows")
-        XCTAssertTrue(app.buttons["Show less"].exists)
         snap(app, "5-all")
         row(app, "Dark mode contrast").tap()
-        XCTAssertTrue(text(app, "which palette should lead").waitForExistence(timeout: 3), "the newest row's sheet drew no reply")
+        XCTAssertTrue(text(app, "which palette should lead").waitForExistence(timeout: 5), "the newest row's sheet drew no reply")
         snap(app, "6-newest-sheet")
-        app.buttons["Done"].tap()
-        app.buttons["Show less"].tap()
-        XCTAssertTrue(app.buttons["Show 2 more"].waitForExistence(timeout: 3), "Show less did not cap the card")
+        // Open task closes both sheets: the list's Done would otherwise sit under the reply's.
+        app.buttons["Open task"].tap()
+        XCTAssertTrue(app.navigationBars.staticTexts["Dark mode contrast"].waitForExistence(timeout: 5)
+                      || app.staticTexts["Dark mode contrast"].waitForExistence(timeout: 1), "Open task from the list did not open it")
+        XCTAssertFalse(app.buttons["Show 5 more"].exists, "a sheet stayed up over the task")
+        back(app, card)
+
+        // The bot's seven tasks, counted on the button and over the sheet.
+        let tasks = app.buttons["Tasks"]
+        XCTAssertEqual(tasks.value as? String, "7", "the Tasks button carries no count")
+        snap(app, "7-tasks-button")
+        tasks.tap()
+        XCTAssertTrue(app.navigationBars.staticTexts["7"].waitForExistence(timeout: 3)
+                      || app.navigationBars.staticTexts["Tasks, 7"].exists, "the Tasks sheet's title carries no count")
+        snap(app, "8-tasks-sheet")
     }
 
     private func back(_ app: XCUIApplication, _ card: XCUIElement) {
