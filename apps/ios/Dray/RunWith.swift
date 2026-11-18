@@ -40,7 +40,8 @@ struct RunWithSheet: View {
                     ModelChips(models: task.list, harness: task.harness, selected: task.modelId, pick: task.pickModel)
                 }
                 settingsCard
-                if task.hasText { saveCard }
+                // Not mid-dictation: the words still coming would land after the save, as a task of their own.
+                if task.hasText && Dictations.shared.state(.newSession) == .idle { saveCard }
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(isPresented: $attaching) {
