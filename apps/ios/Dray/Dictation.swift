@@ -62,7 +62,7 @@ extension Store {
 
     func name(of engine: DictationEngine) -> String {
         switch engine {
-        case .apple: "Apple"
+        case .apple: AppleSpeech.device
         case .server(let id): name(of: id)
         }
     }

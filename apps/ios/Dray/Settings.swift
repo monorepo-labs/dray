@@ -768,13 +768,11 @@ struct DictationSettings: View {
         let detail: String? = switch apple.status {
         case .needsNewerOS: "Needs iOS 26 and above"
         case .unsupported: "Not available in your language"
-        case .checking: nil
-        case .needsDownload: "On this \(AppleSpeech.device). Downloads its model once."
+        case .checking, .needsDownload, .ready: "On device, private"
         case .downloading(let done): "Downloading model, \(Int(done * 100))%"
-        case .ready: "On this \(AppleSpeech.device)"
         }
-        return row(able: apple.usable, chosen: store.dictationEngine(pick) == .apple, name: "Apple", detail: detail) {
-            Image(systemName: "apple.logo").font(.system(size: 17)).foregroundStyle(Theme.secondary)
+        return row(able: apple.usable, chosen: store.dictationEngine(pick) == .apple, name: AppleSpeech.device, detail: detail) {
+            Image(systemName: AppleSpeech.device == "iPad" ? "ipad" : "iphone").font(.system(size: 17)).foregroundStyle(Theme.secondary)
         } pick: {
             pick = AppleSpeech.pick
             apple.download()

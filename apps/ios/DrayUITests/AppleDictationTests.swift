@@ -30,12 +30,12 @@ final class AppleDictationTests: XCTestCase {
         app.buttons["Settings"].tap()
         let row = labelled(app, "Dictation")
         XCTAssertTrue(row.waitForExistence(timeout: 10))
-        XCTAssertTrue(labelled(app, "Apple").exists, "Settings doesn't name Apple as the engine")
+        XCTAssertTrue(labelled(app, "iPhone").exists, "Settings doesn't name the iPhone as the engine")
         sleep(1)
         snap(app, "2-settings")
         row.tap()
-        let apple = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Apple'")).firstMatch
-        XCTAssertTrue(apple.waitForExistence(timeout: 5), "no Apple row")
+        let apple = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'iPhone'")).firstMatch
+        XCTAssertTrue(apple.waitForExistence(timeout: 5), "no iPhone row")
         XCTAssertTrue(apple.isSelected, "Apple isn't the default with no server able")
         sleep(2)
         snap(app, "3-dictation")
