@@ -399,6 +399,11 @@ pub enum FileBody {
     Video {
         path: String,
     },
+    /// A folder a chat link named. Its entries' paths are relative to it, so
+    /// the viewer joins each onto the folder's own path to open it.
+    Dir {
+        entries: Vec<DirEntry>,
+    },
 }
 
 const NOT_TEXT: &str = "Not text — nothing to show.";
@@ -430,6 +435,14 @@ pub async fn read_file(app: tauri::AppHandle, path: String) -> Result<FileBody, 
 /// grant a video on, so a remote client gets the path and nothing to play it
 /// through until the server serves files.
 pub(crate) async fn read_body(path: &str) -> Result<FileBody, String> {
+    // An agent links a folder as readily as a file, and a link that opens on
+    // "Not a file" is a dead end; its listing is what the reader came for.
+    if tokio::fs::metadata(path).await.is_ok_and(|meta| meta.is_dir()) {
+        return Ok(FileBody::Dir {
+            entries: list_dir(path.to_string(), String::new()).await?,
+        });
+    }
+
     // Judged on the link's target, or `secret.mp4` pointing at a database
     // would stream it whole past the cap. Canonical is also what the protocol
     // matches against, since it resolves links before it checks.
@@ -755,6 +768,28 @@ mod tests {
         std::fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
 
         assert!(read_body(path.to_str().unwrap()).await.is_err());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A chat link may name a folder, and the viewer has to draw its contents
+    /// rather than a refusal.
+    #[tokio::test]
+    async fn answers_a_folder_with_its_listing() {
+        let dir = scratch();
+        std::fs::write(dir.join("notes.md"), "x").unwrap();
+        std::fs::create_dir(dir.join("sub")).unwrap();
+
+        // A trailing slash is how an agent usually writes a folder link.
+        let path = format!("{}/", dir.to_str().unwrap());
+        let FileBody::Dir { entries } = read_body(&path).await.unwrap() else {
+            panic!("a folder should answer with its listing");
+        };
+        let names: Vec<(&str, &str, bool)> = entries
+            .iter()
+            .map(|e| (e.name.as_str(), e.path.as_str(), e.is_dir))
+            .collect();
+        assert_eq!(names, [("sub", "sub", true), ("notes.md", "notes.md", false)]);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

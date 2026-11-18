@@ -34,6 +34,7 @@ import { useDigitHotkey, useHotkey } from "@/hooks/useHotkey";
 import {
   activateFile,
   closeFile,
+  isFolder,
   openFilesFor,
   reopenFile,
   useOpenFiles,
@@ -408,7 +409,7 @@ export default function ViewTabs({
       : []),
     ...files.map((file, i) => ({
       key: `file:${file.path}`,
-      icon: <FileIcon path={file.path} className="size-3.5 shrink-0" />,
+      icon: <FileIcon path={file.path} dir={isFolder(file)} className="size-3.5 shrink-0" />,
       label: fileLabels[i],
       active: own === "files" && file.path === activeFile,
       pick: () => {
@@ -440,7 +441,7 @@ export default function ViewTabs({
       const labels = tabLabels(open.map((f) => f.path));
       return open.map((file, i) => ({
         key: `pickfile:${p.id}:${file.path}`,
-        icon: <FileIcon path={file.path} className="size-3.5 shrink-0" />,
+        icon: <FileIcon path={file.path} dir={isFolder(file)} className="size-3.5 shrink-0" />,
         label: labels[i],
         active: lit && file.path === active,
         pick: () => {

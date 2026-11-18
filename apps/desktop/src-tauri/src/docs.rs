@@ -128,7 +128,7 @@ pub fn watch_docs(app: Sink, scope: String, paths: Vec<String>) -> Result<(), St
         return Ok(());
     }
 
-    let (watched, dirs) = watch_targets(paths);
+    let (watched, folders, dirs) = watch_targets(paths);
 
     let handle = app.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
@@ -140,7 +140,8 @@ pub fn watch_docs(app: Sink, scope: String, paths: Vec<String>) -> Result<(), St
             return;
         }
         for touched in event.paths {
-            if let Some(path) = watched.get(&touched) {
+            let folder = touched.parent().and_then(|parent| folders.get(parent));
+            if let Some(path) = watched.get(&touched).or(folder) {
                 let _ = handle.emit("doc_changed", path);
             }
         }
@@ -178,8 +179,15 @@ pub fn watch_docs(app: Sink, scope: String, paths: Vec<String>) -> Result<(), St
 /// which nothing would then be listening to. So the link's parent is watched
 /// beside the target's, and both spellings map back to the one path the panel
 /// holds. Ordinarily the two are the same and this collapses to one of each.
-fn watch_targets(paths: Vec<String>) -> (HashMap<PathBuf, String>, Vec<PathBuf>) {
+///
+/// **A folder is watched itself as well**, since the Files view draws an open
+/// folder's listing and an entry landing in it moves no event on the folder's
+/// own path. The second map is keyed by the folder, matched on an event's parent.
+fn watch_targets(
+    paths: Vec<String>,
+) -> (HashMap<PathBuf, String>, HashMap<PathBuf, String>, Vec<PathBuf>) {
     let mut watched = HashMap::new();
+    let mut folders = HashMap::new();
     let mut dirs: Vec<PathBuf> = Vec::new();
     let mut watch_dir = |dir: PathBuf| {
         if !dirs.contains(&dir) {
@@ -204,9 +212,13 @@ fn watch_targets(paths: Vec<String>) -> (HashMap<PathBuf, String>, Vec<PathBuf>)
             }
         }
 
+        if real.is_dir() {
+            watch_dir(real.clone());
+            folders.insert(real.clone(), path.clone());
+        }
         watched.insert(real, path);
     }
-    (watched, dirs)
+    (watched, folders, dirs)
 }
 
 /// One sentence for both directions: a file too large to open is also one too
@@ -378,13 +390,32 @@ mod tests {
         std::fs::write(&one, "# one\n").unwrap();
         std::fs::write(&two, "# two\n").unwrap();
 
-        let (watched, dirs) = watch_targets(vec![one.clone(), two, at(&dir, "gone.md")]);
+        let (watched, folders, dirs) = watch_targets(vec![one.clone(), two, at(&dir, "gone.md")]);
 
         // Two files in one directory is one watch, and the file that does not
         // exist is dropped rather than watched blind.
         assert_eq!(dirs, vec![std::fs::canonicalize(&dir).unwrap()]);
         assert_eq!(watched.len(), 2);
         assert_eq!(watched.get(&std::fs::canonicalize(&one).unwrap()), Some(&one));
+        assert!(folders.is_empty());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An open folder's listing moves when an entry lands in it, which is an
+    /// event in the folder rather than its parent — so the folder is watched too
+    /// and recognised as the parent of what was touched.
+    #[test]
+    fn watches_an_open_folder_itself() {
+        let dir = scratch();
+        let sub = at(&dir, "sub");
+        std::fs::create_dir(&sub).unwrap();
+
+        let (_, folders, dirs) = watch_targets(vec![sub.clone()]);
+
+        let real = std::fs::canonicalize(&sub).unwrap();
+        assert!(dirs.contains(&real));
+        assert_eq!(folders.get(&real), Some(&sub));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
