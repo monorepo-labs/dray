@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SEEK_GRACE_MS, showFirstFrame } from "@/lib/firstFrame";
+import { PLAY_CAP_MS, SEEK_GRACE_MS, showFirstFrame } from "@/lib/firstFrame";
 
-/// Just enough of a `<video>` to drive: seeks fire `seeked` at once, and
-/// `present()` stands in for a frame reaching the screen.
+/// Just enough of a `<video>` to drive: seeks fire `seeked` at once,
+/// `present()` stands in for a frame reaching the screen, and `fire()` for an
+/// event the user's native controls raise.
 function fakeVideo({ start = 0, rvfc = true } = {}) {
   const listeners = new Map<string, () => void>();
   let frame: (() => void) | null = null;
@@ -29,6 +30,7 @@ function fakeVideo({ start = 0, rvfc = true } = {}) {
       frame = null;
     }),
     present: () => frame?.(),
+    fire: (type: string) => listeners.get(type)?.(),
     ...(rvfc && {
       requestVideoFrameCallback: (fn: () => void) => {
         frame = fn;
@@ -88,6 +90,37 @@ describe("showFirstFrame", () => {
     paint(v).stop();
     vi.advanceTimersByTime(SEEK_GRACE_MS * 2);
     expect(v.play).not.toHaveBeenCalled();
+  });
+
+  it("hands over to a native Play pressed before the grace runs out", () => {
+    const v = fakeVideo();
+    const p = paint(v);
+    v.fire("play");
+    vi.advanceTimersByTime(SEEK_GRACE_MS * 2);
+    expect(p.active()).toBe(false);
+    expect(v.play).not.toHaveBeenCalled();
+    expect(v.pause).not.toHaveBeenCalled();
+    expect(v.muted).toBe(false);
+  });
+
+  it("stops on a native Pause while it plays, unmuting", () => {
+    const v = fakeVideo();
+    const p = paint(v);
+    vi.advanceTimersByTime(SEEK_GRACE_MS);
+    v.fire("play");
+    expect(p.active()).toBe(true);
+    v.fire("pause");
+    expect(p.active()).toBe(false);
+    expect(v.muted).toBe(false);
+  });
+
+  it("gives up playing when no frame ever comes", () => {
+    const v = fakeVideo();
+    const p = paint(v);
+    vi.advanceTimersByTime(SEEK_GRACE_MS + PLAY_CAP_MS);
+    expect(p.active()).toBe(false);
+    expect(v.pause).toHaveBeenCalledOnce();
+    expect(v.muted).toBe(false);
   });
 
   it("falls back to the bare seek where frames cannot be watched", () => {

@@ -2,6 +2,10 @@
 /// played to one instead.
 export const SEEK_GRACE_MS = 300;
 
+/// The most it plays for a frame, so a video whose frames never reach the
+/// screen (a hidden pane) stops instead of loading on.
+export const PLAY_CAP_MS = 2000;
+
 /// Past the start, so the seek is a real one rather than a no-op at zero.
 const NUDGE = 0.001;
 
@@ -22,6 +26,9 @@ export type FirstFrame = {
 /// recording's first frame is at ~0.095s, behind an empty edit WebKit lands
 /// in. Nothing in the element says where the first frame is, so it seeks,
 /// waits for a frame, and where none comes plays muted until one does.
+///
+/// A play or pause it did not make is the user's, through native controls,
+/// and ends it there.
 export function showFirstFrame(video: HTMLVideoElement): FirstFrame {
   const start = video.seekable.length > 0 ? video.seekable.start(0) : 0;
   if (typeof video.requestVideoFrameCallback !== "function") {
@@ -39,6 +46,8 @@ export function showFirstFrame(video: HTMLVideoElement): FirstFrame {
     done = true;
     clearTimeout(timer);
     video.removeEventListener("seeked", onSeeked);
+    video.removeEventListener("play", onPlay);
+    video.removeEventListener("pause", onPause);
     video.cancelVideoFrameCallback(frame);
     if (played) {
       video.pause();
@@ -51,10 +60,20 @@ export function showFirstFrame(video: HTMLVideoElement): FirstFrame {
       played = true;
       video.muted = true;
       video.play().catch(stop);
+      timer = setTimeout(stop, PLAY_CAP_MS);
     }, SEEK_GRACE_MS);
+  };
+  // Its own pause only ever comes from `stop`, after `done` is set.
+  const onPlay = () => {
+    if (!played) stop();
+  };
+  const onPause = () => {
+    if (played) stop();
   };
 
   video.addEventListener("seeked", onSeeked, { once: true });
+  video.addEventListener("play", onPlay);
+  video.addEventListener("pause", onPause);
   video.currentTime = start + NUDGE;
   return { active: () => !done, stop };
 }
