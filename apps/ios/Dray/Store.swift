@@ -180,11 +180,21 @@ final class Store {
 
     // MARK: Servers
 
-    /// Adds a server, or where it is already saved, takes the new token and turns it on.
+    /// Adds a server, or where it is already saved, takes the new address and token and turns it on.
     func addServer(name: String, url: String, token: String) {
         if let held = saved(url: url, token: token) {
-            if Keychain.get(held.id.uuidString) != token { updateToken(held.id, token) }
-            return setServerOn(held.id, true)
+            guard address(held.url) != address(url) else {
+                if Keychain.get(held.id.uuidString) != token { updateToken(held.id, token) }
+                return setServerOn(held.id, true)
+            }
+            // A tunnel that restarted keeps its token and moves: reconnect, same id, at the new address.
+            drop(held.id)
+            guard let i = servers.firstIndex(where: { $0.id == held.id }) else { return }
+            servers[i].url = url
+            servers[i].on = true
+            Keychain.set(token, for: held.id.uuidString)
+            save()
+            return start(servers[i])
         }
         let s = Server(id: UUID(), name: name, url: url)
         Keychain.set(token, for: s.id.uuidString)
@@ -199,7 +209,7 @@ final class Store {
         servers.first { $0.via == nil && (address($0.url) == address(url) || Keychain.get($0.id.uuidString) == token) }
     }
 
-    /// Folds the copies an older build let in into the first, on the newest copy's token.
+    /// Folds the copies an older build let in into the first, on the newest copy's address and token.
     private func dedupe() {
         var kept: [Server] = []
         for s in servers {
@@ -209,6 +219,7 @@ final class Store {
                 continue
             }
             kept[i].on = kept[i].on || s.on
+            kept[i].url = s.url
             if let token { Keychain.set(token, for: kept[i].id.uuidString) }
             Keychain.delete(s.id.uuidString)
             try? FileManager.default.removeItem(at: Cache.folder(s.id))

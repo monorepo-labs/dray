@@ -36,6 +36,14 @@ final class DuplicateServerTests: XCTestCase {
         sleep(2)
         app.buttons["Update"].tap()
 
+        // The address alone names it: another token still reads as this server.
+        app.descendants(matching: .any).matching(NSPredicate(format: "label == 'Add server'")).firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Add server"].waitForExistence(timeout: 5))
+        app.staticTexts["Address"].tap()
+        app.typeText("\(url)/ \(String(repeating: "ab", count: 32))")
+        XCTAssertTrue(app.staticTexts["This server is already added as Studio Mac."].waitForExistence(timeout: 5), "the same address with another token reads as new")
+        app.buttons["Cancel"].tap()
+
         sleep(1)
         XCTAssertEqual(app.staticTexts.matching(identifier: "Studio Mac").count, 1, "a second card in Settings")
         XCTAssertFalse(app.staticTexts["Office Mac"].exists)
