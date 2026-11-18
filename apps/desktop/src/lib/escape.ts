@@ -14,6 +14,13 @@ export function onUnhandledEscape(fn: () => boolean): () => void {
   };
 }
 
+/// Whether a key left unhandled would reach AppKit as `cancelOperation:`,
+/// which takes a fullscreen window back to windowed. ⌘. is bound to it
+/// alongside Escape, and does nothing in the app yet.
+export function cancelsWindow(e: KeyboardEvent): boolean {
+  return e.key === "Escape" || (e.metaKey && e.key === ".");
+}
+
 /// Runs the fallback for an Escape nobody handled. Returns whether it acted.
 export function runUnhandledEscape(e: KeyboardEvent): boolean {
   if (e.key !== "Escape" || e.defaultPrevented) return false;

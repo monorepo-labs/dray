@@ -12,6 +12,9 @@ struct RunWithSheet: View {
     /// A branch picked while the checkout has uncommitted files: Bring or Stash decides.
     @State private var switching: String?
     @State private var branchError: String?
+    /// Read off the save that failed, never `task.failure` on open: that may be an older start's.
+    @State private var saveError: String?
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
@@ -33,10 +36,12 @@ struct RunWithSheet: View {
                         }
                     }
                 }
-                PickSection("Model", footer: "Double-tap a model to star it. Starred ones come first.") {
+                PickSection("Model") {
                     ModelChips(models: task.list, harness: task.harness, selected: task.modelId, pick: task.pickModel)
                 }
                 settingsCard
+                // Not mid-dictation: the words still coming would land after the save, as a task of their own.
+                if task.hasText && Dictations.shared.state(.newSession) == .idle { saveCard }
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(isPresented: $attaching) {
@@ -147,6 +152,29 @@ struct RunWithSheet: View {
                     }
                 }
             }
+        }
+    }
+
+    /// The words written so far, kept in Dray's drafts on these picks; a failure says why here, the dock being covered.
+    @ViewBuilder private var saveCard: some View {
+        PickCard {
+            Button {
+                Task { if await task.saveDraft() { dismiss() } else { saveError = task.failure } }
+            } label: {
+                HStack(spacing: Theme.Space.s) {
+                    Image(systemName: "tray.and.arrow.down").font(.system(size: 14, weight: .semibold)).frame(width: 16)
+                    Text("Save draft").frame(maxWidth: .infinity, alignment: .leading)
+                    if task.sending { ProgressView() }
+                }
+                .font(Theme.Font.body)
+                .foregroundStyle(Theme.text)
+                .rowFrame()
+            }
+            .disabled(task.sending)
+        }
+        if let saveError {
+            Text(sentence(saveError)).font(Theme.Font.footnote).foregroundStyle(Theme.destructive)
+                .padding(.horizontal, Theme.Space.l)
         }
     }
 
@@ -392,22 +420,17 @@ struct ChipRow<Content: View>: View {
     }
 }
 
-/// One choice in a chip row: white when picked. An agent carries its mark, a starred model its star.
+/// One choice in a chip row: white when picked. An agent carries its mark.
 struct PickChip: View {
     let label: String
     let selected: Bool
     var harness: String?
-    var starred = false
-    var star: (() -> Void)?
     let pick: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
             if let harness {
                 AgentMark(harness: harness).frame(width: 13, height: 13).padding(.trailing, 6)
-            }
-            if starred {
-                Image(systemName: "star.fill").font(.system(size: 10)).foregroundStyle(Theme.accent).padding(.trailing, 5)
             }
             Text(label).font(selected ? Theme.Font.pill : Theme.Font.subhead)
         }
@@ -417,8 +440,6 @@ struct PickChip: View {
         .frame(height: 36)
         .background(selected ? Theme.text : Theme.tile, in: Capsule())
         .contentShape(Capsule())
-        // Double first: a single tap waits out the second, which is the price of starring by double-tap.
-        .onTapGesture(count: 2) { (star ?? pick)() }
         .onTapGesture {
             Haptic.select()
             pick()
@@ -426,46 +447,66 @@ struct PickChip: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityValue(starred ? "Starred" : "")
-        .accessibilityActions {
-            if let star { Button(starred ? "Unstar" : "Star", action: star) }
-        }
     }
 }
 
-/// An agent's models as chips, starred ones first. Stars live on this phone, per agent.
+/// An agent's shortlisted models as chips, and More models to edit the list. It lives on this phone, per agent.
 struct ModelChips: View {
     let models: [Model]
     let harness: String
     let selected: String
     let pick: (String) -> Void
-    @State private var stars: [String] = []
+    /// The models the row draws, per agent; nil until the reader edits it, which
+    /// draws every row the server doesn't mark secondary, as the desktop seeds its shortlist.
+    @State private var shortlist: [String]?
+    @State private var library = false
 
-    private var key: String { "stars." + harness }
+    private var listKey: String { "shortlist." + harness }
+    private func listed(_ m: Model) -> Bool { shortlist?.contains(m.id) ?? (m.secondary != true) }
     /// The shortlist, and the pick if it is off it. pi and fx run their own default where
     /// nothing is picked, so that is a choice too.
     private var choices: [(id: String, label: String)] {
-        let all = (Picks.defaultModel[harness] == "" ? [("", "Default")] : [])
-            + models.filter { $0.secondary != true || $0.id == selected }.map { ($0.id, $0.label) }
-        return all.filter { stars.contains($0.0) } + all.filter { !stars.contains($0.0) }
+        (Picks.defaultModel[harness] == "" ? [("", "Default")] : [])
+            + models.filter { listed($0) || $0.id == selected }.map { ($0.id, $0.label) }
     }
 
     var body: some View {
         ChipRow(focus: selected) {
             ForEach(choices, id: \.id) { m in
-                PickChip(label: m.label, selected: m.id == selected, starred: stars.contains(m.id),
-                         star: m.id.isEmpty ? nil : { toggle(m.id) }) { pick(m.id) }
+                PickChip(label: m.label, selected: m.id == selected) { pick(m.id) }
                     .id(m.id)
             }
+            if !models.isEmpty {
+                PickChip(label: "More models", selected: false) { library = true }
+            }
         }
-        .animation(Theme.motion, value: stars)
-        .task(id: harness) { stars = UserDefaults.standard.stringArray(forKey: key) ?? [] }
+        .animation(Theme.motion, value: shortlist)
+        .task(id: harness) { shortlist = UserDefaults.standard.stringArray(forKey: listKey) }
+        .sheet(isPresented: $library) {
+            PickSheet(title: "Models") {
+                PickSection(nil, footer: "Models switched on show in the picker.") {
+                    PickCard {
+                        ForEach(Array(models.enumerated()), id: \.element.id) { i, m in
+                            if i > 0 { PickDivider() }
+                            PickRow(m.label) {
+                                PickSwitch(label: m.label, isOn: Binding(get: { listed(m) }, set: { list(m, $0) }))
+                            }
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(38)
+            .presentationBackground(Theme.card)
+        }
     }
 
-    private func toggle(_ id: String) {
-        if let i = stars.firstIndex(of: id) { stars.remove(at: i) } else { stars.append(id) }
-        UserDefaults.standard.set(stars, forKey: key)
-        Haptic.firm()
+    private func list(_ m: Model, _ on: Bool) {
+        var ids = (shortlist ?? models.filter { $0.secondary != true }.map(\.id)).filter { $0 != m.id }
+        if on { ids.append(m.id) }
+        shortlist = ids
+        UserDefaults.standard.set(ids, forKey: listKey)
     }
 }
 

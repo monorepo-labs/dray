@@ -35,6 +35,8 @@ phone reads and drives it over the same WebSocket the desktop uses
   and the recording runs hands-free until Done or Cancel. The words land as
   the task's text; holding again adds to them, the keyboard edits them in a
   sheet, and Cancel offers Save draft (`create_draft`), Keep or Discard.
+  Run with offers Save draft too once there are words, the one way to it
+  in keyboard mode, whose field has no Cancel.
   Every pick under the orb opens **Run with**: server (where two hold the
   project), project with Attach inside its menu, worktree, the agent and its
   model as chips, effort, fast mode and stance. Double-tapping a model stars
@@ -66,8 +68,8 @@ phone reads and drives it over the same WebSocket the desktop uses
 - **Dictation**, transcribed on the Mac: the phone records a 16kHz mono WAV,
   uploads it through `POST /upload` and calls `transcribe_upload`. Only the
   Mac's server has that command, and its welcome frame says `dictation: true`,
-  so the orb says "Type instead" where no server can. The Island's `VoiceOrb`
-  draws it.
+  so where no server can, every dock trades the orb for a text field and
+  send. The Island's `VoiceOrb` draws it.
 
 Left out: push, attachments, the Diff/Files/Browser views,
 forks, settle/pin, the settled list, spaces, issues.

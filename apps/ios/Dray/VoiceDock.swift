@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Where the dock is: resting under the list, or open over it.
 enum DockPhase { case rest, recording, transcribing, ready }
@@ -22,11 +23,15 @@ struct VoiceDock: View {
 
     private let draft = SessionKey.newSession
     private var dictation: Dictation { Dictations.shared.state(draft) }
+    /// No server can transcribe: a text field stands where the orb would. Never mid-recording,
+    /// or losing the one server that could would take Done away with the mic still on.
+    private var typing: Bool { store.typesOnly && dictation == .idle }
     private var phase: DockPhase {
+        if typing { return .rest }
         switch dictation {
-        case .starting, .recording: .recording
-        case .transcribing: .transcribing
-        case .idle: task.hasText ? .ready : .rest
+        case .starting, .recording: return .recording
+        case .transcribing: return .transcribing
+        case .idle: return task.hasText ? .ready : .rest
         }
     }
     private var open: Bool { phase != .rest }
@@ -52,21 +57,30 @@ struct VoiceDock: View {
                     .padding(.bottom, 14)
                     .transition(.opacity)
             }
-            DockOrb(draft: draft, size: open ? 120 : 76, tap: tapped)
+            if typing {
+                ChatInput(placeholder: task.bot.map { "Message \($0.bot.name)" } ?? "New task", text: $task.text,
+                          sending: task.sending, sendable: task.ready) {
+                    Task { if let key = await task.start() { started(key) } }
+                }
+            } else {
+                DockOrb(draft: draft, size: open ? 120 : 76, tap: tapped)
+            }
             if open {
                 actions
                     .padding(.top, Theme.Space.xl)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            picks.padding(.top, open ? 18 : 14)
+            picks.padding(.top, open ? 18 : 14).typingAligned(typing)
         }
         .padding(.horizontal, 20)
         .padding(.top, open ? 0 : 44)
         .padding(.bottom, 30)
         .frame(maxWidth: .infinity, maxHeight: open ? .infinity : nil, alignment: .bottom)
         .background { backdrop.ignoresSafeArea() }
-        .ignoresSafeArea(edges: .bottom)
+        // The container alone while typing, so the keyboard lifts the field over it.
+        .ignoresSafeArea(typing ? .container : .all, edges: .bottom)
         .animation(Theme.motion, value: phase)
+        .animation(Theme.motion, value: task.hasText)
         .animation(Theme.motion, value: confirming)
         .animation(Theme.motion, value: hint)
         .task(id: "\(task.server?.uuidString ?? "")|\(task.harness)") { await task.load() }
@@ -76,7 +90,7 @@ struct VoiceDock: View {
         .sheet(isPresented: $picking) { RunWithSheet(task: task) }
         // A new phase asks its own question; one left up would answer the wrong one.
         .onChange(of: phase) { confirming = false }
-        .onChange(of: open || editing || picking) { if open || editing || picking { engaged() } }
+        .onChange(of: open || editing || picking || task.hasText) { if open || editing || picking || task.hasText { engaged() } }
     }
 
     /// The page showing through at rest, and nearly closed over the list once open.
@@ -241,12 +255,14 @@ struct VoiceDock: View {
                 Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold)).frame(width: 24, height: 20)
             }
             .accessibilityLabel("More picks")
-            Button { edit() } label: {
-                Image(systemName: "keyboard").font(.system(size: 16)).frame(width: 24, height: 20)
+            if !typing {
+                Button { edit() } label: {
+                    Image(systemName: "keyboard").font(.system(size: 16)).frame(width: 24, height: 20)
+                }
+                .disabled(busy)
+                .opacity(busy ? 0.3 : 1)
+                .accessibilityLabel("Keyboard")
             }
-            .disabled(busy)
-            .opacity(busy ? 0.3 : 1)
-            .accessibilityLabel("Keyboard")
         }
         .foregroundStyle(Theme.secondary)
         .lineLimit(1)
@@ -332,6 +348,103 @@ struct DockOrb: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { tap() }
         .accessibilityIdentifier("orb")
+    }
+}
+
+/// The orb's place where no server can transcribe: a composer's field, growing
+/// to five lines, with its send beside it.
+struct ChatInput: View {
+    let placeholder: String
+    @Binding var text: String
+    var sending = false
+    let sendable: Bool
+    let send: () -> Void
+    @FocusState private var focused: Bool
+    @State private var closer = KeyboardCloser()
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: Theme.Space.s) {
+            TextField(placeholder, text: $text, prompt: Text(placeholder).foregroundStyle(Theme.tertiary), axis: .vertical)
+                .font(Theme.Font.body)
+                .foregroundStyle(Theme.text)
+                .tint(Theme.accent)
+                .lineLimit(1...5)
+                .focused($focused)
+                .padding(.vertical, 8)
+                // Send's height, so one line sits centred beside it; more grow from the bottom.
+                .frame(minHeight: 44)
+                .padding(.leading, Theme.Space.l)
+                .accessibilityIdentifier("chatInput")
+            Button(action: send) {
+                Group {
+                    if sending { ProgressView().tint(Theme.page) } else { Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold)) }
+                }
+                .foregroundStyle(Theme.page)
+                .frame(width: 32, height: 32)
+                .background(Theme.text, in: Circle())
+            }
+            .disabled(!sendable)
+            .opacity(sendable ? 1 : 0.3)
+            .padding(6)
+            .accessibilityLabel("Send")
+        }
+        .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous).stroke(Theme.border, lineWidth: 1))
+        .contentShape(.rect)
+        .onTapGesture { focused = true }
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { closer.field = $0 }
+        .onChange(of: focused) { focused ? closer.install { focused = false } : closer.remove() }
+        .onDisappear { closer.remove() }
+    }
+}
+
+/// Closes the keyboard the way Messages does: a tap anywhere but the field, or a swipe
+/// down from the field's top or below it. Above, over a list or a chat, the scroll
+/// view's own interactive dismissal has the swipe. On the window, beside every
+/// other touch and cancelling none, so a row or button under it still works (#1196).
+@MainActor private final class KeyboardCloser: NSObject, UIGestureRecognizerDelegate {
+    var field: CGRect = .zero
+    private var close: () -> Void = {}
+    private var recognizers: [UIGestureRecognizer] = []
+
+    func install(_ close: @escaping () -> Void) {
+        self.close = close
+        guard recognizers.isEmpty, let window = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
+        recognizers = [UITapGestureRecognizer(target: self, action: #selector(tapped)),
+                       UIPanGestureRecognizer(target: self, action: #selector(panned))]
+        for r in recognizers {
+            r.cancelsTouchesInView = false
+            r.delegate = self
+            window.addGestureRecognizer(r)
+        }
+    }
+
+    func remove() {
+        for r in recognizers { r.view?.removeGestureRecognizer(r) }
+        recognizers = []
+    }
+
+    @objc private func tapped() { close() }
+
+    @objc private func panned(_ pan: UIPanGestureRecognizer) {
+        let moved = pan.translation(in: nil)
+        if pan.state == .changed, moved.y > 16, moved.y > abs(moved.x) { close() }
+    }
+
+    func gestureRecognizer(_ r: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        let at = touch.location(in: nil)
+        return r is UIPanGestureRecognizer ? at.y >= field.minY : !field.contains(at)
+    }
+
+    func gestureRecognizer(_ r: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+}
+
+extension View {
+    /// Under the text field the picks line up with its words; under the orb they centre.
+    func typingAligned(_ typing: Bool) -> some View {
+        frame(maxWidth: .infinity, alignment: typing ? .leading : .center)
+            .padding(.leading, typing ? Theme.Space.l : 0)
     }
 }
 

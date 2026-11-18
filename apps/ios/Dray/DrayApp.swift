@@ -84,6 +84,8 @@ struct RootView: View {
             if let link = PairLink(url.absoluteString) { sheet = .add(link, scan: false) }
         }
         .overlay(alignment: .top) { ErrorToast() }
+        // Keyboard mode's field: dragging the list or a chat down takes the keyboard with it.
+        .scrollDismissesKeyboard(.interactively)
         // The desktop's 30s open-PR poll, and none while the app is away.
         .task(id: phase) {
             guard phase == .active else { return }

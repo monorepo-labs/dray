@@ -11,6 +11,7 @@ import {
   type ChangelogItem,
   type Release,
 } from "@/lib/changelog";
+import { useFirstFrame } from "@/hooks/useFirstFrame";
 import { cn } from "@/lib/utils";
 import type { UpdateChannel } from "@/types/events";
 
@@ -67,15 +68,7 @@ function Item({ item }: { item: ChangelogItem }) {
         {item.body.split("\n\n").map((p, i) => p && <p key={i}>{inline(p)}</p>)}
         {item.media.map((m) =>
           m.kind === "video" ? (
-            <video
-              key={m.url}
-              src={m.url}
-              aria-label={m.alt || undefined}
-              controls
-              playsInline
-              preload="metadata"
-              className="mt-1 w-full rounded-lg border border-border"
-            />
+            <Video key={m.url} url={m.url} alt={m.alt} />
           ) : (
             <img
               key={m.url}
@@ -88,6 +81,21 @@ function Item({ item }: { item: ChangelogItem }) {
         )}
       </div>
     </li>
+  );
+}
+
+function Video({ url, alt }: { url: string; alt: string }) {
+  const first = useFirstFrame();
+  return (
+    <video
+      src={url}
+      aria-label={alt || undefined}
+      controls
+      playsInline
+      preload="metadata"
+      onLoadedMetadata={first.onLoadedMetadata}
+      className="mt-1 w-full rounded-lg border border-border"
+    />
   );
 }
 

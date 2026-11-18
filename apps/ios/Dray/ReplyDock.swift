@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The foot of a session: the voice orb, held to reply, and under it the
 /// session's model, its stance behind "···", the keyboard and, while a turn
@@ -10,6 +11,9 @@ struct ReplyDock: View {
     let key: SessionKey
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
     @State private var models: [Model] = []
+    @State private var keyboard = false
+    /// The home indicator's inset, which the dock sits on rather than ignores.
+    @State private var homeInset: CGFloat = 0
     /// Picks for the next reply; nil is the session's own.
     @State private var model: String?
     @State private var effort: String?
@@ -28,11 +32,15 @@ struct ReplyDock: View {
     private var busy: Bool { item?.busy ?? false }
     private var dictation: Dictation { Dictations.shared.state(key) }
     private var text: String { (store.drafts[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// No server can transcribe: a text field stands where the orb would. Never mid-recording,
+    /// or losing the one server that could would take Done away with the mic still on.
+    private var typing: Bool { store.typesOnly && dictation == .idle }
     private var phase: DockPhase {
+        if typing { return .rest }
         switch dictation {
-        case .starting, .recording: .recording
-        case .transcribing: .transcribing
-        case .idle: text.isEmpty ? .rest : .ready
+        case .starting, .recording: return .recording
+        case .transcribing: return .transcribing
+        case .idle: return text.isEmpty ? .rest : .ready
         }
     }
     private var open: Bool { phase != .rest }
@@ -64,25 +72,38 @@ struct ReplyDock: View {
                 KeptNote(line: line, draft: key).transition(.opacity)
             }
             // Dim while the server or the network is away; the banner up top says why, and typing still works.
-            DockOrb(draft: key, size: 76, tap: tapped).opacity(away ? 0.4 : 1)
+            if typing {
+                ChatInput(placeholder: "Message", text: Binding(get: { store.drafts[key] ?? "" }, set: { store.drafts[key] = $0 }),
+                          sending: sending, sendable: !text.isEmpty && !sending && connected, send: send)
+            } else {
+                DockOrb(draft: key, size: 76, tap: tapped).opacity(away ? 0.4 : 1)
+            }
             if open {
                 actions
                     .padding(.top, 6)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            picks.opacity(away ? 0.4 : 1)
+            picks.opacity(away ? 0.4 : 1).typingAligned(typing)
         }
         .padding(.horizontal, 20)
-        .padding(.top, 40)
-        .padding(.bottom, 30)
+        .padding(.top, Theme.Space.m)
+        .padding(.bottom, typing && keyboard ? 30 : max(0, 30 - homeInset))
         .frame(maxWidth: 760)
         .frame(maxWidth: .infinity)
+        // Everything in the dock's frame is inset the chat stops at, so the fade reaches up past it
+        // rather than padding it, and the dock sits on the home indicator's inset rather than
+        // ignoring it, which `safeAreaInset` counts under the dock either way: 80pt of gap between them.
         .background {
             LinearGradient(stops: [.init(color: Theme.page.opacity(0), location: 0), .init(color: Theme.page, location: 0.3)],
                            startPoint: .top, endPoint: .bottom)
+                .padding(.top, -28)
                 .ignoresSafeArea()
+                .onGeometryChange(for: CGFloat.self, of: { $0.safeAreaInsets.bottom }) { if !keyboard { homeInset = $0 } }
         }
-        .ignoresSafeArea(edges: .bottom)
+        // The keyboard lifts the field, never the orb.
+        .ignoresSafeArea(typing ? [] : .keyboard, edges: .bottom)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboard = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboard = false }
         .animation(Theme.motion, value: phase)
         .animation(Theme.motion, value: confirming)
         .animation(Theme.motion, value: hint)
@@ -212,10 +233,12 @@ struct ReplyDock: View {
                 Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold)).frame(width: 24, height: 20)
             }
             .accessibilityLabel("More picks")
-            Button { edit() } label: {
-                Image(systemName: "keyboard").font(.system(size: 16)).frame(width: 24, height: 20)
+            if !typing {
+                Button { edit() } label: {
+                    Image(systemName: "keyboard").font(.system(size: 16)).frame(width: 24, height: 20)
+                }
+                .accessibilityLabel("Keyboard")
             }
-            .accessibilityLabel("Keyboard")
             if busy {
                 Button {
                     Haptic.firm()

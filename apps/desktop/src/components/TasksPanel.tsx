@@ -10,6 +10,7 @@ import PrStateIcon, { ChecksRunningIcon } from "@/components/PrStateIcon";
 import { RowAction, RowMenu, stageRuns } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
 import { useFixAsks } from "@/hooks/useFixAsks";
+import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -58,6 +59,29 @@ function rowState(row: CrewRow, pr: PrMark | undefined): TaskState {
   if (canMerge(pr)) return "ready";
   if (pr?.state === "OPEN" && !pr.isDraft && SOON.has(prStatus(pr).key)) return "soon";
   return row.busy || row.background ? "busy" : "idle";
+}
+
+export type TaskCounts = {
+  working: number;
+  ready: number;
+  /// Every other task: needs you, waiting on its PR, idle.
+  other: number;
+};
+
+/// What the bot composer's status counts, off `rowState` so it files a task
+/// where the Tasks tab does. Set-aside tasks count nowhere, as the tab's own
+/// count leaves them out. A task whose only activity is a background task is
+/// idle here: the status counts tasks, not what runs under them.
+export function taskCounts(rows: CrewRow[], prOf: (row: CrewRow) => PrMark | undefined): TaskCounts {
+  const counts: TaskCounts = { working: 0, ready: 0, other: 0 };
+  for (const row of rows) {
+    if (row.item.aside) continue;
+    const state = rowState(row, prOf(row));
+    if (state === "ready") counts.ready++;
+    else if (state === "busy" && row.busy) counts.working++;
+    else counts.other++;
+  }
+  return counts;
 }
 
 /// The Pinned rows, then the runs drawn under them with a break between each.
@@ -213,6 +237,7 @@ function TaskRow({
   const server = serverOfPath(item.projectPath);
   const machine = server !== LOCAL ? serverName(server) : null;
   const id = item.sessionId;
+  const prefetch = useHoverPrefetch(id);
   const working = row.busy && !row.asking;
   const mergeable = canMerge(pr);
   const blocked = mergeable && pr ? mergeBlock(row, pr) : null;
@@ -250,8 +275,15 @@ function TaskRow({
         tabIndex={0}
         onClick={(e) => onOpen(id, isModClick(e))}
         onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onOpen(id, isModClick(e))}
-        onPointerEnter={() => setHovered(true)}
-        onPointerLeave={() => setHovered(false)}
+        onPointerEnter={(e) => {
+          setHovered(true);
+          prefetch.onPointerEnter(e);
+        }}
+        onPointerLeave={() => {
+          setHovered(false);
+          prefetch.onPointerLeave();
+        }}
+        onPointerDown={prefetch.onPointerDown}
         className={cn(
           "group flex w-full cursor-pointer flex-col rounded-md px-2 text-left text-ui text-muted-foreground outline-none hover:bg-muted/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-muted/50",
           item.aside && "opacity-50",

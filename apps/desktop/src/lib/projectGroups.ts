@@ -1,4 +1,4 @@
-import { serverConnected } from "@/lib/servers";
+import { cloudServer, serverConnected } from "@/lib/servers";
 import { serverOfPath, type ServerId } from "@/lib/transport";
 import type { Project } from "@/types/events";
 
@@ -42,16 +42,22 @@ export function leadPath(projects: Project[], path: string): string {
   return checkoutsOf(projects, path)[0]?.path ?? path;
 }
 
+/// Where a new task may be sent by hand: up, and not a Dray Cloud machine,
+/// since each of those is one task's own.
+const offered = (server: ServerId): boolean => serverConnected(server) && !cloudServer(server);
+
 /// The checkout a new task lands on: the newest pick still reachable, since one
-/// on a dropped server could not send. With none reachable, the newest anyway.
+/// on a dropped server could not send. With none reachable, the newest anyway,
+/// off Cloud wherever the project has a checkout elsewhere.
 export function lastUsedCheckout(
   checkouts: Project[],
-  connected: (server: ServerId) => boolean = serverConnected,
+  connected: (server: ServerId) => boolean = offered,
 ): Project {
   const newest = (list: Project[]) =>
     list.reduce((best, p) => (p.lastSelected > best.lastSelected ? p : best));
   const reachable = checkouts.filter((p) => connected(serverOfPath(p.path)));
-  return newest(reachable.length ? reachable : checkouts);
+  const ordinary = checkouts.filter((p) => !cloudServer(serverOfPath(p.path)));
+  return newest(reachable.length ? reachable : ordinary.length ? ordinary : checkouts);
 }
 
 /// The checkout after `path` that could send, wrapping, so one key steps every
@@ -60,7 +66,7 @@ export function lastUsedCheckout(
 export function nextCheckout(
   checkouts: Project[],
   path: string,
-  connected: (server: ServerId) => boolean = serverConnected,
+  connected: (server: ServerId) => boolean = offered,
 ): Project | null {
   const at = checkouts.findIndex((p) => p.path === path);
   for (let step = 1; step <= checkouts.length; step++) {
