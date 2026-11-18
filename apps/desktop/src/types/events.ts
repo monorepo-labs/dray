@@ -646,6 +646,23 @@ export type BotAvatar = { shape: string, hue: number, };
 export type BotPreview = { text: string | null, replies: number, };
 
 /**
+ * One bot's card, as `bot_stalls` answers and `bot_stalls_changed` carries it.
+ */
+export type BotStalls = { botId: string, 
+/**
+ * The bot's current chat session.
+ */
+chatId: string, 
+/**
+ * Oldest stall first. Not yet filtered by any device's dismissals.
+ */
+rows: Array<StallRow>, 
+/**
+ * The bot's tasks, set-aside ones left out: the Tasks tab's count.
+ */
+tasks: number, fixes: Array<FixAsk>, };
+
+/**
  * What the composer's branch picker needs to render and guard itself.
  */
 export type BranchList = { 
@@ -905,6 +922,12 @@ unreadable: Unreadable | null, };
  * What the reader can do about a failure, drawn beside its sentence.
  */
 export type Fix = { "kind": "copy", command: string, } | { "kind": "trust_host", host: string, keyType: string, fingerprint: string, } | { "kind": "install" } | { "kind": "new_address" };
+
+/**
+ * A task asked to mend its PR: which PR, the status it was asked about, and
+ * when, in unix ms. What the Tasks row's "Fixing merge conflicts · 3m" reads.
+ */
+export type FixAsk = { sessionId: string, pr: number, status: string, at: number, };
 
 /**
  * A repository the signed-in `gh` user can reach.
@@ -2334,6 +2357,54 @@ argumentHint: string,
 aliases: Array<string>, };
 
 export type Stage = "connecting" | "finding" | "starting";
+
+/**
+ * What a card row waits on the reader for.
+ */
+export type StallKind = "waiting" | "ready";
+
+/**
+ * One row of a bot's "Waiting on you" card.
+ */
+export type StallRow = { 
+/**
+ * Names this one stall: dismissed by it, nudged once by it, and new again
+ * only once the task moves. The desktop's own format, so dismissals made
+ * before this moved here still hold.
+ */
+key: string, kind: StallKind, 
+/**
+ * A ready row whose PR GitHub is working out again, as it does for every
+ * open PR after a merge: kept so the card holds still, and not mergeable.
+ */
+checking: boolean, 
+/**
+ * When it stalled, in unix ms; the card is ordered by it.
+ */
+since: number, 
+/**
+ * What the bot wrote the reader needs to do, since the task last moved.
+ */
+need?: string, pr?: PrMark, 
+/**
+ * The task as its own server indexes it. A task on another machine
+ * carries that machine's paths.
+ */
+item: SessionIndexItem, 
+/**
+ * The machine a task started with `--machine` runs on, by name; none for
+ * a task on this server.
+ */
+machine?: string, 
+/**
+ * Its machine did not answer the last poll: drawn from what was last
+ * known, with nothing to open, merged through GitHub by `repo`.
+ */
+offline: boolean, 
+/**
+ * The PR's repo as `gh --repo` takes it, set where `offline` is.
+ */
+repo?: string, };
 
 /**
  * Why a press could not start recording, or `None` where it did.

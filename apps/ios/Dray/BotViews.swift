@@ -579,13 +579,39 @@ struct Stall: Identifiable {
     let item: SessionItem
     let pr: PrMark?
     let ready: Bool
-    var id: String { "\(task.id):\(ready ? "ready:\(pr?.number ?? 0)" : "waiting"):\(item.modified)" }
+    /// Set on a row the bot's server judged (#1259), whose key it names.
+    var judged: StallRow? = nil
+    var id: String { judged?.key ?? "\(task.id):\(ready ? "ready:\(pr?.number ?? 0)" : "waiting"):\(item.modified)" }
+    /// A ready PR GitHub is working out again: drawn, not mergeable.
+    var checking: Bool { judged?.checking ?? false }
+    /// Nothing to open: its machine is down, or one this phone holds no link to.
+    var offline: Bool { judged.map { $0.offline || $0.machine != nil && !held } ?? false }
+    /// Whether the phone holds the task itself, rather than only its server's word.
+    var held = true
 }
 
-/// How long a task sits before it counts as waiting (`STALL_MS`).
+/// How long a task sits before it counts as waiting (`STALL_MS`), for a server too old to judge.
 private let stallAfter: TimeInterval = 5 * 60
 
 extension Store {
+    /// The card `botId`'s server judged, as rows to draw; `nil` where that server
+    /// is too old to judge stalls or is not connected, and the phone judges them.
+    /// A task the phone holds is drawn from its own row, and one that moved since
+    /// the server's last pass is left out, as the desktop does.
+    func judgedStalls(_ server: UUID, botId: String?) -> [Stall]? {
+        guard let botId, serverState[server] == .connected, let cards = stallCards[server] else { return nil }
+        return (cards[botId]?.rows ?? []).compactMap { r in
+            let key = items.keys.first { $0.id == r.item.sessionId }
+            if let key, let own = items[key] {
+                if own.modified != r.item.modified || own.busy || isAsking(key) { return nil }
+                return Stall(task: key, item: own, pr: r.pr, ready: r.kind == "ready", judged: r)
+            }
+            return Stall(task: SessionKey(server: server, id: r.item.sessionId), item: r.item, pr: r.pr,
+                         ready: r.kind == "ready", judged: r, held: false)
+        }
+    }
+
+
     // ponytail: a ready PR's five minutes count from the task's last move, not from
     // when it turned ready as the desktop tracks; a PR that goes green late shows sooner.
     func stalls(_ tasks: [SessionKey], now: Date = .now) -> [Stall] {
@@ -639,6 +665,8 @@ struct StalledCard: View {
     @Environment(\.openTask) private var openTask
     /// The bot's chat, whose server holds its replies.
     let chat: SessionKey
+    /// The bot, whose server judges its card where it can.
+    let botId: String?
     let tasks: [SessionKey]
     @AppStorage("bot.dismissedStalls") private var dismissedRaw = ""
     /// A row's reply, held only while its sheet is up.
@@ -665,14 +693,15 @@ struct StalledCard: View {
                                          ["sessionId": .string(chat.id), "taskId": .string(s.task.id)],
                                          as: String?.self, timeout: .seconds(8))
         guard !Task.isCancelled else { return }
-        if let text = text ?? nil { picked = Picked(stall: s, text: text) } else { openTask?(s.task) }
+        if let text = text ?? nil { picked = Picked(stall: s, text: text) } else if !s.offline { openTask?(s.task) }
     }
 
     var body: some View {
         // Stalls ripen with time alone, so the card looks again each minute.
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let dismissed = Set(dismissedRaw.split(separator: "\n").map(String.init))
-            let rows = store.stalls(tasks, now: context.date).filter { !dismissed.contains($0.id) }
+            let all = store.judgedStalls(chat.server, botId: botId) ?? store.stalls(tasks, now: context.date)
+            let rows = all.filter { !dismissed.contains($0.id) }
             let capped = !all && rows.count > stallRowsShown
             if !rows.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
@@ -723,7 +752,7 @@ struct StalledCard: View {
     }
 
     private func row(_ s: Stall) -> some View {
-        let need = s.item.need.flatMap { n in parseDate(n.at).flatMap { at in
+        let need = s.judged.map(\.need) ?? s.item.need.flatMap { n in parseDate(n.at).flatMap { at in
             parseDate(s.item.modified).map { at >= $0 ? n.text : nil } } ?? nil }
         return Button { if reading == nil { read = Task { await pick(s) } } } label: {
             HStack(alignment: .top, spacing: 10) {
@@ -739,11 +768,22 @@ struct StalledCard: View {
                         }
                         Spacer(minLength: 0)
                         if s.ready, let pr = s.pr {
-                            MergeTaskButton(server: s.task.server, taskId: s.task.id, cwd: s.item.projectPath,
-                                            number: pr.number, branch: pr.headRefName)
+                            if s.checking {
+                                Text("Checking…").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
+                            } else if s.offline, let repo = s.judged?.repo {
+                                // Its machine is down: the bot's server merges by repo, as the desktop does.
+                                MergeTaskButton(server: chat.server, taskId: s.task.id, cwd: "github:\(repo)",
+                                                number: pr.number, branch: pr.headRefName)
+                            } else if !s.offline {
+                                MergeTaskButton(server: s.task.server, taskId: s.task.id, cwd: s.item.projectPath,
+                                                number: pr.number, branch: pr.headRefName)
+                            }
                         }
                         if reading == s.id {
                             ProgressView().controlSize(.mini).tint(Theme.tertiary)
+                        } else if s.offline {
+                            Image(systemName: "wifi.slash").font(Theme.Font.footnote.font).foregroundStyle(Theme.tertiary)
+                                .accessibilityLabel("Offline · last known state")
                         } else if let at = parseDate(s.item.modified) {
                             Text(shortAge(at)).font(Theme.Font.footnote.font.monospacedDigit()).foregroundStyle(Theme.tertiary)
                         }

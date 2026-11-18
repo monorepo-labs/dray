@@ -134,7 +134,7 @@ function StalledRow({
   const status = pr && prStatus(pr);
   const need = needLine(stall);
   const waiting = stall.kind === "waiting" && !need;
-  const offline = offlineLine(serverOfPath(item.cwd));
+  const offline = stall.offline ?? offlineLine(serverOfPath(item.cwd));
   const blocked = stall.kind === "ready" && pr && !stall.checking ? mergeBlock(row, pr) : null;
 
   return (

@@ -98,7 +98,7 @@ struct TranscriptView: View {
                     // One child with what a scroll to the end lands on, so the stack's spacing above it is the
                     // whole gap to the dock: the card draws nothing with no stalls, yet as a child of its own took spacing.
                     VStack(alignment: .leading, spacing: 0) {
-                        if bot != nil { StalledCard(chat: key, tasks: botTasks) }
+                        if let bot { StalledCard(chat: key, botId: bot.id, tasks: botTasks) }
                         Color.clear.frame(height: 0).id("bottom")
                     }
                 }

@@ -81,6 +81,8 @@ pub mod serve;
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod remote_access;
 #[cfg(any(feature = "serve", feature = "desktop"))]
+pub mod stalls;
+#[cfg(any(feature = "serve", feature = "desktop"))]
 #[path = "mcp/mcp.rs"]
 pub mod mcp;
 #[cfg(any(feature = "serve", feature = "desktop"))]

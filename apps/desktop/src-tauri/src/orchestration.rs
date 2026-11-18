@@ -2531,6 +2531,12 @@ pub async fn nudge_bot(
         _ => chat,
     };
     let Some(route) = nudge_route(&task, to.as_ref(), owed) else { return Ok(false) };
+    // The server judges stalls itself now (#1259), and an older app still
+    // nudges beside it: whichever asks second is told it went.
+    let mark = crate::stalls::nudge_mark(&task, problem.as_deref(), ready);
+    if crate::stalls::nudged(&mark).await {
+        return Ok(true);
+    }
     // A need written while the PR waited on review would outlive the review
     // on the ready row, since approving a PR does not move its task.
     if ready.is_some() && problem.is_none() && task.need.is_some() {
@@ -2559,6 +2565,7 @@ pub async fn nudge_bot(
             crate::remote_reports::keep(&session_id, parent, &task.title, prompt).await?;
         }
     }
+    crate::stalls::note_nudged(mark).await;
     Ok(true)
 }
 
