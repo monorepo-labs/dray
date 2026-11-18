@@ -19,6 +19,31 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.13 · 2026-11-18
+
+### New
+
+- A bot's composer shows its tasks at a glance: how many are working, how
+  many are ready to merge. Click to open its Tasks tab.
+- A link to a folder in the chat opens its listing in the Files view.
+
+### Improved
+
+- The in-app browser runs on Chromium 156.
+- Sessions on other machines open faster, and hovering a task starts loading
+  its chat before you click.
+- Waiting on you shows the same tasks on desktop and iPhone.
+- Settings → Servers mentions that an agent can add servers for you.
+- Video thumbnails show for recordings that start after a short gap.
+
+### Fixed
+
+- Passkeys in the browser no longer crash the app when they ask for
+  Bluetooth.
+- ⌘. no longer takes a fullscreen window out of fullscreen.
+- pi accepts models from provider plugins, and its Accounts row works again.
+- A Claude Code session no longer stays working after a subagent's notice.
+
 ## 0.30.12 · 2026-11-17
 
 ### Improved
