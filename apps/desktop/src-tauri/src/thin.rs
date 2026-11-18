@@ -5,9 +5,10 @@
 //! 836KB of JSON, 52KB deflated, for a 100-call turn — all of it read, sent,
 //! inflated and parsed twice before the newest screen can paint. A finished
 //! turn draws its prompt, a count of its work and its answer, so this frame
-//! keeps every event of the turns it holds and cuts their bodies. The client
-//! reads the whole tail only when something drawn needs it: the reader
-//! scrolling up, or a row whose body was cut coming on screen (#1236).
+//! keeps every event of the turns it holds and cuts their bodies. It is a
+//! page like any other, so the reader scrolling up reads the page above it,
+//! cut the same way, and a row that needs its body asks for that call alone:
+//! the whole tail is never read at all (#1236).
 
 use std::io::Write;
 
@@ -27,28 +28,45 @@ const BUDGET: usize = 11 * 1024;
 const BODY: usize = 256;
 
 /// The key a cut body carries, in a call's `input` and a result's
-/// `structured`, so a row drawing one knows to ask for the whole read rather
-/// than show a fragment as the thing itself. Reasoning and reported diffs are
+/// `structured`, so a row drawing one knows to ask for the call rather than
+/// show a fragment as the thing itself. Reasoning and reported diffs are
 /// left whole: neither has anywhere to say it was cut.
 pub const CUT: &str = "_cut";
 
-/// `events` as a first frame, and whether it differs from them. Tool bodies
-/// are cut, then whole turns are dropped from the old end until the rest fits
-/// [`BUDGET`]. Never part of a turn: its header counts its calls, and a count
-/// of some of them is wrong where no count is merely absent. So the newest
-/// turn is kept whatever it weighs, and a long one takes a second flight.
-///
-/// Every event kept is its logged self under the same id, so the whole read
-/// landing later replaces each by id.
-pub fn thin(events: Vec<AgentEvent>) -> (Vec<AgentEvent>, bool) {
+/// What [`thin`] made of a page.
+pub struct Thinned {
+    pub events: Vec<AgentEvent>,
+    /// Whether the events differ from the page's.
+    pub lost: bool,
+    /// How many turns were kept, where older ones were dropped: the page the
+    /// frame now is, for the caller to find where it begins.
+    pub turns: Option<u32>,
+}
+
+/// `events` with every tool body cut, as a page read above a first frame is
+/// sent, and whether any was.
+pub fn cut(events: Vec<AgentEvent>) -> (Vec<AgentEvent>, bool) {
     let mut lost = false;
-    let mut events: Vec<AgentEvent> = events
+    let events = events
         .into_iter()
         .map(|mut event| {
             lost |= strip(&mut event.payload);
             event
         })
         .collect();
+    (events, lost)
+}
+
+/// `events` as a first frame. Tool bodies are cut, then whole turns are
+/// dropped from the old end until the rest fits [`BUDGET`]. Never part of a
+/// turn: its header counts its calls, and a count of some of them is wrong
+/// where no count is merely absent. So the newest turn is kept whatever it
+/// weighs, and a long one takes a second flight.
+///
+/// Every event kept is its logged self under the same id, so a call read
+/// whole later replaces its events by id.
+pub fn thin(events: Vec<AgentEvent>) -> Thinned {
+    let (mut events, mut lost) = cut(events);
     let lines: Vec<Vec<u8>> = events.iter().map(|e| serde_json::to_vec(e).unwrap_or_default()).collect();
 
     // Where a suffix may start: the page's own start, which is a turn's
@@ -62,11 +80,13 @@ pub fn thin(events: Vec<AgentEvent>) -> (Vec<AgentEvent>, bool) {
         .find(|&at| deflated(&lines[at..]) <= BUDGET)
         .or(starts.last().copied())
         .unwrap_or(0);
+    let mut turns = None;
     if from > 0 {
         events.drain(..from);
         lost = true;
+        turns = Some(events.iter().filter(|e| opens_turn(e)).count() as u32);
     }
-    (events, lost)
+    Thinned { events, lost, turns }
 }
 
 /// How much of a kept call's output a bot's chat is sent. A started task's id
@@ -150,7 +170,13 @@ fn strip(payload: &mut AgentEventPayload) -> bool {
             }
             cut
         }
-        AgentEventPayload::ToolCallStarted { input, raw_input, .. } => {
+        AgentEventPayload::ToolCallStarted { name, input, raw_input, .. } => {
+            // A task list is drawn from its arguments, in the panel and on its
+            // own row, with nothing to open: cut, it would be a wrong list.
+            let name = name.to_ascii_lowercase();
+            if name.contains("todo") || name.contains("plan") {
+                return false;
+            }
             let cut = shorten_value(input) | raw_input.as_mut().is_some_and(shorten);
             if cut {
                 match input {
@@ -240,14 +266,14 @@ mod tests {
     #[test]
     fn a_small_transcript_is_left_whole() {
         let log = vec![prompt(0), event(1, json!({ "type": "assistant_text", "text": "hi" }))];
-        let (kept, lost) = thin(log.clone());
+        let Thinned { events: kept, lost, .. } = thin(log.clone());
         assert!(!lost);
         assert_eq!(kept.len(), log.len());
     }
 
     #[test]
     fn bodies_are_cut_and_say_so() {
-        let (kept, lost) = thin(turn(0, 1));
+        let Thinned { events: kept, lost, .. } = thin(turn(0, 1));
         assert!(lost);
         assert_eq!(kept.len(), 3);
         let AgentEventPayload::ToolCallStarted { input, .. } = &kept[1].payload else { panic!() };
@@ -266,8 +292,8 @@ mod tests {
             event(1, json!({ "type": "tool_call_started", "callId": "c", "name": "Bash", "toolType": "shell", "input": { "command": "ls" }, "rawInput": null, "title": null })),
             event(2, json!({ "type": "tool_call_completed", "callId": "c", "result": { "text": "a.txt", "isError": false, "structured": { "stdout": "a.txt" }, "exitCode": 0, "durationMs": 1 } })),
         ];
-        let (kept, lost) = thin(log);
-        assert!(!lost);
+        let Thinned { events: kept, lost, turns } = thin(log);
+        assert!(!lost && turns.is_none());
         let AgentEventPayload::ToolCallStarted { input, .. } = &kept[1].payload else { panic!() };
         assert!(input.get(CUT).is_none());
         let AgentEventPayload::ToolCallCompleted { result, .. } = &kept[2].payload else { panic!() };
@@ -279,7 +305,7 @@ mod tests {
         let mut log = turn(0, 60);
         log.extend(turn(1000, 60));
         log.extend(turn(2000, 10));
-        let (kept, lost) = thin(log);
+        let Thinned { events: kept, lost, turns } = thin(log);
         assert!(lost);
         // Every turn kept opens on its prompt and holds all its calls.
         assert!(matches!(kept[0].payload, AgentEventPayload::UserMessage { .. }));
@@ -288,16 +314,18 @@ mod tests {
         assert_eq!(kept.last().unwrap().id, "e2020");
         assert!(kept.iter().any(|e| e.id == "e2000"));
         assert_eq!(kept.len() % 2, prompts % 2);
+        assert_eq!(turns, Some(prompts as u32));
     }
 
     #[test]
     fn the_newest_turn_is_kept_whatever_it_weighs() {
         let mut log = turn(0, 2);
         log.extend(turn(1000, 400));
-        let (kept, lost) = thin(log);
+        let Thinned { events: kept, lost, turns } = thin(log);
         assert!(lost);
         assert_eq!(kept[0].id, "e1000");
         assert_eq!(kept.len(), 801);
+        assert_eq!(turns, Some(1));
     }
 
     #[test]
@@ -334,8 +362,21 @@ mod tests {
     }
 
     #[test]
+    fn a_task_list_keeps_its_arguments() {
+        let long = "x".repeat(600);
+        let log = vec![
+            prompt(0),
+            event(1, json!({ "type": "tool_call_started", "callId": "t", "name": "TodoWrite", "toolType": "other", "input": { "todos": [{ "content": long }] }, "rawInput": null, "title": null })),
+        ];
+        let (kept, lost) = cut(log);
+        assert!(!lost);
+        let AgentEventPayload::ToolCallStarted { input, .. } = &kept[1].payload else { panic!() };
+        assert_eq!(input["todos"][0]["content"].as_str().unwrap().len(), 600);
+    }
+
+    #[test]
     fn an_empty_page_thins_to_itself() {
-        let (kept, lost) = thin(Vec::new());
+        let Thinned { events: kept, lost, .. } = thin(Vec::new());
         assert!(kept.is_empty() && !lost);
     }
 }

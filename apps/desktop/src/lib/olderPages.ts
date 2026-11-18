@@ -12,18 +12,16 @@ export function loadOlder(sessionId: string, turns?: number) {
   loader(sessionId, turns);
 }
 
-let completer: (sessionId?: string) => void = () => {};
+let callReader: (sessionId: string, callId: string) => void = () => {};
 
-export function setCompleter(complete: (sessionId?: string) => void) {
-  completer = complete;
+export function setCallReader(read: (sessionId: string, callId: string) => void) {
+  callReader = read;
 }
 
-/// Asks for the whole of a transcript held as a first frame
-/// (`SessionSnapshot.lite`): every transcript on screen with no id named, for
-/// a row that knows its body was cut but not whose it is. Nothing to do for
-/// one already whole.
-export function completeTranscript(sessionId?: string) {
-  completer(sessionId);
+/// Asks for one tool call's whole events, for a row whose body a first frame
+/// cut (`isCut`) and which now needs it. Nothing else of the transcript is read.
+export function completeCall(sessionId: string, callId: string) {
+  callReader(sessionId, callId);
 }
 
 let dropper: (sessionId: string, keepFrom?: string) => void = () => {};

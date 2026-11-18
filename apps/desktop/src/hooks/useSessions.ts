@@ -36,13 +36,13 @@ import { lockedMidTurn } from "@/lib/liveControls";
 import { AGENT_LABELS, DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
 import { islandOn } from "@/lib/island";
 import { notifyOS } from "@/lib/notify";
-import { setOlderDropper, setCompleter, setOlderLoader } from "@/lib/olderPages";
+import { setCallReader, setOlderDropper, setOlderLoader } from "@/lib/olderPages";
 import { EMPTY_TASKS } from "@/lib/transcript";
 import { botStance, stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
 import { appendLive, mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
-import { forgetTranscript, hasTranscript, keepTranscript, takeTranscript, warmPicks } from "@/lib/keptTranscripts";
+import { forgetTranscript, keepTranscript, takeTranscript } from "@/lib/keptTranscripts";
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, moveSpace, orderProjects, PROJECT_ORDER_KEY, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { FIRST_MOUNT } from "@/lib/turnWindow";
@@ -2277,7 +2277,6 @@ const readServer = (server: ServerId) => {
       }
       setSessionIndexItems((prev) => mergeFrom(prev, server, items, (i) => i.cwd));
       if (server === LOCAL) setIndexSide(archived);
-      else if (!archived) void warmServerRef.current(server, items);
     })
     .catch((e) => {
       if (server === LOCAL) setError(String(e));
@@ -3011,45 +3010,48 @@ const setCrewSeen = (ids: string[]) => {
 /// How a transcript is asked for. A bot's chat draws the conversation and the
 /// tasks it started, never the work between, so it is read as that alone, on
 /// every server, older pages included: most of a bot's log is tool calls its
-/// chat has no row for. Anything else over a network comes as a first frame,
-/// the rest when something drawn needs it. This Mac reads its own disk and
+/// chat has no row for. Anything else over a network comes with its tool
+/// bodies cut, the first frame and every page above it alike, and a row that
+/// needs one asks for its call (`readCalls`). This Mac reads its own disk and
 /// asks whole. A server older than either argument answers whole.
 const readAs = (server: ServerId, cwd: string | null | undefined): { bot?: true; lite?: true } =>
   isBotPath(cwd) ? { bot: true } : server !== LOCAL ? { lite: true } : {};
 
-/// The whole tail behind a first frame (`SessionSnapshot.lite`), merged over
-/// it by id: every cut event is replaced by its logged self and whatever
-/// arrived live meanwhile stays. Asked for only when something drawn needs
-/// it — the reader within a screen of the top (`loadOlder`), a row whose body
-/// was cut coming on screen, the side panel opening — since most opens are a
-/// look at the newest answer and never do. A read that failed is asked again
-/// by the next of those.
-const fills = useRef(new Map<string, Promise<void>>());
-const fill = (sessionId: string): Promise<void> => {
-  const running = fills.current.get(sessionId);
-  if (running) return running;
-  const read = invoke<SessionSnapshot | null>("get_session_by_id", { sessionId, turns: FIRST_MOUNT })
-    .then((whole) => {
-      if (!whole || deletedRef.current.has(sessionId)) return;
-      // Evicted meanwhile: nothing to complete, and landing it would load it.
-      if (!sessionsRef.current.some((s) => s.sessionId === sessionId)) return;
-      upsertSession(whole);
-    })
-    .catch((e) => console.error("could not complete", sessionId, e))
-    .finally(() => fills.current.delete(sessionId));
-  fills.current.set(sessionId, read);
-  return read;
+/// The whole events of tool calls a first frame cut, asked for by the rows
+/// that need them (`completeCall`) and laid over the cut ones by id. One call
+/// is a few KB where the tail it sits in is hundreds, and most rows are never
+/// opened. Asks made in one frame go out as one read; an id is asked once per
+/// load of its session, so a row re-rendering while its read is out does not
+/// ask again, and one whose read failed asks when it is next drawn.
+const callAsks = useRef(new Map<string, Set<string>>());
+const callBatch = useRef(new Map<string, Set<string>>());
+const readCalls = (sessionId: string, callId: string) => {
+  const asked = callAsks.current.get(sessionId) ?? new Set<string>();
+  if (asked.has(callId)) return;
+  callAsks.current.set(sessionId, asked.add(callId));
+  const first = callBatch.current.size === 0;
+  callBatch.current.set(sessionId, (callBatch.current.get(sessionId) ?? new Set<string>()).add(callId));
+  if (!first) return;
+  setTimeout(() => {
+    const batch = callBatch.current;
+    callBatch.current = new Map();
+    for (const [id, callIds] of batch) {
+      invoke<AgentEvent[]>("get_session_calls", { sessionId: id, callIds: [...callIds] })
+        .then((whole) => {
+          const byId = new Map(whole.map((e) => [e.id, e]));
+          if (!byId.size) return;
+          setSessions((prev) =>
+            prev.map((s) => (s.sessionId === id ? { ...s, events: s.events.map((e) => byId.get(e.id) ?? e) } : s)),
+          );
+        })
+        .catch((e) => {
+          console.error("could not read calls", id, e);
+          for (const callId of callIds) callAsks.current.get(id)?.delete(callId);
+        });
+    }
+  }, 16);
 };
-useEffect(
-  () =>
-    setCompleter((sessionId) => {
-      const ids = sessionId ? [sessionId] : [selectedSessionIdRef.current, ...onScreenRef.current];
-      for (const id of ids) {
-        if (id && sessionsRef.current.find((s) => s.sessionId === id)?.lite) void fill(id);
-      }
-    }),
-  [],
-);
+useEffect(() => setCallReader(readCalls), []);
 
 /// Reads a session's newest `FIRST_MOUNT` turns and lands them, answering
 /// whether the id resolved to anything. The rest of the log is read by
@@ -3064,9 +3066,8 @@ const deletedRef = useRef(new Set<string>());
 const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
   const running = tailReads.current.get(sessionId);
   if (running) return running;
-  // A read-ahead still out is this read now, and its answer lands here.
-  const warming = warmReads.current.get(sessionId);
-  warmReads.current.delete(sessionId);
+  // A fresh load holds cut calls again, whatever an earlier one had read.
+  callAsks.current.delete(sessionId);
   // An evicted remote transcript draws now and asks only for what is new. Its
   // index fields are taken from the live index, which may have moved since.
   const copy = takeTranscript(sessionId);
@@ -3085,9 +3086,8 @@ const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
   const kept = isCloud(server) && !serverConnected(server) ? keptCloudTranscript(server, sessionId) : null;
   const read = Promise.resolve(kept)
     .then(
-      async (copy) =>
+      (copy) =>
         copy ??
-        (await warming) ??
         invoke<SessionSnapshot | null>("get_session_by_id", {
           sessionId,
           turns: FIRST_MOUNT,
@@ -3111,49 +3111,6 @@ const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
   tailReads.current.set(sessionId, read);
   return read;
 };
-
-/// Reads a remote transcript's first frame into the kept copies before anyone
-/// asks for it, so the open that follows is `loadTail`'s copy path: drawn at
-/// once and caught up behind. The first frame takes one round trip
-/// where the whole tail took several, but one is still the whole wait on a
-/// slow link (195ms measured to a sandbox), and this is the open with none. `fresh` re-reads over a copy already held, for a turn
-/// that just ended. Never This Mac, which reads its own disk in milliseconds.
-const warmReads = useRef(new Map<string, Promise<SessionSnapshot | null>>());
-const warm = (sessionId: string, fresh = false, row?: SessionIndexItem): Promise<void> => {
-  if (serverOfSession(sessionId) === LOCAL) return Promise.resolve();
-  if (sessionsRef.current.some((s) => s.sessionId === sessionId)) return Promise.resolve();
-  if (tailReads.current.has(sessionId) || warmReads.current.has(sessionId)) return Promise.resolve();
-  if (!fresh && hasTranscript(sessionId)) return Promise.resolve();
-  // What `loadTail` would ask for, since the open that follows takes this as its read.
-  const cwd = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId)?.cwd ?? row?.cwd;
-  const read = invoke<SessionSnapshot | null>("get_session_by_id", {
-    sessionId,
-    turns: FIRST_MOUNT,
-    ...readAs(serverOfSession(sessionId), cwd),
-  }).catch(() => null);
-  warmReads.current.set(sessionId, read);
-  return read.then((snapshot) => {
-    // Taken by a `loadTail` meanwhile, which lands it in state instead.
-    if (warmReads.current.get(sessionId) !== read) return;
-    warmReads.current.delete(sessionId);
-    if (!snapshot || deletedRef.current.has(sessionId)) return;
-    if (sessionsRef.current.some((s) => s.sessionId === sessionId)) return;
-    keepTranscript(snapshot);
-  });
-};
-/// One at a time, so a click during the run waits behind one tail at most.
-const warmServer = async (server: ServerId, items: SessionIndexItem[]) => {
-  // The row rides along: this runs off the read that is about to put it in the index.
-  const rows = new Map(items.map((i) => [i.sessionId, i]));
-  for (const id of warmPicks(items)) {
-    if (!serverConnected(server)) return;
-    await warm(id, false, rows.get(id));
-  }
-};
-const warmServerRef = useRef(warmServer);
-warmServerRef.current = warmServer;
-const warmRef = useRef(warm);
-warmRef.current = warm;
 
 /// Loads a transcript without selecting it — a split pane, or a sidebar row
 /// hovered long enough to be worth warming. Touches no selection ref, so a
@@ -3200,8 +3157,6 @@ const pageReads = useRef(new Set<string>());
 const pageStarts = useRef(new Map<string, Map<string, number>>());
 const loadOlder = async (sessionId: string, turns = OLDER_PAGE_TURNS, attempt = 0) => {
   const session = sessionsRef.current.find((s) => s.sessionId === sessionId);
-  // A first frame's own page comes before any page above it.
-  if (session?.lite) return fill(sessionId);
   const before = session?.olderBefore;
   if (before == null || pageReads.current.has(sessionId)) return;
   const first = session?.events[0]?.id;
@@ -3215,7 +3170,7 @@ const loadOlder = async (sessionId: string, turns = OLDER_PAGE_TURNS, attempt = 
       sessionId,
       before,
       turns,
-      ...(isBotPath(session?.cwd) && { bot: true }),
+      ...readAs(serverOfSession(sessionId), session?.cwd),
     });
     setSessions((prev) =>
       prev.map((s) => {
@@ -3611,13 +3566,6 @@ useEffect(() => {
       if (!tasksBySessionRef.current[sessionId]?.length) {
         setAsksBySession((prev) => (prev[sessionId]?.length ? { ...prev, [sessionId]: [] } : prev));
       }
-    }
-
-    // A finished turn is the transcript most likely opened next — where it
-    // has a row to open it from, which a bot's hidden children do not.
-    if (status === "completed") {
-      const row = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
-      if (row && !row.hidden && !row.archived) void warmRef.current(sessionId, true);
     }
 
     // Finishing in front of the reader is read the moment it does; everything

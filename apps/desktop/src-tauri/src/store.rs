@@ -1837,9 +1837,9 @@ pub async fn get_session_index_item(session_id: &str) -> Result<Option<SessionIn
 /// `bot` asks for the page as a bot's chat draws it, which is all of what its
 /// client holds: see [`crate::thin::chat`]. Not `lite`, since nothing follows.
 ///
-/// `lite` asks for those turns as a first frame, small enough to cross a slow
-/// link in one flight; see [`crate::thin`]. `older_before` is the page's
-/// either way, so the whole read landing later sits on the same boundary.
+/// `lite` asks for a first frame, small enough to cross a slow link in one
+/// flight; see [`crate::thin`]. It may hold fewer turns than asked for, and
+/// `older_before` is where those begin, so it pages like any other read.
 ///
 /// `turns` asks for the newest that many turns alone, read off the end of the
 /// log, with `older_before` saying where the rest begins. Opening a long
@@ -1865,16 +1865,28 @@ pub async fn get_session_by_id(
         },
     };
 
-    let (events, lite) = match (bot, lite) {
-        (Some(true), _) => (crate::thin::chat(page.events), false),
-        (_, Some(true)) => crate::thin::thin(page.events),
-        _ => (page.events, false),
+    let (events, older_before, lite) = match (bot, lite) {
+        (Some(true), _) => (crate::thin::chat(page.events), page.older_before, false),
+        (_, Some(true)) => {
+            let thin = crate::thin::thin(page.events);
+            // The frame is the page of the turns it kept, so what is above it
+            // is read like any page's. Read again rather than reckoned: the
+            // offset is the log's and the events here are parsed. A turn
+            // landing between the two reads moves this later, which overlaps
+            // the page above and never leaves a gap.
+            let older_before = match thin.turns {
+                Some(turns) => read_session_page(session_id, None, turns).await?.older_before,
+                None => page.older_before,
+            };
+            (thin.events, older_before, thin.lost)
+        }
+        _ => (page.events, page.older_before, false),
     };
 
     Ok(Some(SessionSnapshot {
         index_item,
         events,
-        older_before: page.older_before,
+        older_before,
         lite,
     }))
 }
@@ -1887,12 +1899,38 @@ pub async fn get_session_page(
     before: u64,
     turns: u32,
     bot: Option<bool>,
+    lite: Option<bool>,
 ) -> Result<SessionPage, Fail> {
     let mut page = read_session_page(session_id, Some(before), turns).await?;
     if bot == Some(true) {
         page.events = crate::thin::chat(page.events);
+    } else if lite == Some(true) {
+        page.events = crate::thin::cut(page.events).0;
     }
     Ok(page)
+}
+
+/// Every event of the tool calls `call_ids` names, whole: what a row out of a
+/// first frame asks for when its body is wanted, so one call's output is read
+/// and not the transcript's. The log is scanned for the ids as bytes and only
+/// the lines naming one are parsed.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn get_session_calls(session_id: &str, call_ids: Vec<String>) -> Result<Vec<AgentEvent>, Fail> {
+    let buf = match fs::read(get_session_path(session_id).await?).await {
+        Ok(buf) => buf,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(anyhow::Error::from(e).context("could not open session file").into()),
+    };
+    let needles: Vec<String> = call_ids
+        .iter()
+        .filter_map(|id| serde_json::to_string(id).ok())
+        .map(|id| format!("\"callId\":{id}"))
+        .collect();
+    Ok(buf
+        .split(|&b| b == b'\n')
+        .filter(|line| needles.iter().any(|needle| memchr::memmem::find(line, needle.as_bytes()).is_some()))
+        .filter_map(parse_line::<AgentEvent>)
+        .collect())
 }
 
 /// The last thing a session's main thread said, and how many replies it has

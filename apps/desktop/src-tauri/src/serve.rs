@@ -61,7 +61,10 @@ pub const PROTOCOL: u32 = 1;
 
 /// Frames shorter than this go out as text even to a client that asked for
 /// deflate: an event or a short reply saves too little to be worth the CPU.
-const DEFLATE_FLOOR: usize = 16 * 1024;
+/// Low enough to take one tool call's events and a page of cut ones, which
+/// are what a transcript read as a first frame asks for after it: at 16KB
+/// both went out whole, a cut page larger on the wire than the uncut one.
+const DEFLATE_FLOOR: usize = 4 * 1024;
 
 /// One outgoing frame. A transcript page is 0.6–1.3MB of JSON and deflates
 /// about 4.7×, which on a slow link is most of the wait — and tungstenite
@@ -1917,7 +1920,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         share_machines() => ok(crate::machines::sharing().await);
         set_share_machines(on: bool) => crate::machines::set_sharing(on).await;
         get_session_by_id(session_id: String, turns: Option<u32>, lite: Option<bool>, bot: Option<bool>) => store::get_session_by_id(&session_id, turns, lite, bot).await;
-        get_session_page(session_id: String, before: u64, turns: u32, bot: Option<bool>) => store::get_session_page(&session_id, before, turns, bot).await;
+        get_session_page(session_id: String, before: u64, turns: u32, bot: Option<bool>, lite: Option<bool>) => store::get_session_page(&session_id, before, turns, bot, lite).await;
+        get_session_calls(session_id: String, call_ids: Vec<String>) => store::get_session_calls(&session_id, call_ids).await;
         list_subagents(session_id: String, also: Vec<String>, cursor: Option<store::SubagentCursor>, limit: u32, live: Option<Vec<String>>) => store::list_subagents(session_id, also, cursor, limit, live).await;
         list_attachments(session_id: String, before: u64, limit: u32) => store::list_attachments(&session_id, before, limit).await;
         get_session_since(session_id: String, after: Vec<String>) => store::get_session_since(&session_id, after).await;

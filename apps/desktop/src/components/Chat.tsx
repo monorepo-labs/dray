@@ -31,7 +31,7 @@ import { buildTranscript, type PendingAsk } from "@/lib/transcript";
 import { drawnSegments, earlierTurns, lastTurns } from "@/lib/botTranscript";
 import { readerMessagesAfter } from "@/lib/mergeCard";
 import { isProvisional } from "@/lib/provisional";
-import { completeTranscript, dropOlder, loadOlder } from "@/lib/olderPages";
+import { dropOlder, loadOlder } from "@/lib/olderPages";
 import type { Bot, SessionSnapshot } from "@/types/events";
 
 type ChatProps = {
@@ -320,8 +320,7 @@ export default function Chat({
     return drawnSegments(live ? [...earlier, live] : earlier);
   }, [earlier, session, drawFrom]);
   const oldest = segments[0];
-  // A first frame holds fewer turns than its page, so it has more above too.
-  const more = oldest?.olderBefore != null || !!oldest?.lite || earlierLoading;
+  const more = oldest?.olderBefore != null || earlierLoading;
   // Moves when a page lands above, which is what the anchor below answers.
   const oldestKey = oldest ? `${oldest.sessionId}:${oldest.events[0]?.id}` : "";
   const syncAtBottom = () => {
@@ -495,8 +494,6 @@ export default function Chat({
     if (drawFrom > 0) {
       const from = earlierTurns(session.events, drawFrom, OLDER_TURNS);
       holdWindow(from > 0 ? session.events[from].id : ALL_HELD);
-    } else if (oldest?.lite) {
-      completeTranscript(oldest.sessionId);
     } else if (oldest?.olderBefore != null) {
       loadOlder(oldest.sessionId);
     }
@@ -556,8 +553,7 @@ export default function Chat({
         focusUnpinned.current ||= followRef.current;
         followRef.current = false;
         holdWindow(ALL_HELD);
-        if (drawFrom === 0 && oldest?.lite) completeTranscript(oldest.sessionId);
-        else if (drawFrom === 0 && oldest?.olderBefore != null) loadOlder(oldest.sessionId, FOCUS_PAGE_TURNS);
+        if (drawFrom === 0 && oldest?.olderBefore != null) loadOlder(oldest.sessionId, FOCUS_PAGE_TURNS);
         return;
       }
       focusedAt.current = botFocus.at;

@@ -9,7 +9,7 @@ import { basename, truncate } from "@/lib/format";
 import { isTodoCall, todoList } from "@/lib/todos";
 import { cn } from "@/lib/utils";
 import { countChanges, countUnifiedChanges, editSides, readRange } from "@/lib/diff";
-import { completeTranscript } from "@/lib/olderPages";
+import { completeCall } from "@/lib/olderPages";
 import { isCut } from "@/lib/thin";
 import {
   fileTarget,
@@ -112,6 +112,8 @@ type ToolCallProps = {
   /// — repeating "Edited" down all 30 rows is noise, and the path is the only
   /// thing that varies.
   hideLabel?: boolean;
+  /// Whose call this is, for a row out of a first frame to ask for its body by.
+  source?: { sessionId: string; callId: string };
   /// Starts the row expanded. Initial state only, so the reader's own closes
   /// stick. For a row the reader reached deliberately — the call a subagent
   /// panel row opens onto — where making them click a second time to see the
@@ -127,19 +129,22 @@ export default function ToolCall({
   rawInput,
   result,
   edits,
+  source,
   hideLabel = false,
   defaultOpen = false,
 }: ToolCallProps) {
   const [open, setOpen] = useState(defaultOpen);
 
   // A row out of a first frame, its arguments or output cut by the server.
-  // Being drawn at all is what asks for the whole transcript — a finished
-  // turn is collapsed, so most opens never draw one — and until that lands
-  // the row shows no figure counted from a fragment and opens onto nothing.
+  // It asks for its own call and nothing else, and only once that is needed:
+  // opened, or an edit, whose collapsed row draws a size counted from the
+  // arguments. Until the call lands the row shows no figure counted from a
+  // fragment and opens onto nothing.
   const cut = isCut(input) || isCut(result?.structured);
+  const wanted = cut && (open || (toolType === "file_edit" && isCut(input)));
   useEffect(() => {
-    if (cut) completeTranscript();
-  }, [cut]);
+    if (wanted && source) completeCall(source.sessionId, source.callId);
+  }, [wanted, source?.sessionId, source?.callId]);
 
   // An MCP call names a server and a method, and both harnesses spell that for
   // a machine. The label becomes "MCP" the way a shell row's is "Bash", and the
