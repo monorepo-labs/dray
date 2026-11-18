@@ -794,12 +794,6 @@ final class Store {
         return open.checksState == "RUNNING" ? .checks : .pr
     }
 
-    /// A bot's tasks as its server counts them, set-aside ones left out; `nil`
-    /// from a server too old to judge stalls, where the phone counts.
-    func botTaskCount(_ server: UUID, botId: String) -> Int? {
-        stallCards[server].map { $0[botId]?.tasks ?? 0 }
-    }
-
     func isAsking(_ key: SessionKey) -> Bool { !(asks[key]?.isEmpty ?? true) }
 
     /// Background work the agent waits on: tasks, unless they are only a
