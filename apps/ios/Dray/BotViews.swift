@@ -749,7 +749,11 @@ struct StalledCard: View {
         .onChange(of: chat) { read?.cancel() }
         // While the list is up, a reply opens over it instead, since one presenter shows one sheet.
         .sheet(item: Binding(get: { all ? nil : picked }, set: { picked = $0 }), content: replySheet)
-        .sheet(isPresented: $all, onDismiss: { picked = nil }) {
+        // A read still out when the list closes must not open a reply or a task after it.
+        .sheet(isPresented: $all, onDismiss: {
+            read?.cancel()
+            picked = nil
+        }) {
             NavigationStack {
                 TimelineView(.periodic(from: .now, by: 60)) { context in
                     ScrollView {
