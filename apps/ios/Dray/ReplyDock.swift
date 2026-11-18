@@ -76,7 +76,9 @@ struct ReplyDock: View {
                 ChatInput(placeholder: "Message", text: Binding(get: { store.drafts[key] ?? "" }, set: { store.drafts[key] = $0 }),
                           sending: sending, sendable: !text.isEmpty && !sending && connected, send: send)
             } else {
-                DockOrb(draft: key, size: 76, tap: tapped).opacity(away ? 0.4 : 1)
+                // New task's size while it listens; back to rest size once the bubble takes the room.
+                DockOrb(draft: key, size: phase == .recording || phase == .transcribing ? 120 : 76, tap: tapped)
+                    .opacity(away ? 0.4 : 1)
             }
             if open {
                 actions
@@ -129,10 +131,11 @@ struct ReplyDock: View {
         }
     }
 
-    /// The reply as it will send: the reader's own bubble, its first lines and a count.
+    /// The reply as it will send: the reader's own bubble, its last lines, so each recording
+    /// shows what it added. Tapped, the sheet holds the whole text.
     private var bubble: some View {
         VStack(alignment: .trailing, spacing: 6) {
-            Text(text)
+            Text(spokenTail(text))
                 .font(Theme.Font.body)
                 .foregroundStyle(Theme.onSent)
                 .lineLimit(3)
@@ -142,13 +145,9 @@ struct ReplyDock: View {
                                                                       bottomTrailingRadius: 6, topTrailingRadius: 20, style: .continuous))
                 .frame(maxWidth: 290, alignment: .trailing)
                 .onTapGesture { edit() }
+                .accessibilityLabel(text)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityHint("Opens it to edit")
-            let words = text.split(whereSeparator: \.isWhitespace).count
-            Text(words == 1 ? "1 word" : "\(words) words")
-                .font(Theme.Font.footnote)
-                .foregroundStyle(Theme.tertiary)
-                .padding(.trailing, 6)
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
@@ -399,4 +398,13 @@ private struct SendLabel: LabelStyle {
             configuration.title
         }
     }
+}
+
+/// The end of a long reply, cut at a word with "…" before it: about three lines of the bubble.
+/// Cut here rather than by `truncationMode(.head)`, which a multi-line `Text` ignores.
+func spokenTail(_ text: String, limit: Int = 100) -> String {
+    guard text.count > limit else { return text }
+    let cut = text.suffix(limit)
+    let word = cut.firstIndex(where: \.isWhitespace).map { cut.index(after: $0) } ?? cut.startIndex
+    return "…" + cut[word...]
 }
