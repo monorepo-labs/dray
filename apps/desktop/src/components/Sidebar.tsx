@@ -56,6 +56,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { draftTitle, type Draft } from "@/hooks/useDrafts";
+import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
 import { burstConfetti } from "@/lib/confetti";
 import type { ManualCheck } from "@/hooks/useUpdater";
 import { startSessionDrag, type DropTarget } from "@/lib/dragSession";
@@ -127,7 +128,6 @@ type SidebarProps = {
   collapsed: boolean;
   onSelect: (sessionId: string) => void;
   /// See `SessionRow`'s own.
-  onPrefetch?: (sessionId: string) => void;
   /// The split groups of the active space, drawn as runs of their own ahead
   /// of everything else. Each holds only sessions in `items`.
   groups: SplitGroup[];
@@ -1048,7 +1048,6 @@ export default function Sidebar({
   selectedSessionId,
   collapsed,
   onSelect,
-  onPrefetch,
   groups: splits,
   onDropSession,
   splitLearned,
@@ -1680,7 +1679,6 @@ export default function Sidebar({
                       group.kind === "pinned" && depth > 0 && !item.pinned
                     }
                     onSelect={onSelect}
-                    onPrefetch={onPrefetch}
                     onDragStart={
                       !archivedShown
                         ? (e) => startSessionDrag(e, item.sessionId, item.title, onDropSession)
@@ -2659,10 +2657,6 @@ const RAIL_X = 12;
 const STEP = 12;
 const ELBOW = 10;
 
-/// How long the pointer rests on a row before its transcript is read ahead of
-/// the click. Long enough that sweeping down the list reads nothing.
-const PREFETCH_HOVER_MS = 100;
-
 /// A saved task, drawn as a session row with its created time. No mark says
 /// "draft": the drafts view is the only place one is drawn. No rail and no
 /// hover controls, since nothing has run. Delete sits on right-click, asking
@@ -2760,7 +2754,6 @@ function SessionRow({
   aside = false,
   marksLive = true,
   onSelect,
-  onPrefetch,
   onDragStart,
   nested = false,
   inheritsPin = false,
@@ -2796,7 +2789,6 @@ function SessionRow({
   onSelect: (sessionId: string) => void;
   /// Warms the row's transcript once the pointer has rested on it, so the click
   /// finds it loaded. Loads without selecting.
-  onPrefetch?: (sessionId: string) => void;
   /// Wires the row for dragging onto the transcript column. See `startSessionDrag`.
   onDragStart?: (e: React.PointerEvent<HTMLDivElement>) => void;
   /// This row has a parent in the same list, so 'Detach from parent' is a real
@@ -2826,8 +2818,7 @@ function SessionRow({
     if (active) ref.current?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
-  const hover = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(hover.current), []);
+  const prefetch = useHoverPrefetch(item.sessionId);
 
   // The rail this row elbows onto is its parent's, one step to the left of the
   // one it opens for its own children.
@@ -2893,12 +2884,12 @@ function SessionRow({
         role="button"
         tabIndex={0}
         onClick={() => void onSelect(item.sessionId)}
-        onPointerEnter={() => {
-          clearTimeout(hover.current);
-          hover.current = setTimeout(() => onPrefetch?.(item.sessionId), PREFETCH_HOVER_MS);
+        onPointerEnter={prefetch.onPointerEnter}
+        onPointerLeave={prefetch.onPointerLeave}
+        onPointerDown={(e) => {
+          prefetch.onPointerDown();
+          onDragStart?.(e);
         }}
-        onPointerLeave={() => clearTimeout(hover.current)}
-        onPointerDown={onDragStart}
         onKeyDown={(e) => {
           // Keys bubbling up from the hover buttons are theirs: taking Enter
           // here would cancel the button's own click and select the row.

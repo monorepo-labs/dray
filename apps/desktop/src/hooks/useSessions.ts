@@ -1,4 +1,4 @@
-import { invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
+import { CANCELLED, invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
 import { botsOf, isBotPath, keepBots, refreshBots, useBots } from "@/lib/bots";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
@@ -204,6 +204,14 @@ const connectedRemotes = (): ServerId[] =>
 /// The transcript's own empty set, so a session with no tasks shares one memo
 /// entry with every reader that passes none.
 const NO_TASKS = EMPTY_TASKS;
+
+/// A transcript read in flight. `kept` once anything but a hover asked for it,
+/// after which no hover's leaving can drop it.
+type TailRead = { read: Promise<boolean>; abort: AbortController; hovers: number; kept: boolean; started: number };
+
+/// Pointer-only transcript reads let run at once. Two covers a pointer crossing
+/// from one row to the next before the first read is let go.
+const HOVER_READS = 2;
 
 /// What a transcript pane draws for one session. The selected session's fields
 /// on the hook's return are this, spread.
@@ -3012,12 +3020,17 @@ const setCrewSeen = (ids: string[]) => {
 /// newest turn could draw.
 ///
 /// One read per session however many ask at once, so a hover's prefetch and
-/// the click that follows share it rather than landing twice.
-const tailReads = useRef(new Map<string, Promise<boolean>>());
+/// the click that follows share it rather than landing twice. `hover` is a
+/// read only a pointer asked for, which `prefetchTranscript` may drop.
+const tailReads = useRef(new Map<string, TailRead>());
 const deletedRef = useRef(new Set<string>());
-const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
+const loadTail = (sessionId: string, touch = true, hover = false): Promise<boolean> => {
   const running = tailReads.current.get(sessionId);
-  if (running) return running;
+  if (running) {
+    if (hover) running.hovers++;
+    else running.kept = true;
+    return running.read;
+  }
   // An evicted remote transcript draws now and asks only for what is new. Its
   // index fields are taken from the live index, which may have moved since.
   const copy = takeTranscript(sessionId);
@@ -3034,14 +3047,21 @@ const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
   const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
   const server = item ? serverOfPath(item.cwd) : serverOfSession(sessionId);
   const kept = isCloud(server) && !serverConnected(server) ? keptCloudTranscript(server, sessionId) : null;
-  const read = Promise.resolve(kept)
+  const abort = new AbortController();
+  const entry: TailRead = { read: Promise.resolve(false), abort, hovers: hover ? 1 : 0, kept: !hover, started: Date.now() };
+  entry.read = Promise.resolve(kept)
     .then(
       (copy) =>
         copy ??
-        invoke<SessionSnapshot | null>("get_session_by_id", {
-          sessionId,
-          turns: FIRST_MOUNT,
-        }),
+        invoke<SessionSnapshot | null>(
+          "get_session_by_id",
+          {
+            sessionId,
+            turns: FIRST_MOUNT,
+          },
+          undefined,
+          abort.signal,
+        ),
     )
     .then((snapshot) => {
       if (!snapshot) return false;
@@ -3056,14 +3076,51 @@ const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
       evictSessionsRef.current();
       return true;
     })
-    .finally(() => tailReads.current.delete(sessionId));
-  tailReads.current.set(sessionId, read);
-  return read;
+    .finally(() => {
+      if (tailReads.current.get(sessionId) === entry) tailReads.current.delete(sessionId);
+    });
+  tailReads.current.set(sessionId, entry);
+  return entry.read;
 };
 
-/// Loads a transcript without selecting it — a split pane, or a sidebar row
-/// hovered long enough to be worth warming. Touches no selection ref, so a
-/// prefetch cannot be read as a move the rollback owns.
+/// Drops a read nobody but a pointer wanted. Out of the map at once, so a
+/// hover landing before the rejection settles starts afresh rather than
+/// joining a read that is already gone.
+const dropTailRead = (sessionId: string, entry: TailRead) => {
+  if (tailReads.current.get(sessionId) === entry) tailReads.current.delete(sessionId);
+  entry.abort.abort();
+};
+
+/// Starts reading a transcript the reader is about to open — a pointer resting
+/// on its row or card — and answers the call that lets it go. Letting go drops
+/// the read, on the wire and on the server, once no other hover holds it and
+/// nothing opened it meanwhile; a click joins the same read, which keeps it.
+/// Already loaded, or already being read for an open, costs nothing.
+///
+/// At most `HOVER_READS` pointer-only reads run at once, the oldest dropped for
+/// the newest, since the newest is where the pointer is.
+const prefetchTranscript = (sessionId: string): (() => void) => {
+  if (deletedRef.current.has(sessionId) || sessionsRef.current.some((s) => s.sessionId === sessionId)) return () => {};
+  void loadTail(sessionId, true, true).catch((e) => {
+    if (e !== CANCELLED) console.error("failed to prefetch a transcript", e);
+  });
+  const entry = tailReads.current.get(sessionId);
+  if (!entry) return () => {};
+  const loose = [...tailReads.current].filter(([, r]) => !r.kept).sort(([, a], [, b]) => a.started - b.started);
+  for (const [id, r] of loose.slice(0, Math.max(0, loose.length - HOVER_READS))) dropTailRead(id, r);
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    entry.hovers--;
+    // A read already landed is out of the map, and is a transcript worth keeping.
+    if (entry.hovers <= 0 && !entry.kept && tailReads.current.get(sessionId) === entry) dropTailRead(sessionId, entry);
+  };
+};
+
+/// Loads a transcript without selecting it — a split pane, or a ⌘⇧↑/↓
+/// neighbour. Touches no selection ref, so a prefetch cannot be read as a move
+/// the rollback owns.
 const ensureLoaded = async (sessionId: string, touch = true) => {
   if (sessionsRef.current.some((s) => s.sessionId === sessionId)) return;
   try {
@@ -3803,6 +3860,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems: shownIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, servingBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems: shownIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, servingBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, prefetchTranscript, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
 
 }

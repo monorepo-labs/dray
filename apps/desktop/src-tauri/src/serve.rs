@@ -8,6 +8,7 @@
 //! → {"id":1,"cmd":"send_msg","args":{…}}        args exactly as `invoke` sends them
 //! ← {"id":1,"ok":…}  or  {"id":1,"err":…}       err as a rejected `invoke` carries it
 //! ← {"event":"agent_event","payload":{…}}       every event, to every client
+//! → {"cancel":1}                                drop call 1 unanswered; reads only
 //! ```
 //!
 //! A hello carrying `"deflate":true` gets every frame from [`DEFLATE_FLOOR`]
@@ -836,6 +837,12 @@ fn judge_hello(raw: &str, token: &str) -> Option<String> {
     None
 }
 
+/// The calls a client may cancel: reads alone, since aborting a write between
+/// two awaits could leave it half done. A cancel names a call the client has
+/// already answered itself, so the server sends nothing back. A server from
+/// before cancels logs the frame as unreadable and answers the call as usual.
+const CANCELLABLE: &[&str] = &["get_session_by_id", "get_session_page"];
+
 #[derive(Deserialize)]
 struct Call {
     id: Value,
@@ -1567,6 +1574,8 @@ async fn connection(
         tokio::spawn(host_call("reload_servers", Value::Null));
     }
 
+    // Cancellable reads in flight on this connection, by the call's id as JSON.
+    let running: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>> = Default::default();
     // Not `?`: a reset must still reach the cleanup below, or a call
     // waiting on this host waits forever.
     let mut failed = None;
@@ -1585,6 +1594,12 @@ async fn connection(
             answered(connection, frame);
             continue;
         }
+        if let Some(id) = frame.get("cancel") {
+            if let Some(task) = running.lock().unwrap_or_else(|e| e.into_inner()).remove(&id.to_string()) {
+                task.abort();
+            }
+            continue;
+        }
         let call: Call = match serde_json::from_value(frame) {
             Ok(call) => call,
             Err(e) => {
@@ -1595,7 +1610,12 @@ async fn connection(
         // Concurrently, as Tauri runs async commands: a send that spawns a
         // child must not hold a permission reply behind it.
         let (sink, replies) = (sink.clone(), replies.clone());
-        tokio::spawn(crate::analytics::CLIENT_COUNTS.scope(counts, async move {
+        let key = CANCELLABLE.contains(&call.cmd.as_str()).then(|| call.id.to_string());
+        let tracked = key.clone().map(|key| (key, running.clone()));
+        // Held across the spawn, so the task's own untracking cannot run
+        // before it is tracked and leave a handle behind.
+        let mut tracking = key.is_some().then(|| running.lock().unwrap_or_else(|e| e.into_inner()));
+        let task = tokio::spawn(crate::analytics::CLIENT_COUNTS.scope(counts, async move {
             let args = tag_dictation(&call.cmd, call.args, island);
             let answer = match call.cmd.as_str() {
                 "island_links" => island_links(island).await.into_reply(),
@@ -1604,8 +1624,20 @@ async fn connection(
             if island && answer.is_ok() {
                 island_used(&call.cmd);
             }
+            // Untracked before the reply is queued, so a cancel landing now
+            // finds nothing to abort rather than a reply half sent.
+            if let Some((key, running)) = tracked {
+                running.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+            }
             let _ = replies.send(reply(&call.id, answer));
         }));
+        if let (Some(key), Some(tracking)) = (key, tracking.as_mut()) {
+            tracking.insert(key, task.abort_handle());
+        }
+        drop(tracking);
+    }
+    for (_, task) in running.lock().unwrap_or_else(|e| e.into_inner()).drain() {
+        task.abort();
     }
 
     // Dropping its waiters answers every call still out on it.

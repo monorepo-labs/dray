@@ -54,6 +54,7 @@ import { setLinkOpener } from "@/lib/openLink";
 import { repoChanged } from "@/lib/prSync";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useChanges } from "@/hooks/useChanges";
+import { setTranscriptPrefetch } from "@/hooks/useHoverPrefetch";
 import { keptPrMark, usePrMarks } from "@/hooks/usePrMarks";
 import { usePrReady } from "@/hooks/usePrReady";
 import { useAutoMergeCards } from "@/hooks/useAutoMergeCards";
@@ -345,6 +346,7 @@ function App() {
     deleteSession,
     removeWorktree,
     ensureLoaded,
+    prefetchTranscript,
     setNeighbours,
     dropNeighbours,
     setOnScreen,
@@ -379,6 +381,12 @@ function App() {
   useEffect(() => {
     if (selectedSessionId) setOpenDraftId(null);
   }, [selectedSessionId]);
+  const prefetchRef = useRef(prefetchTranscript);
+  prefetchRef.current = prefetchTranscript;
+  useEffect(() => {
+    setTranscriptPrefetch((id) => prefetchRef.current(id));
+    return () => setTranscriptPrefetch(null);
+  }, []);
   // Dray Island opens on this session when tapped over Dray's window.
   useEffect(() => {
     void invoke("set_app_selection", { sessionId: selectedSessionId }).catch(() => {});
@@ -3658,7 +3666,6 @@ function App() {
           selectedSessionId={issuesOpen ? null : strip?.owner ?? selectedSessionId}
           collapsed={collapsed}
           onSelect={(sessionId) => goToSession(() => void handleSelectSessionIndexItem(sessionId))}
-          onPrefetch={(sessionId) => void ensureLoaded(sessionId)}
           groups={spaceGroups}
           onDropSession={dropSession}
           splitLearned={splitLearned}
