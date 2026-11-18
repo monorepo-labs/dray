@@ -180,7 +180,7 @@ import BoatNotice from "@/components/composer/BoatNotice";
 import { CloudFailedNotice, CloudNotice } from "@/components/composer/CloudNotice";
 import BoatWarnings from "@/components/BoatWarnings";
 import { boatAsleep, restoreHeld } from "@/lib/boat";
-import { onCloud, setCloudFailure, useCloud, useCloudFailure, useCloudPicks, usePlacing } from "@/lib/cloud";
+import { onCloud, setCloudFailure, useCloud, useCloudFailure, usePlacing } from "@/lib/cloud";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout, nextCheckout } from "@/lib/projectGroups";
 import { serverConnected, serverName, shownOffline, useServers } from "@/lib/servers";
@@ -565,7 +565,6 @@ function App() {
   const placing = usePlacing();
   const cloudFailure = useCloudFailure();
   useCloud();
-  useCloudPicks();
   // A new task bound for Cloud runs wherever placement puts it, so an agent
   // missing from the picked checkout's machine says nothing about it.
   const cloudTask = !selectedSessionId && onCloud(projects, projectPath);
