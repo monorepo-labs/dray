@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ChecksRunningIcon } from "@/components/PrPanel";
 import PrStateIcon from "@/components/PrStateIcon";
 import { MergeControl } from "@/components/TasksPanel";
+import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
 import { seededAvatar } from "@/lib/botAvatar";
 import { cardRepo, FULL_FOR, type MergeCardPayload } from "@/lib/mergeCard";
 import { openLink } from "@/lib/openLink";
@@ -90,6 +91,8 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
   useEffect(() => {
     if (payload && found === null) host?.missing(repo, payload.number);
   }, [host, repo, payload, found]);
+  const { onPointerEnter, onPointerLeave, onPointerDown } = useHoverPrefetch(payload?.taskId);
+  const warm = { onPointerEnter, onPointerLeave, onPointerDown };
   if (!payload) return null;
   const card = { ...payload, projectPath: repo };
   // Without `machine`, the task lives where the chat does, even where no list
@@ -124,7 +127,12 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
           {merged ? `Merged #${card.number}` : `#${card.number}`}
         </button>
         <span aria-hidden>·</span>
-        <button type="button" onClick={open} className="flex min-w-0 cursor-pointer items-center gap-1.5 hover:text-foreground">
+        <button
+          type="button"
+          onClick={open}
+          {...warm}
+          className="flex min-w-0 cursor-pointer items-center gap-1.5 hover:text-foreground"
+        >
           <span className="size-4 shrink-0">{face}</span>
           <span className="truncate">{title}</span>
         </button>
@@ -146,6 +154,7 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
           <button
             type="button"
             onClick={open}
+            {...warm}
             className="block max-w-full cursor-pointer truncate text-left text-chat font-medium hover:underline"
           >
             {title}

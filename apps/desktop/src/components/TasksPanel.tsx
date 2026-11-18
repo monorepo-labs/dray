@@ -10,6 +10,7 @@ import PrStateIcon, { ChecksRunningIcon } from "@/components/PrStateIcon";
 import { RowAction, RowMenu, stageRuns } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
 import { useFixAsks } from "@/hooks/useFixAsks";
+import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -213,6 +214,7 @@ function TaskRow({
   const server = serverOfPath(item.projectPath);
   const machine = server !== LOCAL ? serverName(server) : null;
   const id = item.sessionId;
+  const prefetch = useHoverPrefetch(id);
   const working = row.busy && !row.asking;
   const mergeable = canMerge(pr);
   const blocked = mergeable && pr ? mergeBlock(row, pr) : null;
@@ -250,8 +252,15 @@ function TaskRow({
         tabIndex={0}
         onClick={(e) => onOpen(id, isModClick(e))}
         onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onOpen(id, isModClick(e))}
-        onPointerEnter={() => setHovered(true)}
-        onPointerLeave={() => setHovered(false)}
+        onPointerEnter={(e) => {
+          setHovered(true);
+          prefetch.onPointerEnter(e);
+        }}
+        onPointerLeave={() => {
+          setHovered(false);
+          prefetch.onPointerLeave();
+        }}
+        onPointerDown={prefetch.onPointerDown}
         className={cn(
           "group flex w-full cursor-pointer flex-col rounded-md px-2 text-left text-ui text-muted-foreground outline-none hover:bg-muted/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-muted/50",
           item.aside && "opacity-50",

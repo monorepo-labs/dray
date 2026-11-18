@@ -10,13 +10,14 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "server_invoke") {
       const inner = (args as { cmd: string }).cmd;
       if (inner === "list_projects") return [{ path: "/root/app", name: "app" }];
+      if (inner === "get_session_by_id") return new Promise(() => {});
     }
     return null;
   },
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 
-const { APP_COMMANDS, displayPath, fileSrc, invoke, qualify, serverOfSession, splitPath } = await import("./transport");
+const { APP_COMMANDS, CANCELLED, displayPath, fileSrc, invoke, qualify, serverOfSession, splitPath } = await import("./transport");
 
 beforeEach(() => {
   calls.length = 0;
@@ -72,6 +73,23 @@ describe("invoke", () => {
 
   it("refuses one call naming two servers", async () => {
     await expect(invoke("x", { a: "dray://one/a", b: "dray://two/b" })).rejects.toThrow(/two servers/);
+  });
+
+  it("drops an aborted read at once and tells the app which call to cancel", async () => {
+    const abort = new AbortController();
+    const read = invoke("get_session_by_id", { sessionId: "s9" }, "vps1", abort.signal);
+    abort.abort();
+    await expect(read).rejects.toBe(CANCELLED);
+    const ticket = (calls[0].args as { ticket: string }).ticket;
+    expect(ticket).toBeTruthy();
+    expect(calls[1]).toEqual({ cmd: "server_cancel", args: { ticket } });
+  });
+
+  it("sends nothing for a call answered before the abort", async () => {
+    const abort = new AbortController();
+    await invoke("list_projects", {}, "vps1", abort.signal);
+    abort.abort();
+    expect(calls.map((c) => c.cmd)).toEqual(["server_invoke"]);
   });
 
   it("qualifies the paths a remote answer carries", async () => {

@@ -994,6 +994,7 @@ pub fn run() {
             servers::server_caches,
             servers::reconnect_servers,
             servers::server_invoke,
+            servers::server_cancel,
             servers::update_server,
             servers::restart_server_now,
             servers::servers_behind,
