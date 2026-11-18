@@ -676,6 +676,23 @@ extension EnvironmentValues {
     @Entry var callSession: SessionKey?
 }
 
+/// Where a cut call's read failed: said, with the read offered again, since the row has
+/// nothing of its own to show.
+struct CallFailed: View {
+    @Environment(Store.self) private var store
+    let key: SessionKey
+    let callIds: [String]
+
+    var body: some View {
+        HStack(spacing: Theme.Space.s) {
+            Text("Couldn't load this.").foregroundStyle(Theme.secondary)
+            Button("Retry") { for id in callIds { store.completeCall(key, id) } }
+                .foregroundStyle(Theme.text)
+        }
+        .font(Theme.Font.footnote)
+    }
+}
+
 /// One call: its verb, what it acted on, and its output on tap.
 struct ToolRow: View {
     let call: ToolCall
@@ -722,6 +739,9 @@ struct ToolRow: View {
             // A picture the tool handed back is the result itself, so it shows unasked.
             ForEach(Array(call.images.enumerated()), id: \.offset) { _, ref in
                 ImageButton(ref: ref) { InlineImage(ref: ref) }
+            }
+            if open, call.cut, let session, let id = call.callId, store.callFailed(session, id) {
+                CallFailed(key: session, callIds: [id])
             }
             // A cut output opens onto nothing until its call lands, never onto a fragment.
             if open, !call.cut, let output = call.output {

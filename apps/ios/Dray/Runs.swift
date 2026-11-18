@@ -44,6 +44,15 @@ struct Run: Identifiable {
     /// Claude Code's `Bash` and `Monitor` register as `local_bash`; grok's task list says `bash`.
     var shell: Bool { tool == "Bash" || tool == "Monitor" || label == "local_bash" || label == "bash" }
     var title: String { description ?? label ?? (shell ? "Background task" : "Subagent") }
+    /// Calls a `lite` read cut that this run draws as text, not as rows that ask for themselves:
+    /// its spawning call, and the handback a Claude subagent answers through (`runItems`).
+    var cutCalls: [String] {
+        let handbacks = events.compactMap { e -> String? in
+            guard case .toolStarted(let callId, "SubagentHandback", _, let input, _) = e.payload, isCut(input) else { return nil }
+            return callId
+        }
+        return (cut ? [id] : []) + handbacks
+    }
     var handle: String { taskId ?? id }
     var command: String? { input["command"]?.string }
     /// fx nests its brief: `request.task`, or since 0.0.17 a message to a named child.
@@ -456,12 +465,15 @@ struct RunDetail: View {
                     Text("Nothing reported yet.").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                 }
             }
+            let failed = run.cutCalls.filter { store.callFailed(run.session, $0) }
+            if !failed.isEmpty { CallFailed(key: run.session, callIds: failed) }
         }
         .environment(\.callSession, run.session)
         // The answer lands after the task starts, and carries the path the read needs.
         // A cut one may hold half a path, so the spawning call is read whole first.
-        .task(id: "\(run.done)|\(run.answer ?? "")|\(run.cut)") {
-            if run.cut { store.completeCall(run.session, run.id) } else { await follow() }
+        .task(id: "\(run.done)|\(run.answer ?? "")|\(run.cutCalls)") {
+            for id in run.cutCalls { store.completeCall(run.session, id) }
+            if !run.cut { await follow() }
         }
     }
 
@@ -540,6 +552,8 @@ struct SubagentChat: View {
                     } else if let fxError {
                         Text(sentence(fxError)).font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
                     }
+                    let failed = run.cutCalls.filter { store.callFailed(key, $0) }
+                    if !failed.isEmpty { CallFailed(key: key, callIds: failed) }
                 }
                 Color.clear.frame(height: Theme.Space.m)
             }
@@ -552,8 +566,9 @@ struct SubagentChat: View {
         .page()
         .environment(\.imageServer, store.connection(key.server))
         .environment(\.callSession, key)
-        // Its brief is the spawning call's argument, which a `lite` read cut.
-        .task(id: run?.cut) { if let run, run.cut { store.completeCall(key, run.id) } }
+        // Its brief is the spawning call's argument and its answer the handback's, both cut by a
+        // `lite` read and drawn as text, with no row to ask for them.
+        .task(id: run?.cutCalls) { for id in run?.cutCalls ?? [] { store.completeCall(key, id) } }
         .navigationTitle(run?.title ?? "Subagent")
         .navigationBarTitleDisplayMode(.inline)
         // fx's report landing is when the child's turn is saved and worth reading again.

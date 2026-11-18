@@ -898,6 +898,10 @@ final class Store {
     /// One whose read failed asks again the next time it needs its body.
     @ObservationIgnored private var callAsks: [SessionKey: Set<String>] = [:]
     @ObservationIgnored private var callBatch: [SessionKey: Set<String>] = [:]
+    /// Calls whose last read failed: a cut row draws nothing of its own, so it says so instead.
+    private(set) var callErrors: [SessionKey: Set<String>] = [:]
+
+    func callFailed(_ key: SessionKey, _ callId: String) -> Bool { callErrors[key]?.contains(callId) == true }
 
     /// Reads one tool call's whole events, for a row whose body a `lite` read cut,
     /// and lays them over the cut ones by id. Asks made within a frame go out as one read.
@@ -920,12 +924,13 @@ final class Store {
         do {
             let whole: [AgentEvent] = try await call(key.server, "get_session_calls",
                                                      ["sessionId": .string(key.id), "callIds": .array(ids.map { .string($0) })])
+            callErrors[key]?.subtract(ids)
             let byId = Dictionary(whole.map { ($0.id, $0) }) { a, _ in a }
             guard !byId.isEmpty, var t = transcripts[key] else { return }
             t.events = t.events.map { byId[$0.id] ?? $0 }
             transcripts[key] = t
         } catch {
-            print("could not read calls", key.id, error)
+            callErrors[key, default: []].formUnion(ids)
         }
     }
 

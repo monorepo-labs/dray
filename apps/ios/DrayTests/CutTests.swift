@@ -31,6 +31,18 @@ final class CutTests: XCTestCase {
         XCTAssertEqual(byId["c3"]?.cut, false)
     }
 
+    func testRunAsksForItsCutTextCalls() throws {
+        let sub = #"{"id":"spawn","label":"Explore"}"#
+        let events = try events([
+            line("a", #"{"type":"tool_call_started","callId":"spawn","name":"Agent","toolType":"subagent_spawn","input":{"prompt":"look","_cut":true},"title":null}"#),
+            #"{"id":"b","sessionId":"s","ts":null,"subagent":\#(sub),"payload":{"type":"tool_call_started","callId":"hb","name":"SubagentHandback","toolType":"other","input":{"message":"found it","_cut":true},"title":null}}"#,
+            #"{"id":"c","sessionId":"s","ts":null,"subagent":\#(sub),"payload":{"type":"tool_call_started","callId":"ls","name":"Bash","toolType":"shell","input":{"command":"ls","_cut":true},"title":null}}"#,
+        ])
+        let run = buildRuns(events, session: SessionKey(server: UUID(), id: "s"), live: [], busy: false).first
+        // The Bash row asks for itself when opened; the brief and the answer have no row to.
+        XCTAssertEqual(run?.cutCalls, ["spawn", "hb"])
+    }
+
     func testWholeEditStillCounts() throws {
         let call = ToolCall(id: "a", name: "Edit", toolType: "file_edit",
                             input: .object(["old_string": .string("a"), "new_string": .string("b\nc")]),
