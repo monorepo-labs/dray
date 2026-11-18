@@ -69,6 +69,63 @@ pub fn thin(events: Vec<AgentEvent>) -> (Vec<AgentEvent>, bool) {
     (events, lost)
 }
 
+/// How much of a kept call's output a bot's chat is sent. A started task's id
+/// is the first line, and a send's receipt a line of its own.
+const RECEIPT: usize = 4 * 1024;
+
+/// `events` as a bot's chat draws them. A bot is talked to like a person, so
+/// its chat shows the conversation and the tasks it started and never the
+/// work between: of its tool calls only a `dray … new` or `dray … send` is
+/// read, for a task or a message it names, and those are kept whole. Every
+/// other call goes with its result, and so do reasoning, reported edits and
+/// whatever a subagent did — in a bot's log, most of the bytes and most of
+/// the events.
+///
+/// A call still open is kept too, whatever it runs: the chat's orb line names
+/// what the bot is doing now, and a chat opened mid-turn would otherwise say
+/// nothing until the next event.
+///
+/// Whatever is not one of those is kept, so an event a later build adds
+/// reaches a chat that draws it.
+pub fn chat(events: Vec<AgentEvent>) -> Vec<AgentEvent> {
+    let done: std::collections::HashSet<String> = events
+        .iter()
+        .filter_map(|e| match &e.payload {
+            AgentEventPayload::ToolCallCompleted { call_id, .. } => Some(call_id.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut read = std::collections::HashSet::new();
+    events
+        .into_iter()
+        .filter_map(|mut event| {
+            if event.subagent.is_some() {
+                return None;
+            }
+            match &mut event.payload {
+                AgentEventPayload::ToolCallStarted { call_id, input, .. } => {
+                    let said = input.to_string();
+                    let ours = said.contains("dray") && (said.contains("new") || said.contains("send"));
+                    if ours {
+                        read.insert(call_id.clone());
+                    }
+                    (ours || !done.contains(call_id.as_str())).then_some(event)
+                }
+                AgentEventPayload::ToolCallCompleted { call_id, result } => {
+                    if !read.contains(call_id.as_str()) {
+                        return None;
+                    }
+                    cut_to(&mut result.text, RECEIPT);
+                    result.structured = None;
+                    Some(event)
+                }
+                AgentEventPayload::Reasoning { .. } | AgentEventPayload::FileEdits { .. } => None,
+                _ => Some(event),
+            }
+        })
+        .collect()
+}
+
 /// The rule `store::opens_turn` reads off a raw line.
 fn opens_turn(event: &AgentEvent) -> bool {
     event.subagent.is_none() && matches!(event.payload, AgentEventPayload::UserMessage { queued: false, .. })
@@ -110,10 +167,14 @@ fn strip(payload: &mut AgentEventPayload) -> bool {
 }
 
 fn shorten(text: &mut String) -> bool {
-    if text.len() <= BODY {
+    cut_to(text, BODY)
+}
+
+fn cut_to(text: &mut String, cap: usize) -> bool {
+    if text.len() <= cap {
         return false;
     }
-    let mut end = BODY;
+    let mut end = cap;
     while !text.is_char_boundary(end) {
         end -= 1;
     }
@@ -237,6 +298,39 @@ mod tests {
         assert!(lost);
         assert_eq!(kept[0].id, "e1000");
         assert_eq!(kept.len(), 801);
+    }
+
+    #[test]
+    fn a_bots_chat_keeps_the_talk_and_the_calls_it_reads() {
+        let dray = |seq: u64, command: &str, out: &str| {
+            let id = format!("d{seq}");
+            [
+                event(seq, json!({ "type": "tool_call_started", "callId": id, "name": "Bash", "toolType": "shell", "input": { "command": command }, "rawInput": null, "title": null })),
+                event(seq + 1, json!({ "type": "tool_call_completed", "callId": id, "result": { "text": out, "isError": false, "structured": { "stdout": out }, "exitCode": 0, "durationMs": 1 } })),
+            ]
+        };
+        let mut log = vec![prompt(0)];
+        log.extend(call(1));
+        log.push(event(3, json!({ "type": "reasoning", "text": "hm" })));
+        log.extend(dray(4, "dray session new --project /tmp 'do it'", "01a1edc2-be4d-7410-88ec-8bff59d44ac0\nStarted"));
+        log.extend(dray(6, "dray session send abc 'hello'", &"y".repeat(9000)));
+        log.extend(dray(8, "dray session ls", "rows"));
+        let mut inner = event(10, json!({ "type": "assistant_text", "text": "from a subagent" }));
+        inner.subagent = Some(crate::events::Subagent { id: "s".into(), label: None });
+        log.push(inner);
+        log.push(event(11, json!({ "type": "assistant_text", "text": "done" })));
+        // Still running, so the chat can say what the bot is doing.
+        log.push(call(12)[0].clone());
+
+        let kept = chat(log);
+        let ids: Vec<&str> = kept.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, ["e0", "e4", "e5", "e6", "e7", "e11", "e12"]);
+        let AgentEventPayload::ToolCallStarted { input, .. } = &kept[1].payload else { panic!() };
+        assert_eq!(input["command"], "dray session new --project /tmp 'do it'");
+        let AgentEventPayload::ToolCallCompleted { result, .. } = &kept[2].payload else { panic!() };
+        assert!(result.text.starts_with("01a1edc2"));
+        let AgentEventPayload::ToolCallCompleted { result, .. } = &kept[4].payload else { panic!() };
+        assert_eq!(result.text.len(), RECEIPT);
     }
 
     #[test]

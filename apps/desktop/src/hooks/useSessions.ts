@@ -3008,6 +3008,15 @@ const setCrewSeen = (ids: string[]) => {
   crewSeenRef.current = new Set(ids);
 };
 
+/// How a transcript is asked for. A bot's chat draws the conversation and the
+/// tasks it started, never the work between, so it is read as that alone, on
+/// every server, older pages included: most of a bot's log is tool calls its
+/// chat has no row for. Anything else over a network comes as a first frame,
+/// the rest when something drawn needs it. This Mac reads its own disk and
+/// asks whole. A server older than either argument answers whole.
+const readAs = (server: ServerId, cwd: string | null | undefined): { bot?: true; lite?: true } =>
+  isBotPath(cwd) ? { bot: true } : server !== LOCAL ? { lite: true } : {};
+
 /// The whole tail behind a first frame (`SessionSnapshot.lite`), merged over
 /// it by id: every cut event is replaced by its logged self and whatever
 /// arrived live meanwhile stays. Asked for only when something drawn needs
@@ -3082,11 +3091,7 @@ const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
         invoke<SessionSnapshot | null>("get_session_by_id", {
           sessionId,
           turns: FIRST_MOUNT,
-          // Over a network the newest screen comes alone, and the rest when
-          // something drawn needs it. This Mac reads its own disk and asks
-          // whole; so does a bot's chat, which draws rows out of the commands
-          // and outputs a first frame cuts.
-          ...(server !== LOCAL && !isBotPath(item?.cwd) && { lite: true }),
+          ...readAs(server, item?.cwd),
         }),
     )
     .then((snapshot) => {
@@ -3114,13 +3119,18 @@ const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
 /// slow link (195ms measured to a sandbox), and this is the open with none. `fresh` re-reads over a copy already held, for a turn
 /// that just ended. Never This Mac, which reads its own disk in milliseconds.
 const warmReads = useRef(new Map<string, Promise<SessionSnapshot | null>>());
-const warm = (sessionId: string, fresh = false): Promise<void> => {
+const warm = (sessionId: string, fresh = false, row?: SessionIndexItem): Promise<void> => {
   if (serverOfSession(sessionId) === LOCAL) return Promise.resolve();
   if (sessionsRef.current.some((s) => s.sessionId === sessionId)) return Promise.resolve();
   if (tailReads.current.has(sessionId) || warmReads.current.has(sessionId)) return Promise.resolve();
   if (!fresh && hasTranscript(sessionId)) return Promise.resolve();
-  // A first frame, a quarter of the bytes: the open that takes it asks for the rest.
-  const read = invoke<SessionSnapshot | null>("get_session_by_id", { sessionId, turns: FIRST_MOUNT, lite: true }).catch(() => null);
+  // What `loadTail` would ask for, since the open that follows takes this as its read.
+  const cwd = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId)?.cwd ?? row?.cwd;
+  const read = invoke<SessionSnapshot | null>("get_session_by_id", {
+    sessionId,
+    turns: FIRST_MOUNT,
+    ...readAs(serverOfSession(sessionId), cwd),
+  }).catch(() => null);
   warmReads.current.set(sessionId, read);
   return read.then((snapshot) => {
     // Taken by a `loadTail` meanwhile, which lands it in state instead.
@@ -3133,10 +3143,11 @@ const warm = (sessionId: string, fresh = false): Promise<void> => {
 };
 /// One at a time, so a click during the run waits behind one tail at most.
 const warmServer = async (server: ServerId, items: SessionIndexItem[]) => {
-  // Never a bot's chat, which is read whole: see `loadTail`.
-  for (const id of warmPicks(items.filter((i) => !isBotPath(i.cwd)))) {
+  // The row rides along: this runs off the read that is about to put it in the index.
+  const rows = new Map(items.map((i) => [i.sessionId, i]));
+  for (const id of warmPicks(items)) {
     if (!serverConnected(server)) return;
-    await warm(id);
+    await warm(id, false, rows.get(id));
   }
 };
 const warmServerRef = useRef(warmServer);
@@ -3204,6 +3215,7 @@ const loadOlder = async (sessionId: string, turns = OLDER_PAGE_TURNS, attempt = 
       sessionId,
       before,
       turns,
+      ...(isBotPath(session?.cwd) && { bot: true }),
     });
     setSessions((prev) =>
       prev.map((s) => {
@@ -3605,7 +3617,7 @@ useEffect(() => {
     // has a row to open it from, which a bot's hidden children do not.
     if (status === "completed") {
       const row = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
-      if (row && !row.hidden && !row.archived && !isBotPath(row.cwd)) void warmRef.current(sessionId, true);
+      if (row && !row.hidden && !row.archived) void warmRef.current(sessionId, true);
     }
 
     // Finishing in front of the reader is read the moment it does; everything

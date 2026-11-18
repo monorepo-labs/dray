@@ -1834,6 +1834,9 @@ pub async fn get_session_index_item(session_id: &str) -> Result<Option<SessionIn
 /// is normal — it was written before its process spawned — and yields empty
 /// `events` rather than `None`.
 ///
+/// `bot` asks for the page as a bot's chat draws it, which is all of what its
+/// client holds: see [`crate::thin::chat`]. Not `lite`, since nothing follows.
+///
 /// `lite` asks for those turns as a first frame, small enough to cross a slow
 /// link in one flight; see [`crate::thin`]. `older_before` is the page's
 /// either way, so the whole read landing later sits on the same boundary.
@@ -1848,6 +1851,7 @@ pub async fn get_session_by_id(
     session_id: &str,
     turns: Option<u32>,
     lite: Option<bool>,
+    bot: Option<bool>,
 ) -> Result<Option<SessionSnapshot>, Fail> {
     let Some(index_item) = get_session_index_item(session_id).await? else {
         return Ok(None);
@@ -1861,8 +1865,9 @@ pub async fn get_session_by_id(
         },
     };
 
-    let (events, lite) = match lite {
-        Some(true) => crate::thin::thin(page.events),
+    let (events, lite) = match (bot, lite) {
+        (Some(true), _) => (crate::thin::chat(page.events), false),
+        (_, Some(true)) => crate::thin::thin(page.events),
         _ => (page.events, false),
     };
 
@@ -1881,8 +1886,13 @@ pub async fn get_session_page(
     session_id: &str,
     before: u64,
     turns: u32,
+    bot: Option<bool>,
 ) -> Result<SessionPage, Fail> {
-    Ok(read_session_page(session_id, Some(before), turns).await?)
+    let mut page = read_session_page(session_id, Some(before), turns).await?;
+    if bot == Some(true) {
+        page.events = crate::thin::chat(page.events);
+    }
+    Ok(page)
 }
 
 /// The last thing a session's main thread said, and how many replies it has

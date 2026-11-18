@@ -1916,8 +1916,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         reachable_sessions() => ok(crate::machines::reachable_sessions().await);
         share_machines() => ok(crate::machines::sharing().await);
         set_share_machines(on: bool) => crate::machines::set_sharing(on).await;
-        get_session_by_id(session_id: String, turns: Option<u32>, lite: Option<bool>) => store::get_session_by_id(&session_id, turns, lite).await;
-        get_session_page(session_id: String, before: u64, turns: u32) => store::get_session_page(&session_id, before, turns).await;
+        get_session_by_id(session_id: String, turns: Option<u32>, lite: Option<bool>, bot: Option<bool>) => store::get_session_by_id(&session_id, turns, lite, bot).await;
+        get_session_page(session_id: String, before: u64, turns: u32, bot: Option<bool>) => store::get_session_page(&session_id, before, turns, bot).await;
         list_subagents(session_id: String, also: Vec<String>, cursor: Option<store::SubagentCursor>, limit: u32, live: Option<Vec<String>>) => store::list_subagents(session_id, also, cursor, limit, live).await;
         list_attachments(session_id: String, before: u64, limit: u32) => store::list_attachments(&session_id, before, limit).await;
         get_session_since(session_id: String, after: Vec<String>) => store::get_session_since(&session_id, after).await;
