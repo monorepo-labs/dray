@@ -73,7 +73,13 @@ jobs:
   # The target-to-runner table is repeated in warm-cli-cache.yml, and the
   # runner is part of the cache key, so the two drifting costs a cold build,
   # never a wrong one.
+  # The release Mac when it is online, GitHub's Macs otherwise.
+  pick:
+    uses: ./.github/workflows/pick-mac.yml
+    secrets: inherit
+
   build:
+    needs: pick
     strategy:
       fail-fast: false
       matrix:
@@ -95,7 +101,7 @@ jobs:
             os: ubuntu-22.04-arm
             serve: true
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'macos-latest' && fromJSON(needs.pick.outputs.mac) || matrix.os }}
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
