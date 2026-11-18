@@ -65,6 +65,15 @@ final class WaitingOnYouTests: XCTestCase {
                       || app.staticTexts["Dark mode contrast"].waitForExistence(timeout: 1), "Open task from the list did not open it")
         XCTAssertFalse(app.buttons["Show 5 more"].exists, "a sheet stayed up over the task")
         back(app, card)
+
+        // The bot's seven tasks, counted on the button and over the sheet.
+        let tasks = app.buttons["Tasks"]
+        XCTAssertEqual(tasks.value as? String, "7", "the Tasks button carries no count")
+        snap(app, "7-tasks-button")
+        tasks.tap()
+        XCTAssertTrue(app.navigationBars.staticTexts["7"].waitForExistence(timeout: 3)
+                      || app.navigationBars.staticTexts["Tasks, 7"].exists, "the Tasks sheet's title carries no count")
+        snap(app, "8-tasks-sheet")
     }
 
     private func back(_ app: XCUIApplication, _ card: XCUIElement) {
