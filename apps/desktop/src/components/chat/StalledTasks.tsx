@@ -9,6 +9,7 @@ import PrStateIcon from "@/components/PrStateIcon";
 import { MergeControl } from "@/components/TasksPanel";
 import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { seededAvatar } from "@/lib/botAvatar";
 import type { CrewRow } from "@/lib/crew";
@@ -135,6 +136,8 @@ function StalledRow({
   const need = needLine(stall);
   const waiting = stall.kind === "waiting" && !need;
   const offline = stall.offline ?? offlineLine(serverOfPath(item.cwd));
+  // A plain click opens the bot's reply, so only ⌘ held says the task is next.
+  const prefetch = useHoverPrefetch(offline ? null : id, true);
   const blocked = stall.kind === "ready" && pr && !stall.checking ? mergeBlock(row, pr) : null;
 
   return (
@@ -146,8 +149,16 @@ function StalledRow({
         aria-expanded={expanded}
         onClick={(e) => (isModClick(e) && !offline ? onOpen(id, false) : onToggle(id))}
         onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onToggle(id)}
-        onPointerEnter={() => setHovered(true)}
-        onPointerLeave={() => setHovered(false)}
+        onPointerEnter={(e) => {
+          setHovered(true);
+          prefetch.onPointerEnter(e);
+        }}
+        onPointerMove={prefetch.onPointerMove}
+        onPointerDown={prefetch.onPointerDown}
+        onPointerLeave={() => {
+          setHovered(false);
+          prefetch.onPointerLeave();
+        }}
         className="group flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
       >
         <BotAvatar seed={id} avatar={seededAvatar(id)} follow={hovered} className="block size-8 shrink-0 scale-[1.18]" />
