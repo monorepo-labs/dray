@@ -19,6 +19,10 @@ runs:
   using: composite
   steps:
     - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      # Per runner, not the default ~/setup-pnpm: the release Mac's two runners
+      # share a home, and one job reinstalling it pulled pnpm from the other.
+      with:
+        dest: ${{ runner.tool_cache }}/setup-pnpm
     # No pnpm store cache: restoring it was 25s ahead of everything else,
     # where the install fetching its packages afresh runs hidden behind the
     # cargo cache below.
