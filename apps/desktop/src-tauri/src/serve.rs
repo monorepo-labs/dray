@@ -1916,7 +1916,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         reachable_sessions() => ok(crate::machines::reachable_sessions().await);
         share_machines() => ok(crate::machines::sharing().await);
         set_share_machines(on: bool) => crate::machines::set_sharing(on).await;
-        get_session_by_id(session_id: String, turns: Option<u32>) => store::get_session_by_id(&session_id, turns).await;
+        get_session_by_id(session_id: String, turns: Option<u32>, lite: Option<bool>) => store::get_session_by_id(&session_id, turns, lite).await;
         get_session_page(session_id: String, before: u64, turns: u32) => store::get_session_page(&session_id, before, turns).await;
         list_subagents(session_id: String, also: Vec<String>, cursor: Option<store::SubagentCursor>, limit: u32, live: Option<Vec<String>>) => store::list_subagents(session_id, also, cursor, limit, live).await;
         list_attachments(session_id: String, before: u64, limit: u32) => store::list_attachments(&session_id, before, limit).await;
@@ -2413,7 +2413,7 @@ mod tests {
             crate::models::ModelId::new("opus"), None, crate::events::ApprovalPolicy::Auto, false, None,
         );
         item.unknown.insert("fromNewerBuild".into(), json!({ "z": 1, "a": [true] }));
-        let snapshot = crate::store::SessionSnapshot { index_item: item, events, older_before: Some(7) };
+        let snapshot = crate::store::SessionSnapshot { index_item: item, events, older_before: Some(7), lite: false };
         let read = |frame: String| serde_json::from_str::<Value>(&frame).unwrap();
 
         let old = json!({ "id": 3, "ok": serde_json::to_value(Some(&snapshot)).unwrap() }).to_string();

@@ -4,8 +4,8 @@ import type { SessionIndexItem, SessionSnapshot } from "@/types/events";
 const BUDGET = 32 * 1024 * 1024;
 
 /// Transcripts of sessions on a remote server that are not loaded — evicted,
-/// or read ahead of a click (`warmPicks`) — so opening one draws at once and
-/// asks only for what is new. A remote page is megabytes over a slow
+/// or read ahead of a click (`warmPicks`), which holds a first frame alone
+/// (`lite`) — so opening one draws at once and asks only for what it lacks. A remote page is megabytes over a slow
 /// link, where This Mac reads its own disk in milliseconds and keeps nothing.
 ///
 /// Held as JSON rather than as the objects: eviction exists because resident
@@ -41,10 +41,9 @@ export const hasTranscript = (sessionId: string): boolean => kept.has(sessionId)
 const WARM_COUNT = 6;
 
 /// The sessions on one remote server worth reading before the reader asks:
-/// its most recently touched, pinned first, as the sidebar leads with them. A
-/// tail is one large frame, and on a connection that sat idle TCP slow start
-/// spreads it over about three round trips — 480ms at 150ms RTT against 170ms
-/// warm, measured — so the only open that feels local is one with no read in it.
+/// its most recently touched, pinned first, as the sidebar leads with them.
+/// A first frame still costs the link's round trip — 195ms to a sandbox,
+/// measured — so the only open that feels local is one with no read in it.
 ///
 /// Mid-turn is skipped: its copy would be stale on arrival, and the turn's end
 /// reads it then. Set aside and hidden are skipped as rows nobody is about to

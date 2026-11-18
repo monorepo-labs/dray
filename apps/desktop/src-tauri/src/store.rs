@@ -247,6 +247,12 @@ pub struct SessionSnapshot {
     pub events: Vec<AgentEvent>,
     /// Where the log's unread older part ends, when `events` is only its tail.
     pub older_before: Option<u64>,
+    /// `events` is a first frame from [`crate::thin`]: bodies shortened, and
+    /// maybe the page's oldest events missing. The same read without `lite`
+    /// is what completes it. Absent from a server older than the argument,
+    /// which answered whole.
+    #[serde(default)]
+    pub lite: bool,
 }
 
 static INDEX_LOCK: Mutex<()> = Mutex::const_new(());
@@ -1828,6 +1834,10 @@ pub async fn get_session_index_item(session_id: &str) -> Result<Option<SessionIn
 /// is normal — it was written before its process spawned — and yields empty
 /// `events` rather than `None`.
 ///
+/// `lite` asks for those turns as a first frame, small enough to cross a slow
+/// link in one flight; see [`crate::thin`]. `older_before` is the page's
+/// either way, so the whole read landing later sits on the same boundary.
+///
 /// `turns` asks for the newest that many turns alone, read off the end of the
 /// log, with `older_before` saying where the rest begins. Opening a long
 /// session is otherwise the whole log parsed twice — here and by the
@@ -1837,6 +1847,7 @@ pub async fn get_session_index_item(session_id: &str) -> Result<Option<SessionIn
 pub async fn get_session_by_id(
     session_id: &str,
     turns: Option<u32>,
+    lite: Option<bool>,
 ) -> Result<Option<SessionSnapshot>, Fail> {
     let Some(index_item) = get_session_index_item(session_id).await? else {
         return Ok(None);
@@ -1850,10 +1861,16 @@ pub async fn get_session_by_id(
         },
     };
 
+    let (events, lite) = match lite {
+        Some(true) => crate::thin::thin(page.events),
+        _ => (page.events, false),
+    };
+
     Ok(Some(SessionSnapshot {
         index_item,
-        events: page.events,
+        events,
         older_before: page.older_before,
+        lite,
     }))
 }
 
@@ -4179,6 +4196,7 @@ mod tests {
             index_item: item,
             events: vec![],
             older_before: None,
+            lite: false,
         })
         .unwrap();
 

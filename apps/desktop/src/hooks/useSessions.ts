@@ -1002,6 +1002,7 @@ const handleSendMsg = async (
     const shell: SessionSnapshot = {
       events: [provisionalPrompt(provisional, sessionId, harness, message, attachments)],
       olderBefore: null,
+      lite: false,
       sessionId,
       harness,
       cwd,
@@ -2822,8 +2823,10 @@ const catchUpOrDrop = (sessionId: string, held?: AgentEvent[], queueKnown?: bool
 const refreshHeld = (sessionId: string) => {
   const server = serverOfSession(sessionId);
   if (server === LOCAL || !serverConnected(server)) return;
-  if (!sessionsRef.current.some((s) => s.sessionId === sessionId)) return;
+  const held = sessionsRef.current.find((s) => s.sessionId === sessionId);
+  if (!held) return;
   if (!sessionIndexItemsRef.current.some((i) => i.sessionId === sessionId)) return;
+  if (held.lite) fill(sessionId);
   catchUpOrDrop(sessionId, undefined, true);
 };
 
@@ -2927,6 +2930,7 @@ useEffect(() => {
     for (const s of sessionsRef.current) {
       if (!ours(s.sessionId)) continue;
       retireStreamingBlock(s.sessionId);
+      if (s.lite) fill(s.sessionId);
       catchUp(s.sessionId, undefined, !!payload.queued).catch((e) => console.error("could not catch up", s.sessionId, e));
       // The list read covers the sidebar alone. An open transcript holds its
       // own flags, and a settle made while the socket was down reached nobody.
@@ -3006,6 +3010,26 @@ const setCrewSeen = (ids: string[]) => {
   crewSeenRef.current = new Set(ids);
 };
 
+/// The whole tail behind a first frame (`SessionSnapshot.lite`), asked for the
+/// moment that frame lands and merged over it by id: every thinned event is
+/// replaced by its logged self and whatever arrived live meanwhile stays.
+/// A session left thin by a read that failed is asked again when it next
+/// comes on screen or its server reconnects.
+const fills = useRef(new Set<string>());
+const fill = (sessionId: string) => {
+  if (fills.current.has(sessionId)) return;
+  fills.current.add(sessionId);
+  invoke<SessionSnapshot | null>("get_session_by_id", { sessionId, turns: FIRST_MOUNT })
+    .then((whole) => {
+      if (!whole || deletedRef.current.has(sessionId)) return;
+      // Evicted meanwhile: nothing to complete, and landing it would load it.
+      if (!sessionsRef.current.some((s) => s.sessionId === sessionId)) return;
+      upsertSession(whole);
+    })
+    .catch((e) => console.error("could not complete", sessionId, e))
+    .finally(() => fills.current.delete(sessionId));
+};
+
 /// Reads a session's newest `FIRST_MOUNT` turns and lands them, answering
 /// whether the id resolved to anything. The rest of the log is read by
 /// `loadOlder` as the reader scrolls up toward it — a 21MB log is ~1.8MB of
@@ -3029,6 +3053,8 @@ const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
     if (touch) lastViewedRef.current.set(sessionId, Date.now());
     const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
     upsertSession(item ? { ...copy, ...item } : copy);
+    // Read ahead as a first frame, or evicted before its whole read landed.
+    if (copy.lite) fill(sessionId);
     catchUpOrDrop(sessionId, copy.events);
     evictSessionsRef.current();
     return Promise.resolve(true);
@@ -3046,12 +3072,16 @@ const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
         invoke<SessionSnapshot | null>("get_session_by_id", {
           sessionId,
           turns: FIRST_MOUNT,
+          // Over a network the newest screen comes first, in a frame small
+          // enough for one flight; This Mac reads its own disk and asks whole.
+          ...(server !== LOCAL && { lite: true }),
         }),
     )
     .then((snapshot) => {
       if (!snapshot) return false;
       // A read outlived by a delete must not put the transcript back.
       if (deletedRef.current.has(sessionId)) return false;
+      if (snapshot.lite) fill(sessionId);
       // Stamped as touched, so the count cap takes the least recently used
       // transcript rather than the one a hover just warmed for its click. A
       // neighbour prefetch is not, so it is the first thing out once it stops
@@ -3066,9 +3096,11 @@ const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
   return read;
 };
 
-/// Reads a remote transcript's tail into the kept copies before anyone asks
-/// for it, so the open that follows is `loadTail`'s copy path: drawn at once,
-/// caught up behind. `fresh` re-reads over a copy already held, for a turn
+/// Reads a remote transcript's first frame into the kept copies before anyone
+/// asks for it, so the open that follows is `loadTail`'s copy path: drawn at
+/// once, completed and caught up behind. The first frame takes one round trip
+/// where the whole tail took several, but one is still the whole wait on a
+/// slow link (195ms measured to a sandbox), and this is the open with none. `fresh` re-reads over a copy already held, for a turn
 /// that just ended. Never This Mac, which reads its own disk in milliseconds.
 const warmReads = useRef(new Map<string, Promise<SessionSnapshot | null>>());
 const warm = (sessionId: string, fresh = false): Promise<void> => {
@@ -3076,7 +3108,8 @@ const warm = (sessionId: string, fresh = false): Promise<void> => {
   if (sessionsRef.current.some((s) => s.sessionId === sessionId)) return Promise.resolve();
   if (tailReads.current.has(sessionId) || warmReads.current.has(sessionId)) return Promise.resolve();
   if (!fresh && hasTranscript(sessionId)) return Promise.resolve();
-  const read = invoke<SessionSnapshot | null>("get_session_by_id", { sessionId, turns: FIRST_MOUNT }).catch(() => null);
+  // A first frame, a quarter of the bytes: the open that takes it asks for the rest.
+  const read = invoke<SessionSnapshot | null>("get_session_by_id", { sessionId, turns: FIRST_MOUNT, lite: true }).catch(() => null);
   warmReads.current.set(sessionId, read);
   return read.then((snapshot) => {
     // Taken by a `loadTail` meanwhile, which lands it in state instead.

@@ -225,6 +225,9 @@ struct PrMark: Decodable, Hashable {
 struct Snapshot: Decodable {
     let events: [AgentEvent]
     let olderBefore: Int?
+    /// A first frame: bodies shortened, maybe the page's oldest events missing,
+    /// with the whole read still to ask for. Absent from an older server.
+    var lite: Bool? = nil
 }
 
 struct LiveState: Decodable {

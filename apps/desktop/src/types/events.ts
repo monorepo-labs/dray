@@ -2125,7 +2125,14 @@ export type SessionSnapshot = { events: Array<AgentEvent>,
 /**
  * Where the log's unread older part ends, when `events` is only its tail.
  */
-olderBefore: number | null, sessionId: string, harness: Harness, 
+olderBefore: number | null, 
+/**
+ * `events` is a first frame from [`crate::thin`]: bodies shortened, and
+ * maybe the page's oldest events missing. The same read without `lite`
+ * is what completes it. Absent from a server older than the argument,
+ * which answered whole.
+ */
+lite: boolean, sessionId: string, harness: Harness, 
 /**
  * Where the agent actually runs. Equals `project_path` for a normal
  * session; points inside `.claude/worktrees/<name>` for a worktree one.
