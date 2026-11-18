@@ -752,9 +752,8 @@ struct StalledCard: View {
                         Text(need).font(Theme.Font.subhead).foregroundStyle(Theme.text.opacity(0.7))
                             .multilineTextAlignment(.leading)
                     } else if !s.ready {
-                        // The bot is still reading the task; its line lands here.
-                        Capsule().fill(Theme.tertiary.opacity(0.3)).frame(width: 160, height: 10).shimmer()
-                            .padding(.vertical, 4)
+                        // A need may never come (bot asleep, nothing to add), so no skeleton waits on one.
+                        Text("Waiting for your reply").font(Theme.Font.subhead).foregroundStyle(Theme.secondary)
                     }
                 }
             }

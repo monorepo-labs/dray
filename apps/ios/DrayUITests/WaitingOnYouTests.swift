@@ -15,6 +15,10 @@ final class WaitingOnYouTests: XCTestCase {
         XCTAssertTrue(card.waitForExistence(timeout: 20), "no Waiting on you card")
         snap(app, "1-card")
 
+        // A need line where the bot wrote one; elsewhere a plain line, never a skeleton waiting on one.
+        XCTAssertTrue(text(app, "fake-timer rewrite").exists, "the need line did not draw")
+        XCTAssertTrue(text(app, "Waiting for your reply").exists, "a row with no need drew no line")
+
         // Five of seven, the newest held back.
         XCTAssertFalse(row(app, "Dark mode contrast").exists, "more than five rows shown")
         let more = app.buttons["Show 2 more"]
