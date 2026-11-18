@@ -369,8 +369,14 @@ mod flush {
                                     done.push(held);
                                     continue;
                                 }
-                                // Not answering: the next flush asks again.
-                                None => break,
+                                // Not answering: waits like any failed write, so a
+                                // sleeping machine is not asked every poll.
+                                None => {
+                                    let mut backoff = BACKOFF.lock().unwrap_or_else(|e| e.into_inner());
+                                    let wait = backoff.get(&id).map_or(POLL, |(_, w)| (*w * 2).min(BACKOFF_CAP));
+                                    backoff.insert(id.clone(), (now + wait, wait));
+                                    break;
+                                }
                             }
                         }
                         let args = json!({
