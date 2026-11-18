@@ -2524,7 +2524,10 @@ pub async fn nudge_bot(
     judged: Option<String>,
     sink: Sink,
 ) -> Result<bool, crate::Fail> {
-    let task = store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
+    let Some(task) = store::get_session_index_item(&session_id).await? else {
+        // A sub-task started on a machine further on: its own server nudges it.
+        return forward_nudge(&session_id, problem, ready, judged).await;
+    };
     if task.status == store::SessionStatus::InProgress || judged.is_some_and(|m| m != task.modified) {
         return Ok(false);
     }
@@ -2549,6 +2552,28 @@ pub async fn nudge_bot(
         Err(_) => crate::stalls::release_nudge(&mark).await,
     }
     sent.map(|()| true).map_err(Into::into)
+}
+
+/// [`nudge_bot`] for a task this server tracks on another machine rather than
+/// holds, passed to that machine.
+async fn forward_nudge(
+    session_id: &str,
+    problem: Option<String>,
+    ready: Option<u32>,
+    judged: Option<String>,
+) -> Result<bool, crate::Fail> {
+    let machine = crate::remote_reports::machine_of(session_id).await.with_context(|| format!("no session {session_id}"))?;
+    let saved = crate::machines::load()
+        .await
+        .into_iter()
+        .find(|m| m.id == machine)
+        .with_context(|| format!("no machine for {session_id}"))?;
+    let args = serde_json::json!({ "sessionId": session_id, "problem": problem, "ready": ready, "judged": judged });
+    let answer = tokio::time::timeout(crate::machines::SWEEP, crate::machines::call(&saved, "nudge_bot", args))
+        .await
+        .map_err(|_| anyhow::anyhow!("{} did not answer in time", saved.name))?
+        .map_err(anyhow::Error::msg)?;
+    Ok(answer.as_bool().unwrap_or(true))
 }
 
 /// Delivers a stall nudge on `route`, for [`nudge_bot`], which holds its claim.

@@ -605,7 +605,8 @@ extension Store {
         let known = Set(card?.judged ?? [])
         let local = stalls(tasks.filter { !known.contains($0.id) }, now: now)
         let judged: [Stall] = (card?.rows ?? []).compactMap { r in
-            let key = items.keys.first { $0.id == r.item.sessionId }
+            // `tasks` already prefers a connected copy over a cached one of the same task.
+            let key = tasks.first { $0.id == r.item.sessionId } ?? items.keys.first { $0.id == r.item.sessionId }
             if let key, let own = items[key] {
                 if own.modified != r.item.modified || own.busy || isAsking(key) { return nil }
                 return Stall(task: key, item: own, pr: r.pr, ready: r.kind == "ready", judged: r)
@@ -830,7 +831,7 @@ struct StalledCard: View {
                             if s.checking {
                                 Text("Checking…").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                             } else if s.offline, let repo = s.judged?.repo {
-                                // Its machine is down: the bot's server merges by repo, as the desktop does.
+                                // Its machine is down or out of the phone's reach: the bot's server merges by repo.
                                 MergeTaskButton(server: chat.server, taskId: s.task.id, cwd: "github:\(repo)",
                                                 number: pr.number, branch: pr.headRefName)
                             } else if !s.offline {

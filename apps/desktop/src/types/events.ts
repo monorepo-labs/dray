@@ -2414,7 +2414,8 @@ machine?: string,
  */
 offline: boolean, 
 /**
- * The PR's repo as `gh --repo` takes it, set where `offline` is.
+ * The PR's repo as `gh --repo` takes it, for a client that cannot reach
+ * the task's machine to merge through the bot's server.
  */
 repo?: string, };
 

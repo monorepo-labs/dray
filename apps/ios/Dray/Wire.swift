@@ -291,7 +291,7 @@ struct StallRow: Decodable, Hashable {
     let machine: String?
     /// Its machine did not answer: nothing to open, merged through GitHub by `repo`.
     let offline: Bool
-    /// `owner/name`, set where `offline` is.
+    /// `owner/name`, for merging through the bot's server a task the phone cannot reach.
     let repo: String?
 }
 

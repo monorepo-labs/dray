@@ -91,7 +91,8 @@ pub struct StallRow {
     /// Its machine did not answer the last poll: drawn from what was last
     /// known, with nothing to open, merged through GitHub by `repo`.
     pub offline: bool,
-    /// The PR's repo as `gh --repo` takes it, set where `offline` is.
+    /// The PR's repo as `gh --repo` takes it, for a client that cannot reach
+    /// the task's machine to merge through the bot's server.
     #[ts(optional)]
     pub repo: Option<String>,
 }
@@ -144,6 +145,14 @@ pub struct TaskFacts {
     /// Its repo's PRs were asked for at least once, so no PR means none.
     #[serde(default)]
     pub pr_known: bool,
+    /// Set on a task the answering server does not hold but collects from a
+    /// machine further on: a sub-task its task started there. Its name, and
+    /// whether that machine missed its last poll. Reached through the server
+    /// that answered, which forwards a nudge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+    #[serde(default)]
+    pub offline: bool,
 }
 
 // ── the PR verdict, `pr.ts`'s `mergeVerdict` and `prStatus` ───────────────────
@@ -364,7 +373,7 @@ fn stalled(tasks: &[Judged], ready_since: &mut HashMap<String, i64>, now: i64) -
             item: item.clone(),
             machine: machine.map(|m| m.name.clone()),
             offline,
-            repo: offline.then(|| pr.and_then(|p| crate::github::slug_from_pr_url(&p.url))).flatten(),
+            repo: pr.and_then(|p| crate::github::slug_from_pr_url(&p.url)),
         };
         if let Some(pr) = pr.filter(|_| ready == Some(true) || checking) {
             let since = was.unwrap_or(0).max(touched);
@@ -664,6 +673,8 @@ fn facts_of(item: &SessionIndexItem, live: &crate::serve::LiveFlags, marks: &Has
         pr,
         pr_fresh: repo.is_some_and(|m| m.known && m.read_at > moved),
         pr_known: repo.is_some_and(|m| m.known),
+        machine: None,
+        offline: false,
     }
 }
 
@@ -720,10 +731,36 @@ pub async fn facts_for(children: &[String]) -> Vec<TaskFacts> {
     let items = store::read_index().await.unwrap_or_default();
     let live = crate::serve::live_flags();
     let state = STATE.lock().await;
-    owed_tree(&items, children)
+    let mut out: Vec<TaskFacts> = owed_tree(&items, children)
         .into_iter()
         .map(|item| facts_of(item, &live, &state.marks, &state.moved_at))
-        .collect()
+        .collect();
+    // What those tasks started on machines further on, which this server
+    // collects and the asking one cannot reach: passed along, named.
+    let mut ids: HashSet<String> = out.iter().map(|f| f.item.session_id.clone()).collect();
+    loop {
+        let more: Vec<TaskFacts> = state
+            .remote
+            .values()
+            .filter_map(|r| r.machine.as_ref().map(|m| (m, &r.facts)))
+            .flat_map(|(m, facts)| facts.iter().map(move |f| (m, f)))
+            .filter(|(_, f)| {
+                !ids.contains(&f.item.session_id)
+                    && f.item.parent_session_id.as_ref().is_some_and(|p| ids.contains(p))
+            })
+            .map(|(m, f)| TaskFacts {
+                machine: Some(f.machine.clone().unwrap_or_else(|| m.name.clone())),
+                offline: m.offline || f.offline,
+                ..f.clone()
+            })
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        ids.extend(more.iter().map(|f| f.item.session_id.clone()));
+        out.extend(more);
+    }
+    out
 }
 
 // ── the loop ──────────────────────────────────────────────────────────────────
@@ -833,7 +870,13 @@ async fn pass(sink: &Sink) {
                 }
                 f.pr_fresh = false;
             }
-            remote.push((machine.clone(), f));
+            // A task further on keeps its own name and state, and is reached
+            // through the machine that passed it along.
+            let route = match &f.machine {
+                Some(name) => Remote { id: machine.id.clone(), name: name.clone(), offline: machine.offline || f.offline },
+                None => machine.clone(),
+            };
+            remote.push((route, f));
         }
     }
 
@@ -994,7 +1037,17 @@ mod tests {
     }
 
     fn facts(item: SessionIndexItem, pr: Option<PrMark>) -> TaskFacts {
-        TaskFacts { item, busy: false, asking: false, background: false, pr, pr_fresh: false, pr_known: true }
+        TaskFacts {
+            item,
+            busy: false,
+            asking: false,
+            background: false,
+            pr,
+            pr_fresh: false,
+            pr_known: true,
+            machine: None,
+            offline: false,
+        }
     }
 
     const T0: &str = "2026-01-01T00:00:00Z";
