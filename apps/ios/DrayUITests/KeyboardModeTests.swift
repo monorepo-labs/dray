@@ -52,6 +52,7 @@ final class KeyboardModeTests: XCTestCase {
         XCTAssertTrue(row(bot).waitForExistence(timeout: 20), "no bot row")
         sleep(1)
         check("list", type: "Add a dark mode toggle")
+        if keyboard { XCTAssertTrue(app.buttons["Save draft"].exists, "typing a task offers no Save draft") }
 
         // More models opens the shortlist: a toggle per model, and one switched on joins the chips.
         app.buttons["Model"].firstMatch.tap()

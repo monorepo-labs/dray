@@ -28,8 +28,9 @@ struct ReplyDock: View {
     private var busy: Bool { item?.busy ?? false }
     private var dictation: Dictation { Dictations.shared.state(key) }
     private var text: String { (store.drafts[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
-    /// No server can transcribe: a text field stands where the orb would.
-    private var typing: Bool { store.typesOnly }
+    /// No server can transcribe: a text field stands where the orb would. Never mid-recording,
+    /// or losing the one server that could would take Done away with the mic still on.
+    private var typing: Bool { store.typesOnly && dictation == .idle }
     private var phase: DockPhase {
         if typing { return .rest }
         switch dictation {

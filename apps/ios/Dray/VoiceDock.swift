@@ -22,8 +22,9 @@ struct VoiceDock: View {
 
     private let draft = SessionKey.newSession
     private var dictation: Dictation { Dictations.shared.state(draft) }
-    /// No server can transcribe: a text field stands where the orb would.
-    private var typing: Bool { store.typesOnly }
+    /// No server can transcribe: a text field stands where the orb would. Never mid-recording,
+    /// or losing the one server that could would take Done away with the mic still on.
+    private var typing: Bool { store.typesOnly && dictation == .idle }
     private var phase: DockPhase {
         if typing { return .rest }
         switch dictation {
@@ -56,6 +57,17 @@ struct VoiceDock: View {
                     .transition(.opacity)
             }
             if typing {
+                // Cancel's Save draft lives with the orb's actions, which typing never opens.
+                if task.hasText {
+                    Button("Save draft") { Task { _ = await task.saveDraft() } }
+                        .font(Theme.Font.footnote)
+                        .foregroundStyle(Theme.secondary)
+                        .disabled(task.sending)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .padding(.trailing, Theme.Space.xs)
+                        .padding(.bottom, Theme.Space.s)
+                        .transition(.opacity)
+                }
                 ChatInput(placeholder: task.bot.map { "Message \($0.bot.name)" } ?? "New task", text: $task.text,
                           sending: task.sending, sendable: task.ready) {
                     Task { if let key = await task.start() { started(key) } }
@@ -78,6 +90,7 @@ struct VoiceDock: View {
         // The container alone while typing, so the keyboard lifts the field over it.
         .ignoresSafeArea(typing ? .container : .all, edges: .bottom)
         .animation(Theme.motion, value: phase)
+        .animation(Theme.motion, value: task.hasText)
         .animation(Theme.motion, value: confirming)
         .animation(Theme.motion, value: hint)
         .task(id: "\(task.server?.uuidString ?? "")|\(task.harness)") { await task.load() }
