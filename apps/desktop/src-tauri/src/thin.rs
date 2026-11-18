@@ -208,11 +208,19 @@ fn cut_to(text: &mut String, cap: usize) -> bool {
     true
 }
 
+/// Arguments a collapsed row acts on, not only draws: the file it links to,
+/// the page it opens. Cut, the link would open somewhere that is not there,
+/// on a row with nothing to expand and so nothing to ask for the rest.
+const TARGETS: [&str; 4] = ["file_path", "path", "notebook_path", "url"];
+
 fn shorten_value(value: &mut Value) -> bool {
     match value {
         Value::String(text) => shorten(text),
         Value::Array(items) => items.iter_mut().fold(false, |cut, item| cut | shorten_value(item)),
-        Value::Object(fields) => fields.values_mut().fold(false, |cut, field| cut | shorten_value(field)),
+        Value::Object(fields) => fields
+            .iter_mut()
+            .filter(|(key, field)| !(field.is_string() && TARGETS.contains(&key.as_str())))
+            .fold(false, |cut, (_, field)| cut | shorten_value(field)),
         _ => false,
     }
 }
@@ -372,6 +380,19 @@ mod tests {
         assert!(!lost);
         let AgentEventPayload::ToolCallStarted { input, .. } = &kept[1].payload else { panic!() };
         assert_eq!(input["todos"][0]["content"].as_str().unwrap().len(), 600);
+    }
+
+    #[test]
+    fn a_long_path_is_kept_whole() {
+        let path = format!("/{}", "deep/".repeat(80));
+        let log = vec![
+            prompt(0),
+            event(1, json!({ "type": "tool_call_started", "callId": "r", "name": "Read", "toolType": "file_read", "input": { "file_path": path }, "rawInput": null, "title": null })),
+        ];
+        let (kept, lost) = cut(log);
+        assert!(!lost);
+        let AgentEventPayload::ToolCallStarted { input, .. } = &kept[1].payload else { panic!() };
+        assert_eq!(input["file_path"].as_str().unwrap().len(), path.len());
     }
 
     #[test]
