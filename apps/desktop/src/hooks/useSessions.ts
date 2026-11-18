@@ -3113,7 +3113,8 @@ const prefetchTranscript = (sessionId: string): (() => void) => {
     if (!held) return;
     held = false;
     entry.hovers--;
-    if (entry.hovers <= 0 && !entry.kept) dropTailRead(sessionId, entry);
+    // A read already landed is out of the map, and is a transcript worth keeping.
+    if (entry.hovers <= 0 && !entry.kept && tailReads.current.get(sessionId) === entry) dropTailRead(sessionId, entry);
   };
 };
 
