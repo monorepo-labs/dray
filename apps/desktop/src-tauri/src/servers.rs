@@ -2169,9 +2169,17 @@ static EARLY_CANCELS: LazyLock<Mutex<std::collections::HashSet<String>>> = LazyL
 struct Ticket(String);
 
 impl Ticket {
-    fn new(ticket: String, server: &str, call: u64) -> Self {
-        TICKETS.lock().unwrap_or_else(|e| e.into_inner()).insert(ticket.clone(), (server.into(), call));
-        Self(ticket)
+    /// Registers the call, or answers `None` where its cancel came first. One
+    /// lock over both, so a cancel lands either here or on the ticket, never
+    /// between them. Taken before the frame goes out, so a cancel finding the
+    /// ticket always finds the call's waiter too.
+    fn claim(ticket: String, server: &str, call: u64) -> Option<Self> {
+        let mut tickets = TICKETS.lock().unwrap_or_else(|e| e.into_inner());
+        if EARLY_CANCELS.lock().unwrap_or_else(|e| e.into_inner()).remove(&ticket) {
+            return None;
+        }
+        tickets.insert(ticket.clone(), (server.into(), call));
+        Some(Self(ticket))
     }
 }
 
@@ -2188,14 +2196,21 @@ impl Drop for Ticket {
 /// was answered already, or never sent, and is ignored.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn server_cancel(ticket: String) {
-    let Some((server, call)) = TICKETS.lock().unwrap_or_else(|e| e.into_inner()).remove(&ticket) else {
-        // Two IPC calls are not ordered, so a cancel can beat its own call
-        // here; that call is refused when it lands.
-        let mut early = EARLY_CANCELS.lock().unwrap_or_else(|e| e.into_inner());
-        if early.len() >= 64 {
-            early.clear();
+    let found = {
+        let mut tickets = TICKETS.lock().unwrap_or_else(|e| e.into_inner());
+        let found = tickets.remove(&ticket);
+        if found.is_none() {
+            // Two IPC calls are not ordered, so a cancel can beat its own
+            // call here; `Ticket::claim` refuses that call when it lands.
+            let mut early = EARLY_CANCELS.lock().unwrap_or_else(|e| e.into_inner());
+            if early.len() >= 64 {
+                early.clear();
+            }
+            early.insert(ticket);
         }
-        early.insert(ticket);
+        found
+    };
+    let Some((server, call)) = found else {
         return;
     };
     let mut list = conns();
@@ -2228,9 +2243,6 @@ pub async fn server_invoke(server: String, cmd: String, args: Value, ticket: Opt
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
-    if ticket.as_ref().is_some_and(|t| EARLY_CANCELS.lock().unwrap_or_else(|e| e.into_inner()).remove(t)) {
-        return Err(json!("cancelled"));
-    }
     let counts = server != LOCAL && cmd == "send_msg";
     // The server skips both for this app, which reports them instead. Only
     // the webview reaches this command, so a send here is somebody pressing it.
@@ -2240,7 +2252,7 @@ pub async fn server_invoke(server: String, cmd: String, args: Value, ticket: Opt
     }
     let call = NEXT_CALL.fetch_add(1, Ordering::Relaxed);
     let (reply, answer) = oneshot::channel();
-    {
+    let ticket = {
         let mut list = conns();
         let Some(conn) = list.iter_mut().find(|c| c.saved.id == server) else {
             return Err(json!(format!("no server named {server}")));
@@ -2248,13 +2260,20 @@ pub async fn server_invoke(server: String, cmd: String, args: Value, ticket: Opt
         let Some(outgoing) = &conn.outgoing else {
             return Err(json!(format!("{} is not connected", conn.saved.name)));
         };
+        let ticket = match ticket {
+            Some(ticket) => match Ticket::claim(ticket, &server, call) {
+                Some(claimed) => Some(claimed),
+                None => return Err(json!("cancelled")),
+            },
+            None => None,
+        };
         let frame = json!({ "id": call, "cmd": cmd, "args": args }).to_string();
         if outgoing.send(frame).is_err() {
             return Err(json!(format!("{} is not connected", conn.saved.name)));
         }
         conn.pending.insert(call, reply);
-    }
-    let ticket = ticket.map(|ticket| Ticket::new(ticket, &server, call));
+        ticket
+    };
     let answer = answer
         .await
         .unwrap_or_else(|_| Err(json!("the connection closed before the server answered")));

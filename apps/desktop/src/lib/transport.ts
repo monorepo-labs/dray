@@ -411,7 +411,10 @@ function connect(server: Remote): Promise<WebSocket> {
 }
 
 async function remoteInvoke<T>(server: Remote, cmd: string, args: Rec, signal?: AbortSignal): Promise<T> {
-  const ws = await connect(server);
+  // Watched while the socket opens too, or a pointer leaving then is lost
+  // and the read goes out once it connects.
+  const ws = await (signal ? abortable(connect(server), signal, () => {}) : connect(server));
+  if (signal?.aborted) throw CANCELLED;
   const id = ++nextId;
   const call = new Promise<T>((resolve, reject) => {
     pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
