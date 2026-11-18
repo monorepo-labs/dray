@@ -31,10 +31,15 @@ export default function MachineSelector({
   onSelect: (path: string) => void;
 }) {
   useServers();
-  const checkouts = value ? checkoutsOf(projects, value).filter((p) => !cloudServer(serverOfPath(p.path))) : [];
-  const current = checkouts.find((p) => p.path === value);
+  const all = value ? checkoutsOf(projects, value) : [];
+  const current = all.find((p) => p.path === value);
   if (!current) return null;
-  const only = checkouts.length === 1;
+  const checkouts = all.filter((p) => !cloudServer(serverOfPath(p.path)));
+  // A draft or a session's project can still point at a cloud task's checkout.
+  // It is named but not listed, so the reader can move off it and never onto one.
+  const stranded = !checkouts.includes(current);
+  if (stranded && !checkouts.length) return null;
+  const only = !stranded && checkouts.length === 1;
   if (only && serverOfPath(current.path) === LOCAL) return null;
 
   return (
@@ -50,7 +55,7 @@ export default function MachineSelector({
               className="max-w-40 gap-1.5 px-1.5 text-ui text-muted-foreground disabled:opacity-100"
             >
               <ServerFilledIcon className="size-3.5 shrink-0" />
-              <span className="truncate">{checkoutLabel(current, checkouts, basename)}</span>
+              <span className="truncate">{checkoutLabel(current, stranded ? all : checkouts, basename)}</span>
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>

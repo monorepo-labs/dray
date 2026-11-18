@@ -47,7 +47,8 @@ export function leadPath(projects: Project[], path: string): string {
 const offered = (server: ServerId): boolean => serverConnected(server) && !cloudServer(server);
 
 /// The checkout a new task lands on: the newest pick still reachable, since one
-/// on a dropped server could not send. With none reachable, the newest anyway.
+/// on a dropped server could not send. With none reachable, the newest anyway,
+/// off Cloud wherever the project has a checkout elsewhere.
 export function lastUsedCheckout(
   checkouts: Project[],
   connected: (server: ServerId) => boolean = offered,
@@ -55,7 +56,8 @@ export function lastUsedCheckout(
   const newest = (list: Project[]) =>
     list.reduce((best, p) => (p.lastSelected > best.lastSelected ? p : best));
   const reachable = checkouts.filter((p) => connected(serverOfPath(p.path)));
-  return newest(reachable.length ? reachable : checkouts);
+  const ordinary = checkouts.filter((p) => !cloudServer(serverOfPath(p.path)));
+  return newest(reachable.length ? reachable : ordinary.length ? ordinary : checkouts);
 }
 
 /// The checkout after `path` that could send, wrapping, so one key steps every
