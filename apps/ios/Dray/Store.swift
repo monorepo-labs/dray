@@ -848,14 +848,24 @@ final class Store {
     /// the read starts inside are kept, the read's own events follow in log
     /// order, and anything that arrived live while it was out goes last.
     /// Matched on id, since a subagent restarts `seq`.
-    private func reload(_ key: SessionKey) async {
+    ///
+    /// Over a network the read is asked for `lite` first: the newest screen in
+    /// a frame small enough to cross in one flight, where the whole one takes
+    /// two to four round trips on a connection that sat idle. It draws, and
+    /// the whole read is laid over it the same way. This Mac's is asked whole.
+    private func reload(_ key: SessionKey, whole: Bool = false) async {
         guard let c = connections[key.server] else { return }
         let before = transcripts[key]?.ids ?? []
         let drop = drops
+        let lite = !whole && key.server != home
         do {
-            let raw = try await c.callRaw("get_session_by_id", ["sessionId": .string(key.id), "turns": 8])
+            var args: [String: JSON] = ["sessionId": .string(key.id), "turns": 8]
+            if lite { args["lite"] = true }
+            let raw = try await c.callRaw("get_session_by_id", args)
             let snap = try await decodeReply(raw, as: Snapshot?.self)
-            if snap != nil, home == nil { Cache.write(Cache.transcript(key)) { raw } }
+            let thin = snap?.lite == true
+            // Never a first frame: the cache is what the next launch draws.
+            if snap != nil, !thin, home == nil { Cache.write(Cache.transcript(key)) { raw } }
             // Dropped while the read was out: writing it back would hold it, growing, until the next drop.
             guard drop == drops || key == kept else { return }
             // Deleted from another client. Said, or the transcript waits on a read that already answered.
@@ -875,6 +885,7 @@ final class Store {
             transcripts[key] = t
             transcriptErrors[key] = nil
             serverRead.insert(key)
+            if thin { await reload(key, whole: true) }
         } catch {
             transcriptErrors[key] = error.localizedDescription
         }

@@ -1331,6 +1331,7 @@ impl SessionManager {
                     index_item: item,
                     events,
                     older_before: None,
+                    lite: false,
                 }),
                 queued: None,
             });
@@ -1882,6 +1883,7 @@ impl SessionManager {
             index_item: item,
             events,
             older_before: None,
+            lite: false,
         })
     }
 
