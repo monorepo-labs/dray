@@ -13,7 +13,7 @@ import WorktreeToggle from "@/components/composer/WorktreeToggle";
 import { Button } from "@/components/ui/button";
 import type { ServerId } from "@/lib/transport";
 import ShortcutKeys from "@/components/ShortcutKeys";
-import { onCloud, useCloud, useCloudPicks } from "@/lib/cloud";
+import { onCloud, useCloud } from "@/lib/cloud";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { botPicksStance } from "@/lib/permission";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -139,7 +139,6 @@ export default function ComposerToolbar({
   busy,
 }: ComposerToolbarProps) {
   useCloud();
-  useCloudPicks();
   // Placement picks the checkout, so a branch checked out here would be one
   // the task never runs on.
   const cloud = onCloud(projects, projectPath);
