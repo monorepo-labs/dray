@@ -54,9 +54,9 @@ export default function StalledTasks({
   now: number;
   /// `alone`: a ⌘-click, which switches to the task rather than opening its tab.
   onOpen: (sessionId: string, alone: boolean) => void;
-  onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
+  onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod, stall: Stall) => Promise<void>;
   /// Why a ready row offers no Merge, or `null` where it does.
-  mergeBlock: (row: CrewRow, pr: PrMark) => string | null;
+  mergeBlock: (row: CrewRow, pr: PrMark, stall: Stall) => string | null;
 }) {
   const [dismissed, setDismissed] = useLocalStorage<string[]>(DISMISSED_KEY, []);
   // Each row's offline mark follows its machine.
@@ -125,8 +125,8 @@ function StalledRow({
   expanded: boolean;
   onToggle: (sessionId: string) => void;
   onOpen: (sessionId: string, alone: boolean) => void;
-  onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
-  mergeBlock: (row: CrewRow, pr: PrMark) => string | null;
+  onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod, stall: Stall) => Promise<void>;
+  mergeBlock: (row: CrewRow, pr: PrMark, stall: Stall) => string | null;
 }) {
   const [hovered, setHovered] = useState(false);
   const { row, pr } = stall;
@@ -135,10 +135,10 @@ function StalledRow({
   const status = pr && prStatus(pr);
   const need = needLine(stall);
   const waiting = stall.kind === "waiting" && !need;
-  const offline = offlineLine(serverOfPath(item.cwd));
+  const offline = stall.offline ?? offlineLine(serverOfPath(item.cwd));
   // A plain click opens the bot's reply, so only ⌘ held says the task is next.
   const prefetch = useHoverPrefetch(offline ? null : id, true);
-  const blocked = stall.kind === "ready" && pr && !stall.checking ? mergeBlock(row, pr) : null;
+  const blocked = stall.kind === "ready" && pr && !stall.checking ? mergeBlock(row, pr, stall) : null;
 
   return (
     <div className={cn("flex flex-col rounded-lg", expanded && "bg-muted/30")}>
@@ -208,7 +208,7 @@ function StalledRow({
                     Checking…
                   </span>
                 ) : (
-                  !blocked && <MergeControl onMerge={(method) => onMerge(row, pr, method)} />
+                  !blocked && <MergeControl onMerge={(method) => onMerge(row, pr, method, stall)} />
                 ))}
             </span>
             {offline ? (

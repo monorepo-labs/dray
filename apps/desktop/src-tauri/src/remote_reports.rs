@@ -42,6 +42,12 @@ struct Outbox {
 pub struct Taken {
     pub reports: Vec<Report>,
     pub gone: Vec<String>,
+    /// What this server knows of the tasks asked about and what they started,
+    /// for the bot's server to judge their stalls (`stalls::TaskFacts`). Kept
+    /// as values, so a fact one side cannot read costs that task, never the
+    /// reports. Absent from a server older than #1259.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facts: Option<Vec<serde_json::Value>>,
 }
 
 /// Both files are rewritten whole by more than one task.
@@ -113,9 +119,16 @@ pub async fn take(children: Vec<String>, ack: Vec<String>, forget: Vec<String>) 
         }
     }
     let before = (outbox.owed.len(), outbox.pending.len());
-    let taken = outbox.take(&children, &ack, &forget, &live);
+    let mut taken = outbox.take(&children, &ack, &forget, &live);
     if (outbox.owed.len(), outbox.pending.len()) != before {
         save_outbox(&outbox).await.map_err(|e| format!("{e:#}"))?;
+    }
+    drop(_guard);
+    #[cfg(any(feature = "serve", feature = "desktop"))]
+    if !children.is_empty() {
+        let owed: Vec<String> = live.into_iter().filter(|c| !taken.gone.contains(c)).collect();
+        let facts = crate::stalls::facts_for(&owed).await;
+        taken.facts = Some(facts.iter().filter_map(|f| serde_json::to_value(f).ok()).collect());
     }
     Ok(taken)
 }
@@ -133,7 +146,7 @@ impl Outbox {
         self.owed.retain(|c| !gone.contains(c));
         self.pending.retain(|r| !gone.contains(&r.child));
         let reports = self.pending.iter().filter(|r| children.contains(&r.child)).cloned().collect();
-        Taken { reports, gone }
+        Taken { reports, gone, facts: None }
     }
 
     /// Drops reports older than [`KEEP_FOR`], read off their v7 ids.
@@ -251,6 +264,11 @@ mod collect {
         store::write_atomic(&tracked_path().await?, serde_json::to_string_pretty(&list)?).await
     }
 
+    /// Every machine a task here is tracked on, by id.
+    pub async fn tracked_machines() -> std::collections::HashSet<String> {
+        load().await.into_iter().map(|r| r.machine).collect()
+    }
+
     /// The machine a bot's task here was started on, for a verb that must
     /// reach it while that machine does not answer.
     pub async fn machine_of(child: &str) -> Option<String> {
@@ -300,7 +318,11 @@ mod collect {
                 untrack(&mine.iter().map(|r| r.child.clone()).collect::<Vec<_>>()).await;
                 continue;
             };
-            if saved.off || backoff.get(id).is_some_and(|(at, _)| now < *at) {
+            if saved.off {
+                crate::stalls::remote_down(id).await;
+                continue;
+            }
+            if backoff.get(id).is_some_and(|(at, _)| now < *at) {
                 continue;
             }
             rounds.push(async move { (saved, collect_from(saved, mine, app).await) });
@@ -313,6 +335,7 @@ mod collect {
                     backoff.remove(&saved.id);
                 }
                 Err(e) => {
+                    crate::stalls::remote_down(&saved.id).await;
                     let wait = backoff.get(&saved.id).map_or(POLL, |(_, w)| (*w * 2).min(BACKOFF_CAP));
                     backoff.insert(saved.id.clone(), (now + wait, wait));
                     eprintln!("[remote reports err] {}: {e}", saved.name);
@@ -343,12 +366,14 @@ mod collect {
             Ok(taken) => taken,
             // A server from before #958 keeps no reports to collect.
             Err(e) if e.contains("unknown command") => {
+                crate::stalls::remote_answered(&saved.id, &saved.name, None).await;
                 untrack(&closed).await;
                 untrack(&children).await;
                 return Ok(());
             }
             Err(e) => return Err(e),
         };
+        crate::stalls::remote_answered(&saved.id, &saved.name, taken.facts.clone()).await;
         untrack(&closed).await;
         // Only this machine's own tasks: an answer naming another
         // machine's is not its to close.
@@ -515,7 +540,7 @@ mod collect {
 }
 
 #[cfg(any(feature = "serve", feature = "desktop"))]
-pub use collect::{machine_of, reparent, retarget, run, track};
+pub use collect::{machine_of, reparent, retarget, run, track, tracked_machines};
 
 #[cfg(test)]
 mod tests {
@@ -583,7 +608,7 @@ mod tests {
 
     #[test]
     fn an_answer_reads_back_as_sent() {
-        let taken = Taken { reports: vec![report("1", "a")], gone: vec!["b".into()] };
+        let taken = Taken { reports: vec![report("1", "a")], gone: vec!["b".into()], ..Default::default() };
         let wire = serde_json::to_value(&taken).unwrap();
         assert_eq!(wire["reports"][0]["child"], "a");
         assert_eq!(serde_json::from_value::<Taken>(wire).unwrap(), taken);

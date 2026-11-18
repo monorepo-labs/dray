@@ -239,6 +239,60 @@ struct LiveState: Decodable {
     let serving: [ServingEvent]?
     /// Null until the app first reads a sandbox's timer.
     let boat: [BoatAlert]?
+    /// Every bot's "Waiting on you" card on this server; absent from a server
+    /// that predates #1259, whose cards the phone judges itself.
+    let stalls: [Lenient<BotStalls>]?
+}
+
+/// One entry that may fail alone, so a bad one costs itself and not its list.
+struct Lenient<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: Decoder) { value = try? T(from: decoder) }
+}
+
+/// One bot's "Waiting on you" card as its server judged it (#1259): `bot_stalls`
+/// answers every bot's, `bot_stalls_changed` carries one, `live_state` all of them.
+/// The server reads the same rules the desktop did, so every client draws the same rows.
+struct BotStalls: Decodable, Hashable {
+    let botId: String
+    let chatId: String
+    let rows: [StallRow]
+    /// The bot's tasks, set-aside ones left out.
+    let tasks: Int
+    /// The tasks the server judged; the rest, on machines too old to send it
+    /// their facts, the phone judges itself.
+    let judged: [String]
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Key.self)
+        botId = try c.decode(String.self, forKey: "botId")
+        chatId = try c.decode(String.self, forKey: "chatId")
+        rows = ((try? c.decode([Lenient<StallRow>].self, forKey: "rows")) ?? []).compactMap(\.value)
+        tasks = (try? c.decode(Int.self, forKey: "tasks")) ?? 0
+        judged = (try? c.decode([String].self, forKey: "judged")) ?? []
+    }
+}
+
+/// A card row, oldest stall first. `key` is what a dismissal stores.
+struct StallRow: Decodable, Hashable {
+    let key: String
+    /// `waiting` or `ready`.
+    let kind: String
+    /// A ready PR GitHub is working out again after a merge: drawn, not mergeable.
+    let checking: Bool
+    /// Unix ms.
+    let since: Double
+    /// The bot's line for the reader, written since the task last moved.
+    let need: String?
+    let pr: PrMark?
+    /// The task as its own server indexes it.
+    let item: SessionItem
+    /// The machine a task started with `--machine` runs on; none for the bot's own server.
+    let machine: String?
+    /// Its machine did not answer: nothing to open, merged through GitHub by `repo`.
+    let offline: Bool
+    /// `owner/name`, for merging through the bot's server a task the phone cannot reach.
+    let repo: String?
 }
 
 /// A boat sandbox about to auto-stop. The Mac app reads the timers and tells

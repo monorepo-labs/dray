@@ -1067,7 +1067,7 @@ fn read_prs(out: &str) -> Result<Vec<PullRequest>, String> {
 /// connection, so the connection *is* the answer and a `state` field would be a
 /// second copy of it free to disagree. Only the two states the sidebar draws —
 /// closed-without-merging is not asked for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "UPPERCASE")]
 pub enum PrMarkState {
@@ -1080,7 +1080,7 @@ pub enum PrMarkState {
 /// Deliberately not a `PullRequest`: the row says "this branch has a PR, and
 /// what became of it" and nothing else, so carrying checks, comments and review
 /// threads for every session in the list would be payload nobody reads.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct PrMark {
@@ -1126,7 +1126,7 @@ pub struct PrMark {
 /// second time makes the mark that *does* need reading harder to find. So this
 /// is a three-way, not the rollup's five-way — `SUCCESS` and an absent rollup
 /// both reach the reader as [`PrChecksState::Clear`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "UPPERCASE")]
 pub enum PrChecksState {

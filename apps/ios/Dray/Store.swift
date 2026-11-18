@@ -97,6 +97,9 @@ final class Store {
     /// The ports a session serves where servers are all its background work
     /// is (`session_serving`). Said of one task set, so a new set drops it.
     private(set) var serving: [SessionKey: [Int]] = [:]
+    /// Each server's "Waiting on you" cards by bot id, where it judges them
+    /// (#1259). A server absent here is too old to, and the phone judges its bots.
+    private(set) var stallCards: [UUID: [String: BotStalls]] = [:]
     /// Each server's bots: any server can hold them (#887).
     private(set) var bots: [UUID: [Bot]] = [:] { didSet { keepList() } }
     /// Servers whose index was read since this launch: before that, an empty list
@@ -1046,6 +1049,13 @@ final class Store {
             }
             for key in serving.keys where key.server == server { serving[key] = nil }
             for s in live.serving ?? [] where !s.ports.isEmpty { serving[SessionKey(server: server, id: s.sessionId)] = s.ports }
+            stallCards[server] = live.stalls.map { list in
+                Dictionary(list.compactMap(\.value).map { card in (card.botId, card) }, uniquingKeysWith: { _, last in last })
+            }
+        case "bot_stalls_changed":
+            // Only from a server that judges stalls, whose `live_state` already said so.
+            guard let card = try? decoder.decode(EventFrame<BotStalls>.self, from: data).payload else { return }
+            stallCards[server, default: [:]][card.botId] = card
         case "session_serving":
             guard let s = try? decoder.decode(EventFrame<ServingEvent>.self, from: data).payload else { return }
             serving[SessionKey(server: server, id: s.sessionId)] = s.ports.isEmpty ? nil : s.ports

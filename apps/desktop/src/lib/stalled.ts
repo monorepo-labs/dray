@@ -27,6 +27,15 @@ export type Stall = {
   checking?: boolean;
   since: number;
   key: string;
+  /// Set on a stall the bot's server judged (`serverCard`): the need line as
+  /// it read it, and the repo a row whose machine is down merges through.
+  judged?: { need: string | null; repo: string | null };
+  /// Why the row has nothing to open, where the server said so rather than
+  /// this app's own server list.
+  offline?: string;
+  /// A task this app holds no connection to merges through the bot's server,
+  /// by repo, which also settles it on the task's own machine.
+  via?: { server: string; repo: string };
 };
 
 /// What a task can mend itself, by PR status: `problem` as its bot is told
@@ -161,6 +170,7 @@ export const cardRows = (stalls: readonly Stall[], dismissed: readonly string[])
 /// PR is merged. Nothing while the bot is still on it, and for most ready PRs
 /// nothing at all.
 export function needLine(stall: Stall): string | undefined {
+  if (stall.judged) return (onCard(stall) && stall.judged.need) || undefined;
   const { need, modified } = stall.row.item;
   return onCard(stall) && need && Date.parse(need.at) >= Date.parse(modified) ? need.text : undefined;
 }

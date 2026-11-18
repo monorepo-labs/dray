@@ -558,6 +558,7 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     crate::auto_continue::rearm(&sink).await;
 
     tokio::spawn(crate::remote_reports::run(sink.clone()));
+    tokio::spawn(crate::stalls::run(sink.clone()));
     tokio::spawn(crate::held_flags::run(sink.clone()));
     // Agents this server spawns reach it through `dray`, so it serves the
     // socket the desktop app does — under `DRAY_HOME` where that is set.
@@ -591,6 +592,7 @@ impl Hub {
         // the two or landing in both.
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         live.note(event, payload);
+        crate::stalls::poke(event, payload);
         // No receivers is ordinary — nobody connected, or the app not
         // serving — and the frame would be built for nobody.
         if self.events.receiver_count() > 0 {
@@ -872,6 +874,8 @@ struct Live {
     serving: HashMap<String, Value>,
     /// The boat sandboxes about to stop, which only the app reads timers for.
     boat: Value,
+    /// Each bot's "Waiting on you" card, by bot id, as last judged here.
+    stalls: std::collections::BTreeMap<String, Value>,
 }
 
 impl Live {
@@ -911,6 +915,14 @@ impl Live {
                 }
             }
             ("boat_alerts", _) => self.boat = payload["alerts"].clone(),
+            ("bot_stalls_changed", _) => {
+                let bot = payload["botId"].as_str().unwrap_or_default().to_string();
+                if payload["rows"].as_array().is_some_and(|r| r.is_empty()) && payload["tasks"] == 0 {
+                    self.stalls.remove(&bot);
+                } else {
+                    self.stalls.insert(bot, payload.clone());
+                }
+            }
             ("session_status", _) => {
                 if payload["status"] == "in_progress" {
                     self.running.insert(session);
@@ -939,8 +951,39 @@ impl Live {
         let tasks: Vec<&Value> = self.tasks.values().collect();
         let queued: Vec<&Value> = self.queued.values().collect();
         let serving: Vec<&Value> = self.serving.values().collect();
-        json!({ "asks": self.asks, "tasks": tasks, "queued": queued, "serving": serving, "boat": self.boat })
+        // Always present, so a client tells a server that judges stalls from
+        // one too old to, whose `live_state` has no such key.
+        let stalls: Vec<&Value> = self.stalls.values().collect();
+        json!({ "asks": self.asks, "tasks": tasks, "queued": queued, "serving": serving, "boat": self.boat, "stalls": stalls })
     }
+
+    fn flags(&self) -> LiveFlags {
+        let ids = |m: &HashMap<String, Value>| m.keys().cloned().collect();
+        LiveFlags {
+            asking: self.asks.iter().filter_map(|a| a["sessionId"].as_str().map(String::from)).collect(),
+            tasks: ids(&self.tasks),
+            serving: ids(&self.serving),
+        }
+    }
+}
+
+/// Which sessions are behind a card, hold background tasks, or hold only
+/// servers: what a client reads off `live_state` and the events after it, read
+/// here by the stall judge so it sees exactly what a client would.
+#[derive(Default)]
+pub struct LiveFlags {
+    pub asking: std::collections::HashSet<String>,
+    pub tasks: std::collections::HashSet<String>,
+    pub serving: std::collections::HashSet<String>,
+}
+
+pub fn live_flags() -> LiveFlags {
+    HUB.live.lock().unwrap_or_else(|e| e.into_inner()).flags()
+}
+
+/// Every bot's card here, for `bot_stalls`.
+fn live_stalls() -> Vec<Value> {
+    HUB.live.lock().unwrap_or_else(|e| e.into_inner()).stalls.values().cloned().collect()
 }
 
 /// The request's first line, read without consuming it so the WebSocket
@@ -1524,6 +1567,8 @@ async fn connection(
         "dev": cfg!(debug_assertions),
         // Read by the app to tag a session it starts here, as a closed value.
         "os": std::env::consts::OS,
+        // This server judges its bots' "Waiting on you" cards (`bot_stalls`).
+        "stalls": true,
     });
     // The welcome stays text whatever was asked: a client reads it before it
     // knows whether this server understood `deflate` at all.
@@ -1943,6 +1988,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         // A bot's server collecting what its tasks here said (#958).
         parent_reports(children: Vec<String>, ack: Vec<String>, forget: Option<Vec<String>>) =>
             crate::remote_reports::take(children, ack, forget.unwrap_or_default()).await;
+        bot_stalls() => ok(live_stalls());
         worktree_disposition(session_id: String) =>crate::worktree_disposition(&session_id).await;
         remove_session_worktree(session_id: String) => crate::remove_session_worktree(&session_id).await;
         detach_session(session_id: String) => store::detach_session(&session_id).await;
@@ -2030,7 +2076,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         create_bot(name: String, avatar: Option<crate::bots::BotAvatar>) => crate::bots::create_bot(name, avatar).await;
         bot_previews(session_ids: Vec<String>) => crate::bots::bot_previews(session_ids).await;
         bot_task_reply(session_id: String, task_id: String) => crate::bots::bot_task_reply(session_id, task_id).await;
-        nudge_bot(session_id: String, problem: Option<String>, ready: Option<u32>) => crate::orchestration::nudge_bot(session_id, problem, ready, sink).await;
+        nudge_bot(session_id: String, problem: Option<String>, ready: Option<u32>, judged: Option<String>) => crate::orchestration::nudge_bot(session_id, problem, ready, judged, sink).await;
         auto_merge_card(session_id: String, task_id: String, number: u64, url: String, branch: String) =>
             crate::orchestration::auto_merge_card(session_id, task_id, number, url, branch, sink).await;
         start_bot(id: String, harness: crate::session::Harness, model: crate::models::ModelId, effort: Option<crate::models::Effort>, permission_mode: crate::events::ApprovalPolicy, fast: bool) =>

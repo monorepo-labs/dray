@@ -110,6 +110,12 @@ pub async fn list_bots() -> Result<Vec<Bot>, Fail> {
     Ok(bots)
 }
 
+/// Every bot here as saved, with none made and no greeting worded: what a
+/// background reader wants, where `list_bots` makes Dray Bot on first ask.
+pub(crate) async fn bots_here() -> Vec<Bot> {
+    read_list().await.unwrap_or_default()
+}
+
 async fn read_list() -> Result<Vec<Bot>, Fail> {
     Ok(read_json(&list_path().await?).await?)
 }

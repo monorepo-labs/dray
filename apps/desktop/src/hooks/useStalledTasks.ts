@@ -16,8 +16,11 @@ import {
   stalledTasks,
   type Stall,
 } from "@/lib/stalled";
-import { invoke } from "@/lib/transport";
-import type { BackgroundTask, Bot, PrMark, SessionIndexItem, SessionStatus } from "@/types/events";
+import { serverConnected } from "@/lib/servers";
+import { askStalls, listenForStalls, serverCard, useServerStalls } from "@/lib/serverStalls";
+import { invoke, serverOfPath } from "@/lib/transport";
+import type { PrStatusKey } from "@/lib/pr";
+import type { BackgroundTask, Bot, BotStalls, PrMark, SessionIndexItem, SessionStatus } from "@/types/events";
 
 /// Stalls already handed to their bot, by key: kept across launches, so a
 /// relaunch never nudges the bot about the same stall twice.
@@ -31,6 +34,11 @@ const NUDGE_HOLD_MS = 60_000;
 
 /// Every bot's stalled tasks, keyed by bot id: `card` is what the bot's chat
 /// draws, and the clock they were read at.
+///
+/// A bot whose server judges stalls itself (#1259) draws that server's card,
+/// and its server nudges the bot with no app open; everything below is then
+/// that server's job. A server too old to judge them, or one not connected,
+/// is judged here as before.
 ///
 /// Each stall also goes to the bot, once, as a hidden message from the task
 /// (`nudge_bot`): a PR the task can mend; a task idle on the reader, which the
@@ -70,6 +78,13 @@ export function useStalledTasks({
     return () => clearInterval(tick);
   }, [bots.length]);
 
+  const served = useServerStalls();
+  useEffect(() => listenForStalls(), []);
+  const botServers = [...new Set(bots.map((b) => serverOfPath(b.path)))].join("\n");
+  useEffect(() => {
+    for (const server of botServers ? botServers.split("\n") : []) void askStalls(server);
+  }, [botServers]);
+
   const readySince = useRef(new Map<string, number>());
   // When this app saw each task's `modified` change, on its own clock: that
   // stamp is the server's, and a remote one's clock running behind would let a
@@ -77,20 +92,39 @@ export function useStalledTasks({
   const movedAt = useRef(new Map<string, { modified: string; at: number }>());
   const byBot = useMemo(() => {
     const markFresh = (row: CrewRow) => (prReadAt(row) ?? 0) > (movedAt.current.get(row.item.sessionId)?.at ?? Infinity);
-    const out = new Map<string, { chatId: string; rows: CrewRow[]; stalls: Stall[]; card: Stall[] }>();
+    const out = new Map<
+      string,
+      { chatId: string; rows: CrewRow[]; stalls: Stall[]; card: Stall[]; local: Stall[]; fixes: BotStalls["fixes"] }
+    >();
     for (const { bot, chatId, rows } of botCrews(bots, items, { statusBySession, askingSessions, tasksBySession, servingBySession })) {
+      const server = serverOfPath(bot.path);
+      const judged = serverConnected(server) ? served.get(server) : undefined;
+      if (judged) {
+        const card = judged.find((c) => c.botId === bot.id);
+        // A task on a machine too old to send the server its facts is
+        // judged here, and nudged from here, as before.
+        const known = new Set(card?.judged ?? []);
+        const rest = rows.filter((r) => !known.has(r.item.sessionId));
+        const local = rest.length ? stalledTasks(rest, prOf, readySince.current, now, markFresh) : [];
+        const stalls = [...serverCard(card, rows, server), ...local].sort((a, b) => a.since - b.since);
+        out.set(bot.id, { chatId, rows, stalls, card: stalls.filter(onCard), local, fixes: card?.fixes ?? [] });
+        continue;
+      }
       for (const { item } of rows) {
         if (movedAt.current.get(item.sessionId)?.modified !== item.modified)
           movedAt.current.set(item.sessionId, { modified: item.modified, at: Date.now() });
       }
       const stalls = stalledTasks(rows, prOf, readySince.current, now, markFresh);
-      out.set(bot.id, { chatId, rows, stalls, card: stalls.filter(onCard) });
+      out.set(bot.id, { chatId, rows, stalls, card: stalls.filter(onCard), local: stalls, fixes: [] });
     }
     return out;
-  }, [bots, items, statusBySession, askingSessions, tasksBySession, servingBySession, prOf, prReadAt, now]);
+  }, [bots, items, statusBySession, askingSessions, tasksBySession, servingBySession, prOf, prReadAt, now, served]);
 
   // Here rather than in the Tasks tab, which is on screen for one bot at most.
   useEffect(() => {
+    // A server that nudges says which fixes it asked for, and when.
+    for (const fix of [...byBot.values()].flatMap((b) => b.fixes))
+      recordFixAsk(fix.sessionId, Number(fix.pr), fix.status as PrStatusKey, fix.at);
     pruneFixAsks([...byBot.values()].flatMap((b) => b.rows.map((r) => [r.item.sessionId, prOf(r)] as const)));
   }, [byBot, prOf]);
 
@@ -106,7 +140,7 @@ export function useStalledTasks({
     if (now - mountedAt.current < NUDGE_HOLD_MS) return;
     const nudged = new Set(readLocalStorage<string[]>(NUDGED_KEY, []));
     const due = [...byBot.values()]
-      .flatMap((b) => b.stalls)
+      .flatMap((b) => b.local)
       // A ready stall is nudged even under a need, which a waiting stall
       // wrote and `nudge_bot` clears for the bot to judge afresh.
       .filter(
