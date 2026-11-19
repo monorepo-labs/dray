@@ -230,6 +230,11 @@ fragment pr on PullRequest{
 /// commit that has since been pushed over describes code nobody is waiting on.
 /// The merged half asks for none — its checks are over, and the row says merged.
 ///
+/// The tip's sha and how many checks report on it are there for the merge
+/// card, which must not take a push no check has reached yet for a passing
+/// one. `contexts{totalCount}` without a `first` is measured free: the query
+/// costs 1 point with or without both.
+///
 /// `first:100` is a real cap on both halves. A repo with more than a hundred
 /// open pull requests marks the hundred most recently touched; a branch merged
 /// long enough ago to fall past the hundredth loses its mark, which is the
@@ -238,8 +243,8 @@ const QUERY_MARKS: &str = r#"
 query($owner:String!,$repo:String!){
  repository(owner:$owner,name:$repo){
   open: pullRequests(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
-   number url headRefName isDraft mergeable mergeStateStatus reviewDecision
-   commits(last:1){nodes{commit{statusCheckRollup{state}}}}
+   number url headRefName headRefOid isDraft mergeable mergeStateStatus reviewDecision
+   commits(last:1){nodes{commit{statusCheckRollup{state contexts{totalCount}}}}}
   }}
   merged: pullRequests(states:MERGED,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
    number url headRefName isDraft
@@ -252,6 +257,9 @@ query($owner:String!,$repo:String!){
 #[derive(Deserialize)]
 struct Nodes<T> {
     nodes: Option<Vec<T>>,
+    /// Only where asked for, which the marks' check count alone does.
+    #[serde(default, rename = "totalCount")]
+    total_count: Option<u32>,
 }
 
 impl<T> Nodes<T> {
@@ -905,12 +913,102 @@ pub async fn prs_for_branch(
         // keeps its tab for that reason so the install can be offered. So git
         // is asked the question `gh` would have answered, or a machine without
         // the CLI grows a PR tab on sessions that have nothing to do with
-        // GitHub.
-        Err(PrUnavailable::NoCli) if !git::has_github_remote(&cwd).await => {
+        // GitHub. A logged-out `gh` likewise answers before the checkout is
+        // read, and a local repo has no PR to log in for.
+        Err(PrUnavailable::NoCli | PrUnavailable::NotAuthenticated) if !git::has_github_remote(&cwd).await => {
             Err(PrUnavailable::NoRemote)
         }
         answer => answer,
     }
+}
+
+/// Each login's answer per repo from [`can_merge_repo`], and when it was read.
+static MERGE_ACCESS: LazyLock<Mutex<HashMap<String, (std::time::Instant, bool)>>> = LazyLock::new(Default::default);
+
+/// How long a repo's access answer stands. Access changes rarely, and the card
+/// asks on every task row it draws.
+const MERGE_ACCESS_FOR: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Who this machine's `gh` is right now, and whether that account can merge
+/// into the repo `cwd` names (#1178).
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeAccess {
+    /// Read afresh on every ask, never from a cache: a merge runs as whoever
+    /// `gh` is at that moment, and an account switched since must not pass as
+    /// the one the task's machine used.
+    pub login: Option<String>,
+    /// Write access or above; `None` where GitHub could not be asked.
+    pub can_merge: Option<bool>,
+}
+
+/// [`MergeAccess`] for the repo `cwd` names. Asked before Merge is offered for
+/// a task whose own machine is down, since that merge runs as this `gh`. The
+/// permission is cached per login and repo, so a sign-in as someone else asks
+/// again; a failed ask is not cached.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn merge_access(cwd: String) -> MergeAccess {
+    let Some(slug) = (match slug_of(&cwd) {
+        Some(slug) => Some(slug.to_string()),
+        None => repo_slug(&cwd).await.ok().map(|(owner, name)| format!("{owner}/{name}")),
+    }) else {
+        return MergeAccess::default();
+    };
+    let key = format!("{SLUG_PREFIX}{slug}");
+    // The repo's own host: a lapsed github.com login says nothing of an
+    // enterprise one.
+    let mut args = vec!["api", "user", "--jq", ".login"];
+    if let (Some(host), _) = api_target(&slug) {
+        args.extend(["--hostname", host]);
+    }
+    let login = gh(&key, &args)
+        .await
+        .ok()
+        .map(|out| out.trim().to_string())
+        .filter(|login| !login.is_empty());
+    let Some(who) = login.clone() else { return MergeAccess::default() };
+    let can_merge = can_merge_repo(&slug, &who).await;
+    MergeAccess { login, can_merge }
+}
+
+/// Whether `login`, this `gh`'s account, can merge into `slug`.
+async fn can_merge_repo(slug: &str, login: &str) -> Option<bool> {
+    let cached = format!("{login}\n{slug}");
+    if let Some((at, can)) = MERGE_ACCESS.lock().await.get(&cached) {
+        if at.elapsed() < MERGE_ACCESS_FOR {
+            return Some(*can);
+        }
+    }
+    let (host, path) = api_target(slug);
+    let mut args = vec!["api", path.as_str(), "--jq", ".permissions"];
+    if let Some(host) = host {
+        args.extend(["--hostname", host]);
+    }
+    let can = match gh(&format!("{SLUG_PREFIX}{slug}"), &args).await {
+        Ok(out) => can_merge_from(&out)?,
+        // GitHub answers a private repo this account cannot see as missing.
+        Err(e) if e.contains("HTTP 404") => false,
+        Err(_) => return None,
+    };
+    MERGE_ACCESS.lock().await.insert(cached, (std::time::Instant::now(), can));
+    Some(can)
+}
+
+/// The `--hostname` and `repos/…` path `gh api` takes for `slug`: a
+/// `host/owner/name` slug is a repo on a GitHub that is not github.com.
+fn api_target(slug: &str) -> (Option<&str>, String) {
+    match slug.split('/').collect::<Vec<_>>().as_slice() {
+        [host, owner, name] => (Some(*host), format!("repos/{owner}/{name}")),
+        _ => (None, format!("repos/{slug}")),
+    }
+}
+
+/// Reads `gh api repos/…`'s `permissions`: merging takes write access, which
+/// maintain and admin include. Absent is a token that cannot see them.
+fn can_merge_from(permissions: &str) -> Option<bool> {
+    let value: serde_json::Value = serde_json::from_str(permissions.trim()).ok()?;
+    let object = value.as_object()?;
+    Some(["push", "maintain", "admin"].iter().any(|key| object.get(*key).and_then(|v| v.as_bool()) == Some(true)))
 }
 
 /// Probes for `gh` again, and answers whether it is there now.
@@ -921,6 +1019,7 @@ pub async fn prs_for_branch(
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn recheck_gh() -> bool {
     binpath::forget_gh();
+    MERGE_ACCESS.lock().await.clear();
     // The same absence, cached a second time: the issues side remembers *who*
     // `gh` answered as, and a reader pressing this has usually just installed
     // the CLI or signed in — so an answer taken before that must not outlive it.
@@ -968,7 +1067,7 @@ fn read_prs(out: &str) -> Result<Vec<PullRequest>, String> {
 /// connection, so the connection *is* the answer and a `state` field would be a
 /// second copy of it free to disagree. Only the two states the sidebar draws —
 /// closed-without-merging is not asked for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "UPPERCASE")]
 pub enum PrMarkState {
@@ -981,7 +1080,7 @@ pub enum PrMarkState {
 /// Deliberately not a `PullRequest`: the row says "this branch has a PR, and
 /// what became of it" and nothing else, so carrying checks, comments and review
 /// threads for every session in the list would be payload nobody reads.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct PrMark {
@@ -990,9 +1089,21 @@ pub struct PrMark {
     pub url: String,
     /// The branch it was opened from — what the caller matches a session by.
     pub head_ref_name: String,
+    /// The tip commit's sha, on the open half alone. A push is a new one,
+    /// which is what restarts the merge card's wait for checks to register.
+    /// Optional in TS too, since a server older than the field sends none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub head_oid: Option<String>,
     pub is_draft: bool,
     pub state: PrMarkState,
     pub checks_state: PrChecksState,
+    /// How many checks and statuses report on the tip, on the open half alone.
+    /// Zero is both "no CI" and "CI not started yet", which only a count seen on
+    /// an earlier push can tell apart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub check_count: Option<u32>,
     /// Enough of the panel's merge fields to answer "can this land now", which
     /// the sidebar itself draws nothing from — the notice for a pull request
     /// turning ready does, and this is the only read that runs for a session
@@ -1015,7 +1126,7 @@ pub struct PrMark {
 /// second time makes the mark that *does* need reading harder to find. So this
 /// is a three-way, not the rollup's five-way — `SUCCESS` and an absent rollup
 /// both reach the reader as [`PrChecksState::Clear`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "UPPERCASE")]
 pub enum PrChecksState {
@@ -1058,6 +1169,7 @@ struct RawPrMark {
     url: String,
     #[serde(default)]
     head_ref_name: String,
+    head_ref_oid: Option<String>,
     /// Always false on a merged one — GitHub clears the flag on merge — so this
     /// is only ever read for the open half. One node shape for both keeps the
     /// query symmetrical.
@@ -1081,15 +1193,20 @@ struct RawPrMark {
 /// `commits(last:1)` asks for one, so anything else — no commits, no rollup, no
 /// CI — is [`PrChecksState::Clear`] rather than an error: a repo without checks is
 /// the ordinary case, not a failure to read one.
-fn read_checks(commits: Option<Nodes<RawCommitNode>>) -> PrChecksState {
-    Nodes::take(commits)
+///
+/// The count is `None` where the rollup was not asked for (the merged half) and
+/// zero where the tip carries none.
+fn read_checks(commits: Option<Nodes<RawCommitNode>>) -> (PrChecksState, Option<u32>) {
+    let asked = commits.is_some().then_some(0);
+    let rollup = Nodes::take(commits)
         .into_iter()
         .filter_map(|node| node.commit)
-        .filter_map(|commit| commit.status_check_rollup)
-        .filter_map(|rollup| rollup.state)
-        .map(|state| PrChecksState::from_rollup(&state))
-        .next()
-        .unwrap_or(PrChecksState::Clear)
+        .find_map(|commit| commit.status_check_rollup);
+    let Some(rollup) = rollup else {
+        return (PrChecksState::Clear, asked);
+    };
+    let state = rollup.state.as_deref().map_or(PrChecksState::Clear, PrChecksState::from_rollup);
+    (state, rollup.contexts.and_then(|c| c.total_count).or(asked))
 }
 
 /// The two-connection answer: `pullRequests` asked twice under two aliases.
@@ -1128,16 +1245,21 @@ fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
         .into_iter()
         .map(|pr| (PrMarkState::Open, pr))
         .chain(merged.into_iter().map(|pr| (PrMarkState::Merged, pr)))
-        .map(|(state, mut pr)| PrMark {
-            number: pr.number,
-            url: pr.url,
-            checks_state: read_checks(pr.commits.take()),
-            head_ref_name: pr.head_ref_name,
-            is_draft: pr.is_draft,
-            state,
-            mergeable: pr.mergeable,
-            merge_state_status: pr.merge_state_status,
-            review_decision: pr.review_decision.filter(|d| !d.is_empty()),
+        .map(|(state, pr)| {
+            let (checks_state, check_count) = read_checks(pr.commits);
+            PrMark {
+                number: pr.number,
+                url: pr.url,
+                checks_state,
+                check_count,
+                head_ref_name: pr.head_ref_name,
+                head_oid: pr.head_ref_oid.filter(|o| !o.is_empty()),
+                is_draft: pr.is_draft,
+                state,
+                mergeable: pr.mergeable,
+                merge_state_status: pr.merge_state_status,
+                review_decision: pr.review_decision.filter(|d| !d.is_empty()),
+            }
         })
         .collect())
 }
@@ -1154,27 +1276,49 @@ fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
 /// merge` can fail with the merge already through (a post-merge step, a lost
 /// connection), and reporting the exit code alone tells the reader their merge
 /// failed when it is on `main`.
+///
+/// `settle` names a bot's task the merge lands, settled here once it has
+/// rather than by each client: only the server reaches a task on another
+/// machine, which the phone never connects to. Answers whether it took one
+/// on, so a client can tell a server from before `settle` and settle itself.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn merge_pr(cwd: String, number: u64, method: MergeMethod) -> Result<(), String> {
-    let arg = number.to_string();
-
-    let Err(e) = gh(&cwd, &["pr", "merge", &arg, method.flag()]).await else {
-        crate::analytics::feature_used("pr_merged");
-        return Ok(());
-    };
-
-    match merged_state(&cwd, number).await {
-        // Reported on both paths rather than once around the whole function:
-        // the two are the same answer, but only one of them is a call that
-        // reported failure and turned out to have worked.
-        Some(true) => {
-            crate::analytics::feature_used("pr_merged");
-            Ok(())
+pub async fn merge_pr(
+    cwd: String,
+    number: u64,
+    method: MergeMethod,
+    settle: Option<String>,
+    sink: crate::sink::Sink,
+) -> Result<bool, String> {
+    // An unverifiable merge has to read as the failure it was reported as.
+    if let Err(e) = gh(&cwd, &["pr", "merge", &number.to_string(), method.flag()]).await {
+        if merged_state(&cwd, number).await != Some(true) {
+            return Err(e);
         }
-        // Either it genuinely didn't merge, or we couldn't find out — and an
-        // unverifiable merge has to read as the failure it was reported as.
-        _ => Err(e),
     }
+    crate::analytics::feature_used("pr_merged");
+    // Only ever the reader's merge, from a client: a bot and its tasks merge
+    // with `gh` and never reach this, so the bot is told of it.
+    crate::bots::note_merge(&cwd, number).await;
+    let Some(task) = settle else { return Ok(false) };
+    // Off the reply: a task on another machine can take a while to settle.
+    tokio::spawn(async move {
+        let Some(head) = pr_head(&cwd, number).await else { return };
+        if let Err(e) = crate::orchestration::settle_merged(&task, &head, &sink).await {
+            eprintln!("[merge] could not settle {task}: {e:#}");
+        }
+    });
+    Ok(true)
+}
+
+/// The PR's head branch, where it is one of this repo's: a fork's branch can
+/// share a task's name, and unknown counts as a fork.
+pub(crate) async fn pr_head(cwd: &str, number: u64) -> Option<String> {
+    let out = gh(cwd, &["pr", "view", &number.to_string(), "--json", "headRefName,isCrossRepository"]).await.ok()?;
+    let pr: serde_json::Value = serde_json::from_str(&out).ok()?;
+    if pr["isCrossRepository"].as_bool() != Some(false) {
+        return None;
+    }
+    pr["headRefName"].as_str().map(str::to_string)
 }
 
 /// Whether the PR is merged, or `None` where asking failed too.
@@ -1737,6 +1881,23 @@ mod tests {
             "merged":{"nodes":[{"number":4,"headRefName":"b","isDraft":false}]}}}}"#;
         let prs = read_pr_marks(out).expect("pr marks parse");
         assert_eq!(prs[0].checks_state, PrChecksState::Clear);
+        assert_eq!(prs[0].check_count, None);
+        assert_eq!(prs[0].head_oid, None);
+    }
+
+    /// The merge card waits on these: a tip no check has reached yet reads as
+    /// zero, not as unknown, and a push is told by its sha.
+    #[test]
+    fn open_marks_carry_their_tip_and_check_count() {
+        let out = r#"{"data":{"repository":{"open":{"nodes":[
+            {"number":1,"headRefName":"a","headRefOid":"abc","isDraft":false,
+             "commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS","contexts":{"totalCount":3}}}}]}},
+            {"number":2,"headRefName":"b","headRefOid":"def","isDraft":false,
+             "commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}
+        ]},"merged":{"nodes":[]}}}}"#;
+        let prs = read_pr_marks(out).expect("pr marks parse");
+        assert_eq!((prs[0].head_oid.as_deref(), prs[0].check_count), (Some("abc"), Some(3)));
+        assert_eq!((prs[1].head_oid.as_deref(), prs[1].check_count), (Some("def"), Some(0)));
     }
 
     /// Same 200-with-errors trap the branch query has: a zero exit code proves
@@ -1775,5 +1936,27 @@ mod tests {
         assert_eq!(slug_of("/github:monorepo-labs/dray"), Some("monorepo-labs/dray"));
         assert_eq!(slug_of("/home/me/dray"), None);
         assert_eq!(slug_of("github:nothing"), None);
+    }
+
+    /// Write access merges; read and triage do not; no permissions at all is
+    /// a token that cannot see them, which is not a yes.
+    #[test]
+    fn merge_access_needs_write() {
+        let perms = |push: bool, maintain: bool, admin: bool| {
+            format!(r#"{{"admin":{admin},"maintain":{maintain},"push":{push},"triage":true,"pull":true}}"#)
+        };
+        assert_eq!(can_merge_from(&perms(true, false, false)), Some(true));
+        assert_eq!(can_merge_from(&perms(false, true, false)), Some(true));
+        assert_eq!(can_merge_from(&perms(false, false, true)), Some(true));
+        assert_eq!(can_merge_from(&perms(false, false, false)), Some(false));
+        assert_eq!(can_merge_from("{}\n"), Some(false));
+        assert_eq!(can_merge_from(""), None);
+    }
+
+    /// An enterprise slug carries its host; a github.com one none.
+    #[test]
+    fn api_target_reads_the_host() {
+        assert_eq!(api_target("acme/app"), (None, "repos/acme/app".to_string()));
+        assert_eq!(api_target("git.corp.example/acme/app"), (Some("git.corp.example"), "repos/acme/app".to_string()));
     }
 }

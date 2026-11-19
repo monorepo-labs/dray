@@ -1,4 +1,4 @@
-import type { AgentEvent, QueueChangedEvent } from "@/types/events";
+import type { AgentEvent, QueueChangedEvent, SessionServingEvent } from "@/types/events";
 import { retireOldestProvisional } from "@/lib/provisional";
 
 /// What a `dray-serve` sends on every connect: what lives in its memory and in
@@ -12,6 +12,8 @@ export type LiveState = {
   tasks: AgentEvent[];
   /// Every non-empty queue. Absent from a server that predates it.
   queued?: QueueChangedEvent[];
+  /// Every session left only serving. Absent from a server that predates it.
+  serving?: SessionServingEvent[];
 };
 
 /// The logged events a client missed: everything in `fetched` (a log tail, in
@@ -60,7 +62,13 @@ export function mergeMissed(current: AgentEvent[], held: AgentEvent[], fresh: Ag
 /// one drawn at send. One a log read already delivered is dropped: `serve.rs`'s
 /// writer picks between replies and events at random, so a read's reply can
 /// overtake an event emitted before it.
+///
+/// A retry replaces the retry before it: fx restates its countdown every second
+/// for as long as a network is down, and only the newest one is ever read.
 export function appendLive(events: AgentEvent[], event: AgentEvent): AgentEvent[] {
   if (events.some((e) => e.id === event.id)) return events;
+  if (event.payload.type === "api_retry" && events.at(-1)?.payload.type === "api_retry") {
+    return [...events.slice(0, -1), event];
+  }
   return [...(event.payload.type === "user_message" ? retireOldestProvisional(events) : events), event];
 }

@@ -6,7 +6,7 @@ import SessionAvatar from "@/components/SessionAvatar";
 import ClampedBody from "@/components/chat/ClampedBody";
 import FileLink from "@/components/chat/FileLink";
 import ImageRow from "@/components/chat/ImageRow";
-import { inlineMark } from "@/components/chat/InlineMark";
+import { InlineButton, InlineLink, inlineMark } from "@/components/chat/InlineMark";
 import { useChatSession } from "@/hooks/useChatSession";
 import { absolutePath } from "@/lib/filePath";
 import { basename } from "@/lib/format";
@@ -21,7 +21,6 @@ import {
 } from "@/lib/highlight";
 import { useBots } from "@/lib/bots";
 import { openIssue, parseIdentifier } from "@/lib/issue";
-import { openLink } from "@/lib/openLink";
 import { commandBrand } from "@/lib/pluginBrand";
 import { stripSenderPrefix } from "@/lib/relay";
 import { useSendProgress } from "@/lib/uploads";
@@ -68,6 +67,7 @@ export default function UserMessage({
   issues = [],
   from = null,
   cwd: writtenIn = null,
+  reaction = null,
   onOpenSession,
   onOpenBot,
 }: {
@@ -87,6 +87,8 @@ export default function UserMessage({
   /// `@mention` naming the tree it was typed in rather than the fork's own copy
   /// of the same file.
   cwd?: string | null;
+  /// A bot's emoji on this message, drawn as a badge on the bubble's corner.
+  reaction?: string | null;
   /// Opens the sending session. Absent where nothing can navigate, which draws
   /// the attribution as a plain line rather than hiding it.
   onOpenSession?: (sessionId: string) => void;
@@ -147,6 +149,8 @@ export default function UserMessage({
           read before the sentence written about it, on the way in and on the way
           back out. `end` so the row grows leftwards from the same edge the
           bubble sits on. */}
+      {/* A message of images alone has no bubble to sit on. */}
+      {reaction && !body && <ReactionBadge emoji={reaction} />}
       <ImageRow images={images} variant="sent" />
 
       {body && (
@@ -157,7 +161,10 @@ export default function UserMessage({
         // this sits *in* the transcript rather than floating at the window's
         // edge, and the crisper one read as an edge cut under it.
         <div
-          className="user-bubble max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground shadow-(--shadow-card)"
+          className={cn(
+            "user-bubble max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground shadow-(--shadow-card)",
+            reaction && "relative mt-3",
+          )}
           // The colour rides in and App.css paints it — a palette that fills
           // this bubble has to answer differently to one that doesn't, and only
           // the palette knows which it is. `data-brand` is what the rules match
@@ -262,17 +269,16 @@ export default function UserMessage({
                 }
 
                 return (
-                  <button
+                  <InlineButton
                     key={i}
-                    type="button"
                     // Underlined on hover rather than at rest: the colour
                     // already sets it apart from the sentence, and a permanent
                     // underline through a prompt reads as a correction.
-                    className={cn(SEGMENT_COLOR.issue, "cursor-pointer hover:underline")}
-                    onClick={(e) => openIssue(link, e)}
+                    className={cn(SEGMENT_COLOR.issue, "hover:underline")}
+                    onActivate={(e) => openIssue(link, e)}
                   >
                     {issueFace(segment)}
-                  </button>
+                  </InlineButton>
                 );
               }
 
@@ -293,11 +299,10 @@ export default function UserMessage({
                   );
                 }
                 return (
-                  <button
+                  <InlineButton
                     key={i}
-                    type="button"
-                    className={cn(SEGMENT_COLOR.session, "cursor-pointer hover:underline")}
-                    onClick={() => onOpenSession(sessionId)}
+                    className={cn(SEGMENT_COLOR.session, "hover:underline")}
+                    onActivate={() => onOpenSession(sessionId)}
                   >
                     <SessionAvatar
                       sessionId={sessionId}
@@ -305,7 +310,7 @@ export default function UserMessage({
                       className="mr-0.5 inline-block size-4 align-text-bottom"
                     />
                     {title}
-                  </button>
+                  </InlineButton>
                 );
               }
 
@@ -322,11 +327,10 @@ export default function UserMessage({
                   );
                 }
                 return (
-                  <button
+                  <InlineButton
                     key={i}
-                    type="button"
-                    className={cn(SEGMENT_COLOR.bot, "cursor-pointer hover:underline")}
-                    onClick={() => onOpenBot(bot)}
+                    className={cn(SEGMENT_COLOR.bot, "hover:underline")}
+                    onActivate={() => onOpenBot(bot)}
                   >
                     <BotAvatar
                       still
@@ -335,20 +339,22 @@ export default function UserMessage({
                       className="mr-0.5 inline-block size-4 align-text-bottom"
                     />
                     {name}
-                  </button>
+                  </InlineButton>
                 );
               }
 
               if (segment.kind === "url") {
                 return (
-                  <button
+                  <InlineLink
                     key={i}
-                    type="button"
-                    className={cn(SEGMENT_COLOR.url, "cursor-pointer font-medium")}
-                    onClick={(e) => openLink(segment.href ?? segment.text, e)}
+                    href={segment.href ?? segment.text}
+                    // `break-all`, not the body's `wrap-anywhere`: that breaks a
+                    // word only once it fails a line of its own, so a long URL
+                    // left the word before it and started on the next line.
+                    className={cn(SEGMENT_COLOR.url, "font-medium break-all")}
                   >
                     {segment.text}
-                  </button>
+                  </InlineLink>
                 );
               }
 
@@ -359,6 +365,7 @@ export default function UserMessage({
               );
             })}
           </ClampedBody>
+          {reaction && <ReactionBadge emoji={reaction} className="absolute -top-4 -left-3" />}
         </div>
       )}
 
@@ -377,5 +384,35 @@ export default function UserMessage({
         </span>
       )}
     </div>
+  );
+}
+
+const REACTION_LABELS: Record<string, string> = {
+  "👀": "Seen",
+  "✅": "Done",
+  "🎉": "Celebrating",
+  "👍": "Like",
+  "❤️": "Love",
+  "😂": "Laughing",
+  "😢": "Sad",
+};
+
+/// A bot's reaction, as iMessage draws a tapback: a round chip on the bubble's top
+/// corner on the bot's side, a step lighter than the chat's page colour and
+/// edged by a hairline. Mixed off `--background` rather than `--muted`, which
+/// turns into a translucent veil on glass and let the bubble show through.
+function ReactionBadge({ emoji, className }: { emoji: string; className?: string }) {
+  return (
+    <span
+      role="img"
+      aria-label={`Bot reacted: ${REACTION_LABELS[emoji] ?? emoji}`}
+      className={cn(
+        "flex size-7 items-center justify-center rounded-full border-[0.5px] border-border bg-[color-mix(in_oklab,var(--background),white_7%)] text-[15px] leading-none select-none",
+        "motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:fade-in motion-safe:duration-200",
+        className,
+      )}
+    >
+      {emoji}
+    </span>
   );
 }

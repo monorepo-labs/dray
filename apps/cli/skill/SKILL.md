@@ -44,7 +44,8 @@ Options:
 
 | flag | meaning |
 |---|---|
-| `--project <path>` | Repo to run in. Defaults to the current session's, or the repo you are in. |
+| `--project <path>` | Repo to run in. Defaults to the current session's, or the repo you are in. With `--no-worktree`, any folder. |
+| `--no-worktree` | Run in the `--project` folder as it is, with no worktree or branch — see *Work outside a worktree*. |
 | `--model <alias>` | `opus`, `sonnet`, `fable`, `haiku` on Claude Code; a `provider/model` id on pi. Defaults to the current session's model — see *Model and effort*. |
 | `--effort <level>` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. Defaults to the current session's — see *Model and effort*. |
 | `--harness <name>` | `claude_code`, `codex`, `pi`, `fx` or `grok`. Defaults to the current session's. |
@@ -97,6 +98,23 @@ Changing harness carries nothing across, because the ladders are not one scale.
 A Codex session spawned from a Claude one takes Codex's own default, and the
 reverse likewise: Claude Code is Opus 5.5 on High, Codex is Sol on Medium. Pass
 `--model` and `--effort` there only when the user named them.
+
+### Switching a running session's model
+
+```bash
+dray session model <id> fable                 # switch model; keeps its effort where fable has it
+dray session model <id> opus --effort high    # model and effort
+dray session model <id> --effort low          # effort alone
+dray session model <id>                       # print what it runs on
+```
+
+The composer's model picker, from here. The pick lands from the session's next
+turn — the next message it gets, from you or the user, one already waiting
+included — and a running turn is not stopped. The model is an alias of the
+session's own agent; an effort the model lacks is refused with the levels it
+has. A session on another machine is found by its id. Switch a session only
+where the user asked, or one you started yourself, and ask before raising one
+to Fable or above its harness's default effort, for the reasons above.
 
 **pi names no default at all**, and that is deliberate rather than a gap: it is
 multi-provider, so which models exist depends on which providers the user has
@@ -163,13 +181,31 @@ does.
 
 ### Each session gets its own worktree
 
-Every session runs in its own git worktree on its own branch, and there is no way
-to turn that off. It is what makes running them at once safe — without it, three
-agents write to one checkout and overwrite each other.
+Every session runs in its own git worktree on its own branch. It is what makes
+running them at once safe — without it, three agents write to one checkout and
+overwrite each other.
 
 By default the worktree branches from `origin/<default>`, **not** from the branch
 you are on. So a session created plainly cannot see unpushed work — yours or
 another session's.
+
+### Work outside a worktree
+
+```bash
+dray session new --no-worktree --project '~' "Set up Docker on this machine and report the version"
+dray session new --no-worktree --project ~/code/app "Find out why the dev server here fails to start"
+```
+
+`--no-worktree` runs the session in the `--project` folder as it is: a repo's
+own checkout, or a folder that is no repo at all. It is for work that changes no
+repo's files — setting up a machine, infra, research. **Never for editing a
+repo**: the session shares that checkout with the user and every other session
+in it. It takes no `--base`.
+
+`'~'` is the home folder of the machine that runs it. Quoted, so with
+`--machine` the shell leaves it for that machine to expand; unquoted, it is this
+one's. With `--machine`, `--project` is otherwise a folder on that machine, or a
+repo it has a checkout of.
 
 ### Basing a session on existing work
 
@@ -200,8 +236,8 @@ Three things to know:
 - **A new branch, not a shared one.** The session gets its own
   `worktree-<name>` branch starting at that commit. It never checks out the
   branch you named, so it cannot commit onto your work or move it.
-- **Not a shared checkout.** There is no way to run two sessions in one
-  directory, and `--base` is not it. Two agents writing to one checkout overwrite
+- **Not a shared checkout.** `--base` never runs two sessions in one
+  directory. Two agents writing to one checkout overwrite
   each other, and the changes panel cannot tell them apart.
 
 The line `dray session new` prints says what it resolved: `Started "…" in worktree
@@ -271,6 +307,7 @@ looking the session up again.
 
 ```bash
 dray session rename <id> "Add retry to the upload client"
+dray session model <id> sonnet              # its next turn runs on sonnet; see "Model and effort"
 dray session stop <id>                      # stop the running turn, like its Stop button
 dray session settle <id>                    # it stops and leaves the active list; worktree kept
 dray session settle <id> --delete-worktree  # and the worktree and branch go too
@@ -286,7 +323,8 @@ Settling is refused while a turn runs — stop it first, or wait.
 **`--delete-worktree` deletes whatever the worktree holds**, uncommitted and
 unpushed work included, and nothing asks. Before passing it, check the tree
 yourself — `git -C <cwd> status --short` and `git -C <cwd> log @{u}..` or
-against `origin/<default>` — and ask the user, naming what would be lost.
+against `origin/<default>` — and ask the user, naming what would be lost. A
+session started with `--no-worktree` has none, and refuses the flag.
 
 ## Handing a pull request to the user
 
@@ -308,6 +346,16 @@ When a task you started is waiting on the user and you cannot answer it
 yourself, write what it needs in one short line. The user sees it on the task's
 row in the "Waiting on you" card at the foot of your chat, and it clears as soon
 as the task moves.
+
+```bash
+dray session react 👀   # or ✅ 🎉 👍 ❤️ 😂 😢; also seen, done, celebrate, like, love, laugh, sad
+```
+
+A bot only. Puts the emoji on the user's newest message in your chat, in place
+of a reply: 👍 got it (an ok or go-ahead), 👀 looking into it (investigating or
+checking), ✅ done, 🎉 celebrate, ❤️ thanks, 😂 funny, 😢 sorry to hear. Never
+react to starting or messaging a task: the chat already shows that row. A new one on the same message replaces the old. End
+your turn without writing anything after it.
 
 ## Saving work for later
 
@@ -443,6 +491,15 @@ so a video made on another machine, a VM or a remote box has to be copied here
 first. Name no environment variable to find any of this, and don't build the path
 by hand: the home moves. It is deleted with the session.
 
+**A screenshot shows the same way through `dray image add`.** A PNG or JPEG
+from a simulator, a sandbox desktop or `dray browser screenshot`: put the path
+it prints in your reply and the chat draws the picture. Crop it to what changed
+first. Same rules as `dray video add`: this machine, folder worked out for you.
+
+```bash
+dray image add ~/shots/after.png "settings after"  # prints the path to put in your reply
+```
+
 **Keep a video of the test that confirms UI work or work on another machine**,
 and show it the same way, so the user can watch it pass.
 
@@ -502,6 +559,7 @@ dray --machine vps session new "Run the load test" --title "Load test"
 dray --machine vps session ls                # that machine's sessions
 dray session ls --machine all                # this one's and every connected machine's
 dray session send <session-id> "Use the staging DB"   # finds the machine on its own
+dray session model <session-id> sonnet                # so does every verb taking an id
 ```
 
 `--machine <name>` runs a `session`, `draft`, `issue`, `browser` or `share`
@@ -514,6 +572,13 @@ found by its `origin` remote; pass `--project <path on that machine>` where it
 has none. `--base <session-id>` names that session's branch, which the other
 machine can only see once it is pushed. Model, effort, agent and fast mode
 inherit from you as they do here.
+
+`--machine cloud` starts a session on a fresh Dray Cloud machine of its own:
+the app starts the machine, clones the project's GitHub repository there and
+starts the session in a worktree of it. It takes `session new` alone, needs
+Dray Cloud on with the app open, and can take a few minutes, so give the
+command a long timeout. The session's row names its machine (`cloud-…`), and
+settling it deletes the machine.
 
 **Reach follows tokens.** You reach a machine this one added; it reaches you
 only if it added this one too. A session you start there can message you back

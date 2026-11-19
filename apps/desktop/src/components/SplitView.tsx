@@ -14,7 +14,7 @@ import { basename } from "@/lib/format";
 import { dropLabel, paneOrder, type Region, type SplitGroup } from "@/lib/groups";
 import { IS_MAC } from "@/lib/platform";
 import { sessionBranch } from "@/lib/pr";
-import { serverConnected, serverStatus, useServers } from "@/lib/servers";
+import { serverStatus, shownOffline, useServers } from "@/lib/servers";
 import { serverOfSession } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { SessionIndexItem } from "@/types/events";
@@ -158,17 +158,12 @@ export default function SplitView({
                 >
                   {/* A pane its server has not answered for yet; the
                       reconnect loads it. */}
-                  {!paneState(item.sessionId).session && !serverConnected(serverOfSession(item.sessionId)) ? (
+                  {!paneState(item.sessionId).session && shownOffline(serverOfSession(item.sessionId)) ? (
                     <TranscriptSkeleton still={serverStatus(serverOfSession(item.sessionId)) !== "connecting"} />
                   ) : (
                     <Chat
                       {...paneState(item.sessionId)}
                       {...chat}
-                      // Narrowest the transcript gets, so the rail always gives way.
-                      crowded
-                      // The rail only where the pane has the column's whole
-                      // height: halved, it sits over the text.
-                      rail={column.length === 1}
                       active={active && focused}
                     />
                   )}

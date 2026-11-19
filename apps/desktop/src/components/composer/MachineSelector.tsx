@@ -11,13 +11,16 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { basename } from "@/lib/format";
 import { checkoutsOf, nextCheckout, soleServer } from "@/lib/projectGroups";
-import { serverConnected, serverName, useServers } from "@/lib/servers";
+import { cloudServer, serverConnected, serverName, useServers } from "@/lib/servers";
 import { displayPath, LOCAL, serverOfPath } from "@/lib/transport";
 import type { Project } from "@/types/events";
 
 /// Where a new task runs, among the picked project's checkouts. A project only
 /// on This Mac draws nothing, since no name is what says local. One checkout on
 /// a server is named and disabled: worth saying, with nothing to choose.
+///
+/// A Dray Cloud machine is never offered: each is one task's own, and
+/// `dray session new --machine cloud` is the only way to start one now.
 export default function MachineSelector({
   projects,
   value,
@@ -28,10 +31,15 @@ export default function MachineSelector({
   onSelect: (path: string) => void;
 }) {
   useServers();
-  const checkouts = value ? checkoutsOf(projects, value) : [];
-  const current = checkouts.find((p) => p.path === value);
+  const all = value ? checkoutsOf(projects, value) : [];
+  const current = all.find((p) => p.path === value);
   if (!current) return null;
-  const only = checkouts.length === 1;
+  const checkouts = all.filter((p) => !cloudServer(serverOfPath(p.path)));
+  // A draft or a session's project can still point at a cloud task's checkout.
+  // It is named but not listed, so the reader can move off it and never onto one.
+  const stranded = !checkouts.includes(current);
+  if (stranded && !checkouts.length) return null;
+  const only = !stranded && checkouts.length === 1;
   if (only && serverOfPath(current.path) === LOCAL) return null;
 
   return (
@@ -47,7 +55,7 @@ export default function MachineSelector({
               className="max-w-40 gap-1.5 px-1.5 text-ui text-muted-foreground disabled:opacity-100"
             >
               <ServerFilledIcon className="size-3.5 shrink-0" />
-              <span className="truncate">{checkoutLabel(current, checkouts, basename)}</span>
+              <span className="truncate">{checkoutLabel(current, stranded ? all : checkouts, basename)}</span>
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>

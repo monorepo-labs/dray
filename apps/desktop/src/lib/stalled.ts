@@ -5,7 +5,7 @@ import type { BackgroundTask, Bot, PrMark, SessionIndexItem, SessionStatus } fro
 
 /// How long a bot's task sits untouched before the reader hears of it. What
 /// the task can mend itself waits for none of it.
-export const STALL_MS = 5 * 60_000;
+export const STALL_MS = 2 * 60_000;
 
 /// A task of a bot's that has stalled. `ready`: its pull request has been
 /// able to land for [STALL_MS], and the reader merges it from the card. `fix`:
@@ -22,8 +22,20 @@ export type Stall = {
   problem?: string;
   /// The PR status a `fix` stall is about.
   status?: PrStatusKey;
+  /// A `ready` stall whose PR GitHub is working out again, as it does for every
+  /// open PR after a merge: listed so the card holds still, and not mergeable.
+  checking?: boolean;
   since: number;
   key: string;
+  /// Set on a stall the bot's server judged (`serverCard`): the need line as
+  /// it read it, and the repo a row whose machine is down merges through.
+  judged?: { need: string | null; repo: string | null };
+  /// Why the row has nothing to open, where the server said so rather than
+  /// this app's own server list.
+  offline?: string;
+  /// A task this app holds no connection to merges through the bot's server,
+  /// by repo, which also settles it on the task's own machine.
+  via?: { server: string; repo: string };
 };
 
 /// What a task can mend itself, by PR status: `problem` as its bot is told
@@ -42,7 +54,7 @@ export type FixAsk = { pr: number; status: PrStatusKey; at: number };
 /// Whether `pr` has moved off what `ask` was about, so the ask is done with.
 /// `unknown` holds: it is GitHub's recompute after a push, not an answer.
 export function fixAskDone(ask: FixAsk, pr: PrMark): boolean {
-  const key = prStatus(pr).key;
+  const key = stallStatus(pr);
   return pr.number !== ask.pr || (key !== ask.status && key !== "unknown");
 }
 
@@ -53,13 +65,23 @@ export function fixLine(ask: FixAsk | undefined, pr: PrMark | undefined, now: nu
   return fixing ? `${fixing} · ${compactAge(new Date(ask.at).toISOString(), now)}` : undefined;
 }
 
+/// A PR's status as a stall reads it: a draft's failing checks read as a draft.
+/// A draft waits on the reader's look, with feedback committed locally and not
+/// pushed, so its red check (often Greptile's first review) is stale by design.
+/// Read as a fix, each poke of the bot's moved the task and nudged it again.
+function stallStatus(pr: PrMark): PrStatusKey {
+  const key = prStatus(pr).key;
+  return pr.isDraft && key === "checksFailing" ? "draft" : key;
+}
+
 /// The bot's tasks that have stalled, oldest stall first.
 ///
 /// `readySince` is kept by the caller across calls and updated here: when each
 /// task's pull request was seen turning ready, `0` where it was ready the first
-/// time it was seen, `-1` while it is not. A PR found already ready counts from
-/// the task's last activity — waiting another [STALL_MS] of watching would hide
-/// one that has sat for a day.
+/// time it was seen, `-1` while it is not. Keyed by task and PR number, since a
+/// branch can carry a second PR that was never ready. A PR found already ready
+/// counts from the task's last activity — waiting another [STALL_MS] of
+/// watching would hide one that has sat for a day.
 ///
 /// `markFresh` says whether a task's PR mark was asked for after the task last
 /// moved. A fix is called at once only on a fresh mark, and otherwise after
@@ -67,10 +89,12 @@ export function fixLine(ask: FixAsk | undefined, pr: PrMark | undefined, now: nu
 /// checks the task had just fixed.
 ///
 /// Left out: a task mid-turn or with a background shell or subagent still
-/// running, one behind a card (the card is in the chat already), one set aside
+/// running — bar one left only serving, which waits on the reader like any
+/// idle task (`CrewRow.serving`) — one behind a card (the card is in the chat already), one set aside
 /// or waiting on its usage limit, one whose PR is running checks or still being
 /// worked out by GitHub — those wait on CI, not on anyone — and one whose PR
-/// has merged, which is done.
+/// has merged, which is done. A PR last seen ready stays a `ready` stall while
+/// GitHub works it out again, marked `checking`.
 export function stalledTasks(
   rows: readonly CrewRow[],
   prOf: (row: CrewRow) => PrMark | undefined,
@@ -83,25 +107,31 @@ export function stalledTasks(
     const { item } = row;
     const id = item.sessionId;
     const pr = prOf(row);
-    const status = pr && prStatus(pr).key;
+    const status = pr && stallStatus(pr);
+    const prKey = `${id}:${pr?.number}`;
     // Ready by the same word the Tasks tab says, so failing checks on a clean
     // merge state never read as mergeable.
     const ready = status && (status === "unknown" ? null : status === "ready");
-    if (ready === false) readySince.set(id, -1);
+    if (ready === false) readySince.set(prKey, -1);
     if (ready === true) {
-      const was = readySince.get(id);
-      if (was === undefined) readySince.set(id, 0);
-      else if (was === -1) readySince.set(id, now);
+      const was = readySince.get(prKey);
+      if (was === undefined) readySince.set(prKey, 0);
+      else if (was === -1) readySince.set(prKey, now);
     }
     if (row.busy || row.background || row.asking || item.aside || item.continueAt) continue;
-    // Unknown is held, not drawn: a merge elsewhere drops every open PR there
-    // to unknown for a poll, and a waiting stall in that gap would be a new one.
-    if (ready === null || status === "checksRunning" || status === "merged") continue;
+    // A merge elsewhere drops every open PR there to unknown for a poll. One
+    // last seen ready keeps its row, under the same key, so the card neither
+    // empties nor raises a notice again; anything else waits it out, since a
+    // waiting stall in that gap would be a new one.
+    const was = readySince.get(prKey);
+    const checking = ready === null && was !== undefined && was >= 0;
+    if ((ready === null && !checking) || status === "checksRunning" || status === "merged") continue;
 
     const touched = Date.parse(item.modified) || now;
-    if (ready === true) {
-      const since = Math.max(readySince.get(id) ?? 0, touched);
-      if (now - since >= STALL_MS) stalls.push({ row, pr, kind: "ready", since, key: `${id}:ready:${pr.number}:${item.modified}` });
+    if (pr && (ready || checking)) {
+      const since = Math.max(was ?? 0, touched);
+      if (now - since >= STALL_MS)
+        stalls.push({ row, pr, kind: "ready", since, key: `${id}:ready:${pr.number}:${item.modified}`, checking });
       continue;
     }
     const idle = now - touched >= STALL_MS;
@@ -126,11 +156,21 @@ export function stalledTasks(
 /// idle on the reader. The rest are the bot's alone.
 export const onCard = (stall: Stall): boolean => stall.kind !== "fix";
 
+/// Dismissed stalls, by key. A key names one stall, so the list only grows by
+/// what the reader dismisses.
+export const DISMISSED_KEY = "ade.dismissedStalls";
+
+/// The rows the bot's card draws: what is on it and not dismissed. The card
+/// and its notice both count from here, or the notice names rows nobody sees.
+export const cardRows = (stalls: readonly Stall[], dismissed: readonly string[]): Stall[] =>
+  stalls.filter((s) => onCard(s) && !dismissed.includes(s.key));
+
 /// What a card row needs from the reader, as its bot wrote it since the task
 /// last moved: an answer for a waiting task, something to try before a ready
 /// PR is merged. Nothing while the bot is still on it, and for most ready PRs
 /// nothing at all.
 export function needLine(stall: Stall): string | undefined {
+  if (stall.judged) return (onCard(stall) && stall.judged.need) || undefined;
   const { need, modified } = stall.row.item;
   return onCard(stall) && need && Date.parse(need.at) >= Date.parse(modified) ? need.text : undefined;
 }
@@ -143,6 +183,7 @@ export function botCrews(
     statusBySession: Record<string, SessionStatus>;
     askingSessions: ReadonlySet<string>;
     tasksBySession?: Record<string, BackgroundTask[]>;
+    servingBySession?: Record<string, readonly number[]>;
   },
 ): { bot: Bot; chatId: string; rows: CrewRow[] }[] {
   return bots.flatMap((bot) => {

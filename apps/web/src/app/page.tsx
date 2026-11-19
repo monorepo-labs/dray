@@ -1,10 +1,12 @@
+import { Bots } from "@/components/home/Bots";
 import { Closing } from "@/components/home/Closing";
 import { Everywhere } from "@/components/home/Everywhere";
 import { Faq } from "@/components/home/Faq";
 import { Features } from "@/components/home/Features";
 import { Hero } from "@/components/home/Hero";
 import { Island } from "@/components/home/Island";
-import { Orchestrate } from "@/components/home/Orchestrate";
+import { Proof } from "@/components/home/Proof";
+import { Subscriptions } from "@/components/home/Subscriptions";
 import { Testimonials } from "@/components/home/Testimonials";
 import { COMPANY, DOWNLOAD, REPO } from "@/lib/links";
 
@@ -47,10 +49,12 @@ export default function Home() {
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: SCHEMA }} />
       <Hero />
       <main>
-        <Orchestrate />
+        <Bots />
+        <Proof />
         <Everywhere />
-        <Features />
+        <Subscriptions />
         <Island />
+        <Features />
         <Testimonials />
         <Faq />
       </main>

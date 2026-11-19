@@ -19,6 +19,215 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.14 · 2026-11-18
+
+### New
+
+- A bot's composer shows its tasks at a glance: how many are working, how
+  many are ready to merge. Click to open its Tasks tab.
+- A link to a folder in the chat opens its listing in the Files view.
+
+### Improved
+
+- The in-app browser runs on Chromium 156.
+- Sessions on other machines open faster, and hovering a task starts loading
+  its chat before you click.
+- Waiting on you shows the same tasks on desktop and iPhone.
+- Settings → Servers mentions that an agent can add servers for you.
+- Video thumbnails show for recordings that start after a short gap.
+
+### Fixed
+
+- Passkeys in the browser no longer crash the app when they ask for
+  Bluetooth.
+- ⌘. no longer takes a fullscreen window out of fullscreen.
+- pi accepts models from provider plugins, and its Accounts row works again.
+- A Claude Code session no longer stays working after a subagent's notice.
+
+## 0.30.12 · 2026-11-17
+
+### Improved
+
+- The sidebar stops at its normal width before snapping to the icon rail,
+  and the snap is smooth.
+- A task that finished and left a dev server running shows in Waiting on
+  you instead of reading as still working.
+- A bot's Tasks tab shows how many tasks it has.
+
+## 0.30.11 · 2026-11-17
+
+### Improved
+
+- Opening a row in Waiting on you shows the bot's reply about that task,
+  not the task's own report to the bot.
+
+### Fixed
+
+- Installing or updating the `dray` CLI picks the newest release again.
+
+## 0.30.10 · 2026-11-17
+
+### New
+
+- Drag the sidebar narrow and it snaps to an icon rail.
+- A bot's Tasks tab lists its subagents and background tasks under the
+  tasks.
+
+### Improved
+
+- Clicking a row in Waiting on you opens the task's last message right
+  under it.
+- Attachments has Load more for older pictures.
+- A bot task on a machine that's offline stays in Waiting on you, and you
+  can still merge its PR.
+- Long links in your messages wrap in place instead of jumping to their
+  own line.
+
+### Fixed
+
+- A damaged line in a session's log no longer blocks the chat from
+  opening.
+- "Started a new task" shows in a bot chat however the bot started it.
+- Bots no longer nudge you to fix failing checks on a draft PR.
+
+## 0.30.9 · 2026-11-17
+
+### Improved
+
+- Long task chats open at once on their latest turns and load older ones
+  as you scroll up. The checkpoint rail is gone.
+
+## 0.30.8 · 2026-11-16
+
+### Improved
+
+- Bots hand long work to a background helper or a task, so their chat
+  stays free while it runs.
+- `dray session new --no-worktree` starts a task in the folder as it is,
+  repo or not.
+
+## 0.30.7 · 2026-11-15
+
+### Improved
+
+- The server you install on other machines is 60% smaller and answers
+  faster.
+- Your messages sit in a darker blue bubble that's easier to read.
+- fx subagents show as running until they actually finish.
+
+### Fixed
+
+- A Claude Code turn that ends in an error no longer leaves the session
+  stuck as working.
+- Every session a bot's task starts stays hidden, on any machine.
+- A merge card waits for checks to start before it appears.
+- A "Waiting on you" row no longer sits on a loading placeholder.
+
+## 0.30.6 · 2026-11-15
+
+### New
+
+- **Subagents open in a tab.** Click an agent row in the chat or the
+  More tab to read its whole conversation beside the session.
+- **Dev servers in the bot's browser.** A bot's new tab lists its tasks'
+  dev servers. A stopped one shows which task ran it, where, and a
+  button to ask for a restart.
+- **`dray session model`** switches a session's model and effort from
+  the terminal.
+
+### Improved
+
+- The More tab splits Background tasks from Subagents.
+- Links in a bot's task open as tabs in the bot's row.
+- Bots keep their instructions in AGENTS.md, which every agent reads
+  on its own.
+- Merging or settling a bot task deletes its worktree without asking.
+- Removing a machine warns about its unfinished tasks first.
+- fx shows a countdown while it retries a failed request.
+- Idle agent browsers on servers close after 5 minutes, not 30.
+
+### Fixed
+
+- Images an agent links by local path now show in the chat.
+- "Waiting on you" rows stay put while GitHub rechecks PRs after a
+  merge.
+
+## 0.30.5 · 2026-11-14
+
+### New
+
+- **Edit a bot.** Edit… in a bot's menu changes its name and face.
+- **Split groups.** Split panes form a group you can close and resize,
+  and the tab row draws the group as one tab.
+
+### Improved
+
+- Dray opens on your first bot.
+- A bot's Tasks tab puts what needs you first, then PRs ready to merge.
+- A task's own sub-tasks keep running after it settles, and report to
+  the nearest task or bot still open.
+- Bots react less: 👍 for an ok, 👀 only when looking into something.
+
+### Fixed
+
+- PR status that failed to load, often on a spent GitHub rate limit,
+  now retries, so a new PR always shows up.
+
+## 0.30.4 · 2026-11-14 · notify
+
+### New
+
+- **Split panes.** Drag a tab from a session's tab row into the main
+  view to open it beside the chat. Pages, Diff, Files and bot tasks all
+  split.
+- **Video proof from tasks.** A bot's task ends visible work with a
+  short recording, and the bot passes it on so it plays in its chat.
+- **Bots react.** A bot with nothing to say puts 👀, ✅ or 🎉 on your
+  message instead of replying.
+- **Waiting cards in the Island.** Hover a bot's "waiting on you" pill
+  to see each task's card, and merge a ready PR from there.
+
+### Improved
+
+- A bot task waiting on you shows after 2 minutes, not 5.
+- Clicking a "Waiting on you" row scrolls to the task's last reply;
+  ⌘-click opens the task.
+- The background tasks list shows only tasks still running.
+- The sidebar remembers which bot you had open under each project
+  filter, and hides the filter row when no project is attached.
+- Esc leaves Settled or Drafts for the active list.
+- A task whose server is offline can still be set aside.
+- I'm back unlocks after 10 seconds, not 30.
+
+### Fixed
+
+- Scrolling a page sideways in the browser no longer switches tabs.
+- Hidden tasks stay hidden under a project filter.
+
+## 0.30.3 · 2026-11-13
+
+### New
+
+- **Bots learn from corrections.** When you correct a bot or a task
+  fails, it writes the lesson where it will be used next time: a rule,
+  a skill or a memory. Each lesson shows in the chat with View diff and
+  Undo.
+- **Bots hear what you did.** A bot is told which of its tasks you
+  merged, settled, stopped or deleted since its last turn.
+- New tab page has Diff and Files cards.
+
+### Improved
+
+- Long-open bot chats stay fast by keeping only recent turns drawn.
+- Bots stay quiet on task progress and can answer with lists and
+  tables.
+- A bot can end a turn without a reply, and blank replies no longer
+  draw.
+- Links in a bot's chat open as tabs in the bot's row.
+- Stalled tasks on another machine now reach their bot.
+- Merging goes straight to the merged row with no flash.
+- Boat sandbox stop warnings are off.
+
 ## 0.30.2 · 2026-11-13
 
 ### New

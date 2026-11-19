@@ -4,12 +4,16 @@ import {
   firstLine,
   isSettling,
   markDisagrees,
+  marksGaveUp,
+  marksRepo,
+  marksRetryDelay,
   readyTransitions,
   sameMark,
   mergeReadiness,
   mergeVerdict,
   pickPrMark,
   prBadgeCount,
+  prRepoSlug,
   prStatus,
   readyToMerge,
   sessionBranch,
@@ -50,6 +54,18 @@ const check = (state: PrCheck["state"]): PrCheck => ({
   url: null,
   workflow: null,
   avatar: null,
+});
+
+describe("prRepoSlug", () => {
+  it("names a github.com repo as owner/name and any other host in full", () => {
+    expect(prRepoSlug("https://github.com/acme/app/pull/7")).toBe("acme/app");
+    expect(prRepoSlug("https://git.corp.example/acme/app/pull/7")).toBe("git.corp.example/acme/app");
+  });
+
+  it("names nothing for a URL that is no pull request", () => {
+    expect(prRepoSlug("https://github.com/acme/app/issues/7")).toBeUndefined();
+    expect(prRepoSlug(undefined)).toBeUndefined();
+  });
 });
 
 describe("sessionBranch", () => {
@@ -633,5 +649,47 @@ describe("prStatus", () => {
     expect(prStatus(mark({ checksState: "RUNNING" })).tone).toBe("pending");
     expect(prStatus(mark({ checksState: "FAILING" })).tone).toBe("pending");
     expect(prStatus(mark({ mergeStateStatus: "BLOCKED", reviewDecision: "REVIEW_REQUIRED" })).tone).toBe("blocked");
+  });
+});
+
+describe("marksRepo", () => {
+  const at = (url: string): PrMark => ({
+    number: 1,
+    url,
+    headRefName: "feature",
+    isDraft: false,
+    state: "OPEN",
+    checksState: "CLEAR",
+    mergeable: null,
+    mergeStateStatus: null,
+    reviewDecision: null,
+  });
+
+  it("reads host, owner and name off a PR's URL", () => {
+    expect(marksRepo([at("https://github.com/Monorepo-Labs/dray/pull/1075")])).toBe("github.com/monorepo-labs/dray");
+  });
+
+  it("knows nothing for a repo with no PRs or an odd URL", () => {
+    expect(marksRepo([])).toBeUndefined();
+    expect(marksRepo([at("https://github.com/monorepo-labs/dray/issues/3")])).toBeUndefined();
+  });
+});
+
+describe("marksRetryDelay", () => {
+  it("doubles from 15s and stops at 10 minutes", () => {
+    expect([1, 2, 3, 4, 5, 6, 7, 20].map(marksRetryDelay)).toEqual([
+      15_000, 30_000, 60_000, 120_000, 240_000, 480_000, 600_000, 600_000,
+    ]);
+  });
+});
+
+describe("marksGaveUp", () => {
+  it("gives up only where no retry can mend it", () => {
+    expect(marksGaveUp({ kind: "no_cli" })).toBe(true);
+    expect(marksGaveUp({ kind: "no_remote" })).toBe(true);
+    expect(marksGaveUp({ kind: "not_authenticated" })).toBe(false);
+    expect(marksGaveUp({ kind: "other", detail: "API rate limit exceeded" })).toBe(false);
+    expect(marksGaveUp(new Error("not connected"))).toBe(false);
+    expect(marksGaveUp(null)).toBe(false);
   });
 });

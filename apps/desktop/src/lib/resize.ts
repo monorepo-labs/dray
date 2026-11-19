@@ -1,9 +1,16 @@
-/// How near the default a drag has to land before it sticks there, in pixels.
-///
-/// Wide enough to be felt, narrow enough that a reader aiming somewhere else
-/// never fights it — past this the width follows the pointer again, since the
-/// drag's own origin never moves.
+/// How near the default a stored width or a key step has to land before it
+/// sticks there, in pixels.
 const SNAP_PX = 12;
+
+/// How far a drag must pull from the default before the edge lets go of it.
+export const DETENT = 40;
+/// The most the edge stretches toward the pointer while the default holds it.
+export const GIVE = 10;
+
+/// What a width is for: at `rest` (stored, keyed), mid-`drag`, the `release`
+/// that ends one, or a drag the detent has already let go of, which it does
+/// once: from then on the edge `follow`s the pointer.
+export type Pull = "rest" | "drag" | "release" | "follow";
 
 /// The range a pane can actually occupy right now — the one bounds the clamp,
 /// the keys and the ARIA values all read.
@@ -29,17 +36,67 @@ export function paneBounds(
   return { min: Math.min(min, cap), max: cap };
 }
 
-/// Where a pane's edge lands: clamped to its range, and held at `snapTo` while
-/// the drag is within `SNAP_PX` of it.
+/// Where a pane's edge lands: clamped to its range, and held at `snapTo` near
+/// it — within `SNAP_PX` at rest, within `DETENT` for a drag.
 ///
 /// The default width is the one value a reader is likely to want back, and
-/// hitting it by eye is a pixel hunt — so the drag stops there on its own. The
-/// hold point is clamped too: on a window too narrow to hold the default, it is
-/// not a width this pane can take and snapping to it would breach the range.
-export function snapWidth(raw: number, min: number, max: number, snapTo: number): number {
-  const clamped = Math.max(min, Math.min(max, raw));
-  const target = Math.max(min, Math.min(max, snapTo));
-  return Math.abs(clamped - target) < SNAP_PX ? target : clamped;
+/// hitting it by eye is a pixel hunt — so a drag sticks there, stretching at
+/// most `GIVE` toward the pointer until it pulls clear, and a release inside
+/// the detent settles on it. The hold point is clamped too: on a window too
+/// narrow to hold the default, it is not a width this pane can take and
+/// snapping to it would breach the range.
+///
+/// With a `rail`, nothing between it and the floor is ever drawn: a width under
+/// halfway lands on the rail, one above it holds at the floor. One line both
+/// ways, as Finder's sidebar does. With the line at the floor itself, the first
+/// pixel past the default dropped to the rail with no stop at the floor.
+export function snapWidth(
+  raw: number,
+  min: number,
+  max: number,
+  snapTo: number,
+  rail?: number,
+  pull: Pull = "rest",
+): number {
+  if (rail !== undefined) {
+    const r = Math.min(rail, max);
+    if (raw < (r + min) / 2) return r;
+  }
+  const within = (n: number) => Math.max(min, Math.min(max, n));
+  const clamped = within(raw);
+  const target = within(snapTo);
+  if (pull === "follow") return clamped;
+  if (pull === "rest") return Math.abs(clamped - target) < SNAP_PX ? target : clamped;
+  const off = raw - target;
+  if (Math.abs(off) >= DETENT) return clamped;
+  // tanh gives most of the stretch early and stiffens toward the break.
+  return pull === "drag" ? within(Math.round(target + GIVE * Math.tanh((1.5 * off) / DETENT))) : target;
+}
+
+/// The snap's spring, critically damped: settles in about a quarter second. A
+/// bouncier one was tried and read as jank.
+const STIFFNESS = 520;
+const DAMPING = 2 * Math.sqrt(STIFFNESS);
+/// Fixed step, so the spring feels the same at 60Hz and 120Hz.
+const STEP_S = 1 / 240;
+
+/// One frame of the resize spring: `x` at speed `v` chasing `t`, which moves at
+/// `vt` px/s, over `dt` seconds. Returns the new position and speed.
+///
+/// Damping works on the speed relative to the target's, so a chase closes on a
+/// moving pointer instead of trailing it — which also means it carries the
+/// pointer's speed when the pointer stops. So a step that reaches or crosses
+/// the target lands on it and ends the frame there; one starting on it counts,
+/// or the steps after a landing walk straight past.
+export function springFrame(x: number, v: number, t: number, vt: number, dt: number): [number, number] {
+  for (let left = dt; left > 0; left -= STEP_S) {
+    const h = Math.min(STEP_S, left);
+    const before = x - t;
+    v += (-STIFFNESS * before - DAMPING * (v - vt)) * h;
+    x += v * h;
+    if (before === 0 ? x !== t : before * (x - t) <= 0) return [t, vt];
+  }
+  return [x, v];
 }
 
 /// Width the panes ahead of `self` are holding — what it cannot have.

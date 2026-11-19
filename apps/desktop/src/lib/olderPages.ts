@@ -11,3 +11,28 @@ export function setOlderLoader(load: (sessionId: string, turns?: number) => void
 export function loadOlder(sessionId: string, turns?: number) {
   loader(sessionId, turns);
 }
+
+let callReader: (sessionId: string, callId: string) => void = () => {};
+
+export function setCallReader(read: (sessionId: string, callId: string) => void) {
+  callReader = read;
+}
+
+/// Asks for one tool call's whole events, for a row whose body a first frame
+/// cut (`isCut`) and which now needs it. Nothing else of the transcript is read.
+export function completeCall(sessionId: string, callId: string) {
+  callReader(sessionId, callId);
+}
+
+let dropper: (sessionId: string, keepFrom?: string) => void = () => {};
+
+export function setOlderDropper(drop: (sessionId: string, keepFrom?: string) => void) {
+  dropper = drop;
+}
+
+/// Lets go of the pages read above event `keepFrom`, as far as one began, or
+/// above the tail it opened on with none named, so a transcript read back and
+/// left holds its tail again. Read again on scroll.
+export function dropOlder(sessionId: string, keepFrom?: string) {
+  dropper(sessionId, keepFrom);
+}

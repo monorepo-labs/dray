@@ -19,7 +19,7 @@ use draft::DraftCommand;
 use dray_proto::{
     encode_line, AddVideo, BrowserAction, MergeCard, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
     LinkIssues, ListSessions, Locator, OnMachine, RenameSession, Request, Response, SendMessage, SessionRef,
-    SessionSummary, SetAside, SetNeed, SettleSession, ShareAction, ShareRequest,
+    React, SessionSummary, SetAside, SetModel, SetNeed, SettleSession, ShareAction, ShareRequest,
 };
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
@@ -47,8 +47,8 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 
-    /// Run this on another machine, as `dray machine ls` names it. `session ls` also takes `all`. A session id finds its
-    /// machine on its own.
+    /// Run this on another machine, as `dray machine ls` names it. `session ls` also takes `all`, and `session new`
+    /// takes `cloud` for a fresh Dray Cloud machine. A session id finds its machine on its own.
     #[arg(long, global = true, value_name = "NAME")]
     machine: Option<String>,
 }
@@ -75,6 +75,9 @@ enum Command {
     /// Put a video where this session's chat plays it.
     #[command(subcommand, arg_required_else_help = true)]
     Video(VideoCommand),
+    /// Put a screenshot where this session's chat shows it.
+    #[command(subcommand, arg_required_else_help = true)]
+    Image(ImageCommand),
     /// Publish one of this session's dev servers as a public link, list the
     /// live ones, or stop one.
     #[command(arg_required_else_help = true, args_conflicts_with_subcommands = true)]
@@ -128,6 +131,10 @@ enum SessionCommand {
     Send(Send),
     /// Rename a session. Its title stays yours: no generated one replaces it.
     Rename(Rename),
+    /// Switch a session's model or effort, like its composer's model picker.
+    /// Takes effect from its next turn, without stopping one that is running.
+    /// Without a model or --effort, prints what it runs on.
+    Model(ModelArgs),
     /// Stop the turn a session is running, like its Stop button.
     Stop(SessionArg),
     /// Settle a finished session: it stops, and leaves the active list.
@@ -145,6 +152,17 @@ enum SessionCommand {
     /// on you" card in this bot's chat. Cleared when the task moves; no text
     /// clears it now.
     Need(Need),
+    /// React to the user's newest message in this bot's chat instead of
+    /// replying: 👍 got it, 👀 looking into it, ✅ done, 🎉 celebrate,
+    /// ❤️ thanks, 😂 funny, 😢 sorry to hear. End the turn with no text after it.
+    React(ReactArgs),
+}
+
+#[derive(Args)]
+struct ReactArgs {
+    /// 👀 ✅ 🎉 👍 ❤️ 😂 😢, or its word: seen, done, celebrate, like, love,
+    /// laugh, sad.
+    emoji: String,
 }
 
 #[derive(Args)]
@@ -159,6 +177,20 @@ struct Need {
     session_id: String,
     /// What it needs, imperative and short: "Pick: keep or drop the rename button".
     need: Option<String>,
+}
+
+#[derive(Args)]
+struct ModelArgs {
+    /// The session, as printed by `dray session ls`.
+    session_id: String,
+    /// A model alias its agent knows, like fable, opus or sonnet on
+    /// claude_code. Without it the model stays and only --effort moves.
+    model: Option<String>,
+    /// low, medium, high, xhigh, max or ultra, where the model has it. Without
+    /// it the session keeps its level if the new model has it, else takes the
+    /// model's own.
+    #[arg(long)]
+    effort: Option<String>,
 }
 
 #[derive(Args)]
@@ -185,9 +217,16 @@ struct New {
     prompt: String,
 
     /// Repo to run in. Defaults to the calling session's project, or the git
-    /// repo of the current directory.
+    /// repo of the current directory. With --no-worktree, any folder; `~` is
+    /// the home folder of the machine that runs it.
     #[arg(long)]
     project: Option<PathBuf>,
+
+    /// Run in the project folder as it is, with no worktree or branch: the
+    /// repo's own checkout, or a folder that is no repo. For work that changes
+    /// no repo, such as setting up a machine or research.
+    #[arg(long, conflicts_with = "base")]
+    no_worktree: bool,
 
     /// A model alias the harness knows, like opus or sonnet on claude_code.
     /// Defaults to the calling session's model.
@@ -394,6 +433,25 @@ enum ShareCommand {
 }
 
 #[derive(Subcommand)]
+enum ImageCommand {
+    /// File a PNG or JPEG on this machine for the chat, and print the path to
+    /// put in your reply.
+    Add(ImageAdd),
+}
+
+#[derive(Args)]
+struct ImageAdd {
+    /// The screenshot. It must be on this machine: copy one made elsewhere here first.
+    file: PathBuf,
+    /// What to call it. Defaults to the file's own name.
+    name: Option<String>,
+    /// The session whose chat shows it. Defaults to the session running this
+    /// command.
+    #[arg(long)]
+    session: Option<String>,
+}
+
+#[derive(Subcommand)]
 enum VideoCommand {
     /// File a video on this machine for the chat, converting it to MP4 if it
     /// needs it, and print the path to put in your reply.
@@ -456,7 +514,8 @@ fn run() -> Result<(), String> {
         Command::Draft(command) => draft::run(command),
         Command::Bot(command) => bot::run(command),
         Command::Browser(args) => browser(args),
-        Command::Video(VideoCommand::Add(args)) => add_video(args),
+        Command::Video(VideoCommand::Add(args)) => add_media(args.file, args.name, args.session, false),
+        Command::Image(ImageCommand::Add(args)) => add_media(args.file, args.name, args.session, true),
         Command::Share(args) => share(args),
         Command::Machine(command) => machine::run(command),
         Command::Server(command) => setup::server(command),
@@ -484,6 +543,8 @@ fn session(command: SessionCommand) -> Result<(), String> {
         SessionCommand::Ls(args) => return ls(args),
         SessionCommand::Send(args) => return send_message(args),
         SessionCommand::MergeCard(args) => return merge_card(args),
+        SessionCommand::React(args) => return react(args),
+        SessionCommand::Model(args) => return set_model(args),
         SessionCommand::Rename(args) => (
             Request::RenameSession(RenameSession { session_id: args.session_id, title: args.title }),
             "Renamed it",
@@ -514,6 +575,12 @@ fn session(command: SessionCommand) -> Result<(), String> {
         }
     };
     match send(request)? {
+        // Its machine did not answer, so all that is known is the id.
+        Response::Session { session } if session.held => {
+            let machine = session.machine.as_deref().unwrap_or("its machine");
+            eprintln!("{said} {}. {machine} is not reachable, so it lands there once it is.", session.session_id);
+            Ok(())
+        }
         Response::Session { session } => {
             eprintln!("{said} \"{}\".", session.title);
             Ok(())
@@ -539,6 +606,7 @@ fn new(args: New) -> Result<(), String> {
         // one running on it. clap has no other spelling for a bare flag.
         fast: args.fast.then_some(true),
         hidden: args.hidden,
+        no_worktree: args.no_worktree,
     });
 
     match send(request)? {
@@ -552,7 +620,7 @@ fn new(args: New) -> Result<(), String> {
                 on_machine(&session),
                 match &session.worktree_name {
                     Some(name) => format!(" in worktree {name}"),
-                    None => String::new(),
+                    None => format!(" in {}, no worktree", session.cwd),
                 },
                 // `--base <session-id>` names a session, so the branch it
                 // resolved to is news: the caller asked with an id and only the
@@ -562,8 +630,14 @@ fn new(args: New) -> Result<(), String> {
                     None => String::new(),
                 }
             );
-            // An app older than the flag ignores it and lists the session, and
-            // the agent would otherwise tell the user it is hidden.
+            // An app older than either flag ignores it, and the agent would
+            // otherwise tell the user what it asked for rather than what ran.
+            if args.no_worktree && session.worktree_name.is_some() {
+                eprintln!(
+                    "This Dray app does not know --no-worktree, so the session runs in a worktree. \
+                     Update the Dray app."
+                );
+            }
             if args.hidden && !session.hidden {
                 eprintln!(
                     "This Dray app does not know --hidden, so the session shows in the sidebar. \
@@ -692,21 +766,50 @@ fn merge_card(args: SessionArg) -> Result<(), String> {
     }
 }
 
-/// Resolved here, not by the server: a relative path means this shell's
-/// directory, and the server stands in another.
-fn add_video(args: VideoAdd) -> Result<(), String> {
-    let session_id = args
-        .session
+fn set_model(args: ModelArgs) -> Result<(), String> {
+    let asked = args.model.is_some() || args.effort.is_some();
+    let request = SetModel { session_id: args.session_id, model: args.model, effort: args.effort };
+    match send(Request::SetModel(request))? {
+        Response::Model { session, model, effort, changed } => {
+            let at = effort.map(|e| format!(" at {e} effort")).unwrap_or_default();
+            let title = &session.title;
+            let place = on_machine(&session);
+            match (asked, changed) {
+                (false, _) => eprintln!("\"{title}\"{place} runs on {model}{at}."),
+                (true, false) => eprintln!("\"{title}\"{place} is already set to {model}{at}."),
+                (true, true) => eprintln!("\"{title}\"{place} moves to {model}{at} from its next turn."),
+            }
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(other)),
+    }
+}
+
+fn react(args: ReactArgs) -> Result<(), String> {
+    let session_id = parent_session_id().ok_or("run this from inside a bot's chat: the reaction goes on its user's message.")?;
+    match send(Request::React(React { session_id, emoji: args.emoji }))? {
+        Response::Reacted { emoji } => {
+            eprintln!("Reacted {emoji} to the user's message. End your turn without writing anything.");
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(other)),
+    }
+}
+
+/// `dray video add` and `dray image add`. The path is resolved here, not by the
+/// server: a relative path means this shell's directory, and the server stands
+/// in another.
+fn add_media(file: PathBuf, name: Option<String>, session: Option<String>, image: bool) -> Result<(), String> {
+    let what = if image { "screenshot" } else { "video" };
+    let session_id = session
         .or_else(parent_session_id)
         .ok_or("which session? Pass --session <id>, or run this from inside a Dray session.")?;
-    let path = std::fs::canonicalize(&args.file).map_err(|e| {
-        format!("{}: {e}. A video made on another machine has to be copied here first.", args.file.display())
-    })?;
-    let request = Request::AddVideo(AddVideo {
-        session_id,
-        path: path.to_string_lossy().into_owned(),
-        name: args.name,
-    });
+    let path = std::fs::canonicalize(&file)
+        .map_err(|e| format!("{}: {e}. A {what} made on another machine has to be copied here first.", file.display()))?;
+    let add = AddVideo { session_id, path: path.to_string_lossy().into_owned(), name };
+    let request = if image { Request::AddImage(add) } else { Request::AddVideo(add) };
     match send(request)? {
         Response::Video { path } => {
             println!("{path}");
@@ -1328,14 +1431,29 @@ fn resolve_project(explicit: Option<PathBuf>) -> Option<String> {
         // path means this shell's directory, and the server stands in another
         // — under launchd that is `/`, so `--project .` matched no session.
         // Left as typed for another machine, where the path is that machine's.
+        // A quoted `~` reaches here unexpanded, which is how a path names the
+        // home of another machine; the server there expands it.
         let path = match MACHINE.get() {
-            None => std::path::absolute(&path).unwrap_or(path),
+            None => {
+                let path = expand_home(path);
+                std::path::absolute(&path).unwrap_or(path)
+            }
             Some(_) => path,
         };
         return Some(path.to_string_lossy().into_owned());
     }
 
     repo_root(Path::new("."))
+}
+
+/// A leading `~` as this user's home, for a path the shell left unexpanded.
+fn expand_home(path: PathBuf) -> PathBuf {
+    let Ok(rest) = path.strip_prefix("~") else { return path };
+    match std::env::home_dir() {
+        Some(home) if rest.as_os_str().is_empty() => home,
+        Some(home) => home.join(rest),
+        None => path,
+    }
 }
 
 /// The repo `dir` belongs to — its **main** worktree, not whichever linked one
@@ -1617,11 +1735,30 @@ mod tests {
     }
 
     #[test]
-    fn there_is_no_way_to_opt_out_of_the_worktree() {
-        // Sessions created here run at the same time by design, so sharing a
-        // checkout is never the right answer — the flag is gone rather than
-        // defaulted.
-        assert!(Cli::try_parse_from(["dray", "new", "x", "--no-worktree"]).is_err());
+    fn opting_out_of_the_worktree_is_explicit_and_takes_no_base() {
+        let Ok(Cli { command: Command::Session(SessionCommand::New(new)), .. }) =
+            Cli::try_parse_from(["dray", "session", "new", "x", "--no-worktree", "--project", "/srv"])
+        else {
+            panic!("not a create");
+        };
+        assert!(new.no_worktree);
+        let Ok(Cli { command: Command::Session(SessionCommand::New(new)), .. }) =
+            Cli::try_parse_from(["dray", "session", "new", "x"])
+        else {
+            panic!("not a create");
+        };
+        assert!(!new.no_worktree);
+        // `--base` starts a worktree on a ref, which this has none to start.
+        assert!(Cli::try_parse_from(["dray", "new", "x", "--no-worktree", "--base", "main"]).is_err());
+    }
+
+    #[test]
+    fn a_leading_tilde_is_home() {
+        let home = std::env::home_dir().unwrap();
+        assert_eq!(expand_home("~".into()), home);
+        assert_eq!(expand_home("~/notes".into()), home.join("notes"));
+        assert_eq!(expand_home("~bob/x".into()), PathBuf::from("~bob/x"));
+        assert_eq!(expand_home("/srv/~".into()), PathBuf::from("/srv/~"));
     }
 
     /// The old spellings still parse — agents with an older skill, and remote
@@ -1637,6 +1774,10 @@ mod tests {
             &["dray", "session", "need", SESSION, "Pick: keep or drop the rename button"],
             &["dray", "session", "need", SESSION],
             &["dray", "session", "rename", SESSION, "New name"],
+            &["dray", "session", "model", SESSION, "fable"],
+            &["dray", "session", "model", SESSION, "opus", "--effort", "high"],
+            &["dray", "session", "model", SESSION, "--effort", "low"],
+            &["dray", "session", "model", SESSION],
             &["dray", "share", "start", "5173"],
             &["dray", "share", "ls", "--all", "--json"],
             &["dray", "server", "install", "--tools", "git,gh"],

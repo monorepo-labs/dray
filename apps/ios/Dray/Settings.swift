@@ -2,22 +2,22 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-/// Where Settings can go: a server's page, Dictation, Notifications.
+/// Where Settings can go: a server's page, every server, Dictation, Appearance.
 enum SettingsPage: Hashable {
     case server(UUID)
+    case servers
     case dictation
-    case notifications
+    case appearance
 }
 
 /// The one Settings screen: a card per server, then Add server, Dictation,
-/// Notifications and about. Opened on one server's page when a banner's Fix asks.
+/// Appearance and about. Opened on one server's page when a banner's Fix asks.
 struct SettingsView: View {
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var path: [SettingsPage]
-    @State private var adding = false
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
-    @AppStorage(NotificationSettings.allowKey) private var notify = true
+    @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
 
     init(focus: UUID?) { _path = State(initialValue: focus.map { [.server($0)] } ?? []) }
 
@@ -25,23 +25,16 @@ struct SettingsView: View {
         NavigationStack(path: $path) {
             ScrollView {
                 VStack(spacing: 28) {
-                    VStack(spacing: Theme.Space.s) {
-                        ForEach(store.servers) { s in
-                            NavigationLink(value: SettingsPage.server(s.id)) { ServerCard(server: s) }
-                                .buttonStyle(RowButtonStyle())
-                        }
-                        Button { adding = true } label: { AddServerCard(first: store.servers.isEmpty) }
-                            .buttonStyle(RowButtonStyle())
-                    }
+                    ServerCards(limit: 5)
 
                     RowGroup {
                         NavigationLink(value: SettingsPage.dictation) {
                             SettingsRow("Dictation", icon: "mic",
-                                        value: store.dictationServer(dictationPick).map { store.name(of: $0) } ?? "None")
+                                        value: store.dictationEngine(dictationPick).map { store.name(of: $0) } ?? "None")
                         }
                         RowDivider(inset: 48)
-                        NavigationLink(value: SettingsPage.notifications) {
-                            SettingsRow("Notifications", icon: "bell", value: notify ? "On" : "Off")
+                        NavigationLink(value: SettingsPage.appearance) {
+                            SettingsRow("Appearance", icon: "circle.lefthalf.filled", value: hideSessions ? "Bots only" : nil)
                         }
                     }
                     .buttonStyle(RowButtonStyle())
@@ -67,11 +60,15 @@ struct SettingsView: View {
             .navigationDestination(for: SettingsPage.self) { page in
                 switch page {
                 case .server(let id): ServerDetail(id: id)
+                case .servers:
+                    ScrollView { ServerCards(limit: nil).padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.m) }
+                        .background(Theme.card.ignoresSafeArea())
+                        .navigationTitle("Servers")
+                        .navigationBarTitleDisplayMode(.inline)
                 case .dictation: DictationSettings()
-                case .notifications: NotificationSettings()
+                case .appearance: AppearanceSettings()
                 }
             }
-            .sheet(isPresented: $adding) { AddServerView(link: nil) }
             .task { await Releases.shared.refresh() }
         }
     }
@@ -83,6 +80,35 @@ struct SettingsView: View {
 }
 
 // MARK: Pieces
+
+/// A card per server and Add server. Past `limit`, the rest sit behind an All servers row.
+private struct ServerCards: View {
+    @Environment(Store.self) private var store
+    let limit: Int?
+    @State private var adding = false
+
+    var body: some View {
+        // The full page leads with Add server; Settings keeps it under its few.
+        let addCard = Button { adding = true } label: { AddServerCard(first: store.servers.isEmpty) }
+        VStack(spacing: Theme.Space.s) {
+            if limit == nil { addCard }
+            ForEach(store.servers.prefix(limit ?? .max)) { s in
+                NavigationLink(value: SettingsPage.server(s.id)) { ServerCard(server: s) }
+            }
+            if let limit, store.servers.count > limit {
+                RowGroup {
+                    NavigationLink(value: SettingsPage.servers) {
+                        SettingsRow("All servers", value: "\(store.servers.count)")
+                    }
+                }
+                .accessibilityIdentifier("settings.allServers")
+            }
+            if limit != nil { addCard }
+        }
+        .buttonStyle(RowButtonStyle())
+        .sheet(isPresented: $adding) { AddServerView(link: nil) }
+    }
+}
 
 /// A server: two stacked units, each with its light. The holes are cut, so
 /// whatever the glyph sits on shows through.
@@ -619,8 +645,16 @@ struct AddServerView: View {
                             RowDivider(inset: 0)
                             FieldRow(label: "Name", text: $name, prompt: "Optional")
                         }
-                        Text(filled ? "Filled from the pasted connect line." : "A whole connect line fills both at once.")
-                            .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
+                        Group {
+                            if let existing {
+                                Text("This server is already added as \(existing.name).")
+                                    .foregroundStyle(Theme.secondary)
+                            } else {
+                                Text(filled ? "Filled from the pasted connect line." : "A whole connect line fills both at once.")
+                                    .foregroundStyle(Theme.tertiary)
+                            }
+                        }
+                        .font(Theme.Font.footnote)
                             .padding(.horizontal, Theme.Space.xs)
                     }
                 }
@@ -634,7 +668,7 @@ struct AddServerView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
+                    Button(existing == nil ? "Add" : "Update") {
                         guard let parsed else { return }
                         let trimmed = name.trimmingCharacters(in: .whitespaces)
                         store.addServer(name: trimmed.isEmpty ? (host ?? "Server") : trimmed, url: parsed.url, token: parsed.token)
@@ -666,33 +700,35 @@ struct AddServerView: View {
         parseConnectLine("\(address) \(token.trimmingCharacters(in: .whitespacesAndNewlines))")
     }
     private var host: String? { parsed.flatMap { socketURL($0.url)?.host } }
+    /// Already saved: Add would draw its bots and sessions twice.
+    private var existing: Server? { parsed.flatMap { store.saved(url: $0.url, token: $0.token) } }
 }
 
 // MARK: Dictation
 
-/// Which server turns the phone's voice into text, the record tones, and the
-/// microphone's permission.
+/// What turns the phone's voice into text — Apple's model on the phone or a
+/// server — the record tones, and the microphone's permission.
 struct DictationSettings: View {
     @Environment(Store.self) private var store
     @AppStorage(Dictations.serverKey) private var pick = ""
     @AppStorage(Dictations.soundsKey) private var sounds = true
     @Environment(\.scenePhase) private var phase
     @State private var mic = AVAudioApplication.shared.recordPermission
+    private var apple: AppleSpeech { .shared }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 28) {
-                if !store.servers.isEmpty {
-                    VStack(alignment: .leading, spacing: Theme.Space.s) {
-                        GroupLabel("Transcribe on").padding(.horizontal, Theme.Space.m)
-                        RowGroup {
-                            ForEach(Array(store.servers.enumerated()), id: \.element.id) { i, s in
-                                if i > 0 { RowDivider(inset: 48) }
-                                serverRow(s)
-                            }
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    GroupLabel("Transcribe on").padding(.horizontal, Theme.Space.m)
+                    RowGroup {
+                        appleRow
+                        ForEach(store.servers, id: \.id) { s in
+                            RowDivider(inset: 48)
+                            serverRow(s)
                         }
-                        GroupLabel("Your voice is turned into text on this server.").padding(.horizontal, Theme.Space.m)
                     }
+                    if let footer { GroupLabel(footer).padding(.horizontal, Theme.Space.m) }
                 }
                 RowGroup {
                     Toggle("Start and stop sounds", isOn: $sounds)
@@ -714,20 +750,54 @@ struct DictationSettings: View {
         .foregroundStyle(Theme.text)
         .navigationTitle("Dictation")
         .navigationBarTitleDisplayMode(.inline)
+        .task { await apple.refresh() }
         // Back from the system's Settings, where it may have changed.
         .onChange(of: phase) { _, now in if now == .active { mic = AVAudioApplication.shared.recordPermission } }
     }
 
+    private var footer: String? {
+        switch store.dictationEngine(pick) {
+        case .apple: "Your voice is turned into text on this \(AppleSpeech.device) and never leaves it."
+        case .server: "Your voice is turned into text on this server."
+        case nil: nil
+        }
+    }
+
+    /// Shown on every iOS, so an older phone learns what it is missing.
+    private var appleRow: some View {
+        let detail: String? = switch apple.status {
+        case .needsNewerOS: "Needs iOS 26 and above"
+        case .unsupported: "Not available in your language"
+        case .checking, .needsDownload, .ready: "On device, private"
+        case .downloading(let done): "Downloading model, \(Int(done * 100))%"
+        }
+        return row(able: apple.usable, chosen: store.dictationEngine(pick) == .apple, name: AppleSpeech.device, detail: detail) {
+            Image(systemName: AppleSpeech.device == "iPad" ? "ipad" : "iphone").font(.system(size: 17)).foregroundStyle(Theme.secondary)
+        } pick: {
+            pick = AppleSpeech.pick
+            apple.download()
+        }
+    }
+
     private func serverRow(_ s: Server) -> some View {
-        let able = store.canDictate(s.id)
-        let chosen = store.dictationServer(pick) == s.id
-        return Button { pick = s.id.uuidString } label: {
+        row(able: store.canDictate(s.id), chosen: store.dictationEngine(pick) == .server(s.id), name: s.name, detail: nil) {
+            ServerGlyph().fill(Theme.secondary, style: FillStyle(eoFill: true))
+        } pick: {
+            pick = s.id.uuidString
+        }
+    }
+
+    private func row(able: Bool, chosen: Bool, name: String, detail: String?,
+                     @ViewBuilder icon: () -> some View, pick: @escaping () -> Void) -> some View {
+        Button(action: pick) {
             HStack(spacing: Theme.Space.m) {
-                ServerGlyph().fill(Theme.secondary, style: FillStyle(eoFill: true))
-                    .frame(width: 20, height: 20).opacity(able ? 1 : 0.45)
-                Text(s.name).foregroundStyle(able ? Theme.text : Theme.tertiary).lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if !able {
+                icon().frame(width: 20, height: 20).opacity(able ? 1 : 0.45)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name).foregroundStyle(able ? Theme.text : Theme.tertiary).lineLimit(1)
+                    if let detail { Text(detail).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if !able && detail == nil {
                     Text("Unavailable").foregroundStyle(Theme.tertiary)
                 } else if chosen {
                     Image(systemName: "checkmark").font(Theme.Font.headline.font).foregroundStyle(Theme.text)
@@ -735,6 +805,7 @@ struct DictationSettings: View {
             }
             .font(Theme.Font.body)
             .padding(.leading, Theme.Space.l).padding(.trailing, 14)
+            .padding(.vertical, detail == nil ? 0 : Theme.Space.s)
             .frame(minHeight: 52)
             .contentShape(.rect)
         }
@@ -752,56 +823,32 @@ struct DictationSettings: View {
     }
 }
 
-// MARK: Notifications
+// MARK: Appearance
 
-/// What the phone should tell the reader about. Only the picks exist so far:
-/// nothing sends a notification yet, and the screen says so.
-struct NotificationSettings: View {
-    static let allowKey = "notify.allow"
-    @AppStorage(allowKey) private var allow = true
-    @AppStorage("notify.needsMe") private var needsMe = true
-    @AppStorage("notify.done") private var done = true
-    @AppStorage("notify.prReady") private var prReady = false
-    @AppStorage("notify.autoStop") private var autoStop = true
+/// How the home list looks. Hiding sessions leaves it to bots alone.
+struct AppearanceSettings: View {
+    static let hideSessionsKey = "list.hideSessions"
+    @AppStorage(hideSessionsKey) private var hideSessions = false
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 28) {
-                RowGroup { toggle("Allow notifications", $allow) }
-                VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    GroupLabel("Tell me when").padding(.horizontal, Theme.Space.m)
-                    RowGroup {
-                        toggle("A task needs me", $needsMe)
-                        RowDivider()
-                        toggle("A task is done", $done)
-                        RowDivider()
-                        toggle("A PR is ready to merge", $prReady)
-                        RowDivider()
-                        toggle("A server is about to auto-stop", $autoStop)
-                    }
-                    .disabled(!allow)
-                    .opacity(allow ? 1 : 0.45)
-                    GroupLabel("Never while you're looking at that task.").padding(.horizontal, Theme.Space.m)
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                RowGroup {
+                    Toggle("Hide sessions", isOn: $hideSessions)
+                        .toggleStyle(SwitchStyle())
+                        .font(Theme.Font.body)
+                        .padding(.leading, Theme.Space.l).padding(.trailing, 14)
+                        .frame(minHeight: 52)
                 }
-                // ponytail: picks only; delivery lands with push from the server.
-                GroupLabel("Dray doesn't send these yet. Your picks are kept for when it does.")
+                GroupLabel("Home shows your bots only: no sessions, project filter, orb, drafts or settled.")
                     .padding(.horizontal, Theme.Space.m)
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.horizontal, Theme.Space.l)
             .padding(.top, Theme.Space.m)
         }
         .background(Theme.card.ignoresSafeArea())
         .foregroundStyle(Theme.text)
-        .navigationTitle("Notifications")
+        .navigationTitle("Appearance")
         .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func toggle(_ label: String, _ on: Binding<Bool>) -> some View {
-        Toggle(label, isOn: on)
-            .toggleStyle(SwitchStyle())
-            .font(Theme.Font.body)
-            .padding(.leading, Theme.Space.l).padding(.trailing, 14)
-            .frame(minHeight: 52)
     }
 }

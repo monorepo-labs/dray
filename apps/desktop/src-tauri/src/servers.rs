@@ -8,8 +8,8 @@
 //! and each token sits in `credentials.json` under `server:<id>`, never on a
 //! struct the frontend is handed.
 
-use crate::machines::{admit_with, credential_name, default_name, normalize, BoatLink, Saved, Socket, Welcome, ADMIT};
-use crate::{boat, sink::Sink, ssh, store};
+use crate::machines::{admit_with, credential_name, default_name, normalize, BoatLink, Saved, Socket, Welcome, ADMIT, REFUSED};
+use crate::{boat, cloud, sink::Sink, ssh, store};
 use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -107,7 +107,11 @@ pub struct ServerInfo {
     pub app: bool,
     /// An update landed on the server and it restarts onto it once idle.
     pub restarting: bool,
+    /// Stopped and resuming, for a boat sandbox and a Dray Cloud machine alike.
     pub boat: Option<BoatStatus>,
+    /// A Dray Cloud machine (#857): drawn as no row of its own, and read as
+    /// "Cloud" wherever a machine is named.
+    pub cloud: bool,
 }
 
 type Reply = Result<Value, Value>;
@@ -264,6 +268,7 @@ fn info(conn: &Conn) -> ServerInfo {
             warning: row.warning(conn.status == ServerStatus::Connected),
             note: row.note.clone(),
         }),
+        cloud: conn.saved.cloud.is_some(),
     }
 }
 
@@ -519,6 +524,7 @@ pub async fn start(sink: Sink) {
             beta: false,
             ignored: None,
             boat: None,
+            cloud: None,
             unknown: Default::default(),
         };
         list.push(Conn::new(this_mac));
@@ -526,6 +532,7 @@ pub async fn start(sink: Sink) {
     }
     announce();
     tokio::spawn(watch_boats());
+    tokio::spawn(watch_cloud());
     // Hourly, for an app left open for days on a connection that never drops.
     tokio::spawn(async {
         loop {
@@ -625,6 +632,13 @@ async fn run(id: String) {
             tokio::time::sleep(Duration::from_millis(500)).await;
             continue;
         }
+        // A stopped cloud machine has nothing to answer. The cloud sync restarts
+        // this loop once the control plane says it runs again.
+        let cloud = saved.cloud.is_some();
+        if cloud && cloud_parked(&id) {
+            set(&id, ServerStatus::Disconnected, None, Some("Stopped".into()), None);
+            return;
+        }
         let kept_token = crate::issues::credential(&credential_name(&id)).await.unwrap_or_default();
         // `admitted` is a socket the SSH fallback already opened, kept rather
         // than thrown away and opened a second time.
@@ -722,7 +736,13 @@ async fn run(id: String) {
                 );
                 return;
             }
-            Err(e) => set_status(&id, ServerStatus::Disconnected, Some(said(e))),
+            Err(e) => {
+                set_status(&id, ServerStatus::Disconnected, Some(said(e)));
+                // It may have stopped, or moved under a fork.
+                if cloud {
+                    tokio::spawn(sync_cloud_soon());
+                }
+            }
         }
         drop(tunnel);
         tokio::time::sleep(backoff).await;
@@ -878,6 +898,9 @@ async fn remember_boat(id: &str, reported: Option<&str>, target: &ssh::Target) {
     announce();
 }
 
+/// Off while readers find them noisy; `true` brings the island's warning back.
+/// Its twin of the same name in `lib/boat.ts` gates the sidebar card.
+const BOAT_STOP_WARNINGS: bool = false;
 /// How long before auto-stop the reader hears about it.
 const WARN: Duration = Duration::from_secs(10 * 60);
 /// How often a running sandbox's timer is read. `archiveAfter` moves under a
@@ -888,6 +911,8 @@ const BOAT_READ_NEAR: Duration = Duration::from_secs(60);
 const BOAT_ASLEEP_READ: Duration = Duration::from_secs(30);
 /// The server and its tunnel take 1 to 3 minutes after `boat resume` returns.
 const BOAT_WAKE: Duration = Duration::from_secs(6 * 60);
+/// A new cloud machine's server answers ~30s after create, measured.
+const CLOUD_FRESH: Duration = Duration::from_secs(2 * 60);
 
 /// Reads the timer of every sandbox connected now, redraws what moved, and tells
 /// the island. A stop seen here beats waiting for the socket to go silent.
@@ -937,7 +962,7 @@ async fn watch_boats() {
         announce();
         let alerts = boat_alerts();
         if alerts != told || !alerts.as_array().is_none_or(Vec::is_empty) {
-            let sent = server_invoke(LOCAL.into(), "boat_alerts".into(), json!({ "alerts": alerts })).await;
+            let sent = server_invoke(LOCAL.into(), "boat_alerts".into(), json!({ "alerts": alerts }), None).await;
             if sent.is_ok() {
                 told = alerts;
             }
@@ -947,6 +972,9 @@ async fn watch_boats() {
 
 /// The sandboxes about to stop, in the shape the island reads off the server.
 fn boat_alerts() -> Value {
+    if !BOAT_STOP_WARNINGS {
+        return json!([]);
+    }
     let alerts: Vec<Value> = conns()
         .iter()
         .filter_map(|c| {
@@ -959,19 +987,37 @@ fn boat_alerts() -> Value {
     json!(alerts)
 }
 
-/// Resumes a stopped sandbox and returns once the server on it is connected, so
-/// a send can simply wait on this. Already connected answers at once. Several
-/// callers share one resume: pressing Resume and sending, or sending twice,
-/// must not run `boat resume` twice.
+/// What brings a stopped machine back: `boat resume` for a sandbox added by
+/// hand, the control plane for a Dray Cloud one.
+#[derive(Clone)]
+enum Sleeper {
+    Boat(BoatLink),
+    /// `started` is a machine the control plane already set going, as adding
+    /// room does, so there is nothing to ask for, only a wait.
+    Cloud { sandbox: String, started: bool },
+}
+
+/// Resumes a stopped sandbox or cloud machine and returns once the server on
+/// it is connected, so a send can simply wait on this. Already connected
+/// answers at once. Several callers share one resume: pressing Resume and
+/// sending, or sending twice, must not resume twice.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn resume_boat(id: String) -> Result<(), String> {
+    wake(id, false).await
+}
+
+async fn wake(id: String, started: bool) -> Result<(), String> {
     let (start, turned_on) = {
         let mut list = conns();
         let conn = list.iter_mut().find(|c| c.saved.id == id).ok_or("no such server")?;
         if conn.status == ServerStatus::Connected {
             return Ok(());
         }
-        let link = conn.saved.boat.clone().ok_or("This server is not a boat sandbox.")?;
+        let sleeper = match (&conn.saved.boat, &conn.saved.cloud) {
+            (_, Some(sandbox)) => Sleeper::Cloud { sandbox: sandbox.clone(), started },
+            (Some(link), None) => Sleeper::Boat(link.clone()),
+            (None, None) => return Err("This server is not a boat sandbox.".into()),
+        };
         // Asking for the sandbox back is asking to reach it: a connection left
         // off would never come up, and a send waiting on it would time out.
         let turned_on = std::mem::take(&mut conn.saved.off);
@@ -987,15 +1033,16 @@ pub async fn resume_boat(id: String) -> Result<(), String> {
                 conn.status = ServerStatus::Connecting;
                 conn.error = None;
                 conn.fix = None;
-                Some(link)
+                Some(sleeper)
             }
         };
         (start, turned_on)
     };
     announce();
-    if let Some(link) = start {
-        crate::analytics::track("feature_used", json!({ "feature": "boat_resumed" }));
-        tokio::spawn(wake_boat(id.clone(), link));
+    if let Some(sleeper) = start {
+        let feature = if matches!(sleeper, Sleeper::Boat(_)) { "boat_resumed" } else { "cloud_resumed" };
+        crate::analytics::track("feature_used", json!({ "feature": feature }));
+        tokio::spawn(wake_boat(id.clone(), sleeper));
     }
     // After the wake is under way: a file that won't write must not strand a
     // row marked resuming with nothing behind it. The connection is on in
@@ -1006,7 +1053,7 @@ pub async fn resume_boat(id: String) -> Result<(), String> {
         }
     }
     // `boat resume`'s own cap and then the wake, so a waiter never outlives both.
-    let deadline = tokio::time::Instant::now() + boat::RESUMING + BOAT_WAKE;
+    let deadline = tokio::time::Instant::now() + boat::RESUMING.max(cloud::START) + BOAT_WAKE;
     loop {
         tokio::time::sleep(Duration::from_millis(250)).await;
         if tokio::time::Instant::now() > deadline {
@@ -1022,9 +1069,10 @@ pub async fn resume_boat(id: String) -> Result<(), String> {
     }
 }
 
-/// `boat resume`, then the login pointed at the new machine, then `run` again,
-/// which keeps retrying while [`boat_waking`] holds.
-async fn wake_boat(id: String, link: BoatLink) {
+/// `boat resume` and the login pointed at the new machine, or the control
+/// plane's resume, then `run` again, which keeps retrying while
+/// [`boat_waking`] holds.
+async fn wake_boat(id: String, sleeper: Sleeper) {
     let settle = |phase: BoatPhase, note: Option<String>, restart: bool| {
         if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
             let row = conn.boat.get_or_insert_with(|| BoatRow::new(phase));
@@ -1036,29 +1084,61 @@ async fn wake_boat(id: String, link: BoatLink) {
         }
         announce();
     };
-    if let Err(why) = boat::resume(&link.id).await {
-        settle(BoatPhase::Stopped, Some(why), true);
-        return;
-    }
-    let target = conns().iter().find(|c| c.saved.id == id).and_then(|c| c.saved.ssh.clone());
-    if let Some(target) = target {
-        if let Err(why) = repoint_login(&id, &link, &target).await {
-            settle(BoatPhase::Running, Some(why), true);
-            return;
+    match &sleeper {
+        Sleeper::Boat(link) => {
+            if let Err(why) = boat::resume(&link.id).await {
+                settle(BoatPhase::Stopped, Some(why), true);
+                return;
+            }
+            let target = conns().iter().find(|c| c.saved.id == id).and_then(|c| c.saved.ssh.clone());
+            if let Some(target) = target {
+                if let Err(why) = repoint_login(&id, link, &target).await {
+                    settle(BoatPhase::Running, Some(why), true);
+                    return;
+                }
+            }
+        }
+        Sleeper::Cloud { started: true, .. } => {}
+        Sleeper::Cloud { sandbox, started: false } => {
+            let resumed = match cloud_key().await {
+                Some(key) => cloud::resume(&key, sandbox).await,
+                None => Err(NO_CLOUD_KEY.into()),
+            };
+            match resumed {
+                Ok(machine) => cloud_moved(&id, machine.url.as_deref()).await,
+                Err(why) => {
+                    settle(BoatPhase::Stopped, Some(why), true);
+                    return;
+                }
+            }
         }
     }
     settle(BoatPhase::Resuming, None, true);
-    let deadline = tokio::time::Instant::now() + BOAT_WAKE;
+    let wait = if matches!(sleeper, Sleeper::Cloud { started: true, .. }) { CLOUD_FRESH } else { BOAT_WAKE };
+    let deadline = tokio::time::Instant::now() + wait;
+    let mut last = None;
     while tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_secs(1)).await;
-        let up = conns().iter().any(|c| c.saved.id == id && c.status == ServerStatus::Connected);
-        if up {
+        let Some((status, error)) =
+            conns().iter().find(|c| c.saved.id == id).map(|c| (c.status, c.error.clone()))
+        else {
+            return;
+        };
+        if status == ServerStatus::Connected {
             settle(BoatPhase::Running, None, false);
             return;
         }
+        // The server answered and said no: a wrong token or protocol. Waiting
+        // out the deadline only hid that sentence from the reader for minutes.
+        if let Some(refused) = error.as_deref().filter(|e| e.starts_with(REFUSED)) {
+            settle(BoatPhase::Running, Some(refused.to_string()), false);
+            return;
+        }
+        last = error.or(last);
     }
     let name = conns().iter().find(|c| c.saved.id == id).map(|c| c.saved.name.clone()).unwrap_or_default();
-    settle(BoatPhase::Running, Some(format!("{name} is running, but Dray hasn't answered on it yet.")), false);
+    let why = last.map(|e| format!(" Last try: {e}")).unwrap_or_default();
+    settle(BoatPhase::Running, Some(format!("{name} is running, but Dray hasn't answered on it yet.{why}")), false);
 }
 
 /// More time on a sandbox's auto-stop: `minutes` from now, and on each later resume.
@@ -1081,8 +1161,411 @@ pub async fn extend_boat(id: String, minutes: u32) -> Result<(), String> {
     });
     // Before answering, so the island's pill is gone by the time its Extend
     // returns rather than on `watch_boats`' next tick, up to 30s later.
-    let _ = server_invoke(LOCAL.into(), "boat_alerts".into(), json!({ "alerts": boat_alerts() })).await;
+    let _ = server_invoke(LOCAL.into(), "boat_alerts".into(), json!({ "alerts": boat_alerts() }), None).await;
     Ok(())
+}
+
+/// The Dray Cloud row in Settings. The machines themselves ride
+/// `servers_changed`, each a server marked `cloud`.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct CloudInfo {
+    pub on: bool,
+    /// A key is saved. The key itself never leaves Rust.
+    pub keyed: bool,
+    /// Why the last listing failed.
+    pub error: Option<String>,
+}
+
+static CLOUD_ERROR: Mutex<Option<String>> = Mutex::new(None);
+/// When the control plane was last listed, which paces the listings a failed
+/// connect asks for.
+static CLOUD_LISTED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+/// One listing applied at a time, or two at once mint two rows for one machine.
+static CLOUD_SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// Moved, under [`CLOUD_SYNC`], by everything that changes what a listing
+/// would be applied to: the key, the switch, and every listing applied.
+static CLOUD_GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Sandboxes this app deleted. Boat deletes in the background, so one can stay
+/// listed a while, and a listing must not bring its row back.
+static CLOUD_DROPPED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+const NO_CLOUD_KEY: &str = "Dray Cloud has no key. Add it in Settings, Servers.";
+
+/// How often the machines are listed while Dray Cloud is on. A stopped one is
+/// noticed resuming from elsewhere within this, as a parked boat row is.
+const CLOUD_READ: Duration = Duration::from_secs(30);
+const CLOUD_RETRY_GAP: Duration = Duration::from_secs(10);
+
+async fn cloud_key() -> Option<String> {
+    crate::issues::credential(cloud::KEY).await
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn cloud_info() -> CloudInfo {
+    CloudInfo {
+        on: crate::settings::read().await.dray_cloud,
+        keyed: cloud_key().await.is_some(),
+        error: CLOUD_ERROR.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+    }
+}
+
+async fn announce_cloud() {
+    let info = cloud_info().await;
+    if let Some(sink) = SINK.get() {
+        let _ = sink.emit("cloud_changed", info);
+    }
+}
+
+/// A cloud machine the control plane last said is stopped: `run` parks it
+/// rather than knocking on an address nothing answers.
+fn cloud_parked(id: &str) -> bool {
+    conns().iter().any(|c| c.saved.id == id && c.boat.as_ref().is_some_and(|row| row.phase == BoatPhase::Stopped))
+}
+
+/// A resume may answer a new address. It survives a resume today, but the
+/// contract does not promise it, and a stale one would only ever fail.
+async fn cloud_moved(id: &str, url: Option<&str>) {
+    let Some(Ok(url)) = url.map(normalize) else { return };
+    let moved = match conns().iter_mut().find(|c| c.saved.id == id) {
+        Some(conn) if conn.saved.url != url => {
+            conn.saved.url = url;
+            true
+        }
+        _ => false,
+    };
+    if moved {
+        let _ = save().await;
+    }
+}
+
+/// Where a machine's row goes on a listing. A resume in flight is
+/// `wake_boat`'s to close: the list can lag it, and a row flipped early would
+/// fail the send waiting on it.
+fn cloud_phase(was: Option<BoatPhase>, state: cloud::State) -> BoatPhase {
+    use cloud::State::*;
+    match (was, state) {
+        (Some(BoatPhase::Resuming), _) => BoatPhase::Resuming,
+        (_, Running | Starting) => BoatPhase::Running,
+        (_, Stopping | Stopped | Error) => BoatPhase::Stopped,
+        (was, Unknown) => was.unwrap_or(BoatPhase::Running),
+    }
+}
+
+/// A sandbox id goes into a URL path, so only one that cannot step out of it.
+fn valid_sandbox(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Lists the machines and brings the cloud connections in line: a row per
+/// machine, parked while it is stopped, gone once the control plane drops it.
+async fn sync_cloud() -> Result<(), String> {
+    *CLOUD_LISTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+    // Listed outside the lock, since a list can take seconds and the switch
+    // waits on the lock. So an answer may be stale by the time it lands: a
+    // key changed or cleared, the switch turned off, or a newer listing
+    // applied. Any of those moved the generation, and the list is read again.
+    for _ in 0..3 {
+        let generation = CLOUD_GENERATION.load(Ordering::SeqCst);
+        let (Some(key), true) = (cloud_key().await, crate::settings::read().await.dray_cloud) else {
+            return Ok(());
+        };
+        let listed = cloud::list(&key).await;
+        let _one = CLOUD_SYNC.lock().await;
+        if CLOUD_GENERATION.load(Ordering::SeqCst) != generation {
+            continue;
+        }
+        let error = listed.as_ref().err().cloned();
+        let changed = std::mem::replace(&mut *CLOUD_ERROR.lock().unwrap_or_else(|e| e.into_inner()), error.clone()) != error;
+        if changed {
+            announce_cloud().await;
+        }
+        apply_listing(listed?).await;
+        return Ok(());
+    }
+    Ok(())
+}
+
+/// A listing a failed connect asked for, at most one per [`CLOUD_RETRY_GAP`],
+/// since `run` retries every few seconds.
+async fn sync_cloud_soon() {
+    let recent = CLOUD_LISTED.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|at| at.elapsed() < CLOUD_RETRY_GAP);
+    if !recent {
+        let _ = sync_cloud().await;
+    }
+}
+
+/// Called under [`CLOUD_SYNC`].
+async fn apply_listing(listing: cloud::Listing) {
+    CLOUD_GENERATION.fetch_add(1, Ordering::SeqCst);
+    let known: HashMap<String, String> =
+        conns().iter().filter_map(|c| Some((c.saved.cloud.clone()?, c.saved.id.clone()))).collect();
+    // Every machine listed keeps its row, but one boat has given no address
+    // yet gets none until it has one: a fork's first listings come before it.
+    let dropped = CLOUD_DROPPED.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let listed: Vec<String> =
+        listing.machines.iter().map(|m| m.id.clone()).filter(|id| !dropped.contains(id)).collect();
+    let machines: Vec<(cloud::Machine, String, String)> = listing
+        .machines
+        .into_iter()
+        .filter(|m| valid_sandbox(&m.id) && listed.contains(&m.id))
+        .filter_map(|m| {
+            let url = normalize(m.url.as_deref()?).ok()?;
+            let id = known.get(&m.id).cloned().unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_string());
+            Some((m, url, id))
+        })
+        .collect();
+    // Before any row exists: `run` reads the token the moment one does.
+    let mut rekeyed = Vec::new();
+    for (_, _, id) in &machines {
+        if crate::issues::credential(&credential_name(id)).await.as_deref() != Some(listing.token.as_str()) {
+            let _ = crate::issues::set_credential(&credential_name(id), Some(&listing.token)).await;
+            rekeyed.push(id.clone());
+        }
+    }
+    let (gone, saved) = {
+        let mut list = conns();
+        let mut gone = Vec::new();
+        let mut saved = false;
+        list.retain_mut(|conn| {
+            let listed = conn.saved.cloud.as_ref().is_none_or(|s| listed.contains(s));
+            if !listed {
+                if let Some(task) = conn.task.take() {
+                    task.abort();
+                }
+                gone.push(conn.saved.id.clone());
+            }
+            listed
+        });
+        for (machine, url, id) in machines {
+            match list.iter_mut().find(|c| c.saved.id == id) {
+                Some(conn) => {
+                    let was = conn.boat.as_ref().map(|row| row.phase);
+                    let phase = cloud_phase(was, machine.state);
+                    saved |= conn.saved.url != url;
+                    let moved = conn.saved.url != url || rekeyed.contains(&id);
+                    conn.saved.url = url;
+                    let row = conn.boat.get_or_insert_with(|| BoatRow::new(phase));
+                    row.phase = phase;
+                    // Set, never cleared: a failed connect asks for a listing at
+                    // once, which otherwise wiped the reason `wake_boat` had just
+                    // left for its waiter. `wake` clears it on the next try.
+                    if machine.state == cloud::State::Error {
+                        row.note = Some("Dray Cloud reports an error on it.".into());
+                    }
+                    let woke = was == Some(BoatPhase::Stopped) && phase == BoatPhase::Running;
+                    let slept = was != Some(BoatPhase::Stopped) && phase == BoatPhase::Stopped;
+                    if moved || woke || slept {
+                        conn.restart();
+                    }
+                }
+                None => {
+                    let name = format!("cloud-{}", machine.id.strip_prefix("bx_").unwrap_or(&machine.id));
+                    let added = Saved {
+                        id,
+                        name,
+                        url,
+                        ssh: None,
+                        off: false,
+                        beta: false,
+                        ignored: None,
+                        boat: None,
+                        cloud: Some(machine.id),
+                        unknown: Default::default(),
+                    };
+                    // Under the lock, so `run` reads the phase before it connects.
+                    let mut conn = Conn::new(added);
+                    conn.boat = Some(BoatRow::new(cloud_phase(None, machine.state)));
+                    list.push(conn);
+                    saved = true;
+                }
+            }
+        }
+        let saved = saved || !gone.is_empty();
+        (gone, saved)
+    };
+    for id in &gone {
+        let _ = crate::issues::set_credential(&credential_name(id), None).await;
+        forget_cache(id).await;
+        forget_transcripts(id).await;
+    }
+    // Only on a change: the list is read every 30s, and each write tells the
+    // Mac's server to read the file again.
+    if saved {
+        let _ = save().await;
+    }
+    announce();
+}
+
+/// Lists the machines every [`CLOUD_READ`] while Dray Cloud is on.
+async fn watch_cloud() {
+    loop {
+        let _ = sync_cloud().await;
+        tokio::time::sleep(CLOUD_READ).await;
+    }
+}
+
+/// Saves the Dray Cloud key once the control plane takes it, and turns Dray
+/// Cloud on. An empty key forgets it and every cloud machine with it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn set_cloud_key(key: String) -> Result<(), String> {
+    let key = key.trim();
+    let listing = match key.is_empty() {
+        true => cloud::Listing { token: String::new(), machines: Vec::new() },
+        false => cloud::list(key).await?,
+    };
+    let one = CLOUD_SYNC.lock().await;
+    crate::issues::set_credential(cloud::KEY, Some(key).filter(|k| !k.is_empty())).await?;
+    *CLOUD_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    if !key.is_empty() {
+        switch_cloud(true).await?;
+    }
+    apply_listing(listing).await;
+    drop(one);
+    announce_cloud().await;
+    Ok(())
+}
+
+/// Dray Cloud's switch. Off keeps every machine's row and stops connecting to
+/// them, the way a server's own switch does; the machines stop on their timer.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn set_cloud_on(on: bool) -> Result<(), String> {
+    let one = CLOUD_SYNC.lock().await;
+    switch_cloud(on).await?;
+    drop(one);
+    announce_cloud().await;
+    if on {
+        tokio::spawn(sync_cloud());
+    }
+    Ok(())
+}
+
+/// The switch itself, under [`CLOUD_SYNC`].
+async fn switch_cloud(on: bool) -> Result<(), String> {
+    CLOUD_GENERATION.fetch_add(1, Ordering::SeqCst);
+    crate::settings::update(|s| s.dray_cloud = on).await.map_err(|e| format!("{e:#}"))?;
+    let touched = {
+        let mut list = conns();
+        let mut touched = false;
+        for conn in list.iter_mut().filter(|c| c.saved.cloud.is_some() && c.saved.off == on) {
+            conn.saved.off = !on;
+            conn.restart();
+            touched = true;
+        }
+        touched
+    };
+    if touched {
+        save().await?;
+    }
+    announce();
+    Ok(())
+}
+
+/// A new machine for one task. Answers its server id once it is connected,
+/// so the task can clone onto it straight away.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn start_cloud_machine() -> Result<String, String> {
+    let key = cloud_key().await.ok_or(NO_CLOUD_KEY)?;
+    let machine = cloud::start(&key).await?;
+    crate::analytics::track("feature_used", json!({ "feature": "cloud_machine_started" }));
+    let reached = reach_new_machine(&machine.id).await;
+    // Started but never reached: kept, it would run on unseen, and every
+    // Retry would start another beside it.
+    if reached.is_err() && cloud::delete(&key, &machine.id).await.is_ok() {
+        let row = conns().iter().find(|c| c.saved.cloud.as_deref() == Some(machine.id.as_str())).map(|c| c.saved.id.clone());
+        let _ = forget_cloud_machine(row, machine.id).await;
+    }
+    reached
+}
+
+/// The new machine's server id once it is connected. A create can answer
+/// before boat gives it an address, and a machine without one draws no row,
+/// so the list is read until it has one.
+async fn reach_new_machine(sandbox: &str) -> Result<String, String> {
+    let deadline = tokio::time::Instant::now() + cloud::START;
+    let id = loop {
+        sync_cloud().await?;
+        let found = conns().iter().find(|c| c.saved.cloud.as_deref() == Some(sandbox)).map(|c| c.saved.id.clone());
+        match found {
+            Some(id) => break id,
+            None if tokio::time::Instant::now() < deadline => tokio::time::sleep(Duration::from_secs(2)).await,
+            None => return Err("Dray Cloud started a machine but never gave it an address.".into()),
+        }
+    };
+    wake(id.clone(), true).await?;
+    Ok(id)
+}
+
+/// Deletes a task's machine once nothing on it is wanted, and forgets it here:
+/// its row, token, kept lists and kept transcripts.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn drop_cloud_machine(id: String) -> Result<(), String> {
+    let sandbox = conns()
+        .iter()
+        .find(|c| c.saved.id == id)
+        .and_then(|c| c.saved.cloud.clone())
+        .ok_or("That is not a Dray Cloud machine.")?;
+    let key = cloud_key().await.ok_or(NO_CLOUD_KEY)?;
+    cloud::delete(&key, &sandbox).await?;
+    crate::analytics::track("feature_used", json!({ "feature": "cloud_machine_dropped" }));
+    forget_cloud_machine(Some(id), sandbox).await
+}
+
+/// Forgets a deleted machine, and keeps a listing that still names it from
+/// bringing its row back.
+async fn forget_cloud_machine(id: Option<String>, sandbox: String) -> Result<(), String> {
+    {
+        let _one = CLOUD_SYNC.lock().await;
+        CLOUD_GENERATION.fetch_add(1, Ordering::SeqCst);
+        CLOUD_DROPPED.lock().unwrap_or_else(|e| e.into_inner()).push(sandbox);
+    }
+    let Some(id) = id else { return Ok(()) };
+    forget_transcripts(&id).await;
+    remove_server(id).await
+}
+
+/// Where a cloud task's transcript is kept, so it opens while its machine is
+/// stopped. `None` for an id that could not be a file name.
+async fn transcript_path(server: &str, session: &str) -> Option<std::path::PathBuf> {
+    file_safe(session).then_some(())?;
+    Some(transcripts_dir(server).await?.join(format!("{session}.json")))
+}
+
+async fn transcripts_dir(server: &str) -> Option<std::path::PathBuf> {
+    (file_safe(server) && server != LOCAL).then_some(())?;
+    Some(store::app_subdir("cloud-transcripts").await.ok()?.join(server))
+}
+
+fn file_safe(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+async fn forget_transcripts(server: &str) {
+    if let Some(dir) = transcripts_dir(server).await {
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+}
+
+/// Keeps a cloud task's transcript as last seen. Refused for any other
+/// server, whose transcripts its own disk holds.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn save_cloud_transcript(server: String, session_id: String, snapshot: Value) -> Result<(), String> {
+    if !conns().iter().any(|c| c.saved.id == server && c.saved.cloud.is_some()) {
+        return Err(format!("{server} is not a Dray Cloud machine"));
+    }
+    let path = transcript_path(&server, &session_id).await.ok_or("no transcript file for that session")?;
+    if let Some(dir) = path.parent() {
+        tokio::fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
+    }
+    store::write_atomic(&path, snapshot.to_string()).await.map_err(|e| e.to_string())
+}
+
+/// A cloud task's kept transcript, or `None` where none was kept.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn cloud_transcript(server: String, session_id: String) -> Option<Value> {
+    let path = transcript_path(&server, &session_id).await?;
+    serde_json::from_str(&tokio::fs::read_to_string(path).await.ok()?).ok()
 }
 
 /// Retries a saved tunnel address until it answers, with `ssh` left alone: a
@@ -1342,7 +1825,7 @@ pub async fn add_server(url: String, token: String, name: Option<String>, ticket
                 conn.saved.name = name;
                 conn.restart();
             } else {
-                list.push(Conn::new(Saved { id: id.clone(), name, url, ssh: None, off: false, beta: false, ignored: None, boat: None, unknown: Default::default() }));
+                list.push(Conn::new(Saved { id: id.clone(), name, url, ssh: None, off: false, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() }));
             }
         })
     };
@@ -1414,6 +1897,13 @@ pub async fn remove_server(id: String) -> Result<(), String> {
     forget_cache(&id).await;
     announce();
     Ok(())
+}
+
+/// Titles of a server's tasks that still look unfinished, for Remove's
+/// confirm: what `dray machine rm` warns about, from the same kept list.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn server_unfinished(id: String) -> Vec<String> {
+    crate::machines::unfinished(&id).await
 }
 
 /// Where a remote's last known sessions and projects are kept, so its rows
@@ -1525,7 +2015,7 @@ pub async fn add_ssh_server(line: String, name: Option<String>, ticket: Option<S
             conn.saved.id.clone()
         } else {
             let id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
-            list.push(Conn::new(Saved { id: id.clone(), name, url: String::new(), ssh: Some(target), off: false, beta: false, ignored: None, boat: None, unknown: Default::default() }));
+            list.push(Conn::new(Saved { id: id.clone(), name, url: String::new(), ssh: Some(target), off: false, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() }));
             id
         }
     };
@@ -1659,7 +2149,7 @@ pub fn reconnect_servers() {
     }
     announce();
     tokio::spawn(async {
-        let Ok(state) = server_invoke(LOCAL.into(), "live_state".into(), Value::Null).await else {
+        let Ok(state) = server_invoke(LOCAL.into(), "live_state".into(), Value::Null, None).await else {
             return;
         };
         if let Some(sink) = SINK.get() {
@@ -1668,10 +2158,79 @@ pub fn reconnect_servers() {
     });
 }
 
+/// Calls a cancel can reach, by the webview's ticket: server and call id.
+static TICKETS: LazyLock<Mutex<HashMap<String, (String, u64)>>> = LazyLock::new(Default::default);
+
+/// Cancels that arrived before their call. Capped, since a cancel for a call
+/// already answered lands here too and nothing would ever take it out.
+static EARLY_CANCELS: LazyLock<Mutex<std::collections::HashSet<String>>> = LazyLock::new(Default::default);
+
+/// A call's place in [`TICKETS`], for as long as it is out.
+struct Ticket(String);
+
+impl Ticket {
+    /// Registers the call, or answers `None` where its cancel came first. One
+    /// lock over both, so a cancel lands either here or on the ticket, never
+    /// between them. Taken before the frame goes out, so a cancel finding the
+    /// ticket always finds the call's waiter too.
+    fn claim(ticket: String, server: &str, call: u64) -> Option<Self> {
+        let mut tickets = TICKETS.lock().unwrap_or_else(|e| e.into_inner());
+        if EARLY_CANCELS.lock().unwrap_or_else(|e| e.into_inner()).remove(&ticket) {
+            return None;
+        }
+        tickets.insert(ticket.clone(), (server.into(), call));
+        Some(Self(ticket))
+    }
+}
+
+impl Drop for Ticket {
+    fn drop(&mut self) {
+        TICKETS.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+    }
+}
+
+/// Drops a `server_invoke` still out: its caller is answered `cancelled` now,
+/// and the server is told to stop, which it does for reads alone (`CANCELLABLE`
+/// in serve.rs). A hover's prefetch is the caller — a transcript the reader
+/// moved away from is not worth the rest of its transfer. An unknown ticket
+/// was answered already, or never sent, and is ignored.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn server_cancel(ticket: String) {
+    let found = {
+        let mut tickets = TICKETS.lock().unwrap_or_else(|e| e.into_inner());
+        let found = tickets.remove(&ticket);
+        if found.is_none() {
+            // Two IPC calls are not ordered, so a cancel can beat its own
+            // call here; `Ticket::claim` refuses that call when it lands.
+            let mut early = EARLY_CANCELS.lock().unwrap_or_else(|e| e.into_inner());
+            if early.len() >= 64 {
+                early.clear();
+            }
+            early.insert(ticket);
+        }
+        found
+    };
+    let Some((server, call)) = found else {
+        return;
+    };
+    let mut list = conns();
+    let Some(conn) = list.iter_mut().find(|c| c.saved.id == server) else {
+        return;
+    };
+    if let Some(waiter) = conn.pending.remove(&call) {
+        let _ = waiter.send(Err(json!("cancelled")));
+        if let Some(outgoing) = &conn.outgoing {
+            let _ = outgoing.send(json!({ "cancel": call }).to_string());
+        }
+    }
+}
+
 /// `invoke` on a remote server: the same command, the same arguments, and the
 /// answer or rejection as the server gave it.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<Value, Value> {
+///
+/// `ticket` names the call for [`server_cancel`].
+pub async fn server_invoke(server: String, cmd: String, args: Value, ticket: Option<String>) -> Result<Value, Value> {
     // This Mac's server is down only while it starts or restarts — seconds —
     // and every screen reads it at launch, so a call waits for it rather
     // than failing into an error the reader sees for nothing.
@@ -1693,7 +2252,7 @@ pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<V
     }
     let call = NEXT_CALL.fetch_add(1, Ordering::Relaxed);
     let (reply, answer) = oneshot::channel();
-    {
+    let ticket = {
         let mut list = conns();
         let Some(conn) = list.iter_mut().find(|c| c.saved.id == server) else {
             return Err(json!(format!("no server named {server}")));
@@ -1701,15 +2260,24 @@ pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<V
         let Some(outgoing) = &conn.outgoing else {
             return Err(json!(format!("{} is not connected", conn.saved.name)));
         };
+        let ticket = match ticket {
+            Some(ticket) => match Ticket::claim(ticket, &server, call) {
+                Some(claimed) => Some(claimed),
+                None => return Err(json!("cancelled")),
+            },
+            None => None,
+        };
         let frame = json!({ "id": call, "cmd": cmd, "args": args }).to_string();
         if outgoing.send(frame).is_err() {
             return Err(json!(format!("{} is not connected", conn.saved.name)));
         }
         conn.pending.insert(call, reply);
-    }
+        ticket
+    };
     let answer = answer
         .await
         .unwrap_or_else(|_| Err(json!("the connection closed before the server answered")));
+    drop(ticket);
     // A created session answers with its snapshot, `null` otherwise. One the
     // server wrote in a shape this build cannot read goes uncounted.
     if let Some(id) = created {
@@ -1717,7 +2285,7 @@ pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<V
             Ok(ok) => store::SessionIndexItem::deserialize(&ok["snapshot"]).ok(),
             // The row is written before the spawn, so a create failing after
             // it still started a session — the rule the local count follows.
-            Err(_) => Box::pin(server_invoke(server.clone(), "session_index_item".into(), json!({ "sessionId": id })))
+            Err(_) => Box::pin(server_invoke(server.clone(), "session_index_item".into(), json!({ "sessionId": id }), None))
                 .await
                 .ok()
                 .and_then(|row| store::SessionIndexItem::deserialize(&row).ok()),
@@ -1737,7 +2305,7 @@ pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<V
 pub async fn update_server(server: String) -> Result<String, String> {
     let beta = conns().iter().find(|c| c.saved.id == server).is_some_and(|c| c.saved.beta);
     let channel = if beta { "beta" } else { "stable" };
-    let reply = server_invoke(server.clone(), "update_server".into(), json!({ "channel": channel })).await;
+    let reply = server_invoke(server.clone(), "update_server".into(), json!({ "channel": channel }), None).await;
     let answer = match reply {
         Ok(answer) => answer.as_str().unwrap_or_default().to_string(),
         Err(err) => {
@@ -1761,7 +2329,7 @@ pub async fn update_server(server: String) -> Result<String, String> {
 /// Restarts `server` now, stopping every turn running there.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn restart_server_now(server: String) -> Result<(), String> {
-    match server_invoke(server, "restart_now".into(), Value::Null).await {
+    match server_invoke(server, "restart_now".into(), Value::Null, None).await {
         Ok(_) => Ok(()),
         Err(err) => Err(err.as_str().map_or_else(|| err.to_string(), str::to_owned)),
     }
@@ -2265,6 +2833,39 @@ pub async fn upload_attachment(server: String, path: String, id: String) -> Resu
 mod tests {
     use super::*;
 
+    /// A listing parks and wakes rows, but never closes a resume: the waiter on
+    /// it reads any other phase as the resume having failed.
+    #[test]
+    fn a_cloud_listing_moves_rows_but_not_a_resume() {
+        use cloud::State;
+        assert_eq!(cloud_phase(None, State::Starting), BoatPhase::Running);
+        assert_eq!(cloud_phase(Some(BoatPhase::Running), State::Stopping), BoatPhase::Stopped);
+        assert_eq!(cloud_phase(Some(BoatPhase::Stopped), State::Running), BoatPhase::Running);
+        assert_eq!(cloud_phase(Some(BoatPhase::Running), State::Error), BoatPhase::Stopped);
+        assert_eq!(cloud_phase(Some(BoatPhase::Resuming), State::Stopped), BoatPhase::Resuming);
+        assert_eq!(cloud_phase(Some(BoatPhase::Resuming), State::Running), BoatPhase::Resuming);
+        assert_eq!(cloud_phase(Some(BoatPhase::Stopped), State::Unknown), BoatPhase::Stopped);
+        assert_eq!(cloud_phase(None, State::Unknown), BoatPhase::Running);
+    }
+
+    #[test]
+    fn a_sandbox_id_cannot_leave_its_path() {
+        assert!(valid_sandbox("bx_ab23cdef"));
+        assert!(!valid_sandbox("../stop"));
+        assert!(!valid_sandbox("a/b"));
+        assert!(!valid_sandbox(""));
+    }
+
+    /// An older build carries the mark back untouched, and one without it
+    /// writes nothing new.
+    #[test]
+    fn the_cloud_mark_round_trips() {
+        let saved: Saved = serde_json::from_value(json!({ "id": "a", "name": "cloud-x", "url": "wss://x", "cloud": "bx_x" })).unwrap();
+        assert_eq!(saved.cloud.as_deref(), Some("bx_x"));
+        let plain: Saved = serde_json::from_value(json!({ "id": "b", "name": "vps", "url": "ws://y" })).unwrap();
+        assert!(!serde_json::to_string(&plain).unwrap().contains("cloud"));
+    }
+
     /// WebKit's box walk: after one block lands, every small ask is answered
     /// from it, and an answer never runs past the file's end.
     #[test]
@@ -2394,7 +2995,7 @@ mod tests {
     /// or a re-add after rotating a token. This Mac's row is no name to route to.
     #[test]
     fn a_name_belongs_to_one_server() {
-        let saved = |id: &str, name: &str| Saved { id: id.into(), name: name.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, unknown: Default::default() };
+        let saved = |id: &str, name: &str| Saved { id: id.into(), name: name.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() };
         let list = vec![Conn::new(saved("a", "vps")), Conn::new(saved(LOCAL, "This Mac"))];
         assert!(refuse_taken(&list, "vps", None).is_err());
         assert!(refuse_taken(&list, "vps", Some("b")).is_err());
@@ -2406,12 +3007,37 @@ mod tests {
     /// loop is left to drain them, so they would wait for ever.
     #[test]
     fn turning_off_answers_calls_in_flight() {
-        let saved = Saved { id: "s".into(), name: "box".into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, unknown: Default::default() };
+        let saved = Saved { id: "s".into(), name: "box".into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() };
         let mut conn = Conn::new(saved);
         let (reply, mut answer) = oneshot::channel();
         conn.pending.insert(1, reply);
         conn.restart();
         assert!(answer.try_recv().unwrap().is_err());
+    }
+
+    /// A cancel answers its caller at once and tells the server which call to
+    /// stop; a cancel beating its call refuses that call when it lands.
+    #[tokio::test]
+    async fn a_cancel_answers_the_call_and_tells_the_server() {
+        // Off, so no run loop of its own fails to connect and clears `outgoing`.
+        let saved = Saved { id: "cancel-test".into(), name: "box".into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() };
+        let mut conn = Conn::new(saved);
+        let (tx, mut frames) = mpsc::unbounded_channel();
+        conn.outgoing = Some(tx);
+        conns().push(conn);
+
+        let call = tokio::spawn(server_invoke("cancel-test".into(), "get_session_by_id".into(), json!({}), Some("t1".into())));
+        let sent: Value = serde_json::from_str(&frames.recv().await.unwrap()).unwrap();
+        server_cancel("t1".into());
+        assert_eq!(call.await.unwrap(), Err(json!("cancelled")));
+        assert_eq!(serde_json::from_str::<Value>(&frames.recv().await.unwrap()).unwrap(), json!({ "cancel": sent["id"] }));
+        assert!(!TICKETS.lock().unwrap().contains_key("t1"), "the ticket outlived its call");
+
+        server_cancel("t2".into());
+        let late = server_invoke("cancel-test".into(), "get_session_by_id".into(), json!({}), Some("t2".into())).await;
+        assert_eq!(late, Err(json!("cancelled")));
+        assert!(frames.try_recv().is_err(), "a call cancelled early was still sent");
+        conns().retain(|c| c.saved.id != "cancel-test");
     }
 
     /// A server that admits, then either reads (so tungstenite answers our
@@ -2507,7 +3133,7 @@ mod tests {
         let (url, remote) = forwarding_server().await;
         // A row with no login, the way a Mac added by address is one.
         let id = "forward-no-ssh";
-        let saved = Saved { id: id.into(), name: "box".into(), url: url.clone(), ssh: None, off: true, beta: false, ignored: None, boat: None, unknown: Default::default() };
+        let saved = Saved { id: id.into(), name: "box".into(), url: url.clone(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() };
         let mut conn = Conn::new(saved);
         conn.status = ServerStatus::Connected;
         conn.live = Some((url, "t".into()));
@@ -2565,7 +3191,7 @@ mod tests {
     }
 
     async fn served_for(id: &str, answers: bool) -> Option<()> {
-        let saved = Saved { id: id.into(), name: id.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, unknown: Default::default() };
+        let saved = Saved { id: id.into(), name: id.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() };
         conns().push(Conn::new(saved));
         let (ws, _) = admit(&fake_server(answers).await, "t").await.unwrap();
         let served = tokio::time::timeout(SILENCE * 3, serve(id, ws)).await.ok();
@@ -2690,9 +3316,9 @@ mod tests {
 
         // Idle past `SILENCE`: the server's pongs keep the connection.
         tokio::time::sleep(SILENCE * 3).await;
-        let projects = server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.unwrap();
+        let projects = server_invoke(added.id.clone(), "list_projects".into(), json!({}), None).await.unwrap();
         assert!(projects.is_array());
-        let unknown = server_invoke(added.id.clone(), "open_in_app".into(), json!({})).await.unwrap_err();
+        let unknown = server_invoke(added.id.clone(), "open_in_app".into(), json!({}), None).await.unwrap_err();
         assert!(unknown.as_str().unwrap().contains("unknown command"));
 
         // The token sits in credentials.json, never beside the address.
@@ -2706,7 +3332,7 @@ mod tests {
         remove_server(added.id.clone()).await.unwrap();
         assert!(list_servers().is_empty());
         assert_eq!(crate::issues::credential(&credential_name(&added.id)).await, None);
-        let gone = server_invoke(added.id, "list_projects".into(), json!({})).await.unwrap_err();
+        let gone = server_invoke(added.id, "list_projects".into(), json!({}), None).await.unwrap_err();
         assert!(gone.as_str().unwrap().contains("no server"));
     }
 
@@ -2747,7 +3373,7 @@ mod tests {
         // By address alone, as another Mac with no SSH would add it.
         let added = add_server(first.clone(), token.clone(), Some("tunnel".into()), None).await.unwrap();
         connected("by address");
-        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.is_ok());
+        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({}), None).await.is_ok());
 
         // A restart: the same address, and the row reconnects on its own.
         on_server("systemctl --user restart dray");
@@ -2760,7 +3386,7 @@ mod tests {
         // No Try again: a call fails on the dead socket until the row has
         // found its own way back.
         let t0 = std::time::Instant::now();
-        let call = || tokio::time::timeout(Duration::from_secs(5), server_invoke(added.id.clone(), "list_projects".into(), json!({})));
+        let call = || tokio::time::timeout(Duration::from_secs(5), server_invoke(added.id.clone(), "list_projects".into(), json!({}), None));
         while !matches!(call().await, Ok(Ok(_))) {
             assert!(t0.elapsed() < Duration::from_secs(90), "never came back: {:?}", list_servers()[0].error);
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -2811,7 +3437,7 @@ mod tests {
         // Stored only beside a tunnel address, for connecting without a login.
         let stored = crate::issues::credential(&credential_name(&added.id)).await;
         assert_eq!(stored.is_some(), !list_servers()[0].url.is_empty(), "a token only beside a tunnel");
-        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.is_ok());
+        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({}), None).await.is_ok());
 
         let port = conns()[0].live.clone().unwrap().0.rsplit(':').next().unwrap().to_string();
         let killed = std::process::Command::new("pkill")
@@ -2822,7 +3448,7 @@ mod tests {
         next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["status"] == "disconnected").await;
         next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["stage"] == "finding").await;
         next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["status"] == "connected").await;
-        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.is_ok());
+        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({}), None).await.is_ok());
 
         rename_server(added.id.clone(), " box ".into()).await.unwrap();
         assert_eq!(list_servers()[0].name, "box");
@@ -2833,7 +3459,7 @@ mod tests {
 
         set_server_on(added.id.clone(), false).await.unwrap();
         assert!(!list_servers()[0].on);
-        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.is_err());
+        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({}), None).await.is_err());
         set_server_on(added.id.clone(), true).await.unwrap();
         next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["status"] == "connected").await;
         remove_server(added.id).await.unwrap();

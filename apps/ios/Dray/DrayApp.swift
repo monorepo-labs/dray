@@ -23,6 +23,8 @@ struct DrayApp: App {
                 .font(Theme.Font.body)
                 // Neutral, so yellow stays the one colour that means "this is for you".
                 .tint(Theme.text)
+                // Before the docks decide between the orb and keyboard mode.
+                .task { await AppleSpeech.shared.refresh() }
         }
         .onChange(of: phase) { _, now in
             if now == .active { store.resume() }
@@ -50,14 +52,21 @@ struct RootView: View {
     @Environment(\.scenePhase) private var phase
     @State private var selection: SessionKey?
     @State private var sheet: RootSheet?
+    /// Tasks opened over a bot's chat, so Back walks back to the bot.
+    @State private var opened: [SessionKey] = []
 
     var body: some View {
         NavigationSplitView {
             SessionList(selection: $selection, sheet: $sheet)
         } detail: {
             if let selection {
-                TranscriptView(key: selection)
-                    .id(selection)
+                NavigationStack(path: $opened) {
+                    TranscriptView(key: selection)
+                        .id(selection)
+                        .navigationDestination(for: SessionKey.self) { TranscriptView(key: $0).id($0) }
+                }
+                .environment(\.openTask) { opened.append($0) }
+                .environment(\.openSession) { self.selection = $0 }
             } else {
                 EmptyState(title: "No session open", message: "Pick one from the list.") {
                     Orb(state: .idle, size: 40)
@@ -72,10 +81,13 @@ struct RootView: View {
             case .add(let link, let scan): AddServerView(link: link, scanFirst: scan)
             }
         }
+        .onChange(of: selection) { opened = [] }
         .onOpenURL { url in
             if let link = PairLink(url.absoluteString) { sheet = .add(link, scan: false) }
         }
         .overlay(alignment: .top) { ErrorToast() }
+        // Keyboard mode's field: dragging the list or a chat down takes the keyboard with it.
+        .scrollDismissesKeyboard(.interactively)
         // The desktop's 30s open-PR poll, and none while the app is away.
         .task(id: phase) {
             guard phase == .active else { return }

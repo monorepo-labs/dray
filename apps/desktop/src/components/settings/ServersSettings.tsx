@@ -30,6 +30,7 @@ import { relativeTime } from "@/lib/format";
 import { MACHINE } from "@/lib/platform";
 import { serverName, useLocalServer, useServers } from "@/lib/servers";
 import { invoke, listen, LOCAL } from "@/lib/transport";
+import { unfinishedWarning } from "@/lib/serverCache";
 import { cn } from "@/lib/utils";
 import type {
   AssistantSummary,
@@ -87,9 +88,21 @@ function detailOf(server: ServerInfo): string {
 /// projects and sessions join the sidebar while it is connected and stay,
 /// dimmed, while it is not — its agents keep running there either way.
 export default function ServersSettings() {
-  const servers = useServers();
+  const all = useServers();
+  const servers = all.filter((s) => !s.cloud);
   const [adding, setAdding] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
+  // Per server, its tasks last seen unfinished, read as Remove is asked.
+  // Absent while that read runs, which holds Remove, so the warning cannot
+  // land after the machine is gone.
+  const [unfinished, setUnfinished] = useState<Record<string, string[]>>({});
+  const askRemove = (id: string) => {
+    setUnfinished(({ [id]: _, ...rest }) => rest);
+    setConfirming(id);
+    void invoke<string[]>("server_unfinished", { id }, LOCAL)
+      .catch(() => [])
+      .then((titles) => setUnfinished((all) => ({ ...all, [id]: titles })));
+  };
   const [renaming, setRenaming] = useState<string | null>(null);
   const [updates, setUpdates] = useState<Record<string, UpdateState>>({});
   const patchUpdate = (id: string, next: UpdateState) =>
@@ -187,7 +200,9 @@ export default function ServersSettings() {
             beta={server.beta}
             onBeta={(beta) => void invoke("set_server_beta", { id: server.id, beta }, LOCAL).catch(console.error)}
             confirming={confirming === server.id}
-            onRemove={() => setConfirming(server.id)}
+            warning={unfinishedWarning(unfinished[server.id])}
+            reading={!unfinished[server.id]}
+            onRemove={() => askRemove(server.id)}
             onCancel={() => setConfirming(null)}
             onConfirm={() => {
               setConfirming(null);
@@ -748,6 +763,8 @@ function Row({
   onCheckUpdate,
   onAssistant,
   confirming = false,
+  warning,
+  reading = false,
   onRemove,
   onCancel,
   onConfirm,
@@ -779,6 +796,10 @@ function Row({
   /// Present while connected: the code comes from the server itself.
   onAssistant?: () => void;
   confirming?: boolean;
+  /// Said under the row while Remove is asked.
+  warning?: string | null;
+  /// Remove waits while what `warning` says is still being read.
+  reading?: boolean;
   onRemove?: () => void;
   onCancel?: () => void;
   onConfirm?: () => void;
@@ -815,7 +836,7 @@ function Row({
         {confirming ? (
           // Asked in the row, the transcription models' own reading: a modal
           // is more than forgetting an address is worth.
-          <CancelOrConfirm verb="Remove" onConfirm={onConfirm!} onCancel={onCancel!} autoFocus />
+          <CancelOrConfirm verb="Remove" onConfirm={onConfirm!} onCancel={onCancel!} busy={reading} autoFocus />
         ) : (
           (onToggle || onRemove || onAssistant || action) && (
             <div className="flex items-center gap-1.5">
@@ -874,6 +895,7 @@ function Row({
           dot. */}
       {/* `empty:` because a child may draw nothing — no assistants yet — and
           an empty block would still take the row's gap. */}
+      {confirming && warning && <p className="pl-4.5 text-ui text-muted-foreground">{warning}</p>}
       {children && <div className="flex flex-col gap-2 pl-4.5 empty:hidden">{children}</div>}
     </div>
   );

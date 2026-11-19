@@ -78,18 +78,159 @@ fn discover(root: Option<u32>, tree: Option<&Path>) -> Vec<LocalServer> {
 
 /// Every pid under `root`, `root` included.
 pub(crate) fn descendants(root: u32) -> HashSet<u32> {
-    let Ok(out) = Command::new("ps").args(["-axo", "pid=,ppid="]).output() else {
-        return HashSet::new();
+    subtree(&processes().children, root)
+}
+
+/// The machine's processes: who started whom, and each one's command line.
+#[derive(Default)]
+struct Processes {
+    children: HashMap<u32, Vec<u32>>,
+    args: HashMap<u32, String>,
+}
+
+impl Processes {
+    /// The bare program name: `bash` for `/bin/bash -c …`, `zsh` for a login
+    /// shell's `-zsh`.
+    fn name(&self, pid: u32) -> &str {
+        let first = self.args.get(&pid).and_then(|a| a.split_whitespace().next()).unwrap_or_default();
+        first.rsplit('/').next().unwrap_or_default().trim_start_matches('-')
+    }
+}
+
+fn processes() -> Processes {
+    // `ww`, or a long command line is cut to the terminal's width.
+    let Ok(out) = Command::new("ps").args(["-axwwo", "pid=,ppid=,args="]).output() else {
+        return Processes::default();
     };
-    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let mut it = line.split_whitespace();
-        if let (Some(pid), Some(ppid)) = (it.next(), it.next()) {
-            if let (Ok(pid), Ok(ppid)) = (pid.parse(), ppid.parse()) {
-                children.entry(ppid).or_default().push(pid);
+    parse_ps(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// `ps -o pid=,ppid=,args=`.
+fn parse_ps(text: &str) -> Processes {
+    let mut p = Processes::default();
+    for line in text.lines() {
+        let Some((pid, rest)) = line.trim_start().split_once(char::is_whitespace) else { continue };
+        let rest = rest.trim_start();
+        let (ppid, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        let (Ok(pid), Ok(ppid)) = (pid.parse::<u32>(), ppid.parse::<u32>()) else { continue };
+        p.children.entry(ppid).or_default().push(pid);
+        p.args.insert(pid, args.trim().to_string());
+    }
+    p
+}
+
+/// Whether a command line is a test run: `npm test`, `pnpm test:e2e`,
+/// `npx playwright test`, `cargo test`, `go test`, `python -m pytest`, `jest`,
+/// `cypress run`, `node --test`.
+///
+/// Read off two places only, so a server named or configured like a test
+/// (`node test_server.js`, `vite --config e2e.config.ts`) is still a server:
+/// the program — a runner's own name, or the script or module a `node`,
+/// `python` or `npx` runs, cut to its stem so `.bin/jest` and `jest.js` both
+/// say `jest` — and the bare words after it, a subcommand like `test` or a
+/// script name like `test:e2e`. Paths, options and an option's value are
+/// passed over.
+fn is_test_run(args: &str) -> bool {
+    const RUNNERS: &[&str] = &["jest", "vitest", "mocha", "ava", "pytest", "nextest", "rspec", "phpunit", "karma", "cypress", "wdio"];
+    const HOSTS: &[&str] = &["node", "python", "python3", "bun", "deno", "ruby", "npx", "bunx", "uvx"];
+    let stem = |w: &str| w.rsplit('/').next().unwrap_or(w).split('.').next().unwrap_or_default().to_ascii_lowercase();
+    let words: Vec<&str> = args.split_whitespace().collect();
+    let mut at = 0;
+    while words.get(at).is_some_and(|w| HOSTS.contains(&stem(w).as_str())) {
+        at += 1;
+        while let Some(w) = words.get(at).filter(|w| w.starts_with('-')) {
+            at += 1;
+            match *w {
+                "--test" => return true,
+                "-m" => break,
+                _ => {}
             }
         }
     }
+    let test_word = |w: &str| {
+        let w = w.to_ascii_lowercase();
+        !w.contains('/')
+            && !w.contains('.')
+            && (matches!(w.as_str(), "test" | "tests" | "e2e")
+                || RUNNERS.contains(&w.as_str())
+                || ["test:", "e2e:"].iter().any(|p| w.starts_with(p))
+                || [":test", ":e2e"].iter().any(|s| w.ends_with(s)))
+    };
+    let Some(program) = words.get(at) else { return false };
+    // `bun test` and `deno test`: past the host, the program is the subcommand.
+    if RUNNERS.contains(&stem(program).as_str()) || test_word(program) {
+        return true;
+    }
+    let mut option_value = false;
+    words[at + 1..].iter().any(|w| {
+        if w.starts_with('-') {
+            option_value = !w.contains('=');
+            return false;
+        }
+        !std::mem::take(&mut option_value) && test_word(w)
+    })
+}
+
+/// What the session manager's serving sweep asks, per `(agent pid, background
+/// shells)`: the ports those shells listen on where every one of them is a
+/// server, else nothing.
+///
+/// Read off the OS rather than any harness's wire, since none says whether a
+/// backgrounded command is a server, and a command's text is a poor guess at
+/// it (`pnpm dev`, `cargo run`, `make serve`, a script). A server is what
+/// listens on a port; a build or a test run, which the agent waits on, is not.
+/// Each background shell is its own child of the agent — Claude Code runs every
+/// Bash call as one — so a shell is serving when anything under it holds a
+/// localhost listener. Counted rather than matched to tasks, since the wire
+/// names no pid: a build beside a dev server is two tasks and one listening
+/// shell, and stays working. Only shells count, so an MCP server the agent
+/// spawned and that listens does not pass for one.
+///
+/// A test run can host a server of its own — Playwright's `webServer`, an
+/// integration test binding a port — and it ends on its own, so the agent waits
+/// on it. A shell counts only while nothing live under it is a test runner
+/// ([`is_test_run`]), whose process lasts exactly as long as the run. The
+/// shell's own command line is skipped: it holds the agent's whole script, so
+/// a `cargo test && pnpm dev` already past its tests would still read as one.
+/// CPU was the rejected signal: a dev server the reader is clicking through
+/// burns it, and an e2e run waiting on a page sits idle. So was "the listener
+/// is the shell's own command": `npm run dev` and `pnpm tauri dev` put wrappers
+/// and a compiler around theirs, and Playwright puts its server under itself,
+/// so the shape is per tool, not per intent.
+pub(crate) fn serving(roots: &[(u32, usize)]) -> Vec<Vec<u16>> {
+    let procs = processes();
+    let mut ports_of: HashMap<u32, Vec<u16>> = HashMap::new();
+    for (pid, _, port) in listening() {
+        ports_of.entry(pid).or_default().push(port);
+    }
+    roots.iter().map(|&(root, shells)| serving_ports(&procs, &ports_of, root, shells)).collect()
+}
+
+fn serving_ports(procs: &Processes, ports_of: &HashMap<u32, Vec<u16>>, root: u32, shells: usize) -> Vec<u16> {
+    const SHELLS: &[&str] = &["bash", "zsh", "sh", "dash", "fish"];
+    let mut ports = Vec::new();
+    let mut listening = 0;
+    for &child in procs.children.get(&root).into_iter().flatten() {
+        if !SHELLS.contains(&procs.name(child)) {
+            continue;
+        }
+        let tree = subtree(&procs.children, child);
+        let testing = tree.iter().any(|&pid| pid != child && procs.args.get(&pid).is_some_and(|a| is_test_run(a)));
+        let mut found: Vec<u16> = tree.iter().flat_map(|pid| ports_of.get(pid)).flatten().copied().collect();
+        if !found.is_empty() && !testing {
+            listening += 1;
+            ports.append(&mut found);
+        }
+    }
+    if listening < shells {
+        return Vec::new();
+    }
+    ports.sort_unstable();
+    ports.dedup();
+    ports
+}
+
+fn subtree(children: &HashMap<u32, Vec<u32>>, root: u32) -> HashSet<u32> {
     let mut set = HashSet::from([root]);
     let mut stack = vec![root];
     while let Some(pid) = stack.pop() {
@@ -278,6 +419,102 @@ mod tests {
         let me = std::process::id();
         assert!(listening().iter().any(|(pid, _, p)| *pid == me && *p == port), "port {port} not listed");
         assert_eq!(cwd_of(vec![me]).get(&me).map(|p| resolved(p)), Some(resolved(&std::env::current_dir().unwrap())));
+    }
+
+    #[test]
+    fn parses_ps_names() {
+        let p = parse_ps("  10     1 /bin/zsh -c eval 'pnpm dev'\n  11    10 -zsh\n  12    10 node /x/node_modules/.bin/vite --port 5173\n");
+        assert_eq!(p.name(10), "zsh");
+        assert_eq!(p.name(11), "zsh");
+        assert_eq!(p.name(12), "node");
+        assert_eq!(p.args[&12], "node /x/node_modules/.bin/vite --port 5173");
+        assert_eq!(p.children[&10], vec![11, 12]);
+    }
+
+    #[test]
+    fn tells_a_test_run_from_a_server() {
+        for run in [
+            "npm test",
+            "pnpm run test:e2e",
+            "node /app/node_modules/.bin/playwright test",
+            "cargo test --workspace",
+            "go test ./...",
+            "python -m pytest -x",
+            "node /app/node_modules/jest/bin/jest.js",
+            "npx cypress run",
+            "node --test",
+            "npm exec playwright test --reporter=line",
+            "pnpm --filter web test",
+            "sh -c playwright test",
+            "cargo nextest run",
+            "bun test",
+            "deno test --allow-net",
+            "bun run test:e2e",
+        ] {
+            assert!(is_test_run(run), "{run}");
+        }
+        for server in [
+            "npm run dev",
+            "node /app/node_modules/.bin/vite --port 5173",
+            "node /repo/apps/desktop/scripts/tauri.mjs dev",
+            "cargo run --bin api",
+            "python -m http.server 8000",
+            "next dev",
+            "node /repo/test_server.js",
+            "node_modules/.bin/vite --config e2e.config.ts",
+            "npm run dev -- --mode test",
+            "vite --root tests",
+        ] {
+            assert!(!is_test_run(server), "{server}");
+        }
+    }
+
+    /// Playwright's `webServer` listens under the runner, so the shell holding
+    /// it is a test run, not a server, until the runner exits.
+    #[test]
+    fn a_test_run_hosting_a_server_is_not_serving() {
+        let procs = parse_ps(
+            "10 1 bash -c eval 'npx playwright test'\n11 10 node /a/.bin/playwright test\n12 11 sh -c npm run dev\n13 12 node /a/.bin/vite\n\
+             20 1 bash -c eval 'npx playwright test && npm run dev'\n21 20 node /a/.bin/vite\n",
+        );
+        let ports = HashMap::from([(13, vec![5180]), (21, vec![5173])]);
+        assert_eq!(serving_ports(&procs, &ports, 1, 1), vec![5173], "the shell past its tests serves");
+        assert!(serving_ports(&procs, &ports, 1, 2).is_empty(), "the one mid-run does not");
+    }
+
+    /// Agent 1 runs a dev server (bash 10 → node 11 on :5173), a build
+    /// (bash 20 → cargo 21) and an MCP server listening on its own (node 30).
+    #[test]
+    fn serving_counts_listening_shells() {
+        let procs = parse_ps("10 1 bash\n11 10 node\n20 1 bash\n21 20 cargo\n30 1 node\n");
+        let ports = HashMap::from([(11, vec![5173, 24678]), (30, vec![9000])]);
+        assert_eq!(serving_ports(&procs, &ports, 1, 1), vec![5173, 24678], "the server alone");
+        assert!(serving_ports(&procs, &ports, 1, 2).is_empty(), "a build beside it keeps the agent working");
+        let build_only = HashMap::from([(30, vec![9000])]);
+        assert!(serving_ports(&procs, &build_only, 1, 1).is_empty(), "an MCP server's port is no shell's");
+    }
+
+    /// The real read: a shell under this process listening through a child.
+    #[test]
+    fn finds_a_real_shell_serving() {
+        let mut shell = Command::new("sh")
+            // `; true`, or the shell execs python and there is no shell to find.
+            .args(["-c", "python3 -m http.server 0 --bind 127.0.0.1 >/dev/null 2>&1; true"])
+            .spawn()
+            .unwrap();
+        let me = std::process::id();
+        let mut found = Vec::new();
+        for _ in 0..50 {
+            found = serving(&[(me, 1)]).remove(0);
+            if !found.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let _ = Command::new("pkill").args(["-P", &shell.id().to_string()]).status();
+        let _ = shell.kill();
+        let _ = shell.wait();
+        assert!(!found.is_empty(), "the shell's server was not seen");
     }
 
     #[test]

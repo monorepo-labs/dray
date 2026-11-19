@@ -272,11 +272,11 @@ const REST =
 /// travelling between them. Phones get the headline's grey rest under them.
 export function Everywhere() {
   return (
-    <Section id="everywhere" className="pt-20 pb-[50px]">
+    <Section id="everywhere" className="pt-20 pb-8">
       <Title lead="Run Dray on all your machines.">
         <span className="max-sm:hidden">{REST}</span>
       </Title>
-      <PlayWhenVisible className="mt-10 sm:mt-[70px]">
+      <PlayWhenVisible className="mt-12 lg:mt-20">
         <Machines layout={WIDE} />
       </PlayWhenVisible>
       <p className="mt-10 font-inter text-[22px] leading-[28px] font-light tracking-[-0.02em] text-balance text-[#7C7C7C] sm:hidden light:text-[#8A8A8A]">

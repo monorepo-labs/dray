@@ -98,6 +98,7 @@ export default function EventRow({
           rawInput={payload.rawInput}
           result={resultByCallId.get(payload.callId)}
           edits={editsByCallId?.get(payload.callId)}
+          source={{ sessionId: event.sessionId, callId: payload.callId }}
           hideLabel={hideToolLabel}
           defaultOpen={openTool}
         />

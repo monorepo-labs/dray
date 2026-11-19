@@ -1,0 +1,112 @@
+name: Warm CLI cache
+
+# Exists for the cache it leaves behind, which release-cli.yml restores.
+#
+# A tag build can read only its own ref's caches and the default branch's, so
+# every CLI release used to save four ~330MB entries under its own
+# `refs/tags/cli-v…` that no later tag could read, and compiled `dray-serve`'s
+# 250-odd crates cold each time. `main` is the one scope a tag can read, so
+# this saves there and the release only restores. warm-cache.yml does the same
+# for the app.
+#
+# Steps, flags, env and key all live in .github/actions/cli-build, which the
+# release runs too.
+
+on:
+  push:
+    branches: [main]
+    # What the two builds read.
+    paths:
+      - "apps/cli/**"
+      - "crates/**"
+      - "apps/desktop/src-tauri/**"
+      - ".github/workflows/warm-cli-cache.yml"
+      - ".github/actions/cli-build/**"
+  workflow_dispatch:
+
+# Queued, never cancelled: a push landing mid-warm usually wants the same key,
+# and once this run saves it the queued one finds it and stops in `plan`.
+concurrency:
+  group: warm-cli-cache
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Looks every key up on one Linux runner before any build, so a push whose
+  # key already exists — most of them, since the key moves only with the
+  # dependency graph, the toolchain or the action — takes no Mac at all.
+  # Release bumps are skipped outright: one changes no key, and it is the push
+  # a release in flight is waiting on Macs behind.
+  plan:
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # The table in release-cli.yml, one lookup per row. The runner is passed
+      # as the build's own, since it is part of the key.
+      - id: aarch64-apple-darwin
+        uses: ./.github/actions/cli-build
+        with: { target: aarch64-apple-darwin, runner: macos-latest, lookup-only: "true" }
+      - id: x86_64-apple-darwin
+        uses: ./.github/actions/cli-build
+        with: { target: x86_64-apple-darwin, runner: macos-latest, lookup-only: "true" }
+      - id: x86_64-unknown-linux-gnu
+        uses: ./.github/actions/cli-build
+        with: { target: x86_64-unknown-linux-gnu, runner: ubuntu-22.04, lookup-only: "true" }
+      - id: aarch64-unknown-linux-gnu
+        uses: ./.github/actions/cli-build
+        with: { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm, lookup-only: "true" }
+
+      - id: matrix
+        env:
+          HITS: >-
+            aarch64-apple-darwin=macos-latest=${{ steps.aarch64-apple-darwin.outputs.cache-hit }}
+            x86_64-apple-darwin=macos-latest=${{ steps.x86_64-apple-darwin.outputs.cache-hit }}
+            x86_64-unknown-linux-gnu=ubuntu-22.04=${{ steps.x86_64-unknown-linux-gnu.outputs.cache-hit }}
+            aarch64-unknown-linux-gnu=ubuntu-22.04-arm=${{ steps.aarch64-unknown-linux-gnu.outputs.cache-hit }}
+        run: |
+          rows=()
+          for row in $HITS; do
+            IFS== read -r target os hit <<< "$row"
+            [ "$hit" = true ] || rows+=("{\"target\":\"$target\",\"os\":\"$os\"}")
+          done
+          matrix="[$(IFS=,; echo "${rows[*]}")]"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "To warm: $matrix"
+
+  warm:
+    needs: plan
+    if: needs.plan.outputs.matrix != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - id: build
+        uses: ./.github/actions/cli-build
+        with:
+          target: ${{ matrix.target }}
+          runner: ${{ matrix.os }}
+
+      # The `dray` crates rebuild on every tag whatever the cache holds — the
+      # version moves, and `DRAY_CLI_VERSION` with it — so their artifacts,
+      # binaries included, are weight with no hit behind them.
+      - name: Drop what a release always rebuilds
+        run: |
+          (cd apps/cli && cargo clean --release --target ${{ matrix.target }} -p dray)
+          (cd apps/desktop/src-tauri && cargo clean --release --target ${{ matrix.target }} -p dray)
+
+      # The action only restores; this is the one job that writes.
+      - if: steps.build.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.build.outputs.cache-path }}
+          key: ${{ steps.build.outputs.cache-key }}

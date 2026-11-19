@@ -8,7 +8,20 @@ vi.mock("@/lib/transport", () => ({
   serverOfSession: (id: string) => (id === "remote" ? "vps" : "local"),
 }));
 
-const { reachableUrl, browserTarget, normalizeUrl } = await import("@/lib/browser");
+const { reachableUrl, browserTarget, normalizeUrl, stoppedServer } = await import("@/lib/browser");
+
+type Tab = Parameters<typeof stoppedServer>[0];
+const tab = (url: string, error: string | null, loading = false): Tab => ({
+  id: 7,
+  url,
+  title: "",
+  favicon: "",
+  loading,
+  active: true,
+  canGoBack: false,
+  canGoForward: false,
+  error,
+});
 
 describe("browserTarget", () => {
   it("reads loopback, .localhost, .local and private LAN hosts as localhost", () => {
@@ -79,5 +92,29 @@ describe("reachableUrl", () => {
     expect(await reachableUrl("remote", "https://example.com")).toBe("https://example.com");
     expect(await reachableUrl("remote", "not a url")).toBe("not a url");
     expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("stoppedServer", () => {
+  it("names the session and real port behind a forward the server dropped", async () => {
+    invoke.mockResolvedValueOnce(52011);
+    await reachableUrl("remote", "http://localhost:3000");
+    const dead = stoppedServer(tab("http://localhost:52011/", "net::ERR_EMPTY_RESPONSE"), "bot");
+    expect(dead).toMatchObject({ port: 3000, sessionId: "remote", retrying: false });
+  });
+
+  it("reads a refused port on this machine as the browser's own, where nothing recorded it", () => {
+    expect(stoppedServer(tab("http://localhost:4000/", "net::ERR_CONNECTION_REFUSED"), "mine")).toMatchObject({
+      port: 4000,
+      sessionId: "mine",
+    });
+    // A remote session's browser on this Mac's port: nobody to ask.
+    expect(stoppedServer(tab("http://localhost:4000/", "net::ERR_CONNECTION_REFUSED"), "remote")?.sessionId).toBeNull();
+  });
+
+  it("ignores other failures, other hosts and healthy pages", () => {
+    expect(stoppedServer(tab("http://localhost:4001/", "net::ERR_EMPTY_RESPONSE"), "mine")).toBeNull();
+    expect(stoppedServer(tab("https://example.com/", "net::ERR_CONNECTION_REFUSED"), "mine")).toBeNull();
+    expect(stoppedServer(tab("http://localhost:4001/", null), "mine")).toBeNull();
   });
 });

@@ -4,12 +4,15 @@ import { getFiletypeFromFileName } from "@pierre/diffs";
 import { File, Virtualizer } from "@pierre/diffs/react";
 
 import Note from "@/components/changes/Note";
+import FileIcon from "@/components/FileIcon";
 import { useCodeThemeWithMode } from "@/hooks/useCodeTheme";
+import { useFirstFrame } from "@/hooks/useFirstFrame";
 import { useHighlighter } from "@/hooks/useHighlighter";
 import type { OpenFile } from "@/hooks/useOpenFiles";
-import type { FileBody } from "@/types/events";
+import type { DirEntry, FileBody } from "@/types/events";
 import { diffSide } from "@/lib/diff";
 import { basename } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 /// The line a chat link named, painted where the row sits.
 ///
@@ -31,9 +34,13 @@ type VirtualizedInstance = {
 /// The active file, read and highlighted. Read-only throughout.
 export default function FileViewer({
   file,
+  onOpen,
 }: {
   /// Null where nothing is open, which is the view's own empty state.
   file: OpenFile | null;
+  /// Opens an entry of a folder on screen. Absent, the listing only reads —
+  /// a split pane shows one file and has no strip to open another into.
+  onOpen?: (path: string) => void;
 }) {
   const { pair, resolvedMode } = useCodeThemeWithMode();
   const path = file?.path ?? "";
@@ -156,7 +163,7 @@ export default function FileViewer({
   // metric is exactly the `--diffs-line-height` its rows are drawn at.
   return (
     <Virtualizer className="min-h-0 flex-1 overflow-auto text-code">
-      <Body file={file} contents={contents} options={options} ready={ready} />
+      <Body file={file} contents={contents} options={options} ready={ready} onOpen={onOpen} />
     </Virtualizer>
   );
 }
@@ -166,11 +173,13 @@ function Body({
   contents,
   options,
   ready,
+  onOpen,
 }: {
   file: OpenFile;
   contents: { name: string; contents: string } | null;
   options: Parameters<typeof File>[0]["options"];
   ready: boolean;
+  onOpen?: (path: string) => void;
 }) {
   if (file.state.status === "loading") return <Note text="Loading…" />;
   if (file.state.status === "error") return <Note text={file.state.message} error />;
@@ -201,6 +210,10 @@ function Body({
     return <Video body={file.state.body} />;
   }
 
+  if (file.state.body.kind === "dir") {
+    return <Listing dir={file.path} entries={file.state.body.entries} onOpen={onOpen} />;
+  }
+
   // Plain text while the grammar loads, not an empty box: a grammar fetch runs
   // from ~10ms to several hundred, and a blank pane that long reads as a stall.
   if (!ready || !contents) {
@@ -222,6 +235,7 @@ function Body({
 /// note up over a file that may be fine now.
 function Video({ body }: { body: { path: string } }) {
   const [failed, setFailed] = useState<{ for: object; message: string } | null>(null);
+  const first = useFirstFrame();
   if (failed?.for === body) return <Note text={failed.message} error />;
 
   // The media error cannot tell a missing file from a codec it lacks, so ask
@@ -236,7 +250,63 @@ function Video({ body }: { body: { path: string } }) {
 
   return (
     <div className="flex min-h-full items-center justify-center bg-black">
-      <video src={fileSrc(body.path)} controls className="max-h-full max-w-full" onError={onError} />
+      <video
+        src={fileSrc(body.path)}
+        controls
+        className="max-h-full max-w-full"
+        onLoadedMetadata={first.onLoadedMetadata}
+        onError={onError}
+      />
+    </div>
+  );
+}
+
+/// A folder a chat link named: its entries, a file opening in the viewer and a
+/// subfolder as a listing of its own. Flat rather than a second tree, since
+/// the session's tree is beside it and this is one folder's answer.
+function Listing({
+  dir,
+  entries,
+  onOpen,
+}: {
+  dir: string;
+  entries: DirEntry[];
+  onOpen?: (path: string) => void;
+}) {
+  if (entries.length === 0) return <Note text="Empty folder." />;
+  const base = dir.replace(/\/+$/, "");
+
+  return (
+    <div className="py-1">
+      {entries.map((entry) => {
+        const className = cn(
+          "flex w-full items-center gap-1.5 px-3 py-1 text-left text-ui",
+          entry.ignored ? "text-muted-foreground" : "text-foreground",
+        );
+        const body = (
+          <>
+            <FileIcon path={entry.name} dir={entry.isDir} />
+            <span className="min-w-0 truncate">{entry.name}</span>
+          </>
+        );
+        if (!onOpen) {
+          return (
+            <div key={entry.name} className={className}>
+              {body}
+            </div>
+          );
+        }
+        return (
+          <button
+            key={entry.name}
+            type="button"
+            onClick={() => onOpen(`${base}/${entry.name}`)}
+            className={cn(className, "cursor-pointer hover:bg-sidebar-accent/50")}
+          >
+            {body}
+          </button>
+        );
+      })}
     </div>
   );
 }

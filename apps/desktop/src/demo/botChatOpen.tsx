@@ -10,6 +10,10 @@
 // replies were drawn. Long tasks are Chromium's alone. `&check=1` then scrolls
 // the chat up and says how far the top row drifted as pages landed;
 // `&focus=<task title>` picks that task's "Waiting on you" row instead.
+// `&soak=<turns>&chat=<session id>` streams synthetic turns into the open chat
+// and says what one event costs and what the page holds; `&top=1` reads the
+// whole log back first. Serve it with `Document-Policy: js-profiling` and the
+// soak logs the functions it spent its time in.
 //
 // Under `pnpm dev` React runs its development build in StrictMode, several
 // times slower: for numbers, build this page for production with a config
@@ -53,7 +57,13 @@ box.style.cssText =
 box.textContent = "waiting for the sidebar…";
 document.body.append(box);
 
-const frame = () => new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+// Raced with a timer: a pane the browser counts as hidden never fires rAF.
+const frame = () =>
+  new Promise<void>((r) => {
+    const done = () => setTimeout(r, 0);
+    requestAnimationFrame(done);
+    setTimeout(done, 100);
+  });
 
 async function until<T>(find: () => T | null | undefined, ms = 60_000): Promise<T | null> {
   const end = performance.now() + ms;
@@ -139,6 +149,7 @@ if (!row) {
   document.title = JSON.stringify(result);
   if (query.has("focus")) await focus(query.get("focus")!, box.textContent);
   else if (query.has("check")) await check(box.textContent);
+  else if (query.has("soak")) await soak(Number(query.get("soak")) || 40, box.textContent);
 }
 
 /// Picks a task's row in the "Waiting on you" card and says how long until the
@@ -198,6 +209,7 @@ async function check(report: string) {
   const from = document.querySelectorAll(BUBBLE).length;
   for (let step = 0; step < 40; step++) {
     scroller.scrollTop = Math.max(0, scroller.scrollTop - scroller.clientHeight * 0.8);
+    scroller.dispatchEvent(new Event("scroll"));
     await frame();
     const row = topRow();
     const height = scroller.scrollHeight;
@@ -211,8 +223,169 @@ async function check(report: string) {
   const button = document.querySelector<HTMLButtonElement>('[aria-label="Scroll to bottom"]');
   button?.click();
   await sleep(3000);
+  scroller.dispatchEvent(new Event("scroll"));
+  await sleep(1000);
   const left = Math.round(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight);
-  const result = { replies: `${from}→${replies}`, pages, drift: Math.round(drift), button: !!button, left };
+  // A hidden pane never runs the button's smooth scroll, so the bottom is
+  // also reached directly. There the chat lets go of what it read above.
+  scroller.scrollTop = scroller.scrollHeight;
+  scroller.dispatchEvent(new Event("scroll"));
+  await sleep(1500);
+  const kept = document.querySelectorAll(BUBBLE).length;
+  const after = Math.round(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight);
+  const result = { replies: `${from}→${replies}→${kept}`, pages, drift: Math.round(drift), button: !!button, left, after };
   box.textContent = `${report}\n${JSON.stringify(result)}`;
   document.title = `check ${JSON.stringify(result)}`;
+}
+
+/// What the page holds: elements in the DOM, the chat's own rows, and the JS
+/// heap where Chromium reports it.
+function held() {
+  const memory = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
+  return {
+    nodes: document.getElementsByTagName("*").length,
+    rows: document.querySelector("[data-bot-chat]")?.childElementCount ?? 0,
+    replies: document.querySelectorAll(BUBBLE).length,
+    heapMB: memory ? Math.round(memory.usedJSHeapSize / 1e6) : null,
+  };
+}
+
+/// A chat left open a while: `&top=1` first reads the whole log back by
+/// scrolling to its start, as a reader hunting for something does, then
+/// `&soak=<turns>` streams synthetic turns into `&chat=<session id>`, each event
+/// on its own as the live stream lands them, and says what one event costs the
+/// main thread and what the page holds before and after.
+async function soak(turns: number, report: string) {
+  const { emit } = await import("@tauri-apps/api/event");
+  const sessionId = query.get("chat");
+  const chat = document.querySelector("[data-bot-chat]")!;
+  const scroller = chat.parentElement!;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  if (!sessionId) {
+    document.title = "soak needs &chat=<session id>";
+    return;
+  }
+  if (query.has("top")) {
+    let still = 0;
+    for (let step = 0; step < 600 && still < 8; step++) {
+      const height = scroller.scrollHeight;
+      scroller.scrollTop = 0;
+      // A hidden pane runs no rendering steps, which is where scroll events fire.
+      scroller.dispatchEvent(new Event("scroll"));
+      await sleep(250);
+      still = scroller.scrollHeight > height + 1 ? 0 : still + 1;
+      box.textContent = `${report}\nreading back: ${document.querySelectorAll(BUBBLE).length} replies`;
+    }
+    await sleep(500);
+  }
+  const top = held();
+  scroller.scrollTop = scroller.scrollHeight;
+  scroller.dispatchEvent(new Event("scroll"));
+  await sleep(1500);
+  const before = held();
+  // A macrotask queued behind React's own render task: what one event costs
+  // before layout. `frame` adds layout and paint.
+  const channel = new MessageChannel();
+  const behind = () =>
+    new Promise<void>((r) => {
+      channel.port1.onmessage = () => r();
+      channel.port2.postMessage(0);
+    });
+  const js: number[] = [];
+  const frames: number[] = [];
+  let seq = 1_000_000;
+  const event = (payload: Record<string, unknown>) => ({
+    id: `soak-${seq}`,
+    sessionId,
+    harness: "claude_code",
+    seq: seq++,
+    ts: new Date().toISOString(),
+    turnId: null,
+    subagent: null,
+    payload,
+  });
+  // Chromium's sampling profiler, where the page is served with
+  // `Document-Policy: js-profiling`: the functions the soak spent its time in.
+  type Sample = { stackId?: number };
+  type Trace = {
+    samples: Sample[];
+    stacks: { frameId: number; parentId?: number }[];
+    frames: { name: string; line?: number }[];
+  };
+  const Sampler = (globalThis as unknown as { Profiler?: new (o: object) => { stop(): Promise<Trace> } }).Profiler;
+  let sampler: { stop(): Promise<Trace> } | null = null;
+  try {
+    sampler = Sampler ? new Sampler({ sampleInterval: 1, maxBufferSize: 1_000_000 }) : null;
+  } catch {
+    // Served without the header.
+  }
+  const start = performance.now();
+  for (let t = 0; t < turns; t++) {
+    const call = `soak-call-${t}`;
+    const batch: [string, unknown][] = [
+      ["session_status", { sessionId, status: "in_progress", modified: null }],
+      ["agent_event", event({ type: "user_message", text: `Soak message ${t}`, images: [], issues: [], baseline: null, queued: false, from: null, cwd: null })],
+      ["agent_event", event({ type: "reasoning", block: null, text: "", encrypted: false })],
+      ["agent_event", event({ type: "tool_call_started", callId: call, name: "Bash", toolType: "shell", input: { command: "echo hi" } })],
+      ["agent_event", event({ type: "tool_call_completed", callId: call, result: { text: "hi", isError: false, structured: null, exitCode: 0, durationMs: 1, images: [] } })],
+      ["agent_event", event({ type: "assistant_text", block: null, text: `Reply ${t}: **done**, with \`code\` and a [link](https://example.com).` })],
+      ["agent_event", event({ type: "turn_completed", status: "success", stopReason: "end_turn", finalText: null, usage: null, durationMs: 1000, head: null, authFailed: false })],
+      ["session_status", { sessionId, status: "completed", modified: null }],
+    ];
+    for (const [name, payload] of batch) {
+      const t0 = performance.now();
+      await emit(name, payload);
+      await behind();
+      js.push(performance.now() - t0);
+      // Style and layout forced here rather than waited for: a pane the
+      // browser counts as hidden never paints, and the cost is the same.
+      void document.body.offsetHeight;
+      frames.push(performance.now() - t0);
+      // Not a timer, which a hidden pane clamps to a second.
+      await behind();
+    }
+    box.textContent = `${report}\nsoak turn ${t + 1}/${turns}`;
+  }
+  const busy = long.filter(([s]) => s >= start).reduce((n, [, d]) => n + d, 0);
+  const trace = await sampler?.stop();
+  // Self samples per function, and inclusive ones, whose names carry the
+  // component or hook where the build is not minified.
+  const self = new Map<string, number>();
+  const total = new Map<string, number>();
+  const name = (f: { name: string; line?: number }) => `${f.name || "(anon)"}:${f.line ?? ""}`;
+  for (const s of trace?.samples ?? []) {
+    if (s.stackId == null) continue;
+    const seen = new Set<string>();
+    let stack: Trace["stacks"][number] | undefined = trace!.stacks[s.stackId];
+    const leaf = name(trace!.frames[stack.frameId]);
+    self.set(leaf, (self.get(leaf) ?? 0) + 1);
+    while (stack) {
+      const n = name(trace!.frames[stack.frameId]);
+      if (!seen.has(n)) total.set(n, (total.get(n) ?? 0) + 1);
+      seen.add(n);
+      stack = stack.parentId == null ? undefined : trace!.stacks[stack.parentId];
+    }
+  }
+  const ranked = (m: Map<string, number>) =>
+    [...m].sort((a, b) => b[1] - a[1]).slice(0, 25).map(([n, c]) => `${String(c).padStart(6)} ${n}`).join("\n");
+  if (trace) console.log(`soak samples ${trace.samples.length}\nself\n${ranked(self)}\ninclusive\n${ranked(total)}`);
+  await sleep(1000);
+  const pct = (xs: number[], p: number) => Math.round([...xs].sort((a, b) => a - b)[Math.floor(xs.length * p)] * 10) / 10;
+  const result = {
+    top,
+    before,
+    after: held(),
+    events: js.length,
+    jsP50: pct(js, 0.5),
+    jsP90: pct(js, 0.9),
+    layoutP50: pct(frames, 0.5),
+    layoutP90: pct(frames, 0.9),
+    // The last quarter alone: what an event costs once the chat has been open
+    // a while, which a whole-run figure averages away.
+    lateP50: pct(frames.slice((frames.length * 3) >> 2), 0.5),
+    lateP90: pct(frames.slice((frames.length * 3) >> 2), 0.9),
+    longMs: Math.round(busy),
+  };
+  box.textContent = `${report}\n${JSON.stringify(result, null, 1)}`;
+  document.title = `soak ${JSON.stringify(result)}`;
 }

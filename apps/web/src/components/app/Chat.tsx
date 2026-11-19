@@ -162,13 +162,20 @@ export function Composer({
   agent,
   model,
   effort,
+  picker,
   mode,
   context = 0.3,
   trailing,
   radius = "rounded-2xl",
+  editor,
+  onSend,
   className,
 }: {
   placeholder?: string;
+  /// A real input in the text's place, for a composer the visitor types in.
+  editor?: ReactNode;
+  /// Makes Send a button; disabled while the box is empty is the caller's to say.
+  onSend?: { send: () => void; disabled: boolean };
   /// Text already in the box, drawn in the prose colour where the placeholder
   /// is muted. A slot rather than a string, since a tag in it is a chip.
   value?: ReactNode;
@@ -183,11 +190,15 @@ export function Composer({
   /// The harness's brand glyph, drawn at `size-3.5` before the model's name.
   /// A slot rather than a table: the site already owns those marks.
   agent?: ReactNode;
-  model: string;
+  model?: string;
   effort?: string;
-  mode: string;
-  /// How full the ring is drawn, 0–1. Ignored where `trailing` stands in.
-  context?: number;
+  /// A live model picker in the drawn label's place, where the visitor can open it.
+  picker?: ReactNode;
+  /// The stance. A bot runs on Auto and draws none, as the app's does.
+  mode?: string;
+  /// How full the ring is drawn, 0–1, or `null` for no ring: a bot chat has
+  /// none. Ignored where `trailing` stands in.
+  context?: number | null;
   /// Takes the ring's place at the row's right end.
   trailing?: ReactNode;
   /// The box's corner. The app's own is `rounded-2xl`; a composer drawn
@@ -204,9 +215,11 @@ export function Composer({
               one row read correctly at both heights. */}
           <div className="flex items-end gap-1 px-3 py-3">
             <div className="relative min-w-0 flex-1">
-              <div className={cx("px-1 py-1 text-prompt", value ? "text-foreground" : "text-muted-foreground")}>
-                {value ?? placeholder}
-              </div>
+              {editor ?? (
+                <div className={cx("px-1 py-1 text-prompt", value ? "text-foreground" : "text-muted-foreground")}>
+                  {value ?? placeholder}
+                </div>
+              )}
             </div>
 
             <div className="flex shrink-0 items-center gap-1">
@@ -218,11 +231,23 @@ export function Composer({
               )}
               {/* The one filled button that keeps `--primary`, and the one round
                   control in a row of rounded squares. */}
-              <span className="grid size-7 place-items-center rounded-full bg-primary text-primary-foreground">
-                <span className="grid size-4 place-items-center">
+              {onSend ? (
+                <button
+                  type="button"
+                  aria-label="Send"
+                  onClick={onSend.send}
+                  disabled={onSend.disabled}
+                  className="grid size-7 place-items-center rounded-full bg-primary text-primary-foreground transition-opacity disabled:opacity-50"
+                >
                   <ArrowUp strokeWidth={2} className="size-4" />
+                </button>
+              ) : (
+                <span className="grid size-7 place-items-center rounded-full bg-primary text-primary-foreground">
+                  <span className="grid size-4 place-items-center">
+                    <ArrowUp strokeWidth={2} className="size-4" />
+                  </span>
                 </span>
-              </span>
+              )}
             </div>
           </div>
         </div>
@@ -236,21 +261,27 @@ export function Composer({
 
             {/* Effort is a qualifier on the model, not part of its name, so it
                 is held back a step rather than reading as one long label. */}
-            <span className="flex h-7 shrink-0 items-center gap-1 rounded-[min(var(--radius-md),12px)] px-1.5 text-ui font-medium text-muted-foreground">
-              {agent}
-              <span>{model}</span>
-              {effort && <span className="text-muted-foreground/60">{effort}</span>}
-            </span>
+            {picker ?? (
+              <span className="flex h-7 shrink-0 items-center gap-1 rounded-[min(var(--radius-md),12px)] px-1.5 text-ui font-medium text-muted-foreground">
+                {agent}
+                <span>{model}</span>
+                {effort && <span className="text-muted-foreground/60">{effort}</span>}
+              </span>
+            )}
 
-            <span className="flex h-7 shrink-0 items-center rounded-[min(var(--radius-md),12px)] px-1.5 text-ui font-medium text-muted-foreground">
-              {mode}
-            </span>
+            {mode && (
+              <span className="flex h-7 shrink-0 items-center rounded-[min(var(--radius-md),12px)] px-1.5 text-ui font-medium text-muted-foreground">
+                {mode}
+              </span>
+            )}
 
             {/* `ml-auto` rather than a spacer, so a long branch name still gets
                 the whole middle of the row. */}
-            <div className="ml-auto flex items-center">
-              {trailing ?? <ContextRing fraction={context} />}
-            </div>
+            {(trailing || context !== null) && (
+              <div className="ml-auto flex items-center">
+                {trailing ?? <ContextRing fraction={context ?? 0} />}
+              </div>
+            )}
           </div>
         </div>
         )}
@@ -388,7 +419,7 @@ export function NewTaskComposer({
             }
           }}
           placeholder="Describe a task."
-          className="field-sizing-content max-h-40 w-full resize-none bg-transparent py-1 text-prompt text-foreground outline-none placeholder:text-muted-foreground"
+          className="field-sizing-content select-text max-h-40 w-full resize-none bg-transparent py-1 text-prompt text-foreground outline-none placeholder:text-muted-foreground"
         />
         <div className="flex items-center gap-1 pt-2 text-ui text-muted-foreground/60">
           Press <CornerDownLeft className="size-3" strokeWidth={2} /> to send

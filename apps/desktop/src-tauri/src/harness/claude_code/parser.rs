@@ -98,6 +98,9 @@ pub enum ClaudeCodeEvent {
 #[serde(tag = "subtype", rename_all = "snake_case")]
 pub enum ControlRequest {
     CanUseTool(PermissionRequest),
+    /// One JSON-RPC message for the SDK MCP server a bot is spawned with. See
+    /// [no_reply](super::no_reply).
+    McpMessage { message: Value },
     /// A subtype this build doesn't answer. Distinct from a parse failure: the
     /// line is understood well enough to know it needs a reply we can't give,
     /// which the read loop turns into an automatic denial so the turn proceeds.
@@ -525,12 +528,19 @@ pub struct BackgroundTask {
     pub description: String,
 }
 
+/// **Every field here is optional on the wire as far as this parse is
+/// concerned**, because the line is what closes the turn: one missing field
+/// fails the whole line, and the session then sits `in_progress` with the CLI
+/// idle until the reader presses Stop. Only `subtype` is load-bearing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "subtype", rename_all = "snake_case")]
 pub enum ResultEvent {
     Success {
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         is_error: bool,
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         duration_ms: u64,
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         result: String,
         /// Null on the `result` that closes a compaction — the CLI ran no
         /// inference of its own, so nothing stopped. A required `String` here
@@ -538,17 +548,20 @@ pub enum ResultEvent {
         /// session then sat on `in_progress` until the user typed again.
         #[serde(default)]
         stop_reason: Option<String>,
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         session_id: String,
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         total_cost_usd: f64,
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         usage: Usage,
         /// Per-model breakdown, keyed by model name — a different shape from
         /// [`Usage`], read field by field by `map_model_usage`.
-        #[serde(rename = "modelUsage")]
+        #[serde(default, rename = "modelUsage")]
         model_usage: Value,
         #[serde(default)]
         origin: Option<ResultOrigin>,
-        /// Model calls the turn made. Zero on a notification turn is the CLI
-        /// filing a stranded task's notice ahead of a queued prompt.
+        /// Model calls the turn made. Zero on a notification turn: see
+        /// [`ResultEvent::is_notice_only`].
         #[serde(default)]
         num_turns: u32,
     },
@@ -561,15 +574,23 @@ pub enum ResultEvent {
     ///
     /// [`Success`]: Self::Success
     ErrorDuringExecution {
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         duration_ms: u64,
         #[serde(default)]
         stop_reason: Option<String>,
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         session_id: String,
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         total_cost_usd: f64,
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
         usage: Usage,
-        #[serde(rename = "modelUsage")]
+        #[serde(default, rename = "modelUsage")]
         model_usage: Value,
-        terminal_reason: String,
+        /// Absent where the turn threw rather than stopped (v2.1.322): the CLI
+        /// spreads an undefined reason into the line, and the exception's
+        /// message is then in `errors`.
+        #[serde(default)]
+        terminal_reason: Option<String>,
         /// Diagnostic strings; free-form, and not meant for display.
         #[serde(default)]
         errors: Vec<String>,
@@ -795,12 +816,34 @@ pub enum ContentDelta {
 /// `assistant.message`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Usage {
+    #[serde(default, deserialize_with = "crate::harness::null_as_default")]
     pub input_tokens: u64,
+    #[serde(default, deserialize_with = "crate::harness::null_as_default")]
     pub output_tokens: u64,
     /// Tokens served from cache — cheap, and the bulk of a long session.
+    #[serde(default, deserialize_with = "crate::harness::null_as_default")]
     pub cache_read_input_tokens: u64,
     /// Tokens written *into* the cache, billed at a premium.
+    #[serde(default, deserialize_with = "crate::harness::null_as_default")]
     pub cache_creation_input_tokens: u64,
+}
+
+impl ResultEvent {
+    /// A turn the CLI ran for a task notification without calling the model:
+    /// a resume filing a stranded task's notice, or a notice queued
+    /// transcript-only after a subagent already handed back.
+    pub fn is_notice_only(&self) -> bool {
+        matches!(self, Self::Success { origin: Some(o), num_turns: 0, .. } if o.kind == "task-notification")
+    }
+}
+
+/// A `result` line that failed to parse even so. It still ends the turn, so the
+/// read loop closes it as [`ResultEvent::Unrecognized`] rather than dropping it
+/// — the same reason [`unparsed_request_id`](super::permissions::unparsed_request_id)
+/// exists for a control request.
+pub fn is_unparsed_result(line: &str) -> bool {
+    serde_json::from_str::<Value>(line)
+        .is_ok_and(|v| v.get("type").and_then(Value::as_str) == Some("result"))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1198,7 +1241,7 @@ mod tests {
         assert!(events.iter().any(|event| matches!(
             event,
             ClaudeCodeEvent::Result(ResultEvent::ErrorDuringExecution { terminal_reason, .. })
-                if terminal_reason == "aborted_tools"
+                if terminal_reason.as_deref() == Some("aborted_tools")
         )));
         // The narration turn closes normally after the aborted one.
         assert!(events.iter().any(|event| matches!(
@@ -1554,7 +1597,7 @@ mod tests {
                 stop_reason: None,
                 errors,
                 ..
-            }) if terminal_reason == "aborted_streaming" && !errors.is_empty()
+            }) if terminal_reason.as_deref() == Some("aborted_streaming") && !errors.is_empty()
         )));
 
         // The CLI also narrates the abort as a user text block, which is what

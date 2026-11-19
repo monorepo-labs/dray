@@ -7,6 +7,18 @@ const DEAD_ZONE = 4;
 /// frame.
 const EDGE = 24;
 const SPEED = 8;
+/// How far past the list's far edge the pointer goes before the item counts
+/// as dragged out of it.
+const LEAVE = 12;
+
+/// Lets an item be dragged off the list: `over` hears where the pointer is
+/// while it is past the list's far edge, `null` once it is back or the drag
+/// ends, and answers whether letting go there would drop it. A release while
+/// it does calls `drop` instead of moving anything.
+export type Leave<T> = {
+  over: (item: T, at: { x: number; y: number } | null) => boolean;
+  drop: (item: T) => void;
+};
 
 /// Drag-to-reorder for one list: the Spaces settings rows, and the browser and
 /// Files tab strips. The item follows the pointer and the ones it passes slide
@@ -28,6 +40,7 @@ export function useDragReorder<T>(
   /// `to` is the item's new index, for a store that takes a place over a step.
   onMove: (item: T, delta: number, to: number) => Promise<unknown> | void,
   axis: "x" | "y" = "y",
+  leave?: Leave<T>,
 ) {
   // The order after a drop, held until the write answers so the items do not
   // snap back for the frame it takes.
@@ -83,6 +96,9 @@ export function useDragReorder<T>(
     const edges = box.getBoundingClientRect();
     let pointer = origin;
     let frame = 0;
+    // Whether a release now would drop the item off the list.
+    let out = false;
+    const dragged = shown[from];
     el.setPointerCapture(e.pointerId);
 
     const tick = () => {
@@ -96,6 +112,16 @@ export function useDragReorder<T>(
 
     const move = (ev: PointerEvent) => {
       pointer = at(ev);
+      if (leave) {
+        const past = axis === "x" ? ev.clientY > edges.bottom + LEAVE : ev.clientX > edges.right + LEAVE;
+        const was = out;
+        out = past && leave.over(dragged, { x: ev.clientX, y: ev.clientY });
+        if (was && !past) leave.over(dragged, null);
+        if (past && !moved) {
+          moved = true;
+          document.body.classList.add("session-drag");
+        }
+      }
       if (!moved && Math.abs(pointer - origin) < DEAD_ZONE) return;
       if (!moved) {
         document.body.classList.add("session-drag");
@@ -126,6 +152,13 @@ export function useDragReorder<T>(
       cancelAnimationFrame(frame);
       document.body.classList.remove("session-drag");
       setDrag(null);
+      if (leave) {
+        leave.over(dragged, null);
+        if (out && ev.type === "pointerup") {
+          leave.drop(dragged);
+          return;
+        }
+      }
       // A cancelled gesture (focus lost, the OS taking the pointer) is not a
       // drop, and a list that changed mid-drag no longer matches the indexes.
       if (!moved || ev.type !== "pointerup") return;

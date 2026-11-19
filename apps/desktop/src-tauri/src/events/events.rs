@@ -418,6 +418,12 @@ pub enum AgentEventPayload {
         model: Option<crate::models::ModelId>,
     },
 
+    /// A session this bot chat started, logged by the server as it creates it.
+    /// The chat's "Started a new task" row reads this, never the bot's shell
+    /// call, whose output a pipe or a script may hide. `title` is the one it
+    /// had then, for once the task is settled and gone from the index.
+    TaskStarted { task_id: String, title: String },
+
     /// A task's pull request, posted by the agent with `dray session merge-card`
     /// or by the app once it is ready, so the reader can land it from the chat.
     /// The PR's live state is read by the frontend; these fields are what the
@@ -441,6 +447,28 @@ pub enum AgentEventPayload {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         repo: Option<String>,
+    },
+
+    /// What a bot's turn changed in its instructions, skills or memory, read
+    /// off the commit Dray made of its folder. Drawn as "Learned" rows with
+    /// View diff and Undo, so a lesson the bot gave itself is never silent.
+    Learned {
+        commit: String,
+        files: Vec<LearnedFile>,
+    },
+    /// The reader undid one file of a [`Learned`](Self::Learned) commit.
+    LearnedUndone {
+        commit: String,
+        path: String,
+    },
+
+    /// A bot's emoji on a message the user typed, in place of a reply. Drawn
+    /// as a badge on that message's bubble; a later one on the same message
+    /// replaces it, so 👀 can turn into ✅ once the work is done.
+    Reaction {
+        /// The `user_message` event reacted to, always in this same session.
+        message_id: String,
+        emoji: String,
     },
 
     /// The agent moved the checkout's git state or a pull request mid-turn —
@@ -481,6 +509,11 @@ pub enum AgentEventPayload {
         /// or `unknown`. The last is the majority case and says nothing, so it
         /// is dropped on the way in rather than shown.
         reason: Option<String>,
+        /// The harness's own status line, drawn in place of the attempt count
+        /// where present. fx alone sends one ("Gateway error · next try in 3s ·
+        /// attempt 3") and restates it every second, so its countdown moves.
+        #[serde(default)]
+        message: Option<String>,
     },
     /// A compaction finished, and the transcript before it no longer reaches the
     /// model. Both counts are optional so an unfamiliar wire shape still closes
@@ -745,6 +778,24 @@ pub struct ToolResult {
     pub images: Vec<ImageRef>,
 }
 
+/// One file a bot's turn changed under its instructions, skills or memory.
+/// `kind` and `change` are plain strings, never enums, so a kind a later build
+/// adds cannot fail an older reader's whole line.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct LearnedFile {
+    /// Relative to the bot's folder.
+    pub path: String,
+    /// `instructions`, `skill` or `memory`.
+    pub kind: String,
+    /// `added`, `changed` or `removed`.
+    pub change: String,
+    /// One line saying what was learned: the rule added, or the skill's or
+    /// memory's own `description`.
+    pub summary: String,
+}
+
 /// Who relayed a prompt into this session, for a `user_message` the user did
 /// not type.
 ///
@@ -930,6 +981,24 @@ pub fn rfc3339_from_unix(secs: i64) -> String {
         .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+/// Whether `text` holds anything a reader could see. A bot forced to reply
+/// once wrote a lone zero-width space, which `trim` keeps, so format
+/// characters (Unicode `Cf`) count as blank too. Keep in step with `hasText`
+/// in botTranscript.ts, or the chat and the rail disagree on a silent turn.
+pub fn has_text(text: &str) -> bool {
+    text.chars().any(|c| !c.is_whitespace() && !is_format(c))
+}
+
+/// Unicode general category `Cf`, which std does not expose.
+fn is_format(c: char) -> bool {
+    matches!(c,
+        '\u{AD}' | '\u{600}'..='\u{605}' | '\u{61C}' | '\u{6DD}' | '\u{70F}' | '\u{890}'..='\u{891}'
+        | '\u{8E2}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
+        | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}'
+        | '\u{110BD}' | '\u{110CD}' | '\u{13430}'..='\u{1343F}' | '\u{1BCA0}'..='\u{1BCA3}'
+        | '\u{1D173}'..='\u{1D17A}' | '\u{E0001}' | '\u{E0020}'..='\u{E007F}')
+}
+
 impl AgentEvent {
     /// The fields every mapper mints the same way: a fresh id and the time now.
     /// The rest is the harness's own — its counter, its turn id,
@@ -958,6 +1027,16 @@ impl AgentEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invisible_text_is_no_text() {
+        for blank in ["", " \n\t", "\u{200B}", "\u{FEFF}\u{200D} \u{2060}", "\u{00A0}\u{3000}\u{AD}\u{85}"] {
+            assert!(!has_text(blank), "{blank:?}");
+        }
+        for seen in ["ok", "\u{200B}hi", "🙂", "\u{200D}👍"] {
+            assert!(has_text(seen), "{seen:?}");
+        }
+    }
 
     /// Rule 2: new code reads old lines. Flags and collections deserialize when
     /// absent instead of failing the line.

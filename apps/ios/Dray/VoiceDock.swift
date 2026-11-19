@@ -1,17 +1,20 @@
 import SwiftUI
+import UIKit
 
 /// Where the dock is: resting under the list, or open over it.
 enum DockPhase { case rest, recording, transcribing, ready }
 
-/// The bottom of the list: the voice orb, held to talk, and the picks a new
-/// task starts on. Holding it opens the dock over the list — recording, then
-/// transcribing, then the words ready to start or to keep adding to by holding
-/// again. The keyboard edits the same text in a sheet.
+/// The bottom of the list: the voice orb, tapped to talk, and the picks a new
+/// task starts on. A tap opens the dock over the list — recording until tapped
+/// again or Done, then transcribing, then the words ready to start or to add to
+/// with another tap. The keyboard edits the same text in a sheet.
 struct VoiceDock: View {
     @Environment(Store.self) private var store
     @Bindable var task: NewTask
     /// A task started: the list opens it.
     let started: (SessionKey) -> Void
+    /// The reader opened the keyboard, the picks or the orb.
+    var engaged: () -> Void = {}
     @State private var hint: String?
     @State private var confirming = false
     @State private var editing = false
@@ -20,19 +23,23 @@ struct VoiceDock: View {
 
     private let draft = SessionKey.newSession
     private var dictation: Dictation { Dictations.shared.state(draft) }
+    /// Nothing can transcribe: a text field stands where the orb would. Never mid-recording,
+    /// or losing the one server that could would take Done away with the mic still on.
+    private var typing: Bool { store.typesOnly && dictation == .idle }
     private var phase: DockPhase {
+        if typing { return .rest }
         switch dictation {
-        case .starting, .recording: .recording
-        case .transcribing: .transcribing
-        case .idle: task.hasText ? .ready : .rest
+        case .starting, .recording: return .recording
+        case .transcribing: return .transcribing
+        case .idle: return task.hasText ? .ready : .rest
         }
     }
     private var open: Bool { phase != .rest }
     private var busy: Bool { phase == .recording || phase == .transcribing }
-    /// The machine that turns speech into words: only a Mac's server can.
+    /// Settings' pick: a server's id, or Apple's model on the phone.
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
-    /// The machine that turns speech into words: Settings' pick, else any that can.
-    private var transcriber: UUID? { store.dictationServer(dictationPick) }
+    /// What turns speech into words: Settings' pick, else any server that can, else Apple.
+    private var transcriber: DictationEngine? { store.dictationEngine(dictationPick) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,21 +57,30 @@ struct VoiceDock: View {
                     .padding(.bottom, 14)
                     .transition(.opacity)
             }
-            DockOrb(draft: draft, size: open ? 120 : 76, hold: hold, tap: tapped)
+            if typing {
+                ChatInput(placeholder: task.bot.map { "Message \($0.bot.name)" } ?? "New task", text: $task.text,
+                          sending: task.sending, sendable: task.ready) {
+                    Task { if let key = await task.start() { started(key) } }
+                }
+            } else {
+                DockOrb(draft: draft, size: open ? 120 : 76, tap: tapped)
+            }
             if open {
                 actions
                     .padding(.top, Theme.Space.xl)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            picks.padding(.top, open ? 18 : 14)
+            picks.padding(.top, open ? 18 : 14).typingAligned(typing)
         }
         .padding(.horizontal, 20)
         .padding(.top, open ? 0 : 44)
         .padding(.bottom, 30)
         .frame(maxWidth: .infinity, maxHeight: open ? .infinity : nil, alignment: .bottom)
         .background { backdrop.ignoresSafeArea() }
-        .ignoresSafeArea(edges: .bottom)
+        // The container alone while typing, so the keyboard lifts the field over it.
+        .ignoresSafeArea(typing ? .container : .all, edges: .bottom)
         .animation(Theme.motion, value: phase)
+        .animation(Theme.motion, value: task.hasText)
         .animation(Theme.motion, value: confirming)
         .animation(Theme.motion, value: hint)
         .task(id: "\(task.server?.uuidString ?? "")|\(task.harness)") { await task.load() }
@@ -74,6 +90,7 @@ struct VoiceDock: View {
         .sheet(isPresented: $picking) { RunWithSheet(task: task) }
         // A new phase asks its own question; one left up would answer the wrong one.
         .onChange(of: phase) { confirming = false }
+        .onChange(of: open || editing || picking || task.hasText) { if open || editing || picking || task.hasText { engaged() } }
     }
 
     /// The page showing through at rest, and nearly closed over the list once open.
@@ -93,20 +110,20 @@ struct VoiceDock: View {
     /// What dictation or the last start said instead of words.
     private var note: String? { Dictations.shared.notes[draft] ?? task.failure }
 
-    /// A tap is not a hold: say how, once, then let it go.
+    /// Tap to talk, tap again to stop: the orb is never held. A tap while it
+    /// transcribes waits on that, and words ready take more on the next tap.
     private func tapped() {
-        guard phase == .rest else { return }
-        flash(transcriber == nil ? "This server can't transcribe. Type instead." : "Hold to talk")
-    }
-
-    private func hold() {
+        if dictation == .recording {
+            Task { await Dictations.shared.stop(store, draft: draft) }
+            return
+        }
         guard !busy else { return }
-        guard let transcriber else { return flash("This server can't transcribe. Type instead.") }
-        // A kept recording is the only copy of what was said; it goes by Retry or Discard, never by a new hold.
+        guard let transcriber else { return flash("Nothing can transcribe right now. Type instead.") }
+        // A kept recording is the only copy of what was said; it goes by Retry or Discard, never by a new tap.
         guard Dictations.shared.kept[draft] == nil else { return }
         Dictations.shared.dismiss(draft)
         task.failure = nil
-        Task { await Dictations.shared.start(store, server: transcriber, draft: draft) }
+        Task { await Dictations.shared.start(store, engine: transcriber, draft: draft) }
     }
 
     /// The title is read once, or typing into an empty task retitles the sheet mid-word.
@@ -219,30 +236,33 @@ struct VoiceDock: View {
                 .fixedSize()
             }
             .accessibilityLabel("Model")
+            // Machine before project: the project is one the machine holds.
             Button { picking = true } label: {
                 HStack(spacing: 5) {
-                    Image(systemName: "folder.fill").font(.system(size: 11))
-                    Text(task.project ?? "Project").font(Theme.Font.footnote)
-                }
-            }
-            .accessibilityLabel("Project")
-            Button { picking = true } label: {
-                HStack(spacing: 5) {
-                    ServerIcon().frame(width: 13, height: 13)
+                    ServerIcon().frame(width: 12, height: 12)
                     Text(task.server.map(store.name(of:)) ?? "Machine").font(Theme.Font.footnote)
                 }
             }
             .accessibilityLabel("Machine")
             Button { picking = true } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "folder.fill").resizable().scaledToFit().frame(width: 12, height: 12)
+                    Text(task.project ?? "Project").font(Theme.Font.footnote)
+                }
+            }
+            .accessibilityLabel("Project")
+            Button { picking = true } label: {
                 Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold)).frame(width: 24, height: 20)
             }
             .accessibilityLabel("More picks")
-            Button { edit() } label: {
-                Image(systemName: "keyboard").font(.system(size: 16)).frame(width: 24, height: 20)
+            if !typing {
+                Button { edit() } label: {
+                    Image(systemName: "keyboard").font(.system(size: 16)).frame(width: 24, height: 20)
+                }
+                .disabled(busy)
+                .opacity(busy ? 0.3 : 1)
+                .accessibilityLabel("Keyboard")
             }
-            .disabled(busy)
-            .opacity(busy ? 0.3 : 1)
-            .accessibilityLabel("Keyboard")
         }
         .foregroundStyle(Theme.secondary)
         .lineLimit(1)
@@ -305,11 +325,10 @@ struct KeptNote: View {
     }
 }
 
-/// The voice orb both docks hold: held to talk, tapped for a hint.
+/// The voice orb both docks draw: tapped to talk, tapped again to stop.
 struct DockOrb: View {
     let draft: SessionKey
     let size: CGFloat
-    let hold: () -> Void
     let tap: () -> Void
 
     var body: some View {
@@ -322,14 +341,110 @@ struct DockOrb: View {
         .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1).padding(-0.5))
         .shadow(color: .black.opacity(0.6), radius: size > 76 ? 20 : 15, y: size > 76 ? 16 : 10)
         .contentShape(Circle())
-        .gesture(LongPressGesture(minimumDuration: 0.25).onEnded { _ in hold() }
-            .exclusively(before: TapGesture().onEnded { tap() }))
+        .onTapGesture(perform: tap)
         .accessibilityElement()
         .accessibilityLabel("Voice")
-        .accessibilityHint("Hold to talk")
+        .accessibilityHint(dictation == .recording ? "Stops recording" : "Starts recording")
         .accessibilityAddTraits(.isButton)
-        .accessibilityAction(named: "Talk") { hold() }
+        .accessibilityAction { tap() }
         .accessibilityIdentifier("orb")
+    }
+}
+
+/// The orb's place where no server can transcribe: a composer's field, growing
+/// to five lines, with its send beside it.
+struct ChatInput: View {
+    let placeholder: String
+    @Binding var text: String
+    var sending = false
+    let sendable: Bool
+    let send: () -> Void
+    @FocusState private var focused: Bool
+    @State private var closer = KeyboardCloser()
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: Theme.Space.s) {
+            TextField(placeholder, text: $text, prompt: Text(placeholder).foregroundStyle(Theme.tertiary), axis: .vertical)
+                .font(Theme.Font.body)
+                .foregroundStyle(Theme.text)
+                .tint(Theme.accent)
+                .lineLimit(1...5)
+                .focused($focused)
+                .padding(.vertical, 8)
+                // Send's height, so one line sits centred beside it; more grow from the bottom.
+                .frame(minHeight: 44)
+                .padding(.leading, Theme.Space.l)
+                .accessibilityIdentifier("chatInput")
+            Button(action: send) {
+                Group {
+                    if sending { ProgressView().tint(Theme.page) } else { Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold)) }
+                }
+                .foregroundStyle(Theme.page)
+                .frame(width: 32, height: 32)
+                .background(Theme.text, in: Circle())
+            }
+            .disabled(!sendable)
+            .opacity(sendable ? 1 : 0.3)
+            .padding(6)
+            .accessibilityLabel("Send")
+        }
+        .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous).stroke(Theme.border, lineWidth: 1))
+        .contentShape(.rect)
+        .onTapGesture { focused = true }
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { closer.field = $0 }
+        .onChange(of: focused) { focused ? closer.install { focused = false } : closer.remove() }
+        .onDisappear { closer.remove() }
+    }
+}
+
+/// Closes the keyboard the way Messages does: a tap anywhere but the field, or a swipe
+/// down from the field's top or below it. Above, over a list or a chat, the scroll
+/// view's own interactive dismissal has the swipe. On the window, beside every
+/// other touch and cancelling none, so a row or button under it still works (#1196).
+@MainActor private final class KeyboardCloser: NSObject, UIGestureRecognizerDelegate {
+    var field: CGRect = .zero
+    private var close: () -> Void = {}
+    private var recognizers: [UIGestureRecognizer] = []
+
+    func install(_ close: @escaping () -> Void) {
+        self.close = close
+        guard recognizers.isEmpty, let window = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
+        recognizers = [UITapGestureRecognizer(target: self, action: #selector(tapped)),
+                       UIPanGestureRecognizer(target: self, action: #selector(panned))]
+        for r in recognizers {
+            r.cancelsTouchesInView = false
+            r.delegate = self
+            window.addGestureRecognizer(r)
+        }
+    }
+
+    func remove() {
+        for r in recognizers { r.view?.removeGestureRecognizer(r) }
+        recognizers = []
+    }
+
+    @objc private func tapped() { close() }
+
+    @objc private func panned(_ pan: UIPanGestureRecognizer) {
+        let moved = pan.translation(in: nil)
+        if pan.state == .changed, moved.y > 16, moved.y > abs(moved.x) { close() }
+    }
+
+    func gestureRecognizer(_ r: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        let at = touch.location(in: nil)
+        return r is UIPanGestureRecognizer ? at.y >= field.minY : !field.contains(at)
+    }
+
+    func gestureRecognizer(_ r: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+}
+
+extension View {
+    /// Under the text field the picks line up with its words; under the orb they centre.
+    func typingAligned(_ typing: Bool) -> some View {
+        frame(maxWidth: .infinity, alignment: typing ? .leading : .center)
+            .padding(.leading, typing ? Theme.Space.l : 0)
     }
 }
 

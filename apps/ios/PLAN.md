@@ -28,17 +28,28 @@ phone reads and drives it over the same WebSocket the desktop uses
   goes out, since `send_msg` is what carries it. **Stop** sits at the end of
   the picks while a turn runs. The top bar names the project and machine,
   never the branch.
-- **Permission and question cards**, answered in place.
+- **Permission and question cards**, answered in place. A hidden task's card,
+  a bot's above all, draws at the foot of the chat that started it under the
+  task's title, on whichever machine the task runs, and lights the bot's face.
 - **New task by voice**, from a dock under the list: hold the orb to talk,
   and the recording runs hands-free until Done or Cancel. The words land as
   the task's text; holding again adds to them, the keyboard edits them in a
   sheet, and Cancel offers Save draft (`create_draft`), Keep or Discard.
+  Run with offers Save draft too once there are words, the one way to it
+  in keyboard mode, whose field has no Cancel.
   Every pick under the orb opens **Run with**: server (where two hold the
   project), project with Attach inside its menu, worktree, the agent and its
   model as chips, effort, fast mode and stance. Double-tapping a model stars
   it, on this phone, per agent; starred ones lead. With the worktree off a
   Branch row switches the checkout at once (`checkout_branch`), asking
   Bring or Stash first where files are uncommitted, as the desktop does.
+- **A lone bot opens itself** (#1169): a cold launch where one bot is all
+  the list would draw — no other bot, no session shown, or Hide sessions on —
+  opens its chat at once. It decides off the cached list, so the list never
+  shows first; a server with no cache waits on its index and its bots both,
+  and until both are in its rows stay hidden, or a bot's chat draws as a task.
+  Coming back from the background, a link, a tap first or ten seconds and the
+  list stays.
 - **Pairing** by paste or by QR, and every server's name, token and removal
   in one Settings screen.
 - **Shared machines** (#847): a paired server that shares its list
@@ -54,11 +65,17 @@ phone reads and drives it over the same WebSocket the desktop uses
   it lands; it stays shut while checks run or fail. Mark ready, reopen.
   Hidden when the branch has none. Reads and merges only: no comment, reply
   or close.
-- **Dictation**, transcribed on the Mac: the phone records a 16kHz mono WAV,
-  uploads it through `POST /upload` and calls `transcribe_upload`. Only the
-  Mac's server has that command, and its welcome frame says `dictation: true`,
-  so the orb says "Type instead" where no server can. The Island's `VoiceOrb`
-  draws it.
+- **Dictation**, transcribed on the Mac or on the phone: the phone records a
+  16kHz mono WAV, then either uploads it through `POST /upload` and calls
+  `transcribe_upload` — only the Mac's server has that command, and its
+  welcome frame says `dictation: true` — or, from iOS 26, reads it with
+  Apple's `SpeechAnalyzer` (#1261). Settings › Dictation picks one; with no
+  pick a server that can goes first, then Apple. Below iOS 26 Apple shows
+  disabled. Apple asks no speech recognition permission: that prompt is the
+  old `SFSpeechRecognizer`'s and says speech goes to Apple. The simulator's
+  analyzer offers no audio format, so a read there fails; test it on a phone.
+  Where nothing can transcribe, every dock trades the orb for a text field
+  and send. The Island's `VoiceOrb` draws it.
 
 Left out: push, attachments, the Diff/Files/Browser views,
 forks, settle/pin, the settled list, spaces, issues.
@@ -156,7 +173,7 @@ No `Origin` header is sent, so the server's browser check does not apply; the
 token answers for the connection.
 
 Commands used: `list_session_index_items`, `get_session_by_id`,
-`get_session_page`, `send_msg`, `interrupt_session`, `respond_permission`,
+`get_session_page`, `get_session_calls`, `send_msg`, `interrupt_session`, `respond_permission`,
 `answer_questions`, `list_projects`, `agent_availability`, `list_models`,
 `list_branches`, `checkout_branch`, `mark_session_read`, `work_status`,
 `prs_for_branch`, `merge_pr`, `mark_pr_ready`, `reopen_pr`, `set_last_selected_project`,
@@ -211,6 +228,21 @@ turn runs, gyro for a subagent, spiral for background tasks.
 Opens on the newest turns (`turns: 8`), pages older ones in on scroll to top.
 A reconnect re-reads the open session's tail and appends what it does not hold,
 matched on event id, never `seq`.
+
+The view holds the end only while the reader is within 40pt of it, the
+desktop's pin: a scroll up leaves them where they are, coming back or sending
+follows again (`FollowsBottom`, iOS 18; iOS 17 follows new rows only, always).
+The pin answers the content's height and the room it shows in, not new rows:
+a picture's placeholder is 10pt tall and a video's is a guess, so a chat grew
+by hundreds of points after it opened and the newest message sat behind the
+dock (#1104). The stack is a `VStack`, not lazy: a lazy one's height estimates
+left a chat opened from the cache scrolled past its end, blank, once the read
+drew less.
+
+`OpenAtBottomTests` checks all of it against a scratch server behind
+`scripts/late_turns_proxy.py`, which holds media back and lands turns on
+demand. A Mac serves a picture before the first frame, so without the proxy
+every one of these passes on a build that fails on a phone.
 
 ## Pairing
 

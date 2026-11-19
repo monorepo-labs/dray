@@ -52,12 +52,9 @@ final class PrModel {
             actionError = error.localizedDescription
         }
         await load(store)
+        if let path = store.items[key]?.projectPath { await store.refreshMarks(key.server, path) }
         acting = false
     }
-}
-
-private struct WorkStatus: Decodable {
-    let branch: String?
 }
 
 extension PrUnavailable {
@@ -91,7 +88,8 @@ private struct PrPanelModifier: ViewModifier {
             // that failed with the socket down would otherwise never retry.
             .task(id: "\(busy)|\(connected)") { if connected { await model.load(store) } }
             .toolbar {
-                if model.visible {
+                // A bot's folder holds notes, not work: no PR lookup there, as on the desktop.
+                if model.visible && store.bot(model.key) == nil {
                     ToolbarItem(placement: .primaryAction) {
                         // The list row's own glyph, so the button says the PR's state before it is opened.
                         Button { showing = true } label: {
@@ -188,7 +186,7 @@ private struct PrSection: View {
                         }
                     }
                     HStack(spacing: 6) {
-                        Text("#\(pr.number) · \(pr.author)").foregroundStyle(Theme.secondary)
+                        Text("#\(String(pr.number)) · \(pr.author)").foregroundStyle(Theme.secondary)
                         Text("+\(pr.additions)").foregroundStyle(Theme.add)
                         Text("−\(pr.deletions)").foregroundStyle(Theme.destructive)
                         Text("· \(pr.changedFiles) \(pr.changedFiles == 1 ? "file" : "files")").foregroundStyle(Theme.secondary)
@@ -373,7 +371,7 @@ private struct MergeButton: View {
         .accessibilityElement(children: .contain)
         // A poll can start or fail a check while the confirm is open; the hold covers it too.
         .onChange(of: pr.checksHold) { _, hold in if hold { confirming = false } }
-        .confirmationDialog("\(method.label) #\(pr.number)?", isPresented: $confirming, titleVisibility: .visible) {
+        .confirmationDialog("\(method.label) #\(String(pr.number))?", isPresented: $confirming, titleVisibility: .visible) {
             Button(method.label) {
                 // Read the model, not this view's copy, which can trail a refresh by a render.
                 guard model.prs.first(where: { $0.number == pr.number })?.checksHold == false else { return }

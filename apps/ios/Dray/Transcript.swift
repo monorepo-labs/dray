@@ -23,6 +23,10 @@ struct ToolCall: Identifiable {
     let output: String?
     let state: ToolState
     var images: [ImageRef] = []
+    /// The harness's id for the call, which a subagent's events name it by.
+    var callId: String?
+    /// Its input or output was cut by the server; `Store.completeCall` reads it whole.
+    var cut = false
 
     /// What the row names beside its verb — the desktop's `toolSummary`.
     var summary: String? { title ?? toolSummary(name, toolType, input) }
@@ -130,11 +134,17 @@ extension Turn {
             }
         }
         func shown(_ text: String) -> [Shot] {
-            markdownBlocks(text).compactMap {
+            let images: [Shot] = markdownBlocks(text).compactMap {
                 guard case .image(let alt, let url) = $0 else { return nil }
                 let ref = ImageRef(path: nil, url: url, mimeType: nil)
                 return Shot(ref: ref, verb: "Image", target: alt.isEmpty ? fileName(ref) : alt)
             }
+            // `MarkdownText` draws these after the blocks, so they page in that order too.
+            let named = imagePaths(in: text).map { path in
+                let ref = ImageRef(path: path, url: nil, mimeType: nil)
+                return Shot(ref: ref, verb: "Image", target: fileName(ref))
+            }
+            return images + named
         }
         var out = attached(prompt?.images ?? [])
         for item in work {
@@ -192,7 +202,7 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
     for e in main {
         switch e.payload {
         case .toolStarted(let callId, _, _, _, _) where results[callId] == nil: open.append(callId)
-        case .userMessage(_, _, _, false, _): abandoned.formUnion(open); open = []
+        case .userMessage(_, _, _, false, _, _, _): abandoned.formUnion(open); open = []
         default: break
         }
     }
@@ -237,8 +247,8 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
 
     for e in main {
         switch e.payload {
-        case .userMessage(let text, let fromTitle, let fromId, let queued, let images):
-            let shown = stripSender(text, title: fromTitle, id: fromId)
+        case .userMessage(let text, let fromTitle, let fromId, let queued, let images, _, let fromBot):
+            let shown = stripSender(text, title: fromTitle, id: fromId, bot: fromBot != nil)
             if queued, current != nil {
                 flushCalls()
                 current?.work.append(.prompt(id: e.id, text: shown, from: fromTitle, images: images))
@@ -256,7 +266,8 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
             let state: ToolState = r.map { $0.isError ? .failed : .done }
                 ?? (busy && !abandoned.contains(callId) ? .pending : .done)
             let call = ToolCall(id: e.id, name: name, toolType: toolType, input: input,
-                                title: title, output: r?.text, state: state, images: r?.images ?? [])
+                                title: title, output: r?.text, state: state, images: r?.images ?? [], callId: callId,
+                                cut: isCut(input) || r?.cut == true)
             // A delegated run keeps its own row, as the desktop's panel link does, and so
             // does a call carrying a picture: a closed group would hide it.
             let alone = toolType == "subagent_spawn" || !call.images.isEmpty
@@ -292,9 +303,9 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
 /// client does not keep. That much is read to the line's end rather than
 /// rebuilt: everything before it matched whole, so it cannot take any of the
 /// message, and without it a remote sender's line stayed drawn in the bubble.
-func stripSender(_ text: String, title: String?, id: String?) -> String {
+func stripSender(_ text: String, title: String?, id: String?, bot: Bool = false) -> String {
     guard let title, let id else { return text }
-    let opening = "[message from the Dray session \"\(title)\" (\(id))"
+    let opening = "[message from the Dray \(bot ? "bot" : "session") \"\(title)\" (\(id))"
     guard text.hasPrefix(opening) else { return text }
     let rest = text.dropFirst(opening.count)
     guard rest.hasPrefix("]\n\n") || rest.hasPrefix(" on "), let end = rest.range(of: "]\n\n") else { return text }

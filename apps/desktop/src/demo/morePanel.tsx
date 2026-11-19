@@ -6,7 +6,8 @@ import RightPanel, { TabBody, tabOrder } from "@/components/RightPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { Todo } from "@/lib/todos";
-import type { SessionMedia, SubagentRun } from "@/lib/transcript";
+import type { HeldLog } from "@/lib/olderMedia";
+import { runningRuns, type SubagentRun } from "@/lib/transcript";
 import type { AgentEvent, ToolResult } from "@/types/events";
 import "../App.css";
 
@@ -36,11 +37,39 @@ const SOURCES = [
   shot(1280, 720, "#22303a"),
   "/tauri.svg",
 ];
-const media = (count: number): SessionMedia[] =>
-  Array.from({ length: count }, (_, i) => ({
-    image: { path: null, url: `${SOURCES[i % SOURCES.length]}#${i}`, mimeType: null },
-    byYou: i % 3 === 0,
-  }));
+// A held log of `count` pictures, each its own prompt, so the grid reads them
+// the way it reads a real session's.
+const attachments = (count: number): HeldLog[] | null =>
+  count === 0
+    ? null
+    : [{
+        sessionId: "demo",
+        olderBefore: null,
+        events: Array.from(
+          { length: count },
+          (_, i) =>
+            ({
+              id: `m-${i}`,
+              sessionId: "demo",
+              harness: "claude_code",
+              seq: i,
+              ts: "2026-11-17T00:00:00Z",
+              turnId: null,
+              subagent: null,
+              raw: null,
+              payload: {
+                type: "user_message",
+                text: "",
+                images: [{ path: null, url: `${SOURCES[i % SOURCES.length]}#${i}`, mimeType: null }],
+                issues: [],
+                baseline: null,
+                queued: false,
+                from: null,
+                cwd: null,
+              },
+            }) as AgentEvent,
+        ),
+      }];
 
 const TODOS: Todo[] = [
   { content: "Read the grok ACP capture end to end", status: "completed", id: "1" },
@@ -109,6 +138,7 @@ const RUNS: SubagentRun[] = [
     usage: null,
     events: [textEvent("Three readers so far: the guess, the gateway, a live session.")],
     inline: false,
+    opensWhenDone: false,
     spawn: spawnEvent("call-1", "Find every place the effort ladder is read"),
   },
   {
@@ -123,6 +153,7 @@ const RUNS: SubagentRun[] = [
     usage: null,
     events: [textEvent("`rawOutput` needs no rename_all — every field would read None for ever.")],
     inline: false,
+    opensWhenDone: false,
     spawn: spawnEvent("call-2", "Check the grok mapper against the captured wire"),
   },
 ];
@@ -361,10 +392,10 @@ function Demo() {
             <MorePanel
               todos={picked.todos}
               live
-              media={media(mediaCount)}
-              sessionId="demo"
+              attachments={attachments(mediaCount)}
               subagents={{
-                runs: picked.runs ?? RUNS,
+                // The finished run is dropped here as App drops it.
+                runs: runningRuns(picked.runs ?? RUNS, null),
                 selectedId: null,
                 resultByCallId: RESULTS,
                 live: true,

@@ -24,7 +24,7 @@ The folder is readable by your user alone, and Dray uploads none of it. For what
 | `models/` | Dictation models you downloaded in Settings → Transcription. |
 | `recordings/` | Dictation audio, kept only while a transcription failed so you can retry it. Removed once the model answers, and pruned after 7 days. |
 | `browser/<session-id>/` | Each session's browser profile: cookies, cache, history. |
-| `browser/recordings/<session-id>/` | Videos an agent recorded of a session's browser, or filed with `dray video add`. |
+| `browser/recordings/<session-id>/` | Videos an agent recorded of a session's browser, or filed with `dray video add`, and screenshots filed with `dray image add`. |
 | `cef/<version>/` | The Chromium framework Dray's browser runs on, downloaded after the first launch. |
 | `chromium/` | The headless browser `dray browser` drives where the app's own browser is not open, such as on a Linux server. |
 | `pi-sessions/` | pi's own transcript of each pi session, which is how pi resumes it. |
