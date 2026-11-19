@@ -39,7 +39,7 @@ const buttonVariants = cva(
         // glass, a near-white box on a sheet that is see-through. A card is the
         // white veil there and the solid card colour in fullscreen.
         outline:
-          "bg-clip-padding border-border bg-card hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+          "bg-clip-padding border-border bg-card hover:bg-[var(--fill-soft,var(--muted))] hover:text-foreground aria-expanded:bg-[var(--fill-soft,var(--muted))] aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         // `--shadow-surface`, not the `default` variant's `--shadow-button`: this
         // fill is a few percent off the page it sits on, so what it needs is the
         // edge a floating surface draws rather than the lift under a solid one.
@@ -48,7 +48,7 @@ const buttonVariants = cva(
         secondary:
           "bg-secondary text-secondary-foreground shadow-(--shadow-surface) hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
         ghost:
-          "hover:bg-muted/70 hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
+          "hover:bg-[var(--fill-soft,color-mix(in_oklab,var(--muted)_70%,transparent))] hover:text-foreground aria-expanded:bg-[var(--fill-soft,var(--muted))] aria-expanded:text-foreground dark:hover:bg-muted/50",
         destructive:
           "bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
       },

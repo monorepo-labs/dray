@@ -309,7 +309,7 @@ function TaskRow({
               settleShown
                 ? "row-reached:[mask-image:linear-gradient(to_left,transparent_52px,black_76px)]"
                 : "row-reached:[mask-image:linear-gradient(to_left,transparent_26px,black_50px)]",
-              row.asking && "text-accent-command",
+              row.asking && "text-[var(--task-asking,var(--accent-command))]",
             )}
           >
             {item.title}

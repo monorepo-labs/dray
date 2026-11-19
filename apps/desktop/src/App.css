@@ -574,6 +574,16 @@
   --surface-raised: oklch(0.25 0 0);
   /* Keycaps and inline code ride on cards, so this stays a step above them. */
   --muted: oklch(0.36 0 0);
+  /* Light's hairline ring, in white: the composer and merge card draw their
+     edge as a shadow here too, so their borders go. */
+  --edge-surface: transparent;
+  --shadow-composer: 0 0 0 1px oklch(1 0 0 / 8%);
+  --shadow-raised-card: 0 0 0 1px oklch(1 0 0 / 8%);
+  --card-edge: transparent;
+
+  .merge-card {
+    border-color: transparent;
+  }
 
   /* In a bot chat, where the bot's replies are bubbles too, the reader's is
      filled blue as in light mode, a step deeper so white prose holds on a
@@ -609,44 +619,59 @@
 }
 
 [data-theme="default"][data-mode="light"] {
-  --background: oklch(0.965 0.012 250);
-  --surface-raised: oklch(0.94 0.01 250);
-  /* L 1 admits no chroma at all — `oklch(1 0.01 250)` leaves sRGB and clips, so
-     the cool tint written there never reached the screen. 0.004 is the most this
-     hue carries at 0.99, and naming the value that survives is what keeps the
-     swatch honest. Chasing the full 0.01 means dropping to L 0.978, which closes
-     the card's step above the page to almost nothing — the one thing this rung
-     cannot give up. */
-  --surface-card: oklch(0.99 0.004 250);
-  --muted: oklch(0.92 0.01 250);
-  --muted-foreground: oklch(0.52 0.01 250);
-  --foreground: oklch(0.22 0.01 250);
+  --background: oklch(0.965 0 0);
+  --surface-raised: oklch(0.94 0 0);
+  /* Neutral greys: the cool 250 tint was dropped from every rung here. Accent
+     blues stay. */
+  --surface-card: oklch(0.99 0 0);
+  --muted: oklch(0.92 0 0);
+  --muted-foreground: oklch(0.52 0 0);
+  --foreground: oklch(0.22 0 0);
   --primary: oklch(0.65 0.17 250);
   --primary-foreground: oklch(0.99 0 0);
   /* The one palette that splits the two. This blue is the app's mark and reads
      as one on Send; spent on every filled button it becomes the page's loudest
      colour, worn by controls that are only the second thing on their row. So
      buttons take the light ramp's own primary — L 0.28, the near-black a light
-     page expects — carrying this palette's tint rather than a flat grey. */
-  --button-primary: oklch(0.28 0.01 250);
+     page expects. */
+  --button-primary: oklch(0.28 0 0);
   --button-primary-foreground: var(--surface-card);
-  /* The primary blue itself, at 5.45:1 against the page. It was `oklch(0.8 0.01
-     250)`, which measured 3.03:1 — sitting exactly on the floor a non-text
-     indicator may not go below, where the ramp's own grey ring gives 8.67. A
-     focus ring is the one mark that has to be found rather than noticed. */
-  --ring: var(--primary);
+  /* Neutral, to match the greys: the primary blue it was drew the loudest mark
+     on the page around whatever had focus. L 0.55 stays well past the 3:1 a
+     focus indicator needs on white and on the page, with room for the `/50`
+     some controls draw it at. */
+  --ring: oklch(0.55 0 0);
   --destructive: oklch(0.55 0.2 25);
   /* Kept in step with the light ramp's own, above, where the reasoning for
      yellow leaving the trio's lightness is written out. */
   --accent-command: oklch(0.65 0.14 78);
   --accent-mention: oklch(0.55 0.16 245);
   --accent-thinking: oklch(0.55 0.05 264);
-  --surface-selected: oklch(0.9 0.012 250);
+  --surface-selected: oklch(0.9 0 0);
+  /* Opaque, so the sidebar and titlebar strip read as this exact grey rather
+     than a scrim over the glass. */
+  --surface-frame: #f7f7f7;
+  --surface-sheet: #ffffff;
+  --sidebar-selected: #e5e5e5;
+  /* The composer's hairline ring over the card's own drop, for the same reason. */
+  --shadow-raised-card: 0 0 0 1px oklch(0 0 0 / 6%), var(--shadow-card);
+  --card-edge: transparent;
+  --permission-card: #ffffff;
+  /* The Tasks panel's waiting-on-you titles: the gold read muddy on the white
+     sheet. Elsewhere the gold stays. */
+  --task-asking: oklch(0.55 0.16 250);
+  /* Selected tabs and the outline button's hover, a step lighter than the
+     sidebar's row: on the white sheet #e5e5e5 read heavier than it does there. */
+  --fill-soft: #ededed;
+  /* `--shadow-surface` with the wide stop pulled in from 4px to 2px blur, plus a
+     hairline ring: on the white sheet the white card's top edge had no line. */
+  --shadow-composer:
+    0 0 0 1px oklch(0 0 0 / 6%), 0 1px 1px oklch(0 0 0 / 8%), 0 1px 1px oklch(0 0 0 / 10%), 0 1px 2px oklch(0 0 0 / 8%);
   --vibrancy-alpha: 60%;
-  /* Matched to `--surface-card` above, and clipped the same way before it: this
-     is what the card *becomes* under transparency, so the two have to composite
-     to one colour or a card changes hue when the window goes fullscreen. */
-  --veil-card: oklch(0.99 0.004 250 / 60%);
+  /* Matched to `--surface-card` above: this is what the card *becomes* under
+     transparency, so the two have to composite to one colour or a card changes
+     hue when the window goes fullscreen. */
+  --veil-card: oklch(0.99 0 0 / 60%);
   /* Mixed off `--foreground` rather than named, which is `--surface-selected`'s
      own idiom three lines up and gets the hue for free. These carried the ramp's
      alphas over a *light* grey-blue ink, and the pair quietly halved all three —
@@ -673,11 +698,11 @@
   }
 
   /* This is the one palette that *fills* the bubble, and it is what makes the
-     tags a problem here and nowhere else. The fill is dark mode's bubble blue,
-     not `--primary`: white prose on the primary measured 3.1:1, and this is the
-     lightest blue holding 4.5:1. Send keeps the brighter primary. */
+     tags a problem here and nowhere else. The fill is `--primary` again, by
+     choice: white prose on it measures 3.1:1, under AA, where dark mode's
+     oklch(0.562 0.17 252) held 4.5:1. */
   .user-bubble {
-    background: oklch(0.562 0.17 252);
+    background: var(--primary);
     color: var(--primary-foreground);
     box-shadow: none;
 
@@ -725,6 +750,15 @@
   .user-bubble[data-brand] {
     background: var(--brand);
     color: var(--brand-ink);
+  }
+
+  .bot-bubble {
+    background: #efefef;
+  }
+
+  /* On `body`, since glass sets `--composer` there and would win over `html`. */
+  & body {
+    --composer: #ffffff;
   }
 }
 
@@ -1368,6 +1402,12 @@
   html[data-demo] body,
   html[data-demo] #root {
     @apply h-auto overflow-visible;
+  }
+  /* A demo stands in for the chat pane, so it sits on the pane's sheet over the
+     backdrop, as the app draws it: white in Default light. */
+  html[data-demo] #root {
+    min-height: 100vh;
+    background: var(--surface-sheet);
   }
 
   ::-webkit-scrollbar {

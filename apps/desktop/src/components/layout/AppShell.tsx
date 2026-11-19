@@ -102,7 +102,8 @@ export default function AppShell({
             "pt-(--titlebar-h)",
             // Light rows sat on the bare page and now sit on the frame's
             // darker fill, so the same veil read as half the mark it was.
-            "not-dark:[--sidebar-accent:color-mix(in_oklab,var(--foreground)_15%,transparent)]",
+            // A palette may name the fill outright with `--sidebar-selected`.
+            "not-dark:[--sidebar-accent:var(--sidebar-selected,color-mix(in_oklab,var(--foreground)_15%,transparent))]",
             // Keycaps too: their muted veil was tuned against the bare page.
             "not-dark:[&_[data-slot=kbd]]:bg-foreground/13",
           )}
@@ -216,10 +217,11 @@ export function Sheet({
   return (
     <div className={cn("relative flex min-h-0 min-w-0", className)} style={style} {...attrs}>
       {/* Its own box over the panes rather than a shadow on them, which would
-          clip at their edge. Inert, so every click passes through. */}
+          clip at their edge. Inert, so every click passes through. One above
+          the corners, whose frame fill otherwise covers the ring's arc. */}
       <span
         aria-hidden
-        className="pointer-events-none absolute inset-0 z-20 rounded-[8px] shadow-(--shadow-sheet)"
+        className="pointer-events-none absolute inset-0 z-21 rounded-[8px] shadow-(--shadow-sheet)"
       />
       <span aria-hidden className={cn(corner, "top-0 left-0 bg-[radial-gradient(circle_at_100%_100%,transparent_8px,var(--surface-frame)_8.5px)]")} />
       <span aria-hidden className={cn(corner, "top-0 right-0 bg-[radial-gradient(circle_at_0%_100%,transparent_8px,var(--surface-frame)_8.5px)]")} />

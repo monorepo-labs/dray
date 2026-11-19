@@ -1,14 +1,12 @@
 import { Cog6ToothIcon, SignalSlashIcon } from "@heroicons/react/16/solid";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  MessageCirclePlus,
   Archive,
   ArchiveRestore,
   Check,
   CheckCheck,
   Circle,
   CircleDashed,
-  CircleDot,
   Ellipsis,
   GitBranchPlus,
   Unlink,
@@ -27,6 +25,7 @@ import { greetingOf, previewLine, type BotEntry } from "@/lib/bots";
 import PrStateIcon, { ChecksRunningIcon, prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
 import { setRailSlot } from "@/components/RailPop";
+import { IssuesIcon, NewBotIcon, NewTaskIcon } from "@/components/icons/SidebarIcons";
 import PanelLeftIcon from "@/components/icons/PanelLeftIcon";
 import { Button } from "@/components/ui/button";
 import {
@@ -1024,10 +1023,11 @@ function RailTip({
 }
 
 /// The top strip's buttons, drawn as session rows: see the note where they
-/// render. `--rail` (0 full, 1 rail) moves the icon from 14px at 6px in to 16px
-/// centred in the rail's 40px button, a frame at a time with the edge.
+/// render. `--rail` (0 full, 1 rail) moves the 16px icon from 6px in to centred
+/// in the rail's 40px button, a frame at a time with the edge. The filled icons
+/// sit at 80% beside a label and at full strength alone in the rail.
 const STRIP =
-  "w-full justify-start pr-[calc(6px-6px*var(--rail,0))] pl-[calc(6px+5px*var(--rail,0))] transition-[color,background-color] [&_svg:not([class*='size-'])]:size-[calc(14px+2px*var(--rail,0))] text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50";
+  "w-full justify-start pr-[calc(6px-6px*var(--rail,0))] pl-[calc(6px+5px*var(--rail,0))] transition-[color,background-color] [&_svg:not([class*='size-'])]:size-4 [&_svg]:opacity-[calc(0.8+0.2*var(--rail,0))] text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50";
 
 export default function Sidebar({
   items,
@@ -1349,7 +1349,7 @@ export default function Sidebar({
             aria-label={iconOnly ? "New Task" : undefined}
             className={STRIP}
           >
-            <Plus />
+            <NewTaskIcon />
             {!iconOnly && <>
               <span data-rail-hide className="flex flex-1 items-center">
                 New Task
@@ -1376,7 +1376,7 @@ export default function Sidebar({
               "data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground",
             )}
           >
-            <CircleDot />
+            <IssuesIcon />
             {!iconOnly && <>
               <span data-rail-hide className="flex flex-1 items-center">
                 Issues
@@ -1386,85 +1386,6 @@ export default function Sidebar({
           </Button>
         </RailTip>
 
-        {/* The button *becomes* the field, on the same row at the same height:
-            the icon holds its place, the caret lands where the label was, and
-            nothing below it moves. Bare on purpose — a fill, a border or a
-            focus ring here would draw a second kind of control into a strip
-            that is otherwise plain buttons. The transparent border is what holds
-            that promise to the pixel: every button carries one, so the icon
-            would sit a pixel further out without it. */}
-        {searchOpen ? (
-          <div className="group flex h-7 w-full items-center gap-1 border border-transparent px-1.5 text-ui">
-            <Search className="size-3.5 shrink-0" />
-            <input
-              autoFocus
-              id={SEARCH_INPUT_ID}
-              type="text"
-              value={search}
-              placeholder="Search"
-              aria-label="Search tasks"
-              onChange={(e) => onSearchChange(e.target.value)}
-              // Escape is the way out, and it takes the query with it: leaving
-              // a filter behind an input that has closed would hide rows with
-              // nothing on screen saying why.
-              onKeyDown={(e) => {
-                if (e.key !== "Escape") return;
-                e.preventDefault();
-                closeSearch();
-              }}
-              // Only where there is nothing to lose. Clicking away from a query
-              // that is narrowing the list is not a request to drop it.
-              //
-              // Over the rail, closing folds it and moves everything under a
-              // press that took the focus, so the close waits for the release:
-              // the click then lands on what was pressed.
-              // Focus coming back takes it away, or a query typed after a Tab
-              // out would be closed over by the next click, still filtering.
-              onFocus={cancelFold}
-              onBlur={() => {
-                if (search) return;
-                if (held !== SIDEBAR_RAIL) return onSearchOpenChange(false);
-                cancelFold();
-                const fold = () => {
-                  pendingFold.current = undefined;
-                  onSearchOpenChange(false);
-                };
-                pendingFold.current = fold;
-                window.addEventListener("pointerup", fold, { once: true });
-              }}
-              className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
-            />
-            {/* The slot keeps naming whichever key does something here, and
-                which one that is turns on focus alone: Escape reaches this
-                input and nothing else, where ⌘F is what brings focus back to a
-                field left holding a query. Esc is withheld over an empty field,
-                which is the one state neither key has anything to do in. CSS
-                rather than a `focused` state: the browser already knows. */}
-            {search && (
-              <Kbd className="hidden group-focus-within:inline-flex">Esc</Kbd>
-            )}
-            <ShortcutKeys ids={["search"]} className="group-focus-within:hidden" />
-          </div>
-        ) : (
-          <RailTip on={iconOnly} label="Search" keys={["search"]}>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => onSearchOpenChange(true)}
-              aria-label={iconOnly ? "Search" : undefined}
-              className={STRIP}
-            >
-              <Search />
-              {!iconOnly && <>
-                <span data-rail-hide className="flex flex-1 items-center">
-                  Search
-                  <ShortcutKeys ids={["search"]} className="ml-auto" />
-                </span>
-              </>}
-            </Button>
-          </RailTip>
-        )}
-
         <RailTip on={iconOnly} label="New bot">
           <Button
             variant="ghost"
@@ -1473,7 +1394,7 @@ export default function Sidebar({
             aria-label={iconOnly ? "New bot" : undefined}
             className={STRIP}
           >
-            <MessageCirclePlus />
+            <NewBotIcon />
             {!iconOnly && <span data-rail-hide>New bot</span>}
           </Button>
         </RailTip>
@@ -1514,6 +1435,20 @@ export default function Sidebar({
         />
 
         <div className="flex items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Search"
+            aria-pressed={searchOpen}
+            // Keeps the field's focus, or its blur would close an empty
+            // search and this click would open it straight back up.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => (searchOpen ? closeSearch() : onSearchOpenChange(true))}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <Search />
+          </Button>
+
           {/* Same bargain as settled beside it: the glyph names where the press
               goes, so it swaps to `Undo2` while the drafts are what is shown.
               A dashed circle, Linear's backlog shape in lucide's stroke: not yet on
@@ -1555,6 +1490,58 @@ export default function Sidebar({
               {archivedRequested ? "Show active" : "Show settled"}
             </TooltipContent>
           </Tooltip>
+        </div>
+      </div>}
+
+      {/* Opened by the search button beside Drafts, or ⌘F. Bare on purpose: a
+          fill, a border or a focus ring would draw a second kind of control
+          over a pane that is otherwise one list. */}
+      {searchOpen && <div data-rail-hide className="px-2">
+        <div className="group flex h-7 w-full items-center gap-1 border border-transparent px-1.5 text-ui">
+          <input
+            autoFocus
+            id={SEARCH_INPUT_ID}
+            type="text"
+            value={search}
+            placeholder="Search"
+            aria-label="Search tasks"
+            onChange={(e) => onSearchChange(e.target.value)}
+            // Escape is the way out, and it takes the query with it: leaving
+            // a filter behind an input that has closed would hide rows with
+            // nothing on screen saying why.
+            onKeyDown={(e) => {
+              if (e.key !== "Escape") return;
+              e.preventDefault();
+              closeSearch();
+            }}
+            // Only where there is nothing to lose. Clicking away from a query
+            // that is narrowing the list is not a request to drop it.
+            //
+            // Over the rail, closing folds it and moves everything under a
+            // press that took the focus, so the close waits for the release:
+            // the click then lands on what was pressed.
+            // Focus coming back takes it away, or a query typed after a Tab
+            // out would be closed over by the next click, still filtering.
+            onFocus={cancelFold}
+            onBlur={() => {
+              if (search) return;
+              if (held !== SIDEBAR_RAIL) return onSearchOpenChange(false);
+              cancelFold();
+              const fold = () => {
+                pendingFold.current = undefined;
+                onSearchOpenChange(false);
+              };
+              pendingFold.current = fold;
+              window.addEventListener("pointerup", fold, { once: true });
+            }}
+            className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
+          />
+          {/* Esc only while focused and holding a query, the one state it does
+              something in. CSS rather than a `focused` state: the browser
+              already knows. */}
+          {search && (
+            <Kbd className="hidden group-focus-within:inline-flex">Esc</Kbd>
+          )}
         </div>
       </div>}
 

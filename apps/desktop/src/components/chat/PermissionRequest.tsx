@@ -104,7 +104,7 @@ export default function PermissionRequest({
     <div
       ref={cardRef}
       className={cn(
-        "rounded-2xl border border-border bg-card p-4 shadow-(--shadow-card)",
+        "rounded-2xl border border-[var(--card-edge,var(--border))] bg-[var(--permission-card,var(--card))] p-4 shadow-[var(--shadow-raised-card,var(--shadow-card))]",
         owns && contested && "ring-2 ring-ring/50",
       )}
     >

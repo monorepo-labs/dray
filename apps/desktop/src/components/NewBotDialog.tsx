@@ -162,7 +162,7 @@ export default function NewBotDialog({
               onClick={() => setAvatar((a) => ({ ...a, shape: shape.name }))}
               className={cn(
                 "flex size-12 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-muted/60",
-                avatar.shape === shape.name && "ring-2 ring-ring/60",
+                avatar.shape === shape.name && "bg-[var(--fill-soft,var(--muted))] hover:bg-[var(--fill-soft,var(--muted))]",
               )}
             >
               <BotAvatar seed={seed} avatar={{ shape: shape.name, hue: avatar.hue }} className="size-9" />
