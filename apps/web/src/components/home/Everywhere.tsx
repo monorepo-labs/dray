@@ -1,5 +1,4 @@
 import type { CSSProperties } from "react";
-import { TESTFLIGHT } from "@/lib/links";
 import m from "./motion.module.css";
 import { PlayWhenVisible } from "./PlayWhenVisible";
 import { Section, Title } from "./Section";
@@ -7,8 +6,7 @@ import { Section, Title } from "./Section";
 /// Inline timing for a `motion.module.css` class, as fractions of one loop.
 const at = (s: number, l = 0.06) => ({ "--s": s, "--l": l }) as CSSProperties;
 
-// The iPad and iPhone move as one: the iPad marked coming soon, the iPhone
-// linking its TestFlight beta.
+// The iPad and iPhone move as one, the iPad alone marked coming soon.
 type Place = "macbook" | "mini" | "server" | "soon";
 
 // One per machine, in Paper's frame: where its line drops from the bus, and where it stops.
@@ -161,17 +159,7 @@ function Server() {
   );
 }
 
-const LABEL = {
-  y: 780,
-  textAnchor: "middle",
-  dominantBaseline: "central",
-  fontSize: 12,
-  letterSpacing: "-0.04em",
-  className: "font-mono uppercase",
-} as const;
-
-/// The iPad, marked coming soon, and the iPhone, lit and labelled with its
-/// TestFlight beta.
+/// The iPad, marked coming soon, and the iPhone, out and lit.
 function ComingSoon() {
   return (
     <>
@@ -202,15 +190,10 @@ function ComingSoon() {
       </g>
       <rect x="1122" y="740" width="66" height="3" fill="#141414" />
 
-      <path d="M1017.5 748V768M1155 748V768" fill="none" stroke="#FFFFFF38" strokeDasharray="2 3" />
-      <text {...LABEL} x="1017.5" fill="#555555">
+      <path d="M1017.5 748V768" fill="none" stroke="#FFFFFF38" strokeDasharray="2 3" />
+      <text x="1017.5" y="780" textAnchor="middle" dominantBaseline="central" fontSize="12" letterSpacing="-0.04em" fill="#555555" className="font-mono uppercase">
         Coming soon
       </text>
-      <a href={TESTFLIGHT} target="_blank" rel="noopener noreferrer">
-        <text {...LABEL} x="1155" fill="#A1A1A1" className={`${LABEL.className} underline transition-colors hover:fill-white`}>
-          TestFlight
-        </text>
-      </a>
     </>
   );
 }
@@ -225,7 +208,7 @@ function Machines({ layout: { id, viewBox, className, place, bus, bands } }: { l
       className={`h-auto overflow-visible ${className} ${m.timeline}`}
       style={{ "--dur": "10s" } as CSSProperties}
       role="img"
-      aria-label="A MacBook, a Mac mini, a Linux server, an iPad and an iPhone, each wired to one line. The iPad is marked coming soon; the iPhone links its TestFlight beta."
+      aria-label="A MacBook, a Mac mini, a Linux server, an iPad and an iPhone, each wired to one line. The iPad is marked coming soon."
     >
       <defs>
         <linearGradient id={`${id}-shade`} x1="0" y1="0" x2="0" y2="1">

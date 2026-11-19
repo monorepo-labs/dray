@@ -1,11 +1,14 @@
 "use client";
 
 import { AppleGlyph } from "@/components/AppleGlyph";
+import { BetaTag } from "@/components/BetaTag";
 import { TESTFLIGHT } from "@/lib/links";
 import { posthog } from "@/lib/posthog";
 
 /// The iPhone app's TestFlight beta, beside the download buttons. Counted as
 /// `testflight_click`, keyed by where it sits, since it leaves for Apple's page.
+/// The closing band spells it out ("Download for iPhone" with a TestFlight
+/// tag); the hero, three buttons wide, keeps it short.
 export function IPhoneButton({ className, from }: { className: string; from: "hero" | "cta" }) {
   return (
     <a
@@ -16,7 +19,14 @@ export function IPhoneButton({ className, from }: { className: string; from: "he
       className={className}
     >
       <AppleGlyph className="-mt-0.5 size-4" />
-      iPhone beta
+      {from === "cta" ? (
+        <>
+          Download for iPhone
+          <BetaTag label="TestFlight" />
+        </>
+      ) : (
+        "iPhone beta"
+      )}
     </a>
   );
 }
