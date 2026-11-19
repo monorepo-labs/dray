@@ -7,8 +7,8 @@ import { useDriven } from "@/lib/browser";
 /// A mask rather than an `<img>`, so the mark takes the text colour — the
 /// theme's, and the URL row's tint over a dark page.
 const MARK = {
-  maskImage: "url(/assets/icon-square-frame.svg)",
-  WebkitMaskImage: "url(/assets/icon-square-frame.svg)",
+  maskImage: `url(${import.meta.env.BASE_URL}assets/icon-square-frame.svg)`,
+  WebkitMaskImage: `url(${import.meta.env.BASE_URL}assets/icon-square-frame.svg)`,
   maskSize: "contain",
   WebkitMaskSize: "contain",
   maskRepeat: "no-repeat",

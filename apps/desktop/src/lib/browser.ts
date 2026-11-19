@@ -8,6 +8,7 @@ import { pushClosedTab } from "@/lib/tabOrder";
 import type { BrowserVisit } from "@/lib/history";
 import type { ChromiumStatus } from "@/types/events";
 import { zoomLevel } from "@/lib/zoom";
+import { newId } from "@/lib/id";
 
 /// The in-app browser's frontend half: tabs per session as the backend
 /// reports them, and the one rule about who presents the native view.
@@ -791,7 +792,7 @@ export function useCustomDevices(): Device[] {
 /// A blank name saves under its size.
 export function saveCustomDevice(name: string, width: number, height: number): Device {
   const device = {
-    id: `custom-${crypto.randomUUID()}`,
+    id: `custom-${newId()}`,
     label: name.trim() || `${width} × ${height}`,
     width,
     height,

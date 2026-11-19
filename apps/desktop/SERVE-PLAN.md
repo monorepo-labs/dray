@@ -221,6 +221,29 @@ door.
 Desktop-only commands reject with `unknown command`; the UI logs some
 (`list_open_apps`, `check_update`) rather than hiding the control.
 
+## Web build
+
+`pnpm build:web` builds the same app for a browser with no Dray installed:
+`--mode web`, under `/web/`, into `dist-web/`. Copied to `<home>/web` (or
+wherever `DRAY_WEB_DIR` points), `dray-serve` serves it at `GET /web/…` on its
+own port, with no token, since the bundle holds nothing private. A path that is
+not a file under it answers `index.html`; `..` and symlinks resolve inside it or
+not at all. Bundled scripts and styles, named by their hash, are cached for
+good; everything else is revalidated.
+
+The web build talks to the server that served it, so the page's own origin is
+the socket's, which the origin check already admits on localhost and on the
+Remote access address. Its token arrives once, as `?token=…` or through the
+form [WebTokenGate.tsx](src/components/WebTokenGate.tsx) draws while it has
+none, and is kept in `localStorage` and dropped from the address bar
+([webApp.ts](src/lib/webApp.ts)). A `wrong token` refusal forgets it and goes
+back to the form.
+
+Two things a desktop build never meets: `import.meta.env.BASE_URL` is `/web/`,
+so a file from `public/` is named under it rather than from `/`; and a page
+on plain HTTP away from localhost is not a secure context, so it has no
+`crypto.randomUUID`, and ids come from `newId()` in [id.ts](src/lib/id.ts).
+
 ## Trying it
 
 ```bash
@@ -234,6 +257,10 @@ cd .. && DRAY_HOME=/tmp/dray-serve-home node scripts/serve-smoke.mjs
 # the real UI in a browser
 DRAY_DEV_PORT=1477 pnpm dev
 open "http://localhost:1477/?token=$(cat /tmp/dray-serve-home/serve-token)"
+
+# the web build, served by dray-serve itself
+pnpm build:web && cp -R dist-web /tmp/dray-serve-home/web
+open "http://localhost:7317/web/?token=$(cat /tmp/dray-serve-home/serve-token)"
 ```
 
 ## Stages

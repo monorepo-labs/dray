@@ -11,6 +11,7 @@ import { setHandoffConfig, useHandoffConfig } from "@/hooks/useHandoffConfig";
 import { builtinHandoff, labelFromPrompt } from "@/lib/handoff";
 import type { BuiltinHandoffId, CustomHandoffButton, HandoffConfig, HandoffEntry } from "@/lib/handoff";
 import { cn } from "@/lib/utils";
+import { newId } from "@/lib/id";
 
 /// When each built-in shows, which is the reason it has a switch and not a
 /// text field: the rule is about the checkout, and only right for the words.
@@ -83,7 +84,7 @@ export default function HandoffSettings() {
             variant="outline"
             size="sm"
             onClick={() => {
-              const id = `custom-${crypto.randomUUID()}`;
+              const id = `custom-${newId()}`;
               setHandoffConfig([...config, { kind: "custom", id, label: "", prompt: "" }]);
               setAdded(id);
               setConfirming(null);

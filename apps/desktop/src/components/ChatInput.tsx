@@ -215,8 +215,8 @@ const NEW_TASK_MAX_ROWS = 20;
 // the CSS supplies the ink. Prefixed as well as not, for the older WebKit a
 // Linux build runs on.
 const WORDMARK_MASK = {
-  maskImage: "url(/assets/dray-logo.svg)",
-  WebkitMaskImage: "url(/assets/dray-logo.svg)",
+  maskImage: `url(${import.meta.env.BASE_URL}assets/dray-logo.svg)`,
+  WebkitMaskImage: `url(${import.meta.env.BASE_URL}assets/dray-logo.svg)`,
   maskSize: "contain",
   WebkitMaskSize: "contain",
   maskRepeat: "no-repeat",

@@ -263,6 +263,7 @@ import SubagentView from "@/components/SubagentView";
 import { cn } from "@/lib/utils";
 import { onUnhandledEscape } from "@/lib/escape";
 import { playSwipeTick } from "@/lib/tick";
+import { newId } from "@/lib/id";
 
 /// What a project filter reopens when the reader comes back to it.
 type FilterPick = { session: string } | { bot: string } | null;
@@ -535,7 +536,7 @@ function App() {
     const prompt = readDraft(key);
     const draftProject = source ? source.projectPath : projectPath;
     if (!draftProject || !prompt.trim()) return;
-    const id = crypto.randomUUID();
+    const id = newId();
     const saved = await saveDraft({
       id,
       prompt,
@@ -3877,7 +3878,7 @@ function App() {
                         // the reader came to look at.
                         const target = newestSession(botTasks) ?? (kind === "files" ? strip.bot : null);
                         if (!target) return null;
-                        const id = crypto.randomUUID();
+                        const id = newId();
                         setPickTabs((prev) => addPickTab(prev, strip.bot, { id, kind, target }));
                         showPick(strip.bot, strip.owner, id);
                         return id;
@@ -3887,7 +3888,7 @@ function App() {
                         setPickTabs((prev) => closePickTab(prev, strip.bot, id));
                       },
                       onReopen: (kind, target) => {
-                        const id = crypto.randomUUID();
+                        const id = newId();
                         setPickTabs((prev) => addPickTab(prev, strip.bot, { id, kind, target }));
                         return id;
                       },

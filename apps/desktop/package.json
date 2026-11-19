@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:web": "tsc && vite build --mode web --base /web/ --outDir dist-web",
     "test": "vitest run",
     "preview": "vite preview",
     "tauri": "node scripts/tauri.mjs",
