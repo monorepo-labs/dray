@@ -31,7 +31,7 @@ impl Icon {
             Icon::UpDown => format!(r#"<path {} d="M6.5 21V3.5M2 8l4.5-4.5L11 8M17.5 3v17.5M13 16l4.5 4.5L22 16"/>"#, stroke(2.4)),
             // The arrow is cut out of the disc, so the panel shows through it as on the Mac.
             Icon::Send => format!(
-                r#"<mask id="m"><rect width="24" height="24" fill="white"/><path fill="none" stroke="black" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M12 17.5V7M7.25 11.5 12 6.75l4.75 4.75"/></mask><circle cx="12" cy="12" r="11.5" fill="{c}" mask="url(#m)"/>"#
+                r#"<mask id="m"><rect width="24" height="24" fill="white"/><path fill="none" stroke="black" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" d="M12 17.25V7M7.5 11.25 12 6.75l4.5 4.5"/></mask><circle cx="12" cy="12" r="11.5" fill="{c}" mask="url(#m)"/>"#
             ),
             Icon::Camera => format!(
                 r#"<g {}><path d="M2.75 8V5.5a2.75 2.75 0 0 1 2.75-2.75H8M16 2.75h2.5a2.75 2.75 0 0 1 2.75 2.75V8M21.25 16v2.5a2.75 2.75 0 0 1-2.75 2.75H16M8 21.25H5.5a2.75 2.75 0 0 1-2.75-2.75V16"/><path d="M8.5 9h1.25l.9-1.5h2.7l.9 1.5h1.25A1.5 1.5 0 0 1 17 10.5v4.5a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 7 15v-4.5A1.5 1.5 0 0 1 8.5 9z"/><circle cx="12" cy="12.6" r="2.1"/></g>"#,
