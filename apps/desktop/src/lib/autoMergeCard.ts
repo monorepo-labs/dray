@@ -52,11 +52,11 @@ export function cardDue(mark: PrMark, watch: CardWatch, readAt: number): boolean
   return (mark.checkCount ?? 0) >= watch.expected || waited >= EXPECT_MS;
 }
 
-/// Whether a task's turn is over, judged on a PR read asked at `readAt`. A
-/// turn ending moves `modified`, so a read asked before then may predate the
-/// turn's last push, and the card waits for the next one: ready must still hold.
-export function turnEnded(status: SessionStatus, modified: string, readAt: number): boolean {
-  if (status === "in_progress") return false;
-  const ended = Date.parse(modified);
-  return Number.isNaN(ended) || readAt >= ended;
+/// Whether a task's turn is over, judged on a PR read asked at `readAt`.
+/// `endedAt` is when this app saw the task stop, on its own clock: a task on
+/// another machine stamps `modified` with that machine's. A read asked before
+/// then may predate the turn's last push, so the card waits for the next one
+/// and ready must still hold.
+export function turnEnded(status: SessionStatus, endedAt: number, readAt: number): boolean {
+  return status !== "in_progress" && readAt >= endedAt;
 }

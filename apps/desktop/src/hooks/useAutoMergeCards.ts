@@ -42,6 +42,9 @@ export function useAutoMergeCards({ items, bots, prFor, readAt, statusBySession 
   const inFlight = useRef(new Set<string>());
   /// Each open PR's tip and checks across reads, by URL.
   const watches = useRef(new Map<string, CardWatch>());
+  /// When this app saw each task's status or `modified` last move, on its own
+  /// clock, by session id.
+  const movedAt = useRef(new Map<string, { state: string; at: number }>());
   const [tick, setTick] = useState(0);
   const [pending, setPending] = useState(false);
 
@@ -61,7 +64,14 @@ export function useAutoMergeCards({ items, bots, prFor, readAt, statusBySession 
     const now = Date.now();
     const ready = new Set<string>();
     const watched = new Set<string>();
+    const seen = new Set<string>();
     for (const task of tasks) {
+      const status = statusBySession[task.sessionId] ?? task.status;
+      const state = `${status} ${task.modified}`;
+      let moved = movedAt.current.get(task.sessionId);
+      if (moved?.state !== state) movedAt.current.set(task.sessionId, (moved = { state, at: now }));
+      seen.add(task.sessionId);
+
       const branch = sessionBranch(task);
       const mark = prFor(task.projectPath, branch);
       const asked = readAt(task.projectPath);
@@ -70,8 +80,7 @@ export function useAutoMergeCards({ items, bots, prFor, readAt, statusBySession 
       const watch = watchPr(watches.current.get(key), mark, asked);
       watches.current.set(key, watch);
       watched.add(key);
-      const status = statusBySession[task.sessionId] ?? task.status;
-      if (!turnEnded(status, task.modified, asked) || !cardDue(mark, watch, asked) || done.current.has(key)) continue;
+      if (!turnEnded(status, moved.at, asked) || !cardDue(mark, watch, asked) || done.current.has(key)) continue;
       ready.add(key);
       if (inFlight.current.has(key) || now - (tried.current.get(key) ?? 0) < RETRY_MS) continue;
 
@@ -96,6 +105,7 @@ export function useAutoMergeCards({ items, bots, prFor, readAt, statusBySession 
     // A PR that stops being ready is tried at once when it comes back.
     for (const key of tried.current.keys()) if (!ready.has(key)) tried.current.delete(key);
     for (const key of watches.current.keys()) if (!watched.has(key)) watches.current.delete(key);
+    for (const id of movedAt.current.keys()) if (!seen.has(id)) movedAt.current.delete(id);
     setPending(ready.size > 0);
   }, [tasks, listed, botServers, prFor, readAt, statusBySession, tick]);
 

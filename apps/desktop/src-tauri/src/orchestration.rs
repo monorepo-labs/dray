@@ -1672,16 +1672,16 @@ async fn post_merge_card(card: dray_proto::MergeCard, app: &Sink) -> Result<Resp
         .with_context(|| format!("no session {}", card.session_id))?;
     let task_id = &card.task_session_id;
     let task = CardTask::find(task_id).await?.with_context(|| format!("no session {task_id}"))?;
-    anyhow::ensure!(
-        !task.working(),
-        "\"{}\" is still working; its card goes up on its own once its turn ends and the PR is ready",
-        task.row.title
-    );
+    let busy = || format!("\"{}\" is still working; its card goes up on its own once its turn ends and the PR is ready", task.row.title);
+    anyhow::ensure!(task.row.status != store::SessionStatus::InProgress, busy());
     let branch = task.branch().await.with_context(|| format!("session {task_id} has no branch"))?;
     let (number, url) = task.open_pr(&branch).await?;
+    let _held = POSTING_CARD.lock().await;
+    // Asked again after the lookups, which take seconds: a prompt sent to the
+    // task meanwhile has opened a turn the first look could not see.
+    anyhow::ensure!(!task.working().await?, busy());
     let title = task.row.title.clone();
     let payload = task.card(branch, number, url.clone());
-    let _held = POSTING_CARD.lock().await;
     manager().post_event(&card.session_id, chat.harness, payload, app).await?;
     Ok(Response::MergeCard { number, url, title })
 }
@@ -1710,10 +1710,17 @@ impl CardTask {
         Ok(None)
     }
 
-    /// Whether the task is mid-turn, when no card may go up: it may still be
-    /// pushing fixes. Off the row, which a machine elsewhere answers too.
-    fn working(&self) -> bool {
-        self.row.status == store::SessionStatus::InProgress
+    /// Whether the task is mid-turn now, when no card may go up: it may still
+    /// be pushing fixes. Read fresh, never off the row this was found with. A
+    /// task here also asks its child, which opens the turn the moment a prompt
+    /// is sent, ahead of the row's write.
+    async fn working(&self) -> Result<bool> {
+        let id = &self.row.session_id;
+        if self.machine.is_none() && manager().turn_in_flight(id).await {
+            return Ok(true);
+        }
+        let fresh = Self::find(id).await?;
+        Ok(fresh.is_some_and(|t| t.row.status == store::SessionStatus::InProgress))
     }
 
     /// The frontend's `sessionBranch`: git's own HEAD while a tree here exists,
@@ -1829,7 +1836,7 @@ pub async fn auto_merge_card(
         return Ok(None);
     };
     // A task gone mid-turn since the app's look is asked again later.
-    if task.row.archived || task.working() {
+    if task.row.archived || task.working().await? {
         return Ok(None);
     }
     manager().post_event(&chat.session_id, chat.harness, task.card(branch, number, url), &sink).await?;

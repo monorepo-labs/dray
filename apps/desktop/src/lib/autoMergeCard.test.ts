@@ -86,21 +86,16 @@ describe("cardDue", () => {
 });
 
 describe("turnEnded", () => {
-  const ended = "2026-11-19T10:00:00.000Z";
-  const at = Date.parse(ended);
+  const at = 1_000_000;
 
   it("holds the card while the task is mid-turn", () => {
-    expect(turnEnded("in_progress", ended, at + 60_000)).toBe(false);
+    expect(turnEnded("in_progress", at, at + 60_000)).toBe(false);
   });
 
   it("waits for a read asked after the turn ended", () => {
     // Asked before the turn's last push could show.
-    expect(turnEnded("completed", ended, at - 1)).toBe(false);
-    expect(turnEnded("completed", ended, at)).toBe(true);
-    expect(turnEnded("idle", ended, at + 30_000)).toBe(true);
-  });
-
-  it("takes an unreadable time as ended", () => {
-    expect(turnEnded("idle", "", 0)).toBe(true);
+    expect(turnEnded("completed", at, at - 1)).toBe(false);
+    expect(turnEnded("completed", at, at)).toBe(true);
+    expect(turnEnded("idle", at, at + 30_000)).toBe(true);
   });
 });
