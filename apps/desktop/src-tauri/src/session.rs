@@ -3455,6 +3455,9 @@ async fn deliver_prompt(
     // the transcript has to show what the model was actually given.
     let prepared = attachments::prepare(session_id, prompt, attachment_paths, harness).await?;
     let text = prepared.text;
+    // Here, where the prompt reaches the child, not at send: a queued message
+    // joins whichever turn takes it, and that turn is the one that answers.
+    crate::bots::talk::delivered(session_id, from.as_ref());
     // A bot chat taking over from another agent: the conversation so far goes
     // ahead of the first prompt, sent and never logged, so the chat draws only
     // what the reader typed. What the reader did to the bot's tasks meanwhile
@@ -3790,6 +3793,16 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                     && crate::routines::is_run(ctx.session_id).await;
                 if !quiet_run && !waiting {
                     report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
+                }
+                let asks = crate::bots::talk::take_asks(ctx.session_id);
+                if !asks.is_empty() {
+                    let text = report_text(*status, stop_reason.as_deref(), said);
+                    let pass = crate::bots::talk::pass_back(ctx.session_id.to_string(), asks, text, app.clone());
+                    tokio::spawn(async move {
+                        if let Err(e) = pass.await {
+                            eprintln!("[bot answer err] {e:#}");
+                        }
+                    });
                 }
                 ask_name = crate::bots::take_name_ask(ctx.session_id) && *status == TurnStatus::Success;
                 // Awaited, not spawned: the queued flush below would start the
@@ -4633,7 +4646,7 @@ mod tests {
         };
         let guard = slot.lock().await;
         let session = guard.as_ref().unwrap();
-        let report = MessageSender { session_id: "t".into(), title: "T".into(), machine: None, bot_id: None, routine: None };
+        let report = MessageSender { session_id: "t".into(), title: "T".into(), machine: None, bot_id: None, routine: None, ..Default::default() };
         session.queue_msg("mine", &[], &[], None, &sink).await;
         session.queue_msg("done", &[], &[], Some(report), &sink).await;
 

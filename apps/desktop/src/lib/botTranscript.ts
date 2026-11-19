@@ -245,11 +245,17 @@ export function sentMessages(cmd: string): { target: string; text: string; bot?:
     const skipSpace = () => {
       while (at < cmd.length && /\s/.test(cmd[at])) at++;
     };
-    skipSpace();
+    // `--ask` may sit before the target or between it and the message.
+    const skipAsk = () => {
+      skipSpace();
+      if (/^--ask(?=\s)/.test(cmd.slice(at))) at += "--ask".length;
+      skipSpace();
+    };
+    skipAsk();
     const target = firstWord(cmd.slice(at));
     if (!target || (m[1] !== "bot" && !SESSION_ID.test(target.word))) continue;
     at += target.length;
-    skipSpace();
+    skipAsk();
     const message = shellWord(cmd.slice(at));
     if (message.length === 0) continue;
     const sent = { target: target.word, text: message.value };
@@ -354,7 +360,7 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       else if (!p.kickoff) items.push({ kind: "user", event, reaction: reactions.get(event.id) });
     } else if (p.type === "assistant_text") {
       if (hasText(p.text) && !review) items.push({ kind: "assistant", event });
-    } else if (p.type === "error") {
+    } else if (p.type === "error" || p.type === "notice") {
       items.push({ kind: "notice", event });
     } else if (p.type === "merge_card") {
       items.push({ kind: "card", event });

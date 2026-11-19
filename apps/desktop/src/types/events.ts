@@ -1429,7 +1429,20 @@ botId?: string,
  * A bot's routine woke it (#972): `session_id` is then the routine's id
  * and `title` its name. Hidden in the bot's chat, like a task's report.
  */
-routine?: boolean, };
+routine?: boolean, 
+/**
+ * The bot-to-bot exchange a bot's message belongs to, and how many
+ * messages deep it is. Written by the server alone, so no bot can reset it.
+ */
+chain?: string, hop?: number, 
+/**
+ * Sent with `--ask`: the receiving bot's reply is passed back to it.
+ */
+ask?: boolean, 
+/**
+ * The answer to an `--ask`, passed back by Dray. Needs no answer itself.
+ */
+reply?: boolean, };
 
 export type Model = { 
 /**

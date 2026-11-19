@@ -1099,9 +1099,10 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             Ok(Response::Bot { bot: bots::summary(bot).await })
         }
         Request::ListBots => {
+            let items = store::list_session_index_items(false).await?;
             let mut summaries = Vec::new();
             for bot in bots::list_bots().await? {
-                summaries.push(bots::summary(bot).await);
+                summaries.push(bots::listing(bot, &items).await);
             }
             Ok(Response::Bots { bots: summaries })
         }
@@ -2034,6 +2035,18 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
         None => None,
     };
 
+    // A bot's task landing where another bot already works: said, never refused.
+    let warning = match parent.as_ref() {
+        Some(parent) => match bots::bot_chat_of(parent).await {
+            Some(chat) => match bots::bot_at(&chat.cwd).await {
+                Some(own) => bots::overlap(&project_path, &own).await,
+                None => None,
+            },
+            None => None,
+        },
+        None => None,
+    };
+
     let session_id = uuid::Uuid::now_v7().to_string();
     // Before the spawn, which reads it for the task's own prompt.
     if caller.is_some_and(|c| c.bot_tree) {
@@ -2088,6 +2101,7 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
     Ok(Response::Created {
         session: summarize(item),
         base_ref,
+        warning,
     })
 }
 
@@ -2243,7 +2257,7 @@ async fn start_session(
         .context("the session was created but returned no index entry")?;
 
     app.emit(SESSION_CREATED, &item).ok();
-    Ok(Response::Created { session: summarize(item), base_ref })
+    Ok(Response::Created { session: summarize(item), base_ref, warning: None })
 }
 
 /// What `--from` starts the new worktree at: a session id, a branch, or any
@@ -2464,10 +2478,19 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
     }
 
     let self_sent = carried.is_none();
-    let from = match carried {
+    let mut from = match carried {
         Some(from) => Some(from),
         None => sender(send.from_session_id.as_deref()).await,
     };
+    // `dray session send` from one bot's chat into another's is the exchange
+    // `dray bot send` makes, and held to the same guards.
+    if let (true, Some(f)) = (self_sent, from.as_mut()) {
+        if f.bot_id.is_some() && target.routine_run.is_none() {
+            if let Some(to) = crate::bots::bot_at(&target.cwd).await {
+                stamp_bot_message(f, &to, &send.prompt, false, app).await?;
+            }
+        }
+    }
     let prompt = attribute(&send.prompt, from.as_ref());
     // A routine's run asking its bot something itself, not its report: the
     // run waits on the answer, so its turn ending is not the run ending.
@@ -2529,9 +2552,12 @@ async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
         bail!("a message needs some text");
     }
     let bot = bots::find_bot(&send.bot).await?;
-    let from = sender(send.from_session_id.as_deref()).await;
+    let mut from = sender(send.from_session_id.as_deref()).await;
     if from.as_ref().is_some_and(|f| f.bot_id.as_deref() == Some(&bot.id)) {
         bail!("a bot cannot message itself");
+    }
+    if let Some(f) = from.as_mut().filter(|f| f.bot_id.is_some()) {
+        stamp_bot_message(f, &bot, &send.prompt, send.ask, app).await?;
     }
     // Held from the lookup until a new chat is on the index, or two first
     // messages would each start an agent in the one folder.
@@ -2576,6 +2602,30 @@ async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
     let item = outcome.snapshot.map(|s| s.index_item).context("the bot's chat started but returned no index entry")?;
     app.emit(SESSION_CREATED, &item).ok();
     Ok(Response::BotSent { bot: bots::summary(bot).await, queued: false })
+}
+
+/// Numbers a bot's message to `to` into its exchange and holds it to the
+/// guards in [`bots::talk`]. A refusal fails the sending bot's command, with a
+/// line in its chat where the user should know an exchange was cut.
+async fn stamp_bot_message(from: &mut MessageSender, to: &bots::Bot, text: &str, ask: bool, app: &Sink) -> Result<()> {
+    let Some(from_bot) = from.bot_id.clone() else { return Ok(()) };
+    let (chain, hop) = bots::talk::next_hop(&from.session_id);
+    if let Err(refusal) = bots::talk::admit(&from_bot, &to.id, &chain, hop, text) {
+        if let Some(text) = refusal.notice(&from.title, &to.name) {
+            let harness =
+                store::get_session_index_item(&from.session_id).await?.map_or(Harness::ClaudeCode, |i| i.harness);
+            let payload = crate::events::AgentEventPayload::Notice { text, model: None };
+            if let Err(e) = manager().post_event(&from.session_id, harness, payload, app).await {
+                eprintln!("[bot guard notice err] {e:#}");
+            }
+        }
+        bail!("{}", refusal.to_bot(&to.name));
+    }
+    bots::talk::answered(&from.session_id, &to.id);
+    from.chain = Some(chain);
+    from.hop = Some(hop);
+    from.ask = ask.then_some(true);
+    Ok(())
 }
 
 /// How much of a task's last message a stall nudge carries; the tail, where an
@@ -2920,7 +2970,7 @@ pub async fn start_routine_run(
 /// A sender on another machine is named with it. `dray session send <id>`
 /// finds that machine where this one holds a token for it.
 fn attribute(prompt: &str, from: Option<&MessageSender>) -> String {
-    let Some(MessageSender { session_id, title, machine, bot_id, routine }) = from else {
+    let Some(MessageSender { session_id, title, machine, bot_id, routine, ask, reply, .. }) = from else {
         return prompt.to_string();
     };
     let kind = if *routine == Some(true) {
@@ -2931,7 +2981,17 @@ fn attribute(prompt: &str, from: Option<&MessageSender>) -> String {
         "session"
     };
     let on = machine.as_deref().map(|m| format!(" on {m}")).unwrap_or_default();
-    format!("[message from the Dray {kind} \"{title}\" ({session_id}){on}]\n\n{prompt}")
+    if *reply == Some(true) {
+        return format!(
+            "[reply from the Dray {kind} \"{title}\" ({session_id}){on} to your question, passed back by Dray; it needs no answer]\n\n{prompt}"
+        );
+    }
+    let asks = if *ask == Some(true) {
+        "; it asks for an answer: end your turn with it, written for that bot, and Dray passes it back"
+    } else {
+        ""
+    };
+    format!("[message from the Dray {kind} \"{title}\" ({session_id}){on}{asks}]\n\n{prompt}")
 }
 
 /// Who this message is from, as data the transcript can draw.
@@ -2952,6 +3012,7 @@ async fn sender(from_session_id: Option<&str>) -> Option<MessageSender> {
             machine: None,
             bot_id: None,
             routine: Some(true),
+            ..Default::default()
         });
     }
     // A bot is named as the bot rather than by its chat's title, so the reader
@@ -2963,6 +3024,7 @@ async fn sender(from_session_id: Option<&str>) -> Option<MessageSender> {
         machine: None,
         bot_id: bot.map(|b| b.id),
         routine: None,
+        ..Default::default()
     })
 }
 
@@ -3254,6 +3316,7 @@ mod tests {
             machine: None,
             bot_id: None,
             routine: None,
+            ..Default::default()
         };
         let prompt = attribute("review is done", Some(&from));
 
@@ -3273,6 +3336,7 @@ mod tests {
             machine: Some("Yogesh's Mac".into()),
             bot_id: None,
             routine: None,
+            ..Default::default()
         };
         assert_eq!(
             attribute("go", Some(&from)),
@@ -3290,8 +3354,29 @@ mod tests {
             machine: None,
             bot_id: Some("b1".into()),
             routine: None,
+            ..Default::default()
         };
         assert_eq!(attribute("hi", Some(&from)), "[message from the Dray bot \"Ops\" (abc-123)]\n\nhi");
+    }
+
+    /// An `--ask` tells the receiver how to answer, and the answer passed back
+    /// tells the asker it needs none, which is what ends the exchange.
+    #[test]
+    fn an_ask_and_its_passed_back_answer_say_so() {
+        let ask = MessageSender {
+            session_id: "abc".into(),
+            title: "Ops".into(),
+            bot_id: Some("b1".into()),
+            ask: Some(true),
+            ..Default::default()
+        };
+        assert!(attribute("ci?", Some(&ask))
+            .starts_with("[message from the Dray bot \"Ops\" (abc); it asks for an answer: end your turn with it"));
+        let reply = MessageSender { ask: None, reply: Some(true), ..ask };
+        assert_eq!(
+            attribute("green", Some(&reply)),
+            "[reply from the Dray bot \"Ops\" (abc) to your question, passed back by Dray; it needs no answer]\n\ngreen"
+        );
     }
 
     /// A prompt from the user's own terminal has no sender, and must reach the

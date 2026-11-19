@@ -387,8 +387,9 @@ Start or remove only drafts the user named. The list is theirs.
 
 ```bash
 dray bot new "Ops" --shape sun --colour teal   # prints the bot id; shape and colour optional
-dray bot ls                                    # id, chat session id, name; --json
+dray bot ls                                    # id, chat, name, role, open tasks; --json
 dray bot send "Ops" "<message>"                # by name or id
+dray bot send --ask "Ops" "<question>"         # its answer comes back to you
 dray bot rename "Ops" "Release Ops"
 dray bot rm "Ops"                              # settles its chat, deletes its folder
 ```
@@ -399,9 +400,19 @@ by its id; two bots cannot share a name.
 
 `dray bot send` lands in the bot's chat, signed as you, and starts its turn
 (or queues behind the one running). A bot nobody has written to yet starts its
-chat with your message. **Nothing comes back on its own**: the bot answers
-only if it chooses to, with `dray bot send` of its own, and its answer arrives
-in your chat as a new message. Say so when you want one.
+chat with your message. **Without `--ask`, nothing comes back on its own**:
+the bot answers only if it chooses to, with `dray bot send` of its own. With
+`--ask`, Dray passes the bot's reply, its turn's last words, back to your chat
+when that turn ends.
+
+A bot's role is the first line of its `AGENTS.md`. `dray bot ls` shows each
+bot's role, whether it is working, and its open tasks. `dray session new` from
+a bot warns on stderr when other bots have open tasks in the same project.
+
+Between bots, Dray stops an exchange after 4 messages back and forth, a
+message repeated within one exchange, or 20 messages between two bots in 5
+minutes. The refused send fails with the reason; tell the user what is still
+open rather than trying another way.
 
 Shapes: round, organic, boxy, capsule, nub, cloud, hexagon, sun, triangle.
 Colours: red, orange, amber, green, teal, blue, purple, pink, or a hue in
