@@ -328,6 +328,7 @@ async fn open_session(
     // no `false` spelled out beside it. The rules do not ride along — grok keeps
     // those on its own session record.
     if !is_new_session {
+        crate::bots::prepare(session_cwd).await;
         let mut meta = json!({});
         if let Some((key, value)) = stance_meta(mode) {
             meta[key] = json!(value);
@@ -345,7 +346,7 @@ async fn open_session(
             .await;
     }
 
-    let rules = crate::bots::system_prompt(SYSTEM_PROMPT, session_id, session_cwd).await;
+    let rules = crate::bots::system_prompt(SYSTEM_PROMPT, session_id, session_cwd, crate::session::Harness::Grok).await;
     let mut meta = json!({"sessionId": session_id, "rules": rules});
     if let Some((key, value)) = stance_meta(mode) {
         meta[key] = json!(value);

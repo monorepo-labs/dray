@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { changeRange, lastToolResult, splitPath } from "@/lib/changes";
+import { changeRange, lastToolResult, splitPath, writingTurns } from "@/lib/changes";
 import type { AgentEvent } from "@/types/events";
 
 /// A prompt carrying a snapshot, or one that failed to take one. Only the
@@ -148,6 +148,44 @@ describe("changeRange", () => {
     const none = { baseline: null, head: null, previous: null };
     expect(changeRange([prompt(null), noise()])).toEqual(none);
     expect(changeRange([])).toEqual(none);
+  });
+
+  it("reaches above a held tail for the turn that wrote", () => {
+    // A transcript holds only its tail; the last write can sit above it.
+    const tail = [prompt("ccc"), turnEnd("ccc"), prompt("ddd"), turnEnd("ddd")];
+    const above = writingTurns([prompt("aaa"), turnEnd("h1"), prompt("bbb"), turnEnd("h2")], 2, false).ranges;
+
+    expect(changeRange(tail, above)).toEqual({
+      baseline: "bbb",
+      head: "h2",
+      previous: { baseline: "aaa", head: "h1" },
+    });
+  });
+
+  it("takes the held turn first and the one above as its previous", () => {
+    const tail = [prompt("ccc"), turnEnd("h3")];
+    const above = writingTurns([prompt("aaa"), turnEnd("h1"), prompt("bbb"), turnEnd("h2")], 1, false).ranges;
+
+    expect(changeRange(tail, above)).toEqual({
+      baseline: "ccc",
+      head: "h3",
+      previous: { baseline: "bbb", head: "h2" },
+    });
+  });
+});
+
+describe("writingTurns", () => {
+  it("never counts an open turn read above a tail", () => {
+    // Only the transcript's newest turn can still be running.
+    expect(writingTurns([prompt("aaa"), turnEnd("h1"), prompt("bbb")], 2, false).ranges).toEqual([
+      { baseline: "aaa", head: "h1" },
+    ]);
+  });
+
+  it("stops at the limit", () => {
+    const events = [prompt("aaa"), turnEnd("h1"), prompt("bbb"), turnEnd("h2")];
+
+    expect(writingTurns(events, 1, false).ranges).toEqual([{ baseline: "bbb", head: "h2" }]);
   });
 });
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The foot of a session: the voice orb, held to reply, and under it the
 /// session's model, its stance behind "···", the keyboard and, while a turn
@@ -6,9 +7,13 @@ import SwiftUI
 /// words show as the bubble they will send as, and nothing here saves a draft.
 struct ReplyDock: View {
     @Environment(Store.self) private var store
+    @Environment(\.openSession) private var openSession
     let key: SessionKey
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
     @State private var models: [Model] = []
+    @State private var keyboard = false
+    /// The home indicator's inset, which the dock sits on rather than ignores.
+    @State private var homeInset: CGFloat = 0
     /// Picks for the next reply; nil is the session's own.
     @State private var model: String?
     @State private var effort: String?
@@ -27,22 +32,31 @@ struct ReplyDock: View {
     private var busy: Bool { item?.busy ?? false }
     private var dictation: Dictation { Dictations.shared.state(key) }
     private var text: String { (store.drafts[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// Nothing can transcribe: a text field stands where the orb would. Never mid-recording,
+    /// or losing the one server that could would take Done away with the mic still on.
+    private var typing: Bool { store.typesOnly && dictation == .idle }
     private var phase: DockPhase {
+        if typing { return .rest }
         switch dictation {
-        case .starting, .recording: .recording
-        case .transcribing: .transcribing
-        case .idle: text.isEmpty ? .rest : .ready
+        case .starting, .recording: return .recording
+        case .transcribing: return .transcribing
+        case .idle: return text.isEmpty ? .rest : .ready
         }
     }
     private var open: Bool { phase != .rest }
     private var connected: Bool { store.serverState[key.server] == .connected }
-    private var away: Bool { !connected || !store.online }
-    /// Settings' pick, else any machine that can: the words come back to this draft whoever reads them.
-    private var transcriber: UUID? { store.dictationServer(dictationPick) }
-    private var harness: String { item?.harness ?? "" }
-    private var modelId: String { model ?? item?.model ?? "" }
+    /// Down long enough that its session says so; a quick reconnect dims nothing.
+    private var away: Bool { store.lost.contains(key.server) }
+    /// Settings' pick, else anything that can: the words come back to this draft whoever reads them.
+    private var transcriber: DictationEngine? { store.dictationEngine(dictationPick) }
+    /// The bot sheet's agent and model, waiting for this reply.
+    private var pick: AgentPick? { store.unsent[key] }
+    /// The reply moves a bot chat to another agent.
+    private var moving: Bool { pick.map { $0.harness != item?.harness } ?? false }
+    private var harness: String { pick?.harness ?? item?.harness ?? "" }
+    private var modelId: String { model ?? pick?.model ?? item?.model ?? "" }
     private var current: Model? { models.first { $0.id == modelId } }
-    private var effortNow: String? { effort ?? item?.effort }
+    private var effortNow: String? { effort ?? (moving ? nil : item?.effort) }
     private var stanceNow: String { stance ?? item?.permissionMode ?? "" }
     private var fastNow: Bool { fast ?? item?.fast ?? false }
     private var note: String? { failed.map { "Couldn't send. \(sentence($0))" } ?? Dictations.shared.notes[key] }
@@ -50,34 +64,58 @@ struct ReplyDock: View {
     var body: some View {
         VStack(spacing: 14) {
             if phase == .ready { bubble.transition(.opacity) }
+            if moving, !open {
+                Text("Your next message moves this chat to \(Picks.agentLabels[harness] ?? harness).")
+                    .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
+            }
             if !open, let line = hint ?? note {
                 KeptNote(line: line, draft: key).transition(.opacity)
             }
             // Dim while the server or the network is away; the banner up top says why, and typing still works.
-            DockOrb(draft: key, size: 76, hold: hold, tap: tapped).opacity(away ? 0.4 : 1)
+            if typing {
+                ChatInput(placeholder: "Message", text: Binding(get: { store.drafts[key] ?? "" }, set: { store.drafts[key] = $0 }),
+                          sending: sending, sendable: !text.isEmpty && !sending && connected, send: send)
+            } else {
+                // New task's size while it listens; back to rest size once the bubble takes the room.
+                DockOrb(draft: key, size: phase == .recording || phase == .transcribing ? 120 : 76, tap: tapped)
+                    .opacity(away ? 0.4 : 1)
+            }
             if open {
                 actions
                     .padding(.top, 6)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            picks.opacity(away ? 0.4 : 1)
+            picks.opacity(away ? 0.4 : 1).typingAligned(typing)
         }
         .padding(.horizontal, 20)
-        .padding(.top, 40)
-        .padding(.bottom, 30)
+        .padding(.top, Theme.Space.m)
+        .padding(.bottom, typing && keyboard ? 30 : max(0, 30 - homeInset))
         .frame(maxWidth: 760)
         .frame(maxWidth: .infinity)
+        // Everything in the dock's frame is inset the chat stops at, so the fade reaches up past it
+        // rather than padding it, and the dock sits on the home indicator's inset rather than
+        // ignoring it, which `safeAreaInset` counts under the dock either way: 80pt of gap between them.
         .background {
             LinearGradient(stops: [.init(color: Theme.page.opacity(0), location: 0), .init(color: Theme.page, location: 0.3)],
                            startPoint: .top, endPoint: .bottom)
+                .padding(.top, -28)
                 .ignoresSafeArea()
+                .onGeometryChange(for: CGFloat.self, of: { $0.safeAreaInsets.bottom }) { if !keyboard { homeInset = $0 } }
         }
-        .ignoresSafeArea(edges: .bottom)
+        // The keyboard lifts the field, never the orb.
+        .ignoresSafeArea(typing ? [] : .keyboard, edges: .bottom)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboard = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboard = false }
         .animation(Theme.motion, value: phase)
         .animation(Theme.motion, value: confirming)
         .animation(Theme.motion, value: hint)
         .animation(Theme.motion, value: connected)
         .onChange(of: phase) { confirming = false }
+        // The bot sheet's pick is the newer word on model and effort; the dock's own would override it.
+        .onChange(of: pick) {
+            model = nil
+            effort = nil
+        }
         .task(id: "\(harness)|\(connected)") {
             guard connected, !harness.isEmpty else { return }
             models = (try? await store.call(key.server, "list_models", ["harness": .string(harness)])) ?? models
@@ -93,26 +131,23 @@ struct ReplyDock: View {
         }
     }
 
-    /// The reply as it will send: the reader's own bubble, its first lines and a count.
+    /// The reply as it will send: the reader's own bubble, its last lines, so each recording
+    /// shows what it added. Tapped, the sheet holds the whole text.
     private var bubble: some View {
         VStack(alignment: .trailing, spacing: 6) {
-            Text(text)
+            Text(spokenTail(text))
                 .font(Theme.Font.body)
-                .foregroundStyle(Theme.text)
+                .foregroundStyle(Theme.onSent)
                 .lineLimit(3)
                 .padding(.vertical, 10)
                 .padding(.horizontal, 14)
-                .background(Theme.raised, in: UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20,
+                .background(Theme.sent, in: UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20,
                                                                       bottomTrailingRadius: 6, topTrailingRadius: 20, style: .continuous))
                 .frame(maxWidth: 290, alignment: .trailing)
                 .onTapGesture { edit() }
+                .accessibilityLabel(text)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityHint("Opens it to edit")
-            let words = text.split(whereSeparator: \.isWhitespace).count
-            Text(words == 1 ? "1 word" : "\(words) words")
-                .font(Theme.Font.footnote)
-                .foregroundStyle(Theme.tertiary)
-                .padding(.trailing, 6)
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
@@ -197,10 +232,12 @@ struct ReplyDock: View {
                 Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold)).frame(width: 24, height: 20)
             }
             .accessibilityLabel("More picks")
-            Button { edit() } label: {
-                Image(systemName: "keyboard").font(.system(size: 16)).frame(width: 24, height: 20)
+            if !typing {
+                Button { edit() } label: {
+                    Image(systemName: "keyboard").font(.system(size: 16)).frame(width: 24, height: 20)
+                }
+                .accessibilityLabel("Keyboard")
             }
-            .accessibilityLabel("Keyboard")
             if busy {
                 Button {
                     Haptic.firm()
@@ -292,19 +329,19 @@ struct ReplyDock: View {
         return names.prefix(1).uppercased() + names.dropFirst() + " can change once this turn ends. The rest go with your next message."
     }
 
+    /// Tap to talk, tap again to stop: the orb is never held.
     private func tapped() {
-        guard phase == .rest else { return }
-        flash(transcriber != nil ? "Hold to talk" : "This server can't transcribe. Type instead.")
-    }
-
-    private func hold() {
+        if dictation == .recording {
+            Task { await Dictations.shared.stop(store, draft: key) }
+            return
+        }
         guard phase == .rest || phase == .ready else { return }
-        guard let transcriber else { return flash("This server can't transcribe. Type instead.") }
-        // A kept recording is the only copy of what was said; it goes by Retry or Discard, never by a new hold.
+        guard let transcriber else { return flash("Nothing can transcribe right now. Type instead.") }
+        // A kept recording is the only copy of what was said; it goes by Retry or Discard, never by a new tap.
         guard Dictations.shared.kept[key] == nil else { return }
         Dictations.shared.dismiss(key)
         failed = nil
-        Task { await Dictations.shared.start(store, server: transcriber, draft: key) }
+        Task { await Dictations.shared.start(store, engine: transcriber, draft: key) }
     }
 
     private func flash(_ line: String) {
@@ -330,15 +367,19 @@ struct ReplyDock: View {
         failed = nil
         Haptic.tap()
         // Only what the reader moved; a new model takes an effort it offers.
-        let level = model != nil || effort != nil ? current.flatMap { Picks.usableEffort($0, effortNow) } ?? effortNow : nil
+        let level = model != nil || effort != nil || pick != nil ? current.flatMap { Picks.usableEffort($0, effortNow) } ?? effortNow : nil
         Task {
-            if await store.send(key, words, model: model, effort: level, stance: stance, fast: fast) {
+            let to = await store.send(key, words, harness: pick?.harness, model: model ?? pick?.model, effort: level, stance: stance,
+                                      fast: moving ? fastNow && Picks.offersFast(harness, current) : fast)
+            if let to {
                 // Only if untouched meanwhile: words added while the send was out were never sent.
                 if store.drafts[key]?.trimmingCharacters(in: .whitespacesAndNewlines) == words { store.drafts[key] = nil }
                 model = nil
                 effort = nil
                 stance = nil
                 fast = nil
+                // A switch is a new session: the chat follows it.
+                if to != key { openSession?(to) }
             } else {
                 failed = store.lastError ?? "The server didn't answer."
                 store.lastError = nil
@@ -357,4 +398,13 @@ private struct SendLabel: LabelStyle {
             configuration.title
         }
     }
+}
+
+/// The end of a long reply, cut at a word with "…" before it: about three lines of the bubble.
+/// Cut here rather than by `truncationMode(.head)`, which a multi-line `Text` ignores.
+func spokenTail(_ text: String, limit: Int = 100) -> String {
+    guard text.count > limit else { return text }
+    let cut = text.suffix(limit)
+    let word = cut.firstIndex(where: \.isWhitespace).map { cut.index(after: $0) } ?? cut.startIndex
+    return "…" + cut[word...]
 }

@@ -306,6 +306,7 @@ impl Mapper {
                 // that drops Claude Code's literal `unknown` on the way in.
                 status: None,
                 reason: error_message.filter(|m| !m.trim().is_empty()),
+                message: None,
             })],
 
             PiEvent::CompactionStart => {
@@ -1178,6 +1179,7 @@ mod tests {
                 max_retries: 10,
                 status: None,
                 reason: Some(cause),
+                ..
             } if cause == "overloaded"
         ));
     }

@@ -46,7 +46,6 @@ export function PanelToggle({ onToggle }: { onToggle: () => void }) {
 /// see `tabOrder`.
 export const PANEL_TABS = [
   "changes",
-  "browser",
   "tasks",
   "more",
   "pr",
@@ -59,10 +58,6 @@ export type PanelTab = (typeof PANEL_TABS)[number];
 
 export const PANEL_LABELS: Record<PanelTab, string> = {
   changes: "Changes",
-  // The session's browser lives here. Always drawn, unlike PR or Docs: its
-  // empty state is a URL bar, which is a place to start rather than a
-  // sentence saying there is nothing.
-  browser: "Browser",
   // A bot's children: the work it handed off, waiting, running or done.
   tasks: "Tasks",
   // A catch-all, and named as one on purpose. What is in it — the task list,
@@ -126,10 +121,7 @@ export function tabOrder({
   /// review or land. Its tasks' PRs show on their rows in the Tasks tab.
   tasks?: boolean;
 }): readonly PanelTab[] {
-  // Browser always: with no page open its empty state is a URL bar, the
-  // session's recent pages and its local servers — a place to start.
   const tabs: PanelTab[] = tasks ? ["tasks"] : pr ? ["pr", "changes"] : ["changes"];
-  tabs.push("browser");
   // After Changes, which is what keeps Issue immediately before More.
   if (docs) tabs.push("docs");
   // Immediately before More wherever it is drawn, so the row's order is the
@@ -157,6 +149,8 @@ type RightPanelProps = {
   onTabChange: (tab: PanelTab) => void;
   /// The tab row, as `tabOrder` answers it.
   tabs?: readonly PanelTab[];
+  /// A number drawn after a tab's label, muted: a bot's task total on Tasks.
+  counts?: Partial<Record<PanelTab, number>>;
   /// Re-reads whatever the active tab is showing, drawn at the far end of the
   /// tab row. One button rather than one per panel: it means the same thing
   /// everywhere, so it belongs to the frame and always sits in the same place.
@@ -237,6 +231,7 @@ export default function RightPanel({
   tab,
   onTabChange,
   tabs = BASE_TABS,
+  counts,
   refresh,
   cwd,
   actions,
@@ -283,6 +278,15 @@ export default function RightPanel({
           // Padded to sit where a tab's label would, so the pane's first line
           // lands on the same baseline whichever frame it is wearing.
           <span className="px-2 py-1 text-ui font-medium">{heading}</span>
+        ) : tabs.length === 1 && tabs[0] === "tasks" ? (
+          // A bot's pane with nothing beside its task list: the tab's words
+          // with nothing to switch to, so no fill and no weight over its count.
+          // Inset to the faces' drawn edge below rather than a tab's padding,
+          // so the label lines up with the list it heads.
+          <span className="py-1 pr-2 pl-1.5 text-ui text-muted-foreground">
+            {PANEL_LABELS.tasks}
+            <TabCount n={counts?.tasks} />
+          </span>
         ) : (
           // A wrapping row clipped to one line, which sheds the keycaps when
           // they stop fitting and never a tab sooner — the CSS answer to a
@@ -308,6 +312,7 @@ export default function RightPanel({
                   onClick={() => onTabChange(value)}
                 >
                   {PANEL_LABELS[value]}
+                  <TabCount n={counts?.[value]} />
                 </TabButton>
               ))}
             </div>
@@ -337,7 +342,10 @@ export default function RightPanel({
                 light takes no opacity at all; the caps there are already quieter
                 than their dark twins, `--muted` being a black veil on a near-white
                 page rather than a white one on near-black. */}
-            <ShortcutKeys ids={["panel.tab.prev", "panel.tab.next"]} className="ml-1.5 h-full shrink-0 dark:opacity-50" />
+            {/* Not for one tab, which the chord would step onto itself. */}
+            {tabs.length > 1 && (
+              <ShortcutKeys ids={["panel.tab.prev", "panel.tab.next"]} className="ml-1.5 h-full shrink-0 dark:opacity-50" />
+            )}
           </div>
         )}
 
@@ -349,6 +357,10 @@ export default function RightPanel({
       {children}
     </aside>
   );
+}
+
+function TabCount({ n }: { n: number | undefined }) {
+  return n === undefined ? null : <span className="ml-1.5 text-muted-foreground tabular-nums">{n}</span>;
 }
 
 /// The buttons at the pane's far end — the reader's own action, Open, Refresh.

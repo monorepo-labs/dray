@@ -1,7 +1,9 @@
 import { SparklesIcon } from "@heroicons/react/16/solid";
 
+import { RailPop, useRailSlot } from "@/components/RailPop";
 import { Button } from "@/components/ui/button";
 import type { Release } from "@/lib/changelog";
+import { cn } from "@/lib/utils";
 
 /// How many items the card names before "+N more" takes over.
 const SHOWN = 3;
@@ -25,16 +27,20 @@ export default function WhatsNewCard({
   onDismiss: () => void;
   onView: () => void;
 }) {
+  const slot = useRailSlot();
   const items = release.sections.flatMap((s) => s.items);
   if (items.length === 0) return null;
   const media = items.find((i) => i.media.length > 0)?.media[0];
   const more = items.length - SHOWN;
 
-  return (
+  const card = (
     <div
       role="region"
       aria-label="What's new"
-      className="fixed bottom-3 left-3 z-50 flex w-64 flex-col overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-(--shadow-ring) backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2"
+      className={cn(
+        "flex w-64 flex-col overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-(--shadow-ring) backdrop-blur-xl",
+        !slot && "fixed bottom-3 left-3 z-50 animate-in fade-in slide-in-from-bottom-2",
+      )}
     >
       {media && (
         // Inset from the card's edge; 4px corners sit concentric with its 8px
@@ -85,5 +91,21 @@ export default function WhatsNewCard({
         </Button>
       </div>
     </div>
+  );
+
+  if (!slot) return card;
+  const label = `What's new in Dray ${release.version}`;
+  return (
+    <RailPop
+      slot={slot}
+      label={label}
+      trigger={
+        <Button variant="ghost" size="icon-sm" aria-label={label} className="text-accent-add">
+          <SparklesIcon className="size-4" />
+        </Button>
+      }
+    >
+      {card}
+    </RailPop>
   );
 }

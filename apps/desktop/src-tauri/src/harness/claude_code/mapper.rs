@@ -172,16 +172,6 @@ impl Mapper {
                     ResultEvent::Unrecognized => self.session_id.clone().unwrap_or_default(),
                 };
 
-                // A resume files a task stranded by the last child as a
-                // model-less turn ahead of the prompt's own. Its `result` would
-                // end the reader's turn early, and `/compact` then reads as done
-                // for the whole compaction (v2.1.282).
-                if matches!(&result_event, ResultEvent::Success { origin: Some(o), num_turns: 0, .. }
-                    if o.kind == "task-notification")
-                {
-                    return Ok(None);
-                }
-
                 let payload = self
                     .handle_result_event(result_event)
                     .with_context(|| format!("mapping result event for session {session_id}"))?;
@@ -487,6 +477,7 @@ impl Mapper {
                 // Dropped here so every consumer sees one absence rather than
                 // two spellings of it.
                 reason: error.filter(|e| e != "unknown"),
+                message: None,
             })),
             SystemEvent::CompactBoundary {
                 compact_metadata, ..
@@ -780,15 +771,21 @@ impl Mapper {
                 total_cost_usd,
                 terminal_reason,
                 model_usage,
+                errors,
                 ..
             } => Ok(AgentEventPayload::TurnCompleted {
                 status: TurnStatus::Error,
-                stop_reason: Some(terminal_reason),
-                // This variant carries no sentence at all, so nothing here
-                // could name a login. An auth failure arrives as `Success`
-                // with `is_error`, which is where the read happens.
+                // A turn that threw has no reason here, and its exception's
+                // message is the only sentence saying why, so the row draws
+                // that instead of a bare "Turn failed".
+                final_text: terminal_reason
+                    .is_none()
+                    .then(|| errors.join("\n"))
+                    .filter(|text| !text.trim().is_empty()),
+                stop_reason: terminal_reason,
+                // An auth failure arrives as `Success` with `is_error`, which
+                // is where the read happens.
                 auth_failed: false,
-                final_text: None,
                 usage: Some(self.map_result_usage(&usage, total_cost_usd, &model_usage)),
                 duration_ms: Some(duration_ms),
                 head: None,
@@ -2024,20 +2021,6 @@ mod tests {
         assert_eq!(prompts, 0, "this app mints its own user events");
     }
 
-    /// `/compact` sent to a resumed session whose last child left a background
-    /// task behind: the stranded notice's model-less turn must not close the
-    /// prompt's, or the compaction runs behind a turn that already reads done.
-    #[test]
-    fn a_stranded_task_notice_does_not_end_the_prompt_turn() {
-        let events = map_fixture(
-            &mut Mapper::default(),
-            include_str!("fixtures/stranded_task_resume.jsonl"),
-        );
-        let completed = |e: &AgentEvent| matches!(e.payload, AgentEventPayload::TurnCompleted { .. });
-        assert_eq!(events.iter().filter(|e| completed(e)).count(), 1);
-        assert!(completed(events.last().unwrap()));
-    }
-
     /// The gauge's whole input, checked end to end on the one capture that
     /// exercises both halves: a turn's occupancy climbs, the compaction's
     /// `post_tokens` resets it, and the zeroed `result` that lands *after* the
@@ -2539,6 +2522,7 @@ mod tests {
                 max_retries: 10,
                 status: None,
                 reason: None,
+                ..
             }
         ));
 
@@ -2547,6 +2531,7 @@ mod tests {
             max_retries,
             status,
             reason,
+            ..
         } = payloads[1]
         else {
             panic!("expected a retry");
@@ -2618,5 +2603,54 @@ mod tests {
         );
         assert!(map_fixture(&mut mapper, line).is_empty());
     }
-}
 
+    /// A turn that throws ends on an `error_during_execution` with no
+    /// `terminal_reason` (v2.1.322 spreads an undefined one), and a startup
+    /// failure's carries no `stop_reason` either. Each once failed the whole
+    /// line, so nothing closed the turn and the session hung until Stop. Shapes
+    /// copied from the CLI's own builders; no capture holds one.
+    #[test]
+    fn a_result_missing_its_reason_still_closes_the_turn() {
+        let thrown = r#"{"type":"result","subtype":"error_during_execution","duration_api_ms":812,
+            "session_id":"s1","total_cost_usd":0.01,"usage":{"input_tokens":3,"output_tokens":0,
+            "cache_read_input_tokens":0,"cache_creation_input_tokens":0},"modelUsage":{},
+            "permission_denials":[],"fast_mode_state":"off","is_error":true,"num_turns":1,
+            "errors":["fetch failed"],"duration_ms":901,"uuid":"u1"}"#;
+        let startup = r#"{"type":"result","subtype":"error_during_execution","duration_ms":0,
+            "duration_api_ms":0,"is_error":true,"num_turns":0,"stop_reason":null,"session_id":"s1",
+            "total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0},"modelUsage":{},
+            "permission_denials":[],"uuid":"u2","errors":[]}"#;
+
+        let closed = |line: &str| {
+            let line = line.replace('\n', "");
+            Mapper::default()
+                .map(parser::parse_line(&line).unwrap_or_else(|e| panic!("{e:#}")))
+                .unwrap()
+                .expect("a result always closes the turn")
+                .payload
+        };
+
+        let AgentEventPayload::TurnCompleted { status, stop_reason, final_text, .. } = closed(thrown) else {
+            panic!("not a turn end");
+        };
+        assert_eq!(status, TurnStatus::Error);
+        assert_eq!(stop_reason, None);
+        assert_eq!(final_text.as_deref(), Some("fetch failed"), "the exception is the only reason given");
+
+        let AgentEventPayload::TurnCompleted { final_text, .. } = closed(startup) else {
+            panic!("not a turn end");
+        };
+        assert_eq!(final_text, None, "no errors, no sentence");
+    }
+
+    /// The backstop for the next shape nobody has seen: any `result` line is
+    /// recognised loosely, and nothing else is.
+    #[test]
+    fn an_unparsed_result_is_still_known_as_one() {
+        let line = r#"{"type":"result","subtype":"success","usage":"from_the_future"}"#;
+        assert!(parser::parse_line(line).is_err(), "the shape this pins now parses");
+        assert!(parser::is_unparsed_result(line));
+        assert!(!parser::is_unparsed_result(r#"{"type":"assistant"}"#));
+        assert!(!parser::is_unparsed_result("not json"));
+    }
+}

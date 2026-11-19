@@ -4,7 +4,6 @@ import { ArrowDown } from "lucide-react";
 import AssistantMessage from "@/components/chat/AssistantMessage";
 import BotTranscript, { type BotTask } from "@/components/chat/BotTranscript";
 import BackgroundTasksIndicator from "@/components/chat/BackgroundTasksIndicator";
-import CheckpointRail, { type Checkpoint } from "@/components/chat/CheckpointRail";
 import { MergeCardChatContext } from "@/components/chat/MergeCard";
 import ApiRetryIndicator from "@/components/chat/ApiRetryIndicator";
 import PermissionRequest from "@/components/chat/PermissionRequest";
@@ -33,7 +32,6 @@ import { drawnSegments, earlierTurns, lastTurns } from "@/lib/botTranscript";
 import { readerMessagesAfter } from "@/lib/mergeCard";
 import { isProvisional } from "@/lib/provisional";
 import { dropOlder, loadOlder } from "@/lib/olderPages";
-import { firstMount, grow, mountedTurns } from "@/lib/turnWindow";
 import type { Bot, SessionSnapshot } from "@/types/events";
 
 type ChatProps = {
@@ -83,14 +81,6 @@ type ChatProps = {
   /// deliberately unpersisted until it is delivered.
   queuedMessages?: QueuedPrompt[];
   onSendNow?: () => void;
-  /// Both side panes are open, so the pane is at its narrowest and the rail sits
-  /// close to the text. Passed in rather than measured here: the shell owns those
-  /// two toggles, and the rail overlays the transcript at every width anyway — so
-  /// this is about how crowded the pane *is*, not whether the rail fits.
-  crowded?: boolean;
-  /// Whether the checkpoint rail may draw at all. Off for a split pane that
-  /// shares its column: at half height the rail sits over the text.
-  rail?: boolean;
   /// Whether the chat tab is the one on screen. The transcript is hidden rather
   /// than unmounted when another view tab is picked, so ⌘↓ has to be told to
   /// stop listening — otherwise it scrolls a pane nobody can see.
@@ -113,6 +103,8 @@ type ChatProps = {
   botFooter?: ReactNode;
   /// A task picked from that card, scrolled to. See [BotTranscript]'s `focus`.
   botFocus?: { sessionId: string; at: number } | null;
+  /// That pick found nothing to scroll to, with the whole chat read back.
+  onBotFocusMissed?: (sessionId: string) => void;
 };
 
 const NO_EARLIER: SessionSnapshot[] = [];
@@ -131,32 +123,27 @@ const NO_EARLIER: SessionSnapshot[] = [];
 /// happening because it is.
 const CARD_EXIT_MS = 500;
 
-/// How far below the top of the pane a turn has to start before it stops being
-/// the one being read. Matches the content's own top padding, so the turn whose
-/// prompt sits just under the header is the one the rail marks.
-const ACTIVE_LINE_PX = 24;
-
-/// The gap left above a turn jumped to from the rail, so the prompt doesn't sit
-/// flush against the header.
+/// The gap left above a reply jumped to from a bot's "Waiting on you" card, so
+/// it doesn't sit flush against the header.
 const JUMP_PAD_PX = 12;
+
+/// Longest a smooth jump is taken to glide before a scroll is the reader's own
+/// again.
+const GLIDE_MS = 1500;
 
 /// Turns per page while a bot chat reads back to a picked task's reply. Each
 /// page lands as one render of the whole app, which costs far more than the
 /// read, so a long way back is taken in few of them.
 const FOCUS_PAGE_TURNS = 64;
 
-/// Turns a bot chat draws while the reader follows its bottom: the tail it
-/// opens on and a page above it.
-const BOT_WINDOW_TURNS = 24;
+/// Turns a chat draws while the reader follows its bottom: the tail it opens on
+/// and a page above it.
+const WINDOW_TURNS = 24;
 /// Turns drawn above at a time as the reader nears the top of what is drawn, as
 /// many as a page read from the log holds.
 const OLDER_TURNS = 16;
-/// A bot chat's window drawing everything held.
+/// A chat's window drawing everything held.
 const ALL_HELD = "all";
-
-/// Below this the rail is one or two ticks describing what is already on screen,
-/// which is chrome for nothing.
-const RAIL_MIN = 2;
 
 /// How close to the end counts as being at it. One threshold for two questions —
 /// whether to keep pinning, and whether to offer the jump button — so the button
@@ -226,8 +213,6 @@ export default function Chat({
   apiRetry = null,
   queuedMessages = [],
   onSendNow,
-  crowded = false,
-  rail = true,
   active = true,
   bot = false,
   earlier = NO_EARLIER,
@@ -237,6 +222,7 @@ export default function Chat({
   unread = false,
   botFooter,
   botFocus,
+  onBotFocusMissed,
 }: ChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -247,11 +233,21 @@ export default function Chat({
   // from one the pin's own write queued — see `onScroll`. Every pin goes
   // through `pin` so the two cannot disagree.
   const pinnedTop = useRef(-1);
+  // A smooth jump in flight: where it lands, and until when. Leaving the
+  // bottom, its first frames are still within reach of the end, and read as
+  // the reader coming back they re-took the pin, which cancelled the glide, and
+  // let a bot chat's window go, which dropped the row it was headed for.
+  const glide = useRef<{ to: number; until: number } | null>(null);
+  const glideTo = (el: HTMLElement, top: number) => {
+    const to = Math.min(Math.max(top, 0), el.scrollHeight - el.clientHeight);
+    glide.current = { to, until: performance.now() + GLIDE_MS };
+    el.scrollTo({ top: to, behavior: "smooth" });
+  };
 
   // Pads the top so the newest turn starts on a whole pixel. WebKit scrolls in
-  // whole pixels, so every backfill step mounting a fractional height above put
-  // the turns on screen a different fraction off the grid, and the rounding
-  // moved them a pixel per step — a wobble for as long as backfill ran. Measured
+  // whole pixels, so every page mounting a fractional height above put the
+  // turns on screen a different fraction off the grid, and the rounding moved
+  // them a pixel per page — a wobble while history landed. Measured
   // in an offscreen WKWebView: snapping to device pixels instead still wobbles.
   // The pad rides the node as `--snap`, since the empty state remounts it.
   const lastTurnRef = useRef<HTMLDivElement>(null);
@@ -266,6 +262,7 @@ export default function Chat({
     content.style.setProperty("--snap", `${extra}px`);
   };
   const pin = (el: HTMLElement) => {
+    glide.current = null;
     snapToPixel();
     el.scrollTop = el.scrollHeight;
     pinnedTop.current = el.scrollTop;
@@ -277,35 +274,37 @@ export default function Chat({
   // exactly when there is newly something below to go to.
   const [atBottom, setAtBottom] = useState(true);
 
-  // How much of a bot chat's newest session is drawn. A chat left open grows by
-  // every turn, and each row it holds cost every event that landed: with the
-  // whole log read back, an event took ~40ms. So while the reader follows the
-  // bottom (`null`) it draws the last `BOT_WINDOW_TURNS` alone, sliding as turns
-  // land; scrolled up, the top holds on an event id, grown a page at a time as
-  // they near it, or on `ALL_HELD`, where pages read from the log are drawn as
-  // they land. Back at the bottom it slides again, and what was above goes.
-  const [botWindow, setBotWindow] = useState<{ sessionId: string | null; from: string | null }>({
+  // How much of the newest session is drawn. A chat left open grows by every
+  // turn, and each row it holds cost every event that landed: with a bot's whole
+  // log read back, an event took ~40ms. So while the reader follows the bottom
+  // (`null`) it draws the last `WINDOW_TURNS` alone, sliding as turns land;
+  // scrolled up, the top holds on an event id, grown a page at a time as they
+  // near it, or on `ALL_HELD`, where pages read from the log are drawn as they
+  // land. Back at the bottom it slides again, and what was above goes. Keyed on
+  // the session inside the state, so a switch draws the new session's tail on
+  // its very first commit.
+  const [drawn, setDrawn] = useState<{ sessionId: string | null; from: string | null }>({
     sessionId: null,
     from: null,
   });
-  const held = bot && botWindow.sessionId === session?.sessionId ? botWindow.from : null;
+  const held = drawn.sessionId === session?.sessionId ? drawn.from : null;
   const holdWindow = (from: string | null) => {
-    if (held !== from) setBotWindow({ sessionId: session?.sessionId ?? null, from });
+    if (held !== from) setDrawn({ sessionId: session?.sessionId ?? null, from });
   };
   const drawFrom = useMemo(() => {
-    if (!bot || !session || held === ALL_HELD) return 0;
+    if (!session || held === ALL_HELD) return 0;
     const at = held ? session.events.findIndex((e) => e.id === held) : -1;
-    return at >= 0 ? at : lastTurns(session.events, BOT_WINDOW_TURNS);
-  }, [bot, session?.events, held]);
+    return at >= 0 ? at : lastTurns(session.events, WINDOW_TURNS);
+  }, [session?.events, held]);
   // Pages read above a sliding window are let go, so a chat read back and left
   // holds its tail again. Turns that landed live stay held, since only a page
   // read says where in the log it began.
-  const keepFrom = bot && held === null && drawFrom > 0 ? session?.events[drawFrom]?.id : undefined;
+  const keepFrom = held === null && drawFrom > 0 ? session?.events[drawFrom]?.id : undefined;
   useEffect(() => {
     if (session && keepFrom) dropOlder(session.sessionId, keepFrom);
   }, [session?.sessionId, keepFrom]);
   // The sessions before an agent switch go back to the tails they opened on.
-  const following = bot && held === null;
+  const following = held === null;
   useEffect(() => {
     if (following) for (const s of earlier) dropOlder(s.sessionId);
   }, [following, earlier]);
@@ -321,7 +320,7 @@ export default function Chat({
     return drawnSegments(live ? [...earlier, live] : earlier);
   }, [earlier, session, drawFrom]);
   const oldest = segments[0];
-  const more = !!bot && (oldest?.olderBefore != null || earlierLoading);
+  const more = oldest?.olderBefore != null || earlierLoading;
   // Moves when a page lands above, which is what the anchor below answers.
   const oldestKey = oldest ? `${oldest.sessionId}:${oldest.events[0]?.id}` : "";
   const syncAtBottom = () => {
@@ -329,8 +328,9 @@ export default function Chat({
     if (el) setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX);
   };
 
-  // Every held event, never a bot chat's window: a card can wait on the reader
-  // longer than 24 turns, and App builds this same array, whose cache it shares.
+  // Every held event, never the window: a card can wait on the reader longer
+  // than 24 turns, a call drawn in it can be answered after it, and App builds
+  // this same array, whose cache it shares.
   const { events, turns, subagentById, resultByCallId, editsByCallId, pendingAsks } = useMemo(
     () => buildTranscript(session?.events ?? [], busy, liveTaskIds),
     [session?.events, busy, liveTaskIds],
@@ -350,29 +350,6 @@ export default function Chat({
       if (plan) setPlan(sessionId, plan);
     }
   }, [cards, sessionId]);
-
-  // One tick per prompt. A turn with no prompt — a resumed log truncated
-  // mid-conversation, or the promptless `init` a background subagent's
-  // report-back opens — is not a checkpoint: there is nothing the reader wrote
-  // to preview, and jumping to it lands on work with no question above it.
-  const checkpoints = useMemo<Checkpoint[]>(
-    () =>
-      turns.flatMap((turn) => {
-        const payload = turn.prompt?.payload;
-        if (payload?.type !== "user_message") return [];
-        // An image-only prompt has no text to preview, but it is still a place
-        // in the conversation, so it gets a tick with a stand-in label.
-        const preview =
-          payload.text.trim() ||
-          (payload.images.length > 1 ? `${payload.images.length} images` : "Image");
-        return [{ key: turn.key, preview }];
-      }),
-    [turns],
-  );
-
-  // A bot chat is a conversation, not turns of work to jump between.
-  const showRail = rail && !bot && checkpoints.length >= RAIL_MIN;
-  const [activeTurn, setActiveTurn] = useState<string | null>(null);
 
   // Which kind of preview is open, not its text: the text grows on every
   // delta and only `StreamingPreview` reads it, so the transcript around it
@@ -481,7 +458,7 @@ export default function Chat({
   // text wrote `scrollTop` and read layout back on every delta.
   //
   // A send re-arms the pin first, whatever left it down: a scroll that stopped
-  // short of the end, a jump from the rail or the "Waiting on you" card, a
+  // short of the end, a jump from the "Waiting on you" card, a
   // smooth scroll cut short. Only the pin ever brought a send into view, so any
   // of those left the reader's own message below the fold. A send is told by
   // its provisional row *arriving*: every send here draws one, and the real
@@ -495,165 +472,18 @@ export default function Chat({
     const el = scrollRef.current;
     if (el && followRef.current) pin(el);
     syncAtBottom();
-    syncActive();
   }, [session?.sessionId, events.length, streamingKind, sent]);
 
-  // How many of the newest turns are drawn. Opening a long session mounts only
-  // what fits on screen and backfills the rest above it in deferred steps, so
-  // the open costs what a short session costs — see `FIRST_MOUNT` for the
-  // measurement. Keyed on the session inside the state rather than reset by an
-  // effect, so a switch draws the new session's window on its very first
-  // commit instead of one full render later.
-  //
-  // Held as the key of the oldest mounted turn, so a turn the live session
-  // appends is inside the window without moving it — see `firstMount` — and a
-  // page of older turns landing above it stays unmounted until backfill steps
-  // up to it, where an index would have shifted onto the page and mounted it
-  // whole.
-  const [mount, setMount] = useState<{ sessionId: string | null; key: string | null }>({
-    sessionId: null,
-    key: null,
-  });
-  // A bot chat draws everything it holds and reads further back on scroll
-  // instead — see `askOlder`.
-  const mounted = bot
-    ? 0
-    : mount.sessionId === session?.sessionId
-      ? Math.max(0, turns.findIndex((turn) => turn.key === mount.key))
-      : firstMount(turns.length);
-  const shownTurns = mountedTurns(turns, mounted);
-  const backfilling = mounted > 0;
+  // The turns from the window's first event on. A cut is always a prompt, and
+  // a prompt always opens a turn keyed on its own id.
+  const shownTurns = useMemo(() => {
+    if (drawFrom === 0 || !session) return turns;
+    const first = session.events[drawFrom].id;
+    return turns.slice(Math.max(0, turns.findIndex((turn) => turn.key === first)));
+  }, [turns, drawFrom, session?.events]);
 
-  // Where the oldest mounted turn sat before a step lands, for the
-  // compensation below. A node, not the scroller's height: anything else
-  // growing between capture and commit — a delta, a highlight landing — sits
-  // *below* this node and cannot move it, where it would have counted as
-  // backfill in a height diff.
-  const anchorBeforeStep = useRef<{ key: string; top: number } | null>(null);
-  // A rail jump aimed at a turn not mounted yet, honoured once it is.
-  const pendingJump = useRef<string | null>(null);
-
-  // One step per macrotask, after the previous one has painted. A single
-  // deferred pass would still hold the thread for the whole parse; steps keep
-  // the pane responsive while the rest of the transcript fills in.
-  //
-  // With every held turn mounted, the rest of the log is read a page at a time
-  // above it, and each page lands as more to backfill.
-  const olderBefore = session?.olderBefore;
-  useEffect(() => {
-    if (!session || bot) return;
-    if (!backfilling) {
-      if (olderBefore != null) loadOlder(session.sessionId);
-      return;
-    }
-    const sessionId = session.sessionId;
-    const timer = setTimeout(() => {
-      const oldest = contentRef.current?.querySelector<HTMLElement>("[data-turn]");
-      anchorBeforeStep.current =
-        oldest?.dataset.turn && !followRef.current
-          ? { key: oldest.dataset.turn, top: oldest.getBoundingClientRect().top }
-          : null;
-      setMount({ sessionId, key: turns[grow(mounted)].key });
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [backfilling, mounted, session?.sessionId, olderBefore, bot]);
-
-  // A step mounts turns *above* everything on screen, so left alone it would
-  // shove what the reader is looking at down by their height. Pinned, the
-  // bottom is re-taken; unpinned, the view is moved by exactly what the anchor
-  // moved, so the turn the reader was in stays where it was.
-  useLayoutEffect(() => {
-    const anchor = anchorBeforeStep.current;
-    anchorBeforeStep.current = null;
-    const el = scrollRef.current;
-    if (!el) return;
-    snapToPixel();
-    if (followRef.current) {
-      pin(el);
-    } else if (anchor) {
-      const node = contentRef.current?.querySelector<HTMLElement>(
-        `[data-turn="${anchor.key}"]`,
-      );
-      if (node) el.scrollTop += node.getBoundingClientRect().top - anchor.top;
-    }
-
-    const key = pendingJump.current;
-    if (key && contentRef.current?.querySelector(`[data-turn="${key}"]`)) {
-      pendingJump.current = null;
-      jumpToTurn(key);
-    }
-  }, [mounted]);
-
-  // Which turn the rail marks. Measured from the DOM rather than tracked as
-  // state per turn: heights move constantly here — Shiki lands async, a turn
-  // collapses, a diff expands — so anything cached from a previous layout is
-  // wrong by the time it is read.
-  //
-  // Throttled to a frame because the pin writes `scrollTop` on every delta, and
-  // each measurement forces layout.
-  const spyFrame = useRef(0);
-  const syncActive = () => {
-    const scroller = scrollRef.current;
-    const content = contentRef.current;
-    if (!scroller || !content || !showRail) return;
-    if (spyFrame.current) return;
-
-    spyFrame.current = requestAnimationFrame(() => {
-      spyFrame.current = 0;
-      const nodes = content.querySelectorAll<HTMLElement>("[data-turn]");
-      if (nodes.length === 0) return;
-
-      const line = scroller.getBoundingClientRect().top + ACTIVE_LINE_PX;
-      // The last turn to start above the line. Scrolled above the first prompt,
-      // that is still the first — the transcript can only be read downwards.
-      let key = nodes[0].dataset.turn ?? null;
-      for (const node of nodes) {
-        if (node.getBoundingClientRect().top > line) break;
-        key = node.dataset.turn ?? key;
-      }
-
-      // At the bottom the final turn often starts below the line and is what
-      // the reader is looking at regardless — a short last turn would otherwise
-      // never be markable.
-      if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 8) {
-        key = nodes[nodes.length - 1].dataset.turn ?? key;
-      }
-
-      setActiveTurn(key);
-    });
-  };
-
-  // Scrolls a prompt to the top of the pane and drops the pin — jumping back
-  // through the transcript must not be yanked forward by the next delta. The
-  // scroll's own `onScroll` re-decides the pin from where it lands, so a jump to
-  // the newest turn re-arms it.
-  const jumpToTurn = (key: string) => {
-    const scroller = scrollRef.current;
-    const node = contentRef.current?.querySelector<HTMLElement>(`[data-turn="${key}"]`);
-    if (!scroller) return;
-    // The rail lists every turn, mounted or not. A tick above the window
-    // mounts everything and jumps once the node exists.
-    if (!node) {
-      if (session && backfilling) {
-        pendingJump.current = key;
-        setMount({ sessionId: session.sessionId, key: turns[0].key });
-      }
-      return;
-    }
-
-    const top =
-      node.getBoundingClientRect().top -
-      scroller.getBoundingClientRect().top +
-      scroller.scrollTop -
-      JUMP_PAD_PX;
-
-    followRef.current = false;
-    setActiveTurn(key);
-    scroller.scrollTo({ top: Math.max(top, 0), behavior: "smooth" });
-  };
-
-  // A bot chat is one conversation that grows forever, and drawing all of it
-  // was the whole cost of opening one: it opens on its tail and reads a page
+  // A chat can grow for as long as it is used, and drawing all of it was the
+  // whole cost of opening a long one: it opens on its tail and reads a page
   // further back whenever the reader comes within a screen of the top. The
   // pane must also hold a screen above the bottom, or a short tail leaves
   // nothing to scroll and nothing is ever asked for. What is already held is
@@ -679,7 +509,7 @@ export default function Chat({
     const el = scrollRef.current;
     const content = contentRef.current;
     botAnchor.current = [];
-    if (!bot || !el || !content || el.scrollTop > 2 * el.clientHeight) return;
+    if (!el || !content || el.scrollTop > 2 * el.clientHeight) return;
     const top = el.getBoundingClientRect().top;
     for (const node of content.children) {
       if (node.hasAttribute("data-bot-passing")) continue;
@@ -693,7 +523,8 @@ export default function Chat({
   useLayoutEffect(() => {
     const el = scrollRef.current;
     const anchor = botAnchor.current.find((a) => a.node.isConnected);
-    if (!bot || !el) return;
+    if (!el) return;
+    snapToPixel();
     if (followRef.current) {
       pin(el);
     } else if (anchor) {
@@ -701,18 +532,37 @@ export default function Chat({
     }
     noteAnchor();
     askOlder();
-  }, [bot, oldestKey]);
+  }, [oldestKey]);
 
   // A task picked from the bot's "Waiting on you" card: the bot's reply about
   // it, at the top of the pane, once the lit block is laid out. The pin drops
   // as a jump to a turn's does. A reply above what is loaded is read back to,
-  // a page at a time, until it is drawn or the chat runs out.
+  // a page at a time, until it is drawn or the chat runs out; run out, the
+  // pick is handed back, and the card opens the task instead.
   const focusedAt = useRef<number | null>(null);
+  const focusUnpinned = useRef(false);
   useEffect(() => {
     if (!botFocus || focusedAt.current === botFocus.at) return;
     if (!contentRef.current?.querySelector("[data-bot-focus]")) {
-      if (drawFrom > 0) holdWindow(ALL_HELD);
-      else if (oldest?.olderBefore != null) loadOlder(oldest.sessionId, FOCUS_PAGE_TURNS);
+      if (more || drawFrom > 0) {
+        // Unpinned first: pinned, the window growing re-takes the bottom, and
+        // that scroll reads as the reader at the end and lets the window go.
+        // Held whole even with nothing undrawn: a window left following drops
+        // every page read above its tail, so the page read here went the
+        // moment it landed and the reply was never found.
+        focusUnpinned.current ||= followRef.current;
+        followRef.current = false;
+        holdWindow(ALL_HELD);
+        if (drawFrom === 0 && oldest?.olderBefore != null) loadOlder(oldest.sessionId, FOCUS_PAGE_TURNS);
+        return;
+      }
+      focusedAt.current = botFocus.at;
+      if (focusUnpinned.current && scrollRef.current) {
+        followRef.current = true;
+        pin(scrollRef.current);
+      }
+      focusUnpinned.current = false;
+      onBotFocusMissed?.(botFocus.sessionId);
       return;
     }
     const frame = requestAnimationFrame(() => {
@@ -720,38 +570,17 @@ export default function Chat({
       const node = contentRef.current?.querySelector<HTMLElement>("[data-bot-focus]");
       if (!scroller || !node) return;
       focusedAt.current = botFocus.at;
+      focusUnpinned.current = false;
       const top = node.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
       const to = Math.max(top - JUMP_PAD_PX, 0);
       followRef.current = false;
       // Within a screen of the top the scroll reads the next page, and putting
       // the reader back on their row cuts a smooth one short.
-      scroller.scrollTo({ top: to, behavior: to < scroller.clientHeight ? "auto" : "smooth" });
+      if (to < scroller.clientHeight) scroller.scrollTo({ top: to });
+      else glideTo(scroller, to);
     });
     return () => cancelAnimationFrame(frame);
-  }, [botFocus, oldestKey]);
-
-  useEffect(() => () => cancelAnimationFrame(spyFrame.current), []);
-
-  // The rail overlays the scroller as a sibling rather than sitting inside it,
-  // so a wheel over it reaches nothing on its own and the gutter becomes a dead
-  // strip for the pointer. Forwarded by hand, but only once the rail itself has
-  // no room left — a long session's rail scrolls first.
-  const onRailWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    const scroller = scrollRef.current;
-    if (!scroller) return;
-
-    const rail = e.currentTarget;
-    const room =
-      e.deltaY < 0
-        ? rail.scrollTop > 0
-        : rail.scrollTop + rail.clientHeight < rail.scrollHeight - 1;
-    if (room) return;
-
-    // Line-mode deltas come from a wheel mouse; trackpads report pixels.
-    const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
-    if (delta < 0) followRef.current = false;
-    scroller.scrollTop += delta;
-  };
+  }, [botFocus, oldestKey, more]);
 
   // Heights change with no React commit involved — Shiki highlighting lands
   // async and grows the content, and the composer growing shrinks this pane from
@@ -765,9 +594,6 @@ export default function Chat({
     const ro = new ResizeObserver(() => {
       if (followRef.current) pin(scroller);
       syncAtBottom();
-      // A turn that grew or collapsed moves every turn under it, with no scroll
-      // event to notice it by.
-      syncActive();
     });
     ro.observe(scroller);
     ro.observe(content);
@@ -785,6 +611,7 @@ export default function Chat({
   // the pin — the chat sat at the bottom unpinned, and whatever landed next,
   // seen or behind another tab, was left below the view.
   const onWheel = (e: React.WheelEvent) => {
+    glide.current = null;
     const el = scrollRef.current;
     if (!el || e.deltaY >= 0 || el.scrollTop <= 0) return;
     for (let n = e.target as Element | null; n !== el; n = n.parentElement) {
@@ -796,7 +623,13 @@ export default function Chat({
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX;
+    const g = glide.current;
+    if (g && (Math.abs(el.scrollTop - g.to) <= 1 || performance.now() > g.until)) glide.current = null;
+    // A card pick still reading back to its row is not the reader either: the
+    // rows it mounts above can leave a scroll event at the end before the
+    // glide starts, and letting the window go there drops what it mounted.
+    const hunting = !!botFocus && focusedAt.current !== botFocus.at;
+    const atEnd = !glide.current && !hunting && el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX;
     // **Only a scroll that moved the view can drop the pin.** A pin is a write
     // to `scrollTop`, and the browser answers that write with a scroll event a
     // frame later — by which time anything landing async in the transcript, a
@@ -807,8 +640,8 @@ export default function Chat({
     // only while the pin holds. Measured on an open landing 66px short with the
     // arrow up, and 550px short on a warm switch. So the event is judged by
     // where it finds the scroller: exactly where the last pin left it means
-    // the reader did not touch it. An upward wheel and the rail still clear the
-    // pin themselves, and a scrollbar or touch drag moves the position, so
+    // the reader did not touch it. An upward wheel still clears the pin
+    // itself, and a scrollbar or touch drag moves the position, so
     // every gesture the reader can make is honoured, streaming or not — which
     // is what a height-based reading of the same fact could not manage, since
     // a streaming turn grows on nearly every frame.
@@ -823,17 +656,14 @@ export default function Chat({
       followRef.current = false;
     }
     setAtBottom(atEnd);
-    syncActive();
-    if (bot) {
-      // Turns landing must not move the top out from under a reader who left
-      // the bottom, so it holds where it is until they come back.
-      if (atEnd) holdWindow(null);
-      else if (!followRef.current && held === null && session) {
-        holdWindow(drawFrom > 0 ? session.events[drawFrom].id : ALL_HELD);
-      }
-      noteAnchor();
-      askOlder();
+    // Turns landing must not move the top out from under a reader who left the
+    // bottom, so it holds where it is until they come back.
+    if (atEnd) holdWindow(null);
+    else if (!followRef.current && held === null && session) {
+      holdWindow(drawFrom > 0 ? session.events[drawFrom].id : ALL_HELD);
     }
+    noteAnchor();
+    askOlder();
   };
 
   // Re-arms the pin as well as scrolling: pressing this is the reader saying they
@@ -847,6 +677,7 @@ export default function Chat({
   const scrollToBottom = () => {
     const el = scrollRef.current;
     if (!el) return;
+    glide.current = null;
     followRef.current = true;
     el.scrollTo({ top: el.scrollHeight, behavior: busy ? "auto" : "smooth" });
   };
@@ -908,11 +739,6 @@ export default function Chat({
   );
 
   return (
-    // What decides whether the rail fits is the width of *this pane*, which the
-    // sidebar and the right panel both take from. On a 1440px window with both
-    // open the chat column fills the pane and the rail would sit on top of the
-    // text, so it goes; open one of them, or run wider, and the gutter is there.
-    //
     // The session rides a context because the things that read it are leaves — a
     // `@mention` and a file link, several components down. See `useChatSession`.
     <ChatSessionContext value={chatSession}>
@@ -948,14 +774,10 @@ export default function Chat({
                 />
                 {botFooter}
               </>
-            ) :shownTurns.map((turn, i) => (
-              // The wrapper is what the rail measures and scrolls to. It carries
-              // no styles of its own — it stands in for the block as the flex item.
-              <div
-                key={turn.key}
-                data-turn={turn.key}
-                ref={i === shownTurns.length - 1 ? lastTurnRef : undefined}
-              >
+            ) : shownTurns.map((turn, i) => (
+              // The wrapper is what `snapToPixel` measures. It carries no styles
+              // of its own — it stands in for the block as the flex item.
+              <div key={turn.key} ref={i === shownTurns.length - 1 ? lastTurnRef : undefined}>
                 <TurnBlock
                   turn={turn}
                   subagentById={subagentById}
@@ -1040,13 +862,14 @@ export default function Chat({
                 maxRetries={apiRetry.maxRetries}
                 status={apiRetry.status}
                 reason={apiRetry.reason}
+                message={apiRetry.message}
               />
             )}
           </div>
         </div>
 
         {/* Centred on the pane and outside the scroller, so it holds its place
-            while the transcript moves under it — the rail's own arrangement. Sits
+            while the transcript moves under it. Sits
             low enough to read as belonging to the composer's edge rather than
             floating over the last message. */}
         {!atBottom && (
@@ -1074,18 +897,6 @@ export default function Chat({
           </Tooltip>
         )}
 
-        {showRail && (
-          <CheckpointRail
-            checkpoints={checkpoints}
-            activeKey={activeTurn}
-            onSelect={jumpToTurn}
-            onWheel={onRailWheel}
-            dimmed={crowded}
-            // Centred vertically and outside the scroller, so it holds still while
-            // the transcript moves under it.
-            className="absolute left-1.5 top-1/2 -translate-y-1/2"
-          />
-        )}
       </div>
       </MergeCardChatContext>
     </ChatSessionContext>

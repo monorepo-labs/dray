@@ -39,10 +39,13 @@ struct RecordingPlayer: View {
     @State private var failed = false
 
     var body: some View {
-        if !failed {
+        if failed {
+            // The message no longer shows the path, so a video that cannot play says which it was.
+            Text(path).font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
+        } else {
             Group {
                 if let player {
-                    VideoPlayer(player: player)
+                    PlayerController(player: player)
                 } else {
                     Rectangle().fill(.primary.opacity(0.06))
                 }
@@ -65,6 +68,28 @@ struct RecordingPlayer: View {
             return
         }
         aspect = size.width / size.height
-        player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+        let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+        // A simulator recording opens on an empty edit (~0.095s), and paused at 0 it paints
+        // nothing, so the poster is held at the first real frame, as desktop's #1243 does.
+        if let first = try? await track.load(.segments).first(where: { !$0.isEmpty })?.timeMapping.target.start,
+           first > .zero {
+            await player.seek(to: first, toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+        self.player = player
+    }
+}
+
+/// UIKit's player rather than SwiftUI's `VideoPlayer`, which has no full screen button.
+private struct PlayerController: UIViewControllerRepresentable {
+    let player: AVPlayer
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = player
+        return controller
+    }
+
+    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+        controller.player = player
     }
 }

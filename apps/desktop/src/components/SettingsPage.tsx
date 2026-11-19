@@ -1482,6 +1482,8 @@ const TAB_SUBTITLES: Partial<Record<SettingsTab, string>> = {
   accounts: "Manage each harness's sign-in. Switch one off to hide it from the model picker.",
   composer:
     "The buttons that rise out of the composer's top edge on hover. Each sends its prompt as if you had typed it.",
+  // Agents add machines with `dray machine add`, which nothing here would say.
+  servers: "Ask your bot or any session to set one up for you. No need to add each by hand.",
   // Nothing on the island says it has a menu.
   island: "Right-click the island to change these from the island itself.",
 };

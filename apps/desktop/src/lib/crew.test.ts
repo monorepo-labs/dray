@@ -75,6 +75,18 @@ describe("crewRows", () => {
     expect(ids(crewRows(items, "new", quiet, ["old"]))).toEqual(["t2", "t1"]);
   });
 
+  // A bot's task settled with a sub-task still running: the settled task is
+  // on the other side of the index, so the adoption is the only way to the bot.
+  it("lists a sub-task whose parent is settled under the session that adopted it", () => {
+    const items = [
+      item("bot", null),
+      item("task", "bot", { created: "2026-09-02T00:00:00Z" }),
+      item("sub", "task", { hidden: true }),
+      item("orphan", "settled", { hidden: true, adoptedBy: "bot" }),
+    ];
+    expect(ids(crewRows(items, "bot", quiet))).toEqual(["task", "sub", "orphan"]);
+  });
+
   it("survives a cycle in the index", () => {
     const items = [item("a", null), item("b", "a"), item("c", "b"), item("a", "c")];
     expect(ids(crewRows(items, "a", quiet))).toEqual(["b", "c"]);
@@ -135,6 +147,22 @@ describe("crewRows", () => {
     expect(c.background).toBe(false);
     expect(crewRows(items, "a", quiet)[0].background).toBe(false);
   });
+
+  // A task that ended its turn leaving a dev server up waits on the reader.
+  it("reads a task left only serving as not in the background", () => {
+    const items = [item("a", null), item("b", "a"), item("c", "a", { status: "in_progress" }), item("d", "a")];
+    const task = { taskId: "t", taskType: "local_bash", description: "dev server" } as BackgroundTask;
+    const live = {
+      statusBySession: {},
+      askingSessions: new Set<string>(),
+      tasksBySession: { b: [task], c: [task] },
+      servingBySession: { b: [5173], c: [5173], d: [5173] },
+    };
+    const [b, c, d] = crewRows(items, "a", live);
+    expect([b.background, b.serving]).toEqual([false, [5173]]);
+    expect([c.busy, c.serving]).toEqual([true, []]);
+    expect(d.serving).toEqual([]);
+  });
 });
 
 describe("crewSeen", () => {
@@ -184,6 +212,22 @@ describe("hidden sessions", () => {
     const bot = { id: "b", name: "Ops", path: "/h/bots/b", created: "" };
     const settled = [item("old", null, { cwd: "/h/bots/b", archived: true })];
     expect(inSidebar(settled, [bot]).map((i) => i.sessionId)).toEqual(["old"]);
+  });
+
+  // Its parent task settled, a bot's sub-task belongs to the bot: never loose.
+  it("leaves out a hidden child adopted by a listed session", () => {
+    const adopted = [...items, item("sub", "settled-task", { hidden: true, adoptedBy: "a" })];
+    expect(inSidebar(adopted).map((i) => i.sessionId)).toEqual(["a", "shown", "orphan"]);
+  });
+
+  it("lights the adopter of a hidden asker", () => {
+    const adopted = [...items, item("sub", "settled-task", { hidden: true, adoptedBy: "review" })];
+    expect([...withHiddenAsks(adopted, new Set(["sub"]))].sort()).toEqual(["a", "review", "sub"]);
+  });
+
+  it("carries an adopted child along with its adopter", () => {
+    const adopted = [...items, item("sub", "gone-task", { hidden: true, adoptedBy: "a" })];
+    expect(hiddenChildren(adopted, "a").map((i) => i.sessionId)).toEqual(["review", "sub"]);
   });
 
   it("leaves a settled hidden child out of the settled list too", () => {

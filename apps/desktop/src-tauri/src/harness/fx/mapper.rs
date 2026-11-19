@@ -9,7 +9,7 @@
 //! non-thought update.
 
 use crate::events::{
-    usage::ContextWindow, AgentEvent, AgentEventPayload, BlockType, DeltaEvent, SessionInfo, Subagent, ToolResult, ToolType, TurnStatus, Usage,
+    usage::ContextWindow, AgentEvent, AgentEventPayload, BackgroundTask, BlockType, DeltaEvent, SessionInfo, Subagent, ToolResult, ToolType, TurnStatus, Usage,
 };
 use crate::harness::acp::{self, block_ref, OpenBlock};
 use crate::harness::{mentions_any, Harness};
@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 
 use super::parser::{
-    FxEvent, PromptResponse, SessionUpdate, ToolContent, ToolKind, ToolStatus,
+    FxEvent, PromptResponse, Recovery, SessionUpdate, ToolContent, ToolKind, ToolStatus,
 };
 
 /// What fx says when the session's provider wants a login. Written to
@@ -78,7 +78,19 @@ pub struct Mapper {
     /// delegated six times otherwise reports none of them; the chat draws the
     /// tool row rather than a link into the panel, which is what
     /// `SubagentRun.inline` is for.
-    subagents: HashSet<String>,
+    subagents: HashMap<String, Run>,
+}
+
+/// An open delegated run, by its spawning call.
+struct Run {
+    /// The brief, which is what the background task list names it by.
+    task: String,
+    /// fx 0.0.17's shape: a named child messaged in the background, whose call
+    /// closes twice — once at once to say the child took the work, again with
+    /// its report.
+    named: bool,
+    /// The first close has landed and the child is still working.
+    working: bool,
 }
 
 impl Mapper {
@@ -92,7 +104,7 @@ impl Mapper {
             occupancy: None,
             outputs: HashMap::new(),
             suppressed: HashSet::new(),
-            subagents: HashSet::new(),
+            subagents: HashMap::new(),
             shells: HashSet::new(),
         }
     }
@@ -168,9 +180,15 @@ impl Mapper {
                 let mut out = self.ensure_turn();
                 out.extend(self.close_open());
                 let name = name.unwrap_or_else(|| kind.name().to_string());
-                let tool_type = tool_type(kind, &name);
                 let input = tool_input(kind, raw_input);
                 let task = (name == "subagent").then(|| subagent_task(&input)).flatten();
+                let named = input.get("agent").and_then(Value::as_str).is_some();
+                // A `wait` or any other non-delegating action is no spawn, or
+                // it would draw as "Delegating" with nothing delegated.
+                let tool_type = match (&task, name.as_str()) {
+                    (None, "subagent") => kind.tool_type(),
+                    _ => tool_type(kind, &name),
+                };
                 if kind == ToolKind::Execute {
                     self.shells.insert(tool_call_id.clone());
                 }
@@ -191,7 +209,10 @@ impl Mapper {
                 // lists nothing however many children a session delegates to.
                 // See [`Self::subagents`] for what this costs.
                 if let Some(task) = task {
-                    self.subagents.insert(tool_call_id.clone());
+                    self.subagents.insert(
+                        tool_call_id.clone(),
+                        Run { task: task.clone(), named, working: false },
+                    );
                     out.push(self.subagent_event(
                         &tool_call_id,
                         AgentEventPayload::SubagentStarted {
@@ -251,13 +272,30 @@ impl Mapper {
                     images: Vec::new(),
                 };
 
+                let report = is_report(&result.text);
                 let mut out = vec![self.event(AgentEventPayload::ToolCallCompleted {
                     call_id: tool_call_id.clone(),
                     result,
                 })];
+                // A named child's first close only says it took the work, so
+                // the run stays open, listed as a background task, until the
+                // report closes the call again. The task is what keeps the run
+                // open in the transcript, and what closes it if the child dies
+                // before reporting: `settle_dead_child` empties the set.
+                if let Some(run) = self.subagents.get_mut(&tool_call_id) {
+                    if run.named && !run.working && !report && status != ToolStatus::Failed {
+                        run.working = true;
+                        out.push(self.background_tasks());
+                        out.push(self.event(AgentEventPayload::ModelRequestStarted));
+                        return out;
+                    }
+                }
                 // Closes the run the spawning call opened, or the panel row
                 // shimmers for the rest of the session.
-                if self.subagents.remove(&tool_call_id) {
+                if let Some(run) = self.subagents.remove(&tool_call_id) {
+                    if run.working {
+                        out.push(self.background_tasks());
+                    }
                     out.push(self.subagent_event(
                         &tool_call_id,
                         AgentEventPayload::SubagentCompleted {
@@ -293,14 +331,51 @@ impl Mapper {
                 }))]
             }
 
-            // fx's own title, dropped: Dray titles fx sessions itself.
-            SessionUpdate::SessionInfoUpdate
-            | SessionUpdate::AvailableCommandsUpdate
+            // fx's own title is dropped: Dray titles fx sessions itself.
+            SessionUpdate::SessionInfoUpdate { meta } => match meta.fx.model_response_recovery {
+                Some(Some(recovery)) => self.recovery(recovery),
+                // The retry is over and the request is going out. Deltas never
+                // reach the events list, so without this the retry row would
+                // stay up over the reply streaming in under it.
+                Some(None) => vec![self.event(AgentEventPayload::ModelRequestStarted)],
+                None => Vec::new(),
+            },
+
+            SessionUpdate::AvailableCommandsUpdate
             | SessionUpdate::UserMessageChunk
             | SessionUpdate::CurrentModeUpdate
             | SessionUpdate::Plan
             | SessionUpdate::Unknown => Vec::new(),
         }
+    }
+
+    /// A model request fx is retrying (0.0.17), as the retry row.
+    ///
+    /// fx retries until it gets through or the turn is stopped, and restates
+    /// the countdown every second, so this fires once a second for as long as
+    /// a network is down. The read loop emits these and logs none of them.
+    ///
+    /// `recovered` arrives after the reply it recovered and `failed` just
+    /// before the prompt answers, so each is already on screen another way.
+    /// Any other state is drawn with fx's own sentence, `need_user` included:
+    /// never seen over ACP on a custom connection, where a quota or filter
+    /// refusal answers `refused` at once, but documented for `fx ask --json`.
+    fn recovery(&mut self, recovery: Recovery) -> Vec<AgentEvent> {
+        if matches!(recovery.state.as_str(), "recovered" | "failed") {
+            return Vec::new();
+        }
+        let message = recovery
+            .message
+            .filter(|m| !m.trim().is_empty())
+            .or_else(|| recovery.need.as_ref().map(|need| format!("fx is waiting on you: {need}")));
+        vec![self.event(AgentEventPayload::ApiRetry {
+            attempt: recovery.attempt.unwrap_or(1),
+            // Unbounded: fx retries until it gets through or is stopped.
+            max_retries: 0,
+            status: None,
+            reason: recovery.need,
+            message,
+        })]
     }
 
     fn prompt_done(&mut self, response: PromptResponse) -> Vec<AgentEvent> {
@@ -450,6 +525,24 @@ impl Mapper {
         self.event(payload)
     }
 
+    /// The named children still working, as the whole set — the payload
+    /// replaces. Each is keyed on its spawning call, which is the run's own id,
+    /// since fx publishes no handle for a child.
+    fn background_tasks(&self) -> AgentEvent {
+        let mut tasks: Vec<BackgroundTask> = self
+            .subagents
+            .iter()
+            .filter(|(_, run)| run.working)
+            .map(|(id, run)| BackgroundTask {
+                task_id: id.clone(),
+                task_type: "local_agent".to_string(),
+                description: run.task.clone(),
+            })
+            .collect();
+        tasks.sort_by(|a, b| a.task_id.cmp(&b.task_id));
+        self.event(AgentEventPayload::BackgroundTasksChanged { tasks })
+    }
+
     /// A lifecycle event belonging to a run rather than to the conversation.
     /// The envelope's `id` is the spawning call's, which is what the transcript
     /// correlates a run on.
@@ -491,7 +584,7 @@ impl Mapper {
 ///
 /// Keyed on the name because there is no kind to key on; a rename costs these
 /// two readings and nothing else.
-fn tool_type(kind: ToolKind, name: &str) -> ToolType {
+pub(super) fn tool_type(kind: ToolKind, name: &str) -> ToolType {
     match name {
         "subagent" => return ToolType::SubagentSpawn,
         "glob_files" => return ToolType::Search,
@@ -505,14 +598,27 @@ fn tool_type(kind: ToolKind, name: &str) -> ToolType {
 const SUBAGENT_LABEL: &str = "Subagent";
 
 /// The brief a `subagent` call was given, which is the run's own description.
-/// fx nests it under `request` beside the dispatch fields.
-fn subagent_task(input: &Value) -> Option<String> {
-    let task = input.get("request")?.get("task")?.as_str()?.trim();
+/// fx up to 0.0.16 nests it under `request`; 0.0.17 messages a named child
+/// (`{action:"message", agent, message}`) and has other actions on the same
+/// tool — `wait` above all — which start no run and so carry no brief.
+pub(super) fn subagent_task(input: &Value) -> Option<String> {
+    let task = match input.get("request") {
+        Some(request) => request.get("task")?.as_str()?,
+        None if input.get("action")?.as_str()? == "message" => input.get("message")?.as_str()?,
+        None => return None,
+    }
+    .trim();
     (!task.is_empty()).then(|| task.to_string())
 }
 
 /// How a run ended, in the vocabulary [`AgentEventPayload::SubagentCompleted`]
 /// already uses.
+/// Whether a close carries a child's report rather than fx's word that the
+/// child took the work. The prefix is fx 0.0.17's, from `subagent_background`.
+fn is_report(text: &str) -> bool {
+    text.trim_start().starts_with("Subagent report")
+}
+
 fn status_word(status: ToolStatus) -> &'static str {
     if status == ToolStatus::Failed {
         "failed"
@@ -527,7 +633,7 @@ fn status_word(status: ToolStatus) -> &'static str {
 /// `action`, `profile`, `yield_time_ms`, and the session's own `cwd` — which
 /// gave every shell row an expanded body of machinery under one line of
 /// command. The command is the whole input, and it is already the summary.
-fn tool_input(kind: ToolKind, raw: Option<Value>) -> Value {
+pub(super) fn tool_input(kind: ToolKind, raw: Option<Value>) -> Value {
     let mut input = match raw {
         Some(Value::Object(map)) => Value::Object(map),
         Some(Value::Null) | None => json!({}),
@@ -569,9 +675,9 @@ fn result_text(shell: bool, streamed: String, closing: String) -> String {
 }
 
 /// fx wraps a subagent's report in `{"ok":true,"result":"…","error_code":null}`,
-/// and its report is the only account of the run there is: nothing about the
-/// child streams over ACP, and the whole transcript fx keeps for it lives in
-/// its own session store, which Dray does not read.
+/// and its report is the only account of the run the chat has: nothing about
+/// the child streams over ACP, and the whole transcript fx keeps for it lives
+/// in its own session store, which only the subagent tab reads (`history.rs`).
 ///
 /// Unwrapped by **shape rather than by parsing**, because fx caps tool content
 /// at 200 characters and that cut usually lands mid-string — so the envelope is
@@ -949,6 +1055,97 @@ mod tests {
         );
     }
 
+    /// fx 0.0.17 (`subagent_background.jsonl`): the call messages a named child
+    /// and answers at once, the child working on in the background; a `wait`
+    /// on the same tool starts no run; the report lands later as a second
+    /// close on the spawning call, which then carries it.
+    #[test]
+    fn a_background_subagent_is_one_run_and_a_wait_is_none() {
+        let events = replay(include_str!("fixtures/subagent_background.jsonl"));
+        let runs: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                P::SubagentStarted { description, .. } => description.as_deref(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            runs,
+            ["List the files in the current directory using the shell. Then read notes.md and reply with only its first line."]
+        );
+        let types: Vec<ToolType> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                P::ToolCallStarted { tool_type, .. } => Some(*tool_type),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(types, [ToolType::SubagentSpawn, ToolType::Other]);
+        let last = events
+            .iter()
+            .rev()
+            .find_map(|e| match &e.payload {
+                P::ToolCallCompleted { result, .. } => Some(result.text.as_str()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(last.contains("\"output\":\"alpha line one\""), "{last}");
+    }
+
+    /// The run is working from fx's first close, which only says the child
+    /// took the work, until the report: listed as a background task between
+    /// the two, so the transcript keeps it open and a dead child closes it.
+    #[test]
+    fn a_background_subagent_runs_until_its_report() {
+        let events = replay(include_str!("fixtures/subagent_background.jsonl"));
+        let spawn = "call-a6ac7c59-b047-4809-818d-f660718b215b-0";
+        let closes: Vec<usize> = events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matches!(&e.payload, P::ToolCallCompleted { call_id, .. } if call_id == spawn))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(closes.len(), 2, "an ack and a report");
+
+        let sets: Vec<(usize, Vec<String>)> = events
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| match &e.payload {
+                P::BackgroundTasksChanged { tasks } => {
+                    Some((i, tasks.iter().map(|t| t.task_id.clone()).collect()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sets.len(), 2, "{sets:?}");
+        assert!(sets[0].0 > closes[0] && sets[0].0 < closes[1]);
+        assert_eq!(sets[0].1, [spawn]);
+        assert!(sets[1].0 > closes[1] && sets[1].1.is_empty());
+
+        let done: Vec<usize> = events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matches!(e.payload, P::SubagentCompleted { .. }))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(done.len(), 1);
+        assert!(done[0] > closes[1], "closed by the report, not the ack");
+    }
+
+    /// A named child whose first close fails took no work, so nothing is left
+    /// running behind it.
+    #[test]
+    fn a_failed_message_closes_the_run_at_once() {
+        let fixture = concat!(
+            r#"<< {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"x","update":{"sessionUpdate":"tool_call","toolCallId":"c1","name":"subagent","kind":"other","status":"pending","rawInput":{"action":"message","agent":"worker","message":"Do it"}}}}"#,
+            "\n",
+            r#"<< {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"x","update":{"sessionUpdate":"tool_call_update","toolCallId":"c1","status":"failed","content":[{"type":"content","content":{"type":"text","text":"no such agent"}}]}}}"#,
+        );
+        let events = replay(fixture);
+        assert!(events.iter().any(|e| matches!(e.payload, P::SubagentCompleted { .. })));
+        assert!(!events.iter().any(|e| matches!(e.payload, P::BackgroundTasksChanged { .. })));
+    }
+
     /// The two names that outrank the kind fx sends with them. No capture here
     /// holds a glob, and the kind it arrives under is what makes the reading
     /// wrong — so the rule is pinned directly rather than through a fixture.
@@ -1103,5 +1300,82 @@ mod tests {
                 "{text:?} was dropped"
             );
         }
+    }
+
+    const RETRY_RECOVERED: &str = include_str!("fixtures/retry_recovered.jsonl");
+    const RETRY_CANCELLED: &str = include_str!("fixtures/retry_cancelled.jsonl");
+
+    fn retry_messages(events: &[AgentEvent]) -> Vec<(u32, &str)> {
+        events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                P::ApiRetry { attempt, message, .. } => Some((*attempt, message.as_deref()?)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Three 503s, then a reply. Every countdown tick draws fx's own sentence,
+    /// the `null` that ends the retry is a request starting — so the retry row
+    /// gives way before the reply streams — and `recovered` draws nothing.
+    #[test]
+    fn a_retry_draws_fx_s_countdown_and_clears_before_the_reply() {
+        let events = replay(RETRY_RECOVERED);
+
+        let retries = retry_messages(&events);
+        assert_eq!(retries.len(), 10);
+        assert_eq!(retries[0], (1, "Gateway error · next try in 1s · attempt 1"));
+        assert_eq!(retries[4], (3, "Gateway error · retrying · attempt 3"));
+        assert_eq!(retries.last().unwrap(), &(4, "Gateway error · retrying · attempt 4"));
+
+        let last_retry = events.iter().rposition(|e| matches!(e.payload, P::ApiRetry { .. })).unwrap();
+        let text = events.iter().position(|e| matches!(e.payload, P::Delta(_))).unwrap();
+        assert!(
+            events[last_retry..text].iter().any(|e| matches!(e.payload, P::ModelRequestStarted)),
+            "the reply must not stream in under a retry row",
+        );
+
+        let P::TurnCompleted { status, .. } = &events.last().unwrap().payload else {
+            panic!("the turn closes");
+        };
+        assert_eq!(*status, TurnStatus::Success);
+    }
+
+    /// Stop during a retry: fx clears the retry and answers `cancelled`, which
+    /// is the same quiet close any other Stop gets. 0.0.17 dropped the separate
+    /// pause, so there is no third outcome.
+    #[test]
+    fn a_stop_during_a_retry_closes_the_turn_like_any_stop() {
+        let events = replay(RETRY_CANCELLED);
+
+        assert!(!retry_messages(&events).is_empty());
+        let P::TurnCompleted { status, stop_reason, final_text, .. } = &events.last().unwrap().payload else {
+            panic!("the turn closes");
+        };
+        assert_eq!(*status, TurnStatus::Success);
+        assert_eq!(stop_reason.as_deref(), Some("cancelled"));
+        assert_eq!(*final_text, None);
+    }
+
+    /// The states the captures never reach: `need_user` with no sentence still
+    /// says what fx waits on; `failed` and `recovered` draw nothing.
+    #[test]
+    fn a_recovery_state_with_no_sentence_still_draws() {
+        let mut mapper = Mapper::new("s".into(), Arc::new(AtomicU64::new(0)));
+        let recovery = |state: &str, need: Option<&str>| Recovery {
+            state: state.into(),
+            attempt: Some(2),
+            need: need.map(str::to_string),
+            message: None,
+        };
+
+        let events = mapper.recovery(recovery("need_user", Some("quota")));
+        assert!(matches!(
+            &events[0].payload,
+            P::ApiRetry { attempt: 2, reason: Some(need), message: Some(m), .. }
+                if need == "quota" && m == "fx is waiting on you: quota"
+        ));
+        assert!(mapper.recovery(recovery("failed", None)).is_empty());
+        assert!(mapper.recovery(recovery("recovered", None)).is_empty());
     }
 }

@@ -1,8 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { channel } from "@/lib/channel";
-import { projectKey } from "@/lib/projectGroups";
 import { cloudServer, subscribeServers } from "@/lib/servers";
 import { invoke, listen, LOCAL, serverOfPath, type ServerId } from "@/lib/transport";
 import type { CloudInfo, Project } from "@/types/events";
@@ -59,34 +57,13 @@ export function githubSlug(remote: string | null | undefined): string | null {
   return remote?.match(/^github\.com\/([^/]+\/[^/]+)$/)?.[1] ?? null;
 }
 
-/// Which projects send new tasks to Cloud, by project key. Kept apart from the
-/// checkout pick, since Cloud is no one checkout until a task is placed.
-const PICKS = "ade.cloudPicks";
-let picks: string[] = readLocalStorage<string[]>(PICKS, []);
-
-export function cloudPicked(key: string): boolean {
-  return picks.includes(key);
-}
-
-/// Its own hook: a pick changes nothing `useCloud` returns, so that snapshot
-/// would never redraw a selector for one.
-export function useCloudPicks(): string[] {
-  return useSyncExternalStore(subscribe, () => picks);
-}
-
-export function setCloudPick(key: string, on: boolean) {
-  if (cloudPicked(key) === on) return;
-  picks = on ? [...picks, key] : picks.filter((k) => k !== key);
-  writeLocalStorage(PICKS, picks);
-  changed.emit();
-}
-
-/// Whether a new task in `path`'s project goes to Cloud: picked, or a checkout
-/// already on a cloud machine, since every one of those reads as Cloud.
+/// Whether a new task in `path` goes to a fresh cloud machine. The composer no
+/// longer offers Cloud, so this holds only where `path` is itself a checkout on
+/// one, which reusing would hand one task's machine to another.
 export function onCloud(projects: Project[], path: string | null): boolean {
   const project = path ? projects.find((p) => p.path === path) : undefined;
   if (!project || !cloudReady() || !githubSlug(project.remote)) return false;
-  return cloudPicked(projectKey(project)) || cloudServer(serverOfPath(project.path));
+  return cloudServer(serverOfPath(project.path));
 }
 
 export type PlaceStep = "starting" | "cloning";

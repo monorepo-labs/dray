@@ -15,21 +15,23 @@ export default function ApiRetryIndicator({
   maxRetries,
   status,
   reason,
+  message,
 }: {
   attempt: number;
   maxRetries: number;
   status?: number | null;
   reason?: string | null;
+  message?: string | null;
 }) {
+  // fx's own line already names the cause, the attempt and the countdown.
+  if (message) return <OrbLine state="retrying" label={message} />;
+
   // `529 overloaded` where both are known, either alone otherwise. The harness
   // sends `unknown` as its own way of saying nothing, and the mapper drops that
   // on the way in, so anything arriving here is worth showing.
   const cause = [status, reason].filter(Boolean).join(" ");
+  // A ceiling of 0 is a harness that names none (Codex), and its attempt is 0 too.
+  const count = maxRetries > 0 ? ` — attempt ${attempt} of ${maxRetries}` : attempt > 0 ? ` — attempt ${attempt}` : "";
 
-  return (
-    <OrbLine
-      state="retrying"
-      label={`Retrying — attempt ${attempt} of ${maxRetries}${cause ? ` (${cause})` : ""}`}
-    />
-  );
+  return <OrbLine state="retrying" label={`Retrying${count}${cause ? ` (${cause})` : ""}`} />;
 }

@@ -52,6 +52,36 @@ describe("botItems", () => {
     expect(items[2]).toMatchObject({ kind: "task", sessionId: ID });
   });
 
+  it("draws a task from the server's task_started, whatever the bot's call printed", () => {
+    const started = ev({ type: "task_started", taskId: ID, title: "Pricing" } as AgentEventPayload);
+    const piped = botItems([call("c1", `dray session new "Pricing" | tail -1`), started, result("c1", "Started")]);
+    expect(piped).toEqual([{ kind: "task", key: started.id, sessionId: ID, ts: undefined, title: "Pricing" }]);
+    // The call printed the id too: still one row.
+    const plain = botItems([call("c2", `dray session new "Pricing"`), started, result("c2", `${ID}\nStarted`)]);
+    expect(plain.map((i) => i.kind)).toEqual(["task"]);
+  });
+
+  it("names a task from its merge card, which outlives the settled task", () => {
+    const items = botItems([
+      call("c1", `dray session new --project /repo "Write the changelog"`),
+      result("c1", `${ID}\n`),
+      ev({ type: "merge_card", taskId: ID, title: "Write the changelog" } as AgentEventPayload),
+    ]);
+    expect(items[0]).toMatchObject({ kind: "task", sessionId: ID, title: "Write the changelog" });
+  });
+
+  it("puts the bot's newest reaction on the message it names, and draws no row for it", () => {
+    const fix = user("fix the login bug");
+    const thanks = user("thanks!");
+    const react = (target: AgentEvent, emoji: string) =>
+      ev({ type: "reaction", messageId: target.id, emoji } as AgentEventPayload);
+    const items = botItems([fix, react(fix, "👀"), said("Fixed, PR is up."), react(fix, "✅"), thanks, react(thanks, "🎉")]);
+    expect(items.map((i) => i.kind)).toEqual(["user", "assistant", "user"]);
+    expect(items[0]).toMatchObject({ kind: "user", reaction: "✅" });
+    expect(items[2]).toMatchObject({ kind: "user", reaction: "🎉" });
+    expect(botItems([user("hi")])[0]).toMatchObject({ kind: "user", reaction: undefined });
+  });
+
   it("draws no bubble for a reply of whitespace and zero-width characters", () => {
     const items = botItems([user("hi"), said("\u200b"), said(" \ufeff\u200d\n"), said("\u200bok")]);
     expect(items.map((i) => i.kind)).toEqual(["user", "assistant"]);
@@ -235,7 +265,7 @@ dray session new --project /Users/yogesh/Documents/ade --hidden --title "Bot pro
   });
 
   it("draws a hidden review as nothing and each lesson as its own row, undone once taken back", () => {
-    const rule = { path: "INSTRUCTIONS.md", kind: "instructions", change: "changed", summary: "Check the login first" };
+    const rule = { path: "AGENTS.md", kind: "instructions", change: "changed", summary: "Check the login first" };
     const skill = { path: ".claude/skills/fork/SKILL.md", kind: "skill", change: "added", summary: "Fork a sandbox" };
     const items = botItems([
       user("Review: The user just corrected you.", true),
@@ -244,7 +274,7 @@ dray session new --project /Users/yogesh/Documents/ade --hidden --title "Bot pro
       ev({ type: "learned_undone", commit: "abc1234", path: skill.path } as AgentEventPayload),
     ]);
     expect(items.map((i) => (i.kind === "learned" ? [i.file.path, i.undone] : i.kind))).toEqual([
-      ["INSTRUCTIONS.md", false],
+      ["AGENTS.md", false],
       [".claude/skills/fork/SKILL.md", true],
     ]);
   });
@@ -314,10 +344,10 @@ describe("taskContext", () => {
     expect([...taskContext(items, ID)]).toEqual([reply.id]);
   });
 
-  it("falls back to the line that started a task with no reply to point at", () => {
+  it("finds nothing for a task with no reply to point at", () => {
     const start = [call("c1", `dray session new "Pricing"`), result("c1", `${ID}\nStarted`)];
-    expect([...taskContext(botItems(start), ID)]).toEqual(["c1"]);
-    expect([...taskContext(botItems([...start, from("done")]), ID)]).toEqual(["c1"]);
+    expect([...taskContext(botItems(start), ID)]).toEqual([]);
+    expect([...taskContext(botItems([...start, from("done")]), ID)]).toEqual([]);
   });
 });
 

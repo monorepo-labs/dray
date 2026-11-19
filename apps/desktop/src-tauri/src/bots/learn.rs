@@ -2,8 +2,8 @@
 //! folder, drawn as "Learned" rows the reader can view and undo, and the hidden
 //! review Dray asks for after a correction or a failed task.
 //!
-//! Lessons live where they fire: standing rules in `INSTRUCTIONS.md`, which is
-//! in every prompt; how-tos as skills, which the agent loads by description;
+//! Lessons live where they fire: standing rules in `AGENTS.md`, which the
+//! agent loads every session; how-tos as skills, which the agent loads by description;
 //! facts in `memory/`, which it greps. A lesson filed in memory alone never
 //! fires, which is the failure this exists for.
 
@@ -16,7 +16,7 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use ts_rs::TS;
 
-use super::{commit_paths, git, Bot, HISTORY_LOCK, INSTRUCTIONS, MEMORY};
+use super::{commit_paths, git, Bot, HISTORY_LOCK, INSTRUCTIONS, LEGACY_INSTRUCTIONS, MEMORY};
 use crate::events::{AgentEventPayload, LearnedFile, MessageSender};
 
 /// Where a bot's skills live: Claude Code reads them there since the bot runs
@@ -175,9 +175,14 @@ pub fn in_review(events: &[crate::events::AgentEvent]) -> Vec<bool> {
 }
 
 /// Whether `path`, relative to a bot's folder, is a lesson: its instructions,
-/// a skill, or a memory.
+/// a skill, or a memory. The old instructions file counts, so a Learned row
+/// logged before the move still opens and undoes.
 pub fn is_lesson(path: &str) -> bool {
-    path == INSTRUCTIONS || path.starts_with(&format!("{SKILLS}/")) || path.starts_with(&format!("{MEMORY}/"))
+    is_instructions(path) || path.starts_with(&format!("{SKILLS}/")) || path.starts_with(&format!("{MEMORY}/"))
+}
+
+fn is_instructions(path: &str) -> bool {
+    path == INSTRUCTIONS || path == LEGACY_INSTRUCTIONS
 }
 
 /// Makes the skills folder and the link Codex and pi read it through. A
@@ -199,13 +204,18 @@ pub async fn ensure_skills(dir: &Path) {
 /// and an automated pass that rewrote one would change what the user asked
 /// for with nobody asking. Where the turn took any line away, its edit to the
 /// file is put back whole before the commit.
+///
+/// The old file too, for a bot whose move has not run yet.
 pub async fn keep_rules(dir: &Path) -> Result<bool> {
-    let diff = git(dir, &["diff", "-U0", "HEAD", "--", INSTRUCTIONS]).await?;
-    if !diff.lines().any(|l| l.starts_with('-') && !l.starts_with("---")) {
-        return Ok(false);
+    let mut kept = false;
+    for path in [INSTRUCTIONS, LEGACY_INSTRUCTIONS] {
+        let diff = git(dir, &["diff", "-U0", "HEAD", "--", path]).await?;
+        if diff.lines().any(|l| l.starts_with('-') && !l.starts_with("---")) {
+            git(dir, &["checkout", "HEAD", "--", path]).await?;
+            kept = true;
+        }
     }
-    git(dir, &["checkout", "HEAD", "--", INSTRUCTIONS]).await?;
-    Ok(true)
+    Ok(kept)
 }
 
 /// The lessons `commit` changed, and which of them are now over their cap.
@@ -256,7 +266,7 @@ fn cap(path: &str) -> Option<usize> {
 /// The row's kind and its one line.
 async fn describe(dir: &Path, commit: &str, path: &str, change: &str, before: &str, now: &str) -> (&'static str, String) {
     let text = if change == "removed" { before } else { now };
-    if path == INSTRUCTIONS {
+    if is_instructions(path) {
         let diff = git(dir, &["show", "--format=", "--no-renames", "-U0", commit, "--", path]).await.unwrap_or_default();
         let added: Vec<&str> =
             diff.lines().filter(|l| l.starts_with('+') && !l.starts_with("+++")).map(|l| l[1..].trim()).collect();
@@ -341,27 +351,51 @@ pub async fn diff(bot: &Bot, commit: &str, path: &str) -> Result<LearnedDiff> {
 ///
 /// Reverted as a patch rather than restored from the commit's parent, so a
 /// later change to the same file survives; one that overlaps refuses instead.
-pub async fn undo(bot: &Bot, commit: &str, path: &str) -> Result<()> {
+///
+/// Answers the file it changed, which for a row from before #1118 is
+/// `AGENTS.md`, where that row's rule now lives.
+pub async fn undo(bot: &Bot, commit: &str, path: &str) -> Result<String> {
     let (commit, path) = checked(commit, path)?;
     let dir = Path::new(&bot.path);
     let _guard = HISTORY_LOCK.lock().await;
+    let live = if path == LEGACY_INSTRUCTIONS && !dir.join(path).exists() { INSTRUCTIONS } else { path };
     // Uncommitted means a turn is writing it: an undo now would be committed
     // under the bot's half-made edit.
-    if !git(dir, &["status", "--porcelain", "--", path]).await?.trim().is_empty() {
+    if !git(dir, &["status", "--porcelain", "--", live]).await?.trim().is_empty() {
         bail!("the bot is changing this file now; try again once its turn ends");
     }
     let patch = git(dir, &["show", "--format=", "--no-renames", "--binary", commit, "--", path]).await?;
     if patch.trim().is_empty() {
         bail!("that change is not in this bot's history");
     }
+    let patch = if live == path { patch } else { retarget(&patch, path, live) };
     let file = dir.join(".git").join("dray-undo.patch");
     tokio::fs::write(&file, patch).await.context("could not write the undo")?;
     let applied = git(dir, &["apply", "-R", &file.to_string_lossy()]).await;
     tokio::fs::remove_file(&file).await.ok();
     if applied.is_err() {
-        bail!("{path} has changed since; ask the bot to undo it");
+        bail!("{live} has changed since; ask the bot to undo it");
     }
-    commit_paths(bot, &format!("Undone by the user: {path} from {}", &commit[..7]), &[path]).await
+    commit_paths(bot, &format!("Undone by the user: {live} from {}", &commit[..7]), &[live]).await?;
+    Ok(live.to_string())
+}
+
+/// A one-file patch pointed from `from` to `to`, in its header alone: a hunk
+/// line naming the file is the file's own text.
+fn retarget(patch: &str, from: &str, to: &str) -> String {
+    let mut header = true;
+    patch
+        .split_inclusive('\n')
+        .map(|line| {
+            header &= !line.starts_with("@@");
+            let names = line.starts_with("diff --git ") || line.starts_with("--- ") || line.starts_with("+++ ");
+            if header && names {
+                line.replace(from, to)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect()
 }
 
 /// Starts of a message that correct: a "no", or a rule said outright.
@@ -479,7 +513,8 @@ mod tests {
 
     #[test]
     fn lessons_are_the_three_homes_and_nothing_else() {
-        assert!(is_lesson("INSTRUCTIONS.md"));
+        assert!(is_lesson("AGENTS.md") && is_lesson("INSTRUCTIONS.md"));
+        assert!(!is_lesson("CLAUDE.md"));
         assert!(is_lesson(".claude/skills/fork-box/SKILL.md"));
         assert!(is_lesson("memory/2026-11-13-who.md"));
         assert!(!is_lesson("notes.md") && !is_lesson(".claude/settings.json") && !is_lesson(".agents/skills"));
@@ -506,6 +541,7 @@ mod tests {
             created: String::new(),
             avatar: None,
             welcome: None,
+            greeting: Vec::new(),
         };
         (bot, dir)
     }
@@ -542,6 +578,47 @@ mod tests {
         assert!(log.starts_with("Undone by the user"), "{log}");
         assert!(undo(&bot, &commit, ".claude/skills/fork-box/SKILL.md").await.is_err(), "twice refuses");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_row_from_before_the_move_undoes_its_rule_in_agents_md() {
+        let (bot, dir) = scratch_bot();
+        std::fs::write(dir.as_path().join(LEGACY_INSTRUCTIONS), "# Ops\n").unwrap();
+        super::super::start_history(&bot).await.unwrap();
+        std::fs::write(dir.as_path().join(LEGACY_INSTRUCTIONS), "# Ops\n\n- Check the login first\n").unwrap();
+        let turn = super::super::commit_bot_turn(&bot, TurnNotes::default()).await;
+        let commit = turn.commit.unwrap();
+        assert_eq!(turn.files[0].path, LEGACY_INSTRUCTIONS);
+
+        super::super::move_legacy_instructions(&bot).await.unwrap();
+
+        assert!(diff(&bot, &commit, LEGACY_INSTRUCTIONS).await.unwrap().after.contains("Check the login"));
+        assert_eq!(undo(&bot, &commit, LEGACY_INSTRUCTIONS).await.unwrap(), INSTRUCTIONS);
+        assert_eq!(std::fs::read_to_string(dir.as_path().join(INSTRUCTIONS)).unwrap(), "# Ops\n");
+        assert!(!dir.as_path().join(LEGACY_INSTRUCTIONS).exists());
+        let log = git(dir.as_path(), &["log", "-1", "--format=%s"]).await.unwrap();
+        assert!(log.starts_with("Undone by the user: AGENTS.md"), "{log}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_review_cannot_take_a_rule_from_the_old_file_either() {
+        let (bot, dir) = scratch_bot();
+        std::fs::write(dir.as_path().join(LEGACY_INSTRUCTIONS), "- Rule the user wrote\n").unwrap();
+        super::super::start_history(&bot).await.unwrap();
+        std::fs::write(dir.as_path().join(LEGACY_INSTRUCTIONS), "").unwrap();
+        assert!(keep_rules(dir.as_path()).await.unwrap());
+        assert_eq!(std::fs::read_to_string(dir.as_path().join(LEGACY_INSTRUCTIONS)).unwrap(), "- Rule the user wrote\n");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_patch_is_retargeted_in_its_header_alone() {
+        let patch = "diff --git a/INSTRUCTIONS.md b/INSTRUCTIONS.md\nindex 1..2 100644\n--- a/INSTRUCTIONS.md\n+++ b/INSTRUCTIONS.md\n@@ -1 +1,2 @@\n-- see INSTRUCTIONS.md\n+--- INSTRUCTIONS.md\n";
+        assert_eq!(
+            retarget(patch, LEGACY_INSTRUCTIONS, INSTRUCTIONS),
+            "diff --git a/AGENTS.md b/AGENTS.md\nindex 1..2 100644\n--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1,2 @@\n-- see INSTRUCTIONS.md\n+--- INSTRUCTIONS.md\n"
+        );
     }
 
     #[tokio::test]

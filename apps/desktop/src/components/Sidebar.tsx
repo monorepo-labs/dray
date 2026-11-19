@@ -15,16 +15,18 @@ import {
   Pin,
   Plus,
   Search,
+  Layers,
   Trash2,
   Undo2,
 } from "lucide-react";
 import Orb from "@/components/Orb";
 import BotAvatar from "@/components/BotAvatar";
 import { TypingDots } from "@/components/chat/BotTranscript";
-import { previewLine, type BotEntry } from "@/lib/bots";
+import { greetingOf, previewLine, type BotEntry } from "@/lib/bots";
 
 import PrStateIcon, { ChecksRunningIcon, prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
+import { setRailSlot } from "@/components/RailPop";
 import PanelLeftIcon from "@/components/icons/PanelLeftIcon";
 import { Button } from "@/components/ui/button";
 import {
@@ -54,6 +56,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { draftTitle, type Draft } from "@/hooks/useDrafts";
+import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
 import { burstConfetti } from "@/lib/confetti";
 import type { ManualCheck } from "@/hooks/useUpdater";
 import { startSessionDrag, type DropTarget } from "@/lib/dragSession";
@@ -65,6 +68,7 @@ import { offlineLine, projectLabel, serverName, shownOffline, useServers } from 
 import { LOCAL, serverOfPath } from "@/lib/transport";
 import { useResizable } from "@/components/ResizeHandle";
 import { useJumpDigit } from "@/lib/digitChords";
+import type { ShortcutId } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import type {
   Bot,
@@ -87,8 +91,12 @@ type SidebarProps = {
   items: SessionIndexItem[];
   /// The Bots section: every bot with its ongoing chat, if it has one.
   bots?: BotEntry[];
+  /// The bot whose first chat the empty composer is aimed at: open, though it
+  /// has no chat session yet for `selectedSessionId` to name.
+  newBotId?: string;
   onOpenBot?: (bot: Bot) => void;
   onDeleteBot?: (bot: Bot) => void;
+  onEditBot?: (bot: Bot) => void;
   onNewBot?: () => void;
   // The live search query. Owned by the caller, because the list it narrows is
   // the caller's — the ⌘⇧↑/↓ walk reads the same array, and a query kept in here
@@ -120,7 +128,6 @@ type SidebarProps = {
   collapsed: boolean;
   onSelect: (sessionId: string) => void;
   /// See `SessionRow`'s own.
-  onPrefetch?: (sessionId: string) => void;
   /// The split groups of the active space, drawn as runs of their own ahead
   /// of everything else. Each holds only sessions in `items`.
   groups: SplitGroup[];
@@ -181,6 +188,10 @@ type SidebarProps = {
   projects: Project[];
   /// `null` is every project, whatever space it is filed under.
   space: string | null;
+  /// Every space there is, for the rail's own switcher: the titlebar's sits
+  /// over the sidebar's end, which the rail puts under the traffic lights.
+  spaces: string[];
+  onSpaceChange: (space: string | null) => void;
   // `null` is every project, and it is the entry the filter opens on.
   projectFilter: string | null;
   onProjectFilterChange: (path: string | null) => void;
@@ -197,6 +208,9 @@ type SidebarProps = {
   updateBlocked: boolean;
   updateManual: ManualCheck;
   onInstallUpdate: () => void;
+  /// The rail draws Settings at its foot, since the titlebar gear sits over
+  /// the sidebar's end and the rail has no end clear of the traffic lights.
+  onOpenSettings: () => void;
 };
 
 /// One drawn row: the session, how deep it sits, and the flags its connector
@@ -967,6 +981,7 @@ function devBadgeLabel(branch: string | null): string {
 function DevBadge() {
   return (
     <div
+      data-rail-hide
       title={__DEV_BRANCH__ ?? undefined}
       className="shrink-0 truncate px-3.5 pb-2 font-mono text-[10px] leading-none text-muted-foreground/60"
     >
@@ -975,15 +990,52 @@ function DevBadge() {
   );
 }
 
-/// The sidebar's floor, and the width the crew counts on it holding when it
-/// judges whether there is room to stand beside the chat.
+/// The sidebar's floor and its default, and the width the crew counts on it
+/// holding when it judges whether there is room to stand beside the chat.
+/// Narrower, the rows' timestamps and marks eat the titles beside them, so a
+/// drag under it goes to the rail instead.
 export const SIDEBAR_MIN = 240;
+/// The icon-only sidebar: the top buttons and the bots, no tasks.
+export const SIDEBAR_RAIL = 56;
+
+/// Names a control in the icon rail, where its label is gone; held shut in the
+/// full sidebar. One shape either way, so folding the rail mid-click never
+/// remounts the button the press landed on.
+function RailTip({
+  on,
+  label,
+  keys,
+  children,
+}: {
+  on: boolean;
+  label: React.ReactNode;
+  keys?: ShortcutId[];
+  children: React.ReactElement;
+}) {
+  return (
+    <Tooltip open={on ? undefined : false}>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="right">
+        {label}
+        {keys && <ShortcutKeys ids={keys} />}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/// The top strip's buttons, drawn as session rows: see the note where they
+/// render. `--rail` (0 full, 1 rail) moves the icon from 14px at 6px in to 16px
+/// centred in the rail's 40px button, a frame at a time with the edge.
+const STRIP =
+  "w-full justify-start pr-[calc(6px-6px*var(--rail,0))] pl-[calc(6px+5px*var(--rail,0))] transition-[color,background-color] [&_svg:not([class*='size-'])]:size-[calc(14px+2px*var(--rail,0))] text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50";
 
 export default function Sidebar({
   items,
   bots = [],
+  newBotId,
   onOpenBot,
   onDeleteBot,
+  onEditBot,
   onNewBot,
   search,
   onSearchChange,
@@ -996,7 +1048,6 @@ export default function Sidebar({
   selectedSessionId,
   collapsed,
   onSelect,
-  onPrefetch,
   groups: splits,
   onDropSession,
   splitLearned,
@@ -1012,6 +1063,8 @@ export default function Sidebar({
   onToggleArchived,
   projects,
   space,
+  spaces,
+  onSpaceChange,
   projectFilter,
   onDetach,
   onProjectFilterChange,
@@ -1021,6 +1074,7 @@ export default function Sidebar({
   updateBlocked,
   updateManual,
   onInstallUpdate,
+  onOpenSettings,
   drafts,
   openDraftId,
   onOpenDraft,
@@ -1028,13 +1082,14 @@ export default function Sidebar({
   draftsShown,
   onToggleDrafts,
 }: SidebarProps) {
-  // `SIDEBAR_MIN` is `w-60`, the width this opened at before it could be dragged — and
-  // its floor as well as its default: narrower, the rows' timestamps and marks
-  // start eating the title they sit beside, so this only ever widens.
-  const { style, handle } = useResizable({
+  const { style, handle, width, held, snap } = useResizable({
     storageKey: "ade.sidebarWidth",
     initial: SIDEBAR_MIN,
     min: SIDEBAR_MIN,
+    rail: SIDEBAR_RAIL,
+    // The search field needs the full sidebar, so the rail opens out while it
+    // is up and folds back when it closes.
+    widen: searchOpen,
     edge: "right",
     label: "Resize the sidebar",
     // Dropped while collapsed, which is not an unmount: this component returns
@@ -1043,6 +1098,22 @@ export default function Sidebar({
     // on screen.
     pane: collapsed ? undefined : "sidebar",
   });
+  // The full sidebar stays drawn while it folds, clipped by the narrowing
+  // aside, and turns into the rail once it lands.
+  const iconOnly = width === SIDEBAR_RAIL && snap !== "toRail";
+  // How far toward the rail the drawn width is, 0 to 1. The strip's icons take
+  // their padding and size from it each frame, so they move in step with the
+  // edge rather than on a transition of their own.
+  const towardRail = Math.min(1, Math.max(0, (SIDEBAR_MIN - Number(style.width)) / (SIDEBAR_MIN - SIDEBAR_RAIL)));
+  // The rail's foot slides in after a fold, never on a launch already there.
+  const folded = useRef(false);
+  if (snap === "toRail" || snap === "fromRail") folded.current = snap === "toRail";
+  // A fold the search field's blur left waiting on the pointer's release.
+  const pendingFold = useRef<() => void>(undefined);
+  const cancelFold = () => {
+    if (pendingFold.current) window.removeEventListener("pointerup", pendingFold.current);
+    pendingFold.current = undefined;
+  };
 
   const closeSearch = () => {
     onSearchOpenChange(false);
@@ -1087,7 +1158,8 @@ export default function Sidebar({
   useLayoutEffect(() => {
     const el = listRef.current;
     if (el) setNoGutter(el.offsetWidth === el.clientWidth);
-  }, [collapsed]);
+  // The rail unmounts the list too, so coming off it measures again.
+  }, [collapsed, iconOnly]);
   // Reset on the press, not on the rows landing: the request moves first, so
   // the window is already at its first step by the time the settled rows
   // arrive, and the read's commit draws one step rather than wherever the
@@ -1153,7 +1225,9 @@ export default function Sidebar({
     const observer = new ResizeObserver(openMore);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [more, settledLimit]);
+  // `iconOnly` too: the rail unmounts the list, and the one drawn after it
+  // needs an observer of its own.
+  }, [more, settledLimit, iconOnly]);
 
   // Keys for a run's own break and heading. Rows are keyed by session id
   // alone, as siblings across every run, so these may change freely.
@@ -1219,6 +1293,15 @@ export default function Sidebar({
           ? "Nothing settled yet."
           : "No tasks yet.";
 
+  // The filter is where project grouping went. With no project attached it has
+  // nothing to filter, so it goes — unless something it controls is still in
+  // force: a stored filter still narrows the list, and its toggles are the only
+  // way back from drafts or settled, `archivedShown` included since it lags the
+  // request until the read lands. The empty text goes with it, under the bots
+  // "No tasks yet." is a line about nothing.
+  const filterShown =
+    projects.length > 0 || projectFilter !== null || draftsShown || archivedRequested || archivedShown;
+
   const asideRef = useRef<HTMLElement>(null);
   // The step ticks for itself, in `App`, where the chords land too.
   useSwipe(asideRef, onStepProjectFilter);
@@ -1229,8 +1312,20 @@ export default function Sidebar({
 
   return (
     <aside
-      className="relative flex shrink-0 flex-col"
-      style={style}
+      className={cn(
+        "relative flex shrink-0 flex-col",
+        // While a rail snap springs, every child keeps the full width and the
+        // aside clips it, so rows slide under the edge instead of re-wrapping
+        // each frame. No edge mask: at rail width it covered the icons, which
+        // flashed back to full strength as the fold landed.
+        (snap === "toRail" || snap === "fromRail") &&
+          "overflow-hidden [&>:not([role=separator],[data-rail-foot],[data-rail-keep])]:w-60",
+        // What the rail drops fades before the narrowing edge could show it cut
+        // off behind the icons, and back in on the way out.
+        snap === "toRail" && "[&_[data-rail-hide]]:opacity-0 [&_[data-rail-hide]]:transition-opacity [&_[data-rail-hide]]:duration-100",
+        snap === "fromRail" && "[&_[data-rail-hide]]:animate-in [&_[data-rail-hide]]:fade-in [&_[data-rail-hide]]:duration-300",
+      )}
+      style={{ ...style, "--rail": towardRail } as React.CSSProperties}
       ref={asideRef}
     >
       {handle}
@@ -1243,34 +1338,53 @@ export default function Sidebar({
           brightened where a row's does not. The dark hover is named too, since
           `dark:hover:bg-muted/50` on the variant out-specifies an unprefixed
           `hover:` and `tailwind-merge` cannot fold the two together. */}
-      <div className="flex flex-col gap-px px-2 pt-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onNewSession}
-          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50"
-        >
-          <Plus />
-          New Task
-          <ShortcutKeys ids={["session.new"]} className="ml-auto" />
-        </Button>
+      {/* Kept to the aside's width through a snap, unlike the list below: its
+          icons and highlights track the moving edge rather than being cut off. */}
+      <div data-rail-keep className="flex flex-col gap-px px-2 pt-3">
+        <RailTip on={iconOnly} label="New Task" keys={["session.new"]}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onNewSession}
+            aria-label={iconOnly ? "New Task" : undefined}
+            className={STRIP}
+          >
+            <Plus />
+            {!iconOnly && <>
+              <span data-rail-hide className="flex flex-1 items-center">
+                New Task
+                <ShortcutKeys ids={["session.new"]} className="ml-auto" />
+              </span>
+            </>}
+          </Button>
+        </RailTip>
 
         {/* Under New Task, because it is the other way a task starts — an
             issue is a task somebody already wrote down. Drawn whether or not a
             tracker is connected: the page's own empty state is where connecting
             is offered, and a row that only appears once you have found the
             settings page can only be found by people who did not need it. */}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onOpenIssues}
-          data-active={issuesOpen || undefined}
-          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50 data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground"
-        >
-          <CircleDot />
-          Issues
-          <ShortcutKeys ids={["issues.open"]} className="ml-auto" />
-        </Button>
+        <RailTip on={iconOnly} label="Issues" keys={["issues.open"]}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onOpenIssues}
+            data-active={issuesOpen || undefined}
+            aria-label={iconOnly ? "Issues" : undefined}
+            className={cn(
+              STRIP,
+              "data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground",
+            )}
+          >
+            <CircleDot />
+            {!iconOnly && <>
+              <span data-rail-hide className="flex flex-1 items-center">
+                Issues
+                <ShortcutKeys ids={["issues.open"]} className="ml-auto" />
+              </span>
+            </>}
+          </Button>
+        </RailTip>
 
         {/* The button *becomes* the field, on the same row at the same height:
             the icon holds its place, the caret lands where the label was, and
@@ -1300,8 +1414,23 @@ export default function Sidebar({
               }}
               // Only where there is nothing to lose. Clicking away from a query
               // that is narrowing the list is not a request to drop it.
+              //
+              // Over the rail, closing folds it and moves everything under a
+              // press that took the focus, so the close waits for the release:
+              // the click then lands on what was pressed.
+              // Focus coming back takes it away, or a query typed after a Tab
+              // out would be closed over by the next click, still filtering.
+              onFocus={cancelFold}
               onBlur={() => {
-                if (!search) onSearchOpenChange(false);
+                if (search) return;
+                if (held !== SIDEBAR_RAIL) return onSearchOpenChange(false);
+                cancelFold();
+                const fold = () => {
+                  pendingFold.current = undefined;
+                  onSearchOpenChange(false);
+                };
+                pendingFold.current = fold;
+                window.addEventListener("pointerup", fold, { once: true });
               }}
               className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
             />
@@ -1317,33 +1446,43 @@ export default function Sidebar({
             <ShortcutKeys ids={["search"]} className="group-focus-within:hidden" />
           </div>
         ) : (
+          <RailTip on={iconOnly} label="Search" keys={["search"]}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onSearchOpenChange(true)}
+              aria-label={iconOnly ? "Search" : undefined}
+              className={STRIP}
+            >
+              <Search />
+              {!iconOnly && <>
+                <span data-rail-hide className="flex flex-1 items-center">
+                  Search
+                  <ShortcutKeys ids={["search"]} className="ml-auto" />
+                </span>
+              </>}
+            </Button>
+          </RailTip>
+        )}
+
+        <RailTip on={iconOnly} label="New bot">
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => onSearchOpenChange(true)}
-            className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50"
+            onClick={onNewBot}
+            aria-label={iconOnly ? "New bot" : undefined}
+            className={STRIP}
           >
-            <Search />
-            Search
-            <ShortcutKeys ids={["search"]} className="ml-auto" />
+            <MessageCirclePlus />
+            {!iconOnly && <span data-rail-hide>New bot</span>}
           </Button>
-        )}
-
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onNewBot}
-          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50"
-        >
-          <MessageCirclePlus />
-          New bot
-        </Button>
+        </RailTip>
       </div>
 
       {/* Above the project filter: a bot belongs to no project, it hands work
           to any of them. No heading — the face on a row is what says it is a
           bot. New bot sits in the strip above, beside the other ways in. */}
-      {bots.length > 0 && <div className="mt-4 flex flex-col gap-px px-2">
+      {bots.length > 0 && <div data-rail-keep className="mt-4 flex flex-col gap-px px-2">
         {bots.map(({ bot, session, preview }) => {
           const status = session ? (statusBySession[session.sessionId] ?? session.status) : "idle";
           return <BotRow
@@ -1355,15 +1494,19 @@ export default function Sidebar({
             status={status}
             unread={status === "completed" || (!!session && unreadWorking.has(session.sessionId))}
             asking={!!session && askingSessions.has(session.sessionId)}
-            active={!!session && session.sessionId === selectedSessionId}
+            active={(!!session && session.sessionId === selectedSessionId) || bot.id === newBotId}
             onOpen={() => onOpenBot?.(bot)}
             onDelete={() => onDeleteBot?.(bot)}
+            onEdit={() => onEditBot?.(bot)}
+            iconOnly={iconOnly}
           />;
         })}
       </div>}
 
-      {/* The filter is where project grouping went. */}
-      <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
+      {/* The rail carries no tasks: the top strip and the bots are all it
+          holds, and this spacer keeps its foot at the bottom. */}
+      {iconOnly ? <div className="flex-1" /> : <>
+      {filterShown && <div data-rail-hide className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
         <ProjectFilter
           projects={projects}
           value={projectFilter}
@@ -1413,12 +1556,13 @@ export default function Sidebar({
             </TooltipContent>
           </Tooltip>
         </div>
-      </div>
+      </div>}
 
       {/* With classic scrollbars the reserved gutter is the right-hand spacing,
           and the rows balance the track's extra width with `pr-0.5`. Overlay
           scrollbars reserve none, so the list takes `pr-2` to match above. */}
       <div
+        data-rail-hide
         ref={listRef}
         className={cn(
           "scrollbar-overlay flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pb-3 pl-2",
@@ -1430,7 +1574,8 @@ export default function Sidebar({
         onScroll={more ? openMore : undefined}
       >
         {runs.length === 0 ? (
-          <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
+          // A typed query still gets its answer: silence there reads as broken.
+          (filterShown || search.trim()) && <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
         ) : (
           runs.flatMap((group, index) => {
             // A project heading is drawn only where the list spans projects:
@@ -1534,7 +1679,6 @@ export default function Sidebar({
                       group.kind === "pinned" && depth > 0 && !item.pinned
                     }
                     onSelect={onSelect}
-                    onPrefetch={onPrefetch}
                     onDragStart={
                       !archivedShown
                         ? (e) => startSessionDrag(e, item.sessionId, item.title, onDropSession)
@@ -1564,6 +1708,7 @@ export default function Sidebar({
           />
         )}
       </div>
+      </>}
 
       {/* Outside the scroll container, unlike the shortcut hint above it: that
           is a one-time tip that has earned its way off screen, and this is an
@@ -1573,11 +1718,50 @@ export default function Sidebar({
         blocked={updateBlocked}
         manual={updateManual}
         onInstall={onInstallUpdate}
+        iconOnly={iconOnly}
       />
 
       {/* Under the update row, and last in the column: both are standing
           information, and this is the half nobody is waiting on. */}
-      {import.meta.env.DEV && <DevBadge />}
+      {import.meta.env.DEV && !iconOnly && <DevBadge />}
+
+      {/* Kept through an unfold so it can slide back out, laid over the full
+          sidebar's foot rather than pushing it up. */}
+      {(iconOnly || snap === "fromRail") && (
+        <div
+          data-rail-foot
+          className={cn(
+            "flex shrink-0 flex-col items-center gap-0.5 pb-3",
+            folded.current && "animate-in duration-200 fade-in slide-in-from-bottom-3 motion-reduce:animate-none",
+            !iconOnly &&
+              "pointer-events-none absolute bottom-0 left-0 w-14 animate-out fill-mode-forwards duration-200 fade-out slide-out-to-bottom-3 motion-reduce:hidden",
+          )}
+        >
+          {/* The floating cards land here: pinned bottom-left they would
+              cover the chat, the rail being narrower than any of them. */}
+          <div ref={iconOnly ? setRailSlot : undefined} className="flex flex-col items-center gap-0.5 empty:hidden" />
+          {/* The titlebar switcher's click, stepping to the next space, with
+              the one in force named in the tooltip. */}
+          {spaces.length > 0 && (
+            <RailTip on label={space ?? "All Spaces"}>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Space: ${space ?? "All Spaces"}`}
+                onClick={() => {
+                  const entries = spaceEntries(spaces);
+                  const at = Math.max(0, entries.indexOf(space));
+                  onSpaceChange(entries[(at + 1) % entries.length]);
+                }}
+                className="text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <Layers className="size-4" />
+              </Button>
+            </RailTip>
+          )}
+          <SettingsButton onOpen={onOpenSettings} />
+        </div>
+      )}
     </aside>
   );
 }
@@ -1769,8 +1953,12 @@ function BotRow({
   active,
   onOpen,
   onDelete,
+  onEdit,
+  iconOnly = false,
 }: {
   bot: Bot;
+  /// The rail: the face alone, the name in a tooltip.
+  iconOnly?: boolean;
   /// The chat's last reply and the replies since the reader last wrote.
   preview?: BotPreview;
   /// Its chat, for the jump digit; absent before the first message.
@@ -1783,27 +1971,35 @@ function BotRow({
   active: boolean;
   onOpen: () => void;
   onDelete: () => void;
+  onEdit: () => void;
 }) {
   const digit = useJumpDigit(sessionId ?? "");
   const [hovered, setHovered] = useState(false);
   const badge = asking ? "asking" : unread ? "unread" : null;
   const mask = badge === "asking" ? DOT_CUTOUT : badge === "unread" ? COUNT_CUTOUT : undefined;
-  // Before its first chat, Dray Bot's welcome is what its chat opens on.
-  const last = preview?.text || (!sessionId && bot.welcome);
+  // Before its first chat, Dray Bot's greeting is what its chat opens on.
+  const last = preview?.text || (!sessionId && greetingOf(bot).at(-1));
   const glimpse = last && previewLine(last);
   const offline = offlineLine(serverOfPath(bot.path));
 
   // StalledTasks' row layout, so a bot and its stalled tasks read alike.
+  // The tooltip's root sits outside the menu and its trigger inside, since
+  // `asChild` cannot pass a ref through a provider. Held shut off the rail.
   return (
+    <Tooltip open={iconOnly ? undefined : false}>
     <ContextMenu>
       <ContextMenuTrigger asChild>
+        <TooltipTrigger asChild>
         <button
           type="button"
           onClick={onOpen}
           onPointerEnter={() => setHovered(true)}
           onPointerLeave={() => setHovered(false)}
+          aria-label={iconOnly ? bot.name : undefined}
           className={cn(
-            "group relative flex w-full cursor-pointer items-center gap-2 rounded-md py-1 pr-[5px] pl-1 text-left",
+            "group relative flex w-full cursor-pointer items-center gap-2 rounded-md text-left",
+            // One height both ways, so a snap never moves the rows under it.
+            "h-11", iconOnly ? "justify-center px-1" : "pr-[5px] pl-1",
             "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
             active
               ? "bg-sidebar-accent text-sidebar-accent-foreground"
@@ -1840,8 +2036,11 @@ function BotRow({
                 {preview?.replies || ""}
               </span>
             )}
+            {iconOnly && digit && (
+              <Kbd className="absolute top-1/2 left-1/2 -translate-1/2">{digit}</Kbd>
+            )}
           </span>
-          <span className="flex min-w-0 flex-1 flex-col">
+          {!iconOnly && <span data-rail-hide className="flex min-w-0 flex-1 flex-col">
             <span className="relative flex items-baseline gap-2">
               <span
                 className={cn(
@@ -1877,15 +2076,21 @@ function BotRow({
             ) : (
               glimpse && <span className="truncate text-ui text-foreground/70">{glimpse}</span>
             )}
-          </span>
+          </span>}
         </button>
+        </TooltipTrigger>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-44">
+        <ContextMenuItem className="text-ui" onSelect={onEdit}>
+          Edit…
+        </ContextMenuItem>
         <ContextMenuItem className="text-ui text-destructive" onSelect={onDelete}>
           Delete bot…
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
+    <TooltipContent side="right">{bot.name}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -2452,10 +2657,6 @@ const RAIL_X = 12;
 const STEP = 12;
 const ELBOW = 10;
 
-/// How long the pointer rests on a row before its transcript is read ahead of
-/// the click. Long enough that sweeping down the list reads nothing.
-const PREFETCH_HOVER_MS = 100;
-
 /// A saved task, drawn as a session row with its created time. No mark says
 /// "draft": the drafts view is the only place one is drawn. No rail and no
 /// hover controls, since nothing has run. Delete sits on right-click, asking
@@ -2553,7 +2754,6 @@ function SessionRow({
   aside = false,
   marksLive = true,
   onSelect,
-  onPrefetch,
   onDragStart,
   nested = false,
   inheritsPin = false,
@@ -2589,7 +2789,6 @@ function SessionRow({
   onSelect: (sessionId: string) => void;
   /// Warms the row's transcript once the pointer has rested on it, so the click
   /// finds it loaded. Loads without selecting.
-  onPrefetch?: (sessionId: string) => void;
   /// Wires the row for dragging onto the transcript column. See `startSessionDrag`.
   onDragStart?: (e: React.PointerEvent<HTMLDivElement>) => void;
   /// This row has a parent in the same list, so 'Detach from parent' is a real
@@ -2619,8 +2818,7 @@ function SessionRow({
     if (active) ref.current?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
-  const hover = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(hover.current), []);
+  const prefetch = useHoverPrefetch(item.sessionId);
 
   // The rail this row elbows onto is its parent's, one step to the left of the
   // one it opens for its own children.
@@ -2686,12 +2884,12 @@ function SessionRow({
         role="button"
         tabIndex={0}
         onClick={() => void onSelect(item.sessionId)}
-        onPointerEnter={() => {
-          clearTimeout(hover.current);
-          hover.current = setTimeout(() => onPrefetch?.(item.sessionId), PREFETCH_HOVER_MS);
+        onPointerEnter={prefetch.onPointerEnter}
+        onPointerLeave={prefetch.onPointerLeave}
+        onPointerDown={(e) => {
+          prefetch.onPointerDown();
+          onDragStart?.(e);
         }}
-        onPointerLeave={() => clearTimeout(hover.current)}
-        onPointerDown={onDragStart}
         onKeyDown={(e) => {
           // Keys bubbling up from the hover buttons are theirs: taking Enter
           // here would cancel the button's own click and select the row.

@@ -20,7 +20,7 @@ type Lesson = { file: LearnedFile; before: string; after: string };
 
 const RULE: Lesson = {
   file: {
-    path: "INSTRUCTIONS.md",
+    path: "AGENTS.md",
     kind: "instructions",
     change: "changed",
     summary: "Check a sandbox's Claude login before forking it: an expired login fails every task started there",

@@ -62,6 +62,20 @@ pub struct SessionStatusEvent {
     pub modified: Option<String>,
 }
 
+/// Emitted as `session_serving` when the serving sweep's verdict on a session
+/// changes. Derived state like [`SessionStatusEvent`], never logged.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SessionServingEvent {
+    pub session_id: String,
+    /// The ports the session's background shells listen on, where those
+    /// servers are all it has left running: the turn is over and nothing will
+    /// wake the agent, so it waits on the reader. Empty otherwise. Holds for
+    /// the current task set alone; a new one drops it.
+    pub ports: Vec<u16>,
+}
+
 /// A prompt typed while a turn was running, held here until the turn reaches a
 /// point where handing it to the CLI costs nothing.
 ///
@@ -155,6 +169,24 @@ pub struct SendOutcome {
     pub issues: Vec<IssueRef>,
 }
 
+/// The model `harness` knows as `model`, from whichever table can name it. The
+/// two single-vendor harnesses have one written here; pi, fx, grok and Codex
+/// answer from what the machine last reported, so a model shipped after this
+/// build still spawns.
+///
+/// `None` is legal for pi alone and means "let pi decide" — its own settings
+/// already name a model, and Dray naming one it might have no key for is the
+/// worst possible first run.
+pub async fn model_spec(harness: Harness, model: &ModelId) -> Result<Option<Model>> {
+    Ok(match harness {
+        Harness::Pi => crate::harness::pi::models::find(model).await,
+        Harness::Fx => crate::harness::fx::models::find(model).await,
+        Harness::Grok => crate::harness::grok::models::find(model).await,
+        Harness::Codex => crate::harness::codex::models::find(model).await,
+        _ => Some(find_model(model).with_context(|| format!("unknown model {model}"))?),
+    })
+}
+
 /// Whether a send has to replace the child rather than write to it.
 ///
 /// A **setting change** waits for everything to be idle, background tasks
@@ -196,6 +228,10 @@ pub struct StatusTracker {
     status: SessionStatus,
     /// An `init` opened a model call that no `result` has closed yet.
     model_call_open: bool,
+    /// A prompt went to the child and its turn has not closed yet. A promptless
+    /// `init` never sets it, which is how [`Self::prompt_waiting`] tells the
+    /// two kinds of turn apart.
+    prompt_waiting: bool,
     /// The outstanding background tasks. Only whether the set is empty is read
     /// in anger — by `has_outstanding_work` and by the stranded-task sweep a
     /// dying child runs — and the ids are kept rather than a count because the
@@ -203,6 +239,14 @@ pub struct StatusTracker {
     /// that it is recorded as sent. The panel's per-task stop names an id off
     /// those same events, not off here.
     background_tasks: Vec<String>,
+    /// Every outstanding task is a shell, not a subagent: the precondition for
+    /// [`Self::serving_question`].
+    shells_only: bool,
+    /// The serving sweep's last published verdict for this task set.
+    serving: Vec<u16>,
+    /// Moves on every task set, so a sweep can tell the set it scanned for
+    /// from one that replaced it mid-scan.
+    tasks_gen: u64,
     /// Main-thread tool calls started and not yet finished. Not a status input —
     /// it decides whether an arriving prompt is written now or held.
     open_tool_calls: usize,
@@ -223,6 +267,7 @@ impl StatusTracker {
     /// The user sent a prompt; work is starting regardless of what stdout says.
     pub fn on_send(&mut self) -> Option<SessionStatus> {
         self.model_call_open = true;
+        self.prompt_waiting = true;
         self.epoch += 1;
         self.quiet_since = Some(Instant::now());
         self.set(SessionStatus::InProgress)
@@ -263,6 +308,7 @@ impl StatusTracker {
             // notice hanging until the reader clicked Stop.
             AgentEventPayload::TurnCompleted { auth_failed, .. } => {
                 self.model_call_open = false;
+                self.prompt_waiting = false;
                 self.epoch += 1;
                 self.quiet_since = Some(Instant::now());
                 self.auth_failed = *auth_failed;
@@ -272,6 +318,10 @@ impl StatusTracker {
             // and its own per-task Stop.
             AgentEventPayload::BackgroundTasksChanged { tasks } => {
                 self.background_tasks = tasks.iter().map(|t| t.task_id.clone()).collect();
+                self.shells_only = tasks.iter().all(|t| SHELL_TASKS.contains(&t.task_type.as_str()));
+                // Clients drop theirs on the same event, so the two never differ.
+                self.serving.clear();
+                self.tasks_gen += 1;
                 self.quiet_since = Some(Instant::now());
                 None
             }
@@ -309,6 +359,15 @@ impl StatusTracker {
         self.model_call_open
     }
 
+    /// Whether a prompt sent to the child is still waiting for the turn that
+    /// answers it. Read by Claude Code's read loop on a model-less task
+    /// notification turn: ahead of such a prompt its `result` is not the
+    /// prompt's and must not close it (#330); with none waiting it is the only
+    /// close the turn its `init` opened will ever get (#1227).
+    pub fn prompt_waiting(&self) -> bool {
+        self.prompt_waiting
+    }
+
     /// How long nothing has run, or `None` while anything does — background
     /// tasks included, since stopping the child would take them with it.
     pub fn idle_for(&self, now: Instant) -> Option<Duration> {
@@ -343,6 +402,26 @@ impl StatusTracker {
     /// against the word the frontend reads.
     pub fn status(&self) -> SessionStatus {
         self.status
+    }
+
+    /// What the serving sweep asks of this session, or `None` where the
+    /// question does not apply: a turn running, nothing in the background, or
+    /// a subagent among it — that one is the agent working.
+    pub fn serving_question(&self) -> Option<ServingAsk> {
+        let shells = self.background_tasks.len();
+        (!self.model_call_open && shells > 0 && self.shells_only)
+            .then_some(ServingAsk { shells, at: (self.epoch, self.tasks_gen) })
+    }
+
+    /// Records the sweep's verdict on `ask`, answering whether it moved. An
+    /// answer to an older ask is dropped: a turn or a task set came and went
+    /// during the scan, and what it found was said of something else.
+    pub fn set_serving(&mut self, ask: ServingAsk, ports: Vec<u16>) -> bool {
+        if self.serving_question() != Some(ask) || self.serving == ports {
+            return false;
+        }
+        self.serving = ports;
+        true
     }
 
     /// The outstanding background tasks — the latest reading, since the set is
@@ -386,6 +465,7 @@ impl StatusTracker {
     /// state the ending turn would have left had nothing been queued behind it.
     pub fn release_reserved_turn(&mut self) -> Option<SessionStatus> {
         self.model_call_open = false;
+        self.prompt_waiting = false;
         self.set(SessionStatus::Completed)
     }
 
@@ -622,6 +702,23 @@ pub async fn settle_dead_child(
     }
 }
 
+/// Task kinds that are a shell: Claude Code's `local_bash`, grok's `bash`.
+/// Named rather than "anything but a subagent", so a kind first seen tomorrow
+/// keeps its task working, which is today's reading.
+const SHELL_TASKS: &[&str] = &["local_bash", "bash", "shell"];
+
+/// One question the serving sweep asks: how many background shells must be
+/// found listening, and which turn and task set that was asked of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServingAsk {
+    pub shells: usize,
+    at: (u64, u64),
+}
+
+/// How often [`SessionManager::sweep_serving`] looks. A stall is two minutes,
+/// so a quarter minute late costs nothing.
+const SERVING_EVERY: Duration = Duration::from_secs(15);
+
 /// How long a child may sit with nothing running before [`SessionManager::reap_idle`]
 /// stops it.
 const IDLE_LIMIT: Duration = Duration::from_secs(15 * 60);
@@ -636,6 +733,22 @@ fn start_idle_sweep() {
             loop {
                 tick.tick().await;
                 manager().reap_idle(Instant::now()).await;
+            }
+        });
+    });
+}
+
+/// Starts the serving sweep once, with the first child, on the sink that child
+/// reports through: a process has the one.
+fn start_serving_sweep(app: &Sink) {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        let app = app.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(SERVING_EVERY);
+            loop {
+                tick.tick().await;
+                manager().sweep_serving(&app).await;
             }
         });
     });
@@ -804,6 +917,43 @@ impl SessionManager {
         }
     }
 
+    /// Asks of every session whose turn is over with only shells behind it
+    /// whether those shells are all servers, and tells clients where the
+    /// answer moved. One process scan covers every session, and none runs while
+    /// no session asks. A slot or tracker locked now is skipped, as
+    /// [`Self::reap_idle`] does: the next tick catches it.
+    async fn sweep_serving(&self, app: &Sink) {
+        let slots: Vec<(String, Slot)> =
+            self.sessions.lock().await.iter().map(|(id, s)| (id.clone(), s.clone())).collect();
+        let mut asks = Vec::new();
+        for (id, slot) in slots {
+            let Ok(guard) = slot.try_lock() else { continue };
+            let Some(session) = guard.as_ref() else { continue };
+            let Some(root) = session.child.id() else { continue };
+            let Ok(tracker) = session.status.try_lock() else { continue };
+            if let Some(ask) = tracker.serving_question() {
+                asks.push((id, session.status.clone(), root, ask));
+            }
+        }
+        if asks.is_empty() {
+            return;
+        }
+        let roots: Vec<(u32, usize)> = asks.iter().map(|(_, _, root, ask)| (*root, ask.shells)).collect();
+        let verdicts = tokio::task::spawn_blocking(move || crate::local_servers::serving(&roots))
+            .await
+            .unwrap_or_default();
+        for ((id, status, _, ask), ports) in asks.into_iter().zip(verdicts) {
+            let mut tracker = status.lock().await;
+            if !tracker.set_serving(ask, ports.clone()) {
+                continue;
+            }
+            drop(tracker);
+            if let Err(e) = app.emit("session_serving", &SessionServingEvent { session_id: id, ports }) {
+                eprintln!("[serving emit err] {e}");
+            }
+        }
+    }
+
     /// Takes the live child out, leaving the slot empty for the next send.
     async fn take(&self, id: &str) -> Option<Session> {
         self.existing(id).await?.lock().await.take()
@@ -875,24 +1025,7 @@ impl SessionManager {
         app: &Sink,
     ) -> Result<SendOutcome> {
         let _counted = Sending::enter().await;
-        // Resolved against whichever table can name it. The two single-vendor
-        // harnesses have one written here; pi's list is answered by the machine,
-        // so its models are looked up in what the probe last reported.
-        //
-        // `None` is legal for pi alone and means "let pi decide" — its own
-        // settings already name a model, and Dray naming one it might have no
-        // key for is the worst possible first run.
-        let model_spec = match harness {
-            Harness::Pi => crate::harness::pi::models::find(&model).await,
-            Harness::Fx => crate::harness::fx::models::find(&model).await,
-            // grok's too: its list rides the handshake, so a model xAI shipped
-            // after this build still spawns.
-            Harness::Grok => crate::harness::grok::models::find(&model).await,
-            // Codex's list is the machine's answer too now, with the table
-            // behind it — so a model shipped after this build still spawns.
-            Harness::Codex => crate::harness::codex::models::find(&model).await,
-            _ => Some(find_model(&model).with_context(|| format!("unknown model {model}"))?),
-        };
+        let model_spec = model_spec(harness, &model).await?;
 
         // A model belongs to exactly one harness, and the pair reaches here from
         // two places that each know only half of it — the composer's stored
@@ -906,8 +1039,11 @@ impl SessionManager {
         // searched what Codex reported *and* the table, where `runs_on`
         // knows only the table and would refuse a model newer than this
         // build.
+        // pi's own list is the authority on pi too, plugin providers included;
+        // `runs_on` is the fallback for a probe that has not answered.
         let runnable = match harness {
             Harness::Codex => model_spec.is_some(),
+            Harness::Pi => model_spec.is_some() || runs_on(&model, harness),
             _ => runs_on(&model, harness),
         };
 
@@ -1195,6 +1331,7 @@ impl SessionManager {
                     index_item: item,
                     events,
                     older_before: None,
+                    lite: false,
                 }),
                 queued: None,
             });
@@ -1443,12 +1580,20 @@ impl SessionManager {
                         });
                     }
 
-                    let queued = s.queue_msg(prompt, attachment_paths, issues, from, app).await;
-                    return Ok(SendOutcome {
-                        snapshot: None,
-                        queued: Some(queued),
-                        issues: linked,
-                    });
+                    // Re-read under the status lock: `turn_in_flight` above is
+                    // stale by every await since, and a turn that ended in
+                    // between has already run its flush. Queued then, the
+                    // prompt waited on a boundary that never came.
+                    if let Some(queued) = s
+                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone(), app)
+                        .await
+                    {
+                        return Ok(SendOutcome {
+                            snapshot: None,
+                            queued: Some(queued),
+                            issues: linked,
+                        });
+                    }
                 }
             }
 
@@ -1738,6 +1883,7 @@ impl SessionManager {
             index_item: item,
             events,
             older_before: None,
+            lite: false,
         })
     }
 
@@ -1750,6 +1896,39 @@ impl SessionManager {
     /// task held the session `in_progress` — the status follows the turn alone
     /// now, so that fan-out only killed dev servers the reader still wanted.
     /// Per-task stops stay available in the subagent panel for the narrower ask.
+    /// `dray session model` for a prompt already held behind a running turn.
+    /// That prompt opens the next turn but is flushed straight to the child,
+    /// never through `send_msg`, so the pick goes out now by the rule a prompt
+    /// queued now would take: live on Claude Code, deferred to the flush on fx.
+    /// An effort Claude Code cannot move in place waits for the next send.
+    ///
+    /// Stance and fast come off `item`, not the child: the queued send wrote
+    /// its own to the index, and on fx they are still pending beside the
+    /// model, so the child's would undo them.
+    pub async fn carry_pick_to_queue(&self, item: &SessionIndexItem, app: &Sink) -> Result<()> {
+        let session_id = item.session_id.as_str();
+        let (model, effort, mode, fast) = (&item.model, item.effort, item.permission_mode, item.fast);
+        let Some(slot) = self.sessions.lock().await.get(session_id).cloned() else {
+            return Ok(());
+        };
+        let mut guard = slot.lock().await;
+        let Some(s) = guard.as_mut() else { return Ok(()) };
+        if !s.status.lock().await.turn_in_flight() || s.queued.lock().await.is_empty() {
+            return Ok(());
+        }
+        let spec = model_spec(s.harness, model).await?;
+        match &s.stdin {
+            Transport::Fx(fx) => fx.defer_controls(DeferredControls { model: spec, effort, mode, fast }),
+            _ if s.harness == Harness::ClaudeCode => {
+                apply_live_controls(s, session_id, model, spec.as_ref(), effort, mode, fast, app).await?
+            }
+            // pi and grok steer a prompt into the running turn rather than
+            // holding it here, and so does Codex: nothing of theirs is queued.
+            _ => {}
+        }
+        Ok(())
+    }
+
     pub async fn interrupt(&self, session_id: &str, app: &Sink) -> Result<()> {
         // pi stops off its own desk, for `answer_questions`' reason and one
         // more: the optimistic row the composer draws for a new session puts
@@ -1859,7 +2038,12 @@ impl SessionManager {
     /// living at the project root while its files sat in a directory nothing
     /// pointed at any more.
     pub async fn remove_worktree(&self, session_id: &str) -> Result<SessionIndexItem> {
-        let (relocated, existed) = self.remove_tree(session_id).await?;
+        // A bot's task's sub-tasks outlive it, worktrees and all.
+        let with_children = match get_session_index_item(session_id).await? {
+            Some(item) => !crate::bots::keeps_children(&item).await,
+            None => true,
+        };
+        let (relocated, existed) = self.remove_tree(session_id, with_children).await?;
 
         // Reported here and not at the command, since only this side can tell a
         // deletion from a tidy-up — and only on the explicit route: `delete`
@@ -1875,7 +2059,7 @@ impl SessionManager {
 
     /// [`Self::remove_worktree`]'s work, answering whether the tree was still
     /// there.
-    async fn remove_tree(&self, session_id: &str) -> Result<(SessionIndexItem, bool)> {
+    async fn remove_tree(&self, session_id: &str, with_children: bool) -> Result<(SessionIndexItem, bool)> {
         let item = get_session_index_item(session_id)
             .await?
             .with_context(|| format!("no session {session_id}"))?;
@@ -1888,9 +2072,13 @@ impl SessionManager {
         // screen offers to remove its tree: it goes with this one. First, and a
         // refusal stops here — this session's own button is then still there to
         // retry with, where a child failing after it had nowhere to be retried.
-        for child in crate::store::hidden_children(session_id).await? {
+        let children = match with_children {
+            true => crate::store::hidden_children(session_id).await?,
+            false => Vec::new(),
+        };
+        for child in children {
             if child.worktree_name.is_some() {
-                Box::pin(self.remove_tree(&child.session_id)).await.with_context(|| {
+                Box::pin(self.remove_tree(&child.session_id, true)).await.with_context(|| {
                     format!("could not remove the worktree of hidden session \"{}\"", child.title)
                 })?;
             }
@@ -1994,12 +2182,19 @@ impl SessionManager {
     ///
     /// The child goes first and its lock is released before the disk work, so a
     /// dying process can't append one last event to a file we just removed.
-    pub async fn delete(&self, session_id: &str) -> Result<bool> {
+    ///
+    /// `with_children` false leaves its hidden children be: a bot's task's
+    /// sub-tasks outlive it ([`crate::bots::keeps_children`]).
+    pub async fn delete(&self, session_id: &str, with_children: bool) -> Result<bool> {
         // A hidden child is listed nowhere on screen, so it goes with
         // it. Here rather than in the frontend, which holds one side of the
         // settled split and can miss a child sitting on the other.
-        for child in crate::store::hidden_children(session_id).await? {
-            Box::pin(self.delete(&child.session_id)).await?;
+        let children = match with_children {
+            true => crate::store::hidden_children(session_id).await?,
+            false => Vec::new(),
+        };
+        for child in children {
+            Box::pin(self.delete(&child.session_id, true)).await?;
         }
 
         self.settle(session_id).await?;
@@ -2218,6 +2413,7 @@ impl Session {
         app: &Sink,
     ) -> Result<Session> {
         start_idle_sweep();
+        start_serving_sweep(app);
         match harness {
             Harness::ClaudeCode => {
                 claude_code::init(
@@ -2456,8 +2652,8 @@ impl Session {
         message
     }
 
-    /// fx alone, and the whole of what keeps its two-prompt race shut. Decides,
-    /// **under the status lock**, whether this prompt joins the running turn —
+    /// What keeps a prompt from being queued behind a turn that already ended.
+    /// Decides, **under the status lock**, whether this prompt joins the running turn —
     /// queued for the turn-end flush — or finds the turn already over and must
     /// start a fresh one. `Some` was queued; `None` means the turn ended and
     /// the caller delivers now.
@@ -2470,8 +2666,10 @@ impl Session {
     /// later would — and a completion can slip between, marking the turn done
     /// with a prompt queued behind it and no reservation, which is the race.
     ///
-    /// fx has no injection point, so a prompt for a live turn only ever waits
-    /// here for its end; there is no write-through path to take.
+    /// For fx it is the whole of what keeps its two-prompt race shut: fx has no
+    /// injection point, so a prompt for a live turn only ever waits here for
+    /// its end. Claude Code's turn-end flush runs after the tracker closes the
+    /// turn, so a prompt queued here while it is still open is drained by it.
     async fn queue_if_in_flight(
         &self,
         prompt: &str,
@@ -3279,16 +3477,17 @@ async fn deliver_prompt(
 
     // A bot whose chat opens on a welcome (Dray Bot) has it written down as
     // the chat's first message, ahead of the prompt that started the session,
-    // so the chat reads after a restart as it did before the first send. Only
-    // logged: the agent is not given it.
-    if let Some(welcome) = crate::bots::take_welcome(session_id) {
+    // so the chat reads after a restart as it did before the first send. One
+    // event per message, each its own bubble. The agent is handed the same
+    // words in the hidden lead-in, never as a turn of its own.
+    for text in crate::bots::take_welcome(session_id).unwrap_or_default() {
         let event = AgentEvent::mint(
             session_id.to_string(),
             harness,
             seq.fetch_add(1, Relaxed),
             None,
             None,
-            AgentEventPayload::AssistantText { block: None, text: welcome },
+            AgentEventPayload::AssistantText { block: None, text },
         );
         app.emit("agent_event", &event)?;
         append_session_event(session_id, event).await?;
@@ -3546,6 +3745,7 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
     // the parent's session, which must not hold this one's read loop up.
     let mut silent_bot_turn = false;
     let mut bot_turn = None;
+    let mut ask_name = false;
     if agent_event.subagent.is_none() {
         match &agent_event.payload {
             AgentEventPayload::AssistantText { text, .. } if crate::events::has_text(text) => {
@@ -3566,9 +3766,10 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                     && *status == TurnStatus::Success
                     && crate::bots::bot_at(ctx.session_cwd).await.is_some();
                 report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
+                ask_name = crate::bots::take_name_ask(ctx.session_id) && *status == TurnStatus::Success;
                 // Awaited, not spawned: the queued flush below would start the
                 // next turn, which could overwrite this one's notes unsaved.
-                bot_turn = crate::bots::commit_turn(ctx.session_cwd, notes).await;
+                bot_turn = crate::bots::commit_turn(ctx.session_cwd, notes, app).await;
             }
             _ => {}
         }
@@ -3695,6 +3896,19 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
 
     if let Err(err) = append_session_event(ctx.session_id, agent_event).await {
         eprintln!("[write err] {err}");
+    }
+
+    // A new bot's greeting, then Dray's question for the user's name as a
+    // message of its own (#1076), ahead of anything the turn learned.
+    if ask_name {
+        let text = crate::bots::ASK_NAME.to_string();
+        let payload = AgentEventPayload::AssistantText { block: None, text };
+        let seq = ctx.flush_seq.fetch_add(1, Relaxed);
+        let event = AgentEvent::mint(ctx.session_id.to_string(), ctx.harness, seq, None, None, payload);
+        app.emit("agent_event", &event).ok();
+        if let Err(err) = append_session_event(ctx.session_id, event).await {
+            eprintln!("[name ask write err] {err}");
+        }
     }
 
     // After the turn's close in the log, so its "Learned" rows draw under the
@@ -4408,6 +4622,32 @@ mod tests {
         assert_eq!(shown.lock().unwrap().last().unwrap(), &serde_json::json!([]));
     }
 
+    /// The send path read the turn as running, then awaited long enough for it
+    /// to end and flush an empty queue. Queued now, the prompt would wait on a
+    /// boundary already past, so the re-read under the lock must refuse it and
+    /// leave the queue empty for the direct send. While the turn still runs it
+    /// queues, and the turn-end flush that follows drains it.
+    #[tokio::test]
+    async fn a_prompt_is_never_queued_behind_a_turn_that_ended() {
+        let manager = SessionManager::default();
+        let mut running = StatusTracker::default();
+        running.on_send();
+        let slot = child_with(&manager, "s", running).await;
+        let sink = Sink::new(|_, _| {});
+        let guard = slot.lock().await;
+        let session = guard.as_ref().unwrap();
+
+        let stale = session.status.lock().await.turn_in_flight();
+        assert!(stale, "the send's first read sees the turn running");
+        assert!(session.queue_if_in_flight("early", &[], &[], None, &sink).await.is_some());
+        assert_eq!(session.queued.lock().await.len(), 1, "held for the turn-end flush");
+        session.queued.lock().await.clear();
+
+        session.status.lock().await.on_event(&turn_completed());
+        assert!(session.queue_if_in_flight("late", &[], &[], None, &sink).await.is_none());
+        assert!(session.queued.lock().await.is_empty(), "nothing left for a flush that already ran");
+    }
+
     /// Only a child with nothing running and nothing waiting on it is stopped,
     /// and its slot left empty for the next send to resume into.
     #[tokio::test]
@@ -4771,6 +5011,59 @@ mod tests {
     /// never end, and the CLI's main thread is idle meanwhile (verified against
     /// v2.1.232, a prompt written in this state is answered in under two
     /// seconds).
+    /// Serving is asked only of a finished turn with shells alone behind it,
+    /// and a moved task set forgets the last answer.
+    #[test]
+    fn serving_is_asked_of_shells_behind_a_finished_turn() {
+        let task = |id: &str, kind: &str| crate::events::BackgroundTask {
+            task_id: id.to_string(),
+            task_type: kind.to_string(),
+            description: String::new(),
+        };
+        let mut tracker = StatusTracker::default();
+        tracker.on_send();
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged { tasks: vec![task("b1", "local_bash")] });
+        assert_eq!(tracker.serving_question(), None, "the turn is still running");
+        tracker.on_event(&turn_completed());
+        let ask = tracker.serving_question().unwrap();
+        assert_eq!(ask.shells, 1);
+        assert!(tracker.set_serving(ask, vec![1420]));
+        assert!(!tracker.set_serving(ask, vec![1420]), "the same answer is no news");
+
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged {
+            tasks: vec![task("b1", "local_bash"), task("a1", "local_agent")],
+        });
+        assert_eq!(tracker.serving_question(), None, "a subagent is the agent working");
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged { tasks: vec![task("b1", "local_bash")] });
+        let ask = tracker.serving_question().unwrap();
+        assert!(tracker.set_serving(ask, vec![1420]), "the moved set dropped the old answer");
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged { tasks: vec![] });
+        assert_eq!(tracker.serving_question(), None);
+    }
+
+    /// A scan answers the set it was asked of. A turn that adds a build and
+    /// ends while the scan runs leaves the same question shape behind, and the
+    /// old answer must not land on it.
+    #[test]
+    fn a_verdict_for_a_replaced_task_set_is_dropped() {
+        let shell = |id: &str| crate::events::BackgroundTask {
+            task_id: id.to_string(),
+            task_type: "local_bash".to_string(),
+            description: String::new(),
+        };
+        let mut tracker = StatusTracker::default();
+        tracker.on_send();
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged { tasks: vec![shell("dev")] });
+        tracker.on_event(&turn_completed());
+        let ask = tracker.serving_question().unwrap();
+
+        tracker.on_send();
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged { tasks: vec![shell("build")] });
+        tracker.on_event(&turn_completed());
+        assert_eq!(tracker.serving_question().map(|a| a.shells), Some(1));
+        assert!(!tracker.set_serving(ask, vec![5173]), "said of the dev server, not the build");
+    }
+
     #[test]
     fn a_background_task_holds_the_child_but_not_the_turn() {
         let mut tracker = StatusTracker::default();

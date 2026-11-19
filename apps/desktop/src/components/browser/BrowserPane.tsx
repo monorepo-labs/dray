@@ -3,47 +3,42 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
+  Clock,
   Copy,
   Bug,
   Folder,
   ExternalLink,
   Globe,
-  Maximize2,
-  Minimize2,
-  Plus,
   RotateCcw,
   RotateCw,
+  Server,
   Share2,
   Smartphone,
   SquareDashedMousePointer,
   Trash2,
+  Unplug,
   X,
 } from "lucide-react";
 import { DocumentPlusIcon } from "@heroicons/react/16/solid";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
-import AgentBeam from "@/components/browser/AgentBeam";
+import BotAvatar from "@/components/BotAvatar";
 import Favicon, { hostOf } from "@/components/browser/Favicon";
-import GlobeFilledIcon from "@/components/icons/GlobeFilledIcon";
 import RecordingNotice from "@/components/browser/RecordingNotice";
 import { useTurnNewTab, type TurnKind } from "@/components/layout/ViewTabs";
-import ShortcutKeys from "@/components/ShortcutKeys";
-import TabMenu from "@/components/browser/TabMenu";
-import { ContextMenuTrigger } from "@/components/ui/context-menu";
 import Spinner from "@/components/ui/spinner";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopied } from "@/hooks/useCopied";
-import { useDragReorder } from "@/hooks/useDragReorder";
 import {
-  activateTab,
+  claimPin,
   claimPresenter,
+  pinStillPainted,
+  releasePin,
+  usePinStill,
   releaseAfterPaint,
-  closeTab,
   downloadChromium,
   listLocalServers,
-  moveTab,
   navigate,
   normalizeUrl,
   openDevTools,
@@ -51,18 +46,15 @@ import {
   openServer,
   shareReady,
   shareServer,
+  stoppedServer,
   stopShare,
   trackBrowserOpen,
   pickElement,
   removeCustomDevice,
   saveCustomDevice,
-  setPendingTab,
   setUrlDraft,
   useOpeningUrl,
-  activateBlankTab,
-  closeBlankTab,
   useBlankTabs,
-  useParkedTabs,
   setResponsive,
   useOpenError,
   useResponsive,
@@ -85,16 +77,19 @@ import {
   type BrowserTab,
   type Device,
   type LocalServer,
+  type StoppedServer,
   type Viewport,
 } from "@/lib/browser";
+import { seededAvatar } from "@/lib/botAvatar";
 import { chromiumBusy, chromiumPercent, describeChromium } from "@/lib/chromium";
 import { bareUrl, matchHistory, type BrowserVisit } from "@/lib/history";
 import { useWindowFocused } from "@/lib/focus";
+import { sendToTask } from "@/lib/sendToTask";
 import { serverName, useServers } from "@/lib/servers";
-import { LOCAL, serverOfSession } from "@/lib/transport";
+import { LOCAL, serverOfPath, serverOfSession } from "@/lib/transport";
 import { zoomLevel } from "@/lib/zoom";
 import { cn } from "@/lib/utils";
-import type { ChromiumStatus } from "@/types/events";
+import type { ChromiumStatus, SessionIndexItem } from "@/types/events";
 
 /// The element picker is built and parked: it works, but what it drops into
 /// the composer wants a screenshot beside it before it is worth a button.
@@ -128,60 +123,78 @@ function useHistory(sessionId: string, when: boolean): BrowserVisit[] {
   return read?.sessionId === sessionId ? read.visits : [];
 }
 
-/// The session's browser: tab strip, URL bar, navigation, and the page.
-///
-/// Two mounts of one component. The right panel's Browser tab is where it
-/// lives; the main column's is the full view, reached by the expand button,
-/// and while that is open the panel says so instead of drawing a second copy.
+/// The session's browser: URL bar, navigation, and the page. Its tabs are
+/// the titlebar's own row (`ViewTabs`).
 ///
 /// The page is a native view Chromium draws into the window above the
 /// webview; nothing here renders it. The stage below reports its rect and
-/// Rust moves the view onto it. The full view outranks the panel, so should
-/// both ever be on screen the page lands in the full view.
+/// Rust moves the view onto it.
 export default function BrowserPane({
   sessionId,
   active,
-  mode,
-  fullOpen = false,
-  onExpand,
-  onCollapse,
+  tab,
+  onClose,
+  tasks,
+  own,
 }: {
   sessionId: string;
   active: boolean;
-  mode: "panel" | "full";
-  /// The full view is showing, so the panel mount stands aside.
-  fullOpen?: boolean;
-  onExpand?: () => void;
-  onCollapse?: () => void;
+  /// A bot's tasks, where this is the bot's browser: their servers open here.
+  tasks?: readonly SessionIndexItem[];
+  /// The browser's own session, asked to restart a server it ran.
+  own?: SessionIndexItem;
+  /// A split pane's one tab, drawn whatever the strip has active. Such a
+  /// pane has no device sizes: those are the session's, and its main view's.
+  tab?: number;
+  /// A split pane's close, at the URL bar's far end: the pane has no header.
+  onClose?: () => void;
 }) {
+  const pinned = tab !== undefined;
   const tabs = useBrowserTabs(sessionId) ?? [];
-  const pending = usePendingTab(sessionId);
-  const current = pending ? null : (tabs.find((t) => t.active) ?? null);
-  const viewport = useViewport(sessionId);
+  const pending = usePendingTab(sessionId) && !pinned;
+  const current = pinned
+    ? (tabs.find((t) => t.id === tab) ?? null)
+    : pending
+      ? null
+      : (tabs.find((t) => t.active) ?? null);
+  const sessionViewport = useViewport(sessionId);
+  const viewport = pinned ? null : sessionViewport;
   // Responsive with no size typed is a flag; with one, it is a viewport.
-  const responsive = useResponsive(sessionId) || viewport?.preset === "responsive";
-  const snapshot = useBrowserSnapshot(sessionId);
-  const recorded = useRecordedTab(sessionId);
+  const sessionResponsive = useResponsive(sessionId);
+  const responsive = !pinned && (sessionResponsive || viewport?.preset === "responsive");
   const key = useId();
+  const sessionSnapshot = useBrowserSnapshot(sessionId);
+  const pinStill = usePinStill(key);
+  const snapshot: BrowserSnapshot | null = pinned
+    ? pinStill?.url
+      ? { sessionId, url: pinStill.url }
+      : null
+    : sessionSnapshot;
+  const onSnapshotPainted = (of: BrowserSnapshot) =>
+    pinned ? pinStill && pinStillPainted(key, pinStill) : snapshotPainted(of);
+  const recorded = useRecordedTab(sessionId);
   const stageRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
-  const standingAside = mode === "panel" && fullOpen;
   // The empty state stands in for the page: nothing open, or a new tab
   // waiting for its first URL.
   const empty = !current;
+  // A dev server gone from under the tab: our page stands in for Chromium's.
+  const stopped = current ? stoppedServer(current, sessionId) : null;
+  const hidden = empty || stopped !== null;
 
   useEffect(() => {
     const stage = stageRef.current;
-    if (!active || standingAside || !stage || empty) {
-      releaseAfterPaint(key);
+    const release = () => (pinned ? releasePin(key) : releaseAfterPaint(key));
+    if (!active || !stage || hidden) {
+      release();
       return;
     }
-    const priority = mode === "full" ? 2 : 1;
     // The device frame is the page when one is set; the native view cannot
     // be clipped by the DOM, so the frame is sized to fit the stage below.
     const report = () => {
-      const target = frameRef.current ?? stage;
-      claimPresenter(key, { priority, sessionId, rect: target.getBoundingClientRect() });
+      const rect = (frameRef.current ?? stage).getBoundingClientRect();
+      if (tab !== undefined) claimPin(key, { sessionId, tab, rect });
+      else claimPresenter(key, { priority: 2, sessionId, rect });
     };
     report();
     const observer = new ResizeObserver(report);
@@ -196,9 +209,9 @@ export default function BrowserPane({
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", report);
-      releaseAfterPaint(key);
+      release();
     };
-  }, [sessionId, key, active, mode, standingAside, empty, viewport]);
+  }, [sessionId, key, active, hidden, viewport, pinned, tab]);
 
   // The page's size in responsive mode, which is what Save keeps. In page
   // pixels: the view is placed in window points, so the app's own zoom
@@ -216,33 +229,19 @@ export default function BrowserPane({
     const observer = new ResizeObserver(read);
     observer.observe(stage);
     return () => observer.disconnect();
-  }, [standingAside]);
-
-  if (standingAside) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center text-ui text-muted-foreground">
-        <span>Open in the full view.</span>
-        {onCollapse && (
-          <Button variant="outline" size="sm" onClick={onCollapse}>
-            Bring it back here
-          </Button>
-        )}
-      </div>
-    );
-  }
+  }, []);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <Chrome
         sessionId={sessionId}
-        tabs={tabs}
-        current={current}
+        // Chromium's error page reports its own colour, which ours is not.
+        current={stopped && current ? { ...current, background: null } : current}
         pending={pending}
-        mode={mode}
-        onExpand={onExpand}
-        onCollapse={onCollapse}
+        tab={tab}
+        onClose={onClose}
       />
-      {!empty &&
+      {!hidden &&
         (responsive ? (
           <SaveSizeBar key={sessionId} sessionId={sessionId} size={viewport ?? room} />
         ) : (
@@ -257,11 +256,26 @@ export default function BrowserPane({
           // showing is the sheet the next view sits on, not a flash of the
           // page colour under it.
           "relative min-h-0 flex-1",
-          viewport && !empty && "flex items-start justify-center overflow-hidden bg-surface-raised p-3",
+          viewport && !hidden && "flex items-start justify-center overflow-hidden bg-surface-raised p-3",
         )}
       >
-        {empty ? (
-          <EmptyState sessionId={sessionId} active={active} turnable={mode === "full"} />
+        {empty && pinned ? (
+          <div className="flex h-full items-center justify-center text-ui text-muted-foreground">
+            This page was closed.
+          </div>
+        ) : empty ? (
+          <EmptyState sessionId={sessionId} active={active} tasks={tasks} />
+        ) : stopped ? (
+          // Keyed on the tab, so another tab's ask in flight never shows here.
+          <StoppedPage
+            key={`${sessionId}:${current!.id}`}
+            sessionId={sessionId}
+            active={active}
+            tasks={tasks}
+            own={own}
+            stopped={stopped}
+            tab={tab}
+          />
         ) : viewport ? (
           // Clamped to the stage on both axes rather than scrolled or scaled:
           // the page is a native view the DOM can neither clip nor shrink,
@@ -276,10 +290,10 @@ export default function BrowserPane({
               height: `min(${viewport.height / zoomLevel()}px, 100%)`,
             }}
           >
-            <Snapshot of={snapshot} />
+            <Snapshot of={snapshot} onPainted={onSnapshotPainted} />
           </div>
         ) : (
-          <Snapshot of={snapshot} />
+          <Snapshot of={snapshot} onPainted={onSnapshotPainted} />
         )}
         {current && current.id === recorded && <RecordingNotice since={recordingStart(sessionId)} />}
       </div>
@@ -297,7 +311,7 @@ export default function BrowserPane({
 /// construction and anything drawn on top is a flash where there was none.
 /// A screenshot is not an event the reader has to be told about — they
 /// asked for it, and the file lands in the transcript.
-function Snapshot({ of }: { of: BrowserSnapshot | null }) {
+function Snapshot({ of, onPainted }: { of: BrowserSnapshot | null; onPainted: (of: BrowserSnapshot) => void }) {
   if (!of?.url) return null;
   return (
     <img
@@ -308,7 +322,7 @@ function Snapshot({ of }: { of: BrowserSnapshot | null }) {
         void e.currentTarget
           .decode()
           .catch(() => undefined)
-          .then(() => snapshotPainted(of));
+          .then(() => onPainted(of));
       }}
     />
   );
@@ -346,53 +360,39 @@ function LoadBar({ loading }: { loading: boolean }) {
   );
 }
 
-/// Tab strip and URL bar, coloured the way Chrome does it: the strip takes
-/// the panel's own surface, the active tab and toolbar share the card, and
-/// the URL field is cut into it, so which tab the bar belongs to is read
-/// from colour alone. Palette rungs, never `--muted` or `--surface-well`:
+/// The URL bar, coloured the way Chrome does it: the toolbar takes the card,
+/// or the page's own colour, and the URL field is cut into it. Palette rungs, never `--muted` or `--surface-well`:
 /// those are washes with no hue, and in light mode they drew a grey bar
 /// across a tinted page. The field's rung differs by mode because the ramp
 /// does: `--surface-raised` is a clear step below the card in light and
 /// all but the same colour in dark, where `--background` is the step.
 function Chrome({
   sessionId,
-  tabs,
   current,
   pending,
-  mode,
-  onExpand,
-  onCollapse,
+  tab,
+  onClose,
 }: {
   sessionId: string;
-  tabs: BrowserTab[];
   current: BrowserTab | null;
   pending: boolean;
-  mode: "panel" | "full";
-  onExpand?: () => void;
-  onCollapse?: () => void;
+  /// A split pane's tab: every control acts on it, and the session-wide ones
+  /// (picker, device sizes) are left to the main view.
+  tab?: number;
+  onClose?: () => void;
 }) {
+  const pinned = tab !== undefined;
   const openError = useOpenError(sessionId);
   const inputRef = useRef<HTMLInputElement>(null);
   const picking = usePicking(sessionId);
-  // Only the recorded tab is held, and only from closing: the agent drives its
-  // own tab (`DRIVEN`), so the reader switching tabs moves nothing it films.
-  const recorded = useRecordedTab(sessionId);
   const opening = useOpeningUrl(sessionId);
   const url = current?.url ?? opening ?? "";
   const loading = current ? current.loading : opening !== null;
   const blanks = useBlankTabs(sessionId);
-  const parkedPages = useParkedTabs(sessionId);
-  const draftKey = `${sessionId}:${blanks.active !== null ? `blank:${blanks.active}` : `page:${current?.id}`}`;
+  const draftKey = `${sessionId}:${blanks.active !== null && !pinned ? `blank:${blanks.active}` : `page:${current?.id}`}`;
   // Per tab, as a browser's are: each new tab keeps what was typed into it.
   const draft = useUrlDraft(draftKey);
   const setDraft = (value: string | null) => setUrlDraft(draftKey, value);
-  const reorder = useDragReorder(
-    tabs,
-    (tab) => tab.id,
-    (tab, _delta, to) => moveTab(sessionId, tab.id, to),
-    "x",
-  );
-
   // A new tab is for typing into.
   useEffect(() => {
     if (pending) inputRef.current?.focus();
@@ -416,97 +416,13 @@ function Chrome({
   const open = (raw: string, newTab: boolean) => {
     const target = normalizeUrl(raw);
     if (!target) return;
-    void openInBrowser(sessionId, target, newTab, blanks.active)
+    void (pinned ? openInBrowser(sessionId, target, false, null, tab) : openInBrowser(sessionId, target, newTab, blanks.active))
       .then(() => trackBrowserOpen(target))
       .catch(() => undefined);
   };
 
-  const newTab = () => {
-    setPendingTab(sessionId, true);
-  };
-
-  const swap = mode === "panel" ? onExpand : onCollapse;
-
   return (
     <div className="shrink-0">
-      {/* The full view's tabs are the titlebar's own row (`ViewTabs`). */}
-      {mode === "panel" && (tabs.length > 0 || blanks.ids.length > 0) && (
-        // Scrolls, but draws no bar: a strip of tabs is read by its tabs, and
-        // a bar under them takes the height the tabs' own bottom edge needs.
-        <div
-          ref={reorder.list}
-          className="flex h-7.5 items-end gap-1 overflow-x-auto bg-sidebar px-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-        >
-          {reorder.shown.map((tab, i) => (
-            <TabButton
-              key={tab.id}
-              onPointerDown={(e) => reorder.start(e, i)}
-              transform={reorder.offset(i)}
-              held={reorder.drag?.from === i}
-              gliding={!!reorder.drag && reorder.drag.from !== i}
-              active={tab.active && !pending}
-              // The active tab joins the URL row, so it wears the same colour.
-              paint={tab.active && !pending && tab.background ? tint(tab.background) : undefined}
-              title={tab.error ? `${tab.error} — ${tab.url}` : tab.url}
-              icon={<Favicon tab={tab} />}
-              overlay={<AgentBeam tab={tab.id} top />}
-              label={tab.error ? "Can't reach page" : tab.title || hostOf(tab.url)}
-              locked={tab.id === recorded}
-              onPick={() => {
-                setPendingTab(sessionId, false);
-                if (!tab.active) void activateTab(sessionId, tab.id);
-              }}
-              onClose={() => void closeTab(sessionId, tab.id)}
-              onDuplicate={
-                tab.url
-                  ? () => {
-                      setPendingTab(sessionId, false);
-                      void openInBrowser(sessionId, tab.url, true).catch(() => undefined);
-                    }
-                  : undefined
-              }
-            />
-          ))}
-          {blanks.ids.map((id) => (
-            <TabButton
-              key={`blank:${id}`}
-              active={blanks.active === id}
-              // No page under it, so no fill: the URL row it joins is bare too.
-              paint={{ ["--card" as string]: "transparent" }}
-              title={parkedPages[id]?.url ?? "New tab"}
-              icon={
-                parkedPages[id] ? (
-                  <Favicon tab={parkedPages[id]} />
-                ) : (
-                  <GlobeFilledIcon className="size-4 shrink-0 text-muted-foreground" />
-                )
-              }
-              label={parkedPages[id] ? parkedPages[id].title || hostOf(parkedPages[id].url) : "New tab"}
-              onPick={() =>
-                blanks.active === id ? inputRef.current?.focus() : activateBlankTab(sessionId, id)
-              }
-              onClose={() => closeBlankTab(sessionId, id)}
-            />
-          ))}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="mb-0.5 shrink-0"
-                aria-label="New tab"
-                onClick={newTab}
-              >
-                <Plus className="size-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side={TIP_SIDE}>
-              New tab
-              <ShortcutKeys ids={["browser.newTab"]} />
-            </TooltipContent>
-          </Tooltip>
-        </div>
-      )}
       {/* The page's own colour where it has reported one, the way a browser
           tints its toolbar; bare with no page at all. */}
       <div
@@ -528,7 +444,7 @@ function Chrome({
           className={TOOL_BTN}
           aria-label="Back"
           disabled={!current?.canGoBack}
-          onClick={() => void navigate(sessionId, "back")}
+          onClick={() => void navigate(sessionId, "back", tab)}
         >
           <ArrowLeft className="size-3.5" />
         </Button>
@@ -538,7 +454,7 @@ function Chrome({
           className={TOOL_BTN}
           aria-label="Forward"
           disabled={!current?.canGoForward}
-          onClick={() => void navigate(sessionId, "forward")}
+          onClick={() => void navigate(sessionId, "forward", tab)}
         >
           <ArrowRight className="size-3.5" />
         </Button>
@@ -552,6 +468,7 @@ function Chrome({
             void navigate(
               sessionId,
               current?.loading ? "stop" : e.shiftKey ? "hard_reload" : "reload",
+              tab,
             )
           }
         >
@@ -649,7 +566,7 @@ function Chrome({
             </ul>
           )}
         </form>
-        {PICKER && (
+        {PICKER && !pinned && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -669,158 +586,38 @@ function Chrome({
             </TooltipContent>
           </Tooltip>
         )}
-        <DeviceMenu sessionId={sessionId} disabled={!current} />
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className={TOOL_BTN}
-              aria-label="Developer tools"
-              disabled={!current}
-              onClick={() => void openDevTools(sessionId)}
-            >
-              <Bug className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side={TIP_SIDE}>
-            Developer tools
-            <KbdGroup>
-              <Kbd>⌥</Kbd>
-              <Kbd>⌘</Kbd>
-              <Kbd>I</Kbd>
-            </KbdGroup>
-          </TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className={TOOL_BTN}
-              aria-label="Open in system browser"
-              disabled={!current}
-              onClick={() => void openUrl(url).catch(console.error)}
-            >
-              <ExternalLink className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side={TIP_SIDE}>Open in system browser</TooltipContent>
-        </Tooltip>
-        {swap && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className={TOOL_BTN}
-                onClick={swap}
-                aria-label={mode === "panel" ? "Open full view" : "Back to the panel"}
-              >
-                {mode === "panel" ? <Maximize2 className="size-3.5" /> : <Minimize2 className="size-3.5" />}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side={TIP_SIDE}>
-              {mode === "panel" ? "Open full view" : "Back to the panel"}
-            </TooltipContent>
-          </Tooltip>
+        {!pinned && <DeviceMenu sessionId={sessionId} disabled={!current} />}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={TOOL_BTN}
+          aria-label="Developer tools"
+          disabled={!current}
+          onClick={() => void openDevTools(sessionId, tab)}
+        >
+          <Bug className="size-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={TOOL_BTN}
+          aria-label="Open in system browser"
+          disabled={!current}
+          onClick={() => void openUrl(url).catch(console.error)}
+        >
+          <ExternalLink className="size-3.5" />
+        </Button>
+        {/* No tooltip: a cross says what it does. */}
+        {onClose && (
+          <Button variant="ghost" size="icon-sm" className={TOOL_BTN} onClick={onClose} aria-label="Close pane">
+            <X className="size-3.5" />
+          </Button>
         )}
       </div>
       {openError && (
         <p className={cn("px-3 pb-1.5 text-ui text-destructive", current && "bg-card")}>{openError}</p>
       )}
     </div>
-  );
-}
-
-function TabButton({
-  active,
-  title,
-  icon,
-  label,
-  locked = false,
-  onPick,
-  onClose,
-  onDuplicate,
-  onPointerDown,
-  transform,
-  held = false,
-  gliding = false,
-  paint,
-  overlay,
-}: {
-  active: boolean;
-  title: string;
-  icon: React.ReactNode;
-  /// Drawn over the whole tab, out of the row's flow: the agent's beam.
-  overlay?: React.ReactNode;
-  label: string;
-  /// Not closed, while a recording films it.
-  locked?: boolean;
-  onPick: () => void;
-  onClose: () => void;
-  /// Right-click Duplicate tab, on real tabs only.
-  onDuplicate?: () => void;
-  /// Drag-to-reorder, on real tabs only.
-  onPointerDown?: (e: React.PointerEvent<HTMLDivElement>) => void;
-  transform?: string;
-  /// The tab in hand, mid-drag.
-  held?: boolean;
-  /// A tab sliding aside for the one in hand.
-  gliding?: boolean;
-  /// The page's colour, from `tint`, on the tab joined to the URL row.
-  paint?: React.CSSProperties;
-}) {
-  return (
-    <TabMenu onDuplicate={locked ? undefined : onDuplicate}>
-    <ContextMenuTrigger asChild disabled={!onDuplicate || locked}>
-    <div
-      role="tab"
-      aria-selected={active}
-      tabIndex={0}
-      title={title}
-      onClick={onPick}
-      onKeyDown={(e) => e.key === "Enter" && onPick()}
-      onPointerDown={onPointerDown}
-      style={{ ...paint, transform }}
-      className={cn(
-        "group/tab relative flex h-7 w-40 min-w-0 shrink-0 cursor-default items-center gap-1.5 rounded-t-md px-2 text-ui",
-        active
-          ? "browser-tab-active bg-card text-foreground [--tab-edge:color-mix(in_oklab,var(--foreground)_10%,transparent)]"
-          : held
-              ? "bg-card/50 text-foreground"
-              : "text-muted-foreground hover:text-foreground",
-        // The one in hand tracks the pointer and draws over the tabs it
-        // passes; only those making room glide.
-        held && "z-10",
-        gliding && "transition-transform duration-150 ease-out",
-      )}
-    >
-      {/* The outline, stopping where the foot's curve takes over: the flares
-          carry it round into the toolbar, as Chrome's tab does. */}
-      {active && (
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-0 bottom-2 rounded-t-md border-x border-t border-(--tab-edge)"
-        />
-      )}
-      {overlay}
-      {icon}
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      {!locked && <button
-        type="button"
-        aria-label="Close tab"
-        className="rounded p-0.5 opacity-0 hover:bg-muted group-hover/tab:opacity-100"
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-      >
-        <X className="size-3" />
-      </button>}
-    </div>
-    </ContextMenuTrigger>
-    </TabMenu>
   );
 }
 
@@ -1104,18 +901,25 @@ function SizeBar({ sessionId, viewport }: { sessionId: string; viewport: Viewpor
 /// own marked. Polled while on screen, since a server starting is the
 /// moment the list is looked at.
 ///
-/// `turnable`: the blank is a tab of the row, so it can become Diff or Files.
 /// The panel's is not, and has no row slot to turn.
-function EmptyState({ sessionId, active, turnable }: { sessionId: string; active: boolean; turnable: boolean }) {
+function EmptyState({
+  sessionId,
+  active,
+  tasks,
+}: {
+  sessionId: string;
+  active: boolean;
+  tasks?: readonly SessionIndexItem[];
+}) {
   const chromium = useChromium();
   // Nothing to open pages with yet: the download stands where the page would.
   // Diff and Files need no Chromium, so the cards stay above it.
   if (chromium && chromium.state !== "ready") {
-    return <ChromiumState status={chromium} cards={turnable && <TurnCards sessionId={sessionId} />} />;
+    return <ChromiumState status={chromium} cards={<TurnCards sessionId={sessionId} />} />;
   }
   // Keyed, so one session's servers and its share in flight are never drawn
   // under another: the list is read on a timer and a failed read keeps the old.
-  return <Servers key={sessionId} sessionId={sessionId} active={active} turnable={turnable} />;
+  return <Servers key={sessionId} sessionId={sessionId} active={active} tasks={tasks} />;
 }
 
 /// Chromium is fetched after install (see chromium.rs), and this is where the
@@ -1178,128 +982,83 @@ function TurnCards({ sessionId }: { sessionId: string }) {
   );
 }
 
-function Servers({ sessionId, active, turnable }: { sessionId: string; active: boolean; turnable: boolean }) {
-  const [servers, setServers] = useState<LocalServer[]>([]);
-  const recent = useHistory(sessionId, active).slice(0, RECENT);
-  // Each read is a `ps` and two `lsof`s, and both mounts of this pane stay
-  // mounted while hidden — so it reads only while on screen and frontmost,
-  // and once more on coming back.
+/// A bot's browser reads at most this many tasks, newest first: each read is a
+/// `ps` and two `lsof`s on the task's machine, every five seconds.
+const TASK_READS = 12;
+
+/// Whose servers a list holds: the browser's own session, or one of a bot's
+/// tasks, whose servers open here though they run in its tree.
+type Owner = { sessionId: string; task?: SessionIndexItem };
+
+/// The browser's own session first, then a bot's newest tasks.
+function ownersOf(sessionId: string, tasks: readonly SessionIndexItem[] = []): Owner[] {
+  return [{ sessionId }, ...tasks.slice(0, TASK_READS).map((task) => ({ sessionId: task.sessionId, task }))];
+}
+
+/// Each owner's servers, read every five seconds while `active` and the
+/// window frontmost: each read is a `ps` and two `lsof`s, and both mounts of
+/// this pane stay mounted while hidden. The second value reads again at once,
+/// so a row moves after a share or a stop without waiting a poll.
+function useServerLists(owners: Owner[], active: boolean): [ReadonlyMap<string, LocalServer[]>, () => void] {
+  const ownerKey = owners.map((o) => o.sessionId).join(" ");
+  const [servers, setServers] = useState<ReadonlyMap<string, LocalServer[]>>(new Map());
   const focused = useWindowFocused();
   const polling = active && focused;
-  // Bumped after a share or a stop, so the row moves without waiting a poll.
   const [reread, setReread] = useState(0);
-  const [sharing, setSharing] = useState<number | null>(null);
-  // The first share on a machine sets up its tunnel, a wait of its own.
-  const [fetching, setFetching] = useState(false);
-  const [copied, copy] = useCopied();
 
   useEffect(() => {
     if (!polling) return;
     let live = true;
-    const read = () =>
-      void listLocalServers(sessionId)
-        .then((list) => live && setServers(list))
-        .catch(() => undefined);
+    const ids = ownerKey.split(" ");
+    // Each owner lands on its own reply, so one task's machine going quiet
+    // holds back no other list, and is not asked again until it answers. A
+    // failed read keeps that owner's last list, as one list always did.
+    const asking = new Set<string>();
+    const read = () => {
+      for (const id of ids) {
+        if (asking.has(id)) continue;
+        asking.add(id);
+        void listLocalServers(id)
+          .then(
+            (list) => live && setServers((prev) => new Map(prev).set(id, list)),
+            () => undefined,
+          )
+          .finally(() => asking.delete(id));
+      }
+    };
     read();
     const timer = setInterval(read, 5000);
     return () => {
       live = false;
       clearInterval(timer);
     };
-  }, [sessionId, polling, reread]);
+  }, [ownerKey, polling, reread]);
 
-  // The relay takes a moment to attach a link, so the row says so.
-  const share = (port: number) => {
-    setSharing(port);
-    void shareReady(sessionId).then((ready) => setFetching(!ready));
-    void shareServer(sessionId, port)
-      .catch(() => undefined)
-      .finally(() => {
-        setSharing(null);
-        setFetching(false);
-        setReread((n) => n + 1);
-      });
-  };
-  const unshare = (port: number) =>
-    void stopShare(sessionId, port)
-      .catch(() => undefined)
-      .finally(() => setReread((n) => n + 1));
+  return [servers, () => setReread((n) => n + 1)];
+}
 
-  // A remote session's list is its server's.
-  const server = serverOfSession(sessionId);
-  useServers();
-  const open = (port: number) =>
-    void openServer(sessionId, port)
-      .then(() => trackBrowserOpen("http://localhost"))
-      .catch(() => undefined);
+function Servers({
+  sessionId,
+  active,
+  tasks,
+}: {
+  sessionId: string;
+  active: boolean;
+  tasks?: readonly SessionIndexItem[];
+}) {
+  const owners = ownersOf(sessionId, tasks);
+  const [servers, reread] = useServerLists(owners, active);
+  const recent = useHistory(sessionId, active).slice(0, RECENT);
 
   // One column, one left edge: the heading, the rows and the hint all start
   // at the same x, and the column as a whole sits in the middle.
   return (
-    <div className="flex h-full items-center justify-center p-8 text-ui">
-      <div className="flex w-full max-w-sm flex-col gap-4">
-        {turnable && <TurnCards sessionId={sessionId} />}
-        {servers.length > 0 && (
-          <section className="flex flex-col gap-1.5">
-            <h3 className="px-2 pb-1 text-muted-foreground">
-              {server === LOCAL ? "Running locally" : `Running on ${serverName(server)}`}
-            </h3>
-            {servers.map((s) => (
-              // A bordered card per server, so a link under it reads as part
-              // of the same thing rather than as a second row.
-              <div key={s.port} className="flex flex-col rounded-lg border border-border">
-                <div className="flex min-h-9 items-center gap-1 p-1">
-                  <button
-                    type="button"
-                    onClick={() => open(s.port)}
-                    className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-1 text-left hover:underline"
-                  >
-                    <span className="font-mono">localhost:{s.port}</span>
-                    <span className="truncate text-muted-foreground">{s.process}</span>
-                    {s.mine && <span className="ml-auto shrink-0 text-muted-foreground">this session</span>}
-                  </button>
-                  {!s.share && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => share(s.port)}
-                          disabled={sharing !== null}
-                          // The pane is `--background`, the outline fill's own
-                          // colour, and on glass `--muted` hovers into it too.
-                          className={cn("shrink-0", TOOL_BTN)}
-                        >
-                          {sharing === s.port ? <Spinner className="size-3.5" /> : <Share2 />}
-                          {sharing !== s.port
-                            ? "Get public link"
-                            : fetching
-                              ? "Setting up tunnel…"
-                              : "Creating link…"}
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>A link anyone can open, until you stop it</TooltipContent>
-                    </Tooltip>
-                  )}
-                </div>
-                {s.share && (
-                  <SharedLink
-                    url={s.share}
-                    copied={copied === s.share}
-                    onOpen={(external) =>
-                      void (external
-                        ? openUrl(s.share!)
-                        : openInBrowser(sessionId, s.share!, true).then(() => trackBrowserOpen(s.share!))
-                      ).catch(() => undefined)
-                    }
-                    onCopy={() => void copy(s.share!)}
-                    onStop={() => unshare(s.port)}
-                  />
-                )}
-              </div>
-            ))}
-          </section>
-        )}
+    // `m-auto` rather than centring the row, so a bot with many tasks
+    // scrolls from its first heading instead of clipping it.
+    <div className="flex h-full overflow-y-auto p-8 text-ui">
+      <div className="m-auto flex w-full max-w-sm flex-col gap-4">
+        <TurnCards sessionId={sessionId} />
+        <ServerGroups sessionId={sessionId} owners={owners} servers={servers} reread={reread} />
         {recent.length > 0 && (
           <section className="flex flex-col gap-0.5">
             <h3 className="px-2 pb-1 text-muted-foreground">Recently visited</h3>
@@ -1328,6 +1087,259 @@ function Servers({ sessionId, active, turnable }: { sessionId: string; active: b
         </p>
       </div>
     </div>
+  );
+}
+
+/// The running servers, a section per owner with any: the new tab's list, and
+/// the one under a stopped server's page.
+function ServerGroups({
+  sessionId,
+  owners,
+  servers,
+  reread,
+}: {
+  sessionId: string;
+  owners: Owner[];
+  servers: ReadonlyMap<string, LocalServer[]>;
+  reread: () => void;
+}) {
+  // `owner:port`, since two tasks can each serve the same port in their own tree.
+  const [sharing, setSharing] = useState<string | null>(null);
+  // The first share on a machine sets up its tunnel, a wait of its own.
+  const [fetching, setFetching] = useState(false);
+  const [copied, copy] = useCopied();
+
+  // The relay takes a moment to attach a link, so the row says so.
+  const share = (owner: string, port: number) => {
+    setSharing(`${owner}:${port}`);
+    void shareReady(owner).then((ready) => setFetching(!ready));
+    void shareServer(owner, port, sessionId)
+      .catch(() => undefined)
+      .finally(() => {
+        setSharing(null);
+        setFetching(false);
+        reread();
+      });
+  };
+  const unshare = (owner: string, port: number) =>
+    void stopShare(owner, port)
+      .catch(() => undefined)
+      .finally(reread);
+
+  useServers();
+  // Forwarded off the owner's machine, opened in this browser: a bot task's
+  // server lands in the bot's row, as its links do.
+  const open = (owner: string, port: number) =>
+    void openServer(owner, port, sessionId)
+      .then(() => trackBrowserOpen("http://localhost"))
+      .catch(() => undefined);
+
+  return owners
+    .filter((o) => (servers.get(o.sessionId)?.length ?? 0) > 0)
+    .map((o) => (
+      <section key={o.sessionId} className="flex flex-col gap-1.5">
+        <ServersHeading owner={o} />
+        {servers.get(o.sessionId)!.map((s) => {
+          const key = `${o.sessionId}:${s.port}`;
+          return (
+            // A bordered card per server, so a link under it reads as part
+            // of the same thing rather than as a second row.
+            <div key={s.port} className="flex flex-col rounded-lg border border-border">
+              <div className="flex min-h-9 items-center gap-1 p-1">
+                <button
+                  type="button"
+                  onClick={() => open(o.sessionId, s.port)}
+                  className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-1 text-left hover:underline"
+                >
+                  <span className="font-mono">localhost:{s.port}</span>
+                  <span className="truncate text-muted-foreground">{s.process}</span>
+                  {/* A task's heading already says whose it is. */}
+                  {s.mine && !o.task && <span className="ml-auto shrink-0 text-muted-foreground">this session</span>}
+                </button>
+                {!s.share && (
+                  // An icon that slides its name out on hover, and keeps it
+                  // out while the link is being made. Max-width rather than
+                  // width, which cannot animate to the label's own size.
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label="Get shareable link"
+                    onClick={() => share(o.sessionId, s.port)}
+                    disabled={sharing !== null}
+                    className={cn("group/share h-7 shrink-0 gap-0 px-[7px] text-ui text-muted-foreground", TOOL_BTN)}
+                  >
+                    {sharing === key ? <Spinner className="size-3.5" /> : <Share2 className="size-3.5" />}
+                    <span className={cn("max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-[max-width,opacity] duration-200 ease-out group-hover/share:max-w-40 group-hover/share:opacity-100 motion-reduce:transition-none", sharing === key && "max-w-40 opacity-100")}>
+                      <span className="block pr-0.5 pl-1.5">
+                        {sharing !== key ? "Get shareable link" : fetching ? "Setting up tunnel…" : "Creating link…"}
+                      </span>
+                    </span>
+                  </Button>
+                )}
+              </div>
+              {s.share && (
+                <SharedLink
+                  url={s.share}
+                  copied={copied === s.share}
+                  onOpen={(external) =>
+                    void (external
+                      ? openUrl(s.share!)
+                      : openInBrowser(sessionId, s.share!, true).then(() => trackBrowserOpen(s.share!))
+                    ).catch(() => undefined)
+                  }
+                  onCopy={() => void copy(s.share!)}
+                  onStop={() => unshare(o.sessionId, s.port)}
+                />
+              )}
+            </div>
+          );
+        })}
+      </section>
+    ));
+}
+
+/// How long ago a server stopped, in the page's own sentence.
+function stoppedAgo(since: number): string {
+  const mins = Math.floor((Date.now() - since) / 60_000);
+  if (mins < 1) return "stopped just now";
+  if (mins < 60) return `stopped ${mins} min ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `stopped ${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  return `stopped ${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+/// The page a stopped dev server leaves, in place of Chromium's: whose it was,
+/// where it ran and since when, a way to ask for it back, and what still runs.
+function StoppedPage({
+  sessionId,
+  active,
+  tasks,
+  own,
+  stopped,
+  tab,
+}: {
+  sessionId: string;
+  active: boolean;
+  tasks?: readonly SessionIndexItem[];
+  own?: SessionIndexItem;
+  stopped: StoppedServer;
+  tab?: number;
+}) {
+  const { port, sessionId: ownerId } = stopped;
+  const owners = ownersOf(sessionId, tasks);
+  // Read too, though it may run nothing else: its list is how a restart is seen.
+  if (ownerId && !owners.some((o) => o.sessionId === ownerId)) owners.push({ sessionId: ownerId });
+  const [servers, reread] = useServerLists(owners, active);
+  useServers();
+  const task = tasks?.find((t) => t.sessionId === ownerId);
+  const asked = task ?? (ownerId === own?.sessionId ? own : undefined);
+  const server = task ? serverOfPath(task.projectPath) : ownerId ? serverOfSession(ownerId) : LOCAL;
+  const [asking, setAsking] = useState<"sending" | "sent" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Back on the read that first lists it, the page reloads by itself, once:
+  // a server listening but still refusing would otherwise reload every poll.
+  const back = ownerId !== null && (servers.get(ownerId)?.some((s) => s.port === port) ?? false);
+  useEffect(() => {
+    if (back) void navigate(sessionId, "reload", tab);
+  }, [back, sessionId, tab]);
+
+  const ask = () => {
+    if (!asked) return;
+    setAsking("sending");
+    setError(null);
+    sendToTask(asked, `The dev server on localhost:${port} has stopped: nothing answers there. Start it again.`).then(
+      () => setAsking("sent"),
+      (e: unknown) => {
+        setAsking(null);
+        setError(e instanceof Error ? e.message : String(e));
+      },
+    );
+  };
+
+  const running = owners.some((o) => (servers.get(o.sessionId)?.length ?? 0) > 0);
+  return (
+    <div className="flex h-full overflow-y-auto bg-card p-8 text-ui">
+      <div className="m-auto flex w-full flex-col items-center gap-5">
+        <div className="flex flex-col items-center gap-2 text-center">
+          <Unplug className="size-6 text-muted-foreground" />
+          <h2 className="text-base font-medium">Nothing is answering on localhost:{port}</h2>
+          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-muted-foreground">
+            {task && (
+              <span className="flex min-w-0 items-center gap-1.5 text-foreground">
+                <BotAvatar
+                  seed={task.sessionId}
+                  avatar={seededAvatar(task.sessionId)}
+                  className="block size-3.5 shrink-0 scale-[1.18]"
+                />
+                <span className="truncate">{task.title}</span>
+              </span>
+            )}
+            <span className="flex items-center gap-1">
+              <Server className="size-3.5" />
+              {serverName(server)}
+            </span>
+            <span className="flex items-center gap-1">
+              <Clock className="size-3.5" />
+              {stoppedAgo(stopped.since)}
+            </span>
+          </div>
+          <div className="flex gap-2 pt-1">
+            {asked && (
+              <Button size="sm" onClick={ask} disabled={asking !== null}>
+                {asking === "sending" && <Spinner className="size-3.5" />}
+                {asking === "sent" ? "Asked" : task ? "Ask the task to restart it" : "Ask the agent to restart it"}
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              className={TOOL_BTN}
+              disabled={stopped.retrying}
+              onClick={() => {
+                reread();
+                void navigate(sessionId, "reload", tab);
+              }}
+            >
+              {stopped.retrying && <Spinner className="size-3.5" />}
+              Retry
+            </Button>
+          </div>
+          {error && <p className="text-destructive">{error}</p>}
+        </div>
+        {running && (
+          // 44px on the column's 20px gap: the list sits apart from the
+          // buttons, a page of its own below the answer.
+          <div className="mt-11 flex w-full max-w-sm flex-col gap-4">
+            <ServerGroups sessionId={sessionId} owners={owners} servers={servers} reread={reread} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/// A list's heading: where the browser's own session runs, or the task's face,
+/// title and machine.
+function ServersHeading({ owner }: { owner: Owner }) {
+  const { task } = owner;
+  const server = task ? serverOfPath(task.projectPath) : serverOfSession(owner.sessionId);
+  const machine = server === LOCAL ? null : serverName(server);
+  if (!task) {
+    return <h3 className="px-2 pb-1 text-muted-foreground">{machine ? `Running on ${machine}` : "Running locally"}</h3>;
+  }
+  return (
+    <h3 className="flex min-w-0 items-center gap-1.5 px-2 pb-1 text-muted-foreground">
+      <BotAvatar seed={task.sessionId} avatar={seededAvatar(task.sessionId)} className="block size-4 shrink-0 scale-[1.18]" />
+      <span className="truncate text-foreground">{task.title}</span>
+      {machine && (
+        <span className="ml-auto flex shrink-0 items-center gap-1 pl-2">
+          <Server className="size-3" />
+          {machine}
+        </span>
+      )}
+    </h3>
   );
 }
 

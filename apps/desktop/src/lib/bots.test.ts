@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { botAt, botBrowser, botChat, botNamed, botSession, inBotTree, previewLine } from "@/lib/bots";
+import { botAt, botBrowser, botChat, botNamed, botSession, greetingOf, inBotTree, previewLine } from "@/lib/bots";
 import type { Bot, SessionIndexItem } from "@/types/events";
 
 const bot: Bot = { id: "b", name: "Ops", path: "/h/bots/b", created: "" };
@@ -13,6 +13,15 @@ const item = (sessionId: string, extra: Partial<SessionIndexItem> = {}) =>
     created: "2026-11-01T00:00:00Z",
     ...extra,
   }) as SessionIndexItem;
+
+describe("greetingOf", () => {
+  it("draws the server's greeting, else an older server's welcome alone", () => {
+    const asks = ["Hi!", "What should I call you?"];
+    expect(greetingOf({ ...bot, welcome: "old", greeting: asks })).toEqual(asks);
+    expect(greetingOf({ ...bot, welcome: "Hi Yogesh!" })).toEqual(["Hi Yogesh!"]);
+    expect(greetingOf(bot)).toEqual([]);
+  });
+});
 
 describe("botNamed", () => {
   const twin = (id: string, name: string): Bot => ({ ...bot, id, name });
@@ -60,6 +69,14 @@ describe("inBotTree", () => {
     ];
     expect(inBotTree([bot], items, "grand")).toBe(true);
     expect(inBotTree([bot], items, "other")).toBe(false);
+  });
+
+  it("crosses a settled parent through the adoption", () => {
+    const items = [
+      item("chat"),
+      item("sub", { cwd: "/repo/wt2", parentSessionId: "settled", adoptedBy: "chat" }),
+    ];
+    expect(inBotTree([bot], items, "sub")).toBe(true);
   });
 });
 

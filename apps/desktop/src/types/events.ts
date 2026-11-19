@@ -51,7 +51,13 @@ canSignOut: boolean,
  * reader with an expired token actually wants and the only thing one
  * method allows.
  */
-canChangeMethod: boolean, };
+canChangeMethod: boolean, 
+/**
+ * Whether the credential is held by something Dray cannot drive — a pi
+ * extension's provider, which signs in its own way. Such a row offers no
+ * Sign in, Reauthorize or Sign out, since none of them would reach it.
+ */
+signsInElsewhere: boolean, };
 
 /**
  * Whether a credential will serve.
@@ -360,7 +366,7 @@ automatic: boolean, } | { "type": "permission_denied", toolName: string, toolUse
  * notice says it did. The session layer records it, so the composer
  * stops naming the model the CLI left.
  */
-model: ModelId | null, } | { "type": "merge_card", taskId: string, title: string, 
+model: ModelId | null, } | { "type": "task_started", taskId: string, title: string, } | { "type": "merge_card", taskId: string, title: string, 
 /**
  * The repo root, what the sidebar's PR marks are keyed by. The task's
  * machine's path where `machine` is set.
@@ -375,7 +381,11 @@ machine?: string,
 /**
  * `owner/name`, set with `machine`.
  */
-repo?: string, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
+repo?: string, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "reaction", 
+/**
+ * The `user_message` event reacted to, always in this same session.
+ */
+messageId: string, emoji: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
 /**
  * HTTP status, where the harness knew one. 529 (overloaded) and 500
  * are the only two observed.
@@ -386,7 +396,13 @@ status: number | null,
  * or `unknown`. The last is the majority case and says nothing, so it
  * is dropped on the way in rather than shown.
  */
-reason: string | null, } | { "type": "context_compacted", 
+reason: string | null, 
+/**
+ * The harness's own status line, drawn in place of the attempt count
+ * where present. fx alone sends one ("Gateway error · next try in 3s ·
+ * attempt 3") and restates it every second, so its countdown moves.
+ */
+message: string | null, } | { "type": "context_compacted", 
 /**
  * `manual` or `auto`.
  */
@@ -604,11 +620,17 @@ path: string, created: string,
  */
 avatar?: BotAvatar | null, 
 /**
- * What its chat opens on before any session exists, drawn by the app,
- * and written to the log as the chat's first message when one starts.
- * Dray Bot's alone; a bot made with New bot greets with a real turn.
+ * Marks a bot whose chat opens on a welcome, drawn by the app and written
+ * to the log when a session starts. Dray Bot's alone; a bot made with New
+ * bot greets with a real turn. The words drawn are `greeting`'s.
  */
-welcome?: string | null, };
+welcome?: string | null, 
+/**
+ * The messages its chat opens on, worked out by `list_bots` on every read
+ * and never saved: the welcome in today's words, then the question for
+ * the user's name while no bot knows it. Empty with no welcome.
+ */
+greeting?: Array<string>, };
 
 /**
  * A Blobatar face: which silhouette and which hue. Strings and degrees rather
@@ -622,6 +644,28 @@ export type BotAvatar = { shape: string, hue: number, };
  * last wrote.
  */
 export type BotPreview = { text: string | null, replies: number, };
+
+/**
+ * One bot's card, as `bot_stalls` answers and `bot_stalls_changed` carries it.
+ */
+export type BotStalls = { botId: string, 
+/**
+ * The bot's current chat session.
+ */
+chatId: string, 
+/**
+ * Oldest stall first. Not yet filtered by any device's dismissals.
+ */
+rows: Array<StallRow>, 
+/**
+ * The bot's tasks, set-aside ones left out: the Tasks tab's count.
+ */
+tasks: number, fixes: Array<FixAsk>, 
+/**
+ * Every task of the bot's this server judged. One it could not — on a
+ * machine too old to send its facts — is left to the client to judge.
+ */
+judged: Array<string>, };
 
 /**
  * What the composer's branch picker needs to render and guard itself.
@@ -849,7 +893,7 @@ export type FileBody = { "kind": "text", text: string, } | { "kind": "image",
  * the attachments directory and must stay scoped, so a file anywhere
  * else has no URL the webview can fetch.
  */
-dataUrl: string, } | { "kind": "video", path: string, };
+dataUrl: string, } | { "kind": "video", path: string, } | { "kind": "dir", entries: Array<DirEntry>, };
 
 export type FileChange = "add" | "update" | "delete";
 
@@ -894,6 +938,12 @@ unreadable: Unreadable | null, };
  * What the reader can do about a failure, drawn beside its sentence.
  */
 export type Fix = { "kind": "copy", command: string, } | { "kind": "trust_host", host: string, keyType: string, fingerprint: string, } | { "kind": "install" } | { "kind": "new_address" };
+
+/**
+ * A task asked to mend its PR: which PR, the status it was asked about, and
+ * when, in unix ms. What the Tasks row's "Fixing merge conflicts · 3m" reads.
+ */
+export type FixAsk = { sessionId: string, pr: number, status: string, at: number, };
 
 /**
  * A repository the signed-in `gh` user can reach.
@@ -1598,7 +1648,19 @@ url: string,
 /**
  * The branch it was opened from — what the caller matches a session by.
  */
-headRefName: string, isDraft: boolean, state: PrMarkState, checksState: PrChecksState, 
+headRefName: string, 
+/**
+ * The tip commit's sha, on the open half alone. A push is a new one,
+ * which is what restarts the merge card's wait for checks to register.
+ * Optional in TS too, since a server older than the field sends none.
+ */
+headOid?: string, isDraft: boolean, state: PrMarkState, checksState: PrChecksState, 
+/**
+ * How many checks and statuses report on the tip, on the open half alone.
+ * Zero is both "no CI" and "CI not started yet", which only a count seen on
+ * an earlier push can tell apart.
+ */
+checkCount?: number, 
 /**
  * Enough of the panel's merge fields to answer "can this land now", which
  * the sidebar itself draws nothing from — the notice for a pull request
@@ -2063,7 +2125,14 @@ continueOff: boolean,
  * with `dray session need`. Drawn only while `at` is no older than
  * `modified`, so the task moving clears it without a write.
  */
-need?: TaskNeed, };
+need?: TaskNeed, 
+/**
+ * The nearest live session above a bot's sub-task while the task that
+ * started it is settled or deleted, written by [`readopt`]. A bot's task outlives its parent
+ * task, and a client holding the index's active side alone cannot walk
+ * through a settled parent to find the bot.
+ */
+adoptedBy?: string, };
 
 /**
  * Session-level facts, known at startup.
@@ -2078,6 +2147,19 @@ export type SessionInfo = { cwd: string | null, model: string | null, harnessVer
 export type SessionPage = { events: Array<AgentEvent>, olderBefore: number | null, };
 
 /**
+ * Emitted as `session_serving` when the serving sweep's verdict on a session
+ * changes. Derived state like [`SessionStatusEvent`], never logged.
+ */
+export type SessionServingEvent = { sessionId: string, 
+/**
+ * The ports the session's background shells listen on, where those
+ * servers are all it has left running: the turn is over and nothing will
+ * wake the agent, so it waits on the reader. Empty otherwise. Holds for
+ * the current task set alone; a new one drops it.
+ */
+ports: Array<number>, };
+
+/**
  * What crosses the IPC boundary for one session: its index entry plus the
  * replayed event log. Distinct from [`crate::session::Session`], which owns a
  * child process and cannot be serialized.
@@ -2086,7 +2168,14 @@ export type SessionSnapshot = { events: Array<AgentEvent>,
 /**
  * Where the log's unread older part ends, when `events` is only its tail.
  */
-olderBefore: number | null, sessionId: string, harness: Harness, 
+olderBefore: number | null, 
+/**
+ * `events` is a first frame from [`crate::thin`]: bodies shortened, and
+ * maybe the page's oldest events missing. The same read without `lite`
+ * is what completes it. Absent from a server older than the argument,
+ * which answered whole.
+ */
+lite: boolean, sessionId: string, harness: Harness, 
 /**
  * Where the agent actually runs. Equals `project_path` for a normal
  * session; points inside `.claude/worktrees/<name>` for a worktree one.
@@ -2226,7 +2315,14 @@ continueOff: boolean,
  * with `dray session need`. Drawn only while `at` is no older than
  * `modified`, so the task moving clears it without a write.
  */
-need?: TaskNeed, };
+need?: TaskNeed, 
+/**
+ * The nearest live session above a bot's sub-task while the task that
+ * started it is settled or deleted, written by [`readopt`]. A bot's task outlives its parent
+ * task, and a client holding the index's active side alone cannot walk
+ * through a settled parent to find the bot.
+ */
+adoptedBy?: string, };
 
 /**
  * Driven by [`StatusTracker`](crate::session::StatusTracker). `Completed`
@@ -2290,6 +2386,55 @@ aliases: Array<string>, };
 export type Stage = "connecting" | "finding" | "starting";
 
 /**
+ * What a card row waits on the reader for.
+ */
+export type StallKind = "waiting" | "ready";
+
+/**
+ * One row of a bot's "Waiting on you" card.
+ */
+export type StallRow = { 
+/**
+ * Names this one stall: dismissed by it, nudged once by it, and new again
+ * only once the task moves. The desktop's own format, so dismissals made
+ * before this moved here still hold.
+ */
+key: string, kind: StallKind, 
+/**
+ * A ready row whose PR GitHub is working out again, as it does for every
+ * open PR after a merge: kept so the card holds still, and not mergeable.
+ */
+checking: boolean, 
+/**
+ * When it stalled, in unix ms; the card is ordered by it.
+ */
+since: number, 
+/**
+ * What the bot wrote the reader needs to do, since the task last moved.
+ */
+need?: string, pr?: PrMark, 
+/**
+ * The task as its own server indexes it. A task on another machine
+ * carries that machine's paths.
+ */
+item: SessionIndexItem, 
+/**
+ * The machine a task started with `--machine` runs on, by name; none for
+ * a task on this server.
+ */
+machine?: string, 
+/**
+ * Its machine did not answer the last poll: drawn from what was last
+ * known, with nothing to open, merged through GitHub by `repo`.
+ */
+offline: boolean, 
+/**
+ * The PR's repo as `gh --repo` takes it, for a client that cannot reach
+ * the task's machine to merge through the bot's server.
+ */
+repo?: string, };
+
+/**
  * Why a press could not start recording, or `None` where it did.
  */
 export type StartRefusal = { "kind": "needsModel" } | { "kind": "needsPermission" };
@@ -2308,6 +2453,44 @@ export type Subagent = { id: string,
  * Drives the collapsed subagent card's title.
  */
 label: string | null, };
+
+/**
+ * Where the next page of [`list_subagents`] starts reading back from.
+ */
+export type SubagentCursor = { 
+/**
+ * Index into the session list the first page was asked with.
+ */
+session: number, 
+/**
+ * Byte offset to read back from; the file's end where `None`.
+ */
+before: number | null, 
+/**
+ * Completions already read whose starts lie further back, by run id. A
+ * run's two lines can straddle a page, and dropping these would read the
+ * run back as never finished.
+ */
+ends: Array<[string, string]>, };
+
+/**
+ * A page of [`SubagentSummary`], newest first, and where the next one starts.
+ */
+export type SubagentList = { runs: Array<SubagentSummary>, next: SubagentCursor | null, };
+
+/**
+ * One subagent a session ran, read off its log rather than off a transcript,
+ * so a bot's Tasks tab can list runs older than the chat has loaded.
+ */
+export type SubagentSummary = { 
+/**
+ * The spawning call's id, as on `SubagentRun`.
+ */
+id: string, sessionId: string, taskId: string | null, label: string | null, description: string | null, startedAt: string, 
+/**
+ * `None` for a run the log never closed: still going, or its child died.
+ */
+endedAt: string | null, };
 
 /**
  * What a server has before Dray is installed on it.

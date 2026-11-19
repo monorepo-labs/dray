@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -184,6 +184,13 @@ pub struct SessionIndexItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub need: Option<TaskNeed>,
+    /// The nearest live session above a bot's sub-task while the task that
+    /// started it is settled or deleted, written by [`readopt`]. A bot's task outlives its parent
+    /// task, and a client holding the index's active side alone cannot walk
+    /// through a settled parent to find the bot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub adopted_by: Option<String>,
     /// Every key this build does not know, carried through untouched.
     ///
     /// The index is rewritten **whole**, and `INDEX_LOCK` is an in-process
@@ -240,6 +247,12 @@ pub struct SessionSnapshot {
     pub events: Vec<AgentEvent>,
     /// Where the log's unread older part ends, when `events` is only its tail.
     pub older_before: Option<u64>,
+    /// `events` is a first frame from [`crate::thin`]: bodies shortened, and
+    /// maybe the page's oldest events missing. The same read without `lite`
+    /// is what completes it. Absent from a server older than the argument,
+    /// which answered whole.
+    #[serde(default)]
+    pub lite: bool,
 }
 
 static INDEX_LOCK: Mutex<()> = Mutex::const_new(());
@@ -722,6 +735,7 @@ impl SessionIndexItem {
             continue_at: None,
             continue_off: false,
             need: None,
+            adopted_by: None,
             unknown: Default::default(),
         }
     }
@@ -816,6 +830,7 @@ impl SessionIndexItem {
             continue_at: None,
             continue_off: false,
             need: None,
+            adopted_by: None,
             unknown: Default::default(),
         }
     }
@@ -1144,6 +1159,8 @@ pub async fn take_continue_at(session_id: &str, at: &str) -> Result<Option<(Sess
 pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>, Fail> {
     Ok(update_item(session_id, |item| {
         item.parent_session_id = None;
+        // Or the walk would still find a way up through it.
+        item.adopted_by = None;
         // No parent to surface beside, so a hidden session would show nowhere.
         item.hidden = false;
         item.clone()
@@ -1154,13 +1171,134 @@ pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>
 /// The hidden sessions `parent_id` started directly — the ones that follow it
 /// through settle, delete and worktree removal, since nothing on screen lists them.
 pub async fn hidden_children(parent_id: &str) -> Result<Vec<SessionIndexItem>> {
-    Ok(read_index()
-        .await?
-        .into_iter()
-        .filter(|i| {
-            i.hidden && i.parent_session_id.as_deref() == Some(parent_id) && i.session_id != parent_id
-        })
+    let items = read_index().await?;
+    Ok(items
+        .iter()
+        .filter(|i| i.hidden && tree_parent_in(&items, i).is_some_and(|p| p.session_id == parent_id))
+        .cloned()
         .collect())
+}
+
+/// One step up `item`'s tree: its parent while the index holds it, else the
+/// session that adopted it when the parent was deleted.
+pub async fn tree_parent(item: &SessionIndexItem) -> Result<Option<SessionIndexItem>> {
+    let items = cached_index().await?;
+    Ok(tree_parent_in(&items, item).cloned())
+}
+
+/// The session a report from `item` goes to: its parent while that is live,
+/// else the nearest live ancestor. `None` where nothing above it is live.
+pub async fn live_ancestor(item: &SessionIndexItem) -> Result<Option<SessionIndexItem>> {
+    let items = cached_index().await?;
+    Ok(tree_parent_in(&items, item).and_then(|p| live_from_in(&items, p, None)).cloned())
+}
+
+/// `from` where it is live, else its nearest live ancestor.
+pub async fn live_from(from: &SessionIndexItem) -> Result<Option<SessionIndexItem>> {
+    let items = cached_index().await?;
+    Ok(live_from_in(&items, from, None).cloned())
+}
+
+/// Whether `item` or any session above it is `hit`, crossing an adoption
+/// where a parent is gone.
+pub async fn reaches(item: &SessionIndexItem, hit: impl Fn(&SessionIndexItem) -> bool) -> Result<bool> {
+    let items = cached_index().await?;
+    Ok(reaches_in(&items, item, hit))
+}
+
+fn reaches_in(items: &[SessionIndexItem], item: &SessionIndexItem, hit: impl Fn(&SessionIndexItem) -> bool) -> bool {
+    let mut at = Some(item);
+    for _ in 0..8 {
+        let Some(item) = at else { return false };
+        if hit(item) {
+            return true;
+        }
+        at = tree_parent_in(items, item);
+    }
+    false
+}
+
+fn tree_parent_in<'a>(items: &'a [SessionIndexItem], item: &SessionIndexItem) -> Option<&'a SessionIndexItem> {
+    let find = |id: &str| items.iter().find(|i| i.session_id == id && i.session_id != item.session_id);
+    match item.parent_session_id.as_deref().and_then(find) {
+        Some(parent) => Some(parent),
+        None => item.adopted_by.as_deref().and_then(find),
+    }
+}
+
+/// Live is unsettled and not `gone`, the session a delete is about to remove.
+fn live(item: &SessionIndexItem, gone: Option<&str>) -> bool {
+    !item.archived && gone != Some(item.session_id.as_str())
+}
+
+/// Bounded at 8 like every tree walk here, so a cycle costs a wrong answer.
+fn live_from_in<'a>(
+    items: &'a [SessionIndexItem],
+    from: &'a SessionIndexItem,
+    gone: Option<&str>,
+) -> Option<&'a SessionIndexItem> {
+    let mut at = Some(from);
+    for _ in 0..8 {
+        let item = at?;
+        if live(item, gone) {
+            return Some(item);
+        }
+        at = tree_parent_in(items, item);
+    }
+    None
+}
+
+/// What `item`'s [`SessionIndexItem::adopted_by`] should read: none while its
+/// parent is live, else the nearest live ancestor. A deleted parent is crossed
+/// by the adoption already written.
+fn adoption_in(items: &[SessionIndexItem], item: &SessionIndexItem, gone: Option<&str>) -> Option<String> {
+    let parent = item.parent_session_id.as_deref().and_then(|id| items.iter().find(|i| i.session_id == id));
+    let start = match parent {
+        Some(p) if live(p, gone) => return None,
+        Some(p) => tree_parent_in(items, p),
+        None => items.iter().find(|i| Some(i.session_id.as_str()) == item.adopted_by.as_deref()),
+    };
+    Some(live_from_in(items, start?, gone)?.session_id.clone())
+}
+
+/// Rewrites [`SessionIndexItem::adopted_by`] on every session below
+/// `root`, after `root` was settled, unsettled, or is about to be deleted
+/// (`gone`). Answers the ids whose entry changed, for the caller to announce.
+pub async fn readopt(root: &str, gone: Option<&str>) -> Result<Vec<String>> {
+    let _guard = INDEX_LOCK.lock().await;
+    let mut sessions = read_index().await?;
+    let changed = readopt_in(&mut sessions, root, gone);
+    if !changed.is_empty() {
+        write_session_index(sessions).await?;
+    }
+    Ok(changed)
+}
+
+/// [`readopt`] on a held index, top down, so each level reads the adoptions
+/// written above it.
+fn readopt_in(sessions: &mut [SessionIndexItem], root: &str, gone: Option<&str>) -> Vec<String> {
+    let mut changed = Vec::new();
+    let mut seen = std::collections::HashSet::from([root.to_string()]);
+    let mut queue = std::collections::VecDeque::from([root.to_string()]);
+    while let Some(at) = queue.pop_front() {
+        let kids: Vec<usize> = (0..sessions.len())
+            .filter(|&k| tree_parent_in(&sessions, &sessions[k]).is_some_and(|p| p.session_id == at))
+            .collect();
+        for k in kids {
+            if !seen.insert(sessions[k].session_id.clone()) {
+                continue;
+            }
+            queue.push_back(sessions[k].session_id.clone());
+            // Settled ones too: a settled child is still the step its own
+            // live children's walk takes up to the bot.
+            let next = adoption_in(&sessions, &sessions[k], gone);
+            if next != sessions[k].adopted_by {
+                sessions[k].adopted_by = next;
+                changed.push(sessions[k].session_id.clone());
+            }
+        }
+    }
+    changed
 }
 
 /// Moves every hidden descendant of `parent_id` to `archived`, answering their
@@ -1366,6 +1504,24 @@ pub async fn set_session_model(
 ) -> Result<Option<SessionIndexItem>> {
     update_item(session_id, |item| {
         item.model = model;
+        item.clone()
+    })
+    .await
+}
+
+/// Records a model and effort picked from outside the composer — `dray session
+/// model` — for the session's next send to carry out, as a picker's pick is.
+pub async fn set_session_pick(
+    session_id: &str,
+    model: ModelId,
+    effort: Option<Effort>,
+) -> Result<Option<SessionIndexItem>> {
+    update_item(session_id, |item| {
+        item.model = model;
+        item.effort = effort;
+        // A level a newer build wrote is replaced by this explicit one, or
+        // that build would read its own back over it.
+        item.effort_above = None;
         item.clone()
     })
     .await
@@ -1678,6 +1834,13 @@ pub async fn get_session_index_item(session_id: &str) -> Result<Option<SessionIn
 /// is normal — it was written before its process spawned — and yields empty
 /// `events` rather than `None`.
 ///
+/// `bot` asks for the page as a bot's chat draws it, which is all of what its
+/// client holds: see [`crate::thin::chat`]. Not `lite`, since nothing follows.
+///
+/// `lite` asks for a first frame, small enough to cross a slow link in one
+/// flight; see [`crate::thin`]. It may hold fewer turns than asked for, and
+/// `older_before` is where those begin, so it pages like any other read.
+///
 /// `turns` asks for the newest that many turns alone, read off the end of the
 /// log, with `older_before` saying where the rest begins. Opening a long
 /// session is otherwise the whole log parsed twice — here and by the
@@ -1687,6 +1850,8 @@ pub async fn get_session_index_item(session_id: &str) -> Result<Option<SessionIn
 pub async fn get_session_by_id(
     session_id: &str,
     turns: Option<u32>,
+    lite: Option<bool>,
+    bot: Option<bool>,
 ) -> Result<Option<SessionSnapshot>, Fail> {
     let Some(index_item) = get_session_index_item(session_id).await? else {
         return Ok(None);
@@ -1700,10 +1865,29 @@ pub async fn get_session_by_id(
         },
     };
 
+    let (events, older_before, lite) = match (bot, lite) {
+        (Some(true), _) => (crate::thin::chat(page.events), page.older_before, false),
+        (_, Some(true)) => {
+            let thin = crate::thin::thin(page.events);
+            // The frame is the page of the turns it kept, so what is above it
+            // is read like any page's. Read again rather than reckoned: the
+            // offset is the log's and the events here are parsed. A turn
+            // landing between the two reads moves this later, which overlaps
+            // the page above and never leaves a gap.
+            let older_before = match thin.turns {
+                Some(turns) => read_session_page(session_id, None, turns).await?.older_before,
+                None => page.older_before,
+            };
+            (thin.events, older_before, thin.lost)
+        }
+        _ => (page.events, page.older_before, false),
+    };
+
     Ok(Some(SessionSnapshot {
         index_item,
-        events: page.events,
-        older_before: page.older_before,
+        events,
+        older_before,
+        lite,
     }))
 }
 
@@ -1714,8 +1898,39 @@ pub async fn get_session_page(
     session_id: &str,
     before: u64,
     turns: u32,
+    bot: Option<bool>,
+    lite: Option<bool>,
 ) -> Result<SessionPage, Fail> {
-    Ok(read_session_page(session_id, Some(before), turns).await?)
+    let mut page = read_session_page(session_id, Some(before), turns).await?;
+    if bot == Some(true) {
+        page.events = crate::thin::chat(page.events);
+    } else if lite == Some(true) {
+        page.events = crate::thin::cut(page.events).0;
+    }
+    Ok(page)
+}
+
+/// Every event of the tool calls `call_ids` names, whole: what a row out of a
+/// first frame asks for when its body is wanted, so one call's output is read
+/// and not the transcript's. The log is scanned for the ids as bytes and only
+/// the lines naming one are parsed.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn get_session_calls(session_id: &str, call_ids: Vec<String>) -> Result<Vec<AgentEvent>, Fail> {
+    let buf = match fs::read(get_session_path(session_id).await?).await {
+        Ok(buf) => buf,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(anyhow::Error::from(e).context("could not open session file").into()),
+    };
+    let needles: Vec<String> = call_ids
+        .iter()
+        .filter_map(|id| serde_json::to_string(id).ok())
+        .map(|id| format!("\"callId\":{id}"))
+        .collect();
+    Ok(buf
+        .split(|&b| b == b'\n')
+        .filter(|line| needles.iter().any(|needle| memchr::memmem::find(line, needle.as_bytes()).is_some()))
+        .filter_map(parse_line::<AgentEvent>)
+        .collect())
 }
 
 /// The last thing a session's main thread said, and how many replies it has
@@ -1751,6 +1966,337 @@ pub async fn last_reply(session_id: &str) -> Result<(Option<String>, u32)> {
     Ok((last, since))
 }
 
+/// What `find` picks out of a session's log, read back from the end a few
+/// turns at a time, so a long log is parsed only as far back as the answer.
+pub async fn find_newest<T>(session_id: &str, find: impl Fn(&[AgentEvent]) -> Option<T>) -> Result<Option<T>> {
+    let mut end = None;
+    loop {
+        let page = read_session_page(session_id, end, 8).await?;
+        if let Some(found) = find(&page.events) {
+            return Ok(Some(found));
+        }
+        match page.older_before {
+            Some(before) if end != Some(before) => end = Some(before),
+            _ => return Ok(None),
+        }
+    }
+}
+
+/// A session's log opened for reading, with its length; `None` where it has none.
+pub async fn open_log(session_id: &str) -> Result<Option<(fs::File, u64)>> {
+    match fs::File::open(get_session_path(session_id).await?).await {
+        Ok(file) => {
+            let len = file.metadata().await?.len();
+            Ok(Some((file, len)))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).context("could not open session file"),
+    }
+}
+
+/// Hands `visit` a log `chunk` bytes of whole lines at a time, newest first,
+/// with the byte offset each starts at, until it answers or reading back
+/// reaches `limit` bytes from the end, `len`. Starts at byte `before` where
+/// given. Nothing is parsed here, so a caller searching each chunk for a
+/// needle walks a long log at the speed of that search.
+pub async fn scan_back<T>(
+    file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
+    len: u64,
+    before: Option<u64>,
+    limit: u64,
+    chunk: u64,
+    mut visit: impl FnMut(&[u8], u64) -> Option<T>,
+) -> Result<Option<T>> {
+    use std::io::SeekFrom;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    let floor = len.saturating_sub(limit);
+    let mut start = before.map_or(len, |b| b.min(len));
+    // The older end of the last chunk read, up to its first newline: a line
+    // the next chunk finishes.
+    let mut carry = Vec::new();
+    while start > floor {
+        let from = start.saturating_sub(chunk).max(floor);
+        let mut buf = vec![0; (start - from) as usize];
+        file.seek(SeekFrom::Start(from)).await?;
+        file.read_exact(&mut buf).await?;
+        buf.extend_from_slice(&carry);
+        start = from;
+        let (carry_end, first) = match memchr::memchr(b'\n', &buf) {
+            _ if from == 0 => (0, 0),
+            Some(i) => (i, i + 1),
+            None => (buf.len(), buf.len()),
+        };
+        if let Some(found) = visit(&buf[first..], from + first as u64) {
+            return Ok(Some(found));
+        }
+        buf.truncate(carry_end);
+        carry = buf;
+    }
+    Ok(None)
+}
+
+/// Hands `visit` a log's lines from byte `from` on, oldest first, `chunk`
+/// bytes read at a time, until it answers `false` or the log ends.
+pub async fn scan_forward(
+    file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
+    from: u64,
+    chunk: usize,
+    mut visit: impl FnMut(&[u8]) -> bool,
+) -> Result<()> {
+    use std::io::SeekFrom;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    file.seek(SeekFrom::Start(from)).await?;
+    let mut buf = Vec::new();
+    let mut read_into = vec![0; chunk];
+    loop {
+        let read = file.read(&mut read_into).await?;
+        buf.extend_from_slice(&read_into[..read]);
+        // At the end, a last line with no newline yet is whole as far as it goes.
+        let end = if read == 0 { buf.len() } else { memchr::memrchr(b'\n', &buf).map_or(0, |i| i + 1) };
+        for line in buf[..end].split(|&b| b == b'\n').filter(|l| !l.is_empty()) {
+            if !visit(line) {
+                return Ok(());
+            }
+        }
+        if read == 0 {
+            return Ok(());
+        }
+        buf.drain(..end);
+    }
+}
+
+/// One subagent a session ran, read off its log rather than off a transcript,
+/// so a bot's Tasks tab can list runs older than the chat has loaded.
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentSummary {
+    /// The spawning call's id, as on `SubagentRun`.
+    pub id: String,
+    pub session_id: String,
+    pub task_id: Option<String>,
+    pub label: Option<String>,
+    pub description: Option<String>,
+    pub started_at: String,
+    /// `None` for a run the log never closed: still going, or its child died.
+    pub ended_at: Option<String>,
+}
+
+/// Where the next page of [`list_subagents`] starts reading back from.
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentCursor {
+    /// Index into the session list the first page was asked with.
+    pub session: u32,
+    /// Byte offset to read back from; the file's end where `None`.
+    pub before: Option<u64>,
+    /// Completions already read whose starts lie further back, by run id. A
+    /// run's two lines can straddle a page, and dropping these would read the
+    /// run back as never finished.
+    pub ends: Vec<(String, String)>,
+}
+
+/// A page of [`SubagentSummary`], newest first, and where the next one starts.
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentList {
+    pub runs: Vec<SubagentSummary>,
+    pub next: Option<SubagentCursor>,
+}
+
+/// The subagents `session_id` and then each of `also` ran, newest first, read
+/// backwards from `cursor` until `limit` finished ones are in hand and every
+/// task in `live` has been met: a running run older than both the loaded chat
+/// and the newest finished ones would otherwise show nowhere. Background
+/// shells are left out: a finished one is done with, and a running one is in
+/// the loaded tail.
+///
+/// A page costs what it shows rather than a scan of the log: chunks are read
+/// from the end, and only lifecycle lines, found by a substring check, are
+/// parsed.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn list_subagents(
+    session_id: String,
+    also: Vec<String>,
+    cursor: Option<SubagentCursor>,
+    limit: u32,
+    live: Option<Vec<String>>,
+) -> Result<SubagentList, Fail> {
+    let mut live: HashSet<String> = live.unwrap_or_default().into_iter().collect();
+    let ids: Vec<&String> = std::iter::once(&session_id).chain(&also).collect();
+    let mut cur = cursor.unwrap_or(SubagentCursor { session: 0, before: None, ends: Vec::new() });
+    let mut runs = Vec::new();
+    let want = limit.max(1) as usize;
+    while let Some(id) = ids.get(cur.session as usize) {
+        let path = get_session_path(id).await?;
+        let mut ends = cur.ends.drain(..).collect();
+        let stop = match fs::File::open(&path).await {
+            Ok(mut file) => {
+                let len = file.metadata().await.map_err(anyhow::Error::from)?.len();
+                let end = cur.before.map_or(len, |b| b.min(len));
+                subagents_back(id, &mut file, end, 256 * 1024, &mut ends, &mut live, want, &mut runs).await?
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(anyhow::Error::from(e).context("could not open session file").into()),
+        };
+        match stop {
+            Some(at) => {
+                cur.before = Some(at);
+                cur.ends = ends.into_iter().collect();
+                return Ok(SubagentList { runs, next: Some(cur) });
+            }
+            None => {
+                cur.session += 1;
+                cur.before = None;
+            }
+        }
+    }
+    Ok(SubagentList { runs, next: None })
+}
+
+/// Reads one log back from byte `end`, newest line first, pushing each agent
+/// run onto `out` as its start is met and crossing off each task of `live` it
+/// meets. Once `out` holds `want` finished runs the page is full: reading goes
+/// on only while `live` is not empty, keeping just the running runs it finds,
+/// and the answer is still the offset where the page filled, with `ends` as it
+/// stood there, so the next page reads what was passed over. `None` where the
+/// top of the file came first.
+async fn subagents_back(
+    session_id: &str,
+    file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
+    end: u64,
+    chunk: u64,
+    ends: &mut HashMap<String, String>,
+    live: &mut HashSet<String>,
+    want: usize,
+    out: &mut Vec<SubagentSummary>,
+) -> Result<Option<u64>> {
+    use std::io::SeekFrom;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    let mut finished = out.iter().filter(|r| r.ended_at.is_some()).count();
+    let mut start = end;
+    // The older end of the last chunk read, up to its first newline: a line
+    // the next chunk finishes.
+    let mut carry = Vec::new();
+    // Where the page filled, and the completions pending there.
+    let mut full: Option<(u64, HashMap<String, String>)> = None;
+    while start > 0 {
+        let from = start.saturating_sub(chunk);
+        let mut buf = vec![0; (start - from) as usize];
+        file.seek(SeekFrom::Start(from)).await?;
+        file.read_exact(&mut buf).await?;
+        buf.extend_from_slice(&carry);
+        start = from;
+        // Whole lines begin after the chunk's first newline, or at 0 at the
+        // top; what precedes it is finished by the next chunk.
+        let (carry_end, first) = match buf.iter().position(|&b| b == b'\n') {
+            _ if from == 0 => (0, 0),
+            Some(i) => (i, i + 1),
+            None => (buf.len(), buf.len()),
+        };
+        carry = buf[..carry_end].to_vec();
+        let mut lines = Vec::new();
+        let mut at = first;
+        for line in buf[first..].split(|&b| b == b'\n') {
+            lines.push((at, line));
+            at += line.len() + 1;
+        }
+        for (line_start, line) in lines.into_iter().rev() {
+            let at = from + line_start as u64;
+            match &full {
+                None => {
+                    finished += usize::from(subagent_line(session_id, line, ends, live, out));
+                    if finished >= want {
+                        if live.is_empty() {
+                            return Ok(Some(at));
+                        }
+                        full = Some((at, ends.clone()));
+                    }
+                }
+                Some((filled, kept)) => {
+                    let mut passed = Vec::new();
+                    subagent_line(session_id, line, ends, live, &mut passed);
+                    out.extend(passed.into_iter().filter(|r| r.ended_at.is_none()));
+                    if live.is_empty() {
+                        *ends = kept.clone();
+                        return Ok(Some(*filled));
+                    }
+                }
+            }
+        }
+    }
+    Ok(full.map(|(filled, kept)| {
+        *ends = kept;
+        filled
+    }))
+}
+
+/// Folds one log line into the walk. True where it completed a finished run.
+fn subagent_line(
+    session_id: &str,
+    line: &[u8],
+    ends: &mut HashMap<String, String>,
+    live: &mut HashSet<String>,
+    out: &mut Vec<SubagentSummary>,
+) -> bool {
+    let has = |needle: &[u8]| line.windows(needle.len()).any(|w| w == needle);
+    let (started, completed) = (has(br#""subagent_started""#), has(br#""subagent_completed""#));
+    if !started && !completed {
+        return false;
+    }
+    let Ok(event) = serde_json::from_slice::<AgentEvent>(line) else { return false };
+    let Some(sub) = event.subagent else { return false };
+    // A task is known by its harness handle, or by the spawning call's id
+    // where the harness names none (fx).
+    live.remove(&sub.id);
+    match event.payload {
+        // Codex logs no start, only a main-thread spawn call, so its run is
+        // known from the completion alone, which names the agent on the
+        // envelope.
+        AgentEventPayload::SubagentCompleted { agent_id, .. } if event.harness == Harness::Codex => {
+            live.remove(&agent_id);
+            out.push(SubagentSummary {
+                id: sub.id,
+                session_id: session_id.to_string(),
+                task_id: (!agent_id.is_empty()).then_some(agent_id),
+                label: sub.label,
+                description: None,
+                started_at: event.ts.clone(),
+                ended_at: Some(event.ts),
+            });
+            true
+        }
+        AgentEventPayload::SubagentCompleted { .. } => {
+            ends.insert(sub.id, event.ts);
+            false
+        }
+        AgentEventPayload::SubagentStarted { agent_id, label, description, .. } => {
+            live.remove(&agent_id);
+            let ended_at = ends.remove(&sub.id);
+            if label == "local_bash" || label == "bash" {
+                return false;
+            }
+            let done = ended_at.is_some();
+            out.push(SubagentSummary {
+                id: sub.id,
+                session_id: session_id.to_string(),
+                task_id: (!agent_id.is_empty()).then_some(agent_id),
+                label: sub.label.or(Some(label)),
+                description,
+                started_at: event.ts,
+                ended_at,
+            });
+            done
+        }
+        _ => false,
+    }
+}
+
 /// Events from one stretch of a session's log, and the byte offset the
 /// stretch starts at — `None` once it reaches the top. An offset stays valid
 /// for the life of the file, since the log is only ever appended to.
@@ -1760,6 +2306,89 @@ pub async fn last_reply(session_id: &str) -> Result<(Option<String>, u32)> {
 pub struct SessionPage {
     pub events: Vec<AgentEvent>,
     pub older_before: Option<u64>,
+}
+
+/// The main thread's pictures and recordings written before byte `before`,
+/// newest first, about `limit` of them: for the attachment grid's Load more,
+/// which starts where the loaded transcript does and pages back from there.
+///
+/// Reads backwards in chunks and stops once it has `limit`, so a page costs
+/// what it shows rather than a scan of the log. Only lines that can carry
+/// media are parsed and sent, found by a substring check, plus the calls that
+/// print a recording's path, since the client reads a recording off its call.
+/// A page always opens on a turn, so such a call and its result never land in
+/// two different pages.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn list_attachments(session_id: &str, before: u64, limit: u32) -> Result<SessionPage, Fail> {
+    let path = get_session_path(session_id).await?;
+    let mut file = match fs::File::open(&path).await {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SessionPage { events: Vec::new(), older_before: None })
+        }
+        Err(e) => return Err(anyhow::Error::from(e).context("could not open session file").into()),
+    };
+    let len = file.metadata().await.map_err(anyhow::Error::from)?.len();
+    Ok(read_attachments(&mut file, before.min(len), limit, 256 * 1024).await?)
+}
+
+async fn read_attachments(
+    file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
+    end: u64,
+    limit: u32,
+    chunk: u64,
+) -> Result<SessionPage> {
+    let cut = |buf: &[u8], at_top: bool| {
+        let mut found = 0;
+        newest_line(buf, at_top, |line| {
+            found += media_in(line);
+            found >= limit.max(1) as usize && opens_turn(line)
+        })
+        .map(|(start, _)| start)
+        .or(at_top.then_some(0))
+    };
+    let Some((buf, begins)) = read_back_bytes(file, end, chunk, cut).await? else {
+        return Ok(SessionPage { events: Vec::new(), older_before: None });
+    };
+    let events = buf
+        .split(|&b| b == b'\n')
+        .filter(|line| carries_media(line) || prints_recording(line))
+        .filter_map(parse_line::<AgentEvent>)
+        .filter(|event| event.subagent.is_none())
+        .collect();
+    Ok(SessionPage { events, older_before: (begins > 0).then_some(begins) })
+}
+
+/// A line that may hold a picture or name a recording: the cheap test that
+/// decides which lines are worth parsing.
+fn carries_media(line: &[u8]) -> bool {
+    let has = |needle: &[u8]| line.windows(needle.len()).any(|w| w == needle);
+    has(br#""images":[{"#) || (has(b"/recordings/") && has(b".mp4"))
+}
+
+/// A call that may be `dray browser record stop` or `dray video add`, whose
+/// result names the recording.
+fn prints_recording(line: &[u8]) -> bool {
+    let has = |needle: &[u8]| line.windows(needle.len()).any(|w| w == needle);
+    has(br#""tool_call_started""#) && has(b"dray")
+}
+
+/// How many pictures and recordings a main-thread line holds, near enough to
+/// size a page: a recording is counted wherever its path appears.
+fn media_in(line: &[u8]) -> usize {
+    if !carries_media(line) {
+        return 0;
+    }
+    let Some(event) = parse_line::<AgentEvent>(line).filter(|e| e.subagent.is_none()) else {
+        return 0;
+    };
+    let videos = |text: &str| if text.contains("/recordings/") { text.matches(".mp4").count() } else { 0 };
+    match event.payload {
+        AgentEventPayload::UserMessage { images, .. } => images.len(),
+        AgentEventPayload::ToolCallCompleted { result, .. } => result.images.len() + videos(&result.text),
+        AgentEventPayload::AssistantText { text, .. } => videos(&text),
+        _ => 0,
+    }
 }
 
 /// Reads the newest `turns` turns ending at byte `end` (the file's end where
@@ -1776,17 +2405,18 @@ async fn read_session_page(session_id: &str, end: Option<u64>, turns: u32) -> Re
     };
     let len = file.metadata().await?.len();
 
-    read_page(&mut file, end.map_or(len, |end| end.min(len)), turns, 256 * 1024).await
+    read_page(session_id, &mut file, end.map_or(len, |end| end.min(len)), turns, 256 * 1024).await
 }
 
 async fn read_page(
+    session_id: &str,
     file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
     end: u64,
     turns: u32,
     chunk: u64,
 ) -> Result<SessionPage> {
     let cut = |buf: &[u8], at_top: bool| turn_cut(buf, at_top, turns.max(1)).or(at_top.then_some(0));
-    let (events, begins) = read_back(file, end, chunk, cut).await?.unwrap_or_default();
+    let (events, begins) = read_back(session_id, file, end, chunk, cut).await?.unwrap_or_default();
 
     Ok(SessionPage { events, older_before: (begins > 0).then_some(begins) })
 }
@@ -1795,11 +2425,25 @@ async fn read_page(
 /// in what is in hand to start, and parses only from there. `None` where `cut`
 /// finds nothing all the way to the top.
 async fn read_back(
+    session_id: &str,
+    file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
+    end: u64,
+    chunk: u64,
+    cut: impl Fn(&[u8], bool) -> Option<usize>,
+) -> Result<Option<(Vec<AgentEvent>, u64)>> {
+    Ok(read_back_bytes(file, end, chunk, cut)
+        .await?
+        .map(|(buf, begins)| (parse_log(session_id, &buf), begins)))
+}
+
+/// [`read_back`] without the parse: the bytes from the cut to `end`, and the
+/// offset they begin at.
+async fn read_back_bytes(
     file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
     end: u64,
     mut chunk: u64,
     cut: impl Fn(&[u8], bool) -> Option<usize>,
-) -> Result<Option<(Vec<AgentEvent>, u64)>> {
+) -> Result<Option<(Vec<u8>, u64)>> {
     use std::io::SeekFrom;
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
@@ -1822,14 +2466,43 @@ async fn read_back(
         }
     };
 
-    let events = std::str::from_utf8(&buf[cut..])
-        .context("malformed session file")?
-        .lines()
-        .map(serde_json::from_str::<AgentEvent>)
-        .collect::<Result<Vec<_>, _>>()
-        .context("malformed session file")?;
+    buf.drain(..cut);
+    Ok(Some((buf, start + cut as u64)))
+}
 
-    Ok(Some((events, start + cut as u64)))
+/// Every event in a stretch of log, skipping lines that hold none rather than
+/// failing the read: one torn line must never make a whole chat unopenable.
+fn parse_log(session_id: &str, buf: &[u8]) -> Vec<AgentEvent> {
+    let mut skipped = 0;
+    let events = buf
+        .split(|&b| b == b'\n')
+        .filter(|line| !line.trim_ascii().is_empty())
+        .filter_map(|line| {
+            let event = parse_line(line);
+            skipped += usize::from(event.is_none());
+            event
+        })
+        .collect();
+    if skipped > 0 {
+        eprintln!("[session log] {session_id}: skipped {skipped} unreadable line(s)");
+    }
+    events
+}
+
+/// One log line read as `T`, recovering the event a torn line carries.
+///
+/// A process killed mid-append leaves a fragment with no newline, and the next
+/// append used to land on the same line (`…"subagent":null{"id":…`). Every
+/// event opens with `{"id":"`, which can only be the log's own structure since
+/// quotes inside strings are escaped, so the event is the first such suffix
+/// that parses whole. A fragment alone parses as nothing.
+fn parse_line<T: serde::de::DeserializeOwned>(line: &[u8]) -> Option<T> {
+    const OPEN: &[u8] = br#"{"id":""#;
+    serde_json::from_slice(line).ok().or_else(|| {
+        (1..line.len())
+            .filter(|&at| line[at..].starts_with(OPEN))
+            .find_map(|at| serde_json::from_slice(&line[at..]).ok())
+    })
 }
 
 /// The newest whole line in `buf` that `matches`, as its start and its end
@@ -1869,9 +2542,7 @@ fn after_held(buf: &[u8], at_top: bool, held: &HashSet<String>) -> Option<usize>
     struct Line {
         id: String,
     }
-    newest_line(buf, at_top, |line| {
-        serde_json::from_slice::<Line>(line).is_ok_and(|line| held.contains(&line.id))
-    })
+    newest_line(buf, at_top, |line| parse_line::<Line>(line).is_some_and(|line| held.contains(&line.id)))
     .map(|(_, end)| end)
 }
 
@@ -1897,7 +2568,7 @@ async fn read_since(session_id: &str, held: HashSet<String>) -> Result<Option<Ve
         Err(e) => return Err(e).context("could not open session file"),
     };
     let len = file.metadata().await?.len();
-    let found = read_back(&mut file, len, 64 * 1024, |buf, at_top| after_held(buf, at_top, &held)).await?;
+    let found = read_back(session_id, &mut file, len, 64 * 1024, |buf, at_top| after_held(buf, at_top, &held)).await?;
 
     Ok(found.map(|(events, _)| events))
 }
@@ -1921,11 +2592,9 @@ fn opens_turn(line: &[u8]) -> bool {
         queued: bool,
     }
 
-    let Ok(line) = std::str::from_utf8(line) else {
-        return false;
-    };
-    line.contains(r#""type":"user_message""#)
-        && serde_json::from_str::<Line>(line).is_ok_and(|line| {
+    const NEEDLE: &[u8] = br#""type":"user_message""#;
+    line.windows(NEEDLE.len()).any(|w| w == NEEDLE)
+        && parse_line::<Line>(line).is_some_and(|line| {
             line.subagent.is_none() && line.payload.kind == "user_message" && !line.payload.queued
         })
 }
@@ -1935,19 +2604,13 @@ fn opens_turn(line: &[u8]) -> bool {
 pub async fn list_session_events(session_id: &str) -> Result<Vec<AgentEvent>> {
     let path = get_session_path(session_id).await?;
 
-    let buffer = match fs::read_to_string(&path).await {
+    let buffer = match fs::read(&path).await {
         Ok(buf) => buf,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e).context("could not open session file"),
     };
 
-    let events = buffer
-        .lines()
-        .map(serde_json::from_str::<AgentEvent>)
-        .collect::<Result<Vec<_>, _>>()
-        .context("malformed session file")?;
-
-    Ok(events)
+    Ok(parse_log(session_id, &buffer))
 }
 
 /// Copies a session's log onto a new id, repointing every archived image at the
@@ -2063,25 +2726,44 @@ pub async fn clear_fork_from(session_id: &str) -> Result<bool> {
 }
 
 /// Appends one event as a line to the session's `.jsonl` log.
+///
+/// One blocking hop that opens `O_APPEND`, writes and closes. Four tokio fs
+/// calls plus a `create_dir_all` were ~10 thread handoffs per event. No handle
+/// is kept between events: delete, fork repointing and worktree relocation all
+/// rely on each append opening the file afresh.
 pub async fn append_session_event(session_id: &str, event: AgentEvent) -> Result<()> {
-    let path = get_session_path(session_id).await?;
+    let dir = get_home_app_dir().await?.join("sessions");
+    let path = dir.join(format!("{session_id}.jsonl"));
+    let mut line = serde_json::to_vec(&event)?;
+    line.push(b'\n');
 
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .await
-        .context("failed to open session file")?;
+    tokio::task::spawn_blocking(move || append_line(&dir, &path, &line)).await?
+}
 
-    let line = format!("{}\n", serde_json::to_string(&event)?);
-
-    file.write_all(line.as_bytes()).await?;
-    // tokio's `write_all` answers once the bytes are handed to a blocking task,
-    // not once they are written. The flush waits for that write and carries its
-    // error, so a full disk is reported and two appends keep their order.
-    file.flush().await?;
-
-    Ok(())
+/// `line` onto `path`, creating `dir` only when the open finds it missing, as
+/// `get_sessions_dir` would have before every append.
+fn append_line(dir: &Path, path: &Path, line: &[u8]) -> Result<()> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let open = || std::fs::OpenOptions::new().read(true).create(true).append(true).open(path);
+    let mut file = match open() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(dir)
+                .with_context(|| format!("could not create {}", dir.display()))?;
+            open()
+        }
+        opened => opened,
+    }
+    .context("failed to open session file")?;
+    // A process killed mid-append leaves a line with no newline; writing on
+    // after it glues this event onto the fragment.
+    let mut last = [b'\n'];
+    if file.seek(SeekFrom::End(-1)).is_ok() {
+        file.read_exact(&mut last).context("failed to read session file")?;
+    }
+    if last[0] != b'\n' {
+        file.write_all(b"\n").context("failed to write session file")?;
+    }
+    file.write_all(line).context("failed to write session file")
 }
 
 /// One unreadable line, kept for investigation.
@@ -2149,13 +2831,49 @@ pub async fn record_parse_failure(
 pub async fn next_seq_by_session_id(session_id: &str) -> Result<u64> {
     let path = get_session_path(session_id).await?;
 
-    let buf = match fs::read_to_string(&path).await {
-        Ok(buf) => buf,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(e) => return Err(e).context("could not read session file"),
-    };
+    let seq = tokio::task::spawn_blocking(move || match std::fs::File::open(&path) {
+        Ok(file) => max_seq_of(file),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    })
+    .await?
+    .context("could not read session file")?;
 
-    Ok(max_seq(&buf).map_or(0, |seq| seq + 1))
+    Ok(seq.map_or(0, |seq| seq + 1))
+}
+
+/// [`max_seq`] over a log read a megabyte at a time rather than whole: a 40MB
+/// log was a 40MB buffer faulted in, a third of the resume. Cut at newlines,
+/// so the lines and the UTF-8 check are the ones a whole read would see.
+fn max_seq_of(mut file: impl std::io::Read) -> std::io::Result<Option<u64>> {
+    let mut buf = vec![0; 1 << 20];
+    let (mut held, mut max) = (0, None);
+    loop {
+        if held == buf.len() {
+            buf.resize(buf.len() * 2, 0);
+        }
+        let read = match file.read(&mut buf[held..]) {
+            Ok(read) => read,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        let end = held + read;
+        let whole = match buf[..end].iter().rposition(|&b| b == b'\n') {
+            _ if read == 0 => end,
+            Some(newline) => newline + 1,
+            None => {
+                held = end;
+                continue;
+            }
+        };
+        // Lossy, since a write cut mid-character must not block a resume.
+        max = max.max(max_seq(&String::from_utf8_lossy(&buf[..whole])));
+        if read == 0 {
+            return Ok(max);
+        }
+        buf.copy_within(whole..end, 0);
+        held = end - whole;
+    }
 }
 
 /// The highest `seq`, never the last line's: a Claude Code subagent's events
@@ -2176,7 +2894,7 @@ fn max_seq(buf: &str) -> Option<u64> {
     }
 
     buf.lines()
-        .filter_map(|line| serde_json::from_str::<SeqLine>(line).ok())
+        .filter_map(|line| parse_line::<SeqLine>(line.as_bytes()))
         .map(|line| line.seq)
         .max()
 }
@@ -2193,6 +2911,133 @@ pub async fn get_session_path(session_id: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Newest first, a page ending on its `want`-th finished run, a run whose
+    /// completion and start straddle a page still closed, a shell left out,
+    /// and a Codex run known by its completion alone, across tiny chunks.
+    #[tokio::test]
+    async fn subagents_back_pages_newest_first() {
+        let line = |harness: &str, sub: &str, payload: &str, ts: &str| {
+            format!(r#"{{"id":"e","sessionId":"s","harness":"{harness}","seq":0,"ts":"{ts}","turnId":null,"subagent":{{"id":"{sub}","label":"{sub}"}},"payload":{payload}}}"#)
+        };
+        let start = |sub: &str, label: &str, ts: &str| {
+            line("claude_code", sub, &format!(r#"{{"type":"subagent_started","agentId":"x{sub}","label":"{label}","description":"do {sub}","prompt":null}}"#), ts)
+        };
+        let end = |harness: &str, sub: &str, ts: &str| {
+            line(harness, sub, r#"{"type":"subagent_completed","agentId":"y","status":"completed","summary":null,"usage":null}"#, ts)
+        };
+        let log = [
+            start("a", "Explore", "t1"),
+            start("b", "Explore", "t2"),
+            start("sh", "local_bash", "t3"),
+            end("claude_code", "b", "t4"),
+            start("c", "Explore", "t5"),
+            end("claude_code", "c", "t6"),
+            end("claude_code", "a", "t7"),
+            end("codex", "k", "t8"),
+            start("d", "Explore", "t9"),
+        ]
+        .join("\n")
+            + "\n";
+        let len = log.len() as u64;
+
+        let mut file = std::io::Cursor::new(log.into_bytes());
+        let (mut ends, mut out, mut live) = (HashMap::new(), Vec::new(), HashSet::new());
+        let stop = subagents_back("s", &mut file, len, 64, &mut ends, &mut live, 2, &mut out).await.unwrap();
+        // d is running, k (Codex) and c finished: the page ends at c's start.
+        assert_eq!(out.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["d", "k", "c"]);
+        assert_eq!(out[0].ended_at, None);
+        assert_eq!(out[2].ended_at.as_deref(), Some("t6"));
+        assert!(ends.contains_key("a"), "a's completion rides the cursor");
+
+        let mut rest = Vec::new();
+        let top = subagents_back("s", &mut file, stop.unwrap(), 64, &mut ends, &mut live, 10, &mut rest).await.unwrap();
+        assert_eq!(top, None);
+        assert_eq!(rest.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["b", "a"]);
+        assert_eq!(rest[1].ended_at.as_deref(), Some("t7"));
+        assert_eq!(rest[1].description.as_deref(), Some("do a"));
+
+        // A live task older than the full page keeps the read going until it
+        // is met, keeping only it: `d2` runs past c and b, and the page still
+        // resumes at c's start, as if nothing were hunted.
+        let log2 = [start("d2", "Explore", "t0"), String::from_utf8(file.into_inner()).unwrap()].join("\n");
+        let len2 = log2.len() as u64;
+        let mut file = std::io::Cursor::new(log2.into_bytes());
+        let (mut ends, mut out) = (HashMap::new(), Vec::new());
+        let mut live = HashSet::from(["xd2".to_string()]);
+        let hunted = subagents_back("s", &mut file, len2, 64, &mut ends, &mut live, 2, &mut out).await.unwrap();
+        assert!(live.is_empty());
+        assert_eq!(out.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["d", "k", "c", "d2"]);
+        assert_eq!(hunted, stop.map(|at| at + (len2 - len)));
+        assert!(ends.contains_key("a"), "ends as they stood where the page filled");
+    }
+
+    /// Read in chunks, the answer is the whole read's: lines across a chunk's
+    /// edge, a last line with no newline, a torn line, a payload's own `seq`.
+    #[test]
+    fn max_seq_read_in_chunks_is_the_whole_reads() {
+        struct Trickle<'a>(&'a [u8], usize);
+        impl std::io::Read for Trickle<'_> {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                let n = self.1.min(out.len()).min(self.0.len());
+                out[..n].copy_from_slice(&self.0[..n]);
+                self.0 = &self.0[n..];
+                Ok(n)
+            }
+        }
+        let log = [
+            r#"{"seq":3,"payload":{"seq":900}}"#,
+            r#"{"payload":{"text":"é ✓"},"seq":7}"#,
+            r#"{"seq":2}"#,
+            "",
+            r#"not json {"seq":50}"#,
+            r#"{"seq":5,"payload":{"te"#,
+            "{\"seq\":6}\r",
+            r#"{"seq":4}"#,
+        ]
+        .join("\n");
+        assert_eq!(max_seq(&log), Some(7));
+        for chunk in [1, 2, 3, 7, 64, 4096] {
+            assert_eq!(max_seq_of(Trickle(log.as_bytes(), chunk)).unwrap(), Some(7), "{chunk}-byte reads");
+        }
+        let big = (0..40_000).map(|seq| format!(r#"{{"seq":{seq},"payload":{{"pad":"{}"}}}}"#, "x".repeat(seq % 90))).collect::<Vec<_>>().join("\n");
+        assert_eq!(max_seq_of(big.as_bytes()).unwrap(), max_seq(&big));
+        assert_eq!(max_seq_of(&b""[..]).unwrap(), None);
+        assert_eq!(max_seq_of(&b"{\"seq\":1}\n\xff\n{\"seq\":2}\n"[..]).unwrap(), Some(2));
+    }
+
+    /// An append after a write cut short starts a line of its own, and an
+    /// append onto a whole line or an empty file adds no blank one.
+    #[test]
+    fn an_append_after_a_torn_line_starts_a_new_one() {
+        let dir = std::env::temp_dir().join(format!("dray-torn-{}", Uuid::now_v7()));
+        let path = dir.join("s.jsonl");
+        append_line(&dir, &path, b"one\n").unwrap();
+        append_line(&dir, &path, b"two\n").unwrap();
+        std::fs::write(&path, b"one\ntw").unwrap();
+        append_line(&dir, &path, b"three\n").unwrap();
+        append_line(&dir, &path, b"four\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\ntw\nthree\nfour\n");
+        std::fs::write(&path, b"").unwrap();
+        append_line(&dir, &path, b"five\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "five\n");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An append after the sessions directory went away recreates it and the
+    /// file, as `get_sessions_dir`'s `create_dir_all` before every append did,
+    /// and a later append lands after the first rather than over it.
+    #[test]
+    fn an_append_recreates_a_removed_directory_and_appends() {
+        let dir = std::env::temp_dir().join(format!("dray-append-{}", Uuid::now_v7())).join("sessions");
+        let path = dir.join("s.jsonl");
+        append_line(&dir, &path, b"one\n").unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        append_line(&dir, &path, b"two\n").unwrap();
+        append_line(&dir, &path, b"three\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "two\nthree\n");
+        std::fs::remove_dir_all(dir.parent().unwrap()).ok();
+    }
 
     #[test]
     fn a_worktree_build_names_its_own_dev_home() {
@@ -2236,6 +3081,134 @@ mod tests {
         assert_eq!(ids, ["a", "b"]);
 
         fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    fn tree_item(id: &str, parent: Option<&str>) -> SessionIndexItem {
+        let mut item = SessionIndexItem::new(
+            id,
+            Harness::ClaudeCode,
+            "/p",
+            "/p",
+            None,
+            None,
+            "hi",
+            ModelId::new("opus"),
+            None,
+            ApprovalPolicy::Auto,
+            false,
+            None,
+        );
+        item.title = format!("{id} title");
+        item.parent_session_id = parent.map(str::to_string);
+        item.hidden = parent.is_some();
+        item
+    }
+
+    fn adopted<'a>(items: &'a [SessionIndexItem], id: &str) -> Option<&'a str> {
+        items.iter().find(|i| i.session_id == id)?.adopted_by.as_deref()
+    }
+
+    /// bot → task → sub → subsub. Settling the task hands `sub` to the bot;
+    /// `subsub` still has a live parent and stays put.
+    #[test]
+    fn a_settled_parent_hands_its_sub_task_to_the_nearest_live_ancestor() {
+        let mut items = vec![
+            tree_item("bot", None),
+            tree_item("task", Some("bot")),
+            tree_item("sub", Some("task")),
+            tree_item("subsub", Some("sub")),
+        ];
+        items[1].archived = true;
+        assert_eq!(readopt_in(&mut items, "task", None), ["sub"]);
+        assert_eq!(adopted(&items, "sub"), Some("bot"));
+        assert_eq!(adopted(&items, "subsub"), None);
+        assert_eq!(live_ancestor_in(&items, "sub"), Some("bot"));
+        assert_eq!(live_ancestor_in(&items, "subsub"), Some("sub"));
+
+        // Unsettled, the task takes its sub-task back.
+        items[1].archived = false;
+        assert_eq!(readopt_in(&mut items, "task", None), ["sub"]);
+        assert_eq!(adopted(&items, "sub"), None);
+        assert_eq!(live_ancestor_in(&items, "sub"), Some("task"));
+    }
+
+    /// A bot's task from another machine is the top of its tree here, its
+    /// parent being in no index this server holds.
+    #[test]
+    fn a_walk_reaches_a_root_through_a_deleted_parent() {
+        let mut items = vec![
+            tree_item("task", Some("far-bot")),
+            tree_item("sub", Some("task")),
+            tree_item("gone-mid", Some("sub")),
+            tree_item("subsub", Some("gone-mid")),
+            tree_item("other", None),
+        ];
+        items[3].adopted_by = Some("sub".into());
+        items.retain(|i| i.session_id != "gone-mid");
+        let owed = |i: &SessionIndexItem| i.session_id == "task";
+        for id in ["task", "sub", "subsub"] {
+            let item = items.iter().find(|i| i.session_id == id).unwrap();
+            assert!(reaches_in(&items, item, owed), "{id}");
+        }
+        assert!(!reaches_in(&items, &items[3], owed));
+    }
+
+    /// The task is deleted after its sub-task was adopted: the adoption is the
+    /// only bridge left to the bot.
+    #[test]
+    fn a_deleted_parent_is_bridged_by_the_adoption() {
+        let mut items = vec![
+            tree_item("bot", None),
+            tree_item("mid", Some("bot")),
+            tree_item("task", Some("mid")),
+            tree_item("sub", Some("task")),
+        ];
+        assert_eq!(readopt_in(&mut items, "task", Some("task")), ["sub"]);
+        assert_eq!(adopted(&items, "sub"), Some("mid"));
+        items.retain(|i| i.session_id != "task");
+        assert_eq!(live_ancestor_in(&items, "sub"), Some("mid"));
+        let sub = items.iter().find(|i| i.session_id == "sub").unwrap();
+        assert_eq!(tree_parent_in(&items, sub).map(|p| p.session_id.as_str()), Some("mid"));
+
+        // `mid` settled next: the walk crosses the missing task through the
+        // adoption.
+        items[1].archived = true;
+        assert_eq!(readopt_in(&mut items, "mid", None), ["sub"]);
+        assert_eq!(adopted(&items, "sub"), Some("bot"));
+    }
+
+    /// bot → task → settled child → live grandchild, then the task deleted:
+    /// the settled child keeps a bridge too, or the grandchild's walk stops at
+    /// it with no way on to the bot.
+    #[test]
+    fn a_settled_middle_keeps_the_bridge_for_what_runs_below_it() {
+        let mut items = vec![
+            tree_item("bot", None),
+            tree_item("task", Some("bot")),
+            tree_item("child", Some("task")),
+            tree_item("grand", Some("child")),
+        ];
+        items[2].archived = true;
+        readopt_in(&mut items, "task", Some("task"));
+        items.retain(|i| i.session_id != "task");
+        assert_eq!(adopted(&items, "child"), Some("bot"));
+        assert_eq!(live_ancestor_in(&items, "grand"), Some("bot"));
+    }
+
+    /// Nothing live above it — the bot's chat settled too — is no adoption.
+    #[test]
+    fn nothing_live_above_is_no_adoption() {
+        let mut items = vec![tree_item("bot", None), tree_item("task", Some("bot")), tree_item("sub", Some("task"))];
+        items[0].archived = true;
+        items[1].archived = true;
+        assert!(readopt_in(&mut items, "task", None).is_empty());
+        assert_eq!(live_ancestor_in(&items, "sub"), None);
+    }
+
+    fn live_ancestor_in<'a>(items: &'a [SessionIndexItem], id: &str) -> Option<&'a str> {
+        let item = items.iter().find(|i| i.session_id == id)?;
+        let parent = tree_parent_in(items, item)?;
+        live_from_in(items, parent, None).map(|i| i.session_id.as_str())
     }
 
     /// A redraw loop runs inside one millisecond, where v7's counter bytes hold
@@ -3271,6 +4244,7 @@ mod tests {
             index_item: item,
             events: vec![],
             older_before: None,
+            lite: false,
         })
         .unwrap();
 
@@ -3365,6 +4339,29 @@ mod page_tests {
         assert_eq!(turn_cut(&buf.as_bytes()[1..], false, 2), None);
     }
 
+    /// Load more's pages: newest first, about `limit` pictures each, opening on
+    /// a turn, and carrying no line without one.
+    #[tokio::test]
+    async fn pages_attachments_back() {
+        let shot = |seq: u64| {
+            line(seq, false, serde_json::json!({
+                "type": "user_message", "text": "look", "images": [{"path": format!("/p/{seq}.png"), "url": null, "mimeType": null}],
+                "issues": [], "baseline": null, "queued": false, "from": null, "cwd": null,
+            }))
+        };
+        // Turns 0..6, a picture on each even one; every turn has a reply.
+        let log: String = (0..6u64)
+            .flat_map(|t| [if t % 2 == 0 { shot(t * 2) } else { prompt(t * 2, false) }, text(t * 2 + 1, false)])
+            .collect();
+        let mut file = std::io::Cursor::new(log.clone().into_bytes());
+        let paths = |page: &SessionPage| page.events.iter().map(|e| e.seq).collect::<Vec<_>>();
+
+        let first = read_attachments(&mut file, log.len() as u64, 2, 7).await.unwrap();
+        assert_eq!(paths(&first), [4, 8]);
+        let second = read_attachments(&mut file, first.older_before.unwrap(), 2, 7).await.unwrap();
+        assert_eq!((paths(&second), second.older_before), (vec![0], None));
+    }
+
     /// Pages walked back from the end, through chunks far smaller than a line,
     /// put the whole log back together in order and stop at the top.
     #[tokio::test]
@@ -3376,7 +4373,7 @@ mod page_tests {
         let mut end = log.len() as u64;
         let mut pages = 0;
         loop {
-            let page = read_page(&mut file, end, 2, 7).await.unwrap();
+            let page = read_page("s", &mut file, end, 2, 7).await.unwrap();
             pages += 1;
             let mut these: Vec<u64> = page.events.iter().map(|e| e.seq).collect();
             these.extend(seqs);
@@ -3403,7 +4400,7 @@ mod page_tests {
             let held: HashSet<String> = held.iter().cloned().collect();
             let len = log.len() as u64;
             async move {
-                read_back(&mut file, len, 7, |buf, top| after_held(buf, top, &held))
+                read_back("s", &mut file, len, 7, |buf, top| after_held(buf, top, &held))
                     .await
                     .unwrap()
                     .map(|(events, _)| events.iter().map(|e| e.seq).collect::<Vec<_>>())
@@ -3413,5 +4410,53 @@ mod page_tests {
         assert_eq!(since(&[id(&events[1]), id(&events[3]), "unlogged".into()]).await, Some(vec![4, 5]));
         assert_eq!(since(&[id(&events[5])]).await, Some(vec![]));
         assert_eq!(since(&["unlogged".into()]).await, None);
+    }
+
+    /// A log as a server killed mid-append leaves it: a line cut off with the
+    /// next event glued on, one cut inside a character, and a fragment at the
+    /// end. Every reader keeps each whole event, glued ones included.
+    #[tokio::test]
+    async fn torn_lines_cost_only_themselves() {
+        // `json!` sorts keys; the log is written in field order, `id` first.
+        let real = |line: String| {
+            let event: AgentEvent = serde_json::from_str(&line).unwrap();
+            format!("{}\n", serde_json::to_string(&event).unwrap())
+        };
+        let prompt = |seq| real(prompt(seq, false));
+        let text = |seq| real(text(seq, false));
+        let torn = |line: String, at: usize| line[..at].as_bytes().to_vec();
+        let cut_prompt = prompt(2);
+        let cut_prompt = torn(cut_prompt.clone(), cut_prompt.find(r#""subagent":null"#).unwrap() + 15);
+        let wide = real(line(5, false, serde_json::json!({ "type": "assistant_text", "text": "é ✓ done" })));
+        let mut cut_wide = wide.as_bytes()[..wide.find('✓').unwrap() + 1].to_vec();
+        let tail = text(8);
+        let log: Vec<u8> = [
+            prompt(0).into_bytes(),
+            text(1).into_bytes(),
+            cut_prompt,
+            text(3).into_bytes(),
+            prompt(4).into_bytes(),
+            {
+                cut_wide.extend(prompt(6).into_bytes());
+                cut_wide
+            },
+            text(7).into_bytes(),
+            torn(tail.clone(), tail.len() / 2),
+        ]
+        .concat();
+        let seqs = |events: &[AgentEvent]| events.iter().map(|e| e.seq).collect::<Vec<_>>();
+
+        assert_eq!(seqs(&parse_log("s", &log)), [0, 1, 3, 4, 6, 7]);
+        assert_eq!(max_seq_of(&log[..]).unwrap(), Some(7));
+
+        let mut file = std::io::Cursor::new(log.clone());
+        let page = read_page("s", &mut file, log.len() as u64, 1, 7).await.unwrap();
+        assert_eq!(seqs(&page.events), [6, 7], "the glued prompt opens a turn");
+        let page = read_page("s", &mut file, page.older_before.unwrap(), 2, 7).await.unwrap();
+        assert_eq!((seqs(&page.events), page.older_before), (vec![0, 1, 3, 4], None));
+
+        let held = HashSet::from(["e3".to_string()]);
+        let since = read_back("s", &mut file, log.len() as u64, 7, |buf, top| after_held(buf, top, &held)).await;
+        assert_eq!(seqs(&since.unwrap().unwrap().0), [4, 6, 7]);
     }
 }

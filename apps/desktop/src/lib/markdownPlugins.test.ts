@@ -1,10 +1,16 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { Streamdown } from "streamdown";
 import { describe, expect, it } from "vitest";
 
 import {
   FILE_LINK_CLASS,
   FILE_PATH_CLASS,
   linkBareUrls,
+  LOCAL_IMAGE_CLASS,
+  localImagePath,
   REHYPE_PLUGINS,
+  REHYPE_PLUGINS_WITH_FILE_PATHS,
   TABLE_CELL_CLASS,
   walk,
   wrapCells,
@@ -471,5 +477,61 @@ describe("linkBareUrls", () => {
     ]);
     expect(tree.children?.[1].properties?.href).toBe("https://drayhq.com");
     expect(tree.children?.[3].children?.[0].value).toBe("drayhq.com");
+  });
+});
+
+describe("local images", () => {
+  // The whole pipeline, since the bug lived in the order: sanitize drops a
+  // `file://` source and harden rewrites or blocks every other local one.
+  function render(md: string): string {
+    return renderToStaticMarkup(
+      createElement(Streamdown, { mode: "static", rehypePlugins: REHYPE_PLUGINS_WITH_FILE_PATHS }, md),
+    );
+  }
+
+  function marked(html: string): string[] {
+    const re = new RegExp(`class="${LOCAL_IMAGE_CLASS}" title="([^"]*)"`, "g");
+    return [...html.matchAll(re)].map((m) => m[1]);
+  }
+
+  it("marks every shape of local source an agent writes", () => {
+    const html = render(
+      [
+        "![hero](/Users/me/.dray/browser/recordings/abc/hero.png)",
+        "![a](docs/shot.png) ![b](./shot.png) ![c](file:///Users/me/a%20b.png)",
+        "![d](</Users/me/My Shots/a.png>)",
+      ].join("\n\n"),
+    );
+    expect(marked(html)).toEqual([
+      "/Users/me/.dray/browser/recordings/abc/hero.png",
+      "docs/shot.png",
+      "./shot.png",
+      "/Users/me/a b.png",
+      "/Users/me/My Shots/a.png",
+    ]);
+    expect(html).toContain('data-alt="hero"');
+  });
+
+  it("leaves a web image to Streamdown", () => {
+    const html = render("![web](https://example.com/a.png)");
+    expect(marked(html)).toEqual([]);
+    expect(html).toContain('src="https://example.com/a.png"');
+  });
+
+  it("reads which sources name a file", () => {
+    expect(localImagePath("/a/b.png")).toBe("/a/b.png");
+    expect(localImagePath("/a/My%20b.png")).toBe("/a/My b.png");
+    expect(localImagePath("shot.png")).toBe("shot.png");
+    for (const src of [
+      "https://x.com/a.png",
+      "data:image/png;base64,AA",
+      "//cdn/a.png",
+      "~/a.png",
+      "$HOME/a.png",
+      "#x",
+      "",
+    ]) {
+      expect(localImagePath(src)).toBeNull();
+    }
   });
 });

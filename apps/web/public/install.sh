@@ -72,15 +72,16 @@ else
   die "curl or wget is required."
 fi
 
-# Every `cli-v*` tag, newest first, asked of the releases API rather than
-# guessed at.
+# Every `cli-v*` tag, asked of the releases API rather than guessed at.
 #
 # `/releases/latest/download/` cannot serve here: the app and the CLI publish
 # into the same repo, so that URL belongs to whichever went out most recently,
 # and an app release there carries no `dray-*.tar.gz` at all.
 #
-# The API answers newest-first, so the first match per channel wins. `tr`
-# splits a compact response into lines the `sed` can match one at a time.
+# In no useful order: the app and CLI releases share a commit and a
+# `created_at`, so the API listed cli-v0.14.9 above cli-v0.14.10 and taking the
+# first match installed the older one. `resolve_version` compares them all.
+# `tr` splits a compact response into lines the `sed` can match one at a time.
 #
 # `per_page=100` caps how far back this looks. If the app ever ships 100
 # releases between two `cli-v*` ones the resolver finds nothing, and the refusal
@@ -114,12 +115,15 @@ newest_of() {
   if newer "$1" "$2"; then printf '%s' "$1"; else printf '%s' "$2"; fi
 }
 
-# A beta tag carries a `-` after the version (`cli-v0.12.0-beta.1`).
+# The newest tag on the channel, by `newer` over every one. A beta tag carries
+# a `-` after the version (`cli-v0.12.0-beta.1`); stable skips those, beta
+# takes both.
 resolve_version() {
   tags=$(cli_tags) || return 1
-  stable=$(printf '%s\n' "$tags" | grep -v '^cli-v[^-]*-' | head -n 1)
-  [ "$CHANNEL" = beta ] || { printf '%s' "$stable"; return; }
-  newest_of "$(printf '%s\n' "$tags" | grep '^cli-v[^-]*-' | head -n 1)" "$stable"
+  [ "$CHANNEL" = beta ] || tags=$(printf '%s\n' "$tags" | grep -v '^cli-v[^-]*-' || :)
+  best=
+  for tag in $tags; do best=$(newest_of "$best" "$tag"); done
+  printf '%s' "$best"
 }
 
 # From the binary itself rather than downloaded separately, so the skill can

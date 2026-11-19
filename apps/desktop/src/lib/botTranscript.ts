@@ -6,14 +6,15 @@ import type { JsonValue } from "@/types/serde_json/JsonValue";
 /// One row of a bot's chat. A bot is talked to like a person, so its chat draws
 /// the conversation and the tasks it started, never the tool calls between.
 export type BotItem =
-  | { kind: "user"; event: AgentEvent }
+  /// `reaction` is the bot's emoji on it, the newest where it reacted twice.
+  | { kind: "user"; event: AgentEvent; reaction?: string }
   | { kind: "assistant"; event: AgentEvent }
   /// An error, or a turn that failed: drawn as the transcript draws them, since
   /// a bot turn that fails before answering otherwise ends with no word why.
   | { kind: "notice"; event: AgentEvent }
   /// A task's pull request, posted by `dray session merge-card`.
   | { kind: "card"; event: AgentEvent }
-  | { kind: "task"; key: string; sessionId: string; ts: string }
+  | { kind: "task"; key: string; sessionId: string; ts: string; title?: string }
   | { kind: "report"; event: AgentEvent; sessionId: string; title: string }
   | { kind: "sent"; key: string; target: string; text: string; ts: string }
   /// A message from another bot, by `dray bot send` or a send to its chat.
@@ -322,14 +323,22 @@ export function hasText(text: string): boolean {
 
 /// The rows of a bot's chat, in log order.
 ///
-/// A task is found by its `dray session new` call and named by the id that
-/// command prints alone on its first stdout line — printed that way so a shell
-/// can capture it, which is what makes reading it back here safe.
+/// A task is the `task_started` the server logs as it creates one. A log from
+/// before that event has only the bot's `dray session new` call and the id it
+/// prints alone on its first stdout line, read as a fallback for an id no
+/// event names, so no task draws twice.
 export function botItems(events: readonly AgentEvent[]): BotItem[] {
   const starts = new Set<string>();
   const sends = new Map<string, ReturnType<typeof sentMessages>>();
   const items: BotItem[] = [];
   const undone = undoneLessons(events);
+  const reactions = reactionsOf(events);
+  // Merging from a card settles the task, which takes it off the active index
+  // `taskOf` reads, so its start line is named from the card.
+  const cardTitles = new Map(
+    events.flatMap(({ payload }) => (payload.type === "merge_card" ? [[payload.taskId, payload.title] as const] : [])),
+  );
+  const announced = new Set(events.flatMap(({ payload }) => (payload.type === "task_started" ? [payload.taskId] : [])));
   // Inside a turn Dray's review opened, whose words are for nobody: told to
   // write no reply, the bot sometimes explains itself anyway.
   let review = false;
@@ -342,13 +351,16 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       // reply carries what it said, so the chat names who wrote and folds the rest.
       if (p.from?.botId) items.push({ kind: "botMessage", event, botId: p.from.botId, title: p.from.title });
       else if (p.from) items.push({ kind: "report", event, sessionId: p.from.sessionId, title: p.from.title });
-      else if (!p.kickoff) items.push({ kind: "user", event });
+      else if (!p.kickoff) items.push({ kind: "user", event, reaction: reactions.get(event.id) });
     } else if (p.type === "assistant_text") {
       if (hasText(p.text) && !review) items.push({ kind: "assistant", event });
     } else if (p.type === "error") {
       items.push({ kind: "notice", event });
     } else if (p.type === "merge_card") {
       items.push({ kind: "card", event });
+    } else if (p.type === "task_started") {
+      const title = cardTitles.get(p.taskId) ?? p.title;
+      items.push({ kind: "task", key: event.id, sessionId: p.taskId, ts: event.ts, title });
     } else if (p.type === "learned") {
       for (const file of p.files) {
         items.push({
@@ -385,7 +397,7 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       if (starts.has(p.callId)) {
         // `dray session new` prints the id alone on its line, unlike a send's.
         const id = p.result.text.match(TASK_ID)?.[1];
-        if (id) items.push({ kind: "task", key: p.callId, sessionId: id, ts: event.ts });
+        if (id && !announced.has(id)) items.push({ kind: "task", key: p.callId, sessionId: id, ts: event.ts, title: cardTitles.get(id) });
       }
       // `dray bot send` names the bot it reached on a line of its own, one per
       // send in order; its id still names the bot after a rename. Matched on
@@ -402,6 +414,16 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
     }
   }
   return items;
+}
+
+/// The bot's reaction on each message it reacted to, by message id. Read whole
+/// before the rows, since a reaction lands after its message; the newest wins.
+function reactionsOf(events: readonly AgentEvent[]): Map<string, string> {
+  const reactions = new Map<string, string>();
+  for (const { payload } of events) {
+    if (payload.type === "reaction") reactions.set(payload.messageId, payload.emoji);
+  }
+  return reactions;
 }
 
 const lessonKey = (commit: string, path: string) => `${commit}\0${path}`;
@@ -431,7 +453,8 @@ function undoneLessons(events: readonly AgentEvent[]): Set<string> {
 /// by item key: the bot's reply to the task's last report, everything it did
 /// before the next message came in. The report itself stays folded, since the
 /// reply already says what it held. A stall nudge is Dray's, not the task's, so
-/// it is skipped. With no reply to point at, the line that started the task.
+/// it is skipped. Empty where there is no reply to point at, and the card opens
+/// the task instead.
 export function taskContext(items: readonly BotItem[], sessionId: string): Set<string> {
   let at = items.length - 1;
   for (; at >= 0; at--) {
@@ -450,9 +473,7 @@ export function taskContext(items: readonly BotItem[], sessionId: string): Set<s
     if (item.kind === "user" || item.kind === "report" || item.kind === "botMessage") break;
     keys.add(itemKey(item));
   }
-  if (keys.size > 0) return keys;
-  const started = items.find((i) => i.kind === "task" && i.sessionId === sessionId);
-  return new Set(started ? [itemKey(started)] : []);
+  return keys;
 }
 
 /// An item's React key, as the chat draws it.

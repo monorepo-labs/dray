@@ -301,7 +301,7 @@ fn cards(asks: &[Value], session_id: &str) -> Vec<Value> {
 }
 
 async fn read_session(session_id: &str) -> Result<Value, String> {
-    let snapshot = store::get_session_by_id(session_id, Some(2))
+    let snapshot = store::get_session_by_id(session_id, Some(2), None, None)
         .await
         .map_err(|e| format!("{:#}", anyhow::Error::from(e)))?
         .ok_or_else(|| format!("no session {session_id} on this machine"))?;

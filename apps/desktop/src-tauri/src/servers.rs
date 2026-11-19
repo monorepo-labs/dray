@@ -962,7 +962,7 @@ async fn watch_boats() {
         announce();
         let alerts = boat_alerts();
         if alerts != told || !alerts.as_array().is_none_or(Vec::is_empty) {
-            let sent = server_invoke(LOCAL.into(), "boat_alerts".into(), json!({ "alerts": alerts })).await;
+            let sent = server_invoke(LOCAL.into(), "boat_alerts".into(), json!({ "alerts": alerts }), None).await;
             if sent.is_ok() {
                 told = alerts;
             }
@@ -1161,7 +1161,7 @@ pub async fn extend_boat(id: String, minutes: u32) -> Result<(), String> {
     });
     // Before answering, so the island's pill is gone by the time its Extend
     // returns rather than on `watch_boats`' next tick, up to 30s later.
-    let _ = server_invoke(LOCAL.into(), "boat_alerts".into(), json!({ "alerts": boat_alerts() })).await;
+    let _ = server_invoke(LOCAL.into(), "boat_alerts".into(), json!({ "alerts": boat_alerts() }), None).await;
     Ok(())
 }
 
@@ -1899,6 +1899,13 @@ pub async fn remove_server(id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Titles of a server's tasks that still look unfinished, for Remove's
+/// confirm: what `dray machine rm` warns about, from the same kept list.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn server_unfinished(id: String) -> Vec<String> {
+    crate::machines::unfinished(&id).await
+}
+
 /// Where a remote's last known sessions and projects are kept, so its rows
 /// outlive the app while it cannot be reached (#871). The frontend owns the
 /// shape; this only files it. `None` for an id that could not be a file name.
@@ -2142,7 +2149,7 @@ pub fn reconnect_servers() {
     }
     announce();
     tokio::spawn(async {
-        let Ok(state) = server_invoke(LOCAL.into(), "live_state".into(), Value::Null).await else {
+        let Ok(state) = server_invoke(LOCAL.into(), "live_state".into(), Value::Null, None).await else {
             return;
         };
         if let Some(sink) = SINK.get() {
@@ -2151,10 +2158,79 @@ pub fn reconnect_servers() {
     });
 }
 
+/// Calls a cancel can reach, by the webview's ticket: server and call id.
+static TICKETS: LazyLock<Mutex<HashMap<String, (String, u64)>>> = LazyLock::new(Default::default);
+
+/// Cancels that arrived before their call. Capped, since a cancel for a call
+/// already answered lands here too and nothing would ever take it out.
+static EARLY_CANCELS: LazyLock<Mutex<std::collections::HashSet<String>>> = LazyLock::new(Default::default);
+
+/// A call's place in [`TICKETS`], for as long as it is out.
+struct Ticket(String);
+
+impl Ticket {
+    /// Registers the call, or answers `None` where its cancel came first. One
+    /// lock over both, so a cancel lands either here or on the ticket, never
+    /// between them. Taken before the frame goes out, so a cancel finding the
+    /// ticket always finds the call's waiter too.
+    fn claim(ticket: String, server: &str, call: u64) -> Option<Self> {
+        let mut tickets = TICKETS.lock().unwrap_or_else(|e| e.into_inner());
+        if EARLY_CANCELS.lock().unwrap_or_else(|e| e.into_inner()).remove(&ticket) {
+            return None;
+        }
+        tickets.insert(ticket.clone(), (server.into(), call));
+        Some(Self(ticket))
+    }
+}
+
+impl Drop for Ticket {
+    fn drop(&mut self) {
+        TICKETS.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+    }
+}
+
+/// Drops a `server_invoke` still out: its caller is answered `cancelled` now,
+/// and the server is told to stop, which it does for reads alone (`CANCELLABLE`
+/// in serve.rs). A hover's prefetch is the caller — a transcript the reader
+/// moved away from is not worth the rest of its transfer. An unknown ticket
+/// was answered already, or never sent, and is ignored.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn server_cancel(ticket: String) {
+    let found = {
+        let mut tickets = TICKETS.lock().unwrap_or_else(|e| e.into_inner());
+        let found = tickets.remove(&ticket);
+        if found.is_none() {
+            // Two IPC calls are not ordered, so a cancel can beat its own
+            // call here; `Ticket::claim` refuses that call when it lands.
+            let mut early = EARLY_CANCELS.lock().unwrap_or_else(|e| e.into_inner());
+            if early.len() >= 64 {
+                early.clear();
+            }
+            early.insert(ticket);
+        }
+        found
+    };
+    let Some((server, call)) = found else {
+        return;
+    };
+    let mut list = conns();
+    let Some(conn) = list.iter_mut().find(|c| c.saved.id == server) else {
+        return;
+    };
+    if let Some(waiter) = conn.pending.remove(&call) {
+        let _ = waiter.send(Err(json!("cancelled")));
+        if let Some(outgoing) = &conn.outgoing {
+            let _ = outgoing.send(json!({ "cancel": call }).to_string());
+        }
+    }
+}
+
 /// `invoke` on a remote server: the same command, the same arguments, and the
 /// answer or rejection as the server gave it.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<Value, Value> {
+///
+/// `ticket` names the call for [`server_cancel`].
+pub async fn server_invoke(server: String, cmd: String, args: Value, ticket: Option<String>) -> Result<Value, Value> {
     // This Mac's server is down only while it starts or restarts — seconds —
     // and every screen reads it at launch, so a call waits for it rather
     // than failing into an error the reader sees for nothing.
@@ -2176,7 +2252,7 @@ pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<V
     }
     let call = NEXT_CALL.fetch_add(1, Ordering::Relaxed);
     let (reply, answer) = oneshot::channel();
-    {
+    let ticket = {
         let mut list = conns();
         let Some(conn) = list.iter_mut().find(|c| c.saved.id == server) else {
             return Err(json!(format!("no server named {server}")));
@@ -2184,15 +2260,24 @@ pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<V
         let Some(outgoing) = &conn.outgoing else {
             return Err(json!(format!("{} is not connected", conn.saved.name)));
         };
+        let ticket = match ticket {
+            Some(ticket) => match Ticket::claim(ticket, &server, call) {
+                Some(claimed) => Some(claimed),
+                None => return Err(json!("cancelled")),
+            },
+            None => None,
+        };
         let frame = json!({ "id": call, "cmd": cmd, "args": args }).to_string();
         if outgoing.send(frame).is_err() {
             return Err(json!(format!("{} is not connected", conn.saved.name)));
         }
         conn.pending.insert(call, reply);
-    }
+        ticket
+    };
     let answer = answer
         .await
         .unwrap_or_else(|_| Err(json!("the connection closed before the server answered")));
+    drop(ticket);
     // A created session answers with its snapshot, `null` otherwise. One the
     // server wrote in a shape this build cannot read goes uncounted.
     if let Some(id) = created {
@@ -2200,7 +2285,7 @@ pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<V
             Ok(ok) => store::SessionIndexItem::deserialize(&ok["snapshot"]).ok(),
             // The row is written before the spawn, so a create failing after
             // it still started a session — the rule the local count follows.
-            Err(_) => Box::pin(server_invoke(server.clone(), "session_index_item".into(), json!({ "sessionId": id })))
+            Err(_) => Box::pin(server_invoke(server.clone(), "session_index_item".into(), json!({ "sessionId": id }), None))
                 .await
                 .ok()
                 .and_then(|row| store::SessionIndexItem::deserialize(&row).ok()),
@@ -2220,7 +2305,7 @@ pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<V
 pub async fn update_server(server: String) -> Result<String, String> {
     let beta = conns().iter().find(|c| c.saved.id == server).is_some_and(|c| c.saved.beta);
     let channel = if beta { "beta" } else { "stable" };
-    let reply = server_invoke(server.clone(), "update_server".into(), json!({ "channel": channel })).await;
+    let reply = server_invoke(server.clone(), "update_server".into(), json!({ "channel": channel }), None).await;
     let answer = match reply {
         Ok(answer) => answer.as_str().unwrap_or_default().to_string(),
         Err(err) => {
@@ -2244,7 +2329,7 @@ pub async fn update_server(server: String) -> Result<String, String> {
 /// Restarts `server` now, stopping every turn running there.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn restart_server_now(server: String) -> Result<(), String> {
-    match server_invoke(server, "restart_now".into(), Value::Null).await {
+    match server_invoke(server, "restart_now".into(), Value::Null, None).await {
         Ok(_) => Ok(()),
         Err(err) => Err(err.as_str().map_or_else(|| err.to_string(), str::to_owned)),
     }
@@ -2930,6 +3015,31 @@ mod tests {
         assert!(answer.try_recv().unwrap().is_err());
     }
 
+    /// A cancel answers its caller at once and tells the server which call to
+    /// stop; a cancel beating its call refuses that call when it lands.
+    #[tokio::test]
+    async fn a_cancel_answers_the_call_and_tells_the_server() {
+        // Off, so no run loop of its own fails to connect and clears `outgoing`.
+        let saved = Saved { id: "cancel-test".into(), name: "box".into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() };
+        let mut conn = Conn::new(saved);
+        let (tx, mut frames) = mpsc::unbounded_channel();
+        conn.outgoing = Some(tx);
+        conns().push(conn);
+
+        let call = tokio::spawn(server_invoke("cancel-test".into(), "get_session_by_id".into(), json!({}), Some("t1".into())));
+        let sent: Value = serde_json::from_str(&frames.recv().await.unwrap()).unwrap();
+        server_cancel("t1".into());
+        assert_eq!(call.await.unwrap(), Err(json!("cancelled")));
+        assert_eq!(serde_json::from_str::<Value>(&frames.recv().await.unwrap()).unwrap(), json!({ "cancel": sent["id"] }));
+        assert!(!TICKETS.lock().unwrap().contains_key("t1"), "the ticket outlived its call");
+
+        server_cancel("t2".into());
+        let late = server_invoke("cancel-test".into(), "get_session_by_id".into(), json!({}), Some("t2".into())).await;
+        assert_eq!(late, Err(json!("cancelled")));
+        assert!(frames.try_recv().is_err(), "a call cancelled early was still sent");
+        conns().retain(|c| c.saved.id != "cancel-test");
+    }
+
     /// A server that admits, then either reads (so tungstenite answers our
     /// pings) or goes quiet the way a dead tunnel does.
     async fn fake_server(answers: bool) -> String {
@@ -3206,9 +3316,9 @@ mod tests {
 
         // Idle past `SILENCE`: the server's pongs keep the connection.
         tokio::time::sleep(SILENCE * 3).await;
-        let projects = server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.unwrap();
+        let projects = server_invoke(added.id.clone(), "list_projects".into(), json!({}), None).await.unwrap();
         assert!(projects.is_array());
-        let unknown = server_invoke(added.id.clone(), "open_in_app".into(), json!({})).await.unwrap_err();
+        let unknown = server_invoke(added.id.clone(), "open_in_app".into(), json!({}), None).await.unwrap_err();
         assert!(unknown.as_str().unwrap().contains("unknown command"));
 
         // The token sits in credentials.json, never beside the address.
@@ -3222,7 +3332,7 @@ mod tests {
         remove_server(added.id.clone()).await.unwrap();
         assert!(list_servers().is_empty());
         assert_eq!(crate::issues::credential(&credential_name(&added.id)).await, None);
-        let gone = server_invoke(added.id, "list_projects".into(), json!({})).await.unwrap_err();
+        let gone = server_invoke(added.id, "list_projects".into(), json!({}), None).await.unwrap_err();
         assert!(gone.as_str().unwrap().contains("no server"));
     }
 
@@ -3263,7 +3373,7 @@ mod tests {
         // By address alone, as another Mac with no SSH would add it.
         let added = add_server(first.clone(), token.clone(), Some("tunnel".into()), None).await.unwrap();
         connected("by address");
-        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.is_ok());
+        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({}), None).await.is_ok());
 
         // A restart: the same address, and the row reconnects on its own.
         on_server("systemctl --user restart dray");
@@ -3276,7 +3386,7 @@ mod tests {
         // No Try again: a call fails on the dead socket until the row has
         // found its own way back.
         let t0 = std::time::Instant::now();
-        let call = || tokio::time::timeout(Duration::from_secs(5), server_invoke(added.id.clone(), "list_projects".into(), json!({})));
+        let call = || tokio::time::timeout(Duration::from_secs(5), server_invoke(added.id.clone(), "list_projects".into(), json!({}), None));
         while !matches!(call().await, Ok(Ok(_))) {
             assert!(t0.elapsed() < Duration::from_secs(90), "never came back: {:?}", list_servers()[0].error);
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -3327,7 +3437,7 @@ mod tests {
         // Stored only beside a tunnel address, for connecting without a login.
         let stored = crate::issues::credential(&credential_name(&added.id)).await;
         assert_eq!(stored.is_some(), !list_servers()[0].url.is_empty(), "a token only beside a tunnel");
-        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.is_ok());
+        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({}), None).await.is_ok());
 
         let port = conns()[0].live.clone().unwrap().0.rsplit(':').next().unwrap().to_string();
         let killed = std::process::Command::new("pkill")
@@ -3338,7 +3448,7 @@ mod tests {
         next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["status"] == "disconnected").await;
         next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["stage"] == "finding").await;
         next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["status"] == "connected").await;
-        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.is_ok());
+        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({}), None).await.is_ok());
 
         rename_server(added.id.clone(), " box ".into()).await.unwrap();
         assert_eq!(list_servers()[0].name, "box");
@@ -3349,7 +3459,7 @@ mod tests {
 
         set_server_on(added.id.clone(), false).await.unwrap();
         assert!(!list_servers()[0].on);
-        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.is_err());
+        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({}), None).await.is_err());
         set_server_on(added.id.clone(), true).await.unwrap();
         next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["status"] == "connected").await;
         remove_server(added.id).await.unwrap();

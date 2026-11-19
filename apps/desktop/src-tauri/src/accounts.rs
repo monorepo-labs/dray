@@ -221,6 +221,10 @@ pub struct Account {
     /// reader with an expired token actually wants and the only thing one
     /// method allows.
     pub can_change_method: bool,
+    /// Whether the credential is held by something Dray cannot drive — a pi
+    /// extension's provider, which signs in its own way. Such a row offers no
+    /// Sign in, Reauthorize or Sign out, since none of them would reach it.
+    pub signs_in_elsewhere: bool,
 }
 
 /// Whether a credential will serve.
@@ -607,6 +611,7 @@ async fn claude(cwd: &str) -> anyhow::Result<Vec<Account>> {
         // --help` beside `login` and `status`.
         can_sign_out: status.logged_in,
         can_change_method: auth_options(Harness::ClaudeCode, None).len() > 1,
+        signs_in_elsewhere: false,
     }])
 }
 
@@ -638,6 +643,7 @@ async fn codex(cwd: &str) -> anyhow::Result<Vec<Account>> {
         auth_type: signed_in.then(codex_auth_mode).flatten(),
         can_sign_out: signed_in,
         can_change_method: auth_options(Harness::Codex, None).len() > 1,
+        signs_in_elsewhere: false,
     }])
 }
 
@@ -690,6 +696,12 @@ struct PiCheck {
     reason: Option<String>,
 }
 
+impl PiCheck {
+    fn is_unknown_provider(&self) -> bool {
+        self.status != "ready" && self.reason.as_deref() == Some("provider_not_found")
+    }
+}
+
 /// pi, one row per provider it already serves models for.
 ///
 /// **No provider table decides what is *drawn* here**, for the reason
@@ -704,10 +716,11 @@ struct PiCheck {
 /// which the list cannot say at all.
 async fn pi(cwd: &str) -> anyhow::Result<Vec<Account>> {
     let models = crate::harness::pi::models::list().await;
-    let mut providers: Vec<String> = crate::harness::pi::models::by_provider(&models)
+    let served: Vec<String> = crate::harness::pi::models::by_provider(&models)
         .into_iter()
         .map(|(provider, _)| provider)
         .collect();
+    let mut providers = served.clone();
 
     // A key this module wrote is a credential pi holds whether or not it serves
     // a model list yet, so the store is folded in — without it, pasting a key
@@ -718,11 +731,34 @@ async fn pi(cwd: &str) -> anyhow::Result<Vec<Account>> {
         }
     }
 
-    Ok(futures_util::future::join_all(providers.into_iter().map(|provider| pi_provider(provider, cwd))).await)
+    Ok(futures_util::future::join_all(providers.into_iter().map(|provider| {
+        let serves_models = served.contains(&provider);
+        pi_provider(provider, serves_models, cwd)
+    }))
+    .await)
 }
 
-async fn pi_provider(provider: String, cwd: &str) -> Account {
+async fn pi_provider(provider: String, serves_models: bool, cwd: &str) -> Account {
     let checked = pi_check(&provider, cwd).await;
+
+    // `pi auth check` loads no extensions, so it answers `provider_not_found`
+    // for every provider one registers, pi-claude-bridge's included, while the
+    // model list (which does load them) serves it. Unknown, not signed in: an
+    // extension may hand pi a placeholder key and keep the real login to itself
+    // — the bridge's is Claude Code's, and it lists every model while that is
+    // signed out. Its sign-in is the extension's, so nothing here offers one.
+    if serves_models && checked.as_ref().is_some_and(PiCheck::is_unknown_provider) {
+        return Account {
+            label: pi_label(&provider),
+            provider: Some(provider),
+            state: AccountState::Unknown,
+            auth_type: None,
+            detail: Some("Signs in through its pi extension".to_string()),
+            can_sign_out: false,
+            can_change_method: false,
+            signs_in_elsewhere: true,
+        };
+    }
 
     let (state, auth_type, detail) = match checked {
         Some(check) if check.status == "ready" => (
@@ -748,6 +784,7 @@ async fn pi_provider(provider: String, cwd: &str) -> Account {
         // record to remove.
         can_sign_out: state == AccountState::LoggedIn && pi_store_providers().contains(&provider),
         can_change_method: auth_options(Harness::Pi, Some(&provider)).len() > 1,
+        signs_in_elsewhere: false,
         provider: Some(provider),
         state,
         auth_type,
@@ -833,6 +870,7 @@ async fn fx(cwd: &str) -> anyhow::Result<Vec<Account>> {
                 auth_type: None,
                 can_sign_out: connected,
                 can_change_method: auth_options(Harness::Fx, Some(arg)).len() > 1,
+                signs_in_elsewhere: false,
             }
         })
         .collect())
@@ -1176,6 +1214,7 @@ async fn grok() -> anyhow::Result<Vec<Account>> {
             // environment variable is not Dray's to do.
             can_sign_out: false,
             can_change_method: auth_options(Harness::Grok, None).len() > 1,
+            signs_in_elsewhere: false,
         }]);
     };
 
@@ -1200,6 +1239,7 @@ async fn grok() -> anyhow::Result<Vec<Account>> {
         }),
         can_sign_out: true,
         can_change_method: auth_options(Harness::Grok, None).len() > 1,
+        signs_in_elsewhere: false,
     }])
 }
 
@@ -1454,6 +1494,20 @@ mod tests {
             "Credentials not configured"
         );
         assert_eq!(humanize(String::new()), "");
+    }
+
+    /// What pi 1.5.2 answers for a provider a pi extension registered, as
+    /// captured against pi-claude-bridge. Only that reason marks one; a
+    /// provider with no credential is an ordinary sign-out.
+    #[test]
+    fn pi_names_an_extension_provider_by_not_finding_it() {
+        let read = |line: &str| serde_json::from_str::<PiCheck>(line).unwrap();
+
+        assert!(read(r#"{"status":"not_ready","provider":"claude-bridge","reason":"provider_not_found"}"#)
+            .is_unknown_provider());
+        assert!(!read(r#"{"status":"not_ready","provider":"openai","reason":"credentials_not_configured"}"#)
+            .is_unknown_provider());
+        assert!(!read(r#"{"status":"ready","provider":"anthropic","authType":"oauth"}"#).is_unknown_provider());
     }
 
     /// The seed names what it can and never decides what exists — a provider pi

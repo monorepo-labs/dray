@@ -49,6 +49,7 @@ const row = (item: SessionIndexItem, more: Partial<CrewRow> = {}): CrewRow => ({
   asking: false,
   unread: false,
   background: false,
+  serving: [],
   ...more,
 });
 
@@ -119,6 +120,7 @@ function Demo() {
             <TasksPanel
               rows={ROWS.map((r) => r.row)}
               prOf={(r) => PRS.get(r.item.sessionId)}
+              mergeBlock={() => null}
               onOpen={() => {}}
               onSetFlags={async () => {}}
               onFork={async () => {}}

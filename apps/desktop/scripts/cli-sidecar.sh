@@ -6,9 +6,11 @@
 #
 #   cli-sidecar.sh <out-dir>
 #
-# On a Mac, three files, because `tauri build --target universal-apple-darwin`
-# compiles the app once per arch, and tauri-build copies the sidecar named for
-# each arch's triple before the bundler takes the `-universal-apple-darwin` one.
+# On a Mac, three files: one per arch and the `-universal-apple-darwin` one the
+# bundler ships. tauri-build copies the file named for the triple it compiles
+# beside the binary and fails without one, but never ships it — so release.yml,
+# compiling each arch on its own runner while this runs on another, hands those
+# a stand-in, and only the universal file has to be real.
 # On Linux, one, for the host's triple, since the AppImage is built natively.
 # Named dray-cli, not dray: the app's own executable holds that name. Signed on
 # a Mac by the bundler, which signs what it copies itself.

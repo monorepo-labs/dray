@@ -196,7 +196,10 @@ function AccountRow({
         >
           <span className="text-ui text-muted-foreground">Sign out?</span>
         </CancelOrConfirm>
-      ) : /* A row with nothing signed in has exactly one thing to offer, and
+      ) : account.signsInElsewhere ? /* A pi extension's provider: its sign-in
+             is the extension's, so every button here would end in pi saying
+             it has never heard of the provider. */
+      null : /* A row with nothing signed in has exactly one thing to offer, and
              `can_sign_out` follows being signed in on every harness — so its
              menu was one item behind a caret, which is a button with a step in
              front of it. The action is drawn on the row instead, and the menu
@@ -948,6 +951,7 @@ function useGithub(server: ServerId) {
           authType: null,
           canSignOut: false,
           canChangeMethod: false,
+          signsInElsewhere: false,
         },
       );
       setError(null);

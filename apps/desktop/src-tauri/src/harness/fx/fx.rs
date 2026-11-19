@@ -13,6 +13,7 @@
 //! permission channel, no cancel. See `apps/desktop/FX-PLAN.md`.
 
 pub mod commands;
+pub mod history;
 pub mod mapper;
 pub mod mcp;
 pub mod models;
@@ -633,7 +634,7 @@ async fn open_session(
                 new_session_params(
                     &hello,
                     session_cwd,
-                    &crate::bots::system_prompt(SYSTEM_PROMPT, session_id, session_cwd).await,
+                    &crate::bots::system_prompt(SYSTEM_PROMPT, session_id, session_cwd, crate::session::Harness::Fx).await,
                 ),
                 mcp_servers,
             )
@@ -653,6 +654,7 @@ async fn open_session(
         .await?
         .and_then(|item| item.thread_id)
         .context("this session has no fx session to resume")?;
+    crate::bots::prepare(session_cwd).await;
 
     let answer = open_with_servers(
         client,
@@ -1173,6 +1175,16 @@ async fn read_stdout(
         };
 
         for agent_event in mapper.map(event) {
+            // fx restates a running retry every second with a fresh countdown,
+            // for as long as the network is down. Emitted, never logged: one
+            // line a second is a log read whole on every open, and the next
+            // tick redraws the row after a reconnect anyway.
+            if matches!(agent_event.payload, AgentEventPayload::ApiRetry { .. }) {
+                if let Err(err) = handles.app.emit("agent_event", &agent_event) {
+                    eprintln!("[fx retry emit err] {err}");
+                }
+                continue;
+            }
             crate::session::ingest(&ingest, agent_event, &handles.app).await;
         }
     }
@@ -1222,6 +1234,20 @@ async fn read_stdout(
             }
         }
     }
+
+    // A named subagent still working is a background task, and it died with
+    // the child: emptying the set is what ends its run, since no report can
+    // come now. A no-op where nothing was running.
+    crate::session::settle_dead_child(
+        &handles.session_id,
+        Fx,
+        &seq,
+        &status,
+        &queued,
+        "fx stopped before the turn finished",
+        &handles.app,
+    )
+    .await;
 
     Ok(())
 }

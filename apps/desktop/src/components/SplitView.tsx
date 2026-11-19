@@ -164,11 +164,6 @@ export default function SplitView({
                     <Chat
                       {...paneState(item.sessionId)}
                       {...chat}
-                      // Narrowest the transcript gets, so the rail always gives way.
-                      crowded
-                      // The rail only where the pane has the column's whole
-                      // height: halved, it sits over the text.
-                      rail={column.length === 1}
                       active={active && focused}
                     />
                   )}

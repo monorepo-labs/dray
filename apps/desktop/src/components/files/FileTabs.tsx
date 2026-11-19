@@ -7,7 +7,7 @@ import { useDragReorder } from "@/hooks/useDragReorder";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { tabLabels } from "@/lib/fileTree";
 import { cn } from "@/lib/utils";
-import type { OpenFile } from "@/hooks/useOpenFiles";
+import { isFolder, type OpenFile } from "@/hooks/useOpenFiles";
 
 /// The open files as an editor's tab strip.
 ///
@@ -59,6 +59,7 @@ export default function FileTabs({
           <Tab
             key={file.path}
             path={file.path}
+            dir={isFolder(file)}
             label={labels[i]}
             active={file.path === active}
             onSelect={() => onSelect(file.path)}
@@ -77,6 +78,7 @@ export default function FileTabs({
 
 function Tab({
   path,
+  dir,
   label,
   active,
   onSelect,
@@ -87,6 +89,7 @@ function Tab({
   gliding,
 }: {
   path: string;
+  dir: boolean;
   label: string;
   active: boolean;
   onSelect: () => void;
@@ -144,7 +147,7 @@ function Tab({
         gliding && "transition-[color,background-color,transform] duration-150 ease-out",
       )}
     >
-      <FileIcon path={path} className="size-3.5" />
+      <FileIcon path={path} dir={dir} className="size-3.5" />
       <span className="max-w-40 truncate">{label}</span>
       <Tooltip>
         <TooltipTrigger asChild>

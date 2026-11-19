@@ -64,7 +64,7 @@ pub async fn init(
     fork_from: Option<&str>,
     app: &Sink,
 ) -> Result<Session> {
-    let system_prompt = crate::bots::system_prompt(APPEND_SYSTEM_PROMPT, session_id, session_cwd).await;
+    let system_prompt = crate::bots::system_prompt(APPEND_SYSTEM_PROMPT, session_id, session_cwd, crate::session::Harness::ClaudeCode).await;
     let mut args = vec![
         "-p",
         "--input-format",
@@ -107,10 +107,10 @@ pub async fn init(
 
     // Orchestration calls raise no consent card. An additive allow rule, not a
     // whitelist — everything else still routes through `can_use_tool` exactly
-    // as before. A bot's silent-turn tool rides along: a card for it would ask
+    // as before. A bot's silent-turn tools ride along: a card for one would ask
     // the user to approve the bot saying nothing.
     let bot = crate::bots::bot_at(session_cwd).await.is_some();
-    let allowed = if bot { format!("{ALLOWED_TOOLS},{}", no_reply::TOOL_NAME) } else { ALLOWED_TOOLS.into() };
+    let allowed = if bot { format!("{ALLOWED_TOOLS},{}", no_reply::TOOL_NAMES) } else { ALLOWED_TOOLS.into() };
     args.extend(["--allowedTools", &allowed]);
 
     let mcp_config = no_reply::mcp_config();
@@ -158,7 +158,7 @@ pub async fn init(
         command.env("DRAY_ENDPOINT", endpoint);
     }
     if bot {
-        command.env(no_reply::TERMINAL_TOOLS_ENV, no_reply::TOOL_NAME);
+        command.env(no_reply::TERMINAL_TOOLS_ENV, no_reply::TOOL_NAMES);
     }
 
     let mut child = command
@@ -291,6 +291,7 @@ async fn read_stdout(
             continue;
         }
 
+        let mut filed = false;
         let claude_event = match parser::parse_line(&line) {
             Ok(ev) => ev,
             Err(err) => {
@@ -316,7 +317,15 @@ async fn read_stdout(
                 }
 
                 record_failure(ClaudeCode, session_id, "parse", &why, &line).await;
-                continue;
+
+                // A `result` closes the turn whatever else it says. Dropped,
+                // the session sat `in_progress` with the CLI idle until Stop.
+                if parser::is_unparsed_result(&line) {
+                    filed = true;
+                    ClaudeCodeEvent::Result(parser::ResultEvent::Unrecognized)
+                } else {
+                    continue;
+                }
             }
         };
 
@@ -325,7 +334,13 @@ async fn read_stdout(
             request: parser::ControlRequest::McpMessage { message },
         } = &claude_event
         {
-            let reply = no_reply::response(request_id, message);
+            let reply = match no_reply::reaction_asked(message) {
+                Some(said) => {
+                    let reacted = react(&ingest, &seq, &said, app).await;
+                    no_reply::react_response(request_id, message, reacted)
+                }
+                None => no_reply::response(request_id, message),
+            };
             if let Err(err) = crate::session::write_line(&stdin, &reply).await {
                 eprintln!("[claude mcp reply err] {err}");
             }
@@ -362,8 +377,12 @@ async fn read_stdout(
             ClaudeCodeEvent::Unrecognized => Some("unmodeled line type"),
             _ => None,
         };
-        if let Some(detail) = unmodeled {
+        if let (Some(detail), false) = (unmodeled, filed) {
             record_failure(ClaudeCode, session_id, "unknown_subtype", detail, &line).await;
+        }
+
+        if is_notice_only_result(&claude_event) && status.lock().await.prompt_waiting() {
+            continue;
         }
 
         let agent_event = match mapper.map(claude_event) {
@@ -397,9 +416,93 @@ async fn read_stdout(
     Ok(())
 }
 
+/// A model-less task notification turn's `result`, which closes a turn only
+/// where no prompt is waiting.
+///
+/// A resume files a stranded task's notice ahead of the reader's prompt, and
+/// that `result` ended the reader's turn early, so `/compact` read as done for
+/// the whole compaction (#330, v2.1.282). But a notice queued transcript-only
+/// after a subagent already handed back runs the same model-less turn with no
+/// prompt behind it, and its `init` opens a turn only this `result` can close.
+/// Dropped there too, the session sat `in_progress` until Stop (#1227, v2.1.327).
+fn is_notice_only_result(event: &ClaudeCodeEvent) -> bool {
+    matches!(event, ClaudeCodeEvent::Result(r) if r.is_notice_only())
+}
+
+/// Puts the bot's `react` call on the user's newest message, through the same
+/// counter and log as the turn it closes. Answers the emoji used, or why not.
+async fn react(ingest: &crate::session::Ingest<'_>, seq: &AtomicU64, said: &str, app: &Sink) -> Result<&'static str, String> {
+    let payload = crate::bots::react::reaction(ingest.session_id, ingest.session_cwd, said)
+        .await
+        .map_err(|e| e.to_string())?;
+    let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let event = crate::events::AgentEvent::mint(ingest.session_id.to_string(), ClaudeCode, n, None, None, payload);
+    crate::session::ingest(ingest, event, app).await;
+    Ok(crate::bots::react::emoji(said).unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::APPEND_SYSTEM_PROMPT;
+    use super::{is_notice_only_result, APPEND_SYSTEM_PROMPT};
+    use crate::harness::claude_code::{mapper::Mapper, parser};
+    use crate::session::StatusTracker;
+    use crate::store::SessionStatus;
+
+    const STRANDED: &str = include_str!("fixtures/stranded_task_resume.jsonl");
+
+    /// Each line through what `read_stdout` does to it — the notice-only skip,
+    /// the mapper, the tracker — answering the status after every line.
+    fn replay<'a>(tracker: &mut StatusTracker, lines: impl IntoIterator<Item = &'a str>) -> Vec<SessionStatus> {
+        let mut mapper = Mapper::default();
+        lines
+            .into_iter()
+            .map(|line| {
+                let event = parser::parse_line(line).unwrap();
+                if !(is_notice_only_result(&event) && tracker.prompt_waiting()) {
+                    if let Ok(Some(event)) = mapper.map(event) {
+                        tracker.on_event(&event.payload);
+                    }
+                }
+                tracker.status()
+            })
+            .collect()
+    }
+
+    /// `/compact` sent to a resumed session whose last child left a background
+    /// task behind: the stranded notice's model-less turn must not close the
+    /// prompt's, or the compaction runs behind a turn that already reads done.
+    #[test]
+    fn a_stranded_task_notice_does_not_end_the_prompt_turn() {
+        let mut tracker = StatusTracker::default();
+        tracker.on_send();
+        let lines: Vec<&str> = STRANDED.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert!(is_notice_only_result(&parser::parse_line(lines[2]).unwrap()));
+
+        let statuses = replay(&mut tracker, lines);
+
+        assert_eq!(statuses[2], SessionStatus::InProgress, "the notice's result closed the prompt's turn");
+        assert_eq!(statuses.last(), Some(&SessionStatus::Completed));
+    }
+
+    /// A notice-only turn with no prompt behind it, captured live from v2.1.327:
+    /// a resume with nothing sent, whose stranded task's notice opens a turn
+    /// with `init` and ends it with a model-less `result`. A notice queued
+    /// transcript-only after a subagent's handback runs the same turn. Nothing
+    /// waits on a prompt here, so that `result` is the only close it gets.
+    #[test]
+    fn a_notice_only_turn_with_no_prompt_waiting_closes() {
+        let mut tracker = StatusTracker::default();
+        let statuses = replay(
+            &mut tracker,
+            include_str!("fixtures/notice_only_turn.jsonl").lines().filter(|l| !l.trim().is_empty()),
+        );
+
+        assert_eq!(
+            statuses,
+            vec![SessionStatus::Idle, SessionStatus::InProgress, SessionStatus::Completed]
+        );
+        assert!(!tracker.turn_in_flight());
+    }
 
     /// Same undefined word Codex read as a git parent. Claude has not been seen
     /// to get it wrong, which is not the same as the prompt saying what it means.

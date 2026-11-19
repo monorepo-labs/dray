@@ -418,6 +418,12 @@ pub enum AgentEventPayload {
         model: Option<crate::models::ModelId>,
     },
 
+    /// A session this bot chat started, logged by the server as it creates it.
+    /// The chat's "Started a new task" row reads this, never the bot's shell
+    /// call, whose output a pipe or a script may hide. `title` is the one it
+    /// had then, for once the task is settled and gone from the index.
+    TaskStarted { task_id: String, title: String },
+
     /// A task's pull request, posted by the agent with `dray session merge-card`
     /// or by the app once it is ready, so the reader can land it from the chat.
     /// The PR's live state is read by the frontend; these fields are what the
@@ -454,6 +460,15 @@ pub enum AgentEventPayload {
     LearnedUndone {
         commit: String,
         path: String,
+    },
+
+    /// A bot's emoji on a message the user typed, in place of a reply. Drawn
+    /// as a badge on that message's bubble; a later one on the same message
+    /// replaces it, so 👀 can turn into ✅ once the work is done.
+    Reaction {
+        /// The `user_message` event reacted to, always in this same session.
+        message_id: String,
+        emoji: String,
     },
 
     /// The agent moved the checkout's git state or a pull request mid-turn —
@@ -494,6 +509,11 @@ pub enum AgentEventPayload {
         /// or `unknown`. The last is the majority case and says nothing, so it
         /// is dropped on the way in rather than shown.
         reason: Option<String>,
+        /// The harness's own status line, drawn in place of the attempt count
+        /// where present. fx alone sends one ("Gateway error · next try in 3s ·
+        /// attempt 3") and restates it every second, so its countdown moves.
+        #[serde(default)]
+        message: Option<String>,
     },
     /// A compaction finished, and the transcript before it no longer reaches the
     /// model. Both counts are optional so an unfamiliar wire shape still closes

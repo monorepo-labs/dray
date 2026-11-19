@@ -1,3 +1,4 @@
+import { mockIPC } from "@tauri-apps/api/mocks";
 import React, { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 
@@ -5,6 +6,7 @@ import BotTranscript from "@/components/chat/BotTranscript";
 import StalledTasks from "@/components/chat/StalledTasks";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
+import { ChatSessionContext } from "@/hooks/useChatSession";
 import type { CrewRow } from "@/lib/crew";
 import { compactAge, needLine, onCard, stalledTasks } from "@/lib/stalled";
 import type { AgentEvent, PrMark, SessionIndexItem } from "@/types/events";
@@ -14,11 +16,15 @@ import "../App.css";
 /// `stalledTasks` and `onCard` on made-up tasks: two PRs ready to merge, one of
 /// them asking to be tried first, two idle tasks with a question, a PR waiting on review, one idle task the bot answers
 /// itself, two PRs the task can mend (failing checks, a conflict), and three
-/// left out — working, checks running, and idle only ten minutes. The card
+/// left out — working, checks running, and idle only a minute. The card
 /// starts with the ready PRs alone; every stall goes to the bot, listed under
 /// the chat as the nudges the app sends. **Bot writes needs** lands the lines a
 /// bot would write with `dray session need`, which puts the waiting tasks on
-/// the card and a line under the ready PR that asked to be tried.
+/// the card and a line under the ready PR that asked to be tried. A row click
+/// opens the bot's reply to that task through a stubbed `bot_task_reply`: the
+/// rename, SQLite, pricing and docs search tasks have one, the ⌥ hints task's
+/// bot never answers, and the release notes task has none, so its click opens
+/// the task.
 /// There is no server behind this page. Dismiss is stored for real; Reset
 /// clears it.
 const NOW = Date.now();
@@ -29,11 +35,13 @@ const row = (id: string, title: string, minutes: number, busy = false): CrewRow 
     sessionId: `01a1d000-0000-7000-8000-00000000000${id}`,
     title,
     modified: ago(minutes),
+    cwd: "/repo",
     projectPath: "/repo",
     worktreeName: `task-${id}`,
   } as unknown as SessionIndexItem,
   busy,
   background: false,
+  serving: [],
   asking: false,
   unread: false,
 });
@@ -67,8 +75,28 @@ const ROWS: { row: CrewRow; pr?: PrMark; need?: string; answered?: boolean }[] =
   { row: row("7", "Rename the CLI flags", 50 * 60), pr: pr(917, { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }) },
   { row: row("8", "Audit the landing page", 90, true) },
   { row: row("4", "Add dark mode to docs", 60), pr: pr(916, { checksState: "RUNNING", mergeStateStatus: "BLOCKED" }) },
-  { row: row("5", "Draft the onboarding email", 10) },
+  { row: row("5", "Draft the onboarding email", 1) },
 ];
+
+/// The bot's reply to each task's last report, as `bot_task_reply` reads it
+/// off the chat below; "silent" is a machine asleep, which only the read's
+/// timeout gets past.
+const REPLY: Record<string, string | null | "silent"> = {
+  "1": "The rename button works but crowds the header at narrow widths. Keep it and hide the branch chip, or drop it for double-click? Its screenshot shows the squeeze.",
+  "2": "The SQLite task wants your go-ahead on its migration plan: three steps, JSON kept as a backup for one release. Say the word and it starts.",
+  "3": "Pricing copy is in #908 and ready to merge.",
+  "9": "Docs search is up as #921. It reorders results, so it's waiting on your review.",
+  a: "silent",
+};
+mockIPC((cmd, args) => {
+  // No remote servers, so every row reads as on this machine.
+  if (cmd === "list_servers") return [];
+  // The bot's chat is on This Mac, so the read comes straight here.
+  const a = (args ?? {}) as { taskId?: string };
+  if (cmd !== "bot_task_reply") return null;
+  const reply = REPLY[a.taskId?.slice(-1) ?? ""] ?? null;
+  return reply === "silent" ? new Promise(() => {}) : reply;
+});
 
 const BOT = "01a1cfc8-demo-stalled-bot";
 let seq = 0;
@@ -131,21 +159,8 @@ const EVENTS: AgentEvent[] = [
 function Demo() {
   const [rows, setRows] = useState(ROWS);
   const [shown, setShown] = useState(0);
-  const [focus, setFocus] = useState<{ sessionId: string; at: number } | null>(null);
   const [opened, setOpened] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
-  // What `Chat` does with a pick: the lit block at the top of the pane.
-  useEffect(() => {
-    if (!focus) return;
-    const frame = requestAnimationFrame(() => {
-      const pane = scroller.current;
-      const node = pane?.querySelector<HTMLElement>("[data-bot-focus]");
-      if (!pane || !node) return;
-      const top = node.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
-      pane.scrollTo({ top: Math.max(top - 12, 0), behavior: "smooth" });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [focus]);
   useEffect(() => {
     const pane = scroller.current;
     if (pane) pane.scrollTop = pane.scrollHeight;
@@ -173,8 +188,9 @@ function Demo() {
         <h1 className="text-lg font-medium">Stalled tasks in a bot's chat</h1>
         <p className="max-w-xl text-ui text-muted-foreground">
           Eleven tasks, eight stalled. A ready PR and a task idle on you reach the card; every stall goes to the bot. A row
-          scrolls the chat to the bot's reply about the task; Open task, on hover, opens it. Merge waits a
-          second and takes the row away, as settling does.
+          opens its task's last message under it, and a second click closes it; Open task or ⌘-click opens the task. Merge waits a
+          second and takes the row away, as settling does, and the other PRs read Checking… for four seconds while
+          GitHub works their mergeability out again.
         </p>
         <div className="flex items-center gap-4 text-ui">
           <button type="button" className="underline" onClick={writeNeeds}>
@@ -204,19 +220,31 @@ function Demo() {
                 return r && { sessionId: id, title: r.row.item.title };
               }}
               onOpenSession={() => {}}
-              focus={focus}
             />
+            <ChatSessionContext value={{ cwd: null, sessionId: BOT }}>
             <StalledTasks
               key={shown}
               stalls={card}
+              mergeBlock={() => null}
               now={NOW}
-              onFocus={(sessionId) => setFocus({ sessionId, at: Date.now() })}
               onOpen={(id) => setOpened(ROWS.find((x) => x.row.item.sessionId === id)?.row.item.title ?? id)}
             onMerge={async (r) => {
               await new Promise((done) => setTimeout(done, 1000));
+              // As GitHub does: every other open PR's mergeability is worked
+              // out again, for a few seconds here.
+              const recheck = (settled: boolean) =>
+                setRows((all) =>
+                  all.map((x) => {
+                    const was = ROWS.find((y) => y.row.item.sessionId === x.row.item.sessionId)?.pr;
+                    return x.pr && was ? { ...x, pr: { ...x.pr, mergeable: settled ? was.mergeable : "UNKNOWN" } } : x;
+                  }),
+                );
               setRows((all) => all.filter((x) => x.row.item.sessionId !== r.item.sessionId));
+              recheck(false);
+              setTimeout(() => recheck(true), 4000);
             }}
             />
+            </ChatSessionContext>
           </div>
         </div>
         {opened && <span className="text-ui text-muted-foreground">Open → would open “{opened}”</span>}

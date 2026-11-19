@@ -209,9 +209,12 @@ function patchReady(sid: string, path: string, next: (body: Ready) => Ready) {
 /// store would put this rule somewhere it cannot be read from.
 export function openPath(sid: string | null, raw: string, line?: number): void {
   // An agent names its own machine's paths, so a remote session's are keyed
-  // on its server before either panel reads one.
-  const path = qualify(raw, serverOfSession(sid));
-  if (isMarkdownPath(path)) return openDoc(sid, path);
+  // on its server before either panel reads one. A folder link's trailing
+  // slash is dropped, or `/x/` and `/x` open as two tabs — but read first,
+  // since it says a `notes.md/` is a folder and no doc.
+  const folder = /.\/+$/.test(raw);
+  const path = qualify(raw.replace(/(?<=.)\/+$/, ""), serverOfSession(sid));
+  if (!folder && isMarkdownPath(path)) return openDoc(sid, path);
   openInFiles(sid, path, line);
 }
 

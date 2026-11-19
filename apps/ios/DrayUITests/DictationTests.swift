@@ -37,7 +37,7 @@ final class DictationTests: XCTestCase {
         let orb = app.descendants(matching: .any)["orb"]
         XCTAssertTrue(orb.waitForExistence(timeout: 15), "no dock in the session")
         snap(app, "1-orb")
-        orb.press(forDuration: 0.6)
+        orb.tap()
 
         let stop = app.buttons["Done"]
         XCTAssertTrue(stop.waitForExistence(timeout: 10), "recording never started")

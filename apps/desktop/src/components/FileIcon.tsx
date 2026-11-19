@@ -7,10 +7,20 @@ import { cn } from "@/lib/utils";
 /// These are full-colour brand marks, which is a deliberate exception to the
 /// monochrome chrome around them: colour is the whole reason to prefer them over
 /// one generic glyph, since it makes a file's type readable before its name is.
-export default function FileIcon({ path, className }: { path: string; className?: string }) {
+export default function FileIcon({
+  path,
+  dir = false,
+  className,
+}: {
+  path: string;
+  /// Draw the folder glyph. A path alone can't say, since `src` is as good a
+  /// file name as a folder name.
+  dir?: boolean;
+  className?: string;
+}) {
   return (
     <img
-      src={fileIconSrc(path)}
+      src={fileIconSrc(path, dir)}
       alt=""
       aria-hidden
       draggable={false}

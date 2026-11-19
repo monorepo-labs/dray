@@ -1,7 +1,7 @@
 import { ChevronRight } from "lucide-react";
 import Orb from "@/components/Orb";
 
-import type { SubagentRun } from "@/lib/transcript";
+import { canOpenTab, opensTab, type SubagentRun } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 
 /// The subagent's place in the main conversation: one compact row. It never
@@ -29,12 +29,18 @@ export default function SubagentRow({
   // A run in the background is not work the reader is waiting on: the tasks
   // indicator already says it is up, and a dev server would shimmer forever.
   const running = !run.done && !run.background;
+  // fx's tab is empty until the child's turn is saved, so the row waits too.
+  const locked = opensTab(run) && !canOpenTab(run);
 
   return (
     <button
       type="button"
       onClick={() => onOpen(run.id)}
-      className="group flex w-full cursor-pointer items-center gap-2 text-left text-chat"
+      disabled={locked}
+      className={cn(
+        "group flex w-full items-center gap-2 text-left text-chat",
+        locked ? "cursor-default" : "cursor-pointer",
+      )}
     >
       {/* The orb *is* the running state, so it goes when the run ends rather
           than settling into a resting pose — a still orb next to a finished run
@@ -50,7 +56,9 @@ export default function SubagentRow({
         {detail}
       </span>
 
-      <ChevronRight className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+      {!locked && (
+        <ChevronRight className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+      )}
     </button>
   );
 }

@@ -1,3 +1,4 @@
+import { SignalSlashIcon } from "@heroicons/react/16/solid";
 import { Check, ChevronDown, Ellipsis } from "lucide-react";
 import { useId, useState, useSyncExternalStore } from "react";
 
@@ -9,6 +10,7 @@ import PrStateIcon, { ChecksRunningIcon } from "@/components/PrStateIcon";
 import { RowAction, RowMenu, stageRuns } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
 import { useFixAsks } from "@/hooks/useFixAsks";
+import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,34 +31,78 @@ import type { MergeMethod, PrMark } from "@/types/events";
 
 type Flags = { archived?: boolean; pinned?: boolean; aside?: boolean };
 
-type TaskState = "asking" | "busy" | "idle";
+type TaskState = "asking" | "ready" | "soon" | "idle" | "busy";
 
-/// What wants the reader, then what works, then what is done — also the order
-/// the runs are drawn in. Set aside sinks under all three, as in the sidebar.
-const TASK_STATES: TaskState[] = ["asking", "busy", "idle"];
+/// What the reader acts on first: a question, then a PR to merge, then one
+/// about to be, then idle tasks, with working ones last since they need
+/// nothing yet. Not the sidebar's order, which leads with working. Set aside
+/// sinks under all of them.
+const TASK_STATES: TaskState[] = ["asking", "ready", "soon", "idle", "busy"];
 
-/// Needs you with working, as the sidebar pairs needs you with unread: each
-/// row's own mark, yellow title or orb, tells them apart.
-const SHARED_BREAKS: TaskState[][] = [["asking", "busy"]];
+/// Neighbouring single rows share a break, as the sidebar pairs needs you with
+/// unread: each row's own mark, yellow title, Merge, spinner or orb, tells
+/// them apart.
+const SHARED_BREAKS: TaskState[][] = [TASK_STATES];
 
-/// A run takes the strongest state in it, which only matters for the one run
-/// a short list draws.
-const taskState = (rows: CrewRow[]): TaskState =>
-  rows.some((r) => r.asking) ? "asking" : rows.some((r) => r.busy || r.background) ? "busy" : "idle";
+/// Where Merge shows: GitHub says it can land.
+const canMerge = (pr: PrMark | undefined): boolean =>
+  pr?.state === "OPEN" && !pr.isDraft && readyToMerge(pr) === true;
+
+/// Waiting on something outside the task that will likely pass on its own.
+/// Failing checks, conflicts and changes requested are the task's to mend, so
+/// they file with idle.
+const SOON = new Set<PrStatusKey>(["checksRunning", "needsReview", "unknown"]);
+
+/// The PR state wins over working, since Merge is what the reader came for.
+function rowState(row: CrewRow, pr: PrMark | undefined): TaskState {
+  if (row.asking) return "asking";
+  if (canMerge(pr)) return "ready";
+  if (pr?.state === "OPEN" && !pr.isDraft && SOON.has(prStatus(pr).key)) return "soon";
+  return row.busy || row.background ? "busy" : "idle";
+}
+
+export type TaskCounts = {
+  working: number;
+  ready: number;
+  /// Every other task: needs you, waiting on its PR, idle.
+  other: number;
+};
+
+/// What the bot composer's status counts, off `rowState` so it files a task
+/// where the Tasks tab does. Set-aside tasks count nowhere, as the tab's own
+/// count leaves them out. A task whose only activity is a background task is
+/// idle here: the status counts tasks, not what runs under them.
+export function taskCounts(rows: CrewRow[], prOf: (row: CrewRow) => PrMark | undefined): TaskCounts {
+  const counts: TaskCounts = { working: 0, ready: 0, other: 0 };
+  for (const row of rows) {
+    if (row.item.aside) continue;
+    const state = rowState(row, prOf(row));
+    if (state === "ready") counts.ready++;
+    else if (state === "busy" && row.busy) counts.working++;
+    else counts.other++;
+  }
+  return counts;
+}
 
 /// The Pinned rows, then the runs drawn under them with a break between each.
 /// Sorted by state first, since a short list draws as one run and would
 /// otherwise keep newest-first, an idle task above one waiting on the reader.
-export function taskRuns(rows: CrewRow[]): { pinned: CrewRow[]; runs: CrewRow[][] } {
-  const rank = (r: CrewRow) => TASK_STATES.indexOf(taskState([r]));
-  const sorted = [...rows].sort((a, b) => rank(a) - rank(b));
+export function taskRuns(
+  rows: CrewRow[],
+  prOf: (row: CrewRow) => PrMark | undefined,
+): { pinned: CrewRow[]; runs: CrewRow[][] } {
+  const rank = new Map(rows.map((r) => [r, TASK_STATES.indexOf(rowState(r, prOf(r)))]));
+  const sorted = [...rows].sort((a, b) => rank.get(a)! - rank.get(b)!);
+  // A run takes its strongest state, which only matters for the one run a
+  // short list draws.
+  const runState = (run: CrewRow[]) => TASK_STATES[Math.min(...run.map((r) => rank.get(r)!))];
   // Pinned under its own heading, as the sidebar draws it. Setting aside
   // unpins, so the two never meet.
   const pinned = sorted.filter((r) => r.item.pinned && !r.item.aside);
   const aside = sorted.filter((r) => r.item.aside);
   const byState = stageRuns(
     sorted.filter((r) => !r.item.aside && !pinned.includes(r)).map((r) => [r]),
-    taskState,
+    runState,
     SHARED_BREAKS,
   );
   const runs = [...TASK_STATES.map((s) => byState.get(s) ?? []), aside].filter((run) => run.length);
@@ -77,8 +123,10 @@ export default function TasksPanel({
   onDelete,
   onDetach,
   onMerge,
+  mergeBlock,
   onFixConflicts,
   now,
+  children,
 }: {
   rows: CrewRow[];
   /// The pull request a task's branch carries, for the mark the sidebar draws.
@@ -90,21 +138,28 @@ export default function TasksPanel({
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
+  /// Why a ready row offers no Merge, or `null` where it does.
+  mergeBlock: (row: CrewRow, pr: PrMark) => string | null;
   /// Asks the task's own agent, which holds the branch, to resolve and push.
   onFixConflicts: (row: CrewRow, pr: PrMark) => Promise<void>;
   /// The clock a fix's age is read against, ticking once a minute.
   now: number;
+  /// Drawn under the list in the same scroller: the bot's own runs.
+  children?: React.ReactNode;
 }) {
   const fixAsks = useFixAsks();
   if (rows.length === 0) {
     return (
-      <p className="px-4 py-6 text-ui text-muted-foreground">
-        Nothing handed off yet. Work this bot starts shows up here.
-      </p>
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <p className="px-3 py-6 text-ui text-muted-foreground">
+          Nothing handed off yet. Work this bot starts shows up here.
+        </p>
+        {children}
+      </div>
     );
   }
 
-  const { pinned, runs } = taskRuns(rows);
+  const { pinned, runs } = taskRuns(rows, prOf);
   const draw = (row: CrewRow) => (
     <TaskRow
       key={row.item.sessionId}
@@ -116,13 +171,15 @@ export default function TasksPanel({
       onDelete={onDelete}
       onDetach={onDetach}
       onMerge={onMerge}
+      mergeBlock={mergeBlock}
       onFixConflicts={onFixConflicts}
       fixAsk={fixAsks[row.item.sessionId]}
       now={now}
     />
   );
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-1 py-2">
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="flex shrink-0 flex-col px-1 py-2">
       {pinned.length > 0 && (
         <>
           <div className="flex min-h-6 items-center px-2 text-ui text-muted-foreground/70">Pinned</div>
@@ -135,6 +192,8 @@ export default function TasksPanel({
         (i > 0 || pinned.length > 0) && <div key={`gap ${i}`} aria-hidden className="h-4 shrink-0" />,
         ...run.map(draw),
       ])}
+      </div>
+      {children}
     </div>
   );
 }
@@ -154,6 +213,7 @@ function TaskRow({
   onDelete,
   onDetach,
   onMerge,
+  mergeBlock,
   fixAsk,
   now,
 }: {
@@ -165,6 +225,7 @@ function TaskRow({
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
+  mergeBlock: (row: CrewRow, pr: PrMark) => string | null;
   onFixConflicts: (row: CrewRow, pr: PrMark) => Promise<void>;
   fixAsk: FixAsk | undefined;
   now: number;
@@ -176,8 +237,10 @@ function TaskRow({
   const server = serverOfPath(item.projectPath);
   const machine = server !== LOCAL ? serverName(server) : null;
   const id = item.sessionId;
+  const prefetch = useHoverPrefetch(id);
   const working = row.busy && !row.asking;
-  const mergeable = pr?.state === "OPEN" && !pr.isDraft && readyToMerge(pr) === true;
+  const mergeable = canMerge(pr);
+  const blocked = mergeable && pr ? mergeBlock(row, pr) : null;
   // Merging here or from a merge card settles already, so the button is only
   // for a PR merged elsewhere, say the PR panel in the task's own tab. Never
   // mid-turn either way: settling kills the child.
@@ -212,8 +275,15 @@ function TaskRow({
         tabIndex={0}
         onClick={(e) => onOpen(id, isModClick(e))}
         onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onOpen(id, isModClick(e))}
-        onPointerEnter={() => setHovered(true)}
-        onPointerLeave={() => setHovered(false)}
+        onPointerEnter={(e) => {
+          setHovered(true);
+          prefetch.onPointerEnter(e);
+        }}
+        onPointerLeave={() => {
+          setHovered(false);
+          prefetch.onPointerLeave();
+        }}
+        onPointerDown={prefetch.onPointerDown}
         className={cn(
           "group flex w-full cursor-pointer flex-col rounded-md px-2 text-left text-ui text-muted-foreground outline-none hover:bg-muted/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-muted/50",
           item.aside && "opacity-50",
@@ -271,6 +341,16 @@ function TaskRow({
 
         <MachineMark machine={machine} />
 
+        {/* Idle, not working: the server waits on the reader to try it. */}
+        {row.serving.length > 0 && (
+          <span
+            className="shrink-0 text-[12px] text-muted-foreground tabular-nums"
+            title={`Serving on ${row.serving.map((p) => `localhost:${p}`).join(", ")}`}
+          >
+            :{row.serving[0]}
+          </span>
+        )}
+
         {words && <span className={cn("shrink-0 text-[12px]", TONE_TEXT[words.tone])}>{words.label}</span>}
 
         {/* Opens the pull request in Dray's browser; ⌘-click, the system's. */}
@@ -289,7 +369,15 @@ function TaskRow({
           </button>
         )}
 
-        {mergeable && pr && <MergeControl onMerge={(method) => onMerge(row, pr, method)} />}
+        {mergeable && pr && (blocked ? (
+          // Its machine is down and this one can't merge for it: the offline
+          // mark in Merge's place, saying why.
+          <span className="flex shrink-0 px-1" title={blocked}>
+            <SignalSlashIcon className="size-3.5 text-muted-foreground" aria-label={blocked} />
+          </span>
+        ) : (
+          <MergeControl onMerge={(method) => onMerge(row, pr, method)} />
+        ))}
         {/* Off while the bot fixes conflicts itself, on its nudge. */}
         {/* {status?.key === "conflict" && pr && <FixConflicts onFix={() => onFixConflicts(row, pr)} />} */}
         </span>

@@ -62,6 +62,8 @@ which are today's features under a name, and skips `dray-serve` because of its
 ```bash
 cd apps/desktop/src-tauri
 cargo build --no-default-features --features serve --bin dray-serve
+# what release-cli.yml ships, into target/serve/
+cargo build --profile serve --no-default-features --features serve --bin dray-serve
 ```
 
 **Required check, every change to the core:**
@@ -93,7 +95,7 @@ frontend wrapper is a few lines:
 ```
 
 **A hello carrying `"deflate":true` gets large frames compressed** (#712): every
-frame from 16KB up arrives as a binary frame of raw-deflated JSON, everything
+frame from 4KB up (16KB before #1236) arrives as a binary frame of raw-deflated JSON, everything
 smaller stays text. A transcript page is 0.6–4MB of JSON and deflates about 5×,
 which on a slow link is most of the wait; tungstenite has no permessage-deflate
 to do it. The app offers it to remote servers only, never to loopback. A server

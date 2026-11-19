@@ -77,6 +77,11 @@ struct PrUnavailable: Decodable, Equatable {
     }
 }
 
+/// `work_status`'s answer, read for the branch a checkout is on.
+struct WorkStatus: Decodable {
+    let branch: String?
+}
+
 /// The branch a session's work lands on; `sessionBranch` in `pr.ts`, whose
 /// comment carries the why. HEAD wins while the session has a checkout of its
 /// own, a relocated session's shared checkout never answers, and the rest is

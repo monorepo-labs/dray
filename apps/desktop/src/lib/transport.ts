@@ -64,7 +64,7 @@ type Rec = Record<string, unknown>;
 
 /// Qualifies the path fields of a project, index item or snapshot, and of
 /// a send's or fork's `snapshot`. Events inside are left as the agent wrote them.
-function qualifyRecord(value: unknown, server: ServerId): unknown {
+export function qualifyRecord(value: unknown, server: ServerId): unknown {
   if (Array.isArray(value)) return value.map((v) => qualifyRecord(v, server));
   if (!value || typeof value !== "object") return value;
   const out: Rec = { ...(value as Rec) };
@@ -105,6 +105,7 @@ const QUALIFIED = new Set([
 const QUALIFIED_EVENTS: Record<string, (payload: unknown, server: ServerId) => unknown> = {
   session_created: qualifyRecord,
   session_changed: qualifyRecord,
+  session_model_changed: qualifyRecord,
   doc_changed: (payload, server) => (typeof payload === "string" ? qualify(payload, server) : payload),
 };
 
@@ -149,10 +150,12 @@ export const APP_COMMANDS = new Set([
   "local_server",
   "add_server",
   "remove_server",
+  "server_unfinished",
   "save_server_cache",
   "server_caches",
   "reconnect_servers",
   "server_invoke",
+  "server_cancel",
   "update_server",
   "restart_server_now",
   "servers_behind",
@@ -170,6 +173,8 @@ export const APP_COMMANDS = new Set([
   "install_on_server",
   "run_server_login",
   "run_gh_login",
+  "note_merge_for_star",
+  "star_dray",
   "upload_attachment",
   "resume_boat",
   "extend_boat",
@@ -190,6 +195,7 @@ export const APP_COMMANDS = new Set([
   "browser_move",
   "browser_nav",
   "browser_layout",
+  "browser_pins",
   "browser_shutter_ready",
   "browser_devtools",
   "browser_pick",
@@ -229,9 +235,20 @@ export const APP_COMMANDS = new Set([
   "cancel_transcription",
 ]);
 
+/// What an aborted `invoke` rejects with, so a caller can tell a drop it asked
+/// for from a failure.
+export const CANCELLED = "cancelled";
+
+let nextTicket = 0;
+
 /// `invoke`, routed: to `server` where given, else to the server a qualified
 /// argument names, else to the session's, else local.
-export async function invoke<T>(cmd: string, args?: Rec, server?: ServerId): Promise<T> {
+///
+/// `signal` rejects the call with [`CANCELLED`] at once and tells the server
+/// to stop, so the rest of the answer never crosses the wire. Only reads stop
+/// there (`CANCELLABLE` in serve.rs); any other call still runs to its end.
+export async function invoke<T>(cmd: string, args?: Rec, server?: ServerId, signal?: AbortSignal): Promise<T> {
+  if (signal?.aborted) throw CANCELLED;
   const unwrapped = unwrapArgs(args ?? {});
   const sessionId = typeof unwrapped.args.sessionId === "string" ? unwrapped.args.sessionId : null;
   const target = server ?? unwrapped.server ?? (onThisMac(cmd) ? LOCAL : serverOfSession(sessionId));
@@ -239,11 +256,42 @@ export async function invoke<T>(cmd: string, args?: Rec, server?: ServerId): Pro
   // its server.
   if (sessionId && unwrapped.server) noteSession(sessionId, unwrapped.server);
   if (target === LOCAL) {
-    if (browser) return remoteInvoke<T>(browser, cmd, unwrapped.args);
+    if (browser) return remoteInvoke<T>(browser, cmd, unwrapped.args, signal);
     if (APP_COMMANDS.has(cmd)) return tauriInvoke<T>(cmd, unwrapped.args);
   }
-  const answer = await tauriInvoke<unknown>("server_invoke", { server: target, cmd, args: unwrapped.args });
+  const ticket = signal ? `t${++nextTicket}` : undefined;
+  const call = tauriInvoke<unknown>("server_invoke", { server: target, cmd, args: unwrapped.args, ticket });
+  const answer = await (signal && ticket ? abortable(call, signal, () => void tauriInvoke("server_cancel", { ticket }).catch(() => {})) : call);
   return (QUALIFIED.has(cmd) ? qualifyRecord(answer, target) : answer) as T;
+}
+
+/// `call`, rejected with [`CANCELLED`] the moment `signal` aborts, which also
+/// runs `cancel` — once, and only while the call is still out.
+function abortable<T>(call: Promise<T>, signal: AbortSignal, cancel: () => void): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cancel();
+      reject(CANCELLED);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    const settle = () => {
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+    };
+    call.then(
+      (value) => {
+        settle();
+        resolve(value);
+      },
+      (error) => {
+        settle();
+        reject(error);
+      },
+    );
+  });
 }
 
 /// A URL the webview can load a server's file through: Tauri's asset protocol
@@ -362,11 +410,19 @@ function connect(server: Remote): Promise<WebSocket> {
   return socket;
 }
 
-async function remoteInvoke<T>(server: Remote, cmd: string, args: Rec): Promise<T> {
-  const ws = await connect(server);
+async function remoteInvoke<T>(server: Remote, cmd: string, args: Rec, signal?: AbortSignal): Promise<T> {
+  // Watched while the socket opens too, or a pointer leaving then is lost
+  // and the read goes out once it connects.
+  const ws = await (signal ? abortable(connect(server), signal, () => {}) : connect(server));
+  if (signal?.aborted) throw CANCELLED;
   const id = ++nextId;
-  return new Promise<T>((resolve, reject) => {
+  const call = new Promise<T>((resolve, reject) => {
     pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
     ws.send(JSON.stringify({ id, cmd, args }));
+  });
+  if (!signal) return call;
+  return abortable(call, signal, () => {
+    pending.delete(id);
+    ws.send(JSON.stringify({ cancel: id }));
   });
 }

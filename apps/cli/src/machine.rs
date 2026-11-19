@@ -118,7 +118,10 @@ pub fn run(command: MachineCommand) -> Result<(), String> {
         },
         MachineCommand::Rm(args) => {
             let server = acted_on(Request::RemoveServer(ServerRef { name: args.name }))?;
-            eprintln!("Removed {}.", server.name);
+            if let Some(warning) = unfinished_warning(&server) {
+                eprintln!("{warning}");
+            }
+            eprintln!("Removed {}. Its tasks are cleared from this machine.", server.name);
             Ok(())
         }
         MachineCommand::Rename(args) => {
@@ -174,6 +177,24 @@ fn read_token() -> Result<String, String> {
     Ok(token)
 }
 
+/// What a removal says about tasks last seen running, waiting or holding an
+/// unmerged PR. The server read it off what this machine kept, so a machine
+/// with no app beside it says nothing.
+fn unfinished_warning(server: &ServerSummary) -> Option<String> {
+    let titles = &server.unfinished;
+    let (one, rest) = titles.split_first()?;
+    let names = rest.iter().fold(format!("\"{one}\""), |all, t| format!("{all}, \"{t}\""));
+    let count = match titles.len() {
+        1 => "1 task".to_string(),
+        n => format!("{n} tasks"),
+    };
+    Some(format!(
+        "Warning: {count} on {} still looked unfinished (running, waiting on you, or an unmerged PR): {names}. \
+         Anything still running keeps running there.",
+        server.name
+    ))
+}
+
 fn line(server: &ServerSummary) -> String {
     let mut line = format!("{}  {}  {}", server.name, server.address, server.status);
     if let Some(error) = server.error.as_deref().filter(|_| server.status != "connected") {
@@ -210,6 +231,23 @@ mod tests {
         assert_eq!(add.address, ["ws://box:7317"]);
 
         assert!(Cli::try_parse_from(["dray", "machine", "add", "vps"]).is_err(), "no address");
+    }
+
+    #[test]
+    fn warns_only_about_unfinished_tasks() {
+        let mut server = ServerSummary {
+            id: "a1".into(),
+            name: "vps".into(),
+            address: "root@box".into(),
+            status: "off".into(),
+            error: None,
+            unfinished: Vec::new(),
+        };
+        assert_eq!(unfinished_warning(&server), None);
+        server.unfinished = vec!["Fix login".into(), "Ship docs".into()];
+        let warning = unfinished_warning(&server).unwrap();
+        assert!(warning.starts_with("Warning: 2 tasks on vps"), "{warning}");
+        assert!(warning.contains("\"Fix login\", \"Ship docs\""), "{warning}");
     }
 
     #[test]

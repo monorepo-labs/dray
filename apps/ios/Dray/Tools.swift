@@ -123,7 +123,8 @@ func mcpSummary(_ name: String) -> String? {
 /// `+N -M` for a call that edits a file, from its own arguments. A line
 /// diff over the replaced fragment, as the desktop counts it.
 func editCounts(_ call: ToolCall) -> (added: Int, removed: Int)? {
-    guard call.toolType == "file_edit" else { return nil }
+    // Counted off fragments, a figure would be wrong; the row asks for the call instead.
+    guard call.toolType == "file_edit", !isCut(call.input) else { return nil }
     let input = call.input
     let pairs: [(String, String)]
     if case .array(let edits)? = input["edits"] {
@@ -144,6 +145,10 @@ func editCounts(_ call: ToolCall) -> (added: Int, removed: Int)? {
     }
     return added + removed > 0 ? (added, removed) : nil
 }
+
+/// Whether a call's `input`, or its result's `structured`, was cut by the
+/// server: thin.rs's `CUT` mark, which a remote read asked `lite` carries.
+func isCut(_ value: JSON?) -> Bool { value?["_cut"] == .bool(true) }
 
 /// An error the agent recovers from on its own — a guessed path, a missing
 /// binary — so the row reports it without the red.

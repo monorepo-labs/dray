@@ -1,8 +1,10 @@
-import { invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
+import { CANCELLED, invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
 import { botsOf, isBotPath, keepBots, refreshBots, useBots } from "@/lib/bots";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
-import { indexRow, loadServerCaches, saveServerCache, unreachable, withKept } from "@/lib/serverCache";
+import { indexRow, keptRow, loadServerCaches, saveServerCache, unreachable, withKept } from "@/lib/serverCache";
+import { loginOf, seedLogin, useMergeAccess } from "@/lib/mergeAccess";
+import { keptPrMark, prMarksChanged } from "@/hooks/usePrMarks";
 import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
 import { CloudError, cloudIo, isCloud, onCloud, placeTask, setCloudFailure, setPlacing } from "@/lib/cloud";
 import { keepCloudTranscript, keptCloudTranscript } from "@/lib/cloudTranscripts";
@@ -27,13 +29,14 @@ import {
 import { hiddenChildren, leftToParent } from "@/lib/crew";
 import { repoChanged } from "@/lib/prSync";
 import { dropHeld, dropHeldAsks, heldFor, holdEarlyEvent, isAsk } from "@/lib/earlyEvents";
+import { flushHeld, heldFlagFor, holdFlags, noteFlagWrite, onLanded, overlayHeld, settleAfterSend, unholdFlags, useHeldFlags } from "@/lib/heldFlags";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { AGENT_LABELS, DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
 import { islandOn } from "@/lib/island";
 import { notifyOS } from "@/lib/notify";
-import { setOlderDropper, setOlderLoader } from "@/lib/olderPages";
+import { setCallReader, setOlderDropper, setOlderLoader } from "@/lib/olderPages";
 import { EMPTY_TASKS } from "@/lib/transcript";
 import { botStance, stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId } from "@/lib/provisional";
@@ -45,7 +48,7 @@ import { activeSpace, allowedInSpace, moveSpace, orderProjects, PROJECT_ORDER_KE
 import { FIRST_MOUNT } from "@/lib/turnWindow";
 import { forget, stopWaiting, upload, waitFor } from "@/lib/uploads";
 import type { Draft } from "./useDrafts";
-import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueueChangedEvent, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueueChangedEvent, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionServingEvent, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
 
@@ -139,6 +142,9 @@ export type ApiRetryState = {
   maxRetries: number;
   status: number | null;
   reason: string | null;
+  /// The harness's own status line, drawn in place of the count. fx alone
+  /// sends one, with its countdown to the next try.
+  message: string | null;
 };
 
 /// Sessions whose worktree removal has been asked for and not refused.
@@ -159,6 +165,11 @@ const pathOfProject = (p: Project) => p.path;
 /// from disk at launch and written back there (`serverCache.ts`).
 const lastIndex = new Map<string, SessionIndexItem[]>();
 
+/// Each live remote row as last kept on disk, by session: a row fresh from its
+/// server carries no `prOpen` or `prRepo`, and until its PR is read this run
+/// the kept ones must stand (`keptRow`'s `before`).
+const keptBefore = new Map<string, SessionIndexItem>();
+
 /// Each remote's last projects answer, kept for the same reason.
 const lastProjects = new Map<ServerId, Project[]>();
 
@@ -167,6 +178,10 @@ const lastProjects = new Map<ServerId, Project[]>();
 /// share on screen is the kept one or nothing, and writing nothing back over a
 /// good cache is how a quick quit would lose it.
 const answered = new Set<string>();
+
+/// Whether `server` has sent its session list this run, so a bot's chat on it
+/// can be told apart from a bot with none yet.
+export const sessionsAnswered = (server: ServerId): boolean => answered.has(`${server}:sessions`);
 
 /// Per session, how many index entries have landed. A server's replies and
 /// events leave on separate queues, so a read can answer after a newer change
@@ -189,6 +204,14 @@ const connectedRemotes = (): ServerId[] =>
 /// The transcript's own empty set, so a session with no tasks shares one memo
 /// entry with every reader that passes none.
 const NO_TASKS = EMPTY_TASKS;
+
+/// A transcript read in flight. `kept` once anything but a hover asked for it,
+/// after which no hover's leaving can drop it.
+type TailRead = { read: Promise<boolean>; abort: AbortController; hovers: number; kept: boolean; started: number };
+
+/// Pointer-only transcript reads let run at once. Two covers a pointer crossing
+/// from one row to the next before the first read is let go.
+const HOVER_READS = 2;
 
 /// What a transcript pane draws for one session. The selected session's fields
 /// on the hook's return are this, spread.
@@ -250,6 +273,7 @@ function apiRetryOf(session: SessionSnapshot | null, busy: boolean): ApiRetrySta
       maxRetries: p.maxRetries,
       status: p.status,
       reason: p.reason,
+      message: p.message ?? null,
     };
   }
   return null;
@@ -379,6 +403,10 @@ export function useSessions() {
     // current — and a stale non-empty set survives there across a restart. Only
     // an event this run writes here, which is what makes it honest.
     const [tasksBySession, setTasksBySession] = useState<Record<string, BackgroundTask[]>>({});
+    // sessionId → the ports its background shells serve, where serving is all
+    // that is left of its work (`session_serving`). Valid for the task set it
+    // was said of, so a moved set drops it here as on the server.
+    const [servingBySession, setServingBySession] = useState<Record<string, number[]>>({});
     // sessionId → prompts typed during a running turn, oldest first, still
     // waiting for the backend to hand them to the CLI. Mirrors the queue in
     // `Session`, which is the authority and says so on every `queue_changed`,
@@ -870,6 +898,17 @@ const handleSendMsg = async (
   // The unsent pick this send carries. A later edit made while it is out
   // replaces the map entry, and must survive this send landing.
   const sentPick = sessionId ? unsentPicks.current.get(sessionId) : undefined;
+  // Kept until the send lands: one that fails before reaching the server —
+  // a sandbox that will not resume — leaves the reader's pick standing.
+  let heldAtSend = sessionId ? heldFlagFor(sessionId) : undefined;
+  // A settle held behind a merge goes before the message, never after it:
+  // landing later, it would stop the turn the message starts. Not put back on
+  // a failed send, since a lost reply can hide a message that arrived.
+  if (sessionId && heldAtSend?.archived) {
+    await unholdFlags(sessionId).catch((e) => console.error("could not drop a held settle", e));
+    heldAtSend = undefined;
+  }
+  const sentAt = Date.now();
 
   const existing = sessionId ? selected : undefined;
   // The backend reads the recorded cwd on resume, so this only has to be right
@@ -912,8 +951,9 @@ const handleSendMsg = async (
       setPlacing(null);
     }
   }
-  // A bot's folder is no project, and its chat runs in the folder itself.
-  const worktree = useWorktree && !isBotPath(cwd);
+  // A bot's folder is no project, and its chat runs in the folder itself. A
+  // cloud task always gets a worktree, whatever the saved toggle says.
+  const worktree = (useWorktree || placed !== null) && !isBotPath(cwd);
   const stance = isBotPath(cwd) ? botStance(harness, permissionMode) : stanceFor(harness, permissionMode);
   if (!sessionId) {
     sessionId = crypto.randomUUID();
@@ -970,6 +1010,7 @@ const handleSendMsg = async (
     const shell: SessionSnapshot = {
       events: [provisionalPrompt(provisional, sessionId, harness, message, attachments)],
       olderBefore: null,
+      lite: false,
       sessionId,
       harness,
       cwd,
@@ -1087,6 +1128,9 @@ const handleSendMsg = async (
       baseRef: isNewSession && worktree ? baseRef : null,
       isNewSession,
     });
+    if (heldAtSend) {
+      void settleAfterSend(heldAtSend, sentAt).catch((e) => console.error("could not settle a held flag", e));
+    }
 
     // A turn was already running, so the prompt is held rather than sent. It
     // draws as pending until the backend hands it to the CLI, which arrives as
@@ -1326,6 +1370,13 @@ const handleNewBotSession = (path: string) => {
 const handleNewSession = () => {
   selectionRequestRef.current = null;
   setSelectedSessionId(null);
+  // A bot opened before its first chat aimed the composer at its folder, and a
+  // new task left there would be that bot's chat again. Judged as "not a
+  // project" rather than "a bot's", since a bot just deleted is no longer in
+  // the list that says so. `handleNewBotSession` aims it back after this.
+  setProjectPath((path) =>
+    path && !projects.some((p) => p.path === path) ? (lastSelected(projects)?.path ?? null) : path,
+  );
   // The slot is one value for the whole app, so a failure left in it follows
   // the reader out of the session it happened in. It reports the reader's own
   // last action failing, and leaving a session is leaving that action behind —
@@ -1698,6 +1749,31 @@ const setSessionFlags = async (
   flags: { archived?: boolean; pinned?: boolean; hidden?: boolean; aside?: boolean },
 ): Promise<boolean> => {
   const fail = failUnlessLeft();
+  const server = serverOfSession(sessionId);
+  noteFlagWrite(sessionId);
+  // Set aside or brought back while the session's server is down: held on
+  // this Mac and written there once it answers (#1050). Settle is never held,
+  // since it stops a child only that server can reach.
+  const holdable = flags.aside !== undefined && flags.archived === undefined && flags.hidden === undefined;
+  const hold = async () => {
+    await holdFlags(server, sessionId, { aside: flags.aside!, pinned: flags.pinned });
+    return true;
+  };
+  if (holdable && server !== LOCAL && !serverConnected(server)) {
+    try {
+      return await hold();
+    } catch (e) {
+      fail(e);
+      return false;
+    }
+  }
+  // Only its own server can stop the child, so a stopped one leaves the task
+  // stuck; removing that machine is what clears it from here (#1114).
+  if (flags.archived && server !== LOCAL && !serverConnected(server) && !isCloud(server)) {
+    const name = serverName(server);
+    fail(`${name} isn't connected, so this task can't be settled there. To clear its tasks from here, remove ${name} in Settings → Servers.`);
+    return false;
+  }
   const machine = cloudMachineOf(sessionId);
   // Its machine is deleted with it, so a stopped one is not woken just to
   // write a flag it is about to lose.
@@ -1705,6 +1781,11 @@ const setSessionFlags = async (
     return retireCloudMachine(machine);
   }
   try {
+    // An older held flag is superseded, and must not land after this write.
+    // Ahead of the count, which only the write's own `finally` takes back.
+    if (flags.aside !== undefined) await unholdFlags(sessionId);
+    // Before the write, while the parent's server can still say what it keeps.
+    const away = flags.archived !== undefined ? await childrenElsewhere(sessionId) : [];
     countFlagWrite(machine, 1);
     const updated = await invoke<SessionIndexItem | null>("set_session_flags", {
       sessionId,
@@ -1718,17 +1799,22 @@ const setSessionFlags = async (
     if (!updated) return false;
     applyIndexItem(updated);
     // A hidden child is drawn in this session's crew alone, so it goes where
-    // the parent goes. Awaited, so a caller that refetches the other side
-    // afterwards reads the children already moved.
+    // the parent goes — or stays, a bot's task's sub-task being adopted. The
+    // server walked the whole tree and decided; this list holds one side of
+    // it, so each child is read back rather than judged here. Awaited, so a
+    // caller that refetches the other side afterwards reads them already moved.
     if (flags.archived !== undefined) {
-      await Promise.all(
-        hiddenChildren(sessionIndexItems, sessionId).map((c) =>
-          setSessionFlags(c.sessionId, { archived: flags.archived }),
-        ),
-      );
+      await rereadChildren(sessionId);
+      await Promise.all(away.map((c) => setSessionFlags(c.sessionId, { archived: flags.archived })));
     }
     return true;
   } catch (e) {
+    // Dropped between the check above and the call.
+    if (holdable && server !== LOCAL && !serverConnected(server)) {
+      try {
+        return await hold();
+      } catch {}
+    }
     fail(e);
     return false;
   }
@@ -1960,6 +2046,7 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
   // A stopped machine with nothing else on it is deleted whole, so it is not
   // woken to delete one log first.
   const whole = !!machine && !serverConnected(machine) && (await othersLive(sessionId, machine)) === false;
+  const away = await childrenElsewhere(sessionId);
   try {
     if (!whole) await invoke<boolean>("delete_session", { sessionId });
     if (machine) void (whole ? retireCloudMachine(machine) : retireIfDone(machine));
@@ -1978,14 +2065,17 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
   }
 
   // Read before the row goes. A hidden child has no row of its own to be
-  // deleted from, so it goes with its parent.
-  const children = hiddenChildren(sessionIndexItems, sessionId);
+  // deleted from, so it goes with its parent, unless a bot's task left it
+  // running: the server decided, so each is asked for after the delete.
+  const home = homeOf(sessionId);
+  const children = hiddenChildren(sessionIndexItems, sessionId).filter((c) => homeOf(c.sessionId) === home);
   setSessionIndexItems((prev) => prev.filter((i) => i.sessionId !== sessionId));
   setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
   retireStreamingBlock(sessionId);
   setStatusBySession(({ [sessionId]: _, ...rest }) => rest);
   setWorkingBySession(({ [sessionId]: _, ...rest }) => rest);
   setTasksBySession(({ [sessionId]: _, ...rest }) => rest);
+  setServingBySession(({ [sessionId]: _, ...rest }) => rest);
   setQueuedBySession(({ [sessionId]: _, ...rest }) => rest);
   // Every kind: a card about a session that is gone opens nothing.
   dismissNotice(sessionId);
@@ -1998,8 +2088,55 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
   if (selectedSessionId === sessionId) {
     handleNewSession();
   }
-  await Promise.all(children.map((c) => deleteSession(c.sessionId)));
+  await Promise.all(
+    children.map(async (c) => {
+      const kept = await invoke<SessionIndexItem | null>("session_index_item", { sessionId: c.sessionId }).catch(
+        () => undefined,
+      );
+      if (kept) applyIndexItem(kept);
+      else if (kept === null) await deleteSession(c.sessionId);
+    }),
+  );
+  await Promise.all(away.map((c) => deleteSession(c.sessionId)));
   return true;
+};
+
+const homeOf = (sessionId: string) => {
+  const item = sessionIndexItems.find((i) => i.sessionId === sessionId);
+  return item ? serverOfPath(item.cwd) : serverOfSession(sessionId);
+};
+
+/// The hidden children of `parentId` held on another server — a task started
+/// with `--machine --hidden` — which a settle or delete on the parent's server
+/// cannot reach, so the app carries it to them: unless the parent's server says
+/// it keeps them, a bot's task's sub-tasks outliving it. An older server
+/// answers `unknown command`, read as the cascade it always made.
+const childrenElsewhere = async (parentId: string): Promise<SessionIndexItem[]> => {
+  const home = homeOf(parentId);
+  const away = hiddenChildren(sessionIndexItems, parentId).filter((c) => homeOf(c.sessionId) !== home);
+  if (away.length === 0) return [];
+  const keeps = await invoke<boolean>("session_keeps_children", { sessionId: parentId }).catch(() => false);
+  return keeps ? [] : away;
+};
+
+/// Every hidden session held under `parentId`, read back from the server after
+/// a settle there: it settled them with the parent or left a bot's task's
+/// sub-tasks running, and the index it judged by is whole where this list is not.
+const rereadChildren = async (parentId: string) => {
+  const seen = new Set([parentId]);
+  const ids: string[] = [];
+  for (let at = [parentId]; at.length; ) {
+    at = at.flatMap((id) => hiddenChildren(sessionIndexItems, id).map((c) => c.sessionId)).filter((id) => !seen.has(id));
+    at.forEach((id) => seen.add(id));
+    ids.push(...at);
+  }
+  await Promise.all(
+    ids.map((id) =>
+      invoke<SessionIndexItem | null>("session_index_item", { sessionId: id })
+        .then((item) => item && applyIndexItem(item))
+        .catch((err) => console.error("could not reread", id, err)),
+    ),
+  );
 };
 
 // Refetched on every toggle rather than filtered from one cached list: the two
@@ -2138,6 +2275,14 @@ const readServer = (server: ServerId) => {
       answered.add(`${server}:sessions`);
       // A read outlived by a toggle is the side just left.
       if (archived !== showArchivedRef.current) return;
+      // A pick moved while this server was out of reach sent no event here.
+      // The local copy mirrors every send of ours, so a pair that differs was
+      // moved elsewhere — `dray session model` most likely — and wins.
+      const known = new Map(sessionIndexItemsRef.current.map((i) => [i.sessionId, i]));
+      for (const item of items) {
+        const was = known.get(item.sessionId);
+        if (was && (was.model !== item.model || was.effort !== item.effort)) followModelPickRef.current(item);
+      }
       setSessionIndexItems((prev) => mergeFrom(prev, server, items, (i) => i.cwd));
       if (server === LOCAL) setIndexSide(archived);
     })
@@ -2175,6 +2320,8 @@ useEffect(() => {
       // A read that already landed this run is newer.
       if (!lastProjects.has(id) && cache.projects) lastProjects.set(id, cache.projects);
       if (cache.bots) keepBots(id, cache.bots);
+      seedLogin(id, cache.ghLogin);
+      for (const item of cache.sessions ?? []) keptBefore.set(item.sessionId, item);
       for (const [side, items] of [[false, cache.sessions], [true, cache.archived]] as const) {
         if (!items || lastIndex.has(`${id}:${side}`)) continue;
         // Routes a click on a kept row to its server, as a read would have.
@@ -2195,6 +2342,12 @@ useEffect(() => {
 // during a toggle the list briefly holds the other side, and filing that under
 // this one would draw settled rows as live after the next restart. The settled
 // side is kept from reads alone.
+// A PR merging moves no index row, nor does a turn starting, and the kept
+// row's `prOpen` and `status` must follow both.
+const [prMarksSeen, setPrMarksSeen] = useState(0);
+// A machine's `gh` login is kept with its rows too.
+const loginsSeen = useMergeAccess();
+useEffect(() => prMarksChanged.subscribe(() => setPrMarksSeen((n) => n + 1)), []);
 useEffect(() => {
   const live = !showArchivedRef.current && indexSide === false;
   // An off server's rows are hidden, not gone: its share on screen is empty,
@@ -2210,16 +2363,21 @@ useEffect(() => {
   const timer = setTimeout(() => {
     for (const { id } of remoteServers()) {
       if (!answered.has(`${id}:sessions`) && !answered.has(`${id}:projects`)) continue;
+      const sessions = lastIndex
+        .get(`${id}:false`)
+        ?.map((row) => keptRow(row, keptPrMark, statusBySession[row.sessionId], keptBefore.get(row.sessionId)));
+      for (const row of sessions ?? []) keptBefore.set(row.sessionId, row);
       saveServerCache(id, {
-        sessions: lastIndex.get(`${id}:false`),
+        sessions,
         archived: lastIndex.get(`${id}:true`),
         projects: lastProjects.get(id),
         bots: botsOf(id),
+        ghLogin: loginOf(id),
       });
     }
   }, 1000);
   return () => clearTimeout(timer);
-}, [sessionIndexItems, projects, indexSide, bots])
+}, [sessionIndexItems, projects, indexSide, bots, prMarksSeen, statusBySession, loginsSeen])
 
 // Refetched per project rather than cached: branches change outside the app.
 // The guard matters because switching projects quickly would otherwise let a
@@ -2416,6 +2574,7 @@ useEffect(() => {
             if (agentEvent.payload.type === "background_tasks_changed") {
               const { tasks } = agentEvent.payload;
               setTasksBySession((prev) => ({ ...prev, [agentEvent.sessionId]: tasks }));
+              setServingBySession(({ [agentEvent.sessionId]: _, ...rest }) => rest);
               // The other half of the guard in `session_status`: a turn that
               // ended with a task still open kept its asks, since the task's
               // subagent could be the one asking. With the set drained and no
@@ -2671,7 +2830,8 @@ const catchUpOrDrop = (sessionId: string, held?: AgentEvent[], queueKnown?: bool
 const refreshHeld = (sessionId: string) => {
   const server = serverOfSession(sessionId);
   if (server === LOCAL || !serverConnected(server)) return;
-  if (!sessionsRef.current.some((s) => s.sessionId === sessionId)) return;
+  const held = sessionsRef.current.find((s) => s.sessionId === sessionId);
+  if (!held) return;
   if (!sessionIndexItemsRef.current.some((i) => i.sessionId === sessionId)) return;
   catchUpOrDrop(sessionId, undefined, true);
 };
@@ -2766,7 +2926,12 @@ useEffect(() => {
         void applyQueue(id, queued);
       }
     }
+    setServingBySession((prev) => ({
+      ...without(prev),
+      ...Object.fromEntries((payload.serving ?? []).map((s) => [s.sessionId, s.ports])),
+    }));
     readServer(server);
+    if (server !== LOCAL) flushHeld(server);
 
     for (const s of sessionsRef.current) {
       if (!ours(s.sessionId)) continue;
@@ -2850,19 +3015,74 @@ const setCrewSeen = (ids: string[]) => {
   crewSeenRef.current = new Set(ids);
 };
 
+/// How a transcript is asked for. A bot's chat draws the conversation and the
+/// tasks it started, never the work between, so it is read as that alone, on
+/// every server, older pages included: most of a bot's log is tool calls its
+/// chat has no row for. Anything else over a network comes with its tool
+/// bodies cut, the first frame and every page above it alike, and a row that
+/// needs one asks for its call (`readCalls`). This Mac reads its own disk and
+/// asks whole. So does a cloud machine: what is read from one is saved as the
+/// copy its task opens from once the machine is gone (`keepCloudTranscript`),
+/// when no call could be asked for. A server older than either argument
+/// answers whole.
+const readAs = (server: ServerId, cwd: string | null | undefined): { bot?: true; lite?: true } =>
+  isBotPath(cwd) ? { bot: true } : server !== LOCAL && !isCloud(server) ? { lite: true } : {};
+
+/// The whole events of tool calls a first frame cut, asked for by the rows
+/// that need them (`completeCall`) and laid over the cut ones by id. One call
+/// is a few KB where the tail it sits in is hundreds, and most rows are never
+/// opened. Asks made in one frame go out as one read. An id is held only
+/// while its read is out, so a row re-rendering meanwhile does not ask twice,
+/// and one whose read failed, or whose page was let go and read cut again
+/// (`dropOlder`), asks afresh the next time it needs its body.
+const callAsks = useRef(new Map<string, Set<string>>());
+const callBatch = useRef(new Map<string, Set<string>>());
+const readCalls = (sessionId: string, callId: string) => {
+  const asked = callAsks.current.get(sessionId) ?? new Set<string>();
+  if (asked.has(callId)) return;
+  callAsks.current.set(sessionId, asked.add(callId));
+  const first = callBatch.current.size === 0;
+  callBatch.current.set(sessionId, (callBatch.current.get(sessionId) ?? new Set<string>()).add(callId));
+  if (!first) return;
+  setTimeout(() => {
+    const batch = callBatch.current;
+    callBatch.current = new Map();
+    for (const [id, callIds] of batch) {
+      invoke<AgentEvent[]>("get_session_calls", { sessionId: id, callIds: [...callIds] })
+        .then((whole) => {
+          const byId = new Map(whole.map((e) => [e.id, e]));
+          if (!byId.size) return;
+          setSessions((prev) =>
+            prev.map((s) => (s.sessionId === id ? { ...s, events: s.events.map((e) => byId.get(e.id) ?? e) } : s)),
+          );
+        })
+        .catch((e) => console.error("could not read calls", id, e))
+        .finally(() => {
+          for (const callId of callIds) callAsks.current.get(id)?.delete(callId);
+        });
+    }
+  }, 16);
+};
+useEffect(() => setCallReader(readCalls), []);
+
 /// Reads a session's newest `FIRST_MOUNT` turns and lands them, answering
-/// whether the id resolved to anything. The rest of the log is paged in by
-/// `loadOlder`, which the transcript asks for once it has mounted everything it
-/// holds — a 21MB log is ~1.8MB of tail, and the webview's `JSON.parse` of the
-/// whole was ~400ms before the newest turn could draw.
+/// whether the id resolved to anything. The rest of the log is read by
+/// `loadOlder` as the reader scrolls up toward it — a 21MB log is ~1.8MB of
+/// tail, and the webview's `JSON.parse` of the whole was ~400ms before the
+/// newest turn could draw.
 ///
 /// One read per session however many ask at once, so a hover's prefetch and
-/// the click that follows share it rather than landing twice.
-const tailReads = useRef(new Map<string, Promise<boolean>>());
+/// the click that follows share it rather than landing twice. `hover` is a
+/// read only a pointer asked for, which `prefetchTranscript` may drop.
+const tailReads = useRef(new Map<string, TailRead>());
 const deletedRef = useRef(new Set<string>());
-const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
+const loadTail = (sessionId: string, touch = true, hover = false): Promise<boolean> => {
   const running = tailReads.current.get(sessionId);
-  if (running) return running;
+  if (running) {
+    if (hover) running.hovers++;
+    else running.kept = true;
+    return running.read;
+  }
   // An evicted remote transcript draws now and asks only for what is new. Its
   // index fields are taken from the live index, which may have moved since.
   const copy = takeTranscript(sessionId);
@@ -2879,14 +3099,22 @@ const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
   const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
   const server = item ? serverOfPath(item.cwd) : serverOfSession(sessionId);
   const kept = isCloud(server) && !serverConnected(server) ? keptCloudTranscript(server, sessionId) : null;
-  const read = Promise.resolve(kept)
+  const abort = new AbortController();
+  const entry: TailRead = { read: Promise.resolve(false), abort, hovers: hover ? 1 : 0, kept: !hover, started: Date.now() };
+  entry.read = Promise.resolve(kept)
     .then(
       (copy) =>
         copy ??
-        invoke<SessionSnapshot | null>("get_session_by_id", {
-          sessionId,
-          turns: FIRST_MOUNT,
-        }),
+        invoke<SessionSnapshot | null>(
+          "get_session_by_id",
+          {
+            sessionId,
+            turns: FIRST_MOUNT,
+            ...readAs(server, item?.cwd),
+          },
+          undefined,
+          abort.signal,
+        ),
     )
     .then((snapshot) => {
       if (!snapshot) return false;
@@ -2901,14 +3129,51 @@ const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
       evictSessionsRef.current();
       return true;
     })
-    .finally(() => tailReads.current.delete(sessionId));
-  tailReads.current.set(sessionId, read);
-  return read;
+    .finally(() => {
+      if (tailReads.current.get(sessionId) === entry) tailReads.current.delete(sessionId);
+    });
+  tailReads.current.set(sessionId, entry);
+  return entry.read;
 };
 
-/// Loads a transcript without selecting it — a split pane, or a sidebar row
-/// hovered long enough to be worth warming. Touches no selection ref, so a
-/// prefetch cannot be read as a move the rollback owns.
+/// Drops a read nobody but a pointer wanted. Out of the map at once, so a
+/// hover landing before the rejection settles starts afresh rather than
+/// joining a read that is already gone.
+const dropTailRead = (sessionId: string, entry: TailRead) => {
+  if (tailReads.current.get(sessionId) === entry) tailReads.current.delete(sessionId);
+  entry.abort.abort();
+};
+
+/// Starts reading a transcript the reader is about to open — a pointer resting
+/// on its row or card — and answers the call that lets it go. Letting go drops
+/// the read, on the wire and on the server, once no other hover holds it and
+/// nothing opened it meanwhile; a click joins the same read, which keeps it.
+/// Already loaded, or already being read for an open, costs nothing.
+///
+/// At most `HOVER_READS` pointer-only reads run at once, the oldest dropped for
+/// the newest, since the newest is where the pointer is.
+const prefetchTranscript = (sessionId: string): (() => void) => {
+  if (deletedRef.current.has(sessionId) || sessionsRef.current.some((s) => s.sessionId === sessionId)) return () => {};
+  void loadTail(sessionId, true, true).catch((e) => {
+    if (e !== CANCELLED) console.error("failed to prefetch a transcript", e);
+  });
+  const entry = tailReads.current.get(sessionId);
+  if (!entry) return () => {};
+  const loose = [...tailReads.current].filter(([, r]) => !r.kept).sort(([, a], [, b]) => a.started - b.started);
+  for (const [id, r] of loose.slice(0, Math.max(0, loose.length - HOVER_READS))) dropTailRead(id, r);
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    entry.hovers--;
+    // A read already landed is out of the map, and is a transcript worth keeping.
+    if (entry.hovers <= 0 && !entry.kept && tailReads.current.get(sessionId) === entry) dropTailRead(sessionId, entry);
+  };
+};
+
+/// Loads a transcript without selecting it — a split pane, or a ⌘⇧↑/↓
+/// neighbour. Touches no selection ref, so a prefetch cannot be read as a move
+/// the rollback owns.
 const ensureLoaded = async (sessionId: string, touch = true) => {
   if (sessionsRef.current.some((s) => s.sessionId === sessionId)) return;
   try {
@@ -2964,6 +3229,7 @@ const loadOlder = async (sessionId: string, turns = OLDER_PAGE_TURNS, attempt = 
       sessionId,
       before,
       turns,
+      ...readAs(serverOfSession(sessionId), session?.cwd),
     });
     setSessions((prev) =>
       prev.map((s) => {
@@ -3379,6 +3645,16 @@ useEffect(() => {
   };
 }, []);
 
+useEffect(() => {
+  const listenerPromise = listen<SessionServingEvent>("session_serving", ({ payload }) => {
+    const { sessionId, ports } = payload;
+    setServingBySession(({ [sessionId]: _, ...rest }) => (ports.length ? { ...rest, [sessionId]: ports } : rest));
+  });
+  return () => {
+    listenerPromise.then((unlisten) => unlisten());
+  };
+}, []);
+
 // A session created by something other than the composer — an agent calling the
 // `dray` CLI, which reaches the backend over its own socket. The row has to
 // appear without a refetch, the way a composer-created one does.
@@ -3415,11 +3691,44 @@ useEffect(() => {
 // Rust over the orchestration socket, so the sidebar hears of them only here.
 const applyIndexItemRef = useRef(applyIndexItem);
 applyIndexItemRef.current = applyIndexItem;
+const reportWorktreeFailureRef = useRef(reportWorktreeFailure);
+reportWorktreeFailureRef.current = reportWorktreeFailure;
 useEffect(() => {
   const listenerPromise = listen<SessionIndexItem>("session_changed", (event) => {
     applyIndexItemRef.current(event.payload);
   });
+  // A held flag written once its server came back: the row as that server
+  // answered, in case its own `session_changed` is still on the way.
+  // A held settle's worktree removal that failed says so as the app's own does.
+  const unlanded = onLanded(({ item, worktreeError }) => {
+    applyIndexItemRef.current(item);
+    if (worktreeError) reportWorktreeFailureRef.current(item.sessionId, item.title, worktreeError);
+  });
 
+  return () => {
+    unlanded();
+    listenerPromise.then((unlisten) => unlisten());
+  };
+}, []);
+
+// `dray session model` moved a session's pick from outside the composer. An
+// unsent pick held for it here would carry the old model back out on the next
+// send, so it goes, and a composer showing the session takes the new one. Its
+// own event because only this write may override the reader's pick: a
+// `session_changed` row can lag a send the composer already made.
+const followModelPickRef = useRef((_: SessionIndexItem) => {});
+followModelPickRef.current = (item: SessionIndexItem) => {
+  const pick = unsentPicks.current.get(item.sessionId);
+  if (pick) {
+    const { model: _model, effort: _effort, efforts: _efforts, ...rest } = pick;
+    unsentPicks.current.set(item.sessionId, rest);
+  }
+  if (item.sessionId === selectedSessionIdRef.current) restoreSessionControls(item);
+};
+useEffect(() => {
+  const listenerPromise = listen<SessionIndexItem>("session_model_changed", (event) => {
+    followModelPickRef.current(event.payload);
+  });
   return () => {
     listenerPromise.then((unlisten) => unlisten());
   };
@@ -3554,6 +3863,10 @@ const paneState = (sessionId: string): PaneState => {
   };
 };
 
+// The rows as drawn: a flag held for a server that is down sits over its row.
+const heldFlags = useHeldFlags();
+const shownIndexItems = useMemo(() => overlayHeld(sessionIndexItems, heldFlags), [sessionIndexItems, heldFlags]);
+
 // What the harness said about fast mode on the newest turn — drawn beside the
 // switch, never folded back into the composer's pick. `fast` is what was asked
 // for; this is what the CLI did with it, and the two disagreeing is the whole
@@ -3601,6 +3914,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems: shownIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, servingBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, prefetchTranscript, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
 
 }
