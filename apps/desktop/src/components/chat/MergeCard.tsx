@@ -1,19 +1,21 @@
 import { createContext, useContext, useEffect, useState } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
+import Orb from "@/components/Orb";
 import { Button } from "@/components/ui/button";
 import { ChecksRunningIcon } from "@/components/PrPanel";
 import PrStateIcon from "@/components/PrStateIcon";
 import { MergeControl } from "@/components/TasksPanel";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
 import { seededAvatar } from "@/lib/botAvatar";
-import { cardRepo, FULL_FOR, type MergeCardPayload } from "@/lib/mergeCard";
+import { cardRepo, FULL_FOR, runningLabel, type MergeCardPayload } from "@/lib/mergeCard";
 import { openLink } from "@/lib/openLink";
 import { noteSession, serverOfSession } from "@/lib/transport";
 import { isModClick } from "@/lib/platform";
 import { mergeVerdict, readyToMerge } from "@/lib/pr";
 import { cn } from "@/lib/utils";
-import type { AgentEvent, MergeMethod, PrMark } from "@/types/events";
+import type { AgentEvent, BackgroundTask, MergeMethod, PrMark } from "@/types/events";
 
 /// What a card needs from the app: the sidebar's PR marks for live status,
 /// the task's current title, and the Tasks tab's merge.
@@ -24,6 +26,8 @@ export type MergeCardHost = {
   /// may predate the PR rather than the PR having left the window.
   missing: (repo: string, number: number) => void;
   titleOf: (taskId: string) => string | undefined;
+  /// Work the task's agent left running past its turn: shells, subagents, monitors.
+  tasksOf: (taskId: string) => readonly BackgroundTask[];
   /// Why the card offers no Merge though GitHub would take it, or `null`.
   /// `projectPath` is the qualified key the card merges through.
   mergeBlock: (card: MergeCardPayload) => string | null;
@@ -108,6 +112,8 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
   const conflicted = pr?.state === "OPEN" && mergeVerdict(pr) === "conflict";
   const running = pr?.state === "OPEN" && pr.checksState === "RUNNING";
   const status = blocked ? "Can't merge from here" : statusLine(pr);
+  // Said, never enforced: merging over it is the reader's call.
+  const tasks = merged ? [] : (host?.tasksOf(card.taskId) ?? []);
   // `null` is a PR no longer among the open or recently merged: nothing left
   // to land, so it draws one line without claiming which way it went.
   const compact = merged || found === null || (chat.after.get(event.id) ?? 0) >= FULL_FOR;
@@ -136,6 +142,7 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
           <span className="size-4 shrink-0">{face}</span>
           <span className="truncate">{title}</span>
         </button>
+        <RunningWork tasks={tasks} />
         {mergeable && merge && <MergeControl onMerge={merge} keep={event.id} />}
         {conflicted && host && <FixConflicts onFix={() => host.fixConflicts(card)} />}
       </div>
@@ -173,18 +180,51 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
             {running && <ChecksRunningIcon />}
             {status && (
               <span
-                className={cn("truncate", blocked ? "text-muted-foreground" : statusTone(pr))}
+                // The running work is what gives way when the line runs out.
+                className={cn(tasks.length ? "shrink-0" : "truncate", blocked ? "text-muted-foreground" : statusTone(pr))}
                 title={blocked ?? undefined}
               >
                 {status}
               </span>
             )}
+            {tasks.length > 0 && <span aria-hidden>·</span>}
+            <RunningWork tasks={tasks} />
           </p>
         </div>
         {mergeable && merge && <MergeControl onMerge={merge} keep={event.id} named />}
         {conflicted && host && <FixConflicts onFix={() => host.fixConflicts(card)} />}
       </div>
     </div>
+  );
+}
+
+/// The orb and what the task left running: one job by name, several by count.
+/// Said, never enforced — Merge stays the reader's call. A count lists them on hover or focus.
+function RunningWork({ tasks }: { tasks: readonly BackgroundTask[] }) {
+  const label = runningLabel(tasks);
+  if (!label) return null;
+  const names = tasks.map((t) => t.description.trim()).filter(Boolean);
+  // One job is already named on the card; only a count needs the list, and
+  // focus opens it as hover does, so the names never need a mouse.
+  const counted = tasks.length > 1;
+  const line = (
+    <span
+      className="flex min-w-0 items-center gap-1.5 rounded-sm"
+      tabIndex={counted ? 0 : undefined}
+      data-testid="merge-card-running"
+    >
+      <Orb state="background" variant="spiral" size={12} label="Background work running" />
+      <span className="truncate">{label}</span>
+    </span>
+  );
+  if (!counted) return line;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{line}</TooltipTrigger>
+      <TooltipContent className="flex-col items-start gap-0.5">
+        {names.length ? names.map((name, i) => <span key={i}>{name}</span>) : `${tasks.length} running`}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

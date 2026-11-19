@@ -1,5 +1,5 @@
 import { LOCAL, qualify, serverOfSession } from "@/lib/transport";
-import type { AgentEvent } from "@/types/events";
+import type { AgentEvent, BackgroundTask } from "@/types/events";
 
 export type MergeCardPayload = Extract<AgentEvent["payload"], { type: "merge_card" }>;
 
@@ -40,4 +40,11 @@ export function cardRepos(events: readonly AgentEvent[]): string[] {
     if (payload.type === "merge_card") repos.add(cardRepo(payload, sessionId));
   }
   return [...repos];
+}
+
+/// What the card says beside the orb for work the task's agent left running
+/// past its turn: the one job's name, else how many. `null` once none runs.
+export function runningLabel(tasks: readonly BackgroundTask[]): string | null {
+  if (!tasks.length) return null;
+  return (tasks.length === 1 && tasks[0].description.trim()) || String(tasks.length);
 }
