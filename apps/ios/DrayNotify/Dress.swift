@@ -18,7 +18,9 @@ func dressAlert(_ content: UNNotificationContent) async -> UNNotificationContent
     }
     guard let bot = dray["bot"] as? [String: Any], let id = bot["id"] as? String else { return alert }
     let avatar = (bot["shape"] as? String).map { BotAvatar(shape: $0, hue: bot["hue"] as? Double ?? 0) }
-    let face = ImageRenderer(content: BotFace(seed: id, avatar: avatar, size: 120).frame(width: 160, height: 160).background(Color(white: 26 / 255)))
+    // A pale wash of the bot's own colour; a face with no pick has no hue to wash with.
+    let backdrop = avatar.map { Color(hue: $0.hue / 360, saturation: 0.22, brightness: 0.96) } ?? Color(white: 0.92)
+    let face = ImageRenderer(content: BotFace(seed: id, avatar: avatar, size: 120).frame(width: 160, height: 160).background(backdrop))
     face.scale = 2
     let sender = INPerson(personHandle: INPersonHandle(value: id, type: .unknown), nameComponents: nil,
                           displayName: alert.title, image: face.uiImage?.pngData().map(INImage.init(imageData:)),
