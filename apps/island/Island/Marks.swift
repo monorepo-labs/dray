@@ -450,7 +450,7 @@ struct WaitingCard: View {
     private static let green = Color(red: 0x23 / 255, green: 0x86 / 255, blue: 0x36 / 255)
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(spacing: 10) {
             // Seeded by the task, as the app's row draws it.
             BotFace(bot: Bot(id: task.id, name: "", path: "", avatar: nil), size: 26)
             VStack(alignment: .leading, spacing: 2) {
