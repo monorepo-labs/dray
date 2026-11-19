@@ -125,6 +125,9 @@ importers:
       '@blobatar/react':
         specifier: ^2.7.0
         version: 2.7.0(blobatar@2.7.0(react@19.3.1))(react@19.3.1)
+      '@opencoredev/email-sdk':
+        specifier: ^3.0.1
+        version: 3.0.1(ai@7.0.133(zod@4.6.5))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@yogesharc/thinking-orbs':
         specifier: ^0.1.2
         version: 0.1.2(react@19.3.1)
@@ -140,9 +143,6 @@ importers:
       next:
         specifier: ^16.4.6
         version: 16.4.6(@babel/core@7.29.7)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
-      nodemailer:
-        specifier: ^10.6.0
-        version: 10.6.0
       pg:
         specifier: ^8.23.1
         version: 8.23.1
@@ -162,9 +162,6 @@ importers:
       '@types/node':
         specifier: ^22.20.5
         version: 22.20.5
-      '@types/nodemailer':
-        specifier: ^8.0.2
-        version: 8.0.2
       '@types/pg':
         specifier: ^8.23.1
         version: 8.23.1
@@ -1230,6 +1227,25 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
+
+  '@opencoredev/email-sdk@3.0.1':
+    resolution: {integrity: sha512-GkMqq0QX3qhyPE1Mqgw3VxBMXJAte8qtXhkVhoNuBB/CfhwsKR9nRZ5TMfWdeXjtP3w3KURWd5G9q9fI0QM3Hw==}
+    engines: {bun: '>=1.1.0', node: '>=20.0.0'}
+    hasBin: true
+    peerDependencies:
+      '@react-email/render': ^2.1.0
+      ai: ^6.0.182 || ^7.0.0
+      react: ^18.0.0 || ^19.0.0
+      react-dom: ^18.0.0 || ^19.0.0
+    peerDependenciesMeta:
+      '@react-email/render':
+        optional: true
+      ai:
+        optional: true
+      react:
+        optional: true
+      react-dom:
+        optional: true
 
   '@orama/orama@3.1.18':
     resolution: {integrity: sha512-a61ljmRVVyG5MC/698C8/FfFDw5a8LOIvyOLW5fztgUXqUpc1jOfQzOitSCbge657OgXXThmY3Tk8fpiDb4UcA==}
@@ -2907,9 +2923,6 @@ packages:
 
   '@types/node@22.20.5':
     resolution: {integrity: sha512-U2+DNr+wSjpsTS/wZGYHq7GcwfuSmKiKvoPvK22zwTlRhU91yOniN4qRR5KhIjvif7ysw/dz/hKmfDH0Ris4aA==}
-
-  '@types/nodemailer@8.0.2':
-    resolution: {integrity: sha512-c7M5ox8p0nEOfbJ2E9Qcmt8/QCu/VzsiAhzBiZbvky2PhKZDHpKB3sQHBM5MEZNkCfBOaS6S9//AGPRTNB7IaA==}
 
   '@types/pg@8.23.1':
     resolution: {integrity: sha512-fKVHpikPdg4GKks3JuLEhvwSyvwzF23hnabPy6DD8ljVbC7+6J5dQzdv4arV6jqq57djnMgs1HKBxX4P8aBI3A==}
@@ -7701,6 +7714,14 @@ snapshots:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
 
+  '@opencoredev/email-sdk@3.0.1(ai@7.0.133(zod@4.6.5))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+    dependencies:
+      nodemailer: 10.6.0
+    optionalDependencies:
+      ai: 7.0.133(zod@4.6.5)
+      react: 19.3.1
+      react-dom: 19.3.1(react@19.3.1)
+
   '@orama/orama@3.1.18': {}
 
   '@oslojs/encoding@1.1.0': {}
@@ -9230,10 +9251,6 @@ snapshots:
   '@types/node@22.20.5':
     dependencies:
       undici-types: 6.21.0
-
-  '@types/nodemailer@8.0.2':
-    dependencies:
-      '@types/node': 22.20.5
 
   '@types/pg@8.23.1':
     dependencies:
