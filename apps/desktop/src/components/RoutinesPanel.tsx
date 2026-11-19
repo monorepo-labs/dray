@@ -62,7 +62,7 @@ function RoutineCard({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div className="flex items-center gap-3 rounded-xl bg-card px-3 py-2.5 text-ui shadow-(--shadow-card)">
+        <div className="flex items-center gap-3 rounded-xl border-[0.5px] border-border bg-card px-3 py-2.5 text-ui">
           <Clock className={cn("size-4 shrink-0 text-muted-foreground", paused && "opacity-50")} />
           <div className="flex min-w-0 flex-1 flex-col">
             <span className={cn("truncate", paused ? "text-muted-foreground" : "text-foreground")}>{routine.name}</span>
