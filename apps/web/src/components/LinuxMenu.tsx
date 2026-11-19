@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { BetaTag } from "@/components/BetaTag";
+import { LinuxGlyph } from "@/components/LinuxGlyph";
 import { LINUX_FORMATS, linuxUrl, type LinuxArch, type LinuxFormat } from "@/lib/linux";
 import { posthog } from "@/lib/posthog";
 
@@ -64,6 +65,7 @@ export function LinuxMenu({ className }: { className: string }) {
   return (
     <div ref={box} className="relative">
       <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} className={className}>
+        <LinuxGlyph className="-mt-0.5 size-4" />
         Download for Linux
         <svg viewBox="0 0 16 16" aria-hidden className={`size-3 transition-transform ${open ? "rotate-180" : ""}`} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
           <path d="m4 6 4 4 4-4" />

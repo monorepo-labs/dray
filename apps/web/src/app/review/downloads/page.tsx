@@ -9,15 +9,15 @@ export const metadata: Metadata = {
 };
 
 const NAMES: Record<DownloadTake, string> = {
-  boxed: "B1 · Boxed",
-  bleed: "B2 · Full width",
+  tiles: "1 · Tiles",
+  panels: "2 · Panels",
 };
 
 /// The downloads page in each take, with a bar to step between them. For
 /// picking one; it goes once the pick ships.
 export default async function DownloadsReview({ searchParams }: { searchParams: Promise<{ v?: string }> }) {
   const { v } = await searchParams;
-  const take = DOWNLOAD_TAKES.find((x) => x === v) ?? "boxed";
+  const take = DOWNLOAD_TAKES.find((x) => x === v) ?? "tiles";
 
   return (
     <>

@@ -6,6 +6,6 @@ export const LINK =
   "text-white underline decoration-white/30 underline-offset-4 transition-colors hover:decoration-white light:text-[#0A0A0A] light:decoration-black/30 light:hover:decoration-black";
 
 /// The downloads page's takes, stepped through on `/review/downloads` while
-/// one is picked. `/download` draws `boxed`.
-export const DOWNLOAD_TAKES = ["boxed", "bleed"] as const;
+/// one is picked. `/download` draws `tiles`.
+export const DOWNLOAD_TAKES = ["tiles", "panels"] as const;
 export type DownloadTake = (typeof DOWNLOAD_TAKES)[number];
