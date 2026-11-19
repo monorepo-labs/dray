@@ -93,20 +93,25 @@ fn command(path: &Path) -> Command {
     cmd
 }
 
-/// Where the Linux app writes down the AppImage it runs from, under home.
-/// `app_on_this_machine` in apps/cli/src/setup.rs and install.sh read it.
+/// Where the Linux app writes down the AppImage it runs from, or its binary
+/// where a `.deb` installed it, under home. `app_ships_this_cli` in
+/// apps/cli/src/setup.rs and install.sh read it.
 #[cfg(target_os = "linux")]
 const APPIMAGE_RECORD: &str = ".local/share/dray/appimage";
 
-/// Records which AppImage installed the CLI, so `dray update` and install.sh
-/// leave alone a `dray` the app would put back on its next launch — a Mac's
-/// app is found at fixed paths, an AppImage can live anywhere. The path, not
-/// a flag: one deleted since frees the CLI to update itself, and one moved is
-/// written again by its next launch.
+/// Records which AppImage or package installed the CLI, so `dray update` and
+/// install.sh leave alone a `dray` the app would put back on its next launch —
+/// a Mac's app is found at fixed paths, an AppImage can live anywhere. The
+/// path, not a flag: one deleted or uninstalled since frees the CLI to update
+/// itself, and one moved is written again by its next launch.
 #[cfg(target_os = "linux")]
 fn record_appimage(home: &Path) -> std::io::Result<()> {
     use std::os::unix::ffi::OsStrExt;
-    let Some(image) = crate::serve::appimage() else {
+    use tauri::utils::{config::BundleType, platform::bundle_type};
+    let installed = crate::serve::appimage().or_else(|| {
+        (bundle_type() == Some(BundleType::Deb)).then(std::env::current_exe).and_then(Result::ok)
+    });
+    let Some(image) = installed else {
         return Ok(());
     };
     let record = home.join(APPIMAGE_RECORD);
