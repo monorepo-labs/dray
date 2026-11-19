@@ -979,9 +979,12 @@ async fn pass(sink: &Sink) {
     }
     let live_keys: HashSet<String> = state.ready_since.keys().filter(|k| by_id.contains_key(k.split(':').next().unwrap_or_default())).cloned().collect();
     state.ready_since.retain(|k, _| live_keys.contains(k));
-    let merged: Vec<(SessionIndexItem, u64)> = newly_merged(&mut state.pr_seen, &prs)
+    let merged: Vec<(SessionIndexItem, u64, String)> = newly_merged(&mut state.pr_seen, &prs)
         .into_iter()
-        .filter_map(|(id, n)| by_id.get(id.as_str()).map(|j| (j.facts.item.clone(), n)))
+        .filter_map(|(id, n)| {
+            let url = prs.get(id.as_str())?.url.clone();
+            by_id.get(id.as_str()).map(|j| (j.facts.item.clone(), n, url))
+        })
         .collect();
     state.pr_seen.retain(|id, _| by_id.contains_key(id.as_str()));
     let fixes = prune_fixes(&prs).await;
@@ -1015,8 +1018,8 @@ async fn pass(sink: &Sink) {
             eprintln!("[stalls emit err] {e}");
         }
     }
-    for (item, number) in merged {
-        crate::bots::note_seen_merge(&item, number, sink).await;
+    for (item, number, url) in merged {
+        crate::bots::note_seen_merge(&item, number, &url, sink).await;
     }
     nudge(due_nudges, tried_before, now, sink).await;
 }

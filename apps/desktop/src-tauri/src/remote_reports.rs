@@ -131,19 +131,34 @@ pub async fn keep(child: &str, parent: &str, title: &str, text: String) -> anyho
 }
 
 /// Keeps an act on `task` for the bot's server, collected with `child`.
-pub async fn keep_act(child: &str, task: &str, title: &str, text: String, merged: Option<u64>) -> anyhow::Result<()> {
+/// Answers its id, for [`drop_act`].
+pub async fn keep_act(child: &str, task: &str, title: &str, text: String, merged: Option<u64>) -> anyhow::Result<String> {
     let _guard = OUTBOX.lock().await;
     let mut outbox: Outbox = store::read_json(&outbox_path().await?).await?;
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
     outbox.expire(now);
+    let id = uuid::Uuid::now_v7().to_string();
     outbox.acts.push(KeptAct {
-        id: uuid::Uuid::now_v7().to_string(),
+        id: id.clone(),
         child: child.to_string(),
         task: task.to_string(),
         title: title.to_string(),
         text,
         merged,
     });
+    save_outbox(&outbox).await?;
+    Ok(id)
+}
+
+/// Takes back a kept act whose act then failed, where it is not collected yet.
+pub async fn drop_act(id: &str) -> anyhow::Result<()> {
+    let _guard = OUTBOX.lock().await;
+    let mut outbox: Outbox = store::read_json(&outbox_path().await?).await?;
+    let before = outbox.acts.len();
+    outbox.acts.retain(|a| a.id != id);
+    if outbox.acts.len() == before {
+        return Ok(());
+    }
     save_outbox(&outbox).await
 }
 
@@ -431,8 +446,9 @@ mod collect {
         let mut acked_acts = Vec::new();
         for act in &taken.acts {
             if let Some((remote, _)) = open.iter().find(|(r, _)| r.child == act.child) {
-                crate::bots::note_collected(act, &remote.parent, app).await;
-                acked_acts.push(act.id.clone());
+                if crate::bots::note_collected(act, &remote.parent, app).await {
+                    acked_acts.push(act.id.clone());
+                }
             }
         }
         crate::stalls::remote_answered(&saved.id, &saved.name, taken.facts.clone()).await;
