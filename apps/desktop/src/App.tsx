@@ -96,7 +96,6 @@ import { type Chord, formatChords } from "@/lib/shortcuts";
 import Crew, { CREW_BESIDE, CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
 import TasksPanel, { taskCounts } from "@/components/TasksPanel";
 import BotRuns from "@/components/BotRuns";
-import RoutinesPanel from "@/components/RoutinesPanel";
 import StalledTasks from "@/components/chat/StalledTasks";
 import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/MergeCard";
 import { cardRepos } from "@/lib/mergeCard";
@@ -1859,7 +1858,7 @@ function App() {
   }, [selectedBot, selectedSession, sessionAttachments, earlier]);
   // Older history counts too: its pictures are reached only through the
   // grid's Load more, so the tab has to be there to press it.
-  const hasMoreTab = moreForTasks || attachmentLogs !== null;
+  const hasMoreTab = moreForTasks || attachmentLogs !== null || (!!selectedBot && routines.routines.length > 0);
 
   const tabs = tabOrder({
     pr: hasPrTab,
@@ -4082,15 +4081,6 @@ function App() {
                 )}
               </TasksPanel>
             </TabBody>
-            <TabBody active={activeTab === "routines"}>
-              <RoutinesPanel
-                routines={routines.routines}
-                now={stalled.now}
-                onPause={routines.setPaused}
-                onDelete={routines.remove}
-                error={routines.error}
-              />
-            </TabBody>
             <TabBody active={activeTab === "more"}>
               <MorePanel
                 todos={sessionTodos}
@@ -4105,6 +4095,17 @@ function App() {
                   onOpen: stripOwner ? undefined : (run) => openSubagentTab(shownSession.sessionId, run),
                   onStopTask: handleStopTask,
                 }}
+                routines={
+                  selectedBot
+                    ? {
+                        routines: routines.routines,
+                        now: stalled.now,
+                        onPause: routines.setPaused,
+                        onDelete: routines.remove,
+                        error: routines.error,
+                      }
+                    : undefined
+                }
               />
             </TabBody>
             <TabBody active={hasPrTab && activeTab === "pr"}>

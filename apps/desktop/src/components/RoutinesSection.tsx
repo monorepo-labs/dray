@@ -6,11 +6,12 @@ import { lastRunFailed, lastRunLabel, nextRunLabel, scheduleLabel } from "@/lib/
 import { cn } from "@/lib/utils";
 import type { Routine } from "@/types/events";
 
-/// A bot's Routines tab (#972): a card per scheduled check it made for itself,
-/// with its schedule, next run and last result. The reader turns one off with
-/// its switch and deletes it from the right-click menu; anything else — what
-/// it does, running it, changing it — they ask the bot for.
-export default function RoutinesPanel({
+/// A bot's routines (#972), a section of the More tab: a card per scheduled
+/// check it made for itself, with its schedule, next run and last result. The
+/// reader turns one off with its switch and deletes it from the right-click
+/// menu; anything else — what it does, running it, changing it — they ask the
+/// bot for. Drawn only with a routine in it, as every More section is.
+export default function RoutinesSection({
   routines,
   now,
   onPause,
@@ -25,23 +26,16 @@ export default function RoutinesPanel({
   /// Why the last switch or Delete failed.
   error?: string | null;
 }) {
-  const failed = error && <p className="px-1 pb-1 text-ui text-destructive/80">{error}</p>;
-  if (routines.length === 0) {
-    return (
-      <div className="py-2">
-        {failed}
-        <p className="px-4 py-4 text-ui text-muted-foreground">
-          No routines yet. Ask this bot to check on something on a schedule, like “tell me when CI on my PR goes green”.
-        </p>
-      </div>
-    );
-  }
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 py-2">
-      {failed}
-      {routines.map((r) => (
-        <RoutineCard key={r.id} routine={r} now={now} onPause={onPause} onDelete={onDelete} />
-      ))}
+    <div className="shrink-0">
+      {/* The heading `RunHeading` draws over Background tasks and Subagents. */}
+      <div className="px-3 pt-4 pb-2 text-ui text-muted-foreground">Routines</div>
+      {error && <p className="px-3 pb-2 text-ui text-destructive/80">{error}</p>}
+      <div className="flex flex-col gap-2 px-2 pb-3">
+        {routines.map((r) => (
+          <RoutineCard key={r.id} routine={r} now={now} onPause={onPause} onDelete={onDelete} />
+        ))}
+      </div>
     </div>
   );
 }

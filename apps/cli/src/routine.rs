@@ -6,7 +6,7 @@ use super::{parent_session_id, send, unexpected};
 #[derive(Subcommand)]
 pub enum RoutineCommand {
     /// Make a routine: a prompt Dray sends this bot on a schedule. The user
-    /// sees it in the bot's Routines tab and can turn it off or delete it.
+    /// sees it under Routines in the bot's More tab and can turn it off or delete it.
     Add(AddArgs),
     /// List this bot's routines, with next run and last result.
     Ls(LsArgs),

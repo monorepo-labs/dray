@@ -418,8 +418,8 @@ dray bot routine pause <id|name>    # also resume, rm, and run (fires once, now)
 ```
 
 A routine is a bot's own scheduled check: Dray sends the bot its prompt on the
-schedule, hidden from the chat, and the user sees and stops it in the bot's
-Routines tab. Run from a bot's chat, every verb acts on that bot; `--bot`
+schedule, hidden from the chat, and the user sees and stops it under Routines in
+the bot's More tab. Run from a bot's chat, every verb acts on that bot; `--bot`
 names another. `--every` is at least 5m; `--at` is local time, daily unless
 `--days` says otherwise. A machine that slept through runs runs once on waking.
 
