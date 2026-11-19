@@ -18,7 +18,7 @@ export default function TabButton({
       className={cn(
         "rounded-md px-2 py-1 text-ui transition-colors",
         active
-          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+          ? "bg-[var(--fill-soft,var(--sidebar-accent))] text-sidebar-accent-foreground"
           : "text-muted-foreground hover:text-foreground",
         className,
       )}

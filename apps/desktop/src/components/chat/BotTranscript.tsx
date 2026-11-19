@@ -449,7 +449,7 @@ export function BotBubble({ tight = false, children }: { tight?: boolean; childr
   return (
     <div
       className={cn(
-        "max-w-[85%] self-start rounded-xl bg-muted/50 px-3 py-2",
+        "bot-bubble max-w-[85%] self-start rounded-xl bg-muted/50 px-3 py-2",
         tight && "-mt-2.5",
       )}
     >
