@@ -16,6 +16,11 @@ name: Release
 # and notarization included, and keeps what a release would publish as a
 # workflow artifact: no release, no tag, nothing on R2 or `updates`.
 #
+# With `linux_tag` (`-f linux_tag=v0.30.14`) a manual run publishes Linux alone
+# for a release that shipped without it: the AppImage built from that tag, put
+# on its release and R2, and its `linux-*` entries added to whichever manifest
+# is at that version. The Mac app and the `darwin-*` entries are not touched.
+#
 # The Mac path is four macOS jobs, never more than three at once — the org's
 # free plan runs five, and release-cli.yml takes two of them. `extras` and the
 # two `build` legs start together; `bundle` waits for all three.
@@ -29,6 +34,10 @@ on:
         description: Run the Mac release end to end and publish nothing
         type: boolean
         default: false
+      linux_tag:
+        description: Publish Linux alone for this existing release, e.g. v0.30.14
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -531,15 +540,39 @@ jobs:
   #
   # Held out of tag releases until the repo variable RELEASE_LINUX is `true`
   # (docs/releases.md). Skipped, it leaves no AppImage and no `linux-*` entry.
-  # A dry run is the Mac's and skips it too.
+  # A dry run is the Mac's and skips it too. `linux_tag` runs it whatever the
+  # variable says, built from that tag and published by `linux-publish`.
   linux:
-    if: (github.event_name == 'workflow_dispatch' && !inputs.dry_run) || (github.event_name == 'push' && vars.RELEASE_LINUX == 'true')
+    if: (github.event_name == 'workflow_dispatch' && (!inputs.dry_run || inputs.linux_tag != '')) || (github.event_name == 'push' && vars.RELEASE_LINUX == 'true')
     runs-on: ubuntu-22.04
+    env:
+      # The release this build belongs to. A manual run's ref is a branch.
+      TAG: ${{ inputs.linux_tag || github.ref_name }}
     outputs:
       appimage: ${{ steps.mirror.outputs.appimage }}
       signature: ${{ steps.mirror.outputs.signature }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.linux_tag }}
+
+      # Checked before a 20-minute compile: the release has to exist and be
+      # published, and its tag has to carry its own version, or the manifest
+      # entries would offer Linux an AppImage that thinks it is something else.
+      - name: Check the release
+        if: inputs.linux_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          # A dry run promises to publish nothing; `linux_tag` publishes.
+          [ "$DRY_RUN" != true ] || { echo "linux_tag publishes, so it cannot ride a dry run" >&2; exit 1; }
+          [[ "$TAG" == v* ]] || { echo "linux_tag must be a v* tag, got $TAG" >&2; exit 1; }
+          V="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
+          [ "v$V" = "$TAG" ] || { echo "$TAG carries tauri.conf.json version $V" >&2; exit 1; }
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$TAG" --silent \
+            || { echo "no published release for $TAG" >&2; exit 1; }
 
       # WebKitGTK and the tray for Tauri; ALSA, cmake and the Vulkan headers
       # and shader compiler for dictation's engine, whose Vulkan module builds
@@ -553,8 +586,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libssl-dev libdbus-1-dev libasound2-dev cmake ninja-build file patchelf libfuse2 \
-            gstreamer1.0-plugins-base gstreamer1.0-plugins-good libvulkan-dev glslc spirv-headers \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good libvulkan-dev spirv-headers \
             libxkbcommon-x11-dev libfontconfig1-dev libfreetype6-dev
+
+      # 22.04 has no `glslc` package and its Vulkan headers (1.3.204) are too
+      # old for ggml's Vulkan backend, so both come from LunarG's SDK, pinned
+      # by version and checksum; CMake's FindVulkan reads them off
+      # VULKAN_SDK. Only `include/` and `bin/glslc` are taken, so the app
+      # still links the system's libvulkan, and that glslc needs glibc 2.29.
+      - name: Install Vulkan headers and glslc
+        env:
+          VK: 1.4.328.1
+          SHA: 241e75b56c91c0d210ed07a7c638ec05a3e5b0e4c66ba9f0ba0f102d823ad6bf
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o vulkansdk.tar.xz "https://sdk.lunarg.com/sdk/download/$VK/linux/vulkansdk-linux-x86_64-$VK.tar.xz"
+          echo "$SHA  vulkansdk.tar.xz" | sha256sum -c -
+          tar -xJf vulkansdk.tar.xz "$VK/x86_64/include" "$VK/x86_64/bin/glslc"
+          mkdir -p vulkan-sdk/bin
+          mv "$VK/x86_64/include" vulkan-sdk/include
+          mv "$VK/x86_64/bin/glslc" vulkan-sdk/bin/glslc
+          rm -rf vulkansdk.tar.xz "$VK"
+          vulkan-sdk/bin/glslc --version
+          echo "VULKAN_SDK=$RUNNER_TEMP/vulkan-sdk" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/vulkan-sdk/bin" >> "$GITHUB_PATH"
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -622,7 +678,7 @@ jobs:
       # `bundle` is what creates the release and may not have yet.
       - name: Mirror to R2
         id: mirror
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || inputs.linux_tag != ''
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -636,7 +692,7 @@ jobs:
           : "${AWS_ACCESS_KEY_ID:?}" "${R2_ACCOUNT_ID:?}" "${R2_BUCKET:?}"
           IMAGE="$(ls apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage)"
           test -s "$IMAGE.sig"
-          aws s3 cp "$IMAGE" "s3://${R2_BUCKET}/${GITHUB_REF_NAME}/$(basename "$IMAGE")" \
+          aws s3 cp "$IMAGE" "s3://${R2_BUCKET}/${TAG}/$(basename "$IMAGE")" \
             --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
             --cache-control "public, max-age=31536000, immutable"
           echo "appimage=$(basename "$IMAGE")" >> "$GITHUB_OUTPUT"
@@ -649,6 +705,83 @@ jobs:
           # A release only hands it to the manifest job; a manual run's is
           # there to download.
           retention-days: ${{ github.event_name == 'push' && 1 || 7 }}
+
+  # `linux_tag`'s half of `manifest`: the AppImage onto its release, and its
+  # entries into each manifest already at that version. A manifest that moved
+  # on is left alone — an entry under a newer version would offer Linux an
+  # update that installs an older app and then offers itself again.
+  linux-publish:
+    needs: linux
+    if: inputs.linux_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.linux_tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: updates
+          fetch-depth: 1
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: appimage
+          path: ${{ runner.temp }}/appimage
+
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOWNLOADS_URL: ${{ vars.DOWNLOADS_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          APPIMAGE: ${{ needs.linux.outputs.appimage }}
+          APPIMAGE_SIG: ${{ needs.linux.outputs.signature }}
+          APPIMAGE_DIR: ${{ runner.temp }}/appimage
+        run: |
+          set -euo pipefail
+          : "${DOWNLOADS_URL:?}" "${APPIMAGE:?}" "${APPIMAGE_SIG:?}"
+          URL="${DOWNLOADS_URL%/}/${TAG}/${APPIMAGE}"
+          AT=0
+          for f in stable.json beta.json; do
+            cur="$(jq -r '.version // empty' "$f" 2>/dev/null || true)"
+            if [ "v$cur" != "$TAG" ]; then
+              echo "keeping $f at ${cur:-nothing} — not $TAG"
+              continue
+            fi
+            jq --arg url "$URL" --arg sig "$APPIMAGE_SIG" \
+               '.platforms["linux-x86_64"] = {signature: $sig, url: $url}
+                | .platforms["linux-x86_64-appimage"] = {signature: $sig, url: $url}' \
+               "$f" > manifest.tmp
+            mv manifest.tmp "$f"
+            AT=$((AT + 1))
+            echo "$f: $(jq -c '.platforms | keys' "$f")"
+          done
+          # Neither at this version means a publish that reaches nobody.
+          [ "$AT" -gt 0 ] || { echo "no manifest is at $TAG; nothing published" >&2; exit 1; }
+
+          gh release upload "$TAG" "${APPIMAGE_DIR}/${APPIMAGE}" --repo "${GITHUB_REPOSITORY}" --clobber
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || {
+            git commit -m "release ${TAG} for Linux"
+            git push
+          }
+
+          # The versionless AppImage, as `manifest` moves it on a tag.
+          if [ "v$(jq -r '.version // empty' stable.json 2>/dev/null)" = "$TAG" ]; then
+            aws s3 cp "s3://${R2_BUCKET}/${TAG}/${APPIMAGE}" "s3://${R2_BUCKET}/Dray_amd64.AppImage" \
+              --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+              --metadata-directive REPLACE \
+              --content-type application/vnd.appimage \
+              --cache-control "public, max-age=300"
+          fi
 
   # The manifests live on a branch rather than in the release, because
   # `/releases/latest/` skips prereleases — so beta would have no fixed URL.
