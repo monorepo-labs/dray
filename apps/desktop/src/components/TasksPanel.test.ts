@@ -103,11 +103,12 @@ describe("taskRuns", () => {
 });
 
 describe("taskCounts", () => {
-  it("counts working and ready apart and files the rest as extras, aside left out", () => {
+  it("counts working, ready and checks running apart and files the rest as extras, aside left out", () => {
     const prs: Record<string, PrMark> = {
       ready: mark(),
       readyBusy: mark(),
       running: mark({ checksState: "RUNNING", mergeStateStatus: "BLOCKED" }),
+      runningBusy: mark({ checksState: "RUNNING", mergeStateStatus: "BLOCKED" }),
       failing: mark({ checksState: "FAILING", mergeStateStatus: "BLOCKED" }),
     };
     const counts = taskCounts(
@@ -116,6 +117,7 @@ describe("taskCounts", () => {
         row("readyBusy", { busy: true }),
         row("ready"),
         row("running"),
+        row("runningBusy", { busy: true }),
         row("failing"),
         row("ask", { asking: true, busy: true }),
         row("bg", { background: true }),
@@ -124,10 +126,10 @@ describe("taskCounts", () => {
       ],
       (r) => prs[r.item.sessionId],
     );
-    expect(counts).toEqual({ working: 1, ready: 2, other: 5 });
+    expect(counts).toEqual({ working: 1, ready: 2, checks: 2, other: 4 });
   });
 
   it("counts nothing for no tasks, or only set-aside ones", () => {
-    expect(taskCounts([row("a", {}, { aside: true })], none)).toEqual({ working: 0, ready: 0, other: 0 });
+    expect(taskCounts([row("a", {}, { aside: true })], none)).toEqual({ working: 0, ready: 0, checks: 0, other: 0 });
   });
 });
