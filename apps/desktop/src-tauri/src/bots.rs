@@ -582,7 +582,9 @@ pub(crate) async fn chat_sessions(path: &str) -> Result<Vec<SessionIndexItem>> {
 /// is part of. A task started before an agent switch still names the old
 /// session as its parent, and a report sent there would wake the old agent.
 pub async fn current_chat(target: SessionIndexItem) -> SessionIndexItem {
-    if target.archived || bot_at(&target.cwd).await.is_none() {
+    // A routine's run shares the folder but is its own session: the bot's
+    // answer to its question goes to the run.
+    if target.archived || target.routine_run.is_some() || bot_at(&target.cwd).await.is_none() {
         return target;
     }
     match chat_sessions(&target.cwd).await.ok().and_then(|mut c| c.pop()) {

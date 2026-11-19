@@ -551,7 +551,9 @@ final class Store {
     /// A bot's chat: every unsettled session in its folder, oldest first. The
     /// newest is the one a reply goes to; an agent switch leaves the older ones (`botChat`).
     func botChat(_ server: UUID, _ bot: Bot) -> [SessionKey] {
-        items.filter { $0.key.server == server && $0.value.archived != true && samePath($0.value.cwd, bot.path) }
+        items.filter {
+            $0.key.server == server && $0.value.archived != true && $0.value.routineRun == nil && samePath($0.value.cwd, bot.path)
+        }
             .sorted { ($0.value.created ?? $0.value.modified) < ($1.value.created ?? $1.value.modified) }
             .map(\.key)
     }
@@ -565,7 +567,9 @@ final class Store {
         // One copy per id: a machine paired directly and shared too lists a task twice,
         // and the one to open is the one whose connection is up.
         var copies: [String: (key: SessionKey, item: SessionItem)] = [:]
-        for (key, item) in items where item.archived != true && item.parentSessionId.map({ $0 != item.sessionId }) == true {
+        // A routine's run is the bot's own scheduled work, never a task to list.
+        for (key, item) in items
+        where item.archived != true && item.routineRun == nil && item.parentSessionId.map({ $0 != item.sessionId }) == true {
             if let held = copies[item.sessionId], serverState[held.key.server] == .connected { continue }
             copies[item.sessionId] = (key, item)
         }

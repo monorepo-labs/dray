@@ -3779,13 +3779,16 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                     && !posted
                     && *status == TurnStatus::Success
                     && crate::bots::bot_at(ctx.session_cwd).await.is_some();
-                crate::routines::turn_ended(ctx.session_id, said, *status == TurnStatus::Success, app).await;
+                // A run waiting on its bot's answer has already said what it
+                // needs in its question, so this turn's end reports nothing.
+                let waiting =
+                    crate::routines::turn_ended(ctx.session_id, said, *status == TurnStatus::Success, app).await;
                 // A routine's run that found nothing new ends silent, and the
                 // bot is not woken to read that (#972).
                 let quiet_run = crate::routines::found_nothing(said)
                     && *status == TurnStatus::Success
                     && crate::routines::is_run(ctx.session_id).await;
-                if !quiet_run {
+                if !quiet_run && !waiting {
                     report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
                 }
                 ask_name = crate::bots::take_name_ask(ctx.session_id) && *status == TurnStatus::Success;

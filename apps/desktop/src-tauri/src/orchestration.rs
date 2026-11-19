@@ -2463,11 +2463,18 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
         bail!("a session cannot send a message to itself");
     }
 
+    let self_sent = carried.is_none();
     let from = match carried {
         Some(from) => Some(from),
         None => sender(send.from_session_id.as_deref()).await,
     };
     let prompt = attribute(&send.prompt, from.as_ref());
+    // A routine's run asking its bot something itself, not its report: the
+    // run waits on the answer, so its turn ending is not the run ending.
+    let asking_run = from
+        .as_ref()
+        .filter(|f| self_sent && f.routine == Some(true))
+        .map(|f| f.session_id.clone());
 
     let manager = manager();
     let outcome = manager
@@ -2499,6 +2506,9 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
             app,
         )
         .await?;
+    if let Some(run) = asking_run {
+        crate::routines::asked(&run);
+    }
 
     Ok(Response::Sent {
         queued: outcome.queued.is_some(),

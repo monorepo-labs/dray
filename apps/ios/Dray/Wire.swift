@@ -170,6 +170,8 @@ struct SessionItem: Codable, Hashable {
     let need: Need?
     /// The nearest live session above a bot's sub-task while the task that started it is settled or deleted.
     let adoptedBy: String?
+    /// The routine this session is one run of: it sits in its bot's folder but is never the chat or a task.
+    let routineRun: String?
 
     var busy: Bool { status == "in_progress" }
     var project: String { (projectPath as NSString).lastPathComponent }

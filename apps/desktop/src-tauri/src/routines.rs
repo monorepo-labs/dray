@@ -515,7 +515,15 @@ async fn tick(sink: &Sink) -> Result<()> {
             due.push((r.clone(), bot.clone(), late, retry, crate::session::Sending::enter().await));
         }
         if changed {
-            save(&list).await?;
+            if let Err(e) = save(&list).await {
+                // Nothing fires, so nothing would release them: every later
+                // tick would skip these routines for good.
+                let mut firing = FIRING.lock().unwrap();
+                for (r, ..) in &due {
+                    firing.remove(&r.id);
+                }
+                return Err(e);
+            }
         }
     }
     if changed || !missed.is_empty() {
@@ -544,9 +552,23 @@ async fn run_check(check: &str, cwd: &str) -> Result<String, String> {
         .current_dir(cwd)
         .env("PATH", crate::binpath::child_path(crate::binpath::resolved_bin_dirs()))
         .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let out = match tokio::time::timeout(CHECK_TIMEOUT, cmd.output()).await {
-        Err(_) => return Err(format!("timed out after {}s", CHECK_TIMEOUT.as_secs())),
+    // A group of its own, so a timeout stops a pipeline's every command and
+    // not `sh` alone; the next run would otherwise start another copy beside it.
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let child = cmd.spawn().map_err(|e| format!("could not run: {e}"))?;
+    let group = child.id();
+    let out = match tokio::time::timeout(CHECK_TIMEOUT, child.wait_with_output()).await {
+        Err(_) => {
+            #[cfg(unix)]
+            if let Some(pid) = group {
+                unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
+            }
+            return Err(format!("timed out after {}s", CHECK_TIMEOUT.as_secs()));
+        }
         Ok(Err(e)) => return Err(format!("could not run: {e}")),
         Ok(Ok(out)) => out,
     };
@@ -641,7 +663,7 @@ async fn fire(
         "You are one run of the routine \"{name}\" ({id}), which {bot} set up to run {schedule}. Dray started you in {bot}'s folder; \
          you are not {bot}'s chat, and the user never sees what you write.{when}{again}\n\n\
          The routine's job:\n\n{job}{note}\n\n\
-         If you need context only {bot} has, ask it with `dray session send {chat} \"<question>\"` and end your turn; its answer arrives here as a message. \
+         For context, look first in this folder: `AGENTS.md`, `USER.md` and `memory/` hold what {bot} knows. If only {bot} has it, ask with `dray session send {chat} \"<question>\"` and end your turn; its answer arrives here as a message. \
          When this run finds something {bot} should know, end with it in a line or two: that goes to {bot} as a report, and {bot} decides what the user hears. \
          When it finds nothing new, end with exactly `{NOTHING_NEW}` and nothing else, so {bot} is not woken. Don't make or change routines.",
         name = routine.name,
@@ -690,6 +712,7 @@ fn run_cap(schedule: &Schedule) -> Duration {
 async fn time_out(session_id: &str, cap: Duration, sink: &Sink) {
     let Some(id) = RUNNING.lock().unwrap().remove(session_id) else { return };
     SEEN.lock().unwrap().remove(session_id);
+    ASKED.lock().unwrap().remove(session_id);
     if let Err(e) = store::set_session_flags(session_id, Some(true), None, None, None).await {
         eprintln!("[routine {id}] {e:#}");
     }
@@ -768,17 +791,30 @@ fn apply_check(r: &mut Routine, (hash, failing): (String, bool)) {
     r.check_failing = failing;
 }
 
-/// A session's turn ended. Where it was a routine's run, its first turn is the
-/// run's result: silent, its report's first line, or failed. Only a run that
-/// got through marks the check's output seen; a failed one leaves it new, so
-/// the next run looks again.
-pub async fn turn_ended(session_id: &str, said: Option<&str>, ok: bool, sink: &Sink) {
+/// Run sessions that asked their bot something this turn, and so wait on the answer.
+static ASKED: LazyLock<std::sync::Mutex<HashSet<String>>> = LazyLock::new(Default::default);
+
+/// Run `session_id` sent its bot a question; its turn ending is a wait, not the end.
+pub fn asked(session_id: &str) {
+    ASKED.lock().unwrap().insert(session_id.to_string());
+}
+
+/// A session's turn ended. Where it was a routine's run, the turn that ends it
+/// is the run's result: silent, its report's first line, or failed. Only a run
+/// that got through marks the check's output seen; a failed one leaves it new,
+/// so the next run looks again. Answers whether the run is still waiting on
+/// its bot's answer, in which case nothing is recorded and nothing reports.
+pub async fn turn_ended(session_id: &str, said: Option<&str>, ok: bool, sink: &Sink) -> bool {
     // Killed by the server's own exit: left in flight on the file, so the next
     // start counts it cut off and tries again.
     if !ok && crate::session::exiting() {
-        return;
+        return false;
     }
-    let Some(id) = RUNNING.lock().unwrap().remove(session_id) else { return };
+    let asked = ASKED.lock().unwrap().remove(session_id);
+    if asked && ok && RUNNING.lock().unwrap().contains_key(session_id) {
+        return true;
+    }
+    let Some(id) = RUNNING.lock().unwrap().remove(session_id) else { return false };
     let seen = SEEN.lock().unwrap().remove(session_id);
     let said = said.filter(|_| !found_nothing(said));
     let run = match (ok, said.map(str::trim)) {
@@ -791,6 +827,7 @@ pub async fn turn_ended(session_id: &str, said: Option<&str>, ok: bool, sink: &S
         }
     };
     finish(&id, session_id, run, seen.filter(|_| ok), sink).await;
+    false
 }
 
 /// What a run ends with when it found nothing new. A word to match rather than
