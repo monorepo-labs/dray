@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { DownloadButton } from "@/components/DownloadButton";
 import { GitHubGlyph } from "@/components/GitHubGlyph";
 import { Wordmark } from "@/components/Wordmark";
 import { fetchStars, formatStars } from "@/lib/github";
@@ -10,7 +9,8 @@ const NAV_CELL =
   "h-full shrink-0 items-center justify-center gap-1.5 border-l border-white/20 font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white uppercase transition-colors hover:bg-white/10 light:border-black/15 light:text-[#0A0A0A] light:hover:bg-black/5";
 
 /// The site's bar of cells: wordmark left, scheme, links, stars and Download
-/// right. A server component so the star count arrives in the HTML. The
+/// right. Download opens the list of every platform rather than starting the
+/// dmg. A server component so the star count arrives in the HTML. The
 /// wordmark's fill masks the homepage's tiles; `bare` drops it on a page
 /// with nothing behind the nav.
 export async function SiteNav({ bare = false }: { bare?: boolean } = {}) {
@@ -44,11 +44,9 @@ export async function SiteNav({ bare = false }: { bare?: boolean } = {}) {
           <GitHubGlyph className="size-3" />
           {formatStars(stars)}
         </a>
-        <DownloadButton
-          from="nav"
-          label="Download"
-          className={`${NAV_CELL} flex w-[115px] [&>svg]:-mt-0.5 [&>svg]:size-[11px]`}
-        />
+        <a href="/download" className={`${NAV_CELL} flex w-[115px]`}>
+          Download
+        </a>
       </div>
     </nav>
   );

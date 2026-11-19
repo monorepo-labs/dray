@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 
-import { DownloadButton, OtherPlatformLink } from "@/components/DownloadButton";
+import { DownloadButton } from "@/components/DownloadButton";
 import { CARD_TITLE, LABEL as LABEL_TYPE, Title } from "@/components/home/Section";
 import { Stripes } from "@/components/home/Stripes";
 import { FEEDBACK, INSTALL_LINE, REPO, SPONSOR } from "@/lib/links";
@@ -34,7 +34,9 @@ export function Closing() {
           <Way label="On your computer" title="Download the app.">
             <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
               <DownloadButton from="cta" className="inline-flex h-10 items-center gap-2 rounded-[6px] bg-white px-4 text-[14px] leading-5 font-medium text-[#0B0B0F] shadow-[inset_0_-1px_0_#4D4C4C,0_1px_2px_#00000040] transition-opacity hover:opacity-90 [&>svg]:-mt-0.5" />
-              <OtherPlatformLink className="inline-flex items-center gap-2 text-[14px] leading-5 tracking-[-0.01em] text-white/70 transition-colors hover:text-white" />
+              <a href="/download" className="text-[14px] leading-5 tracking-[-0.01em] text-white/70 transition-colors hover:text-white">
+                Linux and more
+              </a>
             </div>
           </Way>
           <Way label="On a server" title="Install the CLI.">
@@ -78,12 +80,14 @@ function Way({ label, title, children }: { label: string; title: string; childre
 
 /// The install line with a Copy that says when it worked. Scrolls rather than
 /// wraps, since a command broken over two lines reads as two commands.
-function CopyLine() {
+/// `fill` is its background: the band's deep blue here, a terminal's black on
+/// the downloads page in either scheme.
+export function CopyLine({ fill = "bg-[#0B0A6E]" }: { fill?: string }) {
   const [copied, setCopied] = useState(false);
   const line = useRef<HTMLSpanElement>(null);
 
   return (
-    <div className="flex h-10 items-center gap-3 rounded-[6px] bg-[#0B0A6E] px-3.5">
+    <div className={`flex h-10 items-center gap-3 rounded-[6px] px-3.5 ${fill}`}>
       <code className="min-w-0 flex-1 overflow-x-auto font-mono text-[12px] leading-4 tracking-[-0.02em] whitespace-nowrap text-[#CFCFCF] [scrollbar-width:none]">
         <span className="text-[#FFE14D] select-none">$ </span>
         <span ref={line}>{INSTALL_LINE}</span>

@@ -27,7 +27,8 @@ export function linuxUrl(file: string): string {
 /// A one-byte ranged GET rather than HEAD, since Next's data cache keeps only
 /// GETs; cached ten minutes, so a new file lights up with no deploy. A failed
 /// check counts as present, a link being worth more than a false "Soon".
-export async function availableLinuxFiles(): Promise<Set<string>> {
+/// An array, not a set, since it crosses into client components.
+export async function availableLinuxFiles(): Promise<string[]> {
   const names: string[] = LINUX_FORMATS.flatMap((f) => Object.values(f.files));
   const found = await Promise.all(
     names.map(async (name) => {
@@ -42,5 +43,5 @@ export async function availableLinuxFiles(): Promise<Set<string>> {
       }
     }),
   );
-  return new Set(found.filter((n): n is string => n !== null));
+  return found.filter((n): n is string => n !== null);
 }

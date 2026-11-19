@@ -6,10 +6,6 @@ export const REPO = "https://github.com/monorepo-labs/dray";
 /// it alone, the beta channel being the updater's and not this page's.
 export const DOWNLOAD = "https://downloads.drayhq.com/Dray_universal.dmg";
 
-/// The Linux page, which lists its four files rather than starting one: a
-/// browser cannot tell a Debian machine from a Fedora one.
-export const LINUX_PAGE = "/download/linux";
-
 /// The server install. `public/install.sh` resolves the newest `cli-v*` tag
 /// itself, so this line never needs a version in it.
 export const INSTALL_LINE = "curl -fsSL https://www.drayhq.com/install.sh | sh";

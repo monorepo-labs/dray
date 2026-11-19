@@ -18,26 +18,16 @@ export function StartDownload() {
   return null;
 }
 
-/// One of the Linux page's files, counted by format and arch so the page can
-/// tell which of the four are wanted. `/download/linux` starts nothing on
-/// its own, so this click is the download.
-export function LinuxFileLink({
-  href,
-  format,
-  arch,
-  className,
-  children,
-}: {
-  href: string;
-  format: "deb" | "appimage";
-  arch: "x64" | "arm64";
-  className: string;
-  children: React.ReactNode;
-}) {
+/// The dmg itself, from the downloads list. Straight to the file, since that
+/// page carries no ask; counted like the Download buttons that go by way of
+/// the thanks page.
+export function DmgLink({ className, children }: { className: string; children: React.ReactNode }) {
   return (
     <a
-      href={href}
-      onClick={() => posthog.capture("linux_download", { format, arch }, { transport: "sendBeacon" })}
+      href={DOWNLOAD}
+      onClick={() =>
+        posthog.capture("download", { platform: "macos", from: "downloads" }, { transport: "sendBeacon" })
+      }
       className={className}
     >
       {children}
