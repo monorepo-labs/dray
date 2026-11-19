@@ -35,7 +35,6 @@ export function Hero() {
               <LinuxMenu className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-[6px] border border-white/20 px-4 text-[14px] leading-5 font-medium text-white transition-colors hover:bg-white/10 light:border-black/15 light:text-[#0A0A0A] light:hover:bg-black/5" />
               <IPhoneButton from="hero" className="inline-flex h-10 items-center gap-2 rounded-[6px] border border-white/20 px-4 text-[14px] leading-5 font-medium text-white transition-colors hover:bg-white/10 light:border-black/15 light:text-[#0A0A0A] light:hover:bg-black/5" />
             </div>
-            <p className="text-[14px] leading-5 tracking-[-0.01em] text-white/30 light:text-black/40">Free and open source</p>
           </div>
         </div>
 

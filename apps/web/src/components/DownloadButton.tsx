@@ -8,7 +8,7 @@ import { posthog } from "@/lib/posthog";
 /// The iPhone app's TestFlight beta, beside the download buttons. Counted as
 /// `testflight_click`, keyed by where it sits, since it leaves for Apple's page.
 /// The closing band spells it out ("Download for iPhone" with a TestFlight
-/// tag); the hero, three buttons wide, keeps it short.
+/// tag); the hero, three buttons wide, says "iPhone (TestFlight)".
 export function IPhoneButton({ className, from }: { className: string; from: "hero" | "cta" }) {
   return (
     <a
@@ -25,7 +25,7 @@ export function IPhoneButton({ className, from }: { className: string; from: "he
           <BetaTag label="TestFlight" />
         </>
       ) : (
-        "iPhone beta"
+        "iPhone (TestFlight)"
       )}
     </a>
   );
