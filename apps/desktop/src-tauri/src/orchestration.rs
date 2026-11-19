@@ -735,7 +735,7 @@ async fn localize(request: &mut Request, origin: Option<&str>) -> Result<()> {
 /// ([`crate::machines`]) — never the app's, so it works with the window closed
 /// and on a server that has no app at all.
 #[cfg(any(feature = "serve", feature = "desktop"))]
-mod elsewhere {
+pub(crate) mod elsewhere {
     use super::*;
     use crate::machines;
     use anyhow::anyhow;
@@ -1567,6 +1567,8 @@ pub async fn settle_merged(id: &str, head: &str, app: &Sink) -> Result<()> {
     if let Response::Error { message } = response {
         bail!(message);
     }
+    // The reader's merge settled it, so the bot hears of the settle as theirs.
+    crate::bots::note_since(&row, "the user settled it".into(), None, app).await;
     Ok(())
 }
 

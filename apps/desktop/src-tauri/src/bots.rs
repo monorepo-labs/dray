@@ -369,16 +369,31 @@ pub fn restore_handover(session_id: &str, text: String) {
     }
 }
 
-/// What the reader did to a bot's tasks since the bot's last prompt, per bot
-/// folder: each task's id, title and acts, oldest first. Sent ahead of the
-/// next prompt the bot gets anyway, since waking it for each would cost a turn.
-// ponytail: in memory, so a server restart drops what was not yet sent; a
-// file beside bots.json if that ever matters.
+/// What happened to a bot's tasks outside its chat, per bot folder: each
+/// task's id, title and acts, oldest first. Each act wakes the bot a moment
+/// later with a hidden prompt of its own ([`wake`]), so it never answers a
+/// report about a PR that already merged; a prompt it gets meanwhile carries
+/// the list instead.
+// ponytail: in memory, so a server restart inside the wake's wait drops it.
 static SINCE: std::sync::Mutex<Vec<(String, Vec<(String, String, Vec<String>)>)>> =
     std::sync::Mutex::new(Vec::new());
 
 /// Tasks kept per bot, newest kept: the list rides a prompt, so it stays short.
 const SINCE_CAP: usize = 8;
+
+/// Merges a bot was already told of, by task and PR, so the watcher that
+/// catches one made outside Dray never repeats one Dray noted itself.
+static MERGES_TOLD: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<(String, u64)>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// How long an act waits before it wakes the bot: a merge is followed by its
+/// settle within seconds, and one turn for both beats two.
+const WAKE_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Per bot folder, the newest wake's number: an older one finding a newer
+/// standing leaves the send to it.
+static WAKING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, u64>>> =
+    std::sync::LazyLock::new(Default::default);
 
 /// An act of the reader's on a session, through a client.
 pub enum Act {
@@ -393,6 +408,7 @@ pub enum Act {
 pub async fn reader_did<T, E>(
     session_id: &str,
     act: Option<Act>,
+    sink: &Sink,
     run: impl std::future::Future<Output = Result<T, E>>,
 ) -> Result<T, E> {
     let Some(act) = act else { return run.await };
@@ -405,55 +421,217 @@ pub async fn reader_did<T, E>(
         Act::Deleted => true,
     };
     let text = match act {
-        Act::Settled => "settled it",
-        Act::Stopped => "stopped its turn",
-        Act::Deleted => "deleted it",
+        Act::Settled => "the user settled it",
+        Act::Stopped => "the user stopped its turn",
+        Act::Deleted => "the user deleted it",
     };
     // A stop is noted ahead of the act: the stopped task reports at once, and
-    // that report has to carry why the turn ended. Anything else once it landed,
-    // since a note already sent cannot be taken back.
-    let early = matches!(act, Act::Stopped);
+    // that report has to carry why the turn ended. So is any act on a task
+    // whose bot runs elsewhere: a settle or delete is what tells that bot's
+    // poll the task is gone, and an act kept after that poll is never asked
+    // for. Anything else once it landed, since a note already sent cannot be
+    // taken back.
+    let elsewhere = match &item {
+        Some(item) => chat_for(item).await.is_none() && owed_root(item).await.is_some(),
+        None => false,
+    };
+    let early = matches!(act, Act::Stopped) || elsewhere;
     let noted = match (counts && early, &item) {
-        (true, Some(item)) => note_since(item, text.to_string()).await,
+        (true, Some(item)) => note_since(item, text.to_string(), None, sink).await,
         _ => None,
     };
     let out = run.await;
     if let (Ok(_), true, false, Some(item)) = (&out, counts, early, &item) {
-        note_since(item, text.to_string()).await;
+        note_since(item, text.to_string(), None, sink).await;
     }
-    if let (Err(_), Some(bot), Some(item)) = (&out, noted, &item) {
-        let mut since = SINCE.lock().unwrap();
-        if let Some((_, tasks)) = since.iter_mut().find(|(path, _)| *path == bot) {
-            for (_, _, acts) in tasks.iter_mut().filter(|(id, ..)| *id == item.session_id) {
-                acts.retain(|a| a != text);
-            }
-            tasks.retain(|(_, _, acts)| !acts.is_empty());
-        }
+    if let (Err(_), Some(noted), Some(item)) = (&out, noted, &item) {
+        take_back(noted, &item.session_id, text).await;
     }
     out
 }
 
-/// Notes `act` against `task` for its bot, folded into the task's line, and
-/// answers the bot's folder where it was noted.
-pub async fn note_since(task: &SessionIndexItem, act: String) -> Option<String> {
-    let chat = bot_chat_of(task).await?;
+/// Where an act was noted, so one that then failed can be taken back.
+pub enum Noted {
+    /// Into the list for the bot at this folder.
+    Here(String),
+    /// Kept for the bot's server to collect, by the kept act's id.
+    Kept(String),
+}
+
+async fn take_back(noted: Noted, task: &str, text: &str) {
+    match noted {
+        Noted::Here(bot) => {
+            let mut since = SINCE.lock().unwrap();
+            if let Some((_, tasks)) = since.iter_mut().find(|(path, _)| *path == bot) {
+                for (_, _, acts) in tasks.iter_mut().filter(|(id, ..)| *id == task) {
+                    acts.retain(|a| a != text);
+                }
+                tasks.retain(|(_, _, acts)| !acts.is_empty());
+            }
+        }
+        Noted::Kept(id) => {
+            if let Err(e) = crate::remote_reports::drop_act(&id).await {
+                eprintln!("[bot since err] {e:#}");
+            }
+        }
+    }
+}
+
+/// Notes `act`, a clause naming who did what ("the user settled it"), against
+/// `task` for its bot, and wakes the bot. `merged` is the PR number where the
+/// act is a merge. Where the bot runs on another machine, the act waits here
+/// for that machine's server to collect it.
+pub async fn note_since(task: &SessionIndexItem, act: String, merged: Option<u64>, sink: &Sink) -> Option<Noted> {
+    let Some(chat) = chat_for(task).await else {
+        let owed = owed_root(task).await?;
+        let title = one_line(&task.title);
+        return match crate::remote_reports::keep_act(&owed, &task.session_id, &title, act, merged).await {
+            Ok(id) => Some(Noted::Kept(id)),
+            Err(e) => {
+                eprintln!("[bot since err] {e:#}");
+                None
+            }
+        };
+    };
+    note_for(&chat, &task.session_id, &task.title, act, merged, sink).map(Noted::Here)
+}
+
+/// The title is the one piece of free text, and it sits inside a list the bot
+/// is told to trust: kept to one line that cannot close the list.
+fn one_line(title: &str) -> String {
+    title.replace(['\n', '\r', ']', '"'], " ")
+}
+
+/// Folds `act` on task `id` into the list for `chat`'s bot and wakes it.
+fn note_for(chat: &SessionIndexItem, id: &str, title: &str, act: String, merged: Option<u64>, sink: &Sink) -> Option<String> {
+    if let Some(number) = merged {
+        MERGES_TOLD.lock().unwrap().insert((id.to_string(), number));
+    }
     // The bot's own chat: the reader acting there is a turn the bot sees.
-    if chat.session_id == task.session_id {
+    if chat.session_id == id {
         return None;
     }
-    let mut since = SINCE.lock().unwrap();
-    let at = match since.iter().position(|(path, _)| same_dir(path, &chat.cwd)) {
-        Some(at) => at,
-        None => {
-            since.push((chat.cwd.clone(), Vec::new()));
-            since.len() - 1
+    let path = {
+        let mut since = SINCE.lock().unwrap();
+        let at = match since.iter().position(|(path, _)| same_dir(path, &chat.cwd)) {
+            Some(at) => at,
+            None => {
+                since.push((chat.cwd.clone(), Vec::new()));
+                since.len() - 1
+            }
+        };
+        fold_since(&mut since[at].1, id, &one_line(title), act);
+        since[at].0.clone()
+    };
+    wake(path.clone(), sink.clone());
+    Some(path)
+}
+
+/// An act another machine kept for a task it runs under a session here,
+/// tracked under `parent`: noted for the bot here, or, where that bot is on a
+/// machine further up, kept here in turn for it to collect. False where
+/// keeping it failed, so it is not acked and comes again.
+#[cfg(any(feature = "serve", feature = "desktop"))]
+pub async fn note_collected(act: &crate::remote_reports::KeptAct, parent: &str, sink: &Sink) -> bool {
+    // A parent gone from here leaves nobody to tell.
+    let Some(parent) = crate::store::get_session_index_item(parent).await.ok().flatten() else { return true };
+    if let Some(chat) = bot_chat_of(&parent).await {
+        note_for(&chat, &act.task, &act.title, act.text.clone(), act.merged, sink);
+        return true;
+    }
+    let Some(owed) = owed_root(&parent).await else { return true };
+    match crate::remote_reports::keep_act(&owed, &act.task, &act.title, act.text.clone(), act.merged).await {
+        Ok(_) => true,
+        Err(e) => {
+            eprintln!("[bot since err] {e:#}");
+            false
+        }
+    }
+}
+
+/// A bot task's PR, at `url`, that the stalls judge saw go from open to
+/// merged. Told unless a merge through Dray already was: this one came from
+/// GitHub, or from an agent. The mark matched the task by branch name alone,
+/// so the PR is read back first: a fork's answers no head, and a task moved
+/// off that branch holds work the merge did not land. False where GitHub
+/// could not be asked, so the judge keeps the merge to weigh again.
+pub async fn note_seen_merge(task: &SessionIndexItem, number: u64, url: &str, sink: &Sink) -> bool {
+    if MERGES_TOLD.lock().unwrap().contains(&(task.session_id.clone(), number)) {
+        return true;
+    }
+    let Some(slug) = crate::github::slug_from_pr_url(url) else { return true };
+    let repo = format!("{}{slug}", crate::github::SLUG_PREFIX);
+    let head = match crate::github::pr_head_read(&repo, number).await {
+        Ok(Some(head)) => head,
+        Ok(None) => return true,
+        Err(e) => {
+            eprintln!("[bot since err] PR #{number}: {e}");
+            return false;
         }
     };
-    // The title is the one piece of free text, and it sits inside a list the
-    // bot is told to trust: kept to one line that cannot close the list.
-    let title = task.title.replace(['\n', '\r', ']', '"'], " ");
-    fold_since(&mut since[at].1, &task.session_id, &title, act);
-    Some(since[at].0.clone())
+    if on_branch(task, &head).await {
+        note_since(task, format!("its PR #{number} was merged"), Some(number), sink).await;
+    }
+    true
+}
+
+/// Whether `task` is on `head` now, read off its tree's own HEAD here or on
+/// its machine: a task can move off the branch it was made on, and then holds
+/// work the merge did not land. A machine that does not answer leaves the
+/// branch the task was made on.
+async fn on_branch(task: &SessionIndexItem, head: &str) -> bool {
+    let here = crate::store::get_session_index_item(&task.session_id).await.ok().flatten().is_some();
+    let observed = if task.worktree_removed {
+        None
+    } else if here {
+        crate::git::current_branch(&task.cwd).await
+    } else {
+        remote_branch(task).await
+    };
+    crate::store::session_branch(task, observed.as_deref()).as_deref() == Some(head)
+}
+
+#[cfg(any(feature = "serve", feature = "desktop"))]
+async fn remote_branch(task: &SessionIndexItem) -> Option<String> {
+    let machine = crate::remote_reports::machine_of(&task.session_id).await?;
+    crate::orchestration::elsewhere::branch_at(&machine, &task.cwd).await
+}
+
+#[cfg(not(any(feature = "serve", feature = "desktop")))]
+async fn remote_branch(_task: &SessionIndexItem) -> Option<String> {
+    None
+}
+
+/// The bot chat `task` belongs to on this server: up its tree here, or, for a
+/// task on another machine, from the session this server tracks it under.
+async fn chat_for(task: &SessionIndexItem) -> Option<SessionIndexItem> {
+    if let Some(chat) = bot_chat_of(task).await {
+        return Some(chat);
+    }
+    #[cfg(any(feature = "serve", feature = "desktop"))]
+    if let Some(parent) = crate::remote_reports::parent_of(&task.session_id).await {
+        let parent = crate::store::get_session_index_item(&parent).await.ok().flatten()?;
+        return bot_chat_of(&parent).await;
+    }
+    None
+}
+
+/// The task here, `task` or one above it, that reports to a bot on another
+/// machine: the one that machine collects for.
+async fn owed_root(task: &SessionIndexItem) -> Option<String> {
+    let owed = crate::remote_reports::owed_tasks().await;
+    if owed.is_empty() {
+        return None;
+    }
+    let mut at = Some(task.clone());
+    for _ in 0..8 {
+        let item = at?;
+        if owed.contains(&item.session_id) {
+            return Some(item.session_id);
+        }
+        at = crate::store::tree_parent(&item).await.ok().flatten();
+    }
+    None
 }
 
 fn fold_since(tasks: &mut Vec<(String, String, Vec<String>)>, id: &str, title: &str, act: String) {
@@ -467,36 +645,141 @@ fn fold_since(tasks: &mut Vec<(String, String, Vec<String>)>, id: &str, title: &
     }
 }
 
+/// How many times a wake is tried, its wait doubling each time, before the
+/// list is left for the bot's next prompt to carry.
+const WAKE_TRIES: u32 = 4;
+
+/// Wakes the bot at `path` once its acts stop coming for [`WAKE_AFTER`]: the
+/// list goes to its chat as Dray's hidden prompt, which every harness takes
+/// like any other. Nothing is sent where a prompt carried the list first.
+fn wake(path: String, sink: Sink) {
+    wake_in(path, sink, WAKE_AFTER, 1);
+}
+
+fn wake_in(path: String, sink: Sink, after: std::time::Duration, attempt: u32) {
+    let mine = {
+        let mut waking = WAKING.lock().unwrap();
+        let n = waking.entry(path.clone()).or_insert(0);
+        *n += 1;
+        *n
+    };
+    tokio::spawn(async move {
+        tokio::time::sleep(after).await;
+        {
+            let mut waking = WAKING.lock().unwrap();
+            if waking.get(&path) != Some(&mine) {
+                return;
+            }
+            waking.remove(&path);
+        }
+        if let Err(e) = send_since(&path, &sink).await {
+            eprintln!("[bot wake err] {e:#}");
+            if attempt < WAKE_TRIES {
+                wake_in(path, sink, after * 2, attempt + 1);
+            }
+        }
+    });
+}
+
+async fn send_since(path: &str, sink: &Sink) -> Result<()> {
+    let Some(chat) = chat_sessions(path).await?.pop() else { return Ok(()) };
+    let tasks = {
+        let mut since = SINCE.lock().unwrap();
+        match since.iter().position(|(p, _)| same_dir(p, path)) {
+            Some(at) => since.remove(at).1,
+            None => return Ok(()),
+        }
+    };
+    // Emptied by a failed stop taking its note back.
+    if tasks.is_empty() {
+        return Ok(());
+    }
+    let prompt = since_text(&tasks).trim_end().to_string();
+    let sent = crate::orchestration::send_review(chat.session_id, prompt, sink.clone()).await;
+    if sent.is_err() {
+        // Put back ahead of anything noted meanwhile, for the retry or the
+        // next prompt, whichever comes first.
+        let mut since = SINCE.lock().unwrap();
+        let at = match since.iter().position(|(p, _)| same_dir(p, path)) {
+            Some(at) => at,
+            None => {
+                since.push((path.to_string(), Vec::new()));
+                since.len() - 1
+            }
+        };
+        let newer = std::mem::take(&mut since[at].1);
+        let mut kept = tasks;
+        for (id, title, acts) in newer {
+            for act in acts {
+                fold_since(&mut kept, &id, &title, act);
+            }
+        }
+        since[at].1 = kept;
+    }
+    sent
+}
+
 /// Notes the reader's merge of PR `number` against the bot task whose branch
-/// it is. `cwd` is the repo root or the task's own tree, whichever the client
-/// merged from. Asks GitHub for the branch only where a bot task could match.
-pub async fn note_merge(cwd: &str, number: u64) {
-    let items = crate::store::list_session_index_items(false).await.unwrap_or_default();
-    let mut tasks = Vec::new();
-    for item in items {
+/// it is. `cwd` is the repo root, the task's own tree, or a `github:` repo key,
+/// whichever the client merged from; `task` is the task the client named,
+/// which may run on another machine. Each is told only while it is still on
+/// the PR's head, read back from GitHub, which a fork's PR never answers.
+pub async fn note_merge(cwd: &str, number: u64, task: Option<&str>, sink: &Sink) {
+    let mut rows: Vec<SessionIndexItem> = Vec::new();
+    if let Some(row) = match task {
+        Some(id) => task_row(id).await,
+        None => None,
+    } {
+        rows.push(row);
+    }
+    #[cfg(any(feature = "serve", feature = "desktop"))]
+    rows.extend(crate::stalls::remote_with_pr(cwd, number).await);
+    for item in crate::store::list_session_index_items(false).await.unwrap_or_default() {
         if (same_dir(&item.project_path, cwd) || same_dir(&item.cwd, cwd)) && in_bot_tree(&item).await {
-            tasks.push(item);
+            rows.push(item);
         }
     }
-    if tasks.is_empty() {
+    let mut seen = std::collections::HashSet::new();
+    rows.retain(|r| seen.insert(r.session_id.clone()));
+    if rows.is_empty() {
         return;
     }
-    let Some(branch) = crate::github::pr_head(cwd, number).await else { return };
-    let branch = branch.as_str();
-    for task in tasks {
-        // The tree's own HEAD first: a task can move off the branch it was made on.
-        let observed = if task.worktree_removed { None } else { crate::git::current_branch(&task.cwd).await };
-        if crate::store::session_branch(&task, observed.as_deref()).as_deref() == Some(branch) {
-            // No PR title: it is the PR author's text, and this list is trusted.
-            note_since(&task, format!("merged its PR #{number}")).await;
+    let Some(head) = crate::github::pr_head(cwd, number).await else { return };
+    // No PR title: it is the PR author's text, and this list is trusted.
+    let act = format!("the user merged its PR #{number}");
+    for row in rows {
+        if on_branch(&row, &head).await {
+            note_since(&row, act.clone(), Some(number), sink).await;
         }
     }
+}
+
+/// Task `id` as this server knows it: its own row, what its machine last said
+/// of it, or, before it said anything, its machine asked.
+pub async fn task_row(id: &str) -> Option<SessionIndexItem> {
+    if let Some(row) = crate::store::get_session_index_item(id).await.ok().flatten() {
+        return Some(row);
+    }
+    #[cfg(any(feature = "serve", feature = "desktop"))]
+    if let Some(row) = crate::stalls::last_known(id).await {
+        return Some(row);
+    }
+    #[cfg(any(feature = "serve", feature = "desktop"))]
+    if crate::remote_reports::machine_of(id).await.is_some() {
+        return crate::orchestration::elsewhere::session_row(id).await.map(|(_, row)| row);
+    }
+    None
 }
 
 /// The list for the bot chat `session_id` belongs to, taken once, as the
 /// hidden lines that go ahead of its next prompt.
 pub async fn take_since(session_id: &str) -> Option<String> {
     let item = crate::store::get_session_index_item(session_id).await.ok().flatten()?;
+    // A routine's run shares the folder but is not the chat: taken there, the
+    // list went to a session the bot never reads back.
+    if item.routine_run.is_some() {
+        return None;
+    }
     let mut lines: Vec<String> = Vec::new();
     lines.extend(roster_note(session_id, &item.cwd).await);
     NOTES.lock().unwrap().retain(|(path, note)| {
@@ -508,7 +791,10 @@ pub async fn take_since(session_id: &str) -> Option<String> {
     });
     let mut since = SINCE.lock().unwrap();
     if let Some(at) = since.iter().position(|(path, _)| same_dir(path, &item.cwd)) {
-        lines.push(since_text(&since.remove(at).1));
+        let tasks = since.remove(at).1;
+        if !tasks.is_empty() {
+            lines.push(since_text(&tasks));
+        }
     }
     (!lines.is_empty()).then(|| lines.concat())
 }
@@ -540,10 +826,22 @@ fn note_bot(path: &str, kind: Note, note: String) {
     notes.push((path.to_string(), note));
 }
 
+/// Each act is a clause naming who did it; a run of the user's names them once.
 fn since_text(tasks: &[(String, String, Vec<String>)]) -> String {
+    const USER: &str = "the user ";
     let lines: Vec<String> = tasks
         .iter()
-        .map(|(id, title, acts)| format!("- Task \"{title}\" ({id}): the user {}.", acts.join(", then ")))
+        .map(|(id, title, acts)| {
+            let mut said = String::new();
+            for (i, act) in acts.iter().enumerate() {
+                let again = i > 0 && acts[i - 1].starts_with(USER) && act.starts_with(USER);
+                if i > 0 {
+                    said.push_str(", then ");
+                }
+                said.push_str(if again { &act[USER.len()..] } else { act });
+            }
+            format!("- Task \"{title}\" ({id}): {said}.")
+        })
         .collect();
     format!("[Since your last turn, outside this chat:\n{}]\n\n", lines.join("\n"))
 }
@@ -2140,12 +2438,16 @@ mod tests {
     #[test]
     fn since_folds_acts_per_task_and_keeps_the_newest_tasks() {
         let mut tasks = Vec::new();
-        fold_since(&mut tasks, "a", "Boat", "merged its PR #980 (Boat)".into());
-        fold_since(&mut tasks, "a", "Boat", "settled it".into());
-        fold_since(&mut tasks, "a", "Boat", "settled it".into());
+        fold_since(&mut tasks, "a", "Boat", "the user merged its PR #980".into());
+        fold_since(&mut tasks, "a", "Boat", "the user settled it".into());
+        fold_since(&mut tasks, "a", "Boat", "the user settled it".into());
+        fold_since(&mut tasks, "b", "Fix", "its PR #981 was merged".into());
+        fold_since(&mut tasks, "b", "Fix", "the user settled it".into());
         assert_eq!(
             since_text(&tasks),
-            "[Since your last turn, outside this chat:\n- Task \"Boat\" (a): the user merged its PR #980 (Boat), then settled it.]\n\n"
+            "[Since your last turn, outside this chat:\n\
+             - Task \"Boat\" (a): the user merged its PR #980, then settled it.\n\
+             - Task \"Fix\" (b): its PR #981 was merged, then the user settled it.]\n\n"
         );
         for i in 0..SINCE_CAP {
             fold_since(&mut tasks, &i.to_string(), "t", "stopped its turn".into());

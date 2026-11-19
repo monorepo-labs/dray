@@ -27,6 +27,25 @@ pub struct Report {
     pub text: String,
 }
 
+/// Something the reader did to a task here whose bot runs on another machine
+/// (merged its PR, settled it): the bot's digest entry, kept for that
+/// machine's server to collect, since only it can tell the bot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeptAct {
+    /// What an ack names, as a report's does.
+    pub id: String,
+    /// The owed task it is collected with: `task` or the one above it.
+    pub child: String,
+    pub task: String,
+    pub title: String,
+    /// A clause naming who did what, "the user settled it".
+    pub text: String,
+    /// The PR number, where the act is a merge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merged: Option<u64>,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Outbox {
     /// Tasks whose parent is a bot's chat on another machine.
@@ -34,6 +53,8 @@ struct Outbox {
     owed: Vec<String>,
     #[serde(default)]
     pending: Vec<Report>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    acts: Vec<KeptAct>,
 }
 
 /// What a collect answers: the reports for the tasks asked about, and which of
@@ -48,6 +69,10 @@ pub struct Taken {
     /// reports. Absent from a server older than #1259.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub facts: Option<Vec<serde_json::Value>>,
+    /// The reader's acts on those tasks. Answered for a task settled since
+    /// too, which is `gone`: a settle is one of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acts: Vec<KeptAct>,
 }
 
 /// Both files are rewritten whole by more than one task.
@@ -105,6 +130,38 @@ pub async fn keep(child: &str, parent: &str, title: &str, text: String) -> anyho
     save_outbox(&outbox).await
 }
 
+/// Keeps an act on `task` for the bot's server, collected with `child`.
+/// Answers its id, for [`drop_act`].
+pub async fn keep_act(child: &str, task: &str, title: &str, text: String, merged: Option<u64>) -> anyhow::Result<String> {
+    let _guard = OUTBOX.lock().await;
+    let mut outbox: Outbox = store::read_json(&outbox_path().await?).await?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    outbox.expire(now);
+    let id = uuid::Uuid::now_v7().to_string();
+    outbox.acts.push(KeptAct {
+        id: id.clone(),
+        child: child.to_string(),
+        task: task.to_string(),
+        title: title.to_string(),
+        text,
+        merged,
+    });
+    save_outbox(&outbox).await?;
+    Ok(id)
+}
+
+/// Takes back a kept act whose act then failed, where it is not collected yet.
+pub async fn drop_act(id: &str) -> anyhow::Result<()> {
+    let _guard = OUTBOX.lock().await;
+    let mut outbox: Outbox = store::read_json(&outbox_path().await?).await?;
+    let before = outbox.acts.len();
+    outbox.acts.retain(|a| a.id != id);
+    if outbox.acts.len() == before {
+        return Ok(());
+    }
+    save_outbox(&outbox).await
+}
+
 /// The serve command `parent_reports`: drops the reports `ack` names and the
 /// tasks `forget` names, whose bot chat was settled, then answers the reports
 /// waiting for `children`.
@@ -118,9 +175,9 @@ pub async fn take(children: Vec<String>, ack: Vec<String>, forget: Vec<String>) 
             live.push(child.clone());
         }
     }
-    let before = (outbox.owed.len(), outbox.pending.len());
+    let before = (outbox.owed.len(), outbox.pending.len(), outbox.acts.len());
     let mut taken = outbox.take(&children, &ack, &forget, &live);
-    if (outbox.owed.len(), outbox.pending.len()) != before {
+    if (outbox.owed.len(), outbox.pending.len(), outbox.acts.len()) != before {
         save_outbox(&outbox).await.map_err(|e| format!("{e:#}"))?;
     }
     drop(_guard);
@@ -139,22 +196,28 @@ impl Outbox {
     /// `children` this index holds unsettled.
     fn take(&mut self, children: &[String], ack: &[String], forget: &[String], live: &[String]) -> Taken {
         self.pending.retain(|r| !ack.contains(&r.id));
+        self.acts.retain(|a| !ack.contains(&a.id) && !forget.contains(&a.child));
         self.owed.retain(|c| !forget.contains(c));
         self.pending.retain(|r| !forget.contains(&r.child));
+        // Ahead of `gone`: settling the task is what makes it gone, and the
+        // bot has to hear of that settle.
+        let acts = self.acts.iter().filter(|a| children.contains(&a.child)).cloned().collect();
         let gone: Vec<String> =
             children.iter().filter(|c| !live.contains(c) || !self.owed.contains(c)).cloned().collect();
         self.owed.retain(|c| !gone.contains(c));
         self.pending.retain(|r| !gone.contains(&r.child));
         let reports = self.pending.iter().filter(|r| children.contains(&r.child)).cloned().collect();
-        Taken { reports, gone, facts: None }
+        Taken { reports, gone, facts: None, acts }
     }
 
     /// Drops reports older than [`KEEP_FOR`], read off their v7 ids.
     fn expire(&mut self, now: u64) {
-        self.pending.retain(|r| {
-            let made = uuid::Uuid::parse_str(&r.id).ok().and_then(|id| id.get_timestamp()).map(|t| t.to_unix().0);
+        let fresh = |id: &str| {
+            let made = uuid::Uuid::parse_str(id).ok().and_then(|id| id.get_timestamp()).map(|t| t.to_unix().0);
             made.is_none_or(|made| now.saturating_sub(made) < KEEP_FOR)
-        });
+        };
+        self.pending.retain(|r| fresh(&r.id));
+        self.acts.retain(|a| fresh(&a.id));
     }
 }
 
@@ -275,6 +338,11 @@ mod collect {
         load().await.into_iter().find(|r| r.child == child).map(|r| r.machine)
     }
 
+    /// The session here a bot's task on another machine is tracked under.
+    pub async fn parent_of(child: &str) -> Option<String> {
+        load().await.into_iter().find(|r| r.child == child).map(|r| r.parent)
+    }
+
     async fn untrack(children: &[String]) {
         if children.is_empty() {
             return;
@@ -373,6 +441,16 @@ mod collect {
             }
             Err(e) => return Err(e),
         };
+        // Ahead of the facts: a merge noted here is one the stalls judge,
+        // reading those facts, must not tell the bot of again.
+        let mut acked_acts = Vec::new();
+        for act in &taken.acts {
+            if let Some((remote, _)) = open.iter().find(|(r, _)| r.child == act.child) {
+                if crate::bots::note_collected(act, &remote.parent, app).await {
+                    acked_acts.push(act.id.clone());
+                }
+            }
+        }
         crate::stalls::remote_answered(&saved.id, &saved.name, taken.facts.clone()).await;
         untrack(&closed).await;
         // Only this machine's own tasks: an answer naming another
@@ -401,7 +479,8 @@ mod collect {
                 acked
             })
         });
-        let acked: Vec<String> = futures_util::future::join_all(runs).await.into_iter().flatten().collect();
+        let mut acked: Vec<String> = futures_util::future::join_all(runs).await.into_iter().flatten().collect();
+        acked.extend(acked_acts);
         if !acked.is_empty() {
             // Lost, the reports come again next poll: a bot reading
             // one twice beats a bot never reading it.
@@ -542,7 +621,7 @@ mod collect {
 }
 
 #[cfg(any(feature = "serve", feature = "desktop"))]
-pub use collect::{machine_of, reparent, retarget, run, track, tracked_machines};
+pub use collect::{machine_of, parent_of, reparent, retarget, run, track, tracked_machines};
 
 #[cfg(test)]
 mod tests {
@@ -561,6 +640,7 @@ mod tests {
         let mut outbox = Outbox {
             owed: vec!["a".into(), "b".into()],
             pending: vec![report("1", "a"), report("2", "b"), report("3", "a")],
+            ..Default::default()
         };
         let live = ["a".to_string(), "b".to_string()];
 
@@ -577,7 +657,7 @@ mod tests {
 
     #[test]
     fn a_settled_missing_or_unowed_task_is_gone_with_its_reports() {
-        let mut outbox = Outbox { owed: vec!["a".into(), "b".into()], pending: vec![report("1", "a"), report("2", "b")] };
+        let mut outbox = Outbox { owed: vec!["a".into(), "b".into()], pending: vec![report("1", "a"), report("2", "b")], ..Default::default() };
         // `a` settled or deleted here; `c` never owed a report.
         let taken = outbox.take(&["a".into(), "b".into(), "c".into()], &[], &[], &["b".into(), "c".into()]);
         assert_eq!(taken.gone, ["a", "c"]);
@@ -590,7 +670,7 @@ mod tests {
     /// reports go, or they would sit here for a server that stopped asking.
     #[test]
     fn a_forgotten_task_owes_nothing_more() {
-        let mut outbox = Outbox { owed: vec!["a".into(), "b".into()], pending: vec![report("1", "a"), report("2", "b")] };
+        let mut outbox = Outbox { owed: vec!["a".into(), "b".into()], pending: vec![report("1", "a"), report("2", "b")], ..Default::default() };
         let taken = outbox.take(&[], &[], &["a".into()], &["a".into(), "b".into()]);
         assert!(taken.reports.is_empty() && taken.gone.is_empty());
         assert_eq!(outbox.owed, ["b"]);
@@ -600,12 +680,31 @@ mod tests {
     #[test]
     fn a_report_nobody_collects_expires() {
         let id = uuid::Uuid::now_v7().to_string();
-        let mut outbox = Outbox { owed: vec!["a".into()], pending: vec![report(&id, "a")] };
+        let mut outbox = Outbox { owed: vec!["a".into()], pending: vec![report(&id, "a")], ..Default::default() };
         let made = uuid::Uuid::parse_str(&id).unwrap().get_timestamp().unwrap().to_unix().0;
         outbox.expire(made + KEEP_FOR - 1);
         assert_eq!(outbox.pending.len(), 1);
         outbox.expire(made + KEEP_FOR);
         assert!(outbox.pending.is_empty());
+    }
+
+    fn act(id: &str, child: &str) -> KeptAct {
+        KeptAct { id: id.into(), child: child.into(), task: child.into(), title: "Task".into(), text: "the user settled it".into(), merged: None }
+    }
+
+    /// The settle that makes a task gone is itself an act the bot must hear,
+    /// so the answer that says gone carries it, and it stays until acked.
+    #[test]
+    fn an_act_rides_the_answer_that_says_its_task_is_gone() {
+        let mut outbox = Outbox { owed: vec!["a".into(), "b".into()], acts: vec![act("1", "a"), act("2", "b")], ..Default::default() };
+        let taken = outbox.take(&["a".into()], &[], &[], &[]);
+        assert_eq!(taken.gone, ["a"]);
+        assert_eq!(taken.acts, [act("1", "a")]);
+        assert_eq!(outbox.take(&[], &["1".into()], &[], &[]).acts, []);
+        assert_eq!(outbox.acts, [act("2", "b")]);
+        // A settled bot chat takes no more.
+        outbox.take(&[], &[], &["b".into()], &[]);
+        assert!(outbox.acts.is_empty());
     }
 
     #[test]
