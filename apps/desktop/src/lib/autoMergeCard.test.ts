@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { cardDue, EXPECT_MS, readyForCard, SETTLE_MS, watchPr } from "@/lib/autoMergeCard";
+import { cardDue, EXPECT_MS, readyForCard, SETTLE_MS, turnEnded, watchPr } from "@/lib/autoMergeCard";
 import type { PrMark } from "@/types/events";
 
 const mark = (over: Partial<PrMark>): PrMark => ({
@@ -82,5 +82,25 @@ describe("cardDue", () => {
   it("never posts what GitHub does not call ready", () => {
     const blocked = mark({ mergeStateStatus: "BLOCKED" });
     expect(cardDue(blocked, watchPr(undefined, blocked, 0), EXPECT_MS)).toBe(false);
+  });
+});
+
+describe("turnEnded", () => {
+  const ended = "2026-11-19T10:00:00.000Z";
+  const at = Date.parse(ended);
+
+  it("holds the card while the task is mid-turn", () => {
+    expect(turnEnded("in_progress", ended, at + 60_000)).toBe(false);
+  });
+
+  it("waits for a read asked after the turn ended", () => {
+    // Asked before the turn's last push could show.
+    expect(turnEnded("completed", ended, at - 1)).toBe(false);
+    expect(turnEnded("completed", ended, at)).toBe(true);
+    expect(turnEnded("idle", ended, at + 30_000)).toBe(true);
+  });
+
+  it("takes an unreadable time as ended", () => {
+    expect(turnEnded("idle", "", 0)).toBe(true);
   });
 });
