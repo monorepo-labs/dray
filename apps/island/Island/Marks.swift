@@ -170,6 +170,8 @@ struct AttentionPill: View {
     let notch: Bool
     let notchHeight: CGFloat
     let count: Int
+    /// The one asking, where that is a bot: its face stands in for the dot.
+    var bot: Bot? = nil
     var glowing = false
     let action: () -> Void
     @State private var dwell: Task<Void, Never>?
@@ -178,7 +180,7 @@ struct AttentionPill: View {
         Button(action: action) {
             PillShell(notch: notch, notchHeight: notchHeight, glow: glowing ? StatusDot.waiting : nil) {
                 HStack(spacing: 8) {
-                    Circle().fill(StatusDot.waiting).frame(width: 6, height: 6)
+                    if let bot { BotFace(bot: bot, size: 18) } else { Circle().fill(StatusDot.waiting).frame(width: 6, height: 6) }
                     Text("\(count) \(count == 1 ? "task needs" : "tasks need") attention")
                         .font(.system(size: 13, weight: .semibold)).lineLimit(1)
                 }
@@ -318,7 +320,12 @@ struct DonePill: View {
             // One structure, open or shut, so the pill grows rather than swapping layouts.
             VStack(alignment: .leading, spacing: cards ? 8 : 6) {
                 HStack(spacing: 8) {
-                    Circle().fill(tint).frame(width: 6, height: 6)
+                    // One bot's news leads with its face, as the app draws the bot.
+                    if items.count == 1, let bot = store.bot(items[0].key) {
+                        BotFace(bot: bot, size: 18)
+                    } else {
+                        Circle().fill(tint).frame(width: 6, height: 6)
+                    }
                     Text(Self.headline(items, waiting: waiting))
                         .font(.system(size: 13, weight: .semibold))
                         // White outright: the pills' window takes the system's appearance, and light mode drew it black.
@@ -408,6 +415,7 @@ struct DonePill: View {
 
     private func line(_ item: Item) -> some View {
         HStack(spacing: 8) {
+            if let bot = store.bot(item.key) { BotFace(bot: bot, size: 16) }
             Button { open(item.key) } label: { DoneTitle(title: item.title, cap: item.note == nil ? 240 : 120) }
                 .buttonStyle(.plain)
             if item.note != nil {

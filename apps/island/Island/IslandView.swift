@@ -761,7 +761,9 @@ struct PillsView: View {
         ZStack {
             if !composer.shown, !composer.attention.isEmpty {
                 AttentionPill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
-                              count: composer.attention.count, glowing: composer.glowing) { composer.openCards() }
+                              count: composer.attention.count,
+                              bot: composer.attention.count == 1 ? store.bot(composer.attention[0]) : nil,
+                              glowing: composer.glowing) { composer.openCards() }
                     .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
             } else if !composer.shown, let alert = composer.boatAlerts.first {
                 BoatPill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
