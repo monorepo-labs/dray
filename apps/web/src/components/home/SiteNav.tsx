@@ -12,8 +12,8 @@ const NAV_CELL =
 /// right. Download opens the list of every platform rather than starting the
 /// dmg. A server component so the star count arrives in the HTML. The
 /// wordmark's fill masks the homepage's tiles; `bare` drops it on a page
-/// with nothing behind the nav.
-export async function SiteNav({ bare = false }: { bare?: boolean } = {}) {
+/// with nothing behind the nav. `current` fills the cell of the page you are on.
+export async function SiteNav({ bare = false, current }: { bare?: boolean; current?: "download" } = {}) {
   const stars = await fetchStars();
 
   return (
@@ -44,7 +44,7 @@ export async function SiteNav({ bare = false }: { bare?: boolean } = {}) {
           <GitHubGlyph className="size-3" />
           {formatStars(stars)}
         </a>
-        <a href="/download" className={`${NAV_CELL} flex w-[115px]`}>
+        <a href="/download" aria-current={current === "download" ? "page" : undefined} className={`${NAV_CELL} flex w-[115px] aria-[current=page]:bg-white/10 light:aria-[current=page]:bg-black/5`}>
           Download
         </a>
       </div>

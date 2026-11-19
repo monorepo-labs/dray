@@ -21,7 +21,7 @@ export function LinuxFileLink({
   file: string;
   format: LinuxFormat;
   arch: LinuxArch;
-  from: "hero" | "downloads";
+  from: LinuxFrom;
   className: string;
   children: React.ReactNode;
 }) {
@@ -42,9 +42,20 @@ const MUTED = "text-white/45 light:text-black/45";
 const CHIP = `inline-flex h-8 flex-1 items-center justify-center rounded-[5px] border border-white/15 px-3 text-[13px] font-medium transition-colors hover:bg-white/10 light:border-black/15 light:hover:bg-black/5 ${TEXT}`;
 const BETA = "text-[#A1A1A1] light:text-[#6B6B6B]";
 
+type LinuxFrom = "hero" | "cta" | "downloads";
+
 /// "Download for Linux", opening a card per format with a button per
-/// architecture.
-export function LinuxMenu({ className }: { className: string }) {
+/// architecture. `from` names where it sits, for `linux_download`; `icon`
+/// swaps the Tux, which `/download` draws in its own square-cut style.
+export function LinuxMenu({
+  className,
+  from = "hero",
+  icon = <LinuxGlyph className="-mt-0.5 size-4" />,
+}: {
+  className: string;
+  from?: LinuxFrom;
+  icon?: React.ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
@@ -65,14 +76,14 @@ export function LinuxMenu({ className }: { className: string }) {
   return (
     <div ref={box} className="relative">
       <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} className={className}>
-        <LinuxGlyph className="-mt-0.5 size-4" />
+        {icon}
         Download for Linux
         <svg viewBox="0 0 16 16" aria-hidden className={`size-3 transition-transform ${open ? "rotate-180" : ""}`} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
           <path d="m4 6 4 4 4-4" />
         </svg>
       </button>
       {open && (
-        <div className="absolute top-full left-0 z-30 mt-2 w-[420px] rounded-[8px] border border-white/15 bg-[#111112] p-2 shadow-[0_16px_40px_-8px_#000000CC] light:border-black/10 light:bg-white light:shadow-[0_16px_40px_-12px_#00000040]">
+        <div className="absolute top-full left-0 z-30 mt-2 w-[min(420px,calc(100vw-40px))] rounded-[8px] border border-white/15 bg-[#111112] p-2 shadow-[0_16px_40px_-8px_#000000CC] light:border-black/10 light:bg-white light:shadow-[0_16px_40px_-12px_#00000040]">
           <div className="grid grid-cols-2 gap-2">
             {LINUX_FORMATS.map((f) => (
               <div key={f.id} className="flex flex-col gap-3 rounded-[6px] bg-white/[0.05] p-3 light:bg-black/[0.04]">
@@ -85,7 +96,7 @@ export function LinuxMenu({ className }: { className: string }) {
                 </div>
                 <div className="flex gap-1.5">
                   {ARCHES.map((arch) => (
-                    <LinuxFileLink key={arch} file={f.files[arch]} format={f.id} arch={arch} from="hero" className={CHIP}>
+                    <LinuxFileLink key={arch} file={f.files[arch]} format={f.id} arch={arch} from={from} className={CHIP}>
                       {arch}
                     </LinuxFileLink>
                   ))}
