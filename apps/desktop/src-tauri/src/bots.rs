@@ -552,17 +552,26 @@ pub async fn note_collected(act: &crate::remote_reports::KeptAct, parent: &str, 
 /// merged. Told unless a merge through Dray already was: this one came from
 /// GitHub, or from an agent. The mark matched the task by branch name alone,
 /// so the PR is read back first: a fork's answers no head, and a task moved
-/// off that branch holds work the merge did not land.
-pub async fn note_seen_merge(task: &SessionIndexItem, number: u64, url: &str, sink: &Sink) {
+/// off that branch holds work the merge did not land. False where GitHub
+/// could not be asked, so the judge keeps the merge to weigh again.
+pub async fn note_seen_merge(task: &SessionIndexItem, number: u64, url: &str, sink: &Sink) -> bool {
     if MERGES_TOLD.lock().unwrap().contains(&(task.session_id.clone(), number)) {
-        return;
+        return true;
     }
-    let Some(slug) = crate::github::slug_from_pr_url(url) else { return };
+    let Some(slug) = crate::github::slug_from_pr_url(url) else { return true };
     let repo = format!("{}{slug}", crate::github::SLUG_PREFIX);
-    let Some(head) = crate::github::pr_head(&repo, number).await else { return };
+    let head = match crate::github::pr_head_read(&repo, number).await {
+        Ok(Some(head)) => head,
+        Ok(None) => return true,
+        Err(e) => {
+            eprintln!("[bot since err] PR #{number}: {e}");
+            return false;
+        }
+    };
     if on_branch(task, &head).await {
         note_since(task, format!("its PR #{number} was merged"), Some(number), sink).await;
     }
+    true
 }
 
 /// Whether `task` is on `head` now, read off its tree's own HEAD here or on

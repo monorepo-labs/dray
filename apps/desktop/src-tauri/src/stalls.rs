@@ -1019,7 +1019,10 @@ async fn pass(sink: &Sink) {
         }
     }
     for (item, number, url) in merged {
-        crate::bots::note_seen_merge(&item, number, &url, sink).await;
+        if !crate::bots::note_seen_merge(&item, number, &url, sink).await {
+            // Read as still open, so the next pass sees the merge again.
+            STATE.lock().await.pr_seen.insert(item.session_id.clone(), (number, PrMarkState::Open));
+        }
     }
     nudge(due_nudges, tried_before, now, sink).await;
 }

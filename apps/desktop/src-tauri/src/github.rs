@@ -1313,12 +1313,18 @@ pub async fn merge_pr(
 /// The PR's head branch, where it is one of this repo's: a fork's branch can
 /// share a task's name, and unknown counts as a fork.
 pub(crate) async fn pr_head(cwd: &str, number: u64) -> Option<String> {
-    let out = gh(cwd, &["pr", "view", &number.to_string(), "--json", "headRefName,isCrossRepository"]).await.ok()?;
-    let pr: serde_json::Value = serde_json::from_str(&out).ok()?;
+    pr_head_read(cwd, number).await.ok().flatten()
+}
+
+/// [`pr_head`], with a failed read kept apart from a fork's PR: `Err` where
+/// GitHub could not be asked, so a caller can ask again later.
+pub(crate) async fn pr_head_read(cwd: &str, number: u64) -> Result<Option<String>, String> {
+    let out = gh(cwd, &["pr", "view", &number.to_string(), "--json", "headRefName,isCrossRepository"]).await?;
+    let pr: serde_json::Value = serde_json::from_str(&out).map_err(|e| e.to_string())?;
     if pr["isCrossRepository"].as_bool() != Some(false) {
-        return None;
+        return Ok(None);
     }
-    pr["headRefName"].as_str().map(str::to_string)
+    Ok(pr["headRefName"].as_str().map(str::to_string))
 }
 
 /// Whether the PR is merged, or `None` where asking failed too.
