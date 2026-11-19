@@ -32,6 +32,8 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 /// How much of a check's output rides the message.
 const OUTPUT_CAP: usize = 4000;
 const TICK: Duration = Duration::from_secs(30);
+/// The longest a run may take, in minutes, unless its interval is shorter.
+const RUN_CAP_MINUTES: u32 = 30;
 
 /// When a routine runs: every `every_minutes`, or at `at` (local `HH:MM`) on
 /// `days` (0 = Monday; empty = every day). Options rather than an enum, so a
@@ -97,6 +99,14 @@ pub struct Routine {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub run_session: Option<String>,
+    /// That run is itself a retry, so a second cut-off gives up.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(skip)]
+    pub run_is_retry: bool,
+    /// A run was cut off by a restart and is owed one more try.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(skip)]
+    pub retry_due: bool,
 }
 
 /// The file is rewritten whole, by the scheduler and every verb.
@@ -109,6 +119,13 @@ static RUNNING: LazyLock<std::sync::Mutex<HashMap<String, String>>> = LazyLock::
 /// Run session → its routine, between minting the id and the index entry
 /// landing; [`pending_run`] is how `send_msg` stamps the entry.
 static PENDING: LazyLock<std::sync::Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
+
+/// Run session → the check's output it was started for, saved as seen only
+/// once the run gets through.
+static SEEN: LazyLock<std::sync::Mutex<HashMap<String, (String, bool)>>> = LazyLock::new(Default::default);
+
+/// Routines between their check and their run's session existing.
+static FIRING: LazyLock<std::sync::Mutex<HashSet<String>>> = LazyLock::new(Default::default);
 
 /// The routine `session_id` is a run of, while it is being created.
 pub fn pending_run(session_id: &str) -> Option<String> {
@@ -337,6 +354,8 @@ pub async fn add(bot: &bots::Bot, name: &str, prompt: &str, schedule: Schedule, 
             check_hash: None,
             check_failing: false,
             run_session: None,
+            run_is_retry: false,
+            retry_due: false,
         };
         list.push(routine.clone());
         Ok(routine)
@@ -398,12 +417,18 @@ static NUDGE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 /// slept runs on the first tick after it wakes.
 pub async fn run(sink: Sink) {
     // A run cut off by a restart never reports its end: its child died with the
-    // server that spawned it.
+    // server that spawned it. Tried once more, and given up on if that one is
+    // cut off too.
     let interrupted = edit(|list| {
         let mut any = false;
         for r in list.iter_mut().filter(|r| r.run_session.is_some()) {
             r.run_session = None;
-            r.last_result = Some(result("failed", Some("Interrupted by a restart".into())));
+            if r.run_is_retry {
+                r.run_is_retry = false;
+                r.last_result = Some(result("failed", Some("Cut off by a restart twice; waits for its next run".into())));
+            } else {
+                r.retry_due = true;
+            }
             any = true;
         }
         Ok(any)
@@ -412,36 +437,43 @@ pub async fn run(sink: Sink) {
     if matches!(interrupted, Ok(true)) {
         sink.emit(ROUTINES_CHANGED, ()).ok();
     }
-    // Routines between their check and their run's session existing.
-    let firing: std::sync::Arc<std::sync::Mutex<HashSet<String>>> = Default::default();
     loop {
         tokio::select! {
             _ = tokio::time::sleep(TICK) => {}
             _ = NUDGE.notified() => {}
         }
-        if let Err(e) = tick(&sink, &firing).await {
+        if let Err(e) = tick(&sink).await {
             eprintln!("[routines] {e:#}");
         }
     }
 }
 
+/// How late a run may be before the run is told so: a tick's own slack.
+const LATE_AFTER: chrono::Duration = chrono::Duration::minutes(2);
+
 /// Fires every routine that is due. Its next run is written *before* it fires,
-/// so a crash mid-run skips that run rather than repeating it. Routines run
-/// side by side, each in a session of its own; only a routine whose last run is
-/// still going waits, and stays due until it ends.
-async fn tick(sink: &Sink, firing: &std::sync::Arc<std::sync::Mutex<HashSet<String>>>) -> Result<()> {
+/// so a crash mid-run skips that run rather than repeating it — the retry on
+/// restart is what gives it back. Routines run side by side, each in a
+/// session of its own; only a routine whose last run is still going waits,
+/// and stays due until it ends.
+///
+/// A slot missed while the machine slept or Dray was down runs once, late,
+/// for an `--every` routine; an `--at` one catches up only the same day and
+/// is otherwise recorded missed, since a morning digest at midnight is noise.
+async fn tick(sink: &Sink) -> Result<()> {
+    // Counted as a send, so a restart waits for the check and the run's start
+    // rather than cutting them off between the next run being written and the
+    // run existing.
+    let _counted = crate::session::Sending::enter().await;
     let forced = std::mem::take(&mut *FORCED.lock().unwrap());
     let bots = bots::list_bots().await?;
     let now = Local::now();
-    let is_due = |r: &Routine| {
-        !r.paused
-            && r.next_run
-                .as_deref()
-                .and_then(|n| DateTime::parse_from_rfc3339(n).ok())
-                .is_some_and(|n| n <= now)
+    let slot_of = |r: &Routine| {
+        r.next_run.as_deref().and_then(|n| DateTime::parse_from_rfc3339(n).ok()).map(|n| n.with_timezone(&Local))
     };
 
     let mut due = Vec::new();
+    let mut missed = Vec::new();
     let mut changed = false;
     {
         let _guard = LOCK.lock().await;
@@ -450,43 +482,55 @@ async fn tick(sink: &Sink, firing: &std::sync::Arc<std::sync::Mutex<HashSet<Stri
         list.retain(|r| bots.iter().any(|b| b.id == r.bot_id));
         changed |= list.len() != before;
         for r in list.iter_mut() {
-            let scheduled = is_due(r);
-            if !scheduled && !forced.contains(&r.id) {
+            let slot = slot_of(r).filter(|s| *s <= now && !r.paused);
+            let retry = r.retry_due && !r.paused;
+            if slot.is_none() && !retry && !forced.contains(&r.id) {
                 continue;
             }
             let Some(bot) = bots.iter().find(|b| b.id == r.bot_id) else { continue };
             // Its last run is still going. A Run now waits for the next tick
             // rather than being dropped, since a paused routine has no schedule
             // to bring it back.
-            if r.run_session.is_some() || !firing.lock().unwrap().insert(r.id.clone()) {
+            if r.run_session.is_some() || FIRING.lock().unwrap().contains(&r.id) {
                 if forced.contains(&r.id) {
                     FORCED.lock().unwrap().insert(r.id.clone());
                 }
                 continue;
             }
-            if scheduled {
+            let mut late = None;
+            if let Some(slot) = slot {
                 r.next_run = r.schedule.next_after(now).map(rfc3339);
                 changed = true;
+                if r.schedule.at.is_some() && slot.date_naive() != now.date_naive() && !retry && !forced.contains(&r.id) {
+                    let text = format!("Missed {}: Dray was not running then", slot.format("%a %H:%M"));
+                    r.last_result = Some(result("missed", Some(text)));
+                    missed.push(r.id.clone());
+                    continue;
+                }
+                late = Some(now - slot).filter(|l| *l > LATE_AFTER).map(|l| (slot, l));
             }
-            due.push((r.clone(), bot.clone()));
+            r.retry_due = false;
+            changed = true;
+            FIRING.lock().unwrap().insert(r.id.clone());
+            due.push((r.clone(), bot.clone(), late, retry, crate::session::Sending::enter().await));
         }
         if changed {
             save(&list).await?;
         }
     }
-    if changed {
+    if changed || !missed.is_empty() {
         sink.emit(ROUTINES_CHANGED, ()).ok();
     }
-    for (routine, bot) in due {
+    for (routine, bot, late, retry, counted) in due {
         let sink = sink.clone();
-        let firing = firing.clone();
         tokio::spawn(async move {
             let id = routine.id.clone();
-            if let Err(e) = fire(routine, bot, &sink).await {
+            if let Err(e) = fire(routine, bot, late, retry, &sink).await {
                 eprintln!("[routine {id}] {e:#}");
                 record(&id, result("failed", Some(format!("{e:#}"))), None, &sink).await;
             }
-            firing.lock().unwrap().remove(&id);
+            FIRING.lock().unwrap().remove(&id);
+            drop(counted);
         });
     }
     Ok(())
@@ -527,8 +571,15 @@ fn hash(text: &str) -> String {
     Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// One run: the check, then a session of its own.
-async fn fire(routine: Routine, bot: bots::Bot, sink: &Sink) -> Result<()> {
+/// One run: the check, then a session of its own. `late` is the slot it was
+/// due at and by how much it missed it; `retry` that the last one was cut off.
+async fn fire(
+    routine: Routine,
+    bot: bots::Bot,
+    late: Option<(DateTime<Local>, chrono::Duration)>,
+    retry: bool,
+    sink: &Sink,
+) -> Result<()> {
     let mut seen = None;
     let mut note = String::new();
     if let Some(check) = &routine.check {
@@ -544,7 +595,7 @@ async fn fire(routine: Routine, bot: bots::Bot, sink: &Sink) -> Result<()> {
                 note = format!(
                     "\n\nIts check `{check}` {}:\n\n```\n{shown}\n```",
                     if first {
-                        "ran for the first time, so this only sets what later runs are compared against. Unless it already shows what the routine watches for, report only that it is set up. It printed"
+                        "ran for the first time, so this only sets what later runs are compared against. Unless it already shows what the routine watches for, there is nothing new. It printed"
                     } else {
                         "printed something new"
                     }
@@ -573,13 +624,26 @@ async fn fire(routine: Routine, bot: bots::Bot, sink: &Sink) -> Result<()> {
         record(&routine.id, result("skipped", Some("The bot has no chat".into())), None, sink).await;
         return Ok(());
     };
+    let when = match late {
+        Some((slot, by)) => format!(
+            " This run is {} late: it was due {}, while the machine was asleep or Dray was not running. Judge what is still worth reporting.",
+            span(by.num_minutes().max(1) as u32),
+            slot.format("%a %H:%M"),
+        ),
+        None => String::new(),
+    };
+    let again = if retry {
+        " The last run was cut off by a restart before it finished, so this one does its job again."
+    } else {
+        ""
+    };
     let prompt = format!(
         "You are one run of the routine \"{name}\" ({id}), which {bot} set up to run {schedule}. Dray started you in {bot}'s folder; \
-         you are not {bot}'s chat, and the user never sees what you write. When your turn ends, your last message goes to {bot} as a report, \
-         and {bot} decides what the user hears.\n\n\
+         you are not {bot}'s chat, and the user never sees what you write.{when}{again}\n\n\
          The routine's job:\n\n{job}{note}\n\n\
          If you need context only {bot} has, ask it with `dray session send {chat} \"<question>\"` and end your turn; its answer arrives here as a message. \
-         End with what {bot} needs to know from this run, in a line or two, or that nothing changed. Don't make or change routines.",
+         When this run finds something {bot} should know, end with it in a line or two: that goes to {bot} as a report, and {bot} decides what the user hears. \
+         When it finds nothing new, end with exactly `{NOTHING_NEW}` and nothing else, so {bot} is not woken. Don't make or change routines.",
         name = routine.name,
         id = routine.id,
         bot = bot.name,
@@ -590,28 +654,58 @@ async fn fire(routine: Routine, bot: bots::Bot, sink: &Sink) -> Result<()> {
     let session_id = uuid::Uuid::now_v7().to_string();
     PENDING.lock().unwrap().insert(session_id.clone(), routine.id.clone());
     RUNNING.lock().unwrap().insert(session_id.clone(), routine.id.clone());
+    // Held until the run finishes: saved now, a run cut off would leave the
+    // change marked seen and nobody would ever hear of it.
+    if let Some(seen) = seen {
+        SEEN.lock().unwrap().insert(session_id.clone(), seen);
+    }
     // Written before the spawn, so a server stopping mid-run finds it on restart.
-    set_run_session(&routine.id, Some(session_id.clone())).await;
+    set_run_session(&routine.id, Some(session_id.clone()), retry).await;
     let started = crate::orchestration::start_routine_run(&chat, &bot, &session_id, &routine.name, &prompt, sink).await;
     PENDING.lock().unwrap().remove(&session_id);
     if let Err(e) = started {
         RUNNING.lock().unwrap().remove(&session_id);
-        set_run_session(&routine.id, None).await;
+        SEEN.lock().unwrap().remove(&session_id);
+        set_run_session(&routine.id, None, false).await;
         return Err(e);
     }
-    // Only once the run exists: saved before a start that failed, the change
-    // would read as old on every later run and nobody would ever hear of it.
-    if let Some(seen) = seen {
-        save_check(&routine.id, seen).await;
-    }
+    let cap = run_cap(&routine.schedule);
+    let sink = sink.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(cap).await;
+        time_out(&session_id, cap, &sink).await;
+    });
     Ok(())
 }
 
-/// Records the run in flight, or that none is.
-async fn set_run_session(id: &str, session: Option<String>) {
+/// The longest a run may take: half an hour, or its interval where that is
+/// shorter, so a run never overlaps its own next slot for long.
+fn run_cap(schedule: &Schedule) -> Duration {
+    let minutes = schedule.every_minutes.map_or(RUN_CAP_MINUTES, |m| m.min(RUN_CAP_MINUTES));
+    Duration::from_secs(u64::from(minutes) * 60)
+}
+
+/// Stops a run still going after its cap and records it timed out. Settled
+/// first, so its dying child sends the bot no report.
+async fn time_out(session_id: &str, cap: Duration, sink: &Sink) {
+    let Some(id) = RUNNING.lock().unwrap().remove(session_id) else { return };
+    SEEN.lock().unwrap().remove(session_id);
+    if let Err(e) = store::set_session_flags(session_id, Some(true), None, None, None).await {
+        eprintln!("[routine {id}] {e:#}");
+    }
+    if let Err(e) = crate::session::manager().settle(session_id).await {
+        eprintln!("[routine {id}] {e:#}");
+    }
+    let text = format!("Timed out after {}", span((cap.as_secs() / 60) as u32));
+    finish(&id, session_id, result("timed_out", Some(text)), None, sink).await;
+}
+
+/// Records the run in flight, or that none is, and whether it is a retry.
+async fn set_run_session(id: &str, session: Option<String>, retry: bool) {
     let saved = edit(|list| {
         if let Some(r) = list.iter_mut().find(|r| r.id == id) {
             r.run_session = session;
+            r.run_is_retry = retry;
         }
         Ok(())
     })
@@ -641,47 +735,18 @@ async fn record(id: &str, run: RunResult, seen: Option<(String, bool)>, sink: &S
     }
 }
 
-/// The check's state as of its last run: its output's hash, and whether it failed.
-fn apply_check(r: &mut Routine, (hash, failing): (String, bool)) {
-    if !hash.is_empty() {
-        r.check_hash = Some(hash);
-    }
-    r.check_failing = failing;
-}
-
-/// Saves the check's state alone, leaving the result the turn may already have written.
-async fn save_check(id: &str, seen: (String, bool)) {
-    let saved = edit(|list| {
-        if let Some(r) = list.iter_mut().find(|r| r.id == id) {
-            apply_check(r, seen);
-        }
-        Ok(())
-    })
-    .await;
-    if let Err(e) = saved {
-        eprintln!("[routine {id}] {e:#}");
-    }
-}
-
-/// A session's turn ended. Where it was a routine's run, its first turn is the
-/// run's result: silent, its report's first line, or failed; and the routine
-/// is free to run again.
-pub async fn turn_ended(session_id: &str, said: Option<&str>, ok: bool, sink: &Sink) {
-    let Some(id) = RUNNING.lock().unwrap().remove(session_id) else { return };
-    let run = match (ok, said.map(str::trim).filter(|s| !s.is_empty())) {
-        (false, _) => result("failed", Some("The turn failed".into())),
-        (true, None) => result("silent", None),
-        (true, Some(text)) => {
-            let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or(text).trim();
-            let short: String = line.chars().take(160).collect();
-            result("replied", Some(short))
-        }
-    };
+/// Ends run `session_id` of routine `id`: its result, the check's state where
+/// the run got through, and the routine free to run again.
+async fn finish(id: &str, session_id: &str, run: RunResult, seen: Option<(String, bool)>, sink: &Sink) {
     let saved = edit(|list| {
         if let Some(r) = list.iter_mut().find(|r| r.id == id) {
             r.last_result = Some(run);
+            if let Some(seen) = seen {
+                apply_check(r, seen);
+            }
             if r.run_session.as_deref() == Some(session_id) {
                 r.run_session = None;
+                r.run_is_retry = false;
             }
         }
         Ok(())
@@ -693,6 +758,54 @@ pub async fn turn_ended(session_id: &str, said: Option<&str>, ok: bool, sink: &S
         }
         Err(e) => eprintln!("[routine {id}] {e:#}"),
     }
+}
+
+/// The check's state as of its last run: its output's hash, and whether it failed.
+fn apply_check(r: &mut Routine, (hash, failing): (String, bool)) {
+    if !hash.is_empty() {
+        r.check_hash = Some(hash);
+    }
+    r.check_failing = failing;
+}
+
+/// A session's turn ended. Where it was a routine's run, its first turn is the
+/// run's result: silent, its report's first line, or failed. Only a run that
+/// got through marks the check's output seen; a failed one leaves it new, so
+/// the next run looks again.
+pub async fn turn_ended(session_id: &str, said: Option<&str>, ok: bool, sink: &Sink) {
+    // Killed by the server's own exit: left in flight on the file, so the next
+    // start counts it cut off and tries again.
+    if !ok && crate::session::exiting() {
+        return;
+    }
+    let Some(id) = RUNNING.lock().unwrap().remove(session_id) else { return };
+    let seen = SEEN.lock().unwrap().remove(session_id);
+    let said = said.filter(|_| !found_nothing(said));
+    let run = match (ok, said.map(str::trim)) {
+        (false, _) => result("failed", Some("The turn failed".into())),
+        (true, None) => result("silent", None),
+        (true, Some(text)) => {
+            let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or(text).trim();
+            let short: String = line.chars().take(160).collect();
+            result("replied", Some(short))
+        }
+    };
+    finish(&id, session_id, run, seen.filter(|_| ok), sink).await;
+}
+
+/// What a run ends with when it found nothing new. A word to match rather than
+/// silence: asked for no text, models wrote a line explaining their silence.
+const NOTHING_NEW: &str = "NOTHING NEW";
+
+/// Whether a run's last words say it found nothing: none at all, or the marker.
+pub fn found_nothing(said: Option<&str>) -> bool {
+    said.map(|s| s.trim().trim_end_matches('.').trim()).is_none_or(|s| s.is_empty() || s.eq_ignore_ascii_case(NOTHING_NEW))
+}
+
+/// Whether `session_id` is a routine's run, whose silent turn wakes nobody.
+pub async fn is_run(session_id: &str) -> bool {
+    PENDING.lock().unwrap().contains_key(session_id)
+        || store::get_session_index_item(session_id).await.ok().flatten().is_some_and(|i| i.routine_run.is_some())
 }
 
 /// The bot `bot` names, else the one whose chat `from_session_id` is.
@@ -766,6 +879,24 @@ mod tests {
         // waking, not from the seven slots slept through.
         let every = Schedule::parse(Some("1h"), None, None).unwrap();
         assert_eq!(every.next_after(local(2026, 11, 13, 8, 10)), Some(local(2026, 11, 13, 9, 10)));
+    }
+
+    #[test]
+    fn nothing_new_is_silence_or_the_marker() {
+        assert!(found_nothing(None));
+        assert!(found_nothing(Some("  ")));
+        assert!(found_nothing(Some("NOTHING NEW")));
+        assert!(found_nothing(Some("Nothing new.\n")));
+        assert!(!found_nothing(Some("Nothing new: the deploy is still building")));
+        assert!(!found_nothing(Some("deploy: done")));
+    }
+
+    #[test]
+    fn a_run_stops_at_half_an_hour_or_its_interval() {
+        let minutes = |s: &Schedule| run_cap(s).as_secs() / 60;
+        assert_eq!(minutes(&Schedule::parse(Some("10m"), None, None).unwrap()), 10);
+        assert_eq!(minutes(&Schedule::parse(Some("2h"), None, None).unwrap()), 30);
+        assert_eq!(minutes(&Schedule::parse(None, Some("9am"), None).unwrap()), 30);
     }
 
     #[test]
