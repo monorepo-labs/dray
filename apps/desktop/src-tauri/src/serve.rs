@@ -2089,7 +2089,6 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         list_routines(bot_id: String) => crate::routines::list_routines(bot_id).await;
         set_routine_paused(id: String, paused: bool) => crate::routines::set_routine_paused(id, paused, sink).await;
         delete_routine(id: String) => crate::routines::delete_routine(id, sink).await;
-        run_routine(id: String) => crate::routines::run_routine(id).await;
 
         // Assistants signed in to `/mcp`.
         mcp_pair(read_only: bool, replaces: Option<String>) => crate::mcp::pair(sink, read_only, replaces).await;

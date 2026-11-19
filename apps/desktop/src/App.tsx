@@ -4088,7 +4088,6 @@ function App() {
                 now={stalled.now}
                 onPause={routines.setPaused}
                 onDelete={routines.remove}
-                onRunNow={routines.runNow}
                 error={routines.error}
               />
             </TabBody>

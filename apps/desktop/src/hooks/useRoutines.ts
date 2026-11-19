@@ -58,6 +58,5 @@ export function useRoutines(bot: Bot | null | undefined) {
     setPaused: (routineId: string, paused: boolean) =>
       act("set_routine_paused", { id: routineId, paused }, paused ? "Couldn't pause it" : "Couldn't resume it"),
     remove: (routineId: string) => act("delete_routine", { id: routineId }, "Couldn't delete it"),
-    runNow: (routineId: string) => act("run_routine", { id: routineId }, "Couldn't run it"),
   };
 }

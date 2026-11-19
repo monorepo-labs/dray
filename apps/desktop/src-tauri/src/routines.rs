@@ -704,12 +704,6 @@ pub async fn delete_routine(id: String, sink: Sink) -> Result<(), Fail> {
     Ok(())
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn run_routine(id: String) -> Result<(), Fail> {
-    run_now(&id, None).await?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
