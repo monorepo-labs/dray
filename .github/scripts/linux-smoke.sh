@@ -35,6 +35,12 @@ opens() {
       kill "$pid" 2>/dev/null || true
       pkill -f 'dray-(app|island)' 2>/dev/null || true
       sleep 2
+      # A window over a panicking runtime is not an app that works: a
+      # missing CA bundle once drew one while every HTTP call panicked.
+      if grep -m3 'panicked at' "$out/$name.log" >&2; then
+        echo "$name: window drawn, but it panicked" >&2
+        return 1
+      fi
       echo "$name: window drawn"
       return 0
     fi

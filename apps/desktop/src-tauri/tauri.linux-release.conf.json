@@ -10,6 +10,7 @@
       "deb": {
         "depends": [
           "libc6 (>= 2.35)",
+          "ca-certificates",
           "gstreamer1.0-plugins-base",
           "gstreamer1.0-plugins-good",
           "libasound2t64 | libasound2",
