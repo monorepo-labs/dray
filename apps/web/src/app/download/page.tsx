@@ -9,5 +9,5 @@ export const metadata: Metadata = {
 };
 
 export default function Downloads() {
-  return <DownloadsShell take="A" />;
+  return <DownloadsShell take="boxed" />;
 }

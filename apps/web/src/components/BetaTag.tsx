@@ -1,10 +1,12 @@
 /// The small outlined "Beta" beside the Linux app's name. Takes the colour of
 /// whatever it sits in, so one tag serves a filled button and a grey link.
-export function BetaTag({ className = "" }: { className?: string }) {
+/// `plain` sets it in the page's own font rather than mono caps.
+export function BetaTag({ className = "", plain = false }: { className?: string; plain?: boolean }) {
+  const type = plain
+    ? "h-[18px] px-1.5 text-[11px] font-medium"
+    : "h-4 px-1 font-mono text-[10px] tracking-[0.06em] uppercase";
   return (
-    <span
-      className={`inline-flex h-4 items-center rounded-[4px] border border-current/35 px-1 font-mono text-[10px] leading-none tracking-[0.06em] uppercase ${className}`}
-    >
+    <span className={`inline-flex items-center rounded-[4px] border border-current/35 leading-none ${type} ${className}`}>
       Beta
     </span>
   );
