@@ -6,9 +6,10 @@ import { Button } from "@/components/ui/button";
 import { ChecksRunningIcon } from "@/components/PrPanel";
 import PrStateIcon from "@/components/PrStateIcon";
 import { MergeControl } from "@/components/TasksPanel";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
 import { seededAvatar } from "@/lib/botAvatar";
-import { cardRepo, FULL_FOR, runningLine, type MergeCardPayload } from "@/lib/mergeCard";
+import { cardRepo, FULL_FOR, runningLabel, type MergeCardPayload } from "@/lib/mergeCard";
 import { openLink } from "@/lib/openLink";
 import { noteSession, serverOfSession } from "@/lib/transport";
 import { isModClick } from "@/lib/platform";
@@ -113,7 +114,6 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
   const status = blocked ? "Can't merge from here" : statusLine(pr);
   // Said, never enforced: merging over it is the reader's call.
   const tasks = merged ? [] : (host?.tasksOf(card.taskId) ?? []);
-  const work = runningLine(tasks);
   // `null` is a PR no longer among the open or recently merged: nothing left
   // to land, so it draws one line without claiming which way it went.
   const compact = merged || found === null || (chat.after.get(event.id) ?? 0) >= FULL_FOR;
@@ -142,12 +142,7 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
           <span className="size-4 shrink-0">{face}</span>
           <span className="truncate">{title}</span>
         </button>
-        {work && (
-          <span className="flex shrink-0 items-center gap-1" title={work}>
-            <Orb state="background" variant="spiral" size={12} label={work} />
-            {tasks.length} running
-          </span>
-        )}
+        <RunningWork tasks={tasks} />
         {mergeable && merge && <MergeControl onMerge={merge} keep={event.id} />}
         {conflicted && host && <FixConflicts onFix={() => host.fixConflicts(card)} />}
       </div>
@@ -185,24 +180,42 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
             {running && <ChecksRunningIcon />}
             {status && (
               <span
-                className={cn("truncate", blocked ? "text-muted-foreground" : statusTone(pr))}
+                // The running work is what gives way when the line runs out.
+                className={cn(tasks.length ? "shrink-0" : "truncate", blocked ? "text-muted-foreground" : statusTone(pr))}
                 title={blocked ?? undefined}
               >
                 {status}
               </span>
             )}
+            {tasks.length > 0 && <span aria-hidden>·</span>}
+            <RunningWork tasks={tasks} />
           </p>
-          {work && (
-            <p className="flex items-center gap-1.5 text-ui text-muted-foreground">
-              <Orb state="background" variant="spiral" size={12} label="Background work running" />
-              <span className="truncate">{work}</span>
-            </p>
-          )}
         </div>
         {mergeable && merge && <MergeControl onMerge={merge} keep={event.id} named />}
         {conflicted && host && <FixConflicts onFix={() => host.fixConflicts(card)} />}
       </div>
     </div>
+  );
+}
+
+/// The orb and what the task left running: one job by name, several by count.
+/// Said, never enforced — Merge stays the reader's call. Hover lists them all.
+function RunningWork({ tasks }: { tasks: readonly BackgroundTask[] }) {
+  const label = runningLabel(tasks);
+  if (!label) return null;
+  const names = tasks.map((t) => t.description.trim()).filter(Boolean);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="flex min-w-0 items-center gap-1.5" data-testid="merge-card-running">
+          <Orb state="background" variant="spiral" size={12} label="Background work running" />
+          <span className="truncate">{label}</span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="flex-col items-start gap-0.5">
+        {names.length ? names.map((name, i) => <span key={i}>{name}</span>) : `${tasks.length} running`}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

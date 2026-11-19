@@ -432,7 +432,7 @@ struct MergeCardView: View {
         let verdict = pr.map(verdictOf)
         // Said, never enforced: merging over it is the reader's call.
         let tasks = pr?.state == "MERGED" ? [] : task.flatMap { store.tasks[$0] } ?? []
-        let work = runningLine(tasks)
+        let work = runningLabel(tasks)
         Group {
             if compact || pr?.state == "MERGED" || (read && pr == nil) {
                 HStack(spacing: 6) {
@@ -443,13 +443,12 @@ struct MergeCardView: View {
                     Button { task.map { openTask?($0) } } label: { Chip(face: BotFace(seed: card.taskId, size: 16), title: title) }
                         .buttonStyle(.plain)
                         .disabled(task == nil)
-                    if work != nil {
+                    if let work {
                         HStack(spacing: 4) {
                             Orb(.background, size: 14)
-                            Text("\(tasks.count) running")
+                            Text(work)
                         }
                         .foregroundStyle(Theme.secondary)
-                        .fixedSize()
                         .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("mergeCardRunning")
                     }
@@ -474,21 +473,21 @@ struct MergeCardView: View {
                                 .font(Theme.Font.footnote.font.monospacedDigit())
                             if pr?.state == "OPEN" && pr?.checksState == "RUNNING" { ChecksSpinner().frame(width: 13, height: 13) }
                             if let words = words(pr, verdict) {
-                                Text(words.text).foregroundStyle(words.tone)
+                                // The running work is what gives way when the line runs out.
+                                Text(words.text).foregroundStyle(words.tone).layoutPriority(1)
+                            }
+                            if let work {
+                                HStack(spacing: 5) {
+                                    Text("·").foregroundStyle(Theme.tertiary)
+                                    Orb(.background, size: 14)
+                                    Text(work).foregroundStyle(Theme.secondary)
+                                }
+                                .accessibilityElement(children: .combine)
+                                .accessibilityIdentifier("mergeCardRunning")
                             }
                         }
                         .font(Theme.Font.footnote)
                         .lineLimit(1)
-                        if let work {
-                            HStack(spacing: 5) {
-                                Orb(.background, size: 14)
-                                Text(work).foregroundStyle(Theme.secondary)
-                            }
-                            .font(Theme.Font.footnote)
-                            .lineLimit(1)
-                            .accessibilityElement(children: .combine)
-                            .accessibilityIdentifier("mergeCardRunning")
-                        }
                     }
                     Spacer(minLength: 0)
                     if let pr, let verdict { control(pr, verdict) }
@@ -544,12 +543,12 @@ struct MergeCardView: View {
     }
 }
 
-/// The merge card's line for work the task's agent left running past its turn —
-/// "1 running: Wait for CI" — or nil once there is none. Desktop's `runningLine`.
-func runningLine(_ tasks: [BackgroundTask]) -> String? {
+/// What the merge card says beside the orb for work the task's agent left running
+/// past its turn: the one job's name, else how many. Nil once none runs. Desktop's `runningLabel`.
+func runningLabel(_ tasks: [BackgroundTask]) -> String? {
     guard !tasks.isEmpty else { return nil }
-    let what = tasks.compactMap { $0.description?.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-    return what.isEmpty ? "\(tasks.count) running" : "\(tasks.count) running: \(what.joined(separator: ", "))"
+    let name = tasks.count == 1 ? tasks[0].description?.trimmingCharacters(in: .whitespaces) ?? "" : ""
+    return name.isEmpty ? String(tasks.count) : name
 }
 
 /// A mark's merge verdict, unread fields reading as GitHub still deciding.

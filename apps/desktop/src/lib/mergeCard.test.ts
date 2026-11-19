@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { cardRepos, readerMessagesAfter, runningLine } from "@/lib/mergeCard";
+import { cardRepos, readerMessagesAfter, runningLabel } from "@/lib/mergeCard";
 import { buildTranscript } from "@/lib/transcript";
 import { noteSession } from "@/lib/transport";
 import type { AgentEvent } from "@/types/events";
@@ -47,12 +47,13 @@ describe("cardRepos", () => {
   });
 });
 
-describe("runningLine", () => {
+describe("runningLabel", () => {
   const task = (description: string) => ({ taskId: description, taskType: "local_bash", description });
-  it("names what runs, and says nothing once it ends", () => {
-    expect(runningLine([task("Wait for CI")])).toBe("1 running: Wait for CI");
-    expect(runningLine([task("dev server"), task(" ")])).toBe("2 running: dev server");
-    expect(runningLine([])).toBeNull();
+  it("names one job, counts several, and says nothing once they end", () => {
+    expect(runningLabel([task("Wait for CI")])).toBe("Wait for CI");
+    expect(runningLabel([task(" ")])).toBe("1");
+    expect(runningLabel([task("dev server"), task("Wait for CI")])).toBe("2");
+    expect(runningLabel([])).toBeNull();
   });
 });
 

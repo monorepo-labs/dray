@@ -42,10 +42,9 @@ export function cardRepos(events: readonly AgentEvent[]): string[] {
   return [...repos];
 }
 
-/// The card's line for work the task's agent left running past its turn —
-/// "1 running: Wait for CI" — or `null` once there is none.
-export function runningLine(tasks: readonly BackgroundTask[]): string | null {
+/// What the card says beside the orb for work the task's agent left running
+/// past its turn: the one job's name, else how many. `null` once none runs.
+export function runningLabel(tasks: readonly BackgroundTask[]): string | null {
   if (!tasks.length) return null;
-  const what = tasks.map((t) => t.description.trim()).filter(Boolean).join(", ");
-  return what ? `${tasks.length} running: ${what}` : `${tasks.length} running`;
+  return (tasks.length === 1 && tasks[0].description.trim()) || String(tasks.length);
 }
