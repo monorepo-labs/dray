@@ -37,7 +37,7 @@ struct BotListRow: View {
         let unread = item?.status == "completed"
         let preview = chat.flatMap { store.previews[$0] }
         HStack(spacing: Theme.Space.m) {
-            BotFace(bot: bot, size: 64)
+            BotFace(bot: bot, size: 48)
                 .overlay(alignment: .bottomTrailing) { badge(asking: asking, unread: unread, replies: preview?.replies ?? 0) }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: Theme.Space.s) {
@@ -77,7 +77,7 @@ struct BotListRow: View {
         if asking {
             Circle().fill(Theme.accent).frame(width: 12, height: 12)
                 .overlay(Circle().stroke(Theme.page, lineWidth: 2.5))
-                .offset(x: 0, y: -4)
+                .offset(x: 1, y: 0)
                 .accessibilityLabel("Waiting on you")
         } else if unread {
             Text(replies > 0 ? "\(replies)" : "")
@@ -86,7 +86,7 @@ struct BotListRow: View {
                 .frame(minWidth: 18, minHeight: 18)
                 .background(Theme.unread, in: Capsule())
                 .overlay(Capsule().stroke(Theme.page, lineWidth: 2.5))
-                .offset(x: 1, y: -3)
+                .offset(x: 2, y: 1)
                 .accessibilityLabel(replies == 1 ? "1 new reply" : "\(replies) new replies")
         }
     }
