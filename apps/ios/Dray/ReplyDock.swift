@@ -10,6 +10,7 @@ struct ReplyDock: View {
     @Environment(\.openSession) private var openSession
     let key: SessionKey
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
+    @AppStorage(SwipeHint.key) private var swiped = 0
     @State private var models: [Model] = []
     @State private var keyboard = false
     /// The home indicator's inset, which the dock sits on rather than ignores.
@@ -70,26 +71,31 @@ struct ReplyDock: View {
             }
             if !open, let line = hint ?? note {
                 KeptNote(line: line, draft: key).transition(.opacity)
+            } else if !open, !typing, swiped < SwipeHint.learned {
+                Text(SwipeHint.line).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary).transition(.opacity)
             }
-            // Dim while the server or the network is away; the banner up top says why, and typing still works.
-            if typing {
-                ChatInput(placeholder: "Message", text: Binding(get: { store.drafts[key] ?? "" }, set: { store.drafts[key] = $0 }),
-                          sending: sending, sendable: !text.isEmpty && !sending && connected, send: send)
-            } else {
-                // New task's size while it listens; back to rest size once the bubble takes the room.
-                DockOrb(draft: key, size: phase == .recording || phase == .transcribing ? 120 : 76, tap: tapped)
-                    .opacity(away ? 0.4 : 1)
+            VStack(spacing: 14) {
+                // Dim while the server or the network is away; the banner up top says why, and typing still works.
+                if typing {
+                    ChatInput(placeholder: "Message", text: Binding(get: { store.drafts[key] ?? "" }, set: { store.drafts[key] = $0 }),
+                              sending: sending, sendable: !text.isEmpty && !sending && connected, send: send)
+                } else {
+                    // New task's size while it listens; back to rest size once the bubble takes the room.
+                    DockOrb(draft: key, size: phase == .recording || phase == .transcribing ? 120 : 76, tap: tapped)
+                        .opacity(away ? 0.4 : 1)
+                }
+                if open {
+                    actions
+                        .padding(.top, 6)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+                picks.opacity(away ? 0.4 : 1).typingAligned(typing)
             }
-            if open {
-                actions
-                    .padding(.top, 6)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-            picks.opacity(away ? 0.4 : 1).typingAligned(typing)
+            .padding(.bottom, typing && keyboard ? 30 : max(0, 30 - homeInset))
+            .swipeUpToType(phase == .rest && !typing, edit)
         }
         .padding(.horizontal, 20)
         .padding(.top, Theme.Space.m)
-        .padding(.bottom, typing && keyboard ? 30 : max(0, 30 - homeInset))
         .frame(maxWidth: 760)
         .frame(maxWidth: .infinity)
         // Everything in the dock's frame is inset the chat stops at, so the fade reaches up past it

@@ -38,6 +38,7 @@ struct VoiceDock: View {
     private var busy: Bool { phase == .recording || phase == .transcribing }
     /// Settings' pick: a server's id, or Apple's model on the phone.
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
+    @AppStorage(SwipeHint.key) private var swiped = 0
     /// What turns speech into words: Settings' pick, else any server that can, else Apple.
     private var transcriber: DictationEngine? { store.dictationEngine(dictationPick) }
 
@@ -56,25 +57,33 @@ struct VoiceDock: View {
                     .frame(minHeight: 22)
                     .padding(.bottom, 14)
                     .transition(.opacity)
+            } else if !open, !typing, swiped < SwipeHint.learned {
+                Text(SwipeHint.line).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
+                    .frame(minHeight: 22)
+                    .padding(.bottom, 14)
+                    .transition(.opacity)
             }
-            if typing {
-                ChatInput(placeholder: task.bot.map { "Message \($0.bot.name)" } ?? "New task", text: $task.text,
-                          sending: task.sending, sendable: task.ready) {
-                    Task { if let key = await task.start() { started(key) } }
+            VStack(spacing: 0) {
+                if typing {
+                    ChatInput(placeholder: task.bot.map { "Message \($0.bot.name)" } ?? "New task", text: $task.text,
+                              sending: task.sending, sendable: task.ready) {
+                        Task { if let key = await task.start() { started(key) } }
+                    }
+                } else {
+                    DockOrb(draft: draft, size: open ? 120 : 76, tap: tapped)
                 }
-            } else {
-                DockOrb(draft: draft, size: open ? 120 : 76, tap: tapped)
+                if open {
+                    actions
+                        .padding(.top, Theme.Space.xl)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+                picks.padding(.top, open ? 18 : 14).typingAligned(typing)
             }
-            if open {
-                actions
-                    .padding(.top, Theme.Space.xl)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-            picks.padding(.top, open ? 18 : 14).typingAligned(typing)
+            .padding(.bottom, 30)
+            .swipeUpToType(phase == .rest && !typing, edit)
         }
         .padding(.horizontal, 20)
         .padding(.top, open ? 0 : 44)
-        .padding(.bottom, 30)
         .frame(maxWidth: .infinity, maxHeight: open ? .infinity : nil, alignment: .bottom)
         .background { backdrop.ignoresSafeArea() }
         // The container alone while typing, so the keyboard lifts the field over it.
@@ -441,11 +450,30 @@ struct ChatInput: View {
 }
 
 extension View {
+    /// A swipe up from the orb or below it opens the keyboard, as its button does. Beside the orb's
+    /// tap rather than over it, since a finger moving that far has already failed the tap.
+    func swipeUpToType(_ on: Bool, _ type: @escaping () -> Void) -> some View {
+        frame(maxWidth: .infinity)
+            .contentShape(.rect)
+            .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { drag in
+                guard -drag.translation.height > 40, -drag.translation.height > abs(drag.translation.width) else { return }
+                UserDefaults.standard.set(UserDefaults.standard.integer(forKey: SwipeHint.key) + 1, forKey: SwipeHint.key)
+                type()
+            }, including: on ? .all : .subviews)
+    }
+
     /// Under the text field the picks line up with its words; under the orb they centre.
     func typingAligned(_ typing: Bool) -> some View {
         frame(maxWidth: .infinity, alignment: typing ? .leading : .center)
             .padding(.leading, typing ? Theme.Space.l : 0)
     }
+}
+
+/// "Swipe up to type" sits over the resting orb until the reader has done it three times.
+enum SwipeHint {
+    static let key = "dock.swipedToType"
+    static let learned = 3
+    static let line = "Swipe up to type"
 }
 
 /// The text of a task or a reply in a near-full sheet: grabber, title, Done.
