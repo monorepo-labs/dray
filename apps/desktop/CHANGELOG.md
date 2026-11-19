@@ -19,6 +19,46 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.31.0 · 2026-11-20 · notify
+
+### New
+
+- **Sign in to Dray.** Sign in with GitHub, Google or email in your
+  browser, and it brings you straight back to the app. Settings opens
+  with your account card, where you can sign out.
+- **Bot routines.** A bot can schedule its own checks, every few hours
+  or at set times. They show in the bot's More tab, where you can turn
+  one off or delete it.
+- **Bots work together.** Each bot knows the others and their roles,
+  checks with the owner before starting work in a project another bot
+  has tasks in, and can ask another bot and get its reply. A runaway
+  back-and-forth between bots stops by itself.
+- **Push alerts on iPhone.** Done, permission requests, questions and
+  Ready to merge reach your iPhone. Allow, deny or answer right from the
+  alert.
+- **Linux packages.** A `.deb` and an AppImage for x64 and arm64, each
+  updating itself.
+
+### Improved
+
+- Bots hear about every merge and settle of their tasks within seconds,
+  wherever it happened, so they no longer ask you to merge a PR that
+  already merged.
+- Bots greet you by your account's name instead of asking.
+- The light theme uses neutral greys and clearer surfaces, and Search
+  sits beside Drafts in the sidebar.
+- A merge card shows background work the task still has running, and
+  waits for the task's turn to end before it appears.
+- A bot's composer counts tasks with checks running on their own, and
+  shows an idle count when every task is idle.
+- Island alerts show the bot's face beside the pill, on Mac and Linux.
+- Messages queued in a bot chat sit above the Waiting on you card.
+
+### Fixed
+
+- `dray browser` loads pages on Linux servers again instead of timing
+  out.
+
 ## 0.30.14 · 2026-11-18
 
 ### New
