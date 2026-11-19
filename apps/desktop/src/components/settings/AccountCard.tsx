@@ -106,7 +106,10 @@ export default function AccountCard() {
   const linked = !!useOrgLink(LOCAL, connected).state?.linked;
   const [asking, setAsking] = useState(false);
   if (!user) return null;
-  const social = PROVIDERS.filter((p) => user.providers.includes(p.id));
+  // A local server still on the previous build, waiting for its turns to end
+  // before it restarts, sends no `providers` at all.
+  const linkedIds = user.providers ?? [];
+  const social = PROVIDERS.filter((p) => linkedIds.includes(p.id));
   const ways = social.length ? social : [EMAIL];
   return (
     <>

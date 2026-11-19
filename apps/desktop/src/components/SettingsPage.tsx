@@ -1571,7 +1571,9 @@ function SettingsTabs({
         </header>
       }
       sidebar={
-        <aside className="flex w-60 shrink-0 flex-col px-2">
+        // Scrolls, since the account card above twelve tabs nearly fills a
+        // window at its 480px minimum and the shell clips what overflows.
+        <aside className="flex min-h-0 w-60 shrink-0 flex-col overflow-y-auto px-2">
           <AccountCard />
           <div
             role="tablist"
