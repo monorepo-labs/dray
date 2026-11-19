@@ -716,6 +716,21 @@ jobs:
           done
           test ! -e "$RUNNER_TEMP/deb-root/usr/bin/dray"
 
+      # A reader's install on a clean system (linux-smoke.sh): the .deb through
+      # apt, then the app must draw its window, and the AppImage after it. On
+      # each arch's own runner, so arm64 is opened on arm64 every release.
+      - name: Install and open on a clean Ubuntu 22.04
+        run: |
+          docker run --rm -v "$PWD/$BUNDLE:/b:ro" -v "$RUNNER_TEMP/smoke:/out" \
+            -v "$PWD/.github/scripts:/s:ro" ubuntu:22.04 /s/linux-smoke.sh /b /out
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smoke-${{ matrix.arch }}
+          path: ${{ runner.temp }}/smoke
+          if-no-files-found: ignore
+          retention-days: 7
+
       # The same mirror as the Mac's. The files go to the release from the
       # manifest job, since `bundle` is what creates the release and may not
       # have yet.
