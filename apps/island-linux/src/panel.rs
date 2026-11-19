@@ -8,6 +8,8 @@ use crate::orb::Dictation;
 use crate::prefs::{Mode, Placement};
 use crate::{Island, Link};
 use crate::{ROOM, WIDTH};
+use crate::fluid;
+use gpui::AnimationExt;
 use gpui::{
     AnyElement, App, BoxShadow, Context, Entity, FocusHandle, Focusable, Hsla, KeyDownEvent, MouseButton,
     MouseDownEvent, PathBuilder, Pixels, Window, canvas, deferred, div, point, prelude::*, px, rgb,
@@ -785,7 +787,7 @@ fn draft_view(state: &Entity<Island>, island: &Island, cx: &App) -> AnyElement {
         return recording_bar(state, island).into_any_element();
     }
     let head: AnyElement = match &d.target {
-        Some(Target::Session(id)) => title_row(state, island, id).into_any_element(),
+        Some(Target::Session(id)) => title_row(state, island, id, cx).into_any_element(),
         _ => new_task_bar(state, island, top).into_any_element(),
     };
     let groups = row_groups(d);
@@ -1201,8 +1203,22 @@ fn lead_mark(island: &Island, id: &str) -> Option<gpui::Div> {
 /// The session the draft goes to. A click opens the switcher rather than
 /// Dray, since a title clicked without thinking must not switch apps;
 /// Ctrl-click is the deliberate way to Dray.
-fn title_row(state: &Entity<Island>, island: &Island, id: &str) -> impl IntoElement {
+fn title_row(state: &Entity<Island>, island: &Island, id: &str, cx: &App) -> impl IntoElement {
     let title = island.session(id).map(|s| s.title.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| "Task".into());
+    // A bot's chat: its face leads its name, which breathes while it works.
+    let bot = island.bot(id);
+    let busy = bot.is_some() && island.session(id).is_some_and(|s| s.status == "in_progress");
+    let name = div().truncate().child(bot.map_or(title, |b| b.name.clone()));
+    let name = if busy {
+        name.with_animation(
+            "title-busy",
+            gpui::Animation::new(std::time::Duration::from_millis(1400)).repeat().with_easing(gpui::pulsating_between(0.45, 1.)),
+            |d, delta| d.opacity(delta),
+        )
+        .into_any_element()
+    } else {
+        name.into_any_element()
+    };
     div()
         .flex()
         .items_center()
@@ -1218,8 +1234,11 @@ fn title_row(state: &Entity<Island>, island: &Island, id: &str) -> impl IntoElem
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(white(0.7))
                 .hover(|s| s.text_color(white(1.)))
-                .children(lead_mark(island, id))
-                .child(div().truncate().child(title))
+                .map(|d| match bot {
+                    Some(bot) => d.child(crate::bots::bot_face(bot, 16., cx)),
+                    None => d.children(lead_mark(island, id)),
+                })
+                .child(name)
                 .on_mouse_down(MouseButton::Left, title_click(state.clone(), id.to_string(), |i, cx| crate::toggle_list(i, cx))),
         )
         .child(hints("Ctrl+N New   ↑↓ Tasks   Esc"))
@@ -1526,10 +1545,21 @@ fn model_menu(state: &Entity<Island>, island: &Island) -> impl IntoElement {
 fn switcher(state: &Entity<Island>, island: &Island, glass: bool, cx: &App) -> SwitcherCard {
     let d = island.draft();
     let current = d.session().map(str::to_string);
-    let rows: Vec<(String, String, String, Option<Hsla>)> = island
+    let rows: Vec<SwitcherRow> = island
         .listed(cx)
         .iter()
-        .map(|s| (s.session_id.clone(), s.title.clone(), s.project().to_string(), lead_color(island, &s.session_id)))
+        .map(|s| {
+            let bot = island.bot(&s.session_id);
+            SwitcherRow {
+                id: s.session_id.clone(),
+                // A bot's chat shows its face and name, and no project, which would be its folder's id.
+                title: bot.map_or_else(|| s.title.clone(), |b| b.name.clone()),
+                project: if bot.is_some() { String::new() } else { s.project().to_string() },
+                mark: if bot.is_some() { None } else { lead_color(island, &s.session_id) },
+                face: bot.map(|b| crate::bots::bot_face(b, 20., cx)),
+                working: bot.is_some() && s.status == "in_progress",
+            }
+        })
         .collect();
     let empty = rows.is_empty();
     let state = state.clone();
@@ -1538,12 +1568,22 @@ fn switcher(state: &Entity<Island>, island: &Island, glass: bool, cx: &App) -> S
     SwitcherCard { state, search, current, rows, empty, glass, scroll }
 }
 
+struct SwitcherRow {
+    id: String,
+    title: String,
+    project: String,
+    mark: Option<Hsla>,
+    face: Option<AnyElement>,
+    /// A bot at work, which shows the app's typing dots.
+    working: bool,
+}
+
 /// Held as its parts so the frame can put it above or below the card.
 struct SwitcherCard {
     state: Entity<Island>,
     search: Entity<crate::input::TextInput>,
     current: Option<String>,
-    rows: Vec<(String, String, String, Option<Hsla>)>,
+    rows: Vec<SwitcherRow>,
     empty: bool,
     glass: bool,
     scroll: gpui::ScrollHandle,
@@ -1583,7 +1623,7 @@ impl IntoElement for SwitcherCard {
                     .gap(px(2.))
                     .px(px(6.))
                     .pb(px(6.))
-                    .children(self.rows.into_iter().enumerate().map(|(n, (id, title, project, mark))| {
+                    .children(self.rows.into_iter().enumerate().map(|(n, SwitcherRow { id, title, project, mark, face, working })| {
                         let on = self.current.as_deref() == Some(id.as_str());
                         let state = self.state.clone();
                         div()
@@ -1598,7 +1638,9 @@ impl IntoElement for SwitcherCard {
                             .when(on, |d| d.bg(white(0.1)))
                             .hover(|s| s.bg(white(0.08)))
                             .children(mark.map(dot))
+                            .children(face.map(|f| div().flex_none().mr(px(2.)).child(f)))
                             .child(div().flex_1().truncate().text_color(white(if on { 0.95 } else { 0.8 })).child(if title.is_empty() { "Untitled".to_string() } else { title }))
+                            .when(working, |d| d.child(typing_dots(&id)))
                             .child(div().flex_none().text_size(px(ASIDE)).text_color(white(0.35)).child(project))
                             .on_click(move |_, _, cx| {
                                 let id = id.clone();
@@ -1611,71 +1653,175 @@ impl IntoElement for SwitcherCard {
     }
 }
 
-/// How many tasks wait on the reader. Resting the pointer on it opens the
-/// cards, as does a click.
+/// How many tasks wait on the reader, or with none the done pill. Resting the
+/// pointer on it opens the cards, as does a click. One bot's news carries its
+/// face in a disc joined to the pill, the Mac's #1279 (`fluid`).
 pub struct Pill {
     pub island: Entity<Island>,
+    /// The bot whose disc is easing out, since when, and whether the desktop
+    /// asks for no motion. Made with the window, so each showing eases again.
+    pub emerge: Option<(String, std::time::Instant, bool)>,
+}
+
+impl Pill {
+    /// How far out `bot`'s disc is, asking for the next frame while it moves.
+    fn emerge(&mut self, bot: Option<&crate::bots::Bot>, window: &Window) -> f32 {
+        let Some(bot) = bot else {
+            self.emerge = None;
+            return 1.;
+        };
+        // Out again for another bot, as the Mac's `.task(id:)` does.
+        if self.emerge.as_ref().is_none_or(|(id, ..)| *id != bot.id) {
+            self.emerge = Some((bot.id.clone(), std::time::Instant::now(), fluid::still()));
+        }
+        let Some((_, since, still)) = &self.emerge else { return 1. };
+        if *still {
+            return 1.;
+        }
+        let t = since.elapsed();
+        if t < fluid::SETTLED {
+            window.request_animation_frame();
+        }
+        fluid::emerge(t.as_secs_f32())
+    }
 }
 
 impl Render for Pill {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let island = self.island.read(cx);
         let count = island.asks.attention().len();
-        let text = format!("{count} {} attention", if count == 1 { "task needs" } else { "tasks need" });
-        let (glass, top, glowing) = (island.glass, island.placement == Placement::Top, island.glowing);
-        let open = self.island.clone();
-        let fit = self.island.clone();
         // Cards come first; with none waiting, the pill is the done pill.
         let done = count == 0 && !island.done.is_empty();
-        let glow = gpui::rgb(if done { UNREAD } else { WAITING });
+        // One bot's news: its face rides beside the pill.
+        let bot = if done {
+            (island.done.len() == 1).then(|| island.bot(&island.done[0])).flatten()
+        } else {
+            (count == 1).then(|| island.asks.attention().first().and_then(|k| island.bot(k))).flatten()
+        }
+        .cloned();
+        // Without a compositor the window is square and opaque, with no room
+        // for a disc, so the face leads inside the pill instead.
+        let fluid = island.glass && bot.is_some();
+        let e = self.emerge(bot.as_ref().filter(|_| fluid), window);
+        let island = self.island.read(cx);
+        let text = format!("{count} {} attention", if count == 1 { "task needs" } else { "tasks need" });
+        let (glass, top, glowing) = (island.glass, island.placement == Placement::Top, island.glowing);
+        let (side, drop) = (fluid && !top, fluid && top);
+        let open = self.island.clone();
+        let fit = self.island.clone();
+        // A bot's waiting notice is yellow, and wins where both apply, as on the app's rail.
+        let waiting = done && island.done.iter().any(|id| island.notes.contains_key(id));
+        let glow = gpui::rgb(if done && !waiting { UNREAD } else { WAITING });
+        let edge = glowing.then(|| gpui::Hsla { a: 0.25, ..glow.into() });
+        let halo = gpui::Hsla { a: 0.45, ..glow.into() };
+        let r = fluid::RADIUS;
+        // Where the disc sits off the pill's top left; a dropped one off its
+        // bottom middle, since the pill's size is only known at layout.
+        let (c, _) = if side {
+            fluid::side_disc(gpui::Bounds::new(point(px(0.), px(0.)), gpui::size(px(400.), px(2. * r))), e)
+        } else {
+            fluid::drop_disc(gpui::Bounds::new(point(px(0.), px(0.)), gpui::size(px(0.), px(0.))), e)
+        };
+        let at_disc = move |d: gpui::Div, size: f32| {
+            if side {
+                d.absolute().left(px(c.x - size / 2.)).top(px(c.y - size / 2.))
+            } else {
+                d.absolute().left(gpui::relative(0.5)).ml(px(-size / 2.)).top(gpui::relative(1.)).mt(px(c.y - size / 2.))
+            }
+        };
+        let face_size = r * 1.4;
+        let disc = bot
+            .as_ref()
+            .filter(|_| fluid)
+            .map(|b| at_disc(div(), face_size).opacity(e.clamp(0., 1.)).child(crate::bots::bot_face(b, face_size, cx)));
+        // GPUI blurs boxes alone, so the lit edge's halo is the pill's and the disc's own.
+        let halos = (fluid && glowing).then(|| {
+            let ring = at_disc(div(), 2. * r).size(px(2. * r)).rounded_full().shadow(vec![shadow(halo, 5., 0.)]);
+            let pill = side.then(|| {
+                div().absolute().top_0().bottom_0().right_0().left(px(fluid::SLOT)).rounded(px(r)).shadow(vec![shadow(halo, 5., 0.)])
+            });
+            pill.into_iter().chain([ring])
+        });
+        let shape = fluid.then(|| {
+            canvas(
+                |_, _, _| (),
+                move |b, _, window, _| {
+                    if side {
+                        fluid::paint_side(window, b, e, edge);
+                    } else {
+                        fluid::paint_drop(window, b, e, edge);
+                    }
+                },
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+        });
+        let inside = bot.as_ref().filter(|_| !fluid).map(|b| crate::bots::bot_face(b, 16., cx));
         let face = div()
-            .id("pill")
+            .relative()
             .flex()
             .when(!done, |d| d.items_center().gap_2())
             .px(px(16.))
             .py(px(10.))
+            .when(side, |d| d.pl(px(16. + fluid::SLOT)).min_h(px(2. * r)))
             .when(glass && top, |d| d.min_w(px(200.)).justify_center())
-            .bg(rgb(0x000000))
             .text_size(px(BODY))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(white(0.92))
             .map(|d| match (glass, top) {
-                (true, true) => d.rounded_b(px(16.)),
-                (true, false) => d.rounded(px(20.)),
-                (false, _) => d,
+                (true, true) => d.bg(rgb(0x000000)).rounded_b(px(16.)),
+                // Pill and disc are one shape, which the canvas draws.
+                (true, false) if side => d,
+                (true, false) => d.bg(rgb(0x000000)).rounded(px(20.)),
+                (false, _) => d.bg(rgb(0x000000)),
             })
-            .when(glowing, |d| {
-                let edge = gpui::Hsla { a: 0.25, ..glow.into() };
+            .when(glowing && !side, |d| {
                 let d = if glass && top { d.border_l_1().border_r_1().border_b_1() } else { d.border_1() };
-                d.border_color(edge).when(glass, |d| d.shadow(vec![shadow(gpui::Hsla { a: 0.45, ..glow.into() }, 5., 0.)]))
+                d.border_color(gpui::Hsla { a: 0.25, ..glow.into() }).when(glass, |d| d.shadow(vec![shadow(halo, 5., 0.)]))
             })
+            .children(halos.into_iter().flatten())
+            .children(shape)
             .map(|d| {
                 if done {
-                    return d.child(done_face(&self.island, island)).on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                    return d.child(done_face(&self.island, island, inside, cx));
+                }
+                d.child(inside.unwrap_or_else(|| div().size(px(6.)).rounded_full().bg(glow).into_any_element())).child(text)
+            })
+            .children(disc);
+        // The pointer and a click take the dropped disc too, which hangs below the pill.
+        let hit = div()
+            .id("pill")
+            .flex()
+            .flex_col()
+            .child(face)
+            .when(drop, |d| d.child(div().h(px(fluid::DROP))))
+            .map(|d| {
+                if done {
+                    return d.on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                         let hovered = *hovered;
                         later(&this.island, cx, move |i, cx| crate::done_hovered(i, hovered, cx));
                     }));
                 }
-                d.child(div().size(px(6.)).rounded_full().bg(glow))
-                    .child(text)
-                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                        let hovered = *hovered;
-                        later(&this.island, cx, move |i, cx| crate::pill_hovered(i, hovered, cx));
-                    }))
-                    .on_click(move |_, _, cx| {
-                        later(&open, cx, |i, cx| {
-                            if i.read(cx).window.is_none() {
-                                crate::open(i, cx);
-                            }
-                        })
+                d.on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                    let hovered = *hovered;
+                    later(&this.island, cx, move |i, cx| crate::pill_hovered(i, hovered, cx));
+                }))
+                .on_click(move |_, _, cx| {
+                    later(&open, cx, |i, cx| {
+                        if i.read(cx).window.is_none() {
+                            crate::open(i, cx);
+                        }
                     })
+                })
             });
         let frame = div()
             .flex_none()
             .relative()
             .flex()
             .when(glass, |d| d.px(px(ROOM)).pb(px(ROOM)).when(!top, |d| d.pt(px(ROOM))))
-            .child(face)
+            .child(hit)
             .when(glass && top, |d| {
                 let black = gpui::hsla(0., 0., 0., 1.);
                 d.child(ear(true, black)).child(ear(false, black))
@@ -1699,25 +1845,60 @@ impl Render for Pill {
     }
 }
 
+/// One session on the done pill: finished, or a bot's tasks waiting on the reader.
+struct DoneItem {
+    id: String,
+    /// A bot's name, else the session's title.
+    title: String,
+    /// Said in place of "Done": a bot's "2 tasks waiting on you".
+    note: Option<String>,
+    /// The tasks behind the note, which the pill grows into under the pointer.
+    rows: Vec<crate::bots::WaitingTask>,
+    bot: Option<crate::bots::Bot>,
+}
+
 /// Sessions finished, in place of Dray's banner, newest first: the Mac's
 /// `DonePill`. One names itself and offers Open in app; several are a count
 /// that, under the pointer, grows a row each, five tall and then scrolling.
-/// A title opens the island on it.
-fn done_face(state: &Entity<Island>, island: &Island) -> impl IntoElement {
+/// A bot's waiting notice grows its card's rows, and several bots waiting
+/// share one pill, grouped under each bot. A title opens the island on it.
+/// `lead` is a bot's face where there is no disc to carry it.
+fn done_face(state: &Entity<Island>, island: &Island, lead: Option<AnyElement>, cx: &App) -> impl IntoElement {
     const ROW: f32 = 26.;
-    let items: Vec<(String, String)> = island.done.iter().rev().map(|id| (id.clone(), island.title(id))).collect();
-    let first = items[0].0.clone();
-    let title = |id: &str, name: &str, key: &str| {
+    let items: Vec<DoneItem> = island
+        .done
+        .iter()
+        .rev()
+        .map(|id| {
+            let bot = island.bot(id).cloned();
+            DoneItem {
+                id: id.clone(),
+                title: bot.as_ref().map_or_else(|| island.title(id), |b| b.name.clone()),
+                note: island.notes.get(id).cloned(),
+                rows: island.waiting.get(id).cloned().unwrap_or_default(),
+                bot,
+            }
+        })
+        .collect();
+    let waiting = items.iter().any(|i| i.note.is_some());
+    let tint = rgb(if waiting { WAITING } else { UNREAD });
+    let cards = items.iter().any(|i| !i.rows.is_empty());
+    let one = items.len() == 1;
+    let headline = crate::bots::headline(&items.iter().map(|i| (i.note.as_deref(), i.rows.len())).collect::<Vec<_>>());
+    let first = items[0].id.clone();
+    let title = |id: &str, name: &str, cap: f32, key: &str| {
         let (state, id) = (state.clone(), id.to_string());
         div()
             .id(gpui::SharedString::from(format!("done-title-{key}")))
-            .max_w(px(240.))
+            .min_w_0()
+            .max_w(px(cap))
             .truncate()
             .font_weight(gpui::FontWeight::NORMAL)
             .text_color(white(0.55))
             .hover(|s| s.text_color(white(0.95)))
             .child(name.to_string())
             .on_click(move |_, _, cx| {
+                cx.stop_propagation();
                 let id = id.clone();
                 later(&state, cx, move |i, cx| crate::open_done(i, id, cx))
             })
@@ -1737,6 +1918,7 @@ fn done_face(state: &Entity<Island>, island: &Island) -> impl IntoElement {
             .hover(|s| s.bg(white(0.22)))
             .text_size(px(SMALL))
             .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(white(1.))
             .child("Open in app")
             // Super+⏎ opens the newest alone, so only its button names the chord.
             .when(chord, |d| d.child(div().text_color(white(0.45)).child("Super ⏎")))
@@ -1746,40 +1928,266 @@ fn done_face(state: &Entity<Island>, island: &Island) -> impl IntoElement {
                 later(&state, cx, move |i, cx| crate::open_done_in_app(i, id, cx))
             })
     };
-    let one = items.len() == 1;
     let open_first = state.clone();
+    let expanded = island.done_expanded && (!one || cards);
     let head = div()
         .id("done-head")
         .flex()
         .items_center()
         .gap_2()
-        .child(div().flex_none().size(px(6.)).rounded_full().bg(rgb(UNREAD)))
-        .child(div().flex_none().child(if one { "Done".to_string() } else { format!("{} tasks done", items.len()) }))
-        // Several are a count alone; their titles wait for the pointer.
-        .when(one, |d| d.child(title(&items[0].0, &items[0].1, "head")).child(in_app(&items[0].0, true, "head")))
+        // Centred over the grown cards, so its margins match theirs.
+        .when(expanded && cards, |d| d.w_full().justify_center())
+        .child(lead.unwrap_or_else(|| div().flex_none().size(px(6.)).rounded_full().bg(tint).into_any_element()))
+        .child(div().flex_none().text_color(white(1.)).child(headline))
+        // Several are a count alone; their titles wait for the pointer. A
+        // bot's face says whose it is, so its name would say it twice.
+        .when(one, |d| {
+            let i = &items[0];
+            d.when(i.bot.is_none(), |d| d.child(title(&i.id, &i.title, if i.note.is_none() { 240. } else { 160. }, "head")))
+                .child(in_app(&i.id, true, "head"))
+        })
         .on_click(move |_, _, cx| {
             let id = first.clone();
             later(&open_first, cx, move |i, cx| crate::open_done(i, id, cx))
         });
-    let list = (island.done_expanded && !one).then(|| {
+    let line = |i: &DoneItem| {
+        div()
+            .h(px(ROW))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .children(i.bot.as_ref().map(|b| crate::bots::bot_face(b, 16., cx)))
+            .child(title(&i.id, &i.title, if i.note.is_none() { 240. } else { 120. }, &i.id))
+            .when(i.note.is_some(), |d| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(ASIDE))
+                        .font_weight(gpui::FontWeight::NORMAL)
+                        .text_color(rgb(WAITING))
+                        .child(crate::bots::headline_one(i.note.as_deref(), i.rows.len())),
+                )
+            })
+            .child(div().flex_1())
+            .child(in_app(&i.id, false, &i.id))
+    };
+    let group = |i: &DoneItem, first: bool| {
+        div()
+            .h(px(ROW))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .when(!first, |d| d.mt(px(6.)))
+            .children(i.bot.as_ref().map(|b| crate::bots::bot_face(b, 16., cx)))
+            .child(title(&i.id, &i.title, 240., &i.id))
+            .child(div().flex_1())
+            .child(in_app(&i.id, false, &i.id))
+    };
+    let list = expanded.then(|| {
         div()
             .id("done-list")
-            .w(px(360. - 32.))
-            .max_h(px(5. * ROW))
+            .w(px(if cards { 440. } else { 360. } - 32.))
+            .max_h(px(if cards { BODY_CAP } else { 5. * ROW }))
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .children(items.iter().map(|(id, name)| {
-                div()
-                    .h(px(ROW))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(title(id, name, id))
-                    .child(div().flex_1())
-                    .child(in_app(id, false, id))
+            .gap(px(if cards { 4. } else { 0. }))
+            .children(items.iter().enumerate().flat_map(|(n, i)| {
+                // One item's own line is the pill's header already.
+                let label = (!one).then(|| if i.rows.is_empty() { line(i).into_any_element() } else { group(i, n == 0).into_any_element() });
+                label.into_iter().chain(i.rows.iter().map(|t| waiting_card(state, island, &i.id, t, cx))).collect::<Vec<_>>()
             }))
     });
-    div().flex().flex_col().gap(px(6.)).child(head).children(list)
+    div().flex().flex_col().gap(px(if cards { 8. } else { 6. })).child(head).children(list)
+}
+
+/// The app's `--accent-merge`.
+const MERGE_GREEN: u32 = 0x238636;
+
+/// A waiting task as the bot chat's card draws it: face, title, PR and age,
+/// and under them its bot's line for the reader. A click brings Dray forward
+/// on the task; a ready PR lands from here, Merge then the method.
+fn waiting_card(state: &Entity<Island>, island: &Island, chat: &str, task: &crate::bots::WaitingTask, cx: &App) -> AnyElement {
+    let merge = island.merges.get(&task.id).cloned().unwrap_or_default();
+    // Read live where this island holds the task, since the bot may write it
+    // after the notice; drawn only while newer than the task's last move.
+    let need = match island.session(&task.id) {
+        Some(s) => s
+            .need
+            .as_ref()
+            .filter(|n| matches!((crate::bots::parse_time(&n.at), crate::bots::parse_time(&s.modified)), (Some(at), Some(moved)) if at >= moved))
+            .map(|n| n.text.clone()),
+        None => task.need.clone(),
+    };
+    // Another machine's task names its repo `dray://<machine>/<path>`, which
+    // this computer's server cannot merge in; its card opens it in Dray instead.
+    let mergeable = task.ready && task.pr.is_some() && !task.project_path.starts_with("dray://");
+    let id = task.id.clone();
+    let title = if task.title.is_empty() { "Untitled".to_string() } else { task.title.clone() };
+    let top = div()
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .min_h(px(22.))
+        .child(div().min_w_0().truncate().text_size(px(BODY)).font_weight(gpui::FontWeight::MEDIUM).text_color(white(0.92)).child(title))
+        .children(task.pr.as_ref().map(|pr| {
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(2.))
+                .text_size(px(ASIDE))
+                .text_color(white(0.5))
+                .child(crate::bots::pr_glyph(pr, 12., cx))
+                .child(format!("#{}", pr.number))
+        }))
+        .child(div().flex_1().min_w(px(4.)))
+        .when(mergeable, |d| d.children(merge_control(state, chat, &task.id, &merge)))
+        .children(crate::bots::short_age(&task.modified).map(|age| div().flex_none().text_size(px(SMALL)).text_color(white(0.35)).child(age)));
+    let under: Option<AnyElement> = match (&need, task.ready) {
+        (Some(need), _) => Some(div().text_size(px(ASIDE)).text_color(white(0.6)).line_clamp(2).child(need.clone()).into_any_element()),
+        // The bot is still reading the task; its line lands here.
+        (None, false) => Some(
+            div()
+                .w(px(160.))
+                .h(px(9.))
+                .my(px(3.))
+                .rounded_full()
+                .bg(white(0.14))
+                .with_animation(
+                    gpui::SharedString::from(format!("need-{id}")),
+                    gpui::Animation::new(std::time::Duration::from_millis(1400)).repeat().with_easing(gpui::pulsating_between(0.4, 1.)),
+                    |d, delta| d.opacity(delta),
+                )
+                .into_any_element(),
+        ),
+        (None, true) => None,
+    };
+    let open = state.clone();
+    div()
+        .id(gpui::SharedString::from(format!("waiting-{id}")))
+        .flex_none()
+        .flex()
+        .items_start()
+        .gap(px(10.))
+        .px(px(10.))
+        .py(px(7.))
+        .rounded(px(10.))
+        .bg(white(0.08))
+        .hover(|s| s.bg(white(0.13)))
+        .font_weight(gpui::FontWeight::NORMAL)
+        // Seeded by the task, as the app's row draws it.
+        .child(crate::bots::face(&task.id, None, 26., cx))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(top)
+                .children(under)
+                // Drawn, not a tooltip: the pill's window never takes focus.
+                .children(merge.failed.map(|why| div().text_size(px(ASIDE)).text_color(rgb(RED)).line_clamp(3).child(why))),
+        )
+        .on_click(move |_, _, cx| {
+            let id = id.clone();
+            later(&open, cx, move |i, cx| crate::open_waiting(i, id, cx))
+        })
+        .into_any_element()
+}
+
+/// Merge, then the method as the confirm: a repo may allow only some, and
+/// the pill's window takes no menu. Squash, the default, is filled, last.
+fn merge_control(state: &Entity<Island>, chat: &str, task_id: &str, merge: &crate::MergeState) -> Vec<AnyElement> {
+    let pill = |label: &'static str, key: &str, filled: bool| {
+        div()
+            .id(gpui::SharedString::from(format!("{key}-{task_id}")))
+            .flex_none()
+            .flex()
+            .items_center()
+            .px(px(10.))
+            .h(px(22.))
+            .rounded_full()
+            .bg(if filled { rgb(MERGE_GREEN).into() } else { white(0.14) })
+            .hover(|s| s.opacity(0.85))
+            .text_size(px(ASIDE))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(white(1.))
+            .child(label)
+    };
+    if !merge.confirming {
+        let (state, task) = (state.clone(), task_id.to_string());
+        let label = if merge.merging { "Merging…" } else { "Merge" };
+        return vec![
+            pill(label, "merge", true)
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    let task = task.clone();
+                    later(&state, cx, move |i, cx| {
+                        // One merge at a time per card.
+                        if !i.read(cx).merges.get(&task).is_some_and(|m| m.merging) {
+                            crate::set_merge(i, &task, |m| *m = crate::MergeState { confirming: true, ..Default::default() }, cx)
+                        }
+                    })
+                })
+                .into_any_element(),
+        ];
+    }
+    let cancel = {
+        let (state, task) = (state.clone(), task_id.to_string());
+        div()
+            .id(gpui::SharedString::from(format!("cancel-{task_id}")))
+            .flex_none()
+            .text_size(px(ASIDE))
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(white(0.55))
+            .hover(|s| s.text_color(white(0.9)))
+            .child("Cancel")
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                let task = task.clone();
+                later(&state, cx, move |i, cx| crate::set_merge(i, &task, |m| m.confirming = false, cx))
+            })
+            .into_any_element()
+    };
+    let methods = [("rebase", "Rebase"), ("merge", "Merge"), ("squash", "Squash")];
+    std::iter::once(cancel)
+        .chain(methods.into_iter().map(|(method, label)| {
+            let (state, chat, task) = (state.clone(), chat.to_string(), task_id.to_string());
+            pill(label, method, method == "squash")
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    let (chat, task) = (chat.clone(), task.clone());
+                    later(&state, cx, move |i, cx| crate::merge_waiting(i, chat, task, method, cx))
+                })
+                .into_any_element()
+        }))
+        .collect()
+}
+
+/// The app's `TypingDots`: what a bot shows while it works, in place of the
+/// task's running mark — three dots lifting in turn, a 1.2s cycle.
+fn typing_dots(key: &str) -> impl IntoElement {
+    div().flex_none().flex().items_center().gap(px(2.)).children((0..3).map(|n| {
+        div().relative().size(px(4.)).rounded_full().bg(white(0.5)).with_animation(
+            gpui::SharedString::from(format!("dots-{key}-{n}")),
+            gpui::Animation::new(std::time::Duration::from_millis(1200)).repeat(),
+            move |d, delta| {
+                // The CSS `typing-dot` keyframes: up at 30%, back at 60%, rest after.
+                let p = (delta - n as f32 * 0.16 / 1.2).rem_euclid(1.);
+                let k = if p < 0.3 {
+                    p / 0.3
+                } else if p < 0.6 {
+                    (0.6 - p) / 0.3
+                } else {
+                    0.
+                };
+                let k = k * k * (3. - 2. * k);
+                d.opacity(0.35 + 0.65 * k).top(px(-2. * k))
+            },
+        )
+    }))
 }

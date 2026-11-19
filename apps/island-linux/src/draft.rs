@@ -319,13 +319,19 @@ pub fn prompt(rows: &[String], typing: &str) -> String {
 /// The switcher's rows: newest first, narrowed by the search, set-aside
 /// sessions left out by the sidebar's rule — flagged, or untouched for three
 /// days. `modified` is RFC3339 UTC, so it orders as a string.
-pub fn listed<'a>(sessions: &'a [Session], search: &str, stale: &str) -> Vec<&'a Session> {
+pub fn listed<'a>(sessions: &'a [Session], bots: &[crate::bots::Bot], search: &str, stale: &str) -> Vec<&'a Session> {
     let q = search.trim().to_lowercase();
     let mut list: Vec<&Session> = sessions
         .iter()
         .filter(|s| s.hidden != Some(true) && s.archived != Some(true) && s.aside != Some(true))
         .filter(|s| s.modified.as_str() > stale)
-        .filter(|s| q.is_empty() || s.title.to_lowercase().contains(&q) || s.project().to_lowercase().contains(&q))
+        .filter(|s| {
+            // A bot's row shows its name, not the session's title or folder.
+            if let Some(bot) = bots.iter().find(|b| b.path == s.cwd) {
+                return q.is_empty() || bot.name.to_lowercase().contains(&q);
+            }
+            q.is_empty() || s.title.to_lowercase().contains(&q) || s.project().to_lowercase().contains(&q)
+        })
         .collect();
     list.sort_by(|a, b| b.modified.cmp(&a.modified));
     list
@@ -405,9 +411,21 @@ mod tests {
             session("d", "Stale", "2026-11-01T09:00:00Z"),
         ];
         let ids = |l: Vec<&Session>| l.iter().map(|s| s.session_id.clone()).collect::<Vec<_>>();
-        assert_eq!(ids(listed(&sessions, "", "2026-11-07T00:00:00Z")), ["b", "a"]);
-        assert_eq!(ids(listed(&sessions, "old", "2026-11-07T00:00:00Z")), ["a"]);
-        assert_eq!(ids(listed(&sessions, "DRAY", "2026-11-07T00:00:00Z")), ["b", "a"]);
+        assert_eq!(ids(listed(&sessions, &[], "", "2026-11-07T00:00:00Z")), ["b", "a"]);
+        assert_eq!(ids(listed(&sessions, &[], "old", "2026-11-07T00:00:00Z")), ["a"]);
+        assert_eq!(ids(listed(&sessions, &[], "DRAY", "2026-11-07T00:00:00Z")), ["b", "a"]);
+    }
+
+    #[test]
+    fn a_bots_chat_is_searched_by_the_bots_name() {
+        let mut chat = session("bot", "Bot chat", "2026-11-10T09:00:00Z");
+        chat.cwd = "/home/me/.dray/bots/b1".into();
+        let sessions = vec![chat, session("a", "Fix the login", "2026-11-09T09:00:00Z")];
+        let bots = [crate::bots::Bot { id: "b1".into(), name: "Scout".into(), path: "/home/me/.dray/bots/b1".into(), avatar: None }];
+        let ids = |l: Vec<&Session>| l.iter().map(|s| s.session_id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(listed(&sessions, &bots, "scout", "2026-11-07T00:00:00Z")), ["bot"]);
+        // Neither its title nor its folder.
+        assert_eq!(ids(listed(&sessions, &bots, "chat", "2026-11-07T00:00:00Z")), Vec::<String>::new());
     }
 
     #[test]

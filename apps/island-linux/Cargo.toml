@@ -26,6 +26,8 @@ uuid = { version = "1", features = ["v4"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 raw-window-handle = "0.6"
 x11rb = { version = "0.13", features = ["xinput", "shape"] }
+# Runs the Mac island's `botface.js`, so a bot's face is the app's own code.
+rquickjs = "0.14"
 
 [profile.release]
 strip = true

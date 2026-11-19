@@ -3,8 +3,10 @@
 //! reader's modifier tapped alone. See PLAN.md.
 
 mod asks;
+mod bots;
 mod capture;
 mod draft;
+mod fluid;
 mod input;
 mod newtask;
 mod orb;
@@ -56,8 +58,9 @@ enum Msg {
     /// Shift alone held, or let go: the pen armed while dictating.
     Shift(bool),
     Server(Update),
-    /// Dray says a session finished where its banner would have.
-    Done(String),
+    /// Dray says a session finished where its banner would have, or with
+    /// `note` what a bot's tasks wait on, and `rows` those tasks.
+    Done { id: String, note: Option<String>, rows: Vec<bots::WaitingTask> },
     /// Dray's Settings changed a pick: read the prefs again and show it.
     Prefs,
     /// Esc or Super+⏎ under the done pill.
@@ -175,6 +178,14 @@ pub struct Island {
     pub done_hovered: bool,
     pub done_expanded: bool,
     collapse_clock: u64,
+    /// What a session in `done` says in place of "Done": a bot's "2 tasks waiting on you".
+    pub notes: std::collections::HashMap<String, String>,
+    /// The tasks behind a bot's note, its card's rows, which the pill grows into under the pointer.
+    pub waiting: std::collections::HashMap<String, Vec<bots::WaitingTask>>,
+    /// A waiting card's merge, by task id: its confirm, the merge running, why it failed.
+    pub merges: std::collections::HashMap<String, MergeState>,
+    /// This computer's bots, whose chats draw their face and name.
+    pub bots: Vec<bots::Bot>,
     /// Esc and Super+⏎, held while the done pill is up.
     done_keys: Option<x11::DoneKeys>,
     /// The sender the done pill's keys report through.
@@ -182,6 +193,23 @@ pub struct Island {
     /// The panel stepped aside for a screenshot and comes back after it: not
     /// a close the reader made, so what it covered is neither shown nor spent.
     stepped_aside: bool,
+}
+
+/// A bot's waiting notice as Dray writes it down the pipe.
+#[derive(serde::Deserialize)]
+struct Waiting {
+    id: String,
+    note: String,
+    #[serde(default)]
+    rows: Vec<bots::WaitingTask>,
+}
+
+/// One waiting card's Merge: picking the method, landing, or why it did not.
+#[derive(Clone, Debug, Default)]
+pub struct MergeState {
+    pub confirming: bool,
+    pub merging: bool,
+    pub failed: Option<String>,
 }
 
 /// One screenshot's run: the row held for it, whether dictation was
@@ -217,7 +245,7 @@ impl Island {
 
     /// The switcher's rows for the search typed so far.
     pub fn listed(&self, cx: &App) -> Vec<&Session> {
-        draft::listed(&self.sessions, self.draft().search.read(cx).text(), &draft::stale_line())
+        draft::listed(&self.sessions, &self.bots, self.draft().search.read(cx).text(), &draft::stale_line())
     }
 
     /// The card the panel draws in place of the draft: held back while the
@@ -247,6 +275,22 @@ impl Island {
         Some((key, ask))
     }
 
+    /// The bot whose chat this session is: one running in its folder.
+    pub fn bot(&self, session_id: &str) -> Option<&bots::Bot> {
+        let cwd = &self.session(session_id)?.cwd;
+        self.bots.iter().find(|b| &b.path == cwd)
+    }
+
+    /// Drops the notes and rows of sessions no longer in `done`, so a later
+    /// plain finish cannot bring an old notice back.
+    fn prune_done(&mut self) {
+        let done = &self.done;
+        self.notes.retain(|k, _| done.contains(k));
+        self.waiting.retain(|k, _| done.contains(k));
+        let tasks: Vec<&str> = self.waiting.values().flatten().map(|t| t.id.as_str()).collect();
+        self.merges.retain(|k, _| tasks.contains(&k.as_str()));
+    }
+
     fn status_of(&self, session_id: &str) -> Option<&str> {
         self.sessions.iter().find(|s| s.session_id == session_id).map(|s| s.status.as_str())
     }
@@ -265,7 +309,15 @@ impl Island {
             Update::Session(s) if s.archived == Some(true) => self.sessions.retain(|o| o.session_id != s.session_id),
             Update::Session(s) => match self.sessions.iter_mut().find(|o| o.session_id == s.session_id) {
                 Some(old) => *old = s,
-                None => self.sessions.push(s),
+                None => {
+                    // `bots_changed` comes from the CLI alone, and a bot the app made is first seen as its chat.
+                    if !self.bots.iter().any(|b| b.path == s.cwd)
+                        && let Some(server) = &self.server
+                    {
+                        server.list_bots();
+                    }
+                    self.sessions.push(s)
+                }
             },
             Update::Status { session_id, status, modified } => {
                 let ended = status != "in_progress";
@@ -290,6 +342,12 @@ impl Island {
             Update::Tasks { session_id, count } => {
                 let busy = self.status_of(&session_id) == Some("in_progress");
                 self.asks.set_tasks(&session_id, count, busy);
+            }
+            Update::Bots(list) => self.bots = list,
+            Update::BotsChanged => {
+                if let Some(server) = &self.server {
+                    server.list_bots();
+                }
             }
         }
         false
@@ -318,14 +376,22 @@ fn main() {
     // Dray holds our stdin open for its life, so EOF is Dray gone however it
     // went — quit, crash or kill. Run by hand, the flag is left off.
     // Dray's lines on the same pipe: `done <session id>` for a finished
-    // session, `prefs` after its Settings wrote one.
+    // session, `waiting <json>` for a bot's waiting notice, `prefs` after its
+    // Settings wrote one.
     if std::env::args().any(|a| a == "--child") {
         let tx = tx.clone();
         std::thread::spawn(move || {
             for line in std::io::stdin().lines() {
                 let Ok(line) = line else { break };
                 let msg = match line.trim().split_once(' ') {
-                    Some(("done", id)) => Msg::Done(id.trim().to_string()),
+                    Some(("done", id)) => Msg::Done { id: id.trim().to_string(), note: None, rows: Vec::new() },
+                    Some(("waiting", json)) => match serde_json::from_str::<Waiting>(json) {
+                        Ok(w) => Msg::Done { id: w.id, note: Some(w.note), rows: w.rows },
+                        Err(err) => {
+                            eprintln!("[island] unreadable waiting line: {err}");
+                            continue;
+                        }
+                    },
                     _ if line.trim() == "prefs" => Msg::Prefs,
                     _ => continue,
                 };
@@ -374,7 +440,7 @@ fn main() {
                         let fresh = island.update(cx, |island, _| island.apply(update));
                         asks_changed(&island, fresh, had_cards, cx);
                     }
-                    Msg::Done(id) => finished(&island, id, 0, cx),
+                    Msg::Done { id, note, rows } => finished(&island, id, note, rows, 0, cx),
                     Msg::Prefs => prefs_changed(&island, cx),
                     Msg::DoneKey(key) => done_key(&island, key, cx),
                     Msg::Quit => {
@@ -505,7 +571,7 @@ fn sync_pill(island: &Entity<Island>, cx: &mut App) {
             move |_, cx| {
                 cx.new(|cx| {
                     cx.observe(&state, |_, _, cx| cx.notify()).detach();
-                    Pill { island: state }
+                    Pill { island: state, emerge: None }
                 })
             },
         );
@@ -1545,7 +1611,10 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
     }
     // A finish held for this session is the turn this message follows on from.
     if let Target::Session(id) = &target {
-        island.update(cx, |island, _| island.done.retain(|d| d != id));
+        island.update(cx, |island, _| {
+            island.done.retain(|d| d != id);
+            island.prune_done();
+        });
     }
     if target == Target::New && picks["cwd"].is_null() {
         island.update(cx, |island, cx| {
@@ -2263,16 +2332,16 @@ pub fn drop_files(island: &Entity<Island>, paths: &[std::path::PathBuf], cx: &mu
 /// How long the done pill stays up on its own: the Mac's `doneFor`.
 const DONE_FOR: Duration = Duration::from_secs(6);
 
-/// Dray says `id` finished where its banner would have. One this island
-/// has not read yet waits for the index a while, then is dropped: a pill
-/// keyed to a guess opens nothing.
-fn finished(island: &Entity<Island>, id: String, tries: u32, cx: &mut App) {
+/// Dray says `id` finished where its banner would have, or with `note` what
+/// a bot's tasks wait on. One this island has not read yet waits for the
+/// index a while, then is dropped: a pill keyed to a guess opens nothing.
+fn finished(island: &Entity<Island>, id: String, note: Option<String>, rows: Vec<bots::WaitingTask>, tries: u32, cx: &mut App) {
     if island.read(cx).session(&id).is_none() {
         if tries < 20 {
             let island = island.clone();
             cx.spawn(async move |cx| {
                 cx.background_executor().timer(Duration::from_millis(500)).await;
-                cx.update(|cx| finished(&island, id, tries + 1, cx));
+                cx.update(|cx| finished(&island, id, note, rows, tries + 1, cx));
             })
             .detach();
         }
@@ -2281,8 +2350,18 @@ fn finished(island: &Entity<Island>, id: String, tries: u32, cx: &mut App) {
     let shown = island.read(cx).window.is_some();
     let covered = shown || !island.read(cx).asks.attention().is_empty();
     island.update(cx, |island, cx| {
+        // A bot's turn ending beside its waiting notice must not turn the notice into "Done".
+        let kept = note.or_else(|| island.notes.get(&id).cloned());
+        let kept_rows = if rows.is_empty() { island.waiting.get(&id).cloned().unwrap_or_default() } else { rows };
         island.done.retain(|d| *d != id);
         island.done.push(id.clone());
+        island.prune_done();
+        if let Some(kept) = kept {
+            island.notes.insert(id.clone(), kept);
+        }
+        if !kept_rows.is_empty() {
+            island.waiting.insert(id.clone(), kept_rows);
+        }
         if covered {
             island.unseen_done.insert(id);
         } else {
@@ -2309,6 +2388,7 @@ fn cover_done(island: &Entity<Island>, cx: &mut App) {
     island.update(cx, |island, cx| {
         let unseen = island.unseen_done.clone();
         island.done.retain(|d| unseen.contains(d));
+        island.prune_done();
         // Any still unseen waits, its clock stopped until it is.
         island.done_clock += 1;
         cx.notify();
@@ -2362,6 +2442,7 @@ fn start_done_clock(island: &Entity<Island>, cx: &mut App) {
 fn clear_done(island: &Entity<Island>, cx: &mut App) {
     island.update(cx, |island, cx| {
         island.done.clear();
+        island.prune_done();
         island.done_expanded = false;
         // The pill goes from under the pointer, which never hears it leave.
         island.done_hovered = false;
@@ -2377,11 +2458,13 @@ pub fn done_hovered(island: &Entity<Island>, hovered: bool, cx: &mut App) {
     let (several, clock) = island.update(cx, |island, cx| {
         island.done_hovered = hovered;
         island.collapse_clock += 1;
-        if hovered && island.done.len() > 1 {
+        // Several grow a row each, and a bot's waiting notice its cards.
+        let grows = island.done.len() > 1 || island.waiting.values().any(|rows| !rows.is_empty());
+        if hovered && grows {
             island.done_expanded = true;
         }
         cx.notify();
-        (island.done.len() > 1, island.collapse_clock)
+        (grows, island.collapse_clock)
     });
     if hovered {
         return;
@@ -2417,6 +2500,62 @@ pub fn open_done(island: &Entity<Island>, id: String, cx: &mut App) {
 pub fn open_done_in_app(island: &Entity<Island>, id: String, cx: &mut App) {
     clear_done(island, cx);
     show_in_app(island, id, cx);
+}
+
+/// A waiting task's card clicked: Dray comes forward on the task, as the bot
+/// chat card's Ctrl-click does.
+pub fn open_waiting(island: &Entity<Island>, task_id: String, cx: &mut App) {
+    open_done_in_app(island, task_id, cx);
+}
+
+/// A waiting card's Merge or its confirm, by task id.
+pub fn set_merge(island: &Entity<Island>, task_id: &str, f: impl FnOnce(&mut MergeState), cx: &mut App) {
+    island.update(cx, |island, cx| {
+        f(island.merges.entry(task_id.to_string()).or_default());
+        cx.notify();
+    });
+}
+
+/// Lands a waiting task's PR with `method` the bot chat card's way —
+/// `merge_pr` settling the task — then its card goes, and the pill with the
+/// last of them. A failure's reason is drawn on the card.
+pub fn merge_waiting(island: &Entity<Island>, chat: String, task_id: String, method: &'static str, cx: &mut App) {
+    let task = island.read(cx).waiting.get(&chat).and_then(|rows| rows.iter().find(|t| t.id == task_id)).cloned();
+    let Some(task) = task else { return };
+    let Some(pr) = task.pr.clone() else { return };
+    // The app names another machine's repo `dray://<machine>/<path>`, which
+    // this computer's server cannot reach, so the card offers no Merge there.
+    let cwd = island.read(cx).session(&task.id).map_or(task.project_path.clone(), |s| s.project_path.clone());
+    let args = json!({ "cwd": cwd, "number": pr.number, "method": method, "settle": task.id });
+    let Some(reply) = island.read(cx).server.as_ref().map(|s| s.call("merge_pr", args)) else { return };
+    set_merge(island, &task_id, |m| *m = MergeState { merging: true, ..Default::default() }, cx);
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        // `wait`'s 30s is too short for a merge, which runs `gh` and may wait on GitHub.
+        let answer = reply.await.unwrap_or_else(|_| Err("The connection to Dray's server dropped.".into()));
+        cx.update(|cx| match answer {
+            Ok(_) => {
+                island.update(cx, |island, cx| {
+                    if let Some(rows) = island.waiting.get_mut(&chat) {
+                        rows.retain(|t| t.id != task_id);
+                        if rows.is_empty() {
+                            island.done.retain(|d| *d != chat);
+                        }
+                    }
+                    island.prune_done();
+                    // A pill emptied under the pointer never hears it leave.
+                    if island.done.is_empty() {
+                        island.done_hovered = false;
+                        island.done_expanded = false;
+                    }
+                    cx.notify();
+                });
+                sync_pill(&island, cx);
+            }
+            Err(why) => set_merge(&island, &task_id, |m| *m = MergeState { failed: Some(why), ..Default::default() }, cx),
+        });
+    })
+    .detach();
 }
 
 /// The done pill is the pill drawn while the panel is shut and no card waits.

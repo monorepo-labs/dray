@@ -4,6 +4,7 @@
 //! `serve.rs`'s; see its module comment.
 
 use crate::asks::Ask;
+use crate::bots::Bot;
 use futures::channel::oneshot;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -39,6 +40,16 @@ pub struct Session {
     pub permission_mode: String,
     pub fast: Option<bool>,
     pub cwd: String,
+    /// A bot task's one line to the reader, written by its bot.
+    pub need: Option<Need>,
+}
+
+/// A bot task's need: drawn only while written after the task last moved.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct Need {
+    pub text: String,
+    pub at: String,
 }
 
 impl Session {
@@ -64,6 +75,10 @@ pub enum Update {
     Asked(Ask),
     Decided { session_id: String, request_id: String },
     Tasks { session_id: String, count: usize },
+    /// This computer's bots, as `list_bots` answers.
+    Bots(Vec<Bot>),
+    /// A bot was made, renamed or removed: read the list again.
+    BotsChanged,
 }
 
 /// What a call answers: the `ok` value, or the server's own sentence.
@@ -71,6 +86,7 @@ pub type Reply = Result<Value, String>;
 
 enum Outbound {
     List,
+    Bots,
     Call(String, Value, oneshot::Sender<Reply>),
 }
 
@@ -102,6 +118,11 @@ impl Server {
     /// settle and delete emit nothing — so the panel asks again on each open.
     pub fn relist(&self) {
         let _ = self.asks.send(Outbound::List);
+    }
+
+    /// Reads the bots again, which name and draw their chats.
+    pub fn list_bots(&self) {
+        let _ = self.asks.send(Outbound::Bots);
     }
 
     /// One command, answered once the server replies. With no connection up
@@ -172,7 +193,7 @@ fn connect(on_update: &impl Fn(Update), asks: &Receiver<Outbound>) -> Result<(),
     // Only after the handshake: a timeout mid-handshake fails it.
     socket.get_ref().set_read_timeout(Some(POLL)).map_err(|_| Gone::Unreachable)?;
     let mut calls = Calls::default();
-    if !calls.send(&mut socket, Outbound::List) {
+    if !calls.send(&mut socket, Outbound::List) || !calls.send(&mut socket, Outbound::Bots) {
         return Ok(());
     }
     let result = loop {
@@ -229,6 +250,7 @@ fn send_waiting(socket: &mut WebSocket<TcpStream>, calls: &mut Calls, asks: &Rec
 struct Calls {
     next: u64,
     lists: Vec<u64>,
+    bots: Vec<u64>,
     waiting: HashMap<u64, oneshot::Sender<Reply>>,
 }
 
@@ -242,6 +264,10 @@ impl Calls {
                 self.lists.push(id);
                 json!({ "id": id, "cmd": "list_session_index_items", "args": { "archived": false } })
             }
+            Outbound::Bots => {
+                self.bots.push(id);
+                json!({ "id": id, "cmd": "list_bots", "args": {} })
+            }
             Outbound::Call(cmd, args, reply) => {
                 self.waiting.insert(id, reply);
                 json!({ "id": id, "cmd": cmd, "args": args })
@@ -254,6 +280,10 @@ impl Calls {
         if let Some(at) = self.lists.iter().position(|l| *l == id) {
             self.lists.remove(at);
             return serde_json::from_value(frame.get_mut("ok")?.take()).ok().map(Update::Sessions);
+        }
+        if let Some(at) = self.bots.iter().position(|b| *b == id) {
+            self.bots.remove(at);
+            return serde_json::from_value(frame.get_mut("ok")?.take()).ok().map(Update::Bots);
         }
         let reply = self.waiting.remove(&id)?;
         let answer = match frame.get_mut("err") {
@@ -294,6 +324,7 @@ fn read(mut frame: Value) -> Option<Update> {
         }),
         "session_title" => Some(Update::Title { session_id: text("sessionId")?, title: text("title")? }),
         "agent_event" => agent_event(&payload),
+        "bots_changed" => Some(Update::BotsChanged),
         "live_state" => {
             let list = |key: &str| payload.get(key).and_then(Value::as_array).cloned().unwrap_or_default();
             let asks = list("asks").iter().filter_map(Ask::from_event).collect();
