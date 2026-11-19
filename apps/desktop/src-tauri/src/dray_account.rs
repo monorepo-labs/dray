@@ -74,6 +74,10 @@ pub struct DrayAccountState {
     /// Why the last sign-in ended without signing in: `cancelled`,
     /// `timed_out`, `offline`, or a sentence for anything else.
     pub error: Option<String>,
+    /// The site has email sign-in turned off (#1298), so the gate fades its
+    /// card. False until the site says so, so a site that never answers
+    /// takes no way in away.
+    pub email_off: bool,
 }
 
 /// What [`start`] answers: the page the app opens in the browser.
@@ -117,6 +121,8 @@ struct Memory {
 
 static MEMORY: Mutex<Memory> = Mutex::new(Memory { pending: None, generation: 0, error: None });
 static CHECKED: Mutex<Option<Instant>> = Mutex::new(None);
+/// What `/api/app/sign-in-methods` last said about email, and when it was asked.
+static EMAIL: Mutex<(Option<bool>, Option<Instant>)> = Mutex::new((None, None));
 /// Held across a read-change-write of the file.
 static FILE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// The port this server's own listener is on, which the browser comes back to.
@@ -128,6 +134,10 @@ fn memory() -> std::sync::MutexGuard<'static, Memory> {
 
 fn checked() -> std::sync::MutexGuard<'static, Option<Instant>> {
     CHECKED.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn email() -> std::sync::MutexGuard<'static, (Option<bool>, Option<Instant>)> {
+    EMAIL.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Told by the server once it has bound its listener.
@@ -196,13 +206,40 @@ pub async fn state(sink: &Sink) -> DrayAccountState {
             *checked = Some(Instant::now());
             tokio::spawn(recheck(sink.clone()));
         }
+    } else {
+        // Only the gate draws the methods, and it is up only while signed out.
+        let mut email = email();
+        if !email.1.is_some_and(|at| at.elapsed() < RECHECK) {
+            email.1 = Some(Instant::now());
+            tokio::spawn(check_methods(sink.clone()));
+        }
     }
+    let email_off = email().0 == Some(false);
     let memory = memory();
     DrayAccountState {
         user: held.map(|h| h.user),
         signing_in: memory.pending.as_ref().map(|p| p.method),
         finishing: memory.pending.as_ref().is_some_and(|p| p.finishing),
         error: memory.error.clone(),
+        email_off,
+    }
+}
+
+/// Asks the site which ways in are open, so its `EMAIL_SIGN_IN` switch
+/// reaches a released app. Any failure keeps the last answer.
+async fn check_methods(sink: Sink) {
+    let site = crate::org_link::site();
+    let Ok(answer) = crate::http().get(format!("{site}/api/app/sign-in-methods")).timeout(TIMEOUT).send().await else {
+        return;
+    };
+    if !answer.status().is_success() {
+        return;
+    }
+    let Ok(body) = answer.json::<Value>().await else { return };
+    let Some(open) = body["email"].as_bool() else { return };
+    let changed = email().0.replace(open) != Some(open);
+    if changed {
+        let _ = sink.emit(CHANGED, ());
     }
 }
 
