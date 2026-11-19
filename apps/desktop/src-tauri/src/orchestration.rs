@@ -2560,16 +2560,13 @@ async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
         Some(f) if f.bot_id.is_some() => stamp_bot_message(f, &bot, &send.prompt, send.ask, app).await?,
         // A task or a routine run asking: no exchange to guard, and the answer
         // goes back to the session itself.
-        Some(f) if send.ask => {
-            f.ask = Some(true);
-            if f.routine == Some(true) {
-                // Its turn ending is not the run ending: the answer is coming.
-                crate::routines::asked(&f.session_id);
-            }
-        }
+        Some(f) if send.ask => f.ask = Some(true),
         None if send.ask => bail!("--ask needs a session to pass the answer back to: run it from one"),
         _ => {}
     }
+    // A run's turn ending is not the run ending while an answer is coming. Marked
+    // once the question is sent: a failed send leaves nothing to wait on.
+    let waiting_run = from.as_ref().filter(|f| f.ask == Some(true) && f.routine == Some(true)).map(|f| f.session_id.clone());
     // Held from the lookup until a new chat is on the index, or two first
     // messages would each start an agent in the one folder.
     let lock = bots::first_chat_lock(&bot.id);
@@ -2585,6 +2582,9 @@ async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
         // a question it waits on (`asked` is for `dray session send` alone).
         let send = SendMessage { session_id: chat.session_id, prompt: send.prompt, from_session_id: send.from_session_id };
         let queued = matches!(send_message(send, from, app).await?, Response::Sent { queued: true });
+        if let Some(run) = waiting_run {
+            crate::routines::asked(&run);
+        }
         return Ok(Response::BotSent { bot: bots::summary(bot).await, queued });
     }
 
@@ -2612,6 +2612,9 @@ async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
         .await?;
     let item = outcome.snapshot.map(|s| s.index_item).context("the bot's chat started but returned no index entry")?;
     app.emit(SESSION_CREATED, &item).ok();
+    if let Some(run) = waiting_run {
+        crate::routines::asked(&run);
+    }
     Ok(Response::BotSent { bot: bots::summary(bot).await, queued: false })
 }
 
