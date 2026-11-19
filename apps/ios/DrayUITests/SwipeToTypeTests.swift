@@ -78,10 +78,9 @@ final class SwipeToTypeTests: XCTestCase {
 
         XCTAssertTrue(row("Ops").waitForExistence(timeout: 20), "no bot row")
         XCTAssertTrue(orb.waitForExistence(timeout: 15), "no orb on the list")
-        sleep(1)
-        XCTAssertTrue(hint.exists, "no hint over the orb before any swipe")
         snap(app, "list-hint")
-        opensKeyboard("list", swipeOnOrb)
+        // The list's two swipes leave the hint up for the bot's chat, and the bot's first takes it down.
+        chat("list", hinted: true)
 
         row("Ops").tap()
         chat("bot", hinted: true)
