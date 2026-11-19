@@ -123,7 +123,9 @@ Your phone, or another Mac, can reach every server on this Mac's list through th
 
 A public link lets anyone open one of your session's dev servers in their browser, such as a preview of the site your agent is building. The link is made on the machine the dev server runs on, so a link from a remote server keeps working with your Mac asleep.
 
-**Where:** the Browser tab's start page, the page you see with no website open. Under **Running locally** (or **Running on** a server's name) it lists the dev servers your session can reach. Click one to open it in Dray's browser, which needs no public link, on a server added by SSH or by address alike.
+**Where:** the Browser tab's start page, the page you see with no website open. Under **Running locally** (or **Running on** a server's name) it lists the dev servers your session can reach. A bot's new tab lists its tasks' dev servers as well, each group headed by the task's name. Click one to open it in Dray's browser, which needs no public link, on a server added by SSH or by address alike.
+
+When a dev server stops answering, that tab shows a heading like **Nothing is answering on localhost:3000** instead of the browser's own error. It names the task that ran it, the machine, and how long ago it stopped. **Ask the task to restart it** — or **Ask the agent to restart it**, in that session's own browser — sends a prompt to start it again, and the button then reads **Asked**. **Retry** reloads the page. If the server starts answering, the page reloads on its own.
 
 1. Press **Get public link** beside a server. The first link on a machine sets up its tunnel first ("Setting up tunnel…"), then "Creating link…".
 2. The link appears under that server. Click it to open it in Dray's browser, or `⌘`-click to open it in your default browser. **Copy link** copies it.
@@ -167,4 +169,5 @@ A server older than this feature cannot be updated from the app. The app says so
 - Remote access works only while the Mac is awake.
 - The token gives full access. There are no read-only or per-project tokens.
 - Public links have no password and no expiry of their own.
+- A bot's new tab lists dev servers from its twelve newest tasks.
 - There is no browser version and no phone app.

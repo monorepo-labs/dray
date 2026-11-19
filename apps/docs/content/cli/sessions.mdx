@@ -131,7 +131,7 @@ dray session unset-aside <id>
 
 Both work on a session whose machine is offline, where this machine knows which one holds it: a task a bot started there, or one named with `--machine`. The change waits here and lands when the machine answers.
 
-These are the same as the sidebar's buttons. Settling a session also settles the hidden sessions it started.
+Settling a session also settles the hidden sessions it started, except a bot's task: those sub-tasks keep running and report to the nearest task or bot still open. See [Bots](/cli/orchestration#bots). The sidebar's **Settle** on a bot's task also deletes its worktree. This command keeps it unless you pass `--delete-worktree`. See [Worktrees](/using-dray/worktrees#bot-tasks).
 
 ## Merge card
 
@@ -145,7 +145,7 @@ Dray also posts the card on its own, once per pull request, in the chat of the s
 
 The task can run on another machine, such as a sandbox of its own. The card then reads and merges the pull request through the GitHub CLI on the chat's machine, so it keeps working after that machine is gone.
 
-In a bot's chat, Merge also settles the task and deletes its worktree when that holds nothing the merge did not take. In any other chat it only merges. The card shrinks to one line once the PR is merged, or after you have sent three more messages.
+In a bot's chat, Merge also settles the task and deletes its worktree without asking, whatever the tree still holds. In any other chat it only merges. See [Worktrees](/using-dray/worktrees#bot-tasks). The card shrinks to one line once the PR is merged, or after you have sent three more messages.
 
 ## Need line
 
@@ -164,14 +164,16 @@ A task whose pull request is ready to merge gets a line only when it asked you t
 dray session react 👀
 ```
 
-Run by a bot when your message needs no words back. It puts one emoji on your newest message in the bot's chat, as a badge on the bubble, and the bot ends its turn without replying:
+Run by a bot when your message needs no words back. It puts one emoji on your newest message in the bot's chat, as a badge on the bubble, and the bot ends its turn without replying.
+
+A bot uses 👍 for an ok or a go-ahead, and 👀 only when it is looking into something. It does not react just to say it started or messaged a task: the chat already shows that row.
 
 | Emoji | Word | Means |
 |---|---|---|
-| 👀 | `seen` | seen, on it |
+| 👀 | `seen` | looking into it |
 | ✅ | `done` | done |
 | 🎉 | `celebrate` | good news |
-| 👍 | `like` | ok, agreed |
+| 👍 | `like` | ok, go-ahead |
 | ❤️ | `love` | thanks |
 | 😂 | `laugh` | funny |
 | 😢 | `sad` | sorry to hear |

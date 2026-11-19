@@ -45,9 +45,9 @@ A new worktree starts from your remote's default branch, `origin/main` or whatev
 
 ## Delete a worktree
 
-Nothing deletes worktrees on its own, so Dray offers to whenever you are done with one. There are three ways.
+For a session you started yourself, nothing deletes the worktree on its own. Dray offers to whenever you are done with one. There are three ways.
 
-**When you settle the session.** Settling a worktree session raises a card: **Delete worktree?**, with a line saying what would be lost. Click **Delete**, or press `⌘⇧D`. If you do nothing, the card times out and the worktree stays.
+**When you settle the session.** Settling a worktree session you started yourself raises a card: **Delete worktree?**, with a line saying what would be lost. Click **Delete**, or press `⌘⇧D`. If you do nothing, the card times out and the worktree stays.
 
 **From the settled session.** Open a settled worktree session. Its composer is replaced by a bar with **Delete worktree** and **Unsettle**. **Delete worktree** asks first:
 
@@ -57,6 +57,10 @@ Nothing deletes worktrees on its own, so Dray offers to whenever you are done wi
 **By deleting the session.** Deleting a session from the sidebar takes its worktree with it, with no second question.
 
 "On no other branch" means the commits are not reachable from any other local branch, remote branch or tag. A branch whose pull request was squash-merged still counts as unpushed, so the warning can show when the work is in fact safe.
+
+### Bot tasks
+
+In the app, settling a task a bot started, or merging its pull request from the bot's chat or its **Tasks** tab, deletes the worktree without asking. Files the merge did not take go too. `dray session settle` keeps the worktree unless you pass `--delete-worktree`, which deletes it the same way. If the delete fails, Dray says **Worktree cleanup failed** and names the reason. Sessions that task started keep running, and keep their own worktrees. See [Bots](/cli/orchestration#bots).
 
 ### When Dray refuses
 

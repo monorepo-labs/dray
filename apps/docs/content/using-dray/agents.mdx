@@ -57,7 +57,7 @@ Anthropic's agent, and the one Dray supports most fully.
 
 Limits:
 
-- An effort change waits while a background task the agent started (a dev server, a watcher) is still running, and nothing says so. Stop the task first: open the right panel (`⌘E`), pick **More**, and stop it, or press **Stop all**.
+- An effort change waits while a background task the agent started (a dev server, a watcher) is still running, and nothing says so. Stop the task first: open the right panel (`⌘E`), pick **More**, and stop it with the square on its row, or **Stop all** when that section has it.
 - A command, skill or plugin you add while Dray runs appears in the `/` picker only after you quit with **Quit completely** and open Dray again.
 
 ## Codex
@@ -99,6 +99,7 @@ Vercel's agent, from [fx.sh](https://fx.sh). It runs models through one of three
 - **Fast mode** is a switch on the models that offer it, and it can change on a running session. On the AI Gateway the separate "fast" model ids are hidden; the switch is how you reach them.
 - **Effort** is per model. If fx refuses a level, the turn still runs without it and the transcript says which levels the model takes.
 - **Prompts sent during a turn** wait and go together as one turn when it ends, each in its own bubble. **Now** under the last one, or `⌘⏎`, stops the turn and sends them at once. `Esc` takes the newest back into the composer.
+- **A failed request.** While fx retries, the transcript shows fx's own line and counts down to the next try, like "Gateway error · next try in 3s · attempt 3".
 - **Skills.** `/` lists skills from the same folders fx reads: `.fx/skills`, `skills`, `.opencode/skills`, `.codex/skills`, `.claude/skills`, `.agents/skills` and `.claw/skills` in the project, and `~/.fx/skills`, `~/.config/opencode/skills`, `~/.codex/skills`, `~/.claude/skills`, `~/.agents/skills` and `~/.claw/skills` at home. A skill is a folder holding a `SKILL.md`.
 - **MCP servers.** Under Dray, fx does not read your MCP servers itself, so Dray passes it every server in `~/.fx/mcp.json` (the file `fx mcp add` writes). For a server that needs a token, set `bearer_token_env` in that file to an environment variable holding it, and export the variable in your shell profile, like `~/.zprofile`. Dray does not pass a server you signed in to with `fx mcp auth`, a server that fails to start, or servers from a project's own `.mcp.json`.
 - **Session titles.** Dray names fx sessions itself, and turns off fx's own titles in `~/.fx/settings.json` to avoid a delay after the first turn. That applies to fx in your terminal too.
@@ -108,7 +109,7 @@ Limits:
 - Images you attach are not sent.
 - The provider and the permission mode are fx's global settings, shared with your terminal.
 - fx shortens what a tool returns, so a long result shows only its start.
-- A subagent fx starts has no stop button. Stop the whole turn instead.
+- A subagent that fx starts has no stop button. Stop the whole turn instead. Click one that fx gave its own name to open its conversation as a tab. One with no name of its own stays in **More**.
 - Dray adds its own instructions to the first prompt of each new fx session. They are not shown in the transcript.
 
 ## Grok Build
