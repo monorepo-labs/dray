@@ -63,9 +63,6 @@ export const drayTables = {
           references: { model: "user", field: "id", onDelete: "cascade" },
         },
         denied: { type: "boolean", required: true, defaultValue: false },
-        // Asked by the app's own sign-in: approving also signs the approver
-        // in to the app, and the server's claim collects an `app_session`.
-        signIn: { type: "boolean", required: false, defaultValue: false },
       },
     },
     // A desktop app signed in to an account. Its own credential, hashed,

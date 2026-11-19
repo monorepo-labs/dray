@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { GoogleButton } from "@/components/account/GoogleButton";
+import { SignInMethods } from "@/components/account/SignInMethods";
 import { H1, LEAD, PAGE } from "@/components/account/styles";
 import { SiteNav } from "@/components/home/SiteNav";
 import { auth } from "@/lib/auth";
@@ -15,14 +15,18 @@ function safeNext(next: string | string[] | undefined): string {
   return typeof next === "string" && /^\/(?![/\\])/.test(next) ? next : "/app";
 }
 
-/// Sign in to Dray with Google. A reader already signed in goes straight on.
+/// Sign in to Dray with GitHub, Google or email. A reader already signed in
+/// goes straight on; `via` is the method the desktop app picked.
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ next?: string | string[] }>;
+  searchParams: Promise<{ next?: string | string[]; via?: string | string[] }>;
 }) {
-  const next = safeNext((await searchParams).next);
+  const params = await searchParams;
+  const next = safeNext(params.next);
   if (await auth.api.getSession({ headers: await headers() })) redirect(next);
+  const via = typeof params.via === "string" ? params.via : null;
+  const fromApp = next.startsWith("/api/app/authorize");
 
   return (
     <div data-home className={PAGE}>
@@ -31,9 +35,13 @@ export default async function LoginPage({
           <SiteNav bare />
           <div className="lg:ml-[102px] lg:max-w-[756px]">
             <h1 className={H1}>Sign in to Dray.</h1>
-            <p className={LEAD}>Your account holds your orgs and the servers linked to them.</p>
+            <p className={LEAD}>
+              {fromApp
+                ? "Then you're sent straight back to the app."
+                : "Your account holds your orgs and the servers linked to them."}
+            </p>
             <div className="mt-10">
-              <GoogleButton next={next} />
+              <SignInMethods next={next} via={via} github={Boolean(process.env.GITHUB_CLIENT_ID)} />
             </div>
           </div>
         </div>

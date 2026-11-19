@@ -20,7 +20,7 @@
 
 ## Account
 
-**The Dray account the app is signed in to** ([AccountSettings.tsx](../src/components/settings/AccountSettings.tsx)): avatar, name, @username and Sign out, or Sign in. Sign in is This machine's org link with the app's sign-in riding it, so one page at drayhq.com does both; see CLAUDE.md's accounts paragraph. Sign out asks in the row and leaves the machine linked. The Servers tab draws each row's link through [useOrgLink](../src/hooks/useOrgLink.ts): the org in the detail line, Link on an unlinked row (This Mac's only while signed in, since signing in is what links it), Cancel while a code waits, Unlink in ⋯.
+**The Dray account the app is signed in to** ([AccountSettings.tsx](../src/components/settings/AccountSettings.tsx)): avatar, name, @username and Sign out. Signing in happens on the gate before the app opens; see CLAUDE.md's sign-in paragraph. Sign out asks in the row, leaves the machine linked, and lands on the gate. "Not signed in" shows only after Skip for now offline. The Servers tab draws each row's link through [useOrgLink](../src/hooks/useOrgLink.ts): the org in the detail line, Link on an unlinked row, Cancel while a code waits, Unlink in ⋯.
 
 ## Agents
 

@@ -50,19 +50,15 @@ export function useOrgLink(server: ServerId, connected: boolean) {
   const [error, setError] = useState<string | null>(null);
 
   /// Starts the server's flow and opens the approve page with the code in it.
-  /// `signIn` is the app's own Sign in, This Mac's alone.
-  const start = useCallback(
-    async (signIn = false) => {
-      setError(null);
-      try {
-        const pending = await invoke<{ url: string }>("org_link_start", signIn ? { signIn } : {}, server);
-        await openUrl(pending.url);
-      } catch (e) {
-        setError(String(e));
-      }
-    },
-    [server],
-  );
+  const start = useCallback(async () => {
+    setError(null);
+    try {
+      const pending = await invoke<{ url: string }>("org_link_start", {}, server);
+      await openUrl(pending.url);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [server]);
   const cancel = useCallback(() => void invoke("org_link_cancel", {}, server).catch((e) => setError(String(e))), [server]);
   const unlink = useCallback(async () => {
     setError(null);
@@ -78,7 +74,7 @@ export function useOrgLink(server: ServerId, connected: boolean) {
 }
 
 /// Who the app on this machine is signed in to drayhq.com as. The local
-/// server holds it, since its link flow is what signs the app in.
+/// server holds it, since the browser sign-in comes back to it.
 export function useDrayAccount(connected: boolean) {
   return useServerState<DrayAccountState>(LOCAL, connected, "account_state", "account_changed");
 }

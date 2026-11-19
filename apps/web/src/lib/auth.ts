@@ -1,9 +1,11 @@
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
+import { emailOTP } from "better-auth/plugins/email-otp";
 import { organization } from "better-auth/plugins/organization";
 
 import { pool } from "./db";
+import { sendMail } from "./mail";
 import { drayTables } from "./schema";
 import { slugify, slugProblem, usernameFrom, usernameProblem } from "./slug";
 
@@ -12,7 +14,15 @@ function checkSlug(slug: string | undefined) {
   if (problem) throw new APIError("BAD_REQUEST", { message: problem });
 }
 
-/// Better Auth for drayhq.com: Google sign-in, orgs and their members.
+const OTP_SUBJECT = {
+  "email-verification": "Your Dray sign-up code",
+  "forget-password": "Your Dray password reset code",
+  "sign-in": "Your Dray sign-in code",
+  "change-email": "Your Dray email change code",
+} as const;
+
+/// Better Auth for drayhq.com: GitHub, Google, and email with a password
+/// whose address is proved by an emailed code; orgs and their members.
 /// `nextCookies` lets a server action that signs in or out set its cookie.
 export const auth = betterAuth({
   database: pool,
@@ -23,12 +33,21 @@ export const auth = betterAuth({
       username: { type: "string", required: false, unique: true, input: false },
     },
   },
+  // Verified before it can sign in, so an address someone merely typed is
+  // never merged into the Google or GitHub account that really owns it.
+  emailAndPassword: { enabled: true, requireEmailVerification: true, minPasswordLength: 8 },
+  emailVerification: { sendOnSignIn: true, autoSignInAfterVerification: true },
+  account: { accountLinking: { enabled: true, trustedProviders: ["google", "github"] } },
   socialProviders: {
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
       prompt: "select_account",
     },
+    // Only where its OAuth app is configured, so a site without keys still starts.
+    ...(process.env.GITHUB_CLIENT_ID && {
+      github: { clientId: process.env.GITHUB_CLIENT_ID, clientSecret: process.env.GITHUB_CLIENT_SECRET! },
+    }),
   },
   databaseHooks: {
     user: {
@@ -56,6 +75,16 @@ export const auth = betterAuth({
             throw new APIError("BAD_REQUEST", { message: "You can't delete your only org." });
         },
       },
+    }),
+    emailOTP({
+      overrideDefaultEmailVerification: true,
+      sendVerificationOnSignUp: true,
+      sendVerificationOTP: ({ email, otp, type }) =>
+        sendMail({
+          to: email,
+          subject: OTP_SUBJECT[type],
+          text: `Your code is ${otp}. It works for 5 minutes.\n\nIf you didn't ask for it, you can ignore this email.`,
+        }),
     }),
     drayTables,
     nextCookies(),

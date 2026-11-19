@@ -831,14 +831,23 @@ error: string | null,
  */
 cancelled: boolean, };
 
-export type DrayAccountState = { user: DrayUser | null, };
+export type DrayAccountState = { user: DrayUser | null, 
+/**
+ * A browser sign-in started and not yet back.
+ */
+signingIn: SignInMethod | null, 
+/**
+ * Why the last sign-in ended without signing in: `cancelled`,
+ * `timed_out`, `offline`, or a sentence for anything else.
+ */
+error: string | null, };
 
 /**
  * The account, as the site describes it.
  */
 export type DrayUser = { id: string, name: string, username: string | null, 
 /**
- * The Google picture, where the account has one.
+ * The Google or GitHub picture, where the account has one.
  */
 image: string | null, };
 
@@ -1536,11 +1545,7 @@ shortUrl: string,
 /**
  * `ABCD-EFGH`.
  */
-code: string, expiresInSecs: number, 
-/**
- * Started by the app's Sign in, which approving also signs in.
- */
-signIn: boolean, };
+code: string, expiresInSecs: number, };
 
 export type PermissionBehavior = "allow" | "deny";
 
@@ -2367,6 +2372,16 @@ export type Settings = { model: string | null,
  * onto these, gaining variants if it turns out to need them.
  */
 approvalPolicy: PermissionMode | null, sandbox: string | null, writableRoots: Array<string>, networkAccess: boolean | null, fastMode: string | null, };
+
+/**
+ * How the reader chose to sign in, passed through to the site.
+ */
+export type SignInMethod = "github" | "google" | "email";
+
+/**
+ * What [`start`] answers: the page the app opens in the browser.
+ */
+export type SignInStarted = { url: string, };
 
 /**
  * One command the user may type. `name` carries no leading slash — the picker
