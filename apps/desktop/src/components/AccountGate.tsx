@@ -145,7 +145,7 @@ export default function AccountGate({ children }: { children: ReactNode }) {
   if (signedIn || skipped || (!account && !failed && remembered)) return <>{children}</>;
 
   let view: GateView | null = null;
-  if (account?.signingIn) view = { kind: "waiting", method: account.signingIn };
+  if (account?.signingIn) view = { kind: "waiting", method: account.signingIn, finishing: account.finishing };
   else if (account || failed) {
     const error = account?.error ?? null;
     view = {

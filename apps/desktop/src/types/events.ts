@@ -837,6 +837,11 @@ export type DrayAccountState = { user: DrayUser | null,
  */
 signingIn: SignInMethod | null, 
 /**
+ * The browser is back and its code is being traded: too late to cancel,
+ * since the trade re-keys this machine's link on the site.
+ */
+finishing: boolean, 
+/**
  * Why the last sign-in ended without signing in: `cancelled`,
  * `timed_out`, `offline`, or a sentence for anything else.
  */

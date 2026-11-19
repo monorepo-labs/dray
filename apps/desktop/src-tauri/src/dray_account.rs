@@ -68,6 +68,9 @@ pub struct DrayAccountState {
     pub user: Option<DrayUser>,
     /// A browser sign-in started and not yet back.
     pub signing_in: Option<SignInMethod>,
+    /// The browser is back and its code is being traded: too late to cancel,
+    /// since the trade re-keys this machine's link on the site.
+    pub finishing: bool,
     /// Why the last sign-in ended without signing in: `cancelled`,
     /// `timed_out`, `offline`, or a sentence for anything else.
     pub error: Option<String>,
@@ -90,6 +93,7 @@ pub(crate) struct Held {
     pub user: DrayUser,
 }
 
+#[derive(Clone)]
 struct Pending {
     state: String,
     verifier: String,
@@ -97,6 +101,11 @@ struct Pending {
     site: String,
     /// Tells the timeout it has been replaced or finished.
     generation: u64,
+    /// The browser came back and the code is being traded. Neither Cancel
+    /// nor a new sign-in may replace it then: the site has re-keyed this
+    /// machine's link by the time it answers, so dropping the answer would
+    /// strand the link, and a second trade would race the first.
+    finishing: bool,
 }
 
 #[derive(Default)]
@@ -192,6 +201,7 @@ pub async fn state(sink: &Sink) -> DrayAccountState {
     DrayAccountState {
         user: held.map(|h| h.user),
         signing_in: memory.pending.as_ref().map(|p| p.method),
+        finishing: memory.pending.as_ref().is_some_and(|p| p.finishing),
         error: memory.error.clone(),
     }
 }
@@ -240,10 +250,13 @@ fn random() -> String {
     format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
 }
 
-/// Starts a browser sign-in with `method`, replacing any still in flight,
-/// and answers the page to open. An unreachable site ends it at once as
-/// `offline`, so the reader isn't sent to a browser that can't load.
+/// Starts a browser sign-in with `method`, replacing any still waiting on
+/// the browser, and answers the page to open. An unreachable site ends it at
+/// once as `offline`, so the reader isn't sent to a browser that can't load.
 pub async fn start(sink: Sink, method: SignInMethod) -> Result<SignInStarted, String> {
+    if finishing() {
+        return Err("A sign-in is finishing.".into());
+    }
     let port = *PORT.get().ok_or("This server can't take a sign-in.")?;
     let site = crate::org_link::site();
     if !reachable().await {
@@ -270,7 +283,8 @@ pub async fn start(sink: Sink, method: SignInMethod) -> Result<SignInStarted, St
         let mut memory = memory();
         memory.generation += 1;
         memory.error = None;
-        memory.pending = Some(Pending { state, verifier, method, site, generation: memory.generation });
+        memory.pending =
+            Some(Pending { state, verifier, method, site, generation: memory.generation, finishing: false });
         memory.generation
     };
     let timer = sink.clone();
@@ -278,7 +292,7 @@ pub async fn start(sink: Sink, method: SignInMethod) -> Result<SignInStarted, St
         tokio::time::sleep(SIGN_IN_LIFE).await;
         let ended = {
             let mut memory = memory();
-            let ours = memory.pending.as_ref().is_some_and(|p| p.generation == generation);
+            let ours = memory.pending.as_ref().is_some_and(|p| p.generation == generation && !p.finishing);
             if ours {
                 memory.pending = None;
                 memory.error = Some("timed_out".into());
@@ -294,14 +308,22 @@ pub async fn start(sink: Sink, method: SignInMethod) -> Result<SignInStarted, St
 }
 
 /// Stops waiting on the browser. A code it sends back later finds nothing
-/// to match and is turned away.
+/// to match and is turned away. Too late once the code is being traded,
+/// which the gate says by offering no Cancel then.
 pub async fn cancel(sink: Sink) {
     {
         let mut memory = memory();
+        if memory.pending.as_ref().is_some_and(|p| p.finishing) {
+            return;
+        }
         memory.pending = None;
         memory.error = None;
     }
     let _ = sink.emit(CHANGED, ());
+}
+
+fn finishing() -> bool {
+    memory().pending.as_ref().is_some_and(|p| p.finishing)
 }
 
 /// `GET /auth/callback?code=…&state=…`, or `?error=…&state=…`: the browser
@@ -317,17 +339,22 @@ pub async fn callback(sink: &Sink, query: &str) -> (u16, String) {
             _ => {}
         }
     }
-    // Taken, not read: a second visit to the same address finds nothing.
+    // Marked, not read: a second visit to the same address finds it
+    // finishing and is turned away, and so are Cancel and a new start.
     let pending = {
         let mut memory = memory();
-        match memory.pending.as_ref() {
-            Some(p) if state.as_deref() == Some(p.state.as_str()) => memory.pending.take(),
+        match memory.pending.as_mut() {
+            Some(p) if !p.finishing && state.as_deref() == Some(p.state.as_str()) => {
+                p.finishing = true;
+                Some(p.clone())
+            }
             _ => None,
         }
     };
     let Some(pending) = pending else {
         return (400, page("This sign-in has ended", "Go back to Dray and start again.", true));
     };
+    let _ = sink.emit(CHANGED, ());
     let finished = match (error, code) {
         (Some(_), _) => Err("cancelled".to_string()),
         (None, Some(code)) => finish(sink, &pending, &code).await,
@@ -338,7 +365,11 @@ pub async fn callback(sink: &Sink, query: &str) -> (u16, String) {
         Err(why) if why == "cancelled" => (200, page("Sign-in was cancelled", "Go back to Dray to try again.", true)),
         Err(why) => (502, page("Couldn't finish signing in", why, true)),
     };
-    memory().error = finished.err();
+    {
+        let mut memory = memory();
+        memory.pending = None;
+        memory.error = finished.err();
+    }
     let _ = sink.emit(CHANGED, ());
     reply
 }
@@ -452,5 +483,25 @@ mod tests {
         let (status, body) = callback(&sink, "code=c&state=nobody").await;
         assert_eq!(status, 400);
         assert!(body.contains("This sign-in has ended"));
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_being_traded_survives_cancel_start_and_a_second_visit() {
+        let sink = Sink::new(|_, _| {});
+        memory().pending = Some(Pending {
+            state: "traded".into(),
+            verifier: "v".into(),
+            method: SignInMethod::Email,
+            site: "http://site.invalid".into(),
+            generation: 0,
+            finishing: true,
+        });
+        cancel(sink.clone()).await;
+        assert!(finishing());
+        assert!(start(sink.clone(), SignInMethod::Github).await.is_err());
+        let (status, _) = callback(&sink, "code=c&state=traded").await;
+        assert_eq!(status, 400);
+        assert!(finishing());
+        memory().pending = None;
     }
 }

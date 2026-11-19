@@ -4,10 +4,11 @@ import WindowControls from "@/components/layout/WindowControls";
 import type { SignInMethod } from "@/types/events";
 
 /// What the gate is showing. `revoked` is a saved sign-in the site turned
-/// away; `waiting` a browser sign-in in flight.
+/// away; `waiting` a browser sign-in in flight, `finishing` once the browser
+/// is back and it can no longer be cancelled.
 export type GateView =
   | { kind: "choose"; revoked: boolean; error: string | null; offline: boolean }
-  | { kind: "waiting"; method: SignInMethod };
+  | { kind: "waiting"; method: SignInMethod; finishing: boolean };
 
 const METHOD: Record<SignInMethod, string> = { github: "GitHub", google: "Google", email: "email" };
 
@@ -50,11 +51,13 @@ function body(
     return (
       <>
         <Label>Signing in with {METHOD[view.method]}</Label>
-        <Heading>Finish signing in in your browser.</Heading>
+        <Heading>{view.finishing ? "Finishing sign-in." : "Finish signing in in your browser."}</Heading>
         <Cards>
-          <Card icon={<Spinner />} label="Waiting for your browser" />
-          <Card icon={<OpenIcon />} label="Open again" onClick={act.onOpenAgain} />
-          <Card icon={<CloseIcon />} label="Cancel" onClick={act.onCancel} />
+          <Card icon={<Spinner />} label={view.finishing ? "Finishing sign-in" : "Waiting for your browser"} />
+          {/* Too late to cancel once the browser is back: the site is
+              already re-keying this machine's link. */}
+          <Card icon={<OpenIcon />} label="Open again" onClick={view.finishing ? undefined : act.onOpenAgain} dim={view.finishing} />
+          <Card icon={<CloseIcon />} label="Cancel" onClick={view.finishing ? undefined : act.onCancel} dim={view.finishing} />
         </Cards>
       </>
     );
@@ -105,8 +108,21 @@ function Cards({ children }: { children: ReactNode }) {
   return <div className="flex gap-[2px]">{children}</div>;
 }
 
-/// One card. Without `onClick` it only says something, like the waiting one.
-function Card({ icon, label, corner = false, onClick }: { icon: ReactNode; label: string; corner?: boolean; onClick?: () => void }) {
+/// One card. Without `onClick` it only says something, like the waiting one;
+/// `dim` greys out one that can't be used right now.
+function Card({
+  icon,
+  label,
+  corner = false,
+  dim = false,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  corner?: boolean;
+  dim?: boolean;
+  onClick?: () => void;
+}) {
   const inner = (
     <>
       <span className="flex items-start justify-between">
@@ -116,7 +132,7 @@ function Card({ icon, label, corner = false, onClick }: { icon: ReactNode; label
       <span className="text-[17px] leading-6 tracking-[-0.01em] text-white/80">{label}</span>
     </>
   );
-  const cls = "flex h-[220px] min-w-0 flex-1 basis-0 flex-col justify-between bg-[#1C1C1C] p-6 text-left";
+  const cls = `flex h-[220px] min-w-0 flex-1 basis-0 flex-col justify-between bg-[#1C1C1C] p-6 text-left ${dim ? "opacity-40" : ""}`;
   if (!onClick) return <div className={cls}>{inner}</div>;
   return (
     <button

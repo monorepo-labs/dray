@@ -1,9 +1,32 @@
 import { claimAppCode } from "@/lib/app-auth";
+import { createPersonalOrg } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { type AppUser, hashSecret, newSecret, userForAppToken } from "@/lib/link";
 
 function refuse(error: string, status = 400) {
   return Response.json({ error }, { status });
+}
+
+/// The oldest org this account owns or administers.
+async function managedOrg(userId: string): Promise<string | null> {
+  const { rows } = await pool.query<{ id: string }>(
+    `select m."organizationId" as id from member m
+      where m."userId" = $1 and (m.role like '%owner%' or m.role like '%admin%')
+      order by m."createdAt" limit 1`,
+    [userId],
+  );
+  return rows[0]?.id ?? null;
+}
+
+/// Makes the account a personal org, as sign-up does, and answers it.
+async function personalOrg(userId: string): Promise<string | null> {
+  const { rows } = await pool.query<{ id: string; name: string; email: string }>(
+    `select id, name, email from "user" where id = $1`,
+    [userId],
+  );
+  if (!rows[0]) return null;
+  await createPersonalOrg(rows[0]);
+  return managedOrg(userId);
 }
 
 /// The app's server trades the code `/api/app/authorize` sent back, with the
@@ -16,21 +39,15 @@ export async function POST(req: Request) {
   if (typeof body?.code !== "string" || typeof body.verifier !== "string") return refuse("invalid_request");
   const claim = await claimAppCode(body.code, body.verifier);
   if (!claim) return refuse("invalid_grant");
+  // A machine joins an org its account runs. One that runs none, such as a
+  // team's plain member who deleted their own org, gets a personal one
+  // again, as at sign-up, rather than being kept out of the app.
+  const orgId = (await managedOrg(claim.userId)) ?? (await personalOrg(claim.userId));
+  if (!orgId) return refuse("no_org", 409);
 
   const db = await pool.connect();
   try {
     await db.query("begin");
-    const { rows: orgs } = await db.query<{ id: string }>(
-      `select m."organizationId" as id from member m
-        where m."userId" = $1 and (m.role like '%owner%' or m.role like '%admin%')
-        order by m."createdAt" limit 1`,
-      [claim.userId],
-    );
-    // Every account gets an org at sign-up, so none here is a fault.
-    if (!orgs[0]) {
-      await db.query("rollback");
-      return refuse("no_org", 409);
-    }
     const token = newSecret("drs_");
     const held =
       typeof body.held === "string"
@@ -60,7 +77,7 @@ export async function POST(req: Request) {
       await db.query(
         `update server set "organizationId" = $2, "tokenHash" = $3, "linkedBy" = $4, "linkedAt" = now(), name = $5
           where id = $1`,
-        [serverId, orgs[0].id, hashSecret(token), claim.userId, claim.name],
+        [serverId, orgId, hashSecret(token), claim.userId, claim.name],
       );
       await db.query(`delete from server_access where "serverId" = $1`, [serverId]);
     } else {
@@ -68,7 +85,7 @@ export async function POST(req: Request) {
       await db.query(
         `insert into server (id, "organizationId", name, "linkedBy", "linkedAt", "tokenHash")
          values ($1, $2, $3, $4, now(), $5)`,
-        [serverId, orgs[0].id, claim.name, claim.userId, hashSecret(token)],
+        [serverId, orgId, claim.name, claim.userId, hashSecret(token)],
       );
     }
     await db.query(
