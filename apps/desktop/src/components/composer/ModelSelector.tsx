@@ -48,22 +48,6 @@ const EFFORT_LABELS: Record<Effort, string> = {
   max: "Max",
 };
 
-/// Next effort level for `model`, wrapping — what ⌘⇧E lands on. `null`
-/// where the model offers nothing to cycle, so the chord no-ops rather than
-/// inventing an effort the CLI would ignore.
-///
-/// `low` is left out of the cycle and stays pickable from the menu: a blind
-/// chord landing on it makes the model worse at the work, which is not
-/// something anyone reaches for a shortcut to do. An effort outside the
-/// remaining list — `low` itself included — enters at the start.
-export function nextEffort(model: Model | undefined, current: Effort | null): Effort | null {
-  const cycle: Effort[] = model?.efforts.filter((e) => e !== "low") ?? [];
-  if (cycle.length === 0) return null;
-  const from = current ?? model?.defaultEffort ?? null;
-  const i = from ? cycle.indexOf(from) : -1;
-  return cycle[(i + 1) % cycle.length];
-}
-
 /// fx's provider, as a segmented control of marks.
 ///
 /// fx's list is its *active provider's*, and the provider is a global fx

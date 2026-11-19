@@ -198,6 +198,21 @@ export function usableEffort(
   return model.efforts[model.efforts.length - 1];
 }
 
+/// Next effort level for `model`, wrapping — what ⌘⇧E lands on. `null` where
+/// the model offers nothing to cycle, so the chord no-ops rather than inventing
+/// an effort the CLI would ignore.
+///
+/// The model's whole ladder, Low included: leaving Low out made the chord skip a
+/// level every surface lists (#1274). A level outside the ladder enters at the
+/// start.
+export function nextEffort(model: Model | undefined, current: Effort | null): Effort | null {
+  const cycle = model?.efforts ?? [];
+  if (cycle.length === 0) return null;
+  const from = current ?? model?.defaultEffort ?? null;
+  const i = from ? cycle.indexOf(from) : -1;
+  return cycle[(i + 1) % cycle.length];
+}
+
 /// The agents in the order the picker draws them, which is also the order ⌘⇧A
 /// steps through. One list: a chord visiting a harness the row cannot show, or
 /// skipping one it can, reads as the chord being broken.

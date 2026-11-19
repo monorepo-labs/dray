@@ -257,7 +257,7 @@ mod tests {
     }
 
     /// The ladders and fast mode are per model, which is what the table could
-    /// not say: Opus 4.6 has no xhigh, Haiku 4.5 has no ladder at all, and
+    /// not say: Opus 4.6 has no xhigh, Haiku 5.5 takes all five and Haiku 4.5 none, and
     /// fast mode is Opus 5.5 and Opus 5 alone. The CLI still flags Opus 4.8,
     /// whose fast mode is retired.
     #[test]
@@ -266,6 +266,10 @@ mod tests {
         let row = |id: &str| models.iter().find(|m| m.id.as_str() == id).unwrap();
 
         assert_eq!(row("claude-opus-4-6").efforts, vec![Effort::Low, Effort::Medium, Effort::High, Effort::Max]);
+        assert_eq!(
+            row("haiku").efforts,
+            vec![Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh, Effort::Max]
+        );
         assert!(row("claude-haiku-4-5-20251001").efforts.is_empty());
         assert_eq!(row("claude-haiku-4-5-20251001").default_effort, None);
         assert_eq!(row("opus").default_effort, Some(Effort::High));

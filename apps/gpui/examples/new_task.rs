@@ -56,7 +56,7 @@ fn claude_models() -> Vec<Model> {
     vec![
         model("opus", "Opus 5.5", &[Low, Medium, High, Xhigh, Max], Some(High)),
         model("sonnet", "Sonnet 5.5", &[Low, Medium, High, Max], Some(Medium)),
-        model("haiku", "Haiku 5.5", &[], None),
+        model("haiku", "Haiku 5.5", &[Low, Medium, High, Xhigh, Max], Some(High)),
     ]
 }
 

@@ -34,7 +34,7 @@ const AGENTS: { id: string; label: string; Glyph: ComponentType<{ className?: st
     models: [
       { label: "Opus 5.5", efforts: CLAUDE_EFFORTS, effort: "High", fast: true },
       { label: "Sonnet 5.5", efforts: CLAUDE_EFFORTS, effort: "High" },
-      { label: "Haiku 5.5", efforts: [] },
+      { label: "Haiku 5.5", efforts: CLAUDE_EFFORTS, effort: "High" },
     ],
   },
   {

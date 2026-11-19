@@ -3,6 +3,7 @@ import {
   DEFAULT_MODEL_FOR,
   HARNESS_ORDER,
   isUnsetModel,
+  nextEffort,
   nextHarness,
   rememberedModel,
   UNSET_MODEL,
@@ -271,5 +272,32 @@ describe("usableEffort", () => {
   /// for a model that does no reasoning — and `null` is what hides the control.
   it("answers null for a model that takes no effort", () => {
     expect(usableEffort(withEfforts([]), "high", "high")).toBeNull();
+  });
+});
+
+describe("nextEffort", () => {
+  const withEfforts = (efforts: Effort[], defaultEffort: Effort | null = null): Model =>
+    ({ id: "haiku", label: "Haiku 5.5", efforts, defaultEffort }) as unknown as Model;
+  const HAIKU = withEfforts(["low", "medium", "high", "xhigh", "max"], "high");
+
+  /// #1274: the chord skipped Low, going Max → Medium.
+  it("walks the whole ladder, Low included", () => {
+    const seen: (Effort | null)[] = [];
+    let at: Effort | null = "high";
+    for (let i = 0; i < 5; i++) seen.push((at = nextEffort(HAIKU, at)));
+    expect(seen).toEqual(["xhigh", "max", "low", "medium", "high"]);
+  });
+
+  it("starts from the model's default when nothing is picked", () => {
+    expect(nextEffort(HAIKU, null)).toBe("xhigh");
+  });
+
+  it("enters a ladder at its start from a level it lacks", () => {
+    expect(nextEffort(withEfforts(["low", "medium", "high"]), "ultra")).toBe("low");
+  });
+
+  it("does nothing on a model with no ladder", () => {
+    expect(nextEffort(withEfforts([]), "high")).toBeNull();
+    expect(nextEffort(undefined, "high")).toBeNull();
   });
 });
