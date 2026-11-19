@@ -87,7 +87,12 @@ export async function readPreviews(sessionIds: string[]): Promise<Record<string,
 /// bots on its `live_state`, which covers a change made while it was down.
 export function listenForBots(): () => void {
   const changed = listen("bots_changed", ({ server }) => void refreshBots(server));
-  return () => void changed.then((off) => off());
+  // A greeting is worded from the signed-in account's name.
+  const account = listen("account_changed", ({ server }) => void refreshBots(server));
+  return () => {
+    void changed.then((off) => off());
+    void account.then((off) => off());
+  };
 }
 
 /// The bot `key` names, the way `dray bot send` reads it: its id, else its

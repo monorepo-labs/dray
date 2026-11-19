@@ -149,6 +149,13 @@ async fn path() -> Result<std::path::PathBuf, String> {
     Ok(store::get_home_app_dir().await.map_err(|e| format!("{e:#}"))?.join("account.json"))
 }
 
+/// Who this server is signed in as, from the file alone: no check with the
+/// site, so a bot's spawn never waits on the network for it.
+pub async fn signed_in_user() -> Option<DrayUser> {
+    let _file = FILE.lock().await;
+    read().await.map(|h| h.user)
+}
+
 async fn read() -> Option<Held> {
     serde_json::from_slice(&tokio::fs::read(path().await.ok()?).await.ok()?).ok()
 }

@@ -104,9 +104,10 @@ pub async fn list_bots() -> Result<Vec<Bot>, Fail> {
         eprintln!("[dray bot] {e:#}");
     }
     let mut bots = read_list().await?;
-    let user = user_name().await;
     for bot in &mut bots {
-        bot.greeting = greeting(bot, user.as_deref());
+        if bot.welcome.is_some() {
+            bot.greeting = greeting(bot, &name_for(bot).await);
+        }
     }
     Ok(bots)
 }
@@ -139,16 +140,85 @@ I can start and keep track of work across your projects."
 /// The second message of a bot's first greeting while no bot knows the user's name.
 pub const ASK_NAME: &str = "What should I call you?";
 
+/// What a bot may call the user, best source first (#1313).
+#[derive(Debug, Clone, PartialEq)]
+pub enum UserName {
+    /// Told to a bot, written in its [`USER_FILE`], or a real name off the account.
+    Known(String),
+    /// The account's name reads as a handle or email prefix: offered back to
+    /// confirm, never used unasked.
+    Handle(String),
+    Unknown,
+}
+
+impl UserName {
+    pub fn known(&self) -> Option<&str> {
+        match self {
+            Self::Known(name) => Some(name),
+            _ => None,
+        }
+    }
+
+    /// The message of its own Dray posts after a bot's first greeting, while
+    /// the name is not known.
+    pub fn question(&self) -> Option<String> {
+        match self {
+            Self::Known(_) => None,
+            Self::Handle(handle) => Some(format!("Should I call you {handle}, or something else?")),
+            Self::Unknown => Some(ASK_NAME.to_string()),
+        }
+    }
+}
+
+/// What the signed-in account's name gives the bots. GitHub falls back to the
+/// login where a profile has no name, and email sign-up names the account
+/// after the address's local part, so a name only counts as real where it
+/// reads like one: a capitalised word of letters, not the username.
+fn account_name(user: &crate::dray_account::DrayUser) -> UserName {
+    let Some(name) = clean_name(user.name.split('@').next().unwrap_or_default()) else {
+        return UserName::Unknown;
+    };
+    let first = name.split_whitespace().next().unwrap_or_default();
+    let joiner = |c: char| matches!(c, '-' | '\'' | '’');
+    let lead = first.chars().next().unwrap_or_default();
+    // An uncased script (CJK and the like) has no capital to look for.
+    let capital = lead.is_uppercase() || (lead.is_alphabetic() && !lead.is_lowercase());
+    // A capital mid-word reads as a handle ("YogeshArc"); after a hyphen it is a name ("Anne-Marie").
+    let lettered = first
+        .chars()
+        .zip(first.chars().skip(1))
+        .all(|(before, c)| joiner(c) || (c.is_alphabetic() && (!c.is_uppercase() || joiner(before))));
+    let handle = user.username.as_deref().is_some_and(|u| u.eq_ignore_ascii_case(&name));
+    if capital && lettered && !handle && !user.name.contains('@') {
+        UserName::Known(first.to_string())
+    } else {
+        UserName::Handle(name)
+    }
+}
+
+/// What `bot` may call the user: a name told to any bot wins, then one in its
+/// own [`USER_FILE`], then the signed-in account's.
+pub async fn name_for(bot: &Bot) -> UserName {
+    if let Some(told) = user_name().await {
+        return UserName::Known(told);
+    }
+    if let Some(written) = clean_name(&read_file(&Path::new(&bot.path).join(USER_FILE)).await) {
+        return UserName::Known(written);
+    }
+    match crate::dray_account::signed_in_user().await {
+        Some(user) => account_name(&user),
+        None => UserName::Unknown,
+    }
+}
+
 /// What a bot with a welcome opens on. The stored welcome only marks one:
 /// the words are rebuilt, so the names in them are today's.
-fn greeting(bot: &Bot, user: Option<&str>) -> Vec<String> {
+fn greeting(bot: &Bot, user: &UserName) -> Vec<String> {
     if bot.welcome.is_none() {
         return Vec::new();
     }
-    let mut messages = vec![welcome_text(&bot.name, user)];
-    if user.is_none() {
-        messages.push(ASK_NAME.to_string());
-    }
+    let mut messages = vec![welcome_text(&bot.name, user.known())];
+    messages.extend(user.question());
     messages
 }
 
@@ -162,7 +232,7 @@ async fn user_name_path() -> Result<PathBuf> {
 }
 
 /// The name the user asked the bots to call them, once one was told. Never
-/// guessed from git or the account: the user is asked instead (#1076).
+/// guessed from git (#1076); the account's name is [`name_for`]'s fallback.
 pub async fn user_name() -> Option<String> {
     let text = tokio::fs::read_to_string(user_name_path().await.ok()?).await.ok()?;
     clean_name(&text)
@@ -198,8 +268,17 @@ async fn learn_user_name(bot: &Bot, commit: &str, sink: &Sink) {
     // name saved could differ from the one their notes carry.
     static USER_NAME_LOCK: Mutex<()> = Mutex::const_new(());
     let _guard = USER_NAME_LOCK.lock().await;
-    if user_name().await.as_deref() == Some(name.as_str()) {
+    let told = user_name().await;
+    if told.as_deref() == Some(name.as_str()) {
         return;
+    }
+    // The account's own name, as Dray wrote it there: nothing was told, and
+    // noting it to every bot would say the user asked for it.
+    if told.is_none() {
+        let account = crate::dray_account::signed_in_user().await.map(|u| account_name(&u));
+        if account.as_ref().and_then(UserName::known) == Some(name.as_str()) {
+            return;
+        }
     }
     let written = match user_name_path().await {
         Ok(path) => write_atomic(&path, &name).await,
@@ -255,7 +334,7 @@ static WELCOMES: std::sync::Mutex<Vec<(String, Vec<String>)>> = std::sync::Mutex
 /// words ahead of the first prompt: it never wrote them, and the user's first
 /// message may be the answer to its "What should I call you?".
 async fn mark_welcome(session_id: &str, bot: &Bot) {
-    let messages = greeting(bot, user_name().await.as_deref());
+    let messages = greeting(bot, &name_for(bot).await);
     if messages.is_empty() {
         return;
     }
@@ -1531,11 +1610,11 @@ pub async fn start_bot(
         .find(|b| b.id == id)
         .ok_or_else(|| anyhow::anyhow!("no bot {id}"))?;
     let session_id = uuid::Uuid::now_v7().to_string();
-    let user = user_name().await;
-    let prompt = kickoff_prompt(&bot, user.as_deref()).await;
+    let user = name_for(&bot).await;
+    let prompt = kickoff_prompt(&bot, &user).await;
     mark_dray_prompt(&session_id, &prompt);
-    if user.is_none() {
-        NAME_ASKS.lock().unwrap().push(session_id.clone());
+    if let Some(question) = user.question() {
+        NAME_ASKS.lock().unwrap().push((session_id.clone(), question));
     }
     let sent = manager()
         .send_msg(
@@ -1553,22 +1632,23 @@ pub async fn start_bot(
     Ok(item)
 }
 
-/// Kickoff chats owed [`ASK_NAME`] once the greeting's turn ends. Dray asks
-/// rather than the bot, so the question is always a message of its own, which
-/// one model turn cannot promise; the kickoff tells the bot it is coming.
-static NAME_ASKS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// Kickoff chats owed [`UserName::question`] once the greeting's turn ends.
+/// Dray asks rather than the bot, so the question is always a message of its
+/// own, which one model turn cannot promise; the kickoff tells the bot it is
+/// coming.
+static NAME_ASKS: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
 
-/// Whether `session_id`'s turn that just ended was a kickoff owing the
-/// question for the user's name. Taken once, asked or not.
-pub fn take_name_ask(session_id: &str) -> bool {
+/// The question for the user's name owed by `session_id`'s turn that just
+/// ended, where it was a kickoff owing one. Taken once, asked or not.
+pub fn take_name_ask(session_id: &str) -> Option<String> {
     let mut asks = NAME_ASKS.lock().unwrap();
-    let at = asks.iter().position(|id| id == session_id);
-    at.map(|i| asks.remove(i)).is_some()
+    let at = asks.iter().position(|(id, _)| id == session_id)?;
+    Some(asks.remove(at).1)
 }
 
 /// What the bot is asked before anyone has written to it. The projects ride
 /// along so its guess at a job has something to go on.
-async fn kickoff_prompt(bot: &Bot, user: Option<&str>) -> String {
+async fn kickoff_prompt(bot: &Bot, user: &UserName) -> String {
     let projects: Vec<String> = crate::projects::list_projects()
         .await
         .unwrap_or_default()
@@ -1577,13 +1657,17 @@ async fn kickoff_prompt(bot: &Bot, user: Option<&str>) -> String {
         .collect();
     let projects = if projects.is_empty() { "none yet".to_string() } else { projects.join(", ") };
     let (greet, unnamed) = match user {
-        Some(user) => (format!("Greet the user as {user}"), ""),
-        None => (
+        UserName::Known(user) => (format!("Greet the user as {user}"), String::new()),
+        UserName::Handle(handle) => (
             "Greet the user without a name".to_string(),
-            " Never guess their name, from git or anywhere: Dray asks what to call them in a message of its own right after yours, so don't ask that either.",
+            format!(" Their account is named {handle}, which may not be what they go by, so don't call them that yet: Dray asks whether to in a message of its own right after yours, so don't ask that either."),
+        ),
+        UserName::Unknown => (
+            "Greet the user without a name".to_string(),
+            " Never guess their name, from git or anywhere: Dray asks what to call them in a message of its own right after yours, so don't ask that either.".to_string(),
         ),
     };
-    fill(KICKOFF_PROMPT, &[("name", &bot.name), ("projects", &projects), ("greet", &greet), ("unnamed", unnamed)])
+    fill(KICKOFF_PROMPT, &[("name", &bot.name), ("projects", &projects), ("greet", &greet), ("unnamed", &unnamed)])
 }
 
 /// Caller holds `BOTS_LOCK`: the file is rewritten whole.
@@ -1702,8 +1786,8 @@ pub async fn system_prompt(base: &str, session_id: &str, cwd: &str, harness: Har
     ROSTER_SEEN.lock().unwrap().insert(session_id.to_string(), others.clone());
     prepare_folder(bot).await;
     let instructions = read_file(&Path::new(&bot.path).join(INSTRUCTIONS)).await;
-    let user = user_name().await;
-    format!("{base}\n\n{}", bot_block(bot, &others, &instructions, user.as_deref(), harness))
+    let user = name_for(bot).await;
+    format!("{base}\n\n{}", bot_block(bot, &others, &instructions, &user, harness))
 }
 
 /// Where a bot sends long work that changes no repo. Measured on a Mac: a
@@ -1753,6 +1837,26 @@ async fn prepare_folder(bot: &Bot) {
     // straight to one. Its old `MEMORY.md` is left alone: bots had no users yet.
     tokio::fs::create_dir_all(dir.join(MEMORY)).await.ok();
     learn::ensure_skills(dir).await;
+    if let Err(e) = write_user_file(bot).await {
+        eprintln!("[user name] {e:#}");
+    }
+}
+
+/// Writes the name the bots already know to a [`USER_FILE`] the bot has none
+/// of, so its first turn finds it there. Committed on its own: in the turn's
+/// commit it would draw a "Learned" row and read as the user telling the name.
+async fn write_user_file(bot: &Bot) -> Result<()> {
+    let dir = Path::new(&bot.path);
+    if tokio::fs::symlink_metadata(dir.join(USER_FILE)).await.is_ok() {
+        return Ok(());
+    }
+    let UserName::Known(name) = name_for(bot).await else { return Ok(()) };
+    let _guard = HISTORY_LOCK.lock().await;
+    write_atomic(&dir.join(USER_FILE), &format!("{name}\n")).await?;
+    if dir.join(".git").exists() {
+        commit_paths(bot, "Note the user's name", &[USER_FILE]).await?;
+    }
+    Ok(())
 }
 
 /// Writes the `CLAUDE.md` that imports the instructions for Claude Code, and
@@ -2037,12 +2141,15 @@ fn instructions_note(instructions: &str) -> String {
     }
 }
 
-fn bot_block(bot: &Bot, others: &str, instructions: &str, user: Option<&str>, harness: Harness) -> String {
+fn bot_block(bot: &Bot, others: &str, instructions: &str, user: &UserName, harness: Harness) -> String {
     let user = match user {
-        Some(user) => format!(
+        UserName::Known(user) => format!(
             "Call the user {user}. If they ask to be called something else, write just that name to `{USER_FILE}` in your folder and use it from then on; Dray shares it with the other bots."
         ),
-        None => format!(
+        UserName::Handle(handle) => format!(
+            "Your chat opens by asking the user \"Should I call you {handle}, or something else?\": {handle} is their Dray account's name and may be a username, so don't call them that until they say so. Their reply answers it. In that turn, before anything else, write the name to `{USER_FILE}` in your folder: just {handle} if they agree in any way (\"yes\", \"sure\", \"fine\"), else just the name they give. Then call them by it. Dray shares the file with the other bots."
+        ),
+        UserName::Unknown => format!(
             "You don't know the user's name yet. Never guess it, from git, the computer's account or anywhere else. Your chat opens by asking what to call them; when they say, write just that name to `{USER_FILE}` in your folder and use it from then on. Dray shares it with the other bots."
         ),
     };
@@ -2180,7 +2287,7 @@ mod tests {
 
     #[test]
     fn block_points_at_the_instructions_and_memory_without_their_text() {
-        let block = bot_block(&bot(), "The other bots, each with its role:\n\n- \"Research\": Reads papers.", "Watch CI.", None, Harness::ClaudeCode);
+        let block = bot_block(&bot(), "The other bots, each with its role:\n\n- \"Research\": Reads papers.", "Watch CI.", &UserName::Unknown, Harness::ClaudeCode);
         assert!(!block.contains("Watch CI."), "the agent loads AGENTS.md itself");
         assert!(block.contains(&format!("`{INSTRUCTIONS}`")));
         assert!(block.contains("/h/bots/b"));
@@ -2196,12 +2303,12 @@ mod tests {
     /// goes to a task.
     #[test]
     fn long_work_goes_where_the_harness_can_take_it() {
-        let claude = bot_block(&bot(), "", "", None, Harness::ClaudeCode);
+        let claude = bot_block(&bot(), "", "", &UserName::Unknown, Harness::ClaudeCode);
         assert!(claude.contains("the Agent tool with `run_in_background: true`"));
-        let grok = bot_block(&bot(), "", "", None, Harness::Grok);
+        let grok = bot_block(&bot(), "", "", &UserName::Unknown, Harness::Grok);
         assert!(grok.contains("`spawn_subagent` with `background: true`"));
         for harness in [Harness::Pi, Harness::Codex, Harness::Fx] {
-            let block = bot_block(&bot(), "", "", None, harness);
+            let block = bot_block(&bot(), "", "", &UserName::Unknown, harness);
             assert!(!block.contains("subagent"), "{harness:?}");
             assert!(block.contains("start it with `--no-worktree`"), "{harness:?}");
         }
@@ -2295,15 +2402,15 @@ mod tests {
 
     #[test]
     fn the_block_speaks_of_the_file_only_where_the_bot_must_act() {
-        assert!(bot_block(&bot(), "", " \n", None, Harness::ClaudeCode).contains("is empty: your job is whatever the user tells you first"));
+        assert!(bot_block(&bot(), "", " \n", &UserName::Unknown, Harness::ClaudeCode).contains("is empty: your job is whatever the user tells you first"));
         let long = "é".repeat(FILE_CAP + 1);
-        assert!(bot_block(&bot(), "", &long, None, Harness::ClaudeCode).contains(&format!("is {} characters, over its", FILE_CAP + 1)));
-        assert!(!bot_block(&bot(), "", "Watch CI.", None, Harness::ClaudeCode).contains("characters, over its"));
+        assert!(bot_block(&bot(), "", &long, &UserName::Unknown, Harness::ClaudeCode).contains(&format!("is {} characters, over its", FILE_CAP + 1)));
+        assert!(!bot_block(&bot(), "", "Watch CI.", &UserName::Unknown, Harness::ClaudeCode).contains("characters, over its"));
     }
 
     #[test]
     fn every_template_is_filled_whole() {
-        let block = bot_block(&bot(), "", "a", Some("Yogesh"), Harness::ClaudeCode);
+        let block = bot_block(&bot(), "", "a", &UserName::Known("Yogesh".into()), Harness::ClaudeCode);
         let kickoff = fill(KICKOFF_PROMPT, &[("name", "Ops"), ("projects", "dray"), ("greet", "Hi"), ("unnamed", "")]);
         let review = fill(include_str!("bots/review_prompt.md"), &[("reason", "The user just corrected you.")]);
         for text in [&block, &kickoff, &review] {
@@ -2314,23 +2421,50 @@ mod tests {
 
     #[test]
     fn the_bot_is_told_its_name_and_the_users() {
-        let known = bot_block(&bot(), "", "", Some("Yogesh"), Harness::ClaudeCode);
+        let known = bot_block(&bot(), "", "", &UserName::Known("Yogesh".into()), Harness::ClaudeCode);
         assert!(known.starts_with("# Your name is Ops"));
         assert!(known.contains("Call the user Yogesh."));
-        let unknown = bot_block(&bot(), "", "", None, Harness::ClaudeCode);
+        let unknown = bot_block(&bot(), "", "", &UserName::Unknown, Harness::ClaudeCode);
         assert!(unknown.contains("Never guess it"));
         assert!(unknown.contains(USER_FILE));
+        let handle = bot_block(&bot(), "", "", &UserName::Handle("yogesharc".into()), Harness::ClaudeCode);
+        assert!(handle.contains("\"Should I call you yogesharc, or something else?\""));
+        assert!(!handle.contains("Call the user yogesharc"));
+    }
+
+    fn account(name: &str, username: Option<&str>) -> crate::dray_account::DrayUser {
+        crate::dray_account::DrayUser { id: "u".into(), name: name.into(), username: username.map(Into::into), image: None }
+    }
+
+    #[test]
+    fn a_real_account_name_is_used_and_a_handle_is_offered_back() {
+        let known = |n: &str| UserName::Known(n.into());
+        let handle = |n: &str| UserName::Handle(n.into());
+        assert_eq!(account_name(&account("Yogesh Dhakal", Some("yogesh"))), known("Yogesh"));
+        assert_eq!(account_name(&account("Anne-Marie O'Neil", None)), known("Anne-Marie"));
+        assert_eq!(account_name(&account("José", None)), known("José"));
+        assert_eq!(account_name(&account("李明", None)), known("李明"));
+        // GitHub's login standing in for a missing name, and email sign-up's local part.
+        assert_eq!(account_name(&account("yogesharc", Some("yogesh"))), handle("yogesharc"));
+        assert_eq!(account_name(&account("YogeshArc", None)), handle("YogeshArc"));
+        assert_eq!(account_name(&account("sam_99", Some("sam_99"))), handle("sam_99"));
+        assert_eq!(account_name(&account("Sam", Some("sam"))), handle("Sam"));
+        assert_eq!(account_name(&account("sam@example.com", None)), handle("sam"));
+        assert_eq!(account_name(&account("  ", None)), UserName::Unknown);
     }
 
     #[test]
     fn the_greeting_asks_the_name_only_while_nobody_knows_it() {
         let dray = Bot { name: "Jarvis".into(), welcome: Some("old words".into()), ..bot() };
-        let asking = greeting(&dray, None);
+        let asking = greeting(&dray, &UserName::Unknown);
         assert_eq!(asking.len(), 2);
         assert!(asking[0].starts_with("Hi! I'm Jarvis,"));
         assert_eq!(asking[1], ASK_NAME);
-        assert_eq!(greeting(&dray, Some("Yogesh")), vec![welcome_text("Jarvis", Some("Yogesh"))]);
-        assert!(greeting(&bot(), None).is_empty());
+        assert_eq!(greeting(&dray, &UserName::Known("Yogesh".into())), vec![welcome_text("Jarvis", Some("Yogesh"))]);
+        assert!(greeting(&bot(), &UserName::Unknown).is_empty());
+        let confirming = greeting(&dray, &UserName::Handle("yogesharc".into()));
+        assert!(confirming[0].starts_with("Hi! I'm Jarvis,"));
+        assert_eq!(confirming[1], "Should I call you yogesharc, or something else?");
     }
 
     #[test]
