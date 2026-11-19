@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-This is Dray's privacy policy. It covers the Dray desktop app, the Dray app for iPhone and iPad, Dray accounts, and drayhq.com with these docs. Dray is made by Monorepo Labs.
+This is Dray's privacy policy. It covers the Dray desktop app, the Dray app for iPhone and iPad, Dray accounts, and drayhq.com with these docs. "We" and "us" here mean Dray.
 
 Last updated: 19 November 2026.
 
@@ -42,7 +42,7 @@ Every event carries the same few facts about the build:
 | `is_debug` | `false` |
 | `source` | `app` |
 
-PostHog, the service that receives events, also sees the IP address each one comes from, as with any request over the internet.
+PostHog, the service that receives events, keeps the IP address each event comes from, and uses it to tell the country.
 
 Then each event adds its own:
 
@@ -90,6 +90,8 @@ When you start a session on another machine from the Mac app, the app sends that
 
 drayhq.com and these docs count page views, plus clicks on the download, iPhone, sponsor and FAQ buttons and the switch between dark and light, in the same PostHog project. They set a PostHog cookie holding a random id, so repeat visits and moves between pages count as one visitor. Nothing ties that id to who you are, and signing in does not tell PostHog who you are. Click tracking and session recording are off.
 
+PostHog keeps the IP address each visit comes from, and uses it to tell the country.
+
 A page view carries the page's address. On your account pages that address holds your org's short name, such as `/app/your-org/servers`.
 
 ## Your Dray account
@@ -116,7 +118,7 @@ Your account is kept apart from analytics. The desktop app's events carry its ra
 
 ### Change or delete your account
 
-Change your name and username in your account settings on drayhq.com. To delete your account and everything it holds, ask us through [Help](https://www.drayhq.com/help). There is no delete button yet.
+Change your name and username in your account settings on drayhq.com. To delete your account and everything it holds, email [support@drayhq.com](mailto:support@drayhq.com) from the address you sign in with. There is no delete button yet.
 
 ## The iPhone and iPad app
 
@@ -162,10 +164,10 @@ When what Dray collects changes, this page changes with it, and the date at the 
 
 ## Questions
 
-See [Help](https://www.drayhq.com/help) for how to reach us.
+Email [support@drayhq.com](mailto:support@drayhq.com). For other help, see [Help](https://www.drayhq.com/help).
 
 ## Limits
 
 - There is no switch in Settings. `DRAY_NO_ANALYTICS` is the only way to turn analytics off.
 - Surveys are drawn by PostHog and look like PostHog's, not like Dray.
-- There is no button to delete your account yet. Ask us instead.
+- There is no button to delete your account yet. Email us instead.
