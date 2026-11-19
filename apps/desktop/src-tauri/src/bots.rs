@@ -268,17 +268,8 @@ async fn learn_user_name(bot: &Bot, commit: &str, sink: &Sink) {
     // name saved could differ from the one their notes carry.
     static USER_NAME_LOCK: Mutex<()> = Mutex::const_new(());
     let _guard = USER_NAME_LOCK.lock().await;
-    let told = user_name().await;
-    if told.as_deref() == Some(name.as_str()) {
+    if user_name().await.as_deref() == Some(name.as_str()) {
         return;
-    }
-    // The account's own name, as Dray wrote it there: nothing was told, and
-    // noting it to every bot would say the user asked for it.
-    if told.is_none() {
-        let account = crate::dray_account::signed_in_user().await.map(|u| account_name(&u));
-        if account.as_ref().and_then(UserName::known) == Some(name.as_str()) {
-            return;
-        }
     }
     let written = match user_name_path().await {
         Ok(path) => write_atomic(&path, &name).await,
