@@ -20,7 +20,7 @@
 
 ## Account
 
-**The Dray account the app is signed in to** ([AccountSettings.tsx](../src/components/settings/AccountSettings.tsx)): avatar, name, @username and Sign out. Signing in happens on the gate before the app opens; see CLAUDE.md's sign-in paragraph. Sign out asks in the row, leaves the machine linked, and lands on the gate. "Not signed in" shows only after Skip for now offline. The Servers tab draws each row's link through [useOrgLink](../src/hooks/useOrgLink.ts): the org in the detail line, Link on an unlinked row, Cancel while a code waits, Unlink in ⋯.
+**The Dray account the app is signed in to is a card atop Settings' list, not a tab** ([AccountCard.tsx](../src/components/settings/AccountCard.tsx), #1314): picture or initials, name and email. Its menu repeats none of that; it says how the account signs in (GitHub, Google or email, from the site's `providers`) and offers Sign out, which asks in a dialog, leaves the machine linked, and lands on the gate. Signing in happens on the gate before the app opens; see CLAUDE.md's sign-in paragraph. The card draws nothing while signed out, which happens only after Skip for now offline. **Initials are SVG with the baseline set from Geist's cap height**: a centred line box put the capitals wherever the engine's ascent and descent said, which drifted on macOS. The Servers tab draws each row's link through [useOrgLink](../src/hooks/useOrgLink.ts): the org in the detail line, Link on an unlinked row, Cancel while a code waits, Unlink in ⋯.
 
 ## Agents
 
