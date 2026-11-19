@@ -26,6 +26,9 @@ export function SignInMethods({ next, via, github }: { next: string; via: string
   // The app's own sign-in comes back through `/api/app/authorize`, which
   // turns a provider's Cancel into the app's "Sign-in was cancelled".
   const fromApp = next.startsWith("/api/app/authorize");
+  // Signing in here is the choice of account, so the app's flow is not
+  // asked again ("Continue as…" is for a browser already signed in).
+  const done = fromApp ? `${next}&confirmed=1` : next;
 
   const social = async (provider: Provider) => {
     if (provider === "github" && !github) return setError("GitHub sign-in isn't set up on this site yet.");
@@ -33,7 +36,7 @@ export function SignInMethods({ next, via, github }: { next: string; via: string
     setError(null);
     const { error } = await authClient.signIn.social({
       provider,
-      callbackURL: next,
+      callbackURL: done,
       ...(fromApp && { errorCallbackURL: next }),
     });
     // On success the browser is already leaving for the provider.
@@ -60,7 +63,7 @@ export function SignInMethods({ next, via, github }: { next: string; via: string
     return error;
   };
 
-  const signedIn = () => window.location.assign(next);
+  const signedIn = () => window.location.assign(done);
 
   const signIn = async (e: FormEvent) => {
     const error = await run(e, () => authClient.signIn.email({ email, password }));

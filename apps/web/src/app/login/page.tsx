@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { AccountChooser } from "@/components/account/AccountChooser";
 import { SignInMethods } from "@/components/account/SignInMethods";
 import { H1, LEAD, PAGE } from "@/components/account/styles";
 import { SiteNav } from "@/components/home/SiteNav";
@@ -16,7 +17,8 @@ function safeNext(next: string | string[] | undefined): string {
 }
 
 /// Sign in to Dray with GitHub, Google or email. A reader already signed in
-/// goes straight on; `via` is the method the desktop app picked.
+/// goes straight on, unless the desktop app sent them, which asks whether
+/// that is the account they want; `via` is the method the app picked.
 export default async function LoginPage({
   searchParams,
 }: {
@@ -24,9 +26,29 @@ export default async function LoginPage({
 }) {
   const params = await searchParams;
   const next = safeNext(params.next);
-  if (await auth.api.getSession({ headers: await headers() })) redirect(next);
   const via = typeof params.via === "string" ? params.via : null;
   const fromApp = next.startsWith("/api/app/authorize");
+  const github = Boolean(process.env.GITHUB_CLIENT_ID);
+  const session = await auth.api.getSession({ headers: await headers() });
+  // The desktop app asks which account; the site's own pages just go on.
+  if (session && !fromApp) redirect(next);
+
+  if (session)
+    return (
+      <div data-home className={PAGE}>
+        <main className="px-5 pb-[120px] sm:px-8">
+          <div className="mx-auto w-full max-w-[960px]">
+            <SiteNav bare />
+            <AccountChooser
+              account={{ name: session.user.name, email: session.user.email, image: session.user.image ?? null }}
+              next={next}
+              machine={new URLSearchParams(next.split("?")[1] ?? "").get("name")}
+              github={github}
+            />
+          </div>
+        </main>
+      </div>
+    );
 
   return (
     <div data-home className={PAGE}>
@@ -41,7 +63,7 @@ export default async function LoginPage({
                 : "Your account holds your orgs and the servers linked to them."}
             </p>
             <div className="mt-10">
-              <SignInMethods next={next} via={via} github={Boolean(process.env.GITHUB_CLIENT_ID)} />
+              <SignInMethods next={next} via={via} github={github} />
             </div>
           </div>
         </div>
