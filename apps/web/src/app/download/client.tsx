@@ -18,6 +18,23 @@ export function StartDownload() {
   return null;
 }
 
+/// The dmg itself, from the downloads list. Straight to the file, since that
+/// page carries no ask; counted like the Download buttons that go by way of
+/// the thanks page.
+export function DmgLink({ className, children }: { className: string; children: React.ReactNode }) {
+  return (
+    <a
+      href={DOWNLOAD}
+      onClick={() =>
+        posthog.capture("download", { platform: "macos", from: "downloads" }, { transport: "sendBeacon" })
+      }
+      className={className}
+    >
+      {children}
+    </a>
+  );
+}
+
 /// An outbound link off the download page, counted by where it leads, so the
 /// ask can be judged by how many readers act on it.
 export function SupportLink({
