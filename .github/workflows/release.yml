@@ -10,14 +10,14 @@ name: Release
 # that work end to end — the updater compares versions, and `0.3.0-beta.1` is
 # older than `0.3.0`, so a beta user lands on the stable release when it ships.
 #
-# A manual run builds the Linux AppImage alone, as a workflow artifact never
-# attached or published: the way to check Linux still compiles while it is
-# held out of releases. With `dry_run` it runs the Mac path instead, signing
+# A manual run builds the Linux files alone — an AppImage and a .deb for each
+# of x86_64 and arm64 — as workflow artifacts never attached or published: the
+# way to check Linux still builds, and to get files to test. With `dry_run` it runs the Mac path instead, signing
 # and notarization included, and keeps what a release would publish as a
 # workflow artifact: no release, no tag, nothing on R2 or `updates`.
 #
 # With `linux_tag` (`-f linux_tag=v0.30.14`) a manual run publishes Linux alone
-# for a release that shipped without it: the AppImage built from that tag, put
+# for a release that shipped without it: the files built from that tag, put
 # on its release and R2, and its `linux-*` entries added to whichever manifest
 # is at that version. The Mac app and the `darwin-*` entries are not touched.
 #
@@ -526,31 +526,40 @@ jobs:
           [ "$GOT" = "$WANT" ] || { echo "latest.json names $WANT, GitHub serves $GOT" >&2; exit 1; }
           upload latest.json
 
-  # The Linux app, as one AppImage. Beside the Mac build rather than inside
-  # it, so nothing there moves; the manifest job puts its entry in.
+  # The Linux app, as an AppImage and a .deb for each of x86_64 and arm64.
+  # Beside the Mac build rather than inside it, so nothing there moves; the
+  # manifest job puts their entries in.
   #
-  # 22.04 because an AppImage carries no glibc of its own: it runs on the
-  # distros whose glibc is at least the one it was built against, and 24.04's
-  # would refuse Debian 12 and Ubuntu 22.04 outright.
+  # 22.04 because neither format carries glibc: each runs on the distros
+  # whose glibc is at least the one it was built against, and 24.04's would
+  # refuse Debian 12 and Ubuntu 22.04 outright. arm64 builds natively on
+  # GitHub's arm runner rather than cross-compiling WebKitGTK's whole stack.
   #
   # No cache. warm-cache.yml warms the Mac's, and a tag build's own cache is
   # unreadable to the next tag (see there), so this compiles cold, beside the
-  # Mac jobs. `manifest` waits for it, so once it ships it can be what sets
-  # the release's length.
+  # Mac jobs. `manifest` waits for it, so it can be what sets the release's
+  # length.
   #
   # Held out of tag releases until the repo variable RELEASE_LINUX is `true`
-  # (docs/releases.md). Skipped, it leaves no AppImage and no `linux-*` entry.
-  # A dry run is the Mac's and skips it too. `linux_tag` runs it whatever the
-  # variable says, built from that tag and published by `linux-publish`.
+  # (docs/releases.md). Skipped, it leaves no Linux file and no `linux-*`
+  # entry. A dry run is the Mac's and skips it too. `linux_tag` runs it
+  # whatever the variable says, built from that tag and published by
+  # `linux-publish`. Both legs or neither: one failing fails the job, and
+  # `manifest` then writes no Linux entry at all.
   linux:
     if: (github.event_name == 'workflow_dispatch' && (!inputs.dry_run || inputs.linux_tag != '')) || (github.event_name == 'push' && vars.RELEASE_LINUX == 'true')
-    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
     env:
       # The release this build belongs to. A manual run's ref is a branch.
       TAG: ${{ inputs.linux_tag || github.ref_name }}
-    outputs:
-      appimage: ${{ steps.mirror.outputs.appimage }}
-      signature: ${{ steps.mirror.outputs.signature }}
+      BUNDLE: apps/desktop/src-tauri/target/release/bundle
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -558,7 +567,7 @@ jobs:
 
       # Checked before a 20-minute compile: the release has to exist and be
       # published, and its tag has to carry its own version, or the manifest
-      # entries would offer Linux an AppImage that thinks it is something else.
+      # entries would offer Linux a build that thinks it is something else.
       - name: Check the release
         if: inputs.linux_tag != ''
         env:
@@ -571,16 +580,20 @@ jobs:
           [[ "$TAG" == v* ]] || { echo "linux_tag must be a v* tag, got $TAG" >&2; exit 1; }
           V="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
           [ "v$V" = "$TAG" ] || { echo "$TAG carries tauri.conf.json version $V" >&2; exit 1; }
+          test -f apps/desktop/src-tauri/tauri.linux-release.conf.json \
+            || { echo "$TAG predates the .deb and arm64 build this job runs" >&2; exit 1; }
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$TAG" --silent \
             || { echo "no published release for $TAG" >&2; exit 1; }
 
-      # WebKitGTK and the tray for Tauri; ALSA, cmake and the Vulkan headers
-      # and shader compiler for dictation's engine, whose Vulkan module builds
-      # here (docs/transcription.md); FUSE to run linuxdeploy, which the
-      # bundler fetches as an AppImage itself.
+      # WebKitGTK for Tauri; ALSA, cmake and the Vulkan headers and shader
+      # compiler for dictation's engine, whose Vulkan module builds here on
+      # x86_64 (docs/transcription.md); FUSE to run linuxdeploy, which the
+      # bundler fetches as an AppImage itself — the AppImage it makes needs
+      # none (checked below).
       # GStreamer's plugins are copied into the AppImage from here
       # (`bundleMediaFramework`): without them the WebProcess dies on the
-      # first <audio> the page makes, and the window stays black.
+      # first <audio> the page makes, and the window stays black. The .deb
+      # names them as dependencies instead.
       # xkbcommon-x11, fontconfig and freetype for Dray Island's GPUI.
       - run: |
           sudo apt-get update
@@ -594,7 +607,10 @@ jobs:
       # by version and checksum; CMake's FindVulkan reads them off
       # VULKAN_SDK. Only `include/` and `bin/glslc` are taken, so the app
       # still links the system's libvulkan, and that glslc needs glibc 2.29.
+      # x86_64 alone: LunarG ships no arm64 SDK, so Cargo.toml builds arm64
+      # dictation without Vulkan.
       - name: Install Vulkan headers and glslc
+        if: matrix.arch == 'x86_64'
         env:
           VK: 1.4.328.1
           SHA: 241e75b56c91c0d210ed07a7c638ec05a3e5b0e4c66ba9f0ba0f102d823ad6bf
@@ -620,8 +636,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
       - run: pnpm install --frozen-lockfile
 
-      # The Mac's step: the CLI the cli overlay hands the bundler, which puts
-      # it at usr/bin/dray-cli.
+      # The Mac's step: the CLI the overlay hands the bundler, which puts it
+      # at usr/bin/dray-cli.
       - name: Build the dray CLI
         run: apps/desktop/scripts/cli-sidecar.sh apps/desktop/src-tauri/target/cli
 
@@ -630,15 +646,16 @@ jobs:
       - name: Build Dray Island
         run: apps/desktop/scripts/island-sidecar.sh apps/desktop/src-tauri/target/island-linux
 
-      # `createUpdaterArtifacts` signs the AppImage itself into a `.sig`
-      # beside it, with the same minisign key as the Mac's — the one public
-      # key in tauri.conf.json verifies both. `cef` as on the Mac: the
-      # bindings compile against the CEF SDK, which `cef-dll-sys` downloads
-      # into CEF_PATH and builds with CMake and Ninja; libcef itself is never
-      # bundled, the app downloads its own (chromium.rs).
-      # One overlay for both sidecars: a config's arrays replace rather than
-      # merge, so tauri.island-linux.conf.json names the CLI as well.
-      - run: pnpm tauri build --bundles appimage --features cef --config src-tauri/tauri.island-linux.conf.json
+      # `createUpdaterArtifacts` signs the AppImage and the .deb themselves
+      # into a `.sig` beside each, with the same minisign key as the Mac's —
+      # the one public key in tauri.conf.json verifies all of them. `cef` as
+      # on the Mac: the bindings compile against the CEF SDK, which
+      # `cef-dll-sys` downloads into CEF_PATH and builds with CMake and Ninja;
+      # libcef itself is never bundled, the app downloads its own
+      # (chromium.rs). tauri.linux-release.conf.json names both sidecars, the
+      # .deb's dependencies, and the binary `dray-app`: a .deb puts it on
+      # every PATH, where `dray` is the CLI's name.
+      - run: pnpm tauri build --bundles appimage,deb --features cef --config src-tauri/tauri.linux-release.conf.json
         working-directory: apps/desktop
         env:
           CEF_PATH: ${{ runner.temp }}/cef
@@ -649,35 +666,60 @@ jobs:
 
       # The Mac's framework check, Linux's way: libcef is opened at run time
       # and downloaded by the app, so the binary must not link it — or the
-      # app refuses to start before the download — and the AppImage must not
-      # carry it, or every download and update grows by 300MB.
+      # app refuses to start before the download — and neither file may carry
+      # it, or every download and update grows by 300MB.
       - name: Verify libcef stays out
         run: |
           set -euo pipefail
-          if readelf -d apps/desktop/src-tauri/target/release/dray | grep libcef; then exit 1; fi
-          IMAGE="$(realpath apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage)"
+          if readelf -d apps/desktop/src-tauri/target/release/dray-app | grep libcef; then exit 1; fi
+          IMAGE="$(realpath "$BUNDLE"/appimage/*.AppImage)"
+          DEB="$(realpath "$BUNDLE"/deb/*.deb)"
           cd "$RUNNER_TEMP" && "$IMAGE" --appimage-extract >/dev/null
           if find squashfs-root -name 'libcef*' | grep .; then exit 1; fi
+          if dpkg-deb -c "$DEB" | grep libcef; then exit 1; fi
 
-      # What the app reads out of its own mount: the CLI it copies to
+      # The AppImage runs where no libfuse2 is installed only because its
+      # runtime is static, finding any `fusermount` on PATH — fuse3's
+      # included, which current desktops ship. A dynamic one would send every
+      # reader to install libfuse2 first, so it fails the release here.
+      - name: Verify the AppImage needs no libfuse2
+        run: |
+          set -euo pipefail
+          IMAGE="$(ls "$BUNDLE"/appimage/*.AppImage)"
+          head -c "$("$IMAGE" --appimage-offset)" "$IMAGE" > "$RUNNER_TEMP/runtime"
+          file "$RUNNER_TEMP/runtime" | tee /dev/stderr | grep -Eq 'static-pie linked|statically linked'
+
+      # What the app reads out of its own install: the CLI it copies to
       # ~/.local/bin (cli.rs), Dray Island beside the app's binary
       # (island.rs), and dictation's backend modules, loaded from
       # usr/lib/Dray/transcribe by name (engine.rs) since linuxdeploy puts a
       # second libtranscribe in usr/lib with no module beside it. The island's
-      # `--version` answers before it opens a display, so it runs here.
-      - name: Verify the AppImage
+      # `--version` answers before it opens a display, so it runs here. The
+      # .deb lays out the same tree under /, so both are checked alike, and
+      # it must leave `/usr/bin/dray` to the CLI.
+      - name: Verify the AppImage and the .deb
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/squashfs-root"
-          usr/bin/dray-cli --version
-          usr/bin/dray-island --version
-          ls usr/lib/Dray/transcribe/libggml-cpu-*.so usr/lib/Dray/transcribe/libggml-vulkan.so
+          DEB="$(ls "$BUNDLE"/deb/*.deb)"
+          dpkg-deb -f "$DEB" Depends
+          dpkg-deb -x "$DEB" "$RUNNER_TEMP/deb-root"
+          for root in "$RUNNER_TEMP/squashfs-root" "$RUNNER_TEMP/deb-root"; do
+            echo "$root"
+            ( cd "$root"
+              test -x usr/bin/dray-app
+              usr/bin/dray-cli --version
+              usr/bin/dray-island --version
+              ls usr/lib/Dray/transcribe/libggml-cpu*.so
+              if [ "$ARCH" = x86_64 ]; then ls usr/lib/Dray/transcribe/libggml-vulkan.so; fi )
+          done
+          test ! -e "$RUNNER_TEMP/deb-root/usr/bin/dray"
 
-      # The same mirror as the Mac's. The signature rides out as an output
-      # for the manifest; the file goes to the release from there, since
-      # `bundle` is what creates the release and may not have yet.
+      # The same mirror as the Mac's. The files go to the release from the
+      # manifest job, since `bundle` is what creates the release and may not
+      # have yet.
       - name: Mirror to R2
-        id: mirror
         if: github.event_name == 'push' || inputs.linux_tag != ''
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -690,23 +732,29 @@ jobs:
         run: |
           set -euo pipefail
           : "${AWS_ACCESS_KEY_ID:?}" "${R2_ACCOUNT_ID:?}" "${R2_BUCKET:?}"
-          IMAGE="$(ls apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage)"
-          test -s "$IMAGE.sig"
-          aws s3 cp "$IMAGE" "s3://${R2_BUCKET}/${TAG}/$(basename "$IMAGE")" \
-            --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
-            --cache-control "public, max-age=31536000, immutable"
-          echo "appimage=$(basename "$IMAGE")" >> "$GITHUB_OUTPUT"
-          echo "signature=$(cat "$IMAGE.sig")" >> "$GITHUB_OUTPUT"
+          for f in "$BUNDLE"/appimage/*.AppImage "$BUNDLE"/deb/*.deb; do
+            test -s "$f.sig"
+            aws s3 cp "$f" "s3://${R2_BUCKET}/${TAG}/$(basename "$f")" \
+              --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+              --cache-control "public, max-age=31536000, immutable"
+          done
 
+      # Each file with its signature, one artifact per arch, which
+      # linux-release.sh reads back in the manifest job.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: appimage
-          path: apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
-          # A release only hands it to the manifest job; a manual run's is
+          name: linux-${{ matrix.arch }}
+          path: |
+            ${{ env.BUNDLE }}/appimage/*.AppImage
+            ${{ env.BUNDLE }}/appimage/*.AppImage.sig
+            ${{ env.BUNDLE }}/deb/*.deb
+            ${{ env.BUNDLE }}/deb/*.deb.sig
+          if-no-files-found: error
+          # A release only hands them to the manifest job; a manual run's are
           # there to download.
           retention-days: ${{ github.event_name == 'push' && 1 || 7 }}
 
-  # `linux_tag`'s half of `manifest`: the AppImage onto its release, and its
+  # `linux_tag`'s half of `manifest`: the files onto its release, and their
   # entries into each manifest already at that version. A manifest that moved
   # on is left alone — an entry under a newer version would offer Linux an
   # update that installs an older app and then offers itself again.
@@ -719,17 +767,25 @@ jobs:
     env:
       TAG: ${{ inputs.linux_tag }}
     steps:
+      # linux-release.sh from the workflow's own ref, and the manifests'
+      # branch beside it.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: .github/scripts
+          fetch-depth: 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: updates
+          path: updates
           fetch-depth: 1
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: appimage
-          path: ${{ runner.temp }}/appimage
+          pattern: linux-*
+          path: ${{ runner.temp }}/linux
 
-      - env:
+      - working-directory: updates
+        env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOWNLOADS_URL: ${{ vars.DOWNLOADS_URL }}
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -739,13 +795,11 @@ jobs:
           AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_BUCKET: ${{ vars.R2_BUCKET }}
-          APPIMAGE: ${{ needs.linux.outputs.appimage }}
-          APPIMAGE_SIG: ${{ needs.linux.outputs.signature }}
-          APPIMAGE_DIR: ${{ runner.temp }}/appimage
+          L: ${{ github.workspace }}/.github/scripts/linux-release.sh
+          LINUX: ${{ runner.temp }}/linux
         run: |
           set -euo pipefail
-          : "${DOWNLOADS_URL:?}" "${APPIMAGE:?}" "${APPIMAGE_SIG:?}"
-          URL="${DOWNLOADS_URL%/}/${TAG}/${APPIMAGE}"
+          : "${DOWNLOADS_URL:?}"
           AT=0
           for f in stable.json beta.json; do
             cur="$(jq -r '.version // empty' "$f" 2>/dev/null || true)"
@@ -753,18 +807,14 @@ jobs:
               echo "keeping $f at ${cur:-nothing} — not $TAG"
               continue
             fi
-            jq --arg url "$URL" --arg sig "$APPIMAGE_SIG" \
-               '.platforms["linux-x86_64"] = {signature: $sig, url: $url}
-                | .platforms["linux-x86_64-appimage"] = {signature: $sig, url: $url}' \
-               "$f" > manifest.tmp
-            mv manifest.tmp "$f"
+            "$L" entries "$f" "$LINUX" "${DOWNLOADS_URL%/}/${TAG}"
             AT=$((AT + 1))
             echo "$f: $(jq -c '.platforms | keys' "$f")"
           done
           # Neither at this version means a publish that reaches nobody.
           [ "$AT" -gt 0 ] || { echo "no manifest is at $TAG; nothing published" >&2; exit 1; }
 
-          gh release upload "$TAG" "${APPIMAGE_DIR}/${APPIMAGE}" --repo "${GITHUB_REPOSITORY}" --clobber
+          "$L" files "$LINUX" | xargs gh release upload "$TAG" --repo "${GITHUB_REPOSITORY}" --clobber
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -774,13 +824,9 @@ jobs:
             git push
           }
 
-          # The versionless AppImage, as `manifest` moves it on a tag.
+          # The versionless files, as `manifest` moves them on a tag.
           if [ "v$(jq -r '.version // empty' stable.json 2>/dev/null)" = "$TAG" ]; then
-            aws s3 cp "s3://${R2_BUCKET}/${TAG}/${APPIMAGE}" "s3://${R2_BUCKET}/Dray_amd64.AppImage" \
-              --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
-              --metadata-directive REPLACE \
-              --content-type application/vnd.appimage \
-              --cache-control "public, max-age=300"
+            "$L" latest "$LINUX" "$TAG"
           fi
 
   # The manifests live on a branch rather than in the release, because
@@ -804,18 +850,25 @@ jobs:
     permissions:
       contents: write
     steps:
+      # linux-release.sh from the tag, and the manifests' branch beside it.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: .github/scripts
+          fetch-depth: 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: updates
+          path: updates
           fetch-depth: 1
 
       - if: needs.linux.result == 'success'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: appimage
-          path: ${{ runner.temp }}/appimage
+          pattern: linux-*
+          path: ${{ runner.temp }}/linux
 
-      - env:
+      - working-directory: updates
+        env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOWNLOADS_URL: ${{ vars.DOWNLOADS_URL }}
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -826,9 +879,9 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_BUCKET: ${{ vars.R2_BUCKET }}
           DMG: ${{ needs.bundle.outputs.dmg }}
-          APPIMAGE: ${{ needs.linux.outputs.appimage }}
-          APPIMAGE_SIG: ${{ needs.linux.outputs.signature }}
-          APPIMAGE_DIR: ${{ runner.temp }}/appimage
+          HAS_LINUX: ${{ needs.linux.result == 'success' }}
+          L: ${{ github.workspace }}/.github/scripts/linux-release.sh
+          LINUX: ${{ runner.temp }}/linux
         run: |
           set -euo pipefail
           : "${DOWNLOADS_URL:?}" "${DMG:?}"
@@ -849,18 +902,11 @@ jobs:
             exit 1
           fi
 
-          # The updater asks for `linux-x86_64-appimage` first and then
-          # `linux-x86_64`; both name the one file. Attached to the release
-          # here, where the release is known to exist.
-          if [ -n "${APPIMAGE:-}" ]; then
-            : "${APPIMAGE_SIG:?}"
-            gh release upload "${GITHUB_REF_NAME}" "${APPIMAGE_DIR}/${APPIMAGE}" \
-              --repo "${GITHUB_REPOSITORY}" --clobber
-            jq --arg url "${DOWNLOADS_URL%/}/${GITHUB_REF_NAME}/${APPIMAGE}" --arg sig "${APPIMAGE_SIG}" \
-               '.platforms["linux-x86_64"] = {signature: $sig, url: $url}
-                | .platforms["linux-x86_64-appimage"] = {signature: $sig, url: $url}' \
-               manifest.json > manifest.tmp
-            mv manifest.tmp manifest.json
+          # Every Linux file's entries (see linux-release.sh), each file
+          # attached to the release here, where the release is known to exist.
+          if [ "$HAS_LINUX" = true ]; then
+            "$L" files "$LINUX" | xargs gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber
+            "$L" entries manifest.json "$LINUX" "${DOWNLOADS_URL%/}/${GITHUB_REF_NAME}"
           fi
 
           # Writes the release over a channel manifest unless that would move
@@ -920,11 +966,7 @@ jobs:
               --metadata-directive REPLACE \
               --content-type application/x-apple-diskimage \
               --cache-control "public, max-age=300"
-            if [ -n "${APPIMAGE:-}" ]; then
-              aws s3 cp "s3://${R2_BUCKET}/${GITHUB_REF_NAME}/${APPIMAGE}" "s3://${R2_BUCKET}/Dray_amd64.AppImage" \
-                --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
-                --metadata-directive REPLACE \
-                --content-type application/vnd.appimage \
-                --cache-control "public, max-age=300"
+            if [ "$HAS_LINUX" = true ]; then
+              "$L" latest "$LINUX" "${GITHUB_REF_NAME}"
             fi
           fi

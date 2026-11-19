@@ -152,7 +152,7 @@ Swift island carries over.
   them again and show them.
 - **The AppImage carries it** at `usr/bin/dray-island`, beside the app's
   binary, where `island.rs` looks: `island-sidecar.sh` builds it and the
-  `tauri.island-linux.conf.json` overlay hands it to the bundler with the CLI.
+  `tauri.linux-release.conf.json` overlay hands it to the bundler with the CLI.
 - **A client of This computer's `dray --serve`**, address and token from
   `serve-port` / `serve-token` in the `DRAY_HOME` the app hands over, read
   at every connect. Hello carries `client: "island"`. Lenient decoding: a

@@ -289,7 +289,11 @@ async fn install(app: AppHandle) -> Result<(), InstallError> {
 /// AppImage the update was just written over rather than the binary inside the
 /// old one's mount.
 fn relaunch(app: &AppHandle) -> Result<(), String> {
+    // A `.deb` update renames the new binary over this one, and where Tauri
+    // first reads its path after that it fails on the deleted inode.
     let exe = tauri::process::current_binary(&app.env())
+        .or_else(|_| std::env::current_exe())
+        .map(live_path)
         .map_err(|e| format!("could not resolve this binary: {e}"))?;
 
     #[cfg(target_os = "macos")]
@@ -327,6 +331,15 @@ fn relaunch(app: &AppHandle) -> Result<(), String> {
         .map_err(|e| format!("could not launch {}: {e}", exe.display()))
 }
 
+/// The path an executable was started from, once a package update has renamed
+/// a new file over it: Linux then reports the old inode as `<path> (deleted)`.
+fn live_path(exe: std::path::PathBuf) -> std::path::PathBuf {
+    match exe.to_str().and_then(|s| s.strip_suffix(" (deleted)")) {
+        Some(path) => path.into(),
+        None => exe,
+    }
+}
+
 /// The `.app` an executable sits in, or `None` for a bare binary.
 ///
 /// `…/Dray.app/Contents/MacOS/dray` — the fourth ancestor. Counting it wrong
@@ -351,6 +364,19 @@ fn version_to_beat(running: semver::Version, pending: Option<&str>) -> semver::V
 fn emit_status(app: &AppHandle, status: UpdateStatus) {
     if let Err(e) = app.emit("update_status", &status) {
         eprintln!("[update status emit err] {e}");
+    }
+}
+
+#[cfg(test)]
+mod live_path_tests {
+    use super::live_path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn names_the_path_a_package_update_replaced() {
+        let p = |s: &str| PathBuf::from(s);
+        assert_eq!(live_path(p("/usr/bin/dray-app (deleted)")), p("/usr/bin/dray-app"));
+        assert_eq!(live_path(p("/usr/bin/dray-app")), p("/usr/bin/dray-app"));
     }
 }
 

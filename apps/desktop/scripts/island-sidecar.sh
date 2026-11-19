@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds Dray Island for Linux (apps/island-linux) for Tauri's `externalBin`
-# (tauri.island-linux.conf.json), which ships it in the AppImage as usr/bin/dray-island,
+# (tauri.linux-release.conf.json), which ships it as usr/bin/dray-island,
 # beside the app's binary, where island.rs looks for it.
 #
 #   island-sidecar.sh <out-dir>
