@@ -14,6 +14,7 @@ import {
   GoogleIcon,
   Heading,
   Label,
+  LastUsed,
   LINK,
   Links,
   MailIcon,
@@ -22,6 +23,7 @@ import {
 } from "./SignInParts";
 
 type Provider = "github" | "google";
+export type Method = Provider | "email";
 type Mode = "methods" | "sign-in" | "sign-up" | "verify" | "forgot" | "reset";
 
 /// Every way into Dray: GitHub, Google, or an email whose address a code
@@ -29,17 +31,20 @@ type Mode = "methods" | "sign-in" | "sign-up" | "verify" | "forgot" | "reset";
 /// app picked, started at once so the reader isn't asked twice. `emailOpen` is
 /// false while email sign-in is off, which leaves its card in place, disabled.
 /// `problem` is why the last try failed, shown until the next one.
+/// `lastUsed` is how this browser last signed in, tagged on its card.
 export function SignInMethods({
   next,
   via,
   github,
   emailOpen,
+  lastUsed,
   problem = null,
 }: {
   next: string;
   via: string | null;
   github: boolean;
   emailOpen: boolean;
+  lastUsed: Method | null;
   problem?: string | null;
 }) {
   const [mode, setMode] = useState<Mode>(via === "email" && emailOpen ? "sign-in" : "methods");
@@ -160,6 +165,7 @@ export function SignInMethods({
             icon={busy === "github" ? <Spinner size={40} /> : <GitHubIcon />}
             label="GitHub"
             corner
+            tag={lastUsed === "github" && <LastUsed />}
             disabled={busy !== null}
             onClick={() => social("github")}
           />
@@ -167,13 +173,27 @@ export function SignInMethods({
             icon={busy === "google" ? <Spinner size={40} /> : <GoogleIcon />}
             label="Google"
             corner
+            tag={lastUsed === "google" && <LastUsed />}
             disabled={busy !== null}
             onClick={() => social("google")}
           />
           {emailOpen ? (
-            <Card icon={<MailIcon />} label="Email" corner disabled={busy !== null} onClick={() => go("sign-in")} />
+            <Card
+              icon={<MailIcon />}
+              label="Email"
+              corner
+              tag={lastUsed === "email" && <LastUsed />}
+              disabled={busy !== null}
+              onClick={() => go("sign-in")}
+            />
           ) : (
-            <Card icon={<MailIcon />} label="Email" detail="Coming in the next few days" disabled />
+            <Card
+              icon={<MailIcon />}
+              label="Email"
+              detail="Coming in the next few days"
+              tag={lastUsed === "email" && <LastUsed />}
+              disabled
+            />
           )}
         </Cards>
       </>

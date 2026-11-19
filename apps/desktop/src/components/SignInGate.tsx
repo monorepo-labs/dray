@@ -6,9 +6,16 @@ import type { SignInMethod } from "@/types/events";
 /// What the gate is showing. `revoked` is a saved sign-in the site turned
 /// away; `waiting` a browser sign-in in flight, `finishing` once the browser
 /// is back and it can no longer be cancelled. `emailOff` is the site saying
-/// email sign-in isn't open yet.
+/// email sign-in isn't open yet, `lastUsed` the way in this app last took.
 export type GateView =
-  | { kind: "choose"; revoked: boolean; error: string | null; offline: boolean; emailOff: boolean }
+  | {
+      kind: "choose";
+      revoked: boolean;
+      error: string | null;
+      offline: boolean;
+      emailOff: boolean;
+      lastUsed: SignInMethod | null;
+    }
   | { kind: "waiting"; method: SignInMethod; finishing: boolean };
 
 const METHOD: Record<SignInMethod, string> = { github: "GitHub", google: "Google", email: "email" };
@@ -62,7 +69,8 @@ function body(
         </Cards>
       </>
     );
-  const { error, offline, revoked, emailOff } = view;
+  const { error, offline, revoked, emailOff, lastUsed } = view;
+  const tag = (method: SignInMethod) => lastUsed === method && <LastUsed />;
   const failed = !offline && error;
   const label = failed ? failed : revoked ? "You've been signed out" : "Welcome to Dray";
   const heading = offline
@@ -77,12 +85,12 @@ function body(
       <Label danger={Boolean(failed)}>{label}</Label>
       <Heading>{heading}</Heading>
       <Cards>
-        <Card icon={<GitHubIcon />} label="GitHub" corner onClick={() => act.onPick("github")} />
-        <Card icon={<GoogleIcon />} label="Google" corner onClick={() => act.onPick("google")} />
+        <Card icon={<GitHubIcon />} label="GitHub" tag={tag("github")} corner onClick={() => act.onPick("github")} />
+        <Card icon={<GoogleIcon />} label="Google" tag={tag("google")} corner onClick={() => act.onPick("google")} />
         {emailOff ? (
-          <Card icon={<MailIcon />} label="Email" detail="Coming in the next few days" off />
+          <Card icon={<MailIcon />} label="Email" detail="Coming in the next few days" tag={tag("email")} off />
         ) : (
-          <Card icon={<MailIcon />} label="Email" corner onClick={() => act.onPick("email")} />
+          <Card icon={<MailIcon />} label="Email" tag={tag("email")} corner onClick={() => act.onPick("email")} />
         )}
         {offline && <Card icon={<SkipIcon />} label="Skip for now" onClick={act.onSkip} />}
       </Cards>
@@ -115,11 +123,12 @@ function Cards({ children }: { children: ReactNode }) {
 
 /// One card. Without `onClick` it only says something, like the waiting one;
 /// `dim` greys out one that can't be used right now, and `off` fades a way in
-/// that isn't open yet, leaving its `detail` readable, as the site does.
+/// that isn't open yet, leaving its `detail` and `tag` readable, as the site does.
 function Card({
   icon,
   label,
   detail,
+  tag,
   corner = false,
   dim = false,
   off = false,
@@ -128,6 +137,7 @@ function Card({
   icon: ReactNode;
   label: string;
   detail?: string;
+  tag?: ReactNode;
   corner?: boolean;
   dim?: boolean;
   off?: boolean;
@@ -135,9 +145,14 @@ function Card({
 }) {
   const inner = (
     <>
-      <span className={`flex items-start justify-between ${off ? "opacity-40" : ""}`}>
-        {icon}
-        {corner && <CornerArrow />}
+      <span className="flex items-start justify-between gap-3">
+        <span className={off ? "opacity-40" : ""}>{icon}</span>
+        {(tag || corner) && (
+          <span className="flex items-center gap-3">
+            {tag}
+            {corner && <CornerArrow />}
+          </span>
+        )}
       </span>
       <span className="flex flex-col gap-0.5">
         <span className={`text-[17px] leading-6 tracking-[-0.01em] ${off ? "text-white/40" : "text-white/80"}`}>{label}</span>
@@ -160,6 +175,15 @@ function Card({
     >
       {inner}
     </button>
+  );
+}
+
+/// The site's tag on the card this app last signed in with.
+function LastUsed() {
+  return (
+    <span className="bg-white/10 px-1.5 py-[3px] font-mono text-[10px] leading-3 tracking-[0.06em] whitespace-nowrap text-white/70 uppercase">
+      Last used
+    </span>
   );
 }
 

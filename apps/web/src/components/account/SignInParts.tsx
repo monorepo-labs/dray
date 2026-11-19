@@ -36,11 +36,13 @@ const ACTIVE =
 
 /// One gray card: an icon up top, what it does at the foot. A link with
 /// `href`, a button with `onClick`, and only words with neither; `disabled`
-/// with neither draws a way in that isn't open yet, faded.
+/// with neither draws a way in that isn't open yet, faded. `tag` sits in the
+/// top corner and is never faded, so "Last used" still reads on a closed way in.
 export function Card({
   icon,
   label,
   detail,
+  tag,
   corner = false,
   href,
   onClick,
@@ -49,6 +51,7 @@ export function Card({
   icon: ReactNode;
   label: ReactNode;
   detail?: ReactNode;
+  tag?: ReactNode;
   corner?: boolean;
   href?: string;
   onClick?: () => void;
@@ -57,9 +60,14 @@ export function Card({
   const off = disabled && !href && !onClick;
   const inner = (
     <>
-      <span className={`flex items-start justify-between ${off ? "opacity-40" : ""}`}>
-        {icon}
-        {corner && <CornerArrow className="stroke-white/40 light:stroke-black/40" />}
+      <span className="flex items-start justify-between gap-3">
+        <span className={off ? "opacity-40" : ""}>{icon}</span>
+        {(tag || corner) && (
+          <span className="flex items-center gap-3">
+            {tag}
+            {corner && <CornerArrow className="stroke-white/40 light:stroke-black/40" />}
+          </span>
+        )}
       </span>
       <span className="flex flex-col gap-0.5">
         <span
@@ -87,6 +95,15 @@ export function Card({
     <div aria-disabled={off || undefined} className={GRAY}>
       {inner}
     </div>
+  );
+}
+
+/// The tag on the card this browser last signed in with.
+export function LastUsed() {
+  return (
+    <span className="bg-white/10 px-1.5 py-[3px] font-mono text-[10px] leading-3 tracking-[0.06em] whitespace-nowrap text-white/70 uppercase light:bg-black/[0.06] light:text-black/60">
+      Last used
+    </span>
   );
 }
 
