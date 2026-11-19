@@ -781,7 +781,7 @@ pub const SLUG_PREFIX: &str = "github:";
 
 /// A leading `/` is taken too: the app qualifies a remote server's key as a
 /// path, `dray://<server>/github:…`, and unwraps it to `/github:…`.
-fn slug_of(cwd: &str) -> Option<&str> {
+pub(crate) fn slug_of(cwd: &str) -> Option<&str> {
     let cwd = cwd.strip_prefix('/').unwrap_or(cwd);
     cwd.strip_prefix(SLUG_PREFIX).filter(|slug| slug.contains('/'))
 }
@@ -1298,7 +1298,7 @@ pub async fn merge_pr(
     crate::analytics::feature_used("pr_merged");
     // Only ever the reader's merge, from a client: a bot and its tasks merge
     // with `gh` and never reach this, so the bot is told of it.
-    crate::bots::note_merge(&cwd, number).await;
+    crate::bots::note_merge(&cwd, number, settle.as_deref(), &sink).await;
     let Some(task) = settle else { return Ok(false) };
     // Off the reply: a task on another machine can take a while to settle.
     tokio::spawn(async move {

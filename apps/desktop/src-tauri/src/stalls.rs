@@ -560,6 +560,23 @@ struct State {
     /// When each unsent nudge was last tried.
     tried: HashMap<String, i64>,
     cards: HashMap<String, BotStalls>,
+    /// Each bot task's PR as last judged, by task: what tells a merge made
+    /// outside Dray, which nothing else reports.
+    pr_seen: HashMap<String, (u64, PrMarkState)>,
+}
+
+/// Tasks whose PR this pass reads merged where an earlier one read it open,
+/// with `seen` moved on to what each reads now. A PR first seen merged says
+/// nothing: after a restart that would retell every merge the bot knew of.
+fn newly_merged(seen: &mut HashMap<String, (u64, PrMarkState)>, prs: &HashMap<&str, &PrMark>) -> Vec<(String, u64)> {
+    let mut out = Vec::new();
+    for (id, pr) in prs {
+        let was = seen.insert(id.to_string(), (pr.number, pr.state));
+        if pr.state == PrMarkState::Merged && was == Some((pr.number, PrMarkState::Open)) {
+            out.push((id.to_string(), pr.number));
+        }
+    }
+    out
 }
 
 static STATE: LazyLock<tokio::sync::Mutex<State>> = LazyLock::new(Default::default);
@@ -631,6 +648,26 @@ pub async fn last_known(id: &str) -> Option<SessionIndexItem> {
     let mut state = STATE.lock().await;
     load_remote(&mut state).await;
     state.remote.values().flat_map(|r| &r.facts).find(|f| f.item.session_id == id).map(|f| f.item.clone())
+}
+
+/// Bot tasks on other machines whose PR is `number` in the repo `cwd` names
+/// as a `github:` key, as their machines last described them: merged through
+/// that key, they are in no index here to match by branch.
+pub async fn remote_with_pr(cwd: &str, number: u64) -> Vec<SessionIndexItem> {
+    let Some(slug) = crate::github::slug_of(cwd) else { return Vec::new() };
+    let mut state = STATE.lock().await;
+    load_remote(&mut state).await;
+    state
+        .remote
+        .values()
+        .flat_map(|r| &r.facts)
+        .filter(|f| {
+            f.pr.as_ref().is_some_and(|p| {
+                p.number == number && crate::github::slug_from_pr_url(&p.url).as_deref() == Some(slug)
+            })
+        })
+        .map(|f| f.item.clone())
+        .collect()
 }
 
 /// A machine failed the reports poll, or is turned off: its tasks stay, from
@@ -942,6 +979,11 @@ async fn pass(sink: &Sink) {
     }
     let live_keys: HashSet<String> = state.ready_since.keys().filter(|k| by_id.contains_key(k.split(':').next().unwrap_or_default())).cloned().collect();
     state.ready_since.retain(|k, _| live_keys.contains(k));
+    let merged: Vec<(SessionIndexItem, u64)> = newly_merged(&mut state.pr_seen, &prs)
+        .into_iter()
+        .filter_map(|(id, n)| by_id.get(id.as_str()).map(|j| (j.facts.item.clone(), n)))
+        .collect();
+    state.pr_seen.retain(|id, _| by_id.contains_key(id.as_str()));
     let fixes = prune_fixes(&prs).await;
     drop(prs);
 
@@ -972,6 +1014,9 @@ async fn pass(sink: &Sink) {
         if let Err(e) = sink.emit("bot_stalls_changed", &card) {
             eprintln!("[stalls emit err] {e}");
         }
+    }
+    for (item, number) in merged {
+        crate::bots::note_seen_merge(&item, number, sink).await;
     }
     nudge(due_nudges, tried_before, now, sink).await;
 }
@@ -1144,6 +1189,21 @@ mod tests {
         let s = judge(&[facts(item("a", T0), Some(pr))], &mut HashMap::new(), at(3));
         assert!(s[0].fix.is_none());
         assert_eq!(s[0].row.kind, StallKind::Waiting);
+    }
+
+    /// A merge made on GitHub reaches no merge path in Dray, so the bot hears
+    /// of it from the judge seeing the PR go from open to merged, once.
+    #[test]
+    fn a_pr_seen_open_then_merged_is_told_once() {
+        let open = mark(7, "MERGEABLE", "CLEAN", PrChecksState::Clear);
+        let mut merged = open.clone();
+        merged.state = PrMarkState::Merged;
+        let mut seen = HashMap::new();
+        // First seen merged, as after a restart: nothing to tell.
+        assert!(newly_merged(&mut seen, &HashMap::from([("a", &merged)])).is_empty());
+        assert!(newly_merged(&mut seen, &HashMap::from([("b", &open)])).is_empty());
+        assert_eq!(newly_merged(&mut seen, &HashMap::from([("b", &merged)])), [("b".to_string(), 7)]);
+        assert!(newly_merged(&mut seen, &HashMap::from([("b", &merged)])).is_empty());
     }
 
     #[test]

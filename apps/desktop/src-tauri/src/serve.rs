@@ -1970,7 +1970,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         // The reader's own stop, settle and delete are noted for the task's bot
         // here, on the client wire: `dray` is how the bot does each itself.
         interrupt_session(session_id: String) => crate::bots::reader_did(
-            &session_id, Some(crate::bots::Act::Stopped), crate::interrupt_session(&session_id, sink),
+            &session_id, Some(crate::bots::Act::Stopped), &sink.clone(), crate::interrupt_session(&session_id, sink),
         ).await;
         stop_task(session_id: String, task_id: String) => crate::stop_task(&session_id, &task_id).await;
         cancel_queued(session_id: String) => crate::cancel_queued(&session_id, sink).await;
@@ -1983,6 +1983,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             crate::bots::reader_did(
                 &session_id,
                 (archived == Some(true)).then_some(crate::bots::Act::Settled),
+                &sink.clone(),
                 crate::set_session_flags(&session_id, archived, pinned, hidden, aside, sink),
             ).await;
         // Set aside on a row whose own server is down (#1050).
@@ -1998,7 +1999,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         flush_held_flags(machine: String) => ok(crate::held_flags::flush_now(machine, sink).await);
         rename_session(session_id: String, title: String) => crate::rename_session(session_id, title, sink).await;
         delete_session(session_id: String) => crate::bots::reader_did(
-            &session_id, Some(crate::bots::Act::Deleted), crate::delete_session(&session_id, sink),
+            &session_id, Some(crate::bots::Act::Deleted), &sink.clone(), crate::delete_session(&session_id, sink),
         ).await;
         fork_session(session_id: String, fork_id: String, worktree: bool) =>
             crate::fork_session(&session_id, &fork_id, worktree).await;
