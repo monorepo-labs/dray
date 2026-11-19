@@ -11,7 +11,7 @@ import { backToApp, mintAppCode, readAppAuth } from "@/lib/app-auth";
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const request = readAppAuth(url.searchParams);
-  if (!request) return new Response("This sign-in link is broken. Start again from Dray.", { status: 400 });
+  if (!request) return Response.redirect(new URL("/login?error=broken_link", url.origin).toString(), 302);
 
   if (url.searchParams.has("error")) return Response.redirect(backToApp(request, { error: "cancelled" }), 302);
 

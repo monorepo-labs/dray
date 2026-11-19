@@ -326,7 +326,7 @@ pub async fn callback(sink: &Sink, query: &str) -> (u16, String) {
         }
     };
     let Some(pending) = pending else {
-        return (400, page("This sign-in has ended", "Go back to Dray and start again."));
+        return (400, page("This sign-in has ended", "Go back to Dray and start again.", true));
     };
     let finished = match (error, code) {
         (Some(_), _) => Err("cancelled".to_string()),
@@ -334,9 +334,9 @@ pub async fn callback(sink: &Sink, query: &str) -> (u16, String) {
         (None, None) => Err("The site sent no code.".to_string()),
     };
     let reply = match &finished {
-        Ok(()) => (200, page("You're signed in", "You can close this tab and go back to Dray.")),
-        Err(why) if why == "cancelled" => (200, page("Sign-in was cancelled", "Go back to Dray to try again.")),
-        Err(why) => (502, page("Couldn't finish signing in", why)),
+        Ok(()) => (200, page("You're signed in", "You can close this tab and go back to Dray.", false)),
+        Err(why) if why == "cancelled" => (200, page("Sign-in was cancelled", "Go back to Dray to try again.", true)),
+        Err(why) => (502, page("Couldn't finish signing in", why, true)),
     };
     memory().error = finished.err();
     let _ = sink.emit(CHANGED, ());
@@ -363,19 +363,47 @@ async fn finish(sink: &Sink, pending: &Pending, code: &str) -> Result<(), String
     save(sink, account).await
 }
 
-/// The small page the browser lands on, in the gate's own black.
-fn page(title: &str, line: &str) -> String {
+/// The page the browser lands on, drawn like the gate and drayhq.com's
+/// sign-in pages: what happened as the mono label (red when it went wrong),
+/// what to do next as the heading, the striped tiles along the bottom.
+fn page(label: &str, heading: &str, danger: bool) -> String {
     let escape = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    let tiles: String = TILES
+        .iter()
+        .flat_map(|(fill, list)| {
+            list.split(',').map(move |p| {
+                let (x, y) = p.split_once(' ').unwrap_or(("0", "0"));
+                format!("<rect x='{x}' y='{y}' width='60' height='60' fill='{fill}'/><rect x='{x}' y='{y}' width='60' height='60' fill='url(#s)'/>")
+            })
+        })
+        .collect();
     format!(
-        "<!doctype html><meta charset=utf-8><title>{t}</title>\
-         <body style=\"margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;\
-         background:#000;color:#fff;font:15px/1.5 -apple-system,system-ui,sans-serif\">\
-         <div style=\"max-width:420px;padding:24px\"><h1 style=\"font-weight:300;font-size:32px;margin:0 0 8px\">{t}</h1>\
-         <p style=\"margin:0;color:#ffffffcc\">{l}</p></div>",
-        t = escape(title),
-        l = escape(line)
+        "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>{l}</title>\
+         <style>@media (min-width:1024px){{main{{padding-left:126px!important}}}}</style>\
+         <body style=\"margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;overflow:hidden;\
+         background:#000;color:#fff;font-family:Inter,-apple-system,system-ui,sans-serif;-webkit-font-smoothing:antialiased\">\
+         <svg width=1440 height=300 viewBox='0 0 1440 300' style='position:fixed;bottom:0;left:50%;transform:translateX(-50%)' aria-hidden=true>\
+         <defs><pattern id=s width=6 height=60 patternUnits=userSpaceOnUse><rect width=2 height=60 fill='#00000080'/></pattern></defs>{tiles}</svg>\
+         <main style=\"position:relative;width:100%;max-width:960px;padding:0 24px 200px;box-sizing:border-box\">\
+         <p style=\"display:flex;align-items:center;gap:8px;margin:0;font:11px/14px ui-monospace,SFMono-Regular,Menlo,monospace;\
+         letter-spacing:.06em;text-transform:uppercase;color:{c}\">\
+         <svg width=11 height=14 viewBox='0 0 159 200' aria-hidden=true><path fill=currentColor d='{MARK}'/></svg>{l}</p>\
+         <h1 style=\"margin:14px 0 0;font-size:36px;line-height:40px;font-weight:300;letter-spacing:-.03em\">{h}</h1></main>",
+        l = escape(label),
+        h = escape(heading),
+        c = if danger { "#FF6467" } else { "#ffffff80" },
     )
 }
+
+const MARK: &str = "M101.004 0C104.603 0 107.52 2.926 107.52 6.536V18.301C107.52 36.349 122.108 50.98 140.102 50.98H152.484C156.083 50.98 159 53.907 159 57.516V142.484C159 146.093 156.083 149.02 152.484 149.02H140.102C122.108 149.02 107.52 163.651 107.52 181.699V193.464C107.52 197.074 104.603 200 101.004 200H0.326C0.146 200 0 199.854 0 199.673V134.967C0 134.787 0.146 134.641 0.326 134.641H61.254C79.249 134.641 93.836 120.009 93.836 101.961V98.039C93.836 79.991 79.249 65.36 61.254 65.36H0.326C0.146 65.36 0 65.213 0 65.033V0.327C0 0.146 0.146 0 0.326 0H101.004Z";
+
+/// The gate's tiles, by fill, as `x y` corners on a 60px grid.
+const TILES: [(&str, &str); 4] = [
+    ("#121212", "0 180,60 60,180 240,300 180,420 240,480 180,660 180,720 120,960 120,1020 180,1020 240,1080 240,1140 120,1140 240,1200 240,1260 120"),
+    ("#0C0C0C", "0 240,120 240,180 120,180 180,240 180,300 120,420 180,540 180,540 240,660 120,660 240,720 240,780 240,840 120,900 120,960 180,1260 240,1380 240"),
+    ("#181818", "60 180,60 240,240 240,300 240,360 60,360 240,600 180,600 240,840 180,840 240,900 240,1140 180,1260 60,1320 240"),
+    ("#1F1F1F", "480 240,960 240,1260 180"),
+];
 
 /// Asks the site to revoke a credential. True once it holds none.
 async fn revoke(held: &Held) -> bool {
@@ -415,7 +443,7 @@ mod tests {
 
     #[test]
     fn the_landing_page_escapes_what_it_shows() {
-        assert!(page("a", "<script>").contains("&lt;script&gt;"));
+        assert!(page("a", "<script>", true).contains("&lt;script&gt;"));
     }
 
     #[tokio::test]

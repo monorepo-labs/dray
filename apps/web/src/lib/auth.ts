@@ -38,6 +38,9 @@ export const auth = betterAuth({
   emailAndPassword: { enabled: true, requireEmailVerification: true, minPasswordLength: 8 },
   emailVerification: { sendOnSignIn: true, autoSignInAfterVerification: true },
   account: { accountLinking: { enabled: true, trustedProviders: ["google", "github"] } },
+  // A failed provider sign-in lands back on the sign-in page, which says so,
+  // rather than on Better Auth's own unstyled error page.
+  onAPIError: { errorURL: "/login" },
   socialProviders: {
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID!,

@@ -1,24 +1,47 @@
 "use client";
 
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 
 import { authClient } from "@/lib/auth-client";
 
-import { ERROR, INPUT, LABEL, PRIMARY, SECONDARY } from "./styles";
+import {
+  BlueCard,
+  Card,
+  Cards,
+  FIELD,
+  FieldCard,
+  GitHubIcon,
+  GoogleIcon,
+  Heading,
+  Label,
+  LINK,
+  Links,
+  MailIcon,
+  Spinner,
+} from "./SignInParts";
 
 type Provider = "github" | "google";
 type Mode = "methods" | "sign-in" | "sign-up" | "verify" | "forgot" | "reset";
 
-const ROW =
-  "flex h-12 w-full items-center gap-3 border border-white/20 px-4 text-left text-[15px] transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 light:border-black/15 light:hover:bg-black/5";
-
 /// Every way into Dray: GitHub, Google, or an email whose address a code
 /// proves. Lands on `next` once signed in. `via` is the method the desktop
-/// app picked, started at once so the reader isn't asked twice.
-export function SignInMethods({ next, via, github }: { next: string; via: string | null; github: boolean }) {
+/// app picked, started at once so the reader isn't asked twice. `problem` is
+/// why the last try failed, shown until the next one.
+export function SignInMethods({
+  next,
+  via,
+  github,
+  problem = null,
+}: {
+  next: string;
+  via: string | null;
+  github: boolean;
+  problem?: string | null;
+}) {
   const [mode, setMode] = useState<Mode>(via === "email" ? "sign-in" : "methods");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<Provider | "form" | null>(null);
+  const [error, setError] = useState<string | null>(problem);
+  const [notice, setNotice] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -31,8 +54,8 @@ export function SignInMethods({ next, via, github }: { next: string; via: string
   const done = fromApp ? `${next}&confirmed=1` : next;
 
   const social = async (provider: Provider) => {
-    if (provider === "github" && !github) return setError("GitHub sign-in isn't set up on this site yet.");
-    setBusy(true);
+    if (provider === "github" && !github) return setError("GitHub sign-in isn't set up here yet");
+    setBusy(provider);
     setError(null);
     const { error } = await authClient.signIn.social({
       provider,
@@ -41,8 +64,8 @@ export function SignInMethods({ next, via, github }: { next: string; via: string
     });
     // On success the browser is already leaving for the provider.
     if (error) {
-      setError(error.message ?? "Couldn't start sign-in. Try again.");
-      setBusy(false);
+      setError(error.message ?? "Couldn't start sign-in");
+      setBusy(null);
     }
   };
 
@@ -56,214 +79,250 @@ export function SignInMethods({ next, via, github }: { next: string; via: string
 
   const run = async (e: FormEvent, step: () => Promise<{ error: { message?: string; code?: string } | null }>) => {
     e.preventDefault();
-    setBusy(true);
+    setBusy("form");
     setError(null);
+    setNotice(null);
     const { error } = await step();
-    setBusy(false);
+    setBusy(null);
     return error;
   };
 
-  const signedIn = () => window.location.assign(done);
+  const signedIn = () => {
+    // Held busy: the next page is already loading.
+    setBusy("form");
+    window.location.assign(done);
+  };
 
   const signIn = async (e: FormEvent) => {
     const error = await run(e, () => authClient.signIn.email({ email, password }));
     if (!error) return signedIn();
     // An unverified address gets a fresh code on every sign-in attempt.
     if (error.code === "EMAIL_NOT_VERIFIED") return go("verify");
-    setError(error.message ?? "Couldn't sign in.");
+    setError(error.message ?? "Couldn't sign in");
   };
   const signUp = async (e: FormEvent) => {
     const error = await run(e, () => authClient.signUp.email({ email, password, name: email.split("@")[0] }));
-    if (error) return setError(error.message ?? "Couldn't create the account.");
+    if (error) return setError(error.message ?? "Couldn't create the account");
     go("verify");
   };
   const verify = async (e: FormEvent) => {
     const error = await run(e, () => authClient.emailOtp.verifyEmail({ email, otp: code.trim() }));
-    if (error) return setError(error.message ?? "That code didn't work.");
+    if (error) return setError(error.message ?? "That code didn't work");
     signedIn();
   };
   const forgot = async (e: FormEvent) => {
     const error = await run(e, () => authClient.emailOtp.requestPasswordReset({ email }));
-    if (error) return setError(error.message ?? "Couldn't send a code.");
+    if (error) return setError(error.message ?? "Couldn't send a code");
     go("reset");
   };
   const reset = async (e: FormEvent) => {
     const error = await run(e, () => authClient.emailOtp.resetPassword({ email, otp: code.trim(), password }));
-    if (error) return setError(error.message ?? "Couldn't reset the password.");
+    if (error) return setError(error.message ?? "Couldn't reset the password");
     setPassword("");
     go("sign-in");
+    setNotice("Password changed. Sign in with it.");
   };
   const resend = async () => {
     setError(null);
-    const { error } = await authClient.emailOtp.sendVerificationOtp({ email, type: "email-verification" });
-    setError(error ? (error.message ?? "Couldn't send a code.") : null);
+    setNotice(null);
+    const { error } =
+      mode === "reset"
+        ? await authClient.emailOtp.requestPasswordReset({ email })
+        : await authClient.emailOtp.sendVerificationOtp({ email, type: "email-verification" });
+    if (error) setError(error.message ?? "Couldn't send a code");
+    else setNotice(`New code sent to ${email}`);
   };
   const go = (to: Mode) => {
     setCode("");
     setError(null);
+    setNotice(null);
     setMode(to);
   };
 
+  /// The label line: what went wrong, else what just happened, else `plain`.
+  const label = (plain: string) =>
+    error ? <Label danger>{trimStop(error)}</Label> : <Label>{notice ? trimStop(notice) : plain}</Label>;
+
+  if (mode === "methods")
+    return (
+      <>
+        {label("Welcome to Dray")}
+        <Heading>{error ? "Pick an account to try again." : "Pick an account to sign in with."}</Heading>
+        <Cards>
+          <Card
+            icon={busy === "github" ? <Spinner size={40} /> : <GitHubIcon />}
+            label="GitHub"
+            corner
+            disabled={busy !== null}
+            onClick={() => social("github")}
+          />
+          <Card
+            icon={busy === "google" ? <Spinner size={40} /> : <GoogleIcon />}
+            label="Google"
+            corner
+            disabled={busy !== null}
+            onClick={() => social("google")}
+          />
+          <Card icon={<MailIcon />} label="Email" corner disabled={busy !== null} onClick={() => go("sign-in")} />
+        </Cards>
+      </>
+    );
+
   const emailField = (
-    <label className="flex flex-col gap-2">
-      <span className={LABEL}>Email</span>
+    <FieldCard label="Email">
       <input
-        className={INPUT}
+        className={FIELD}
         type="email"
         autoComplete="email"
+        placeholder="you@example.com"
         required
         autoFocus
         value={email}
         onChange={(e) => setEmail(e.target.value)}
       />
-    </label>
+    </FieldCard>
   );
-  const passwordField = (label: string, autoComplete: string) => (
-    <label className="flex flex-col gap-2">
-      <span className={LABEL}>{label}</span>
+  const passwordField = (name: string, autoComplete: string, focus = false) => (
+    <FieldCard label={name}>
       <input
-        className={INPUT}
+        className={FIELD}
         type="password"
         autoComplete={autoComplete}
+        placeholder="At least 8 characters"
         required
         minLength={8}
+        autoFocus={focus}
         value={password}
         onChange={(e) => setPassword(e.target.value)}
       />
-    </label>
+    </FieldCard>
   );
-  const codeField = (
-    <label className="flex flex-col gap-2">
-      <span className={LABEL}>Code from the email</span>
-      <input
-        className={`${INPUT} font-mono tracking-[0.3em]`}
-        inputMode="numeric"
-        autoComplete="one-time-code"
-        required
-        autoFocus
-        maxLength={6}
-        value={code}
-        onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-      />
-    </label>
-  );
-  const link = (label: string, to: Mode) => (
-    <button type="button" className={SECONDARY} onClick={() => go(to)}>
-      {label}
+  const link = (text: string, onClick: () => void) => (
+    <button type="button" className={LINK} onClick={onClick} disabled={busy !== null}>
+      {text}
     </button>
   );
-  const errorLine = error && <p className={ERROR}>{error}</p>;
-
-  if (mode === "methods")
-    return (
-      <div className="flex max-w-[400px] flex-col gap-2">
-        <button type="button" className={ROW} disabled={busy} onClick={() => social("github")}>
-          <GitHubGlyph className="size-4" /> Continue with GitHub
-        </button>
-        <button type="button" className={ROW} disabled={busy} onClick={() => social("google")}>
-          <GoogleGlyph className="size-4" /> Continue with Google
-        </button>
-        <button type="button" className={ROW} disabled={busy} onClick={() => go("sign-in")}>
-          <MailGlyph className="size-4" /> Continue with email
-        </button>
-        {errorLine}
-      </div>
-    );
-
-  const form = (onSubmit: (e: FormEvent) => void, submit: string, body: React.ReactNode, links: React.ReactNode) => (
-    <form onSubmit={onSubmit} className="flex max-w-[400px] flex-col gap-5">
-      {body}
-      <button type="submit" className={PRIMARY} disabled={busy}>
-        {submit}
-      </button>
-      {errorLine}
-      <div className="flex flex-wrap gap-2">{links}</div>
+  const step = (onSubmit: (e: FormEvent) => void, plain: string, heading: string, cards: ReactNode, links: ReactNode) => (
+    <form onSubmit={onSubmit}>
+      {label(plain)}
+      <Heading>{heading}</Heading>
+      <Cards>{cards}</Cards>
+      {links}
     </form>
   );
 
   if (mode === "sign-in")
-    return form(
+    return step(
       signIn,
-      "Sign in",
+      "Welcome to Dray",
+      "Sign in with email.",
       <>
         {emailField}
         {passwordField("Password", "current-password")}
+        <BlueCard label="Sign in" busy={busy === "form"} />
       </>,
-      <>
-        {link("Back", "methods")}
-        {link("Create an account", "sign-up")}
-        {link("Forgot password", "forgot")}
-      </>,
+      <Links onBack={() => go("methods")}>
+        {link("Create an account", () => go("sign-up"))}
+        {link("Forgot password", () => go("forgot"))}
+      </Links>,
     );
   if (mode === "sign-up")
-    return form(
+    return step(
       signUp,
-      "Create account",
+      "Welcome to Dray",
+      "Create your account.",
       <>
         {emailField}
-        {passwordField("Password, at least 8 characters", "new-password")}
+        {passwordField("Password", "new-password")}
+        <BlueCard label="Create account" busy={busy === "form"} />
       </>,
-      <>
-        {link("Back", "methods")}
-        {link("Have an account? Sign in", "sign-in")}
-      </>,
+      <Links onBack={() => go("methods")}>{link("Have an account? Sign in", () => go("sign-in"))}</Links>,
     );
   if (mode === "verify")
-    return form(
+    return step(
       verify,
-      "Verify",
+      `Sent to ${email}`,
+      "Enter the code we emailed you.",
       <>
-        <p className="text-[15px]">We emailed a code to {email}.</p>
-        {codeField}
+        <CodeBoxes value={code} onChange={setCode} />
+        <BlueCard label="Verify" busy={busy === "form"} />
       </>,
-      <>
-        {link("Back", "sign-in")}
-        <button type="button" className={SECONDARY} onClick={resend}>
-          Send a new code
-        </button>
-      </>,
+      <Links onBack={() => go("sign-in")}>{link("Send a new code", resend)}</Links>,
     );
   if (mode === "forgot")
-    return form(forgot, "Send a reset code", emailField, link("Back", "sign-in"));
-  return form(
+    return step(
+      forgot,
+      "Forgot password",
+      "We'll email you a code to reset it.",
+      <>
+        {emailField}
+        <BlueCard label="Send a code" busy={busy === "form"} />
+      </>,
+      <Links onBack={() => go("sign-in")} />,
+    );
+  return step(
     reset,
-    "Set new password",
+    `Sent to ${email}`,
+    "Set a new password.",
     <>
-      <p className="text-[15px]">We emailed a code to {email}.</p>
-      {codeField}
-      {passwordField("New password, at least 8 characters", "new-password")}
+      <FieldCard label="Code from the email">
+        <input
+          className={`${FIELD} font-mono tracking-[0.3em]`}
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          placeholder="000000"
+          required
+          autoFocus
+          maxLength={6}
+          value={code}
+          onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+        />
+      </FieldCard>
+      {passwordField("New password", "new-password")}
+      <BlueCard label="Set password" busy={busy === "form"} />
     </>,
-    link("Back", "sign-in"),
+    <Links onBack={() => go("forgot")}>{link("Send a new code", resend)}</Links>,
   );
 }
 
-function GitHubGlyph({ className }: { className?: string }) {
+/// Six boxes for the emailed code, drawn over one real input so paste,
+/// autofill and the keyboard's one-time-code suggestion all just work.
+function CodeBoxes({ value, onChange }: { value: string; onChange: (code: string) => void }) {
+  const [focused, setFocused] = useState(true);
+  const at = Math.min(value.length, 5);
   return (
-    <svg viewBox="0 0 24 24" aria-hidden className={className}>
-      <path
-        fill="currentColor"
-        d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.2-.4-.6-1.6 0-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.6.2 2.8 0 3.2.9.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.5.4.9 1 .9 2.2v3.3c0 .3.1.7.8.6A12 12 0 0 0 12 .3"
+    <label className="relative flex min-w-0 flex-[2_1_0] gap-[2px] sm:flex-[1.75_1_0]">
+      <input
+        className="absolute inset-0 z-10 w-full cursor-text bg-transparent text-transparent caret-transparent opacity-0 outline-none"
+        aria-label="Code from the email"
+        inputMode="numeric"
+        autoComplete="one-time-code"
+        required
+        autoFocus
+        minLength={6}
+        maxLength={6}
+        pattern="\d{6}"
+        value={value}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        onChange={(e) => onChange(e.target.value.replace(/\D/g, "").slice(0, 6))}
       />
-    </svg>
+      {Array.from({ length: 6 }, (_, i) => {
+        const current = focused && i === at;
+        return (
+          <span
+            key={i}
+            className={`flex h-[140px] min-w-0 flex-1 basis-0 items-center justify-center bg-[#1C1C1C] font-inter text-[44px] font-light text-white sm:h-[220px] sm:text-[56px] ${current ? "shadow-[inset_0_-2px_0_#FFFFFFE6]" : ""}`}
+          >
+            {value[i] ?? (current && <span className="h-14 w-px animate-pulse bg-white/90" />)}
+          </span>
+        );
+      })}
+    </label>
   );
 }
 
-function MailGlyph({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden className={className}>
-      <path fill="currentColor" d="M2 5h20v1.4l-10 6.4L2 6.4z" />
-      <path fill="currentColor" d="M2 8.8l10 6.4 10-6.4V19H2z" />
-    </svg>
-  );
-}
-
-export function GoogleGlyph({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden className={className}>
-      <path fill="#4285F4" d="M23.5 12.27c0-.85-.08-1.67-.22-2.45H12v4.64h6.45a5.5 5.5 0 0 1-2.4 3.62v3h3.88c2.27-2.09 3.57-5.17 3.57-8.81Z" />
-      <path fill="#34A853" d="M12 24c3.24 0 5.96-1.07 7.94-2.9l-3.88-3.02c-1.07.72-2.45 1.15-4.06 1.15-3.13 0-5.78-2.11-6.72-4.95H1.27v3.11A12 12 0 0 0 12 24Z" />
-      <path fill="#FBBC05" d="M5.28 14.28a7.2 7.2 0 0 1 0-4.56V6.61H1.27a12 12 0 0 0 0 10.78l4.01-3.11Z" />
-      <path fill="#EA4335" d="M12 4.77c1.76 0 3.34.61 4.59 1.8l3.44-3.44A11.97 11.97 0 0 0 1.27 6.61l4.01 3.11C6.22 6.88 8.87 4.77 12 4.77Z" />
-    </svg>
-  );
+/// Labels are one line in caps; a sentence's full stop reads oddly there.
+function trimStop(text: string) {
+  return text.replace(/\.\s*$/, "");
 }

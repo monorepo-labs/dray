@@ -1,11 +1,10 @@
 "use client";
 
-import Link from "next/link";
-import { useState, useTransition } from "react";
+import { type FormEvent, useState, useTransition } from "react";
 
 import { approveLink, denyLink } from "@/app/link/actions";
 
-import { ERROR, H1, LABEL, LEAD, MUTED, PRIMARY, ROWS, SECONDARY } from "./styles";
+import { BlueCard, Card, Cards, CloseIcon, Heading, Label, OrgIcon, ServerIcon } from "./SignInParts";
 
 type Org = { id: string; name: string; slug: string };
 
@@ -39,107 +38,80 @@ export function LinkApprove({
   if (outcome === "cancelled")
     return (
       <>
-        <h1 className={H1}>Cancelled.</h1>
-        <p className={LEAD}>{name} won&apos;t be linked. You can close this tab.</p>
+        <Label>Cancelled</Label>
+        <Heading>{name} won&apos;t be linked. You can close this tab.</Heading>
       </>
     );
   if (outcome)
     return (
       <>
-        <h1 className={H1}>Linked.</h1>
-        <p className={LEAD}>
+        <Label>Linked</Label>
+        <Heading>
           {name} joins {outcome.linked.name} in a few seconds. You can close this tab.
-        </p>
-        <div className="mt-10">
-          <Link href={`/app/${outcome.linked.slug}/servers`} className={SECONDARY}>
-            View servers
-          </Link>
-        </div>
+        </Heading>
+        <Cards>
+          <Card icon={<ServerIcon />} label="View servers" corner href={`/app/${outcome.linked.slug}/servers`} />
+          <Spacer />
+          <Spacer />
+        </Cards>
       </>
     );
 
-  const row = "flex items-center gap-4 px-4 py-3";
+  const approve = (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    start(async () => {
+      const answer = await approveLink(code, org.id);
+      if ("error" in answer) setError(answer.error);
+      else setOutcome({ linked: { ...org, ...answer.org } });
+    });
+  };
+  const cancel = () => {
+    setError(null);
+    start(async () => {
+      const problem = await denyLink(code);
+      if (problem) setError(problem);
+      else setOutcome("cancelled");
+    });
+  };
+
   return (
-    <>
-      <h1 className={H1}>Link a server.</h1>
-      <p className={LEAD}>Approve only a code you started yourself.</p>
-
-      <dl className={`mt-10 ${ROWS}`}>
-        <div className={row}>
-          <dt className={`w-20 shrink-0 ${LABEL}`}>Server</dt>
-          <dd className="min-w-0 truncate text-[15px]">{name}</dd>
-        </div>
-        <div className={row}>
-          <dt className={`w-20 shrink-0 ${LABEL}`}>Code</dt>
-          <dd className="font-mono text-[15px] tracking-[0.12em]">{code}</dd>
-        </div>
-        {orgs.length === 1 && (
-          <div className={row}>
-            <dt className={`w-20 shrink-0 ${LABEL}`}>Org</dt>
-            <dd className="min-w-0 truncate text-[15px]">{org.name}</dd>
-          </div>
-        )}
-      </dl>
-
-      {orgs.length > 1 && (
-        <fieldset className="mt-8">
-          <legend className={`mb-3 ${LABEL}`}>Org</legend>
-          <div className={ROWS}>
-            {orgs.map((o) => (
-              <label key={o.id} className="flex cursor-pointer items-center gap-3 px-4 py-3 hover:bg-white/5 light:hover:bg-black/[0.03]">
-                <input
-                  type="radio"
-                  name="org"
-                  value={o.id}
-                  checked={o.id === orgId}
-                  onChange={() => setOrgId(o.id)}
-                  className="accent-white light:accent-[#0A0A0A]"
-                />
-                <span className="min-w-0 truncate text-[15px]">{o.name}</span>
-                {o.id === currentOrgId && <span className={`ml-auto shrink-0 text-[13px] ${MUTED}`}>Linked here now</span>}
-              </label>
-            ))}
-          </div>
-        </fieldset>
-      )}
-
-      {moves && (
-        <p className="mt-6 border-l-2 border-[#FFE14D] pl-3 text-[14px]">
-          It&apos;s linked to another org; approving moves it.
-        </p>
-      )}
-
-      <div className="mt-8 flex gap-2">
-        <button
-          type="button"
-          disabled={pending}
-          className={PRIMARY}
-          onClick={() =>
-            start(async () => {
-              const answer = await approveLink(code, org.id);
-              if ("error" in answer) setError(answer.error);
-              else setOutcome({ linked: { ...org, ...answer.org } });
-            })
+    <form onSubmit={approve}>
+      {error ? <Label danger>{error.replace(/\.\s*$/, "")}</Label> : <Label>Link a server</Label>}
+      <Heading>Approve only a code you started yourself.</Heading>
+      <Cards>
+        <Card icon={<ServerIcon />} label={name} detail={<span className="font-mono tracking-[0.12em]">{code}</span>} />
+        <Card
+          icon={<OrgIcon />}
+          label={
+            orgs.length > 1 ? (
+              <select
+                aria-label="Org"
+                value={orgId}
+                onChange={(e) => setOrgId(e.target.value)}
+                className="-ml-1 w-full max-w-full cursor-pointer truncate bg-transparent pr-2 text-white/80 outline-none [&>option]:bg-[#1C1C1C]"
+              >
+                {orgs.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}
+                    {o.id === currentOrgId ? " (linked here now)" : ""}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              org.name
+            )
           }
-        >
-          Approve
-        </button>
-        <button
-          type="button"
-          disabled={pending}
-          className={SECONDARY}
-          onClick={() =>
-            start(async () => {
-              const problem = await denyLink(code);
-              if (problem) setError(problem);
-              else setOutcome("cancelled");
-            })
-          }
-        >
-          Cancel
-        </button>
-      </div>
-      {error && <p className={`mt-3 ${ERROR}`}>{error}</p>}
-    </>
+          detail={moves ? "Linked to another org; approving moves it" : "The org it joins"}
+        />
+        <BlueCard label="Approve" busy={pending} />
+        <Card icon={<CloseIcon />} label="Cancel" disabled={pending} onClick={cancel} />
+      </Cards>
+    </form>
   );
+}
+
+/// Keeps a lone card at the width it has in a row of three.
+function Spacer() {
+  return <div className="hidden min-w-0 flex-1 basis-0 sm:block" />;
 }
