@@ -1,5 +1,5 @@
 import { prStatus } from "@/lib/pr";
-import type { PrMark } from "@/types/events";
+import type { PrMark, SessionStatus } from "@/types/events";
 
 /// How long a new tip waits before its card can go up. Checks register on
 /// their own schedule after a push — CI and a review bot a few seconds to a
@@ -50,4 +50,13 @@ export function cardDue(mark: PrMark, watch: CardWatch, readAt: number): boolean
   const waited = readAt - watch.since;
   if (waited < SETTLE_MS) return false;
   return (mark.checkCount ?? 0) >= watch.expected || waited >= EXPECT_MS;
+}
+
+/// Whether a task's turn is over, judged on a PR read asked at `readAt`.
+/// `endedAt` is when this app saw the task stop, on its own clock: a task on
+/// another machine stamps `modified` with that machine's. A read asked before
+/// then may predate the turn's last push, so the card waits for the next one
+/// and ready must still hold.
+export function turnEnded(status: SessionStatus, endedAt: number, readAt: number): boolean {
+  return status !== "in_progress" && readAt >= endedAt;
 }
