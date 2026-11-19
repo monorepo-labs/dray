@@ -199,19 +199,22 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
 }
 
 /// The orb and what the task left running: one job by name, several by count.
-/// Said, never enforced — Merge stays the reader's call. Hover lists them all.
+/// Said, never enforced — Merge stays the reader's call. Hovering a count lists them.
 function RunningWork({ tasks }: { tasks: readonly BackgroundTask[] }) {
   const label = runningLabel(tasks);
   if (!label) return null;
   const names = tasks.map((t) => t.description.trim()).filter(Boolean);
+  const line = (
+    <span className="flex min-w-0 items-center gap-1.5" data-testid="merge-card-running">
+      <Orb state="background" variant="spiral" size={12} label="Background work running" />
+      <span className="truncate">{label}</span>
+    </span>
+  );
+  // One job is already named on the card; only a count needs the list.
+  if (tasks.length === 1) return line;
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="flex min-w-0 items-center gap-1.5" data-testid="merge-card-running">
-          <Orb state="background" variant="spiral" size={12} label="Background work running" />
-          <span className="truncate">{label}</span>
-        </span>
-      </TooltipTrigger>
+      <TooltipTrigger asChild>{line}</TooltipTrigger>
       <TooltipContent className="flex-col items-start gap-0.5">
         {names.length ? names.map((name, i) => <span key={i}>{name}</span>) : `${tasks.length} running`}
       </TooltipContent>
