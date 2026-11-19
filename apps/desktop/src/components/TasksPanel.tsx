@@ -64,7 +64,10 @@ function rowState(row: CrewRow, pr: PrMark | undefined): TaskState {
 export type TaskCounts = {
   working: number;
   ready: number;
-  /// Every other task: needs you, waiting on its PR, idle.
+  /// Waiting on CI, the Tasks tab's "soon" with its spinner. Apart from idle
+  /// since it moves on its own.
+  checks: number;
+  /// Every other task: needs you, waiting on review, idle.
   other: number;
 };
 
@@ -73,11 +76,13 @@ export type TaskCounts = {
 /// count leaves them out. A task whose only activity is a background task is
 /// idle here: the status counts tasks, not what runs under them.
 export function taskCounts(rows: CrewRow[], prOf: (row: CrewRow) => PrMark | undefined): TaskCounts {
-  const counts: TaskCounts = { working: 0, ready: 0, other: 0 };
+  const counts: TaskCounts = { working: 0, ready: 0, checks: 0, other: 0 };
   for (const row of rows) {
     if (row.item.aside) continue;
-    const state = rowState(row, prOf(row));
+    const pr = prOf(row);
+    const state = rowState(row, pr);
     if (state === "ready") counts.ready++;
+    else if (state === "soon" && pr && prStatus(pr).key === "checksRunning") counts.checks++;
     else if (state === "busy" && row.busy) counts.working++;
     else counts.other++;
   }
