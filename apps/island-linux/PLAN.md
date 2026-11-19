@@ -142,8 +142,33 @@ Swift island carries over.
   scrolling. Six seconds, held while hovered and while the panel or a card
   covers it; what the panel covered is spent. Esc and Super+⏎ (the Mac's
   ⌘⏎) are grabbed only while it is up.
-- **Dray talks down the pipe the island holds as stdin**: `done <session id>`
-  and `prefs`, a line each, besides the EOF that ends it.
+- **Dray talks down the pipe the island holds as stdin**: `done <session id>`,
+  `waiting <json>` and `prefs`, a line each, besides the EOF that ends it.
+- **Bots look as they do on the Mac** (#1283, catching up #917, #1067, #1069
+  and #1279). A bot's chat — a session whose `cwd` is a bot's folder, from
+  `list_bots`, read again on `bots_changed` — shows its face and name in the
+  title row and the switcher, searched by name, typing dots while it works.
+  The face is the Mac island's own `botface.js` (Blobatar and `botAvatar.ts`),
+  read by path and run in QuickJS (`rquickjs`), its SVG drawn by GPUI. A
+  bot's "N tasks waiting on you" is a `waiting` line carrying the note and the
+  card's rows: the done pill says it in yellow in place of "Done", keeps it
+  when the bot's own turn ends beside it, and grows into the task cards under
+  the pointer — face, title, PR, need, age, a click opening the task in Dray,
+  a ready PR's Merge with the method as the confirm (`merge_pr` settling the
+  task). Several bots share one pill grouped under each face. One bot's
+  alert puts its face in a black disc joined to the pill: out of its left end
+  on a spring above the dock, dropped from its flat bottom at the top
+  (`fluid.rs`); its Done pill drops the name.
+- **Symbols are our own SVGs** (`icons.rs`), drawn after the Mac's SF Symbols
+  and SF Pro's key glyphs: ⏎, ↑↓, send, the camera and search. As text they
+  took whatever the desktop's font had, and DejaVu's sit thin and off the
+  line. A hint line swaps ⏎ and ↑↓ in its text for them, so the box's prompt
+  is drawn over the box while it is empty rather than as its placeholder.
+- **The disc is drawn in parts.** GPUI has no path union, so pill, disc and
+  waist are filled in one black over each other, and a lit edge is each
+  part's outline drawn first; its halo is a blurred box per part. Without a
+  compositor there is no room for a disc, so the face leads inside the pill.
+  GNOME's `enable-animations` off stands in for Reduce Motion.
 - **Prefs are `island.json` under the XDG config dir**, the stand-in for the
   Mac's `defaults` domain: the app writes `key`, and Settings → Island the
   placement and layout, which the island's menu writes too; each write keeps
@@ -171,6 +196,8 @@ Each its own PR.
 5. **Screenshots and drawing on the live screen** (#867).
 6. **Shipped**: the AppImage, Settings → Island, the done pill. What is left
    is #868.
+7. **Bots, caught up with the Mac** (#1283): faces, waiting notes and cards,
+   the face disc.
 
 ## Known limits
 
@@ -194,6 +221,9 @@ The ones the Mac doesn't share are tracked in #868.
   the still is the whole root window.
 - **Settings → Island shows the switch, key, position and layout.** The tap
   pick, the screenshot key and the transcript switch are the Mac's alone.
+- **Another machine's waiting task has no Merge.** Its repo is
+  `dray://<machine>/<path>`, which this computer's server cannot merge in, and
+  the island reaches no other server; the card opens the task in Dray.
 - **One display.** The panel opens on GPUI's primary display; the Mac's
   "the screen with the notch" has no counterpart.
 
