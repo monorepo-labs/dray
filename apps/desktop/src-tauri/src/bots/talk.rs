@@ -38,10 +38,14 @@ static PAIRS: LazyLock<Mutex<HashMap<(String, String), VecDeque<Instant>>>> = La
 /// An `--ask` waiting on the end of the turn it reached.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ask {
-    /// The bot that asked, where the answer goes.
-    pub bot_id: String,
-    pub chain: String,
-    pub hop: u32,
+    /// The session that asked. A bot's answer goes to its chat's newest
+    /// session instead, since an agent switch may have moved it on.
+    pub session_id: String,
+    pub bot_id: Option<String>,
+    /// A bot's exchange, which the answer continues. A task or a routine run
+    /// asking is in none.
+    pub chain: Option<String>,
+    pub hop: Option<u32>,
 }
 
 /// Why a bot's message was not sent.
@@ -134,22 +138,34 @@ fn count_reply(from: &str, to: &str) {
 /// from that bot needs nothing passed back.
 pub fn answered(session_id: &str, to: &str) {
     if let Some(asks) = ASKS.lock().unwrap().get_mut(session_id) {
-        asks.retain(|a| a.bot_id != to);
+        asks.retain(|a| a.bot_id.as_deref() != Some(to));
     }
 }
 
 /// A prompt from `from` reaching `session_id`'s child: the turn it joins now
-/// belongs to that message's chain, or to none.
-pub fn delivered(session_id: &str, from: Option<&MessageSender>) {
-    let bot_message = from.and_then(|f| Some((f.bot_id.as_ref()?, f.chain.as_ref()?, f.hop?, f.ask == Some(true))));
-    let Some((bot_id, chain, hop, ask)) = bot_message else {
-        CURRENT.lock().unwrap().remove(session_id);
-        return;
+/// belongs to that message's chain, or to none. True where it armed an ask,
+/// which the caller takes back with [`undo_ask`] if the send then fails.
+pub fn delivered(session_id: &str, from: Option<&MessageSender>) -> bool {
+    match from.and_then(|f| Some((f.bot_id.as_ref()?, f.chain.as_ref()?, f.hop?))) {
+        Some((_, chain, hop)) => CURRENT.lock().unwrap().insert(session_id.to_string(), (chain.clone(), hop)),
+        None => CURRENT.lock().unwrap().remove(session_id),
     };
-    CURRENT.lock().unwrap().insert(session_id.to_string(), (chain.clone(), hop));
-    if ask {
-        let ask = Ask { bot_id: bot_id.clone(), chain: chain.clone(), hop };
-        ASKS.lock().unwrap().entry(session_id.to_string()).or_default().push(ask);
+    let Some(from) = from.filter(|f| f.ask == Some(true)) else { return false };
+    let ask = Ask {
+        session_id: from.session_id.clone(),
+        bot_id: from.bot_id.clone(),
+        chain: from.chain.clone(),
+        hop: from.hop,
+    };
+    ASKS.lock().unwrap().entry(session_id.to_string()).or_default().push(ask);
+    true
+}
+
+/// Takes back the ask [`delivered`] armed last, for a send that never reached
+/// the child: left armed, the next turn's words would answer it.
+pub fn undo_ask(session_id: &str) {
+    if let Some(asks) = ASKS.lock().unwrap().get_mut(session_id) {
+        asks.pop();
     }
 }
 
@@ -171,19 +187,25 @@ pub fn pass_back(
         let Some(item) = crate::store::get_session_index_item(&session_id).await? else { return Ok(()) };
         let Some(replier) = super::bot_at(&item.cwd).await else { return Ok(()) };
         for ask in asks {
-            let Ok(asker) = super::find_bot(&ask.bot_id).await else { continue };
-            let Some(chat) = super::chat_of(&asker).await else { continue };
-            count_reply(&replier.id, &asker.id);
+            let to = match &ask.bot_id {
+                Some(bot_id) => {
+                    let Ok(asker) = super::find_bot(bot_id).await else { continue };
+                    let Some(chat) = super::chat_of(&asker).await else { continue };
+                    count_reply(&replier.id, &asker.id);
+                    chat.session_id
+                }
+                None => ask.session_id,
+            };
             let from = MessageSender {
                 session_id: session_id.clone(),
                 title: replier.name.clone(),
                 bot_id: Some(replier.id.clone()),
-                chain: Some(ask.chain),
-                hop: Some(ask.hop + 1),
+                chain: ask.chain,
+                hop: ask.hop.map(|h| h + 1),
                 reply: Some(true),
                 ..Default::default()
             };
-            crate::orchestration::deliver_report(chat.session_id, text.clone(), from, app.clone()).await?;
+            crate::orchestration::deliver_report(to, text.clone(), from, app.clone()).await?;
         }
         Ok(())
     })
@@ -261,12 +283,34 @@ mod tests {
 
     #[test]
     fn an_ask_waits_for_its_turn_to_end_unless_answered_by_hand() {
-        delivered("t-ask", Some(&bot_message("c", 1, true)));
-        assert_eq!(take_asks("t-ask"), vec![Ask { bot_id: "ops".into(), chain: "c".into(), hop: 1 }]);
+        assert!(delivered("t-ask", Some(&bot_message("c", 1, true))));
+        let ask = Ask { session_id: "s".into(), bot_id: Some("ops".into()), chain: Some("c".into()), hop: Some(1) };
+        assert_eq!(take_asks("t-ask"), vec![ask]);
         assert!(take_asks("t-ask").is_empty());
 
         delivered("t-ask", Some(&bot_message("c", 1, true)));
         answered("t-ask", "ops");
         assert!(take_asks("t-ask").is_empty());
+    }
+
+    /// A send that never reached the child takes its ask back, or the next
+    /// turn's words would go back as the answer to it.
+    #[test]
+    fn a_failed_send_takes_its_ask_back() {
+        delivered("t-undo", Some(&bot_message("c", 1, true)));
+        assert!(delivered("t-undo", Some(&bot_message("c", 1, true))));
+        undo_ask("t-undo");
+        assert_eq!(take_asks("t-undo").len(), 1);
+    }
+
+    /// A task or a routine run asks from no exchange, and its answer goes to
+    /// the asking session itself.
+    #[test]
+    fn a_task_can_ask_too() {
+        let task = MessageSender { session_id: "task".into(), title: "Fix".into(), ask: Some(true), ..Default::default() };
+        assert!(delivered("t-task", Some(&task)));
+        let ask = Ask { session_id: "task".into(), bot_id: None, chain: None, hop: None };
+        assert_eq!(take_asks("t-task"), vec![ask]);
+        assert!(!delivered("t-task", None));
     }
 }

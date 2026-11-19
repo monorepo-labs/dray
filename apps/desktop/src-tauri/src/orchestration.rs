@@ -1099,7 +1099,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             Ok(Response::Bot { bot: bots::summary(bot).await })
         }
         Request::ListBots => {
-            let items = store::list_session_index_items(false).await?;
+            let items = store::read_index().await?;
             let mut summaries = Vec::new();
             for bot in bots::list_bots().await? {
                 summaries.push(bots::listing(bot, &items).await);
@@ -2556,8 +2556,19 @@ async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
     if from.as_ref().is_some_and(|f| f.bot_id.as_deref() == Some(&bot.id)) {
         bail!("a bot cannot message itself");
     }
-    if let Some(f) = from.as_mut().filter(|f| f.bot_id.is_some()) {
-        stamp_bot_message(f, &bot, &send.prompt, send.ask, app).await?;
+    match from.as_mut() {
+        Some(f) if f.bot_id.is_some() => stamp_bot_message(f, &bot, &send.prompt, send.ask, app).await?,
+        // A task or a routine run asking: no exchange to guard, and the answer
+        // goes back to the session itself.
+        Some(f) if send.ask => {
+            f.ask = Some(true);
+            if f.routine == Some(true) {
+                // Its turn ending is not the run ending: the answer is coming.
+                crate::routines::asked(&f.session_id);
+            }
+        }
+        None if send.ask => bail!("--ask needs a session to pass the answer back to: run it from one"),
+        _ => {}
     }
     // Held from the lookup until a new chat is on the index, or two first
     // messages would each start an agent in the one folder.

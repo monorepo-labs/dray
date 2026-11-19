@@ -496,15 +496,9 @@ pub async fn note_merge(cwd: &str, number: u64) {
 /// The list for the bot chat `session_id` belongs to, taken once, as the
 /// hidden lines that go ahead of its next prompt.
 pub async fn take_since(session_id: &str) -> Option<String> {
-    let bot_session = ROSTER_SEEN.lock().unwrap().contains_key(session_id);
-    if !bot_session && SINCE.lock().unwrap().is_empty() && NOTES.lock().unwrap().is_empty() {
-        return None;
-    }
     let item = crate::store::get_session_index_item(session_id).await.ok().flatten()?;
     let mut lines: Vec<String> = Vec::new();
-    if bot_session {
-        lines.extend(roster_note(session_id, &item.cwd).await);
-    }
+    lines.extend(roster_note(session_id, &item.cwd).await);
     NOTES.lock().unwrap().retain(|(path, note)| {
         let mine = same_dir(path, &item.cwd);
         if mine {
@@ -852,6 +846,7 @@ pub async fn summary(bot: Bot) -> dray_proto::BotSummary {
 
 /// What `dray bot ls` prints for a bot: [`summary`] with its role, whether it
 /// is mid-turn, and its open tasks, so a bot can see who already works on what.
+/// `items` is the whole index, settled sessions too, for the tree walk.
 pub async fn listing(bot: Bot, items: &[SessionIndexItem]) -> dray_proto::BotSummary {
     let role = role(&bot).await;
     let chat = chat_of(&bot).await;
@@ -872,13 +867,12 @@ pub async fn listing(bot: Bot, items: &[SessionIndexItem]) -> dray_proto::BotSum
     out
 }
 
-/// `bot`'s unsettled tasks at any depth, out of the unsettled `items`.
+/// `bot`'s unsettled tasks at any depth, out of the whole index. Every session
+/// in its folder is a root, routine runs and settled chats included, so a task
+/// a run started is listed while the run itself, a root, never is.
 fn open_tasks<'a>(bot: &Bot, items: &'a [SessionIndexItem]) -> Vec<&'a SessionIndexItem> {
-    let roots: Vec<&str> = items
-        .iter()
-        .filter(|i| same_dir(&i.cwd, &bot.path) && i.routine_run.is_none())
-        .map(|i| i.session_id.as_str())
-        .collect();
+    let roots: Vec<&str> =
+        items.iter().filter(|i| same_dir(&i.cwd, &bot.path)).map(|i| i.session_id.as_str()).collect();
     if roots.is_empty() {
         return Vec::new();
     }
@@ -890,7 +884,7 @@ fn open_tasks<'a>(bot: &Bot, items: &'a [SessionIndexItem]) -> Vec<&'a SessionIn
 /// since two tasks in one repo are usually on different things.
 pub async fn overlap(project: &str, own: &Bot) -> Option<String> {
     let bots = read_list().await.ok()?;
-    let items = crate::store::list_session_index_items(false).await.ok()?;
+    let items = crate::store::read_index().await.ok()?;
     let mut lines = Vec::new();
     for bot in bots.iter().filter(|b| b.id != own.id) {
         let tasks: Vec<String> = open_tasks(bot, &items)
@@ -952,13 +946,15 @@ async fn roster(bots: &[Bot], bot: &Bot) -> String {
 static ROSTER_SEEN: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
     std::sync::LazyLock::new(Default::default);
 
-/// The note for `session_id` where the roster moved since it last saw it.
+/// The note for `session_id` where the roster moved since it last saw it. A
+/// bot chat with no roster on record — resumed after a restart without a fresh
+/// prompt, as fx and grok are — is given the current one once.
 async fn roster_note(session_id: &str, cwd: &str) -> Option<String> {
-    let seen = ROSTER_SEEN.lock().unwrap().get(session_id).cloned()?;
     let bots = read_list().await.ok()?;
     let bot = bots.iter().find(|b| same_dir(&b.path, cwd))?;
+    let seen = ROSTER_SEEN.lock().unwrap().get(session_id).cloned();
     let now = roster(&bots, bot).await;
-    if now == seen {
+    if seen.as_ref() == Some(&now) {
         return None;
     }
     ROSTER_SEEN.lock().unwrap().insert(session_id.to_string(), now.clone());
@@ -1843,6 +1839,35 @@ mod tests {
                 assert_eq!(&got, reply, "task {task}, chunk {chunk}");
             }
         }
+    }
+
+    fn indexed(id: &str, cwd: &str, parent: Option<&str>, run: bool) -> SessionIndexItem {
+        let mut item: SessionIndexItem = serde_json::from_value(serde_json::json!({
+            "sessionId": id, "harness": "claude_code", "cwd": cwd, "projectPath": "/r",
+            "title": id, "status": "idle", "parentSessionId": parent,
+            "created": "2026-01-01T00:00:00Z", "modified": "2026-01-01T00:00:00Z",
+            "archived": false, "pinned": false,
+        }))
+        .unwrap();
+        if run {
+            item.routine_run = Some("r1".into());
+        }
+        item
+    }
+
+    /// A task a routine run started is the bot's, though the run is not a task.
+    #[test]
+    fn open_tasks_include_what_a_routine_run_started() {
+        let items = [
+            indexed("chat", "/h/bots/b", None, false),
+            indexed("run", "/h/bots/b", Some("chat"), true),
+            indexed("by-chat", "/r", Some("chat"), false),
+            indexed("by-run", "/r", Some("run"), false),
+            indexed("elsewhere", "/r", Some("other"), false),
+        ];
+        let ids: Vec<&str> = open_tasks(&bot(), &items).iter().map(|i| i.session_id.as_str()).collect();
+        assert_eq!(ids.len(), 2, "{ids:?}");
+        assert!(ids.contains(&"by-chat") && ids.contains(&"by-run"));
     }
 
     #[test]

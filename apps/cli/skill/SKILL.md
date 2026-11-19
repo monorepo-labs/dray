@@ -402,8 +402,8 @@ by its id; two bots cannot share a name.
 (or queues behind the one running). A bot nobody has written to yet starts its
 chat with your message. **Without `--ask`, nothing comes back on its own**:
 the bot answers only if it chooses to, with `dray bot send` of its own. With
-`--ask`, Dray passes the bot's reply, its turn's last words, back to your chat
-when that turn ends.
+`--ask`, Dray passes the bot's reply, its turn's last words, back to you when
+that turn ends: to a bot's chat, or to the task or routine run that asked.
 
 A bot's role is the first line of its `AGENTS.md`. `dray bot ls` shows each
 bot's role, whether it is working, and its open tasks. `dray session new` from

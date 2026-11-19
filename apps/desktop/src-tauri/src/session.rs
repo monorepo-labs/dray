@@ -3375,15 +3375,18 @@ impl std::fmt::Display for Undelivered {
 }
 
 /// A bot chat's hand-over, taken for one send and put back unless that send
-/// reached the agent, so a retry still carries the conversation.
+/// reached the agent, so a retry still carries the conversation. An ask the
+/// prompt armed is taken back the same way, or the next turn would answer it.
 struct HandoverGuard<'a> {
     session_id: &'a str,
     text: Option<String>,
+    ask: bool,
 }
 
 impl HandoverGuard<'_> {
     fn sent(&mut self) {
         self.text = None;
+        self.ask = false;
     }
 }
 
@@ -3391,6 +3394,9 @@ impl Drop for HandoverGuard<'_> {
     fn drop(&mut self) {
         if let Some(text) = self.text.take() {
             crate::bots::restore_handover(self.session_id, text);
+        }
+        if self.ask {
+            crate::bots::talk::undo_ask(self.session_id);
         }
     }
 }
@@ -3455,9 +3461,6 @@ async fn deliver_prompt(
     // the transcript has to show what the model was actually given.
     let prepared = attachments::prepare(session_id, prompt, attachment_paths, harness).await?;
     let text = prepared.text;
-    // Here, where the prompt reaches the child, not at send: a queued message
-    // joins whichever turn takes it, and that turn is the one that answers.
-    crate::bots::talk::delivered(session_id, from.as_ref());
     // A bot chat taking over from another agent: the conversation so far goes
     // ahead of the first prompt, sent and never logged, so the chat draws only
     // what the reader typed. What the reader did to the bot's tasks meanwhile
@@ -3469,7 +3472,11 @@ async fn deliver_prompt(
     let slash = text.starts_with('/');
     let fx = matches!(transport, Transport::Fx(_));
     let lead_in = send && (!slash || fx || matches!(transport, Transport::Rpc(_)));
-    let mut handover = HandoverGuard { session_id, text: if lead_in { take_hidden(session_id).await } else { None } };
+    let mut handover =
+        HandoverGuard { session_id, text: if lead_in { take_hidden(session_id).await } else { None }, ask: false };
+    // Here, where the prompt reaches the child, not at send: a queued message
+    // joins whichever turn takes it, and that turn is the one that answers.
+    handover.ask = crate::bots::talk::delivered(session_id, from.as_ref());
     let given = lead_in_around(handover.text.as_deref(), &text, slash && fx);
 
     // Ahead of the event for a second reason, and this one is about failure
@@ -4341,7 +4348,7 @@ async fn flush_one_per_turn(
         // success the reservation stands as `InProgress` and the turn is this
         // batch's; on failure every message is already on screen and in the log,
         // so the sentence saying why is the only thing still owing.
-        let mut handover = HandoverGuard { session_id, text: None };
+        let mut handover = HandoverGuard { session_id, text: None, ask: false };
         if !texts.is_empty() {
             handover.text = take_hidden(session_id).await;
         }
@@ -4355,6 +4362,9 @@ async fn flush_one_per_turn(
                 }
                 Err(err) => {
                     eprintln!("[queued flush err] {err}");
+                    // Each message armed its ask as it was logged; the turn
+                    // that would answer them never opened.
+                    crate::bots::talk::take_asks(session_id);
                     report_send_failure(session_id, harness, &err.to_string(), seq, app)
                         .await;
                 }
