@@ -1159,6 +1159,7 @@ dependencies = [
  "serde_json",
  "tungstenite",
  "unicode-segmentation",
+ "usvg",
  "uuid",
  "x11rb",
 ]

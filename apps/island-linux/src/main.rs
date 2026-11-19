@@ -7,6 +7,7 @@ mod bots;
 mod capture;
 mod draft;
 mod fluid;
+mod icons;
 mod input;
 mod newtask;
 mod orb;
@@ -1040,8 +1041,8 @@ fn show(island: &Entity<Island>, cx: &mut App) {
         let _ = server.call("island_opened", json!({}));
     }
     settle_target(island, cx);
-    let typing = island.read(cx).draft().typing.clone();
-    typing.update(cx, |t, cx| t.set_placeholder(draft::placeholder(), cx));
+    // Read here, not on each frame: it names the key, which Dray's Settings can move.
+    island.update(cx, |island, _| island.draft_mut().prompt = draft::placeholder());
     sync_card(island, cx);
     let glass = x11::compositing();
     island.update(cx, |island, _| island.glass = glass);

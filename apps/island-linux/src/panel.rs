@@ -9,6 +9,7 @@ use crate::prefs::{Mode, Placement};
 use crate::{Island, Link};
 use crate::{ROOM, WIDTH};
 use crate::fluid;
+use crate::icons::{self, Icon};
 use gpui::AnimationExt;
 use gpui::{
     AnyElement, App, BoxShadow, Context, Entity, FocusHandle, Focusable, Hsla, KeyDownEvent, MouseButton,
@@ -639,7 +640,7 @@ fn questions(state: &Entity<Island>, island: &Island, qs: &[Question], focus: &F
                     .text_color(rgb(0x000000))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .when(card.busy, |d| d.opacity(0.5))
-                    .child(if last { "Send  ⏎" } else { "Next  ⏎" })
+                    .child(icons::line(if last { "Send  ⏎" } else { "Next  ⏎" }, BODY, gpui::hsla(0., 0., 0., 1.), cx))
                     .on_click({
                         let focus = focus.clone();
                         move |_, window, cx| advance(&next, window, &focus, cx)
@@ -784,7 +785,7 @@ fn draft_view(state: &Entity<Island>, island: &Island, cx: &App) -> AnyElement {
     let listening = d.listening();
     let expanded = island.mode == Mode::Expanded;
     if listening && !expanded {
-        return recording_bar(state, island).into_any_element();
+        return recording_bar(state, island, cx).into_any_element();
     }
     let head: AnyElement = match &d.target {
         Some(Target::Session(id)) => title_row(state, island, id, cx).into_any_element(),
@@ -853,11 +854,8 @@ fn draft_view(state: &Entity<Island>, island: &Island, cx: &App) -> AnyElement {
             .flex()
             .items_center()
             .justify_center()
-            .rounded_full()
-            .bg(white(if can_send { 1. } else { 0.25 }))
-            .text_color(rgb(0x000000))
-            .font_weight(gpui::FontWeight::BOLD)
-            .child("↑")
+            // The Mac's `arrow.up.circle.fill`, dimmed as SwiftUI dims a disabled button.
+            .child(icons::icon(Icon::Send, 24., white(if can_send { 1. } else { 0.5 }), cx))
             .when(can_send, |d| d.on_click(move |_, _, cx| later(&state, cx, |i, cx| crate::send(i, cx))))
     };
     // Kept in the layout while expanded records, only not drawn, so the
@@ -868,8 +866,19 @@ fn draft_view(state: &Entity<Island>, island: &Island, cx: &App) -> AnyElement {
         .items_end()
         .gap_2()
         .when(!expanded, |d| d.child(mic(state, island, 24., 24.)))
-        .child(div().flex_1().min_w_0().py(px(2.)).child(d.typing.clone()))
-        .child(camera(state, island))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .py(px(2.))
+                .relative()
+                .child(d.typing.clone())
+                // The prompt, over the box while it is empty; a plain div takes no clicks, so they reach the box.
+                .when(d.typing.read(cx).text().is_empty(), |b| {
+                    b.child(div().absolute().top(px(2.)).left_0().right_0().overflow_hidden().child(icons::line(&d.prompt, BODY, white(0.3), cx)))
+                }),
+        )
+        .child(camera(state, island, cx))
         .child(send);
     let notice = island.notice.clone().map(|n| {
         let retry = d.retry_path.is_some().then(|| {
@@ -889,7 +898,7 @@ fn draft_view(state: &Entity<Island>, island: &Island, cx: &App) -> AnyElement {
         .children(link_status(island).map(|l| gone(div().child(l))))
         .child(gone(div().child(head)))
         .children(rows.map(|r| gone(div().child(r))))
-        .when(expanded, |d| d.child(orb_slot(state, island)))
+        .when(expanded, |d| d.child(orb_slot(state, island, cx)))
         .child(gone(input))
         .children(notice.map(gone))
         .into_any_element()
@@ -898,7 +907,7 @@ fn draft_view(state: &Entity<Island>, island: &Island, cx: &App) -> AnyElement {
 /// Expanded mode's centre: the orb in a 48pt slot, the 80pt lens orb scaled
 /// down at rest and grown to its full size about its own centre while it
 /// records, so starting moves nothing. Its clock shows under it on hover.
-fn orb_slot(state: &Entity<Island>, island: &Island) -> impl IntoElement {
+fn orb_slot(state: &Entity<Island>, island: &Island, cx: &App) -> impl IntoElement {
     const SLOT: f32 = 48.;
     const FULL: f32 = 80.;
     let recording = island.draft().listening();
@@ -916,7 +925,7 @@ fn orb_slot(state: &Entity<Island>, island: &Island) -> impl IntoElement {
             .rounded_full()
             .bg(rgb(0x000000))
             .when(island.orb_hovered || island.camera_hovered, |d| d.child(clock(island)))
-            .children(tools(state, island))
+            .children(tools(state, island, cx))
     });
     div()
         .w_full()
@@ -938,7 +947,7 @@ fn orb_slot(state: &Entity<Island>, island: &Island) -> impl IntoElement {
 }
 
 /// Compact's recording: the orb, which stops it, and the clock.
-fn recording_bar(state: &Entity<Island>, island: &Island) -> impl IntoElement {
+fn recording_bar(state: &Entity<Island>, island: &Island, cx: &App) -> impl IntoElement {
     div()
         .flex()
         .items_center()
@@ -947,22 +956,22 @@ fn recording_bar(state: &Entity<Island>, island: &Island) -> impl IntoElement {
         .py(px(12.))
         .child(mic(state, island, 24., 24.))
         .child(clock(island))
-        .child(div().pl(px(4.)).flex().items_center().gap_2().children(tools(state, island)))
+        .child(div().pl(px(4.)).flex().items_center().gap_2().children(tools(state, island, cx)))
 }
 
 /// What sits beside the recording's clock: how to draw on the screen, until
 /// the reader has, and the camera.
-fn tools(state: &Entity<Island>, island: &Island) -> Vec<gpui::AnyElement> {
+fn tools(state: &Entity<Island>, island: &Island, cx: &App) -> Vec<gpui::AnyElement> {
     let mut out = Vec::new();
     if island.draw_hint {
         out.push(div().text_size(px(ASIDE)).text_color(white(0.5)).child("Hold Shift to draw").into_any_element());
     }
-    out.push(camera(state, island).into_any_element());
+    out.push(camera(state, island, cx).into_any_element());
     out
 }
 
 /// The camera: a screenshot into the draft, its key shown on hover.
-fn camera(state: &Entity<Island>, island: &Island) -> impl IntoElement {
+fn camera(state: &Entity<Island>, island: &Island, cx: &App) -> impl IntoElement {
     let (click, hover) = (state.clone(), state.clone());
     let hovered = island.camera_hovered;
     div()
@@ -974,7 +983,7 @@ fn camera(state: &Entity<Island>, island: &Island) -> impl IntoElement {
         .child(
             div()
                 .id("camera")
-                .size(px(22.))
+                .size(px(24.))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -986,17 +995,8 @@ fn camera(state: &Entity<Island>, island: &Island) -> impl IntoElement {
                         cx.notify();
                     })
                 })
-                // A viewfinder: corners of a frame round a dot, drawn, since
-                // there is no symbol font to lean on.
-                .child(
-                    div()
-                        .size(px(16.))
-                        .relative()
-                        .rounded(px(3.))
-                        .border_1()
-                        .border_color(white(if hovered { 0.8 } else { 0.55 }))
-                        .child(div().absolute().left(px(5.)).top(px(5.)).size(px(4.)).rounded_full().bg(white(if hovered { 0.8 } else { 0.55 }))),
-                ),
+                // The Mac's `camera.viewfinder` at its title3 size and tints.
+                .child(icons::icon(Icon::Camera, 20., white(if hovered { 0.8 } else { 0.6 }), cx)),
         )
 }
 
@@ -1241,11 +1241,11 @@ fn title_row(state: &Entity<Island>, island: &Island, id: &str, cx: &App) -> imp
                 .child(name)
                 .on_mouse_down(MouseButton::Left, title_click(state.clone(), id.to_string(), |i, cx| crate::toggle_list(i, cx))),
         )
-        .child(hints("Ctrl+N New   ↑↓ Tasks   Esc"))
+        .child(hints("Ctrl+N New   ↑↓ Tasks   Esc", cx))
 }
 
-fn hints(text: &str) -> impl IntoElement {
-    div().flex_none().text_size(px(ASIDE)).text_color(white(0.3)).child(text.to_string())
+fn hints(text: &str, cx: &App) -> impl IntoElement {
+    icons::line(text, ASIDE, white(0.3), cx).text_size(px(ASIDE))
 }
 
 /// A bar control that opens a dropdown: the dropdown hangs from it, under the
@@ -1565,7 +1565,9 @@ fn switcher(state: &Entity<Island>, island: &Island, glass: bool, cx: &App) -> S
     let state = state.clone();
     let search = d.search.clone();
     let scroll = d.list_scroll.clone();
-    SwitcherCard { state, search, current, rows, empty, glass, scroll }
+    let mark = icons::icon(Icon::Search, 14., white(0.4), cx);
+    let hint = hints("↑↓ navigate   ⏎ select", cx).into_any_element();
+    SwitcherCard { state, search, current, rows, empty, glass, scroll, mark, hint }
 }
 
 struct SwitcherRow {
@@ -1587,6 +1589,9 @@ struct SwitcherCard {
     empty: bool,
     glass: bool,
     scroll: gpui::ScrollHandle,
+    /// The search's magnifier and the keys' hint, drawn where the app is at hand.
+    mark: AnyElement,
+    hint: AnyElement,
 }
 
 impl IntoElement for SwitcherCard {
@@ -1608,9 +1613,9 @@ impl IntoElement for SwitcherCard {
                     .gap_2()
                     .px(px(12.))
                     .py(px(10.))
-                    .child(div().text_color(white(0.4)).child("⌕"))
+                    .child(self.mark)
                     .child(div().flex_1().min_w_0().child(self.search.clone()))
-                    .child(hints("↑↓ navigate   ⏎ select")),
+                    .child(self.hint),
             )
             .child(
                 div()
@@ -1921,7 +1926,7 @@ fn done_face(state: &Entity<Island>, island: &Island, lead: Option<AnyElement>, 
             .text_color(white(1.))
             .child("Open in app")
             // Super+⏎ opens the newest alone, so only its button names the chord.
-            .when(chord, |d| d.child(div().text_color(white(0.45)).child("Super ⏎")))
+            .when(chord, |d| d.child(icons::line("Super ⏎", SMALL, white(0.45), cx)))
             .on_click(move |_, _, cx| {
                 cx.stop_propagation();
                 let id = id.clone();

@@ -159,6 +159,11 @@ Swift island carries over.
   alert puts its face in a black disc joined to the pill: out of its left end
   on a spring above the dock, dropped from its flat bottom at the top
   (`fluid.rs`); its Done pill drops the name.
+- **Symbols are our own SVGs** (`icons.rs`), drawn after the Mac's SF Symbols
+  and SF Pro's key glyphs: ⏎, ↑↓, send, the camera and search. As text they
+  took whatever the desktop's font had, and DejaVu's sit thin and off the
+  line. A hint line swaps ⏎ and ↑↓ in its text for them, so the box's prompt
+  is drawn over the box while it is empty rather than as its placeholder.
 - **The disc is drawn in parts.** GPUI has no path union, so pill, disc and
   waist are filled in one black over each other, and a lit edge is each
   part's outline drawn first; its halo is a blurred box per part. Without a

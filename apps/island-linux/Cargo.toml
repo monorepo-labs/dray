@@ -31,3 +31,7 @@ rquickjs = "0.14"
 
 [profile.release]
 strip = true
+
+# The renderer GPUI draws SVGs with, so a test can parse the icons the same way.
+[dev-dependencies]
+usvg = "0.46"

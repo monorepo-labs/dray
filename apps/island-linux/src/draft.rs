@@ -63,6 +63,9 @@ pub struct Draft {
     pub rows: Vec<Row>,
     next_row: u64,
     pub typing: Entity<TextInput>,
+    /// The box's prompt, drawn over it while it is empty: the input sets text
+    /// alone, and the prompt carries ⏎ icons.
+    pub prompt: String,
     pub search: Entity<TextInput>,
     /// The switcher, hidden until asked for — the title, Ctrl+F or ↑/↓ — and
     /// again once the reader picks.
@@ -123,7 +126,8 @@ impl Draft {
             target: None,
             rows: Vec::new(),
             next_row: 0,
-            typing: cx.new(|cx| TextInput::new(placeholder(), cx)),
+            typing: cx.new(|cx| TextInput::new("", cx)),
+            prompt: placeholder(),
             search: cx.new(|cx| TextInput::new("Search tasks  Ctrl+F", cx).max_lines(1)),
             list_shown: false,
             list_scroll: ScrollHandle::new(),
