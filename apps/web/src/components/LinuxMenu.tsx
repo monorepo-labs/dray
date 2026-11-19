@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { BetaTag } from "@/components/BetaTag";
-import { LINUX_FORMATS, linuxUrl, type LinuxArch, type LinuxFormat, type BetaSpot } from "@/lib/linux";
+import { LINUX_FORMATS, linuxUrl, type LinuxArch, type LinuxFormat } from "@/lib/linux";
 import { posthog } from "@/lib/posthog";
 
 /// A link to one Linux file, counted by format and arch so the site can tell
@@ -40,21 +40,11 @@ const TEXT = "text-white light:text-[#0A0A0A]";
 const MUTED = "text-white/45 light:text-black/45";
 const CHIP = `inline-flex h-8 flex-1 items-center justify-center rounded-[5px] border border-white/15 px-3 text-[13px] font-medium transition-colors hover:bg-white/10 light:border-black/15 light:hover:bg-black/5 ${TEXT}`;
 const BETA = "text-[#A1A1A1] light:text-[#6B6B6B]";
-const RULE = "border-white/10 light:border-black/10";
 
 /// "Download for Linux", opening a card per format with a button per
-/// architecture. `beta` places the Beta tag; `/review/linux-menu` shows each
-/// spot until one is picked, and the homepage takes the default.
-export function LinuxMenu({
-  className,
-  beta = "footer",
-  defaultOpen = false,
-}: {
-  className: string;
-  beta?: BetaSpot;
-  defaultOpen?: boolean;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
+/// architecture.
+export function LinuxMenu({ className }: { className: string }) {
+  const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -81,14 +71,14 @@ export function LinuxMenu({
       </button>
       {open && (
         <div className="absolute top-full left-0 z-30 mt-2 w-[420px] rounded-[8px] border border-white/15 bg-[#111112] p-2 shadow-[0_16px_40px_-8px_#000000CC] light:border-black/10 light:bg-white light:shadow-[0_16px_40px_-12px_#00000040]">
-          {beta === "edge" && (
-            <BetaTag className="absolute -top-2 right-3 bg-[#111112] text-[#A1A1A1] light:bg-white light:text-[#6B6B6B]" />
-          )}
           <div className="grid grid-cols-2 gap-2">
             {LINUX_FORMATS.map((f) => (
               <div key={f.id} className="flex flex-col gap-3 rounded-[6px] bg-white/[0.05] p-3 light:bg-black/[0.04]">
                 <div>
-                  <p className={`text-[15px] font-medium ${TEXT}`}>{f.name}</p>
+                  <p className={`flex items-center gap-2 text-[15px] font-medium ${TEXT}`}>
+                    {f.name}
+                    <BetaTag className={BETA} />
+                  </p>
                   <p className={`text-[12px] leading-4 ${MUTED}`}>{f.target}</p>
                 </div>
                 <div className="flex gap-1.5">
@@ -101,17 +91,6 @@ export function LinuxMenu({
               </div>
             ))}
           </div>
-          {beta === "footer" && (
-            <p className={`mt-2 flex items-center gap-2 border-t px-1 pt-2.5 pb-0.5 text-[12px] leading-4 ${RULE} ${MUTED}`}>
-              <BetaTag className={BETA} />
-              New on Linux. Both kinds update themselves.
-            </p>
-          )}
-          {beta === "centre" && (
-            <div className="flex justify-center pt-2 pb-0.5">
-              <BetaTag className={BETA} />
-            </div>
-          )}
         </div>
       )}
     </div>
