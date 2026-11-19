@@ -648,11 +648,14 @@ struct PillShell<Content: View>: View {
                             let rect = CGRect(origin: .zero, size: geo.size), emerge: CGFloat = emerged ? 1 : 0
                             let (centre, r) = notch ? DropNotch.disc(in: rect, emerge: emerge) : FluidPill.disc(in: rect, emerge: emerge)
                             BotFace(bot: bot, size: r * 1.4).position(centre).opacity(emerged ? 1 : 0)
+                                // The face is the only thing naming the bot, the Done pill having dropped its name.
+                                .accessibilityLabel(bot.name)
                         }
                     }
                 }
             }
-            .contentShape(Rectangle())
+            // The notch's disc hangs below the pill's frame, and is part of what takes the pointer.
+            .contentShape(notch && fluid ? AnyShape(DropHit()) : AnyShape(Rectangle()))
             // Out of the pill's end on a spring once it shows, and again for another bot.
             .task(id: fluid ? bot?.id : nil) {
                 guard fluid else { return }
@@ -703,6 +706,16 @@ struct DropNotch: Shape {
         neck.closeSubpath()
         let disc = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
         return NotchShape(radius: 16).path(in: rect).union(disc.union(neck))
+    }
+}
+
+/// The notch pill's frame with its dropped disc, for hit testing.
+private struct DropHit: Shape {
+    func path(in rect: CGRect) -> Path {
+        let (c, r) = DropNotch.disc(in: rect, emerge: 1)
+        var path = Path(rect)
+        path.addRect(CGRect(x: c.x - r, y: rect.maxY, width: 2 * r, height: c.y + r - rect.maxY))
+        return path
     }
 }
 
