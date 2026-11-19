@@ -58,6 +58,23 @@ export async function serverForToken(token: string) {
   return rows[0] ?? null;
 }
 
+/// Who an app is signed in as.
+export type AppUser = { id: string; name: string; username: string | null; image: string | null };
+
+/// The account an app credential belongs to. Takes the caller's client
+/// where it reads inside a transaction that made the row.
+export async function userForAppToken(
+  token: string,
+  db: { query: typeof pool.query } = pool,
+): Promise<AppUser | null> {
+  const { rows } = await db.query<AppUser>(
+    `select u.id, u.name, u.username, u.image from app_session a join "user" u on u.id = a."userId"
+      where a."tokenHash" = $1`,
+    [hashSecret(token)],
+  );
+  return rows[0] ?? null;
+}
+
 /// What a server is told about where it is linked.
 export function linkedAnswer(row: NonNullable<Awaited<ReturnType<typeof serverForToken>>>) {
   return {

@@ -2,9 +2,10 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { GoogleButton } from "@/components/account/GoogleButton";
-import { H1, LEAD, PAGE } from "@/components/account/styles";
-import { SiteNav } from "@/components/home/SiteNav";
+import { AccountChooser } from "@/components/account/AccountChooser";
+import { SignInMethods } from "@/components/account/SignInMethods";
+import { Heading, Label } from "@/components/account/SignInParts";
+import { SignInShell } from "@/components/account/SignInShell";
 import { auth } from "@/lib/auth";
 
 export const metadata: Metadata = { title: "Sign in - Dray" };
@@ -15,29 +16,53 @@ function safeNext(next: string | string[] | undefined): string {
   return typeof next === "string" && /^\/(?![/\\])/.test(next) ? next : "/app";
 }
 
-/// Sign in to Dray with Google. A reader already signed in goes straight on.
+/// What a failed try says. Better Auth sends its own codes here
+/// (`onAPIError.errorURL`); `broken_link` is `/api/app/authorize`'s.
+function problemFor(error: string | string[] | undefined): string | null {
+  if (typeof error !== "string") return null;
+  if (error === "access_denied") return "Sign-in was cancelled";
+  if (/state|restart|expired/i.test(error)) return "That sign-in expired";
+  return "Sign-in didn't work";
+}
+
+/// Sign in to Dray with GitHub, Google or email. A reader already signed in
+/// goes straight on, unless the desktop app sent them, which asks whether
+/// that is the account they want; `via` is the method the app picked.
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ next?: string | string[] }>;
+  searchParams: Promise<{ next?: string | string[]; via?: string | string[]; error?: string | string[] }>;
 }) {
-  const next = safeNext((await searchParams).next);
-  if (await auth.api.getSession({ headers: await headers() })) redirect(next);
+  const params = await searchParams;
+  const next = safeNext(params.next);
+  const via = typeof params.via === "string" ? params.via : null;
+  const fromApp = next.startsWith("/api/app/authorize");
+  const github = Boolean(process.env.GITHUB_CLIENT_ID);
+
+  if (params.error === "broken_link")
+    return (
+      <SignInShell>
+        <Label danger>This sign-in link is broken</Label>
+        <Heading>Start again from Dray.</Heading>
+      </SignInShell>
+    );
+
+  const session = await auth.api.getSession({ headers: await headers() });
+  // The desktop app asks which account; the site's own pages just go on.
+  if (session && !fromApp) redirect(next);
 
   return (
-    <div data-home className={PAGE}>
-      <main className="px-5 pb-[120px] sm:px-8">
-        <div className="mx-auto w-full max-w-[960px]">
-          <SiteNav bare />
-          <div className="lg:ml-[102px] lg:max-w-[756px]">
-            <h1 className={H1}>Sign in to Dray.</h1>
-            <p className={LEAD}>Your account holds your orgs and the servers linked to them.</p>
-            <div className="mt-10">
-              <GoogleButton next={next} />
-            </div>
-          </div>
-        </div>
-      </main>
-    </div>
+    <SignInShell>
+      {session ? (
+        <AccountChooser
+          account={{ name: session.user.name, email: session.user.email, image: session.user.image ?? null }}
+          next={next}
+          machine={new URLSearchParams(next.split("?")[1] ?? "").get("name")}
+          github={github}
+        />
+      ) : (
+        <SignInMethods next={next} via={via} github={github} problem={problemFor(params.error)} />
+      )}
+    </SignInShell>
   );
 }

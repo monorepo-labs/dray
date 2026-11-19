@@ -125,6 +125,9 @@ importers:
       '@blobatar/react':
         specifier: ^2.7.0
         version: 2.7.0(blobatar@2.7.0(react@19.3.1))(react@19.3.1)
+      '@opencoredev/email-sdk':
+        specifier: ^3.0.1
+        version: 3.0.1(ai@7.0.133(zod@4.6.5))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@yogesharc/thinking-orbs':
         specifier: ^0.1.2
         version: 0.1.2(react@19.3.1)
@@ -1224,6 +1227,25 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
+
+  '@opencoredev/email-sdk@3.0.1':
+    resolution: {integrity: sha512-GkMqq0QX3qhyPE1Mqgw3VxBMXJAte8qtXhkVhoNuBB/CfhwsKR9nRZ5TMfWdeXjtP3w3KURWd5G9q9fI0QM3Hw==}
+    engines: {bun: '>=1.1.0', node: '>=20.0.0'}
+    hasBin: true
+    peerDependencies:
+      '@react-email/render': ^2.1.0
+      ai: ^6.0.182 || ^7.0.0
+      react: ^18.0.0 || ^19.0.0
+      react-dom: ^18.0.0 || ^19.0.0
+    peerDependenciesMeta:
+      '@react-email/render':
+        optional: true
+      ai:
+        optional: true
+      react:
+        optional: true
+      react-dom:
+        optional: true
 
   '@orama/orama@3.1.18':
     resolution: {integrity: sha512-a61ljmRVVyG5MC/698C8/FfFDw5a8LOIvyOLW5fztgUXqUpc1jOfQzOitSCbge657OgXXThmY3Tk8fpiDb4UcA==}
@@ -5269,6 +5291,10 @@ packages:
     resolution: {integrity: sha512-5qr2okC4ItAI0hG5SaV0HoYMpnM/Y6+Oqr7AmPYy/2uEoGvS+GbSKLeRxSS1uAdu59yz0ouzcuXievSgg///WA==}
     engines: {node: '>=18'}
 
+  nodemailer@10.6.0:
+    resolution: {integrity: sha512-jWanL7D9GD3jvUDYKmoC5rWTiG8MnBgnN2yV68bgMKip1zUJhiSTyz7Eg+18y8sk5OvdVDzws5nZK5arSI4f5Q==}
+    engines: {node: '>=20.0.0'}
+
   nopt@8.1.0:
     resolution: {integrity: sha512-ieGu42u/Qsa4TFktmaKEwM6MQH0pOWnaB3htzh0JRtx84+Mebc0cbZYN5bC+6WTZ4+77xrL9Pn5m7CV6VIkV7A==}
     engines: {node: ^18.17.0 || >=20.5.0}
@@ -7687,6 +7713,14 @@ snapshots:
     dependencies:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
+
+  '@opencoredev/email-sdk@3.0.1(ai@7.0.133(zod@4.6.5))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+    dependencies:
+      nodemailer: 10.6.0
+    optionalDependencies:
+      ai: 7.0.133(zod@4.6.5)
+      react: 19.3.1
+      react-dom: 19.3.1(react@19.3.1)
 
   '@orama/orama@3.1.18': {}
 
@@ -11807,6 +11841,8 @@ snapshots:
   node-mock-http@1.0.5: {}
 
   node-releases@2.0.59: {}
+
+  nodemailer@10.6.0: {}
 
   nopt@8.1.0:
     dependencies:

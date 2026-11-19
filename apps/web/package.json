@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@blobatar/react": "^2.7.0",
+    "@opencoredev/email-sdk": "^3.0.1",
     "@yogesharc/thinking-orbs": "^0.1.2",
     "better-auth": "^1.7.19",
     "blobatar": "^2.7.0",

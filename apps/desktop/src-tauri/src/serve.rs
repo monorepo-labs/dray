@@ -245,6 +245,7 @@ pub async fn run_mac() -> Result<()> {
 /// Written by `dray-serve` too, so a Dray app installed later on a Mac
 /// already serving finds this server rather than starting one of its own.
 async fn write_port_file(home: &Path, port: u16) -> Result<()> {
+    crate::dray_account::listening_on(port);
     let stamp = exe_stamp().unwrap_or_default();
     store::write_atomic(&home.join(PORT_FILE), format!("{port}\n{stamp}\n{}\n", std::process::id())).await
 }
@@ -664,6 +665,9 @@ pub async fn listen(
                 Some(line) if relayed(&line) => relay_http(stream, &token).await,
                 Some(line) if line.starts_with("GET /file?") => file(stream, &token).await,
                 Some(line) if line.starts_with("POST /upload?") => upload(stream, &token).await,
+                // The browser back from drayhq.com: no token, since the
+                // sign-in's own state is what it must match.
+                Some(line) if line.starts_with("GET /auth/callback?") => auth_callback(stream, sink).await,
                 // Its own sign-in, never the serve token: an assistant's cloud
                 // must not hold the key to every other door here.
                 Some(line) if dray_proto::REMOTE_MCP && crate::mcp::routes(&line) =>crate::mcp::serve(stream, sink).await,
@@ -1253,6 +1257,29 @@ async fn read_head(
     }
     let target = line.split(' ').nth(1).unwrap_or_default().to_string();
     Ok((Head { target, bearer, length, range }, reader))
+}
+
+/// `GET /auth/callback?…`: where drayhq.com sends the browser once the reader
+/// has signed in ([`crate::dray_account::callback`]).
+async fn auth_callback(stream: TcpStream, sink: Sink) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let (head, reader) = read_head(stream).await?;
+    let mut stream = reader.into_inner().into_inner();
+    let query = head.target.split_once('?').map(|(_, q)| q).unwrap_or_default();
+    let (status, body) = crate::dray_account::callback(&sink, query).await;
+    let reason = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        _ => "Bad Gateway",
+    };
+    let reply = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(reply.as_bytes()).await?;
+    stream.shutdown().await.ok();
+    Ok(())
 }
 
 /// `POST /upload?name=…`: a file attached on another machine, written under
@@ -2093,7 +2120,14 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         // This server's link to an org at drayhq.com.
         org_link_state() => ok(crate::org_link::state(&sink).await);
         org_link_start() => crate::org_link::start(sink).await;
+        org_link_cancel() => ok(crate::org_link::cancel(sink).await);
         org_unlink() => crate::org_link::unlink(sink).await;
+        // Who the app on this machine is signed in to drayhq.com as.
+        account_state() => ok(crate::dray_account::state(&sink).await);
+        account_sign_in_start(method: crate::dray_account::SignInMethod) => crate::dray_account::start(sink, method).await;
+        account_sign_in_cancel() => ok(crate::dray_account::cancel(sink).await);
+        account_reachable() => ok(crate::dray_account::reachable().await);
+        account_sign_out() => crate::dray_account::sign_out(sink).await;
         read_doc(path: String) => crate::docs::read_doc(path).await;
         save_doc(path: String, text: String, expect: Option<String>) => crate::docs::save_doc(path, text, expect).await;
         watch_docs(scope: String, paths: Vec<String>) => {
