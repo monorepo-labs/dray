@@ -68,6 +68,14 @@ a renderer exploit runs as the server's user — the same rights the agent's own
 shell already holds. The cure that keeps the sandbox is an AppArmor profile
 granting `userns` to the binary, which needs root and a fixed path; not here.
 
+**The cookie key lives in a plain file** (`--password-store=basic`, and
+`--use-mock-keychain` for the Mac's twin), #1317. Chromium otherwise asks the
+Secret Service for it before its network service sends a request, and on a
+server with a user session bus that D-Bus-activates gnome-keyring's unlock
+prompt, which nobody answers. Every page hung while `data:` URLs loaded, so
+it reads as a network fault. A bare `--dump-dom http://…` with and without
+the flag is the quick check.
+
 ## The seam
 
 `automation.rs` (the verbs, `HELPERS_JS`, the recorder clock, the capture lock)

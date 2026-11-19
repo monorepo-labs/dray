@@ -3769,7 +3769,7 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
     // the parent's session, which must not hold this one's read loop up.
     let mut silent_bot_turn = false;
     let mut bot_turn = None;
-    let mut ask_name = false;
+    let mut ask_name: Option<String> = None;
     if agent_event.subagent.is_none() {
         match &agent_event.payload {
             AgentEventPayload::AssistantText { text, .. } if crate::events::has_text(text) => {
@@ -3811,7 +3811,7 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                         }
                     });
                 }
-                ask_name = crate::bots::take_name_ask(ctx.session_id) && *status == TurnStatus::Success;
+                ask_name = crate::bots::take_name_ask(ctx.session_id).filter(|_| *status == TurnStatus::Success);
                 // Awaited, not spawned: the queued flush below would start the
                 // next turn, which could overwrite this one's notes unsaved.
                 bot_turn = crate::bots::commit_turn(ctx.session_cwd, notes, app).await;
@@ -3945,8 +3945,7 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
 
     // A new bot's greeting, then Dray's question for the user's name as a
     // message of its own (#1076), ahead of anything the turn learned.
-    if ask_name {
-        let text = crate::bots::ASK_NAME.to_string();
+    if let Some(text) = ask_name {
         let payload = AgentEventPayload::AssistantText { block: None, text };
         let seq = ctx.flush_seq.fetch_add(1, Relaxed);
         let event = AgentEvent::mint(ctx.session_id.to_string(), ctx.harness, seq, None, None, payload);

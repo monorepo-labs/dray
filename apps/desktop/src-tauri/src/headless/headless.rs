@@ -492,6 +492,12 @@ async fn launch(session: &str, exe: &Path, sandboxed: bool) -> Result<(), String
         .arg("--remote-debugging-pipe")
         .arg(format!("--user-data-dir={}", profile.display()))
         .args([WINDOW, "--no-first-run", "--no-default-browser-check", "--mute-audio"])
+        // The cookie key in a plain file. Otherwise Chromium asks the keyring
+        // for it before any request goes out, and on a server with a session
+        // bus that starts gnome-keyring's unlock prompt, which nobody answers:
+        // every page hung, `data:` URLs alone loading (#1317). The Mac's
+        // Keychain asks the same way. A profile is per session and throwaway.
+        .args(["--password-store=basic", "--use-mock-keychain"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
