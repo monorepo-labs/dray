@@ -52,7 +52,7 @@ const SOON = [
 
 /// Every way to get Dray, one card per platform, and nothing else: no ask,
 /// no auto-start. The Download for macOS buttons elsewhere go by way of
-/// `/download/thanks`, which starts the dmg and asks for support.
+/// `/thank-you`, which starts the dmg and asks for support.
 export default async function Downloads() {
   const available = await availableLinuxFiles();
 

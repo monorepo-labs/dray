@@ -6,8 +6,8 @@ import { Support } from "@/components/home/Support";
 import { fetchStars } from "@/lib/github";
 import { DOWNLOAD } from "@/lib/links";
 
-import { StartDownload, SupportLink } from "../client";
-import { H1, LEDE, LINK } from "../styles";
+import { StartDownload, SupportLink } from "@/app/download/client";
+import { H1, LEDE, LINK } from "@/app/download/styles";
 
 export const metadata: Metadata = {
   title: "Thanks for downloading - Dray",

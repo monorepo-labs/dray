@@ -4,7 +4,7 @@ import { AppleGlyph } from "@/components/AppleGlyph";
 import { posthog } from "@/lib/posthog";
 
 /// The Mac download link, split out as a client component so the click can
-/// be counted. It goes to `/download/thanks`, which starts the dmg itself and
+/// be counted. It goes to `/thank-you`, which starts the dmg itself and
 /// asks for support while the file comes down. A plain anchor, not `Link`:
 /// from that page itself a client navigation keeps the page mounted, and the
 /// dmg would not start again.
@@ -25,7 +25,7 @@ export function DownloadButton({
 }) {
   return (
     <a
-      href="/download/thanks"
+      href="/thank-you"
       onClick={() => posthog.capture("download", { platform: "macos", from }, { transport: "sendBeacon" })}
       className={className ?? "inline-flex items-center gap-2 rounded-full bg-foreground px-5 py-2.5 text-sm font-medium text-background transition-opacity hover:opacity-90"}
     >
