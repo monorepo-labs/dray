@@ -170,7 +170,7 @@ struct AttentionPill: View {
     let notch: Bool
     let notchHeight: CGFloat
     let count: Int
-    /// The one asking, where that is a bot: its face stands in for the dot.
+    /// The one asking, where that is a bot: its face rides beside the pill.
     var bot: Bot? = nil
     var glowing = false
     let action: () -> Void
@@ -178,9 +178,9 @@ struct AttentionPill: View {
 
     var body: some View {
         Button(action: action) {
-            PillShell(notch: notch, notchHeight: notchHeight, glow: glowing ? StatusDot.waiting : nil) {
+            PillShell(notch: notch, notchHeight: notchHeight, glow: glowing ? StatusDot.waiting : nil, bot: bot) {
                 HStack(spacing: 8) {
-                    if let bot { BotFace(bot: bot, size: 18) } else { Circle().fill(StatusDot.waiting).frame(width: 6, height: 6) }
+                    Circle().fill(StatusDot.waiting).frame(width: 6, height: 6)
                     Text("\(count) \(count == 1 ? "task needs" : "tasks need") attention")
                         .font(.system(size: 13, weight: .semibold)).lineLimit(1)
                 }
@@ -316,16 +316,12 @@ struct DonePill: View {
         let waiting = items.contains { $0.note != nil }
         let tint = waiting ? StatusDot.waiting : StatusDot.unread
         let cards = items.contains { !$0.rows.isEmpty }
-        PillShell(notch: notch, notchHeight: notchHeight, glow: glowing ? tint : nil) {
+        PillShell(notch: notch, notchHeight: notchHeight, glow: glowing ? tint : nil,
+                  bot: items.count == 1 ? store.bot(items[0].key) : nil) {
             // One structure, open or shut, so the pill grows rather than swapping layouts.
             VStack(alignment: .leading, spacing: cards ? 8 : 6) {
                 HStack(spacing: 8) {
-                    // One bot's news leads with its face, as the app draws the bot.
-                    if items.count == 1, let bot = store.bot(items[0].key) {
-                        BotFace(bot: bot, size: 18)
-                    } else {
-                        Circle().fill(tint).frame(width: 6, height: 6)
-                    }
+                    Circle().fill(tint).frame(width: 6, height: 6)
                     Text(Self.headline(items, waiting: waiting))
                         .font(.system(size: 13, weight: .semibold))
                         // White outright: the pills' window takes the system's appearance, and light mode drew it black.
@@ -604,13 +600,23 @@ struct PillShell<Content: View>: View {
     let notchHeight: CGFloat
     /// A soft edge in this colour while news is fresh; `Composer.glowing` says when.
     var glow: Color? = nil
+    /// One bot's news: its face in a disc that eases out of the pill above the
+    /// Dock; at the notch, whose flat top has no end to grow from, it leads the words.
+    var bot: Bot? = nil
     @ViewBuilder let content: Content
+    @State private var emerged = false
+    @Environment(\.accessibilityReduceMotion) private var still
 
     var body: some View {
-        content
+        let fluid = bot != nil && !notch
+        HStack(spacing: 8) {
+            if notch, let bot { BotFace(bot: bot, size: 18) }
+            content
+        }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .padding(.top, notchHeight)
+            .padding(.leading, fluid ? FluidPill.slot : 0)
             // A floor to clear the notch, and no ceiling, so it hugs its words. Above the Dock there is nothing to clear.
             .frame(minWidth: notch ? 200 : 0)
             // Its own size, whatever the card it hangs from proposes; a narrower proposal centred the words in a clipped 200pt slot.
@@ -622,6 +628,9 @@ struct PillShell<Content: View>: View {
                     if notch {
                         NotchShape(radius: 16).fill(.black)
                             .overlay { if let glow { NotchShape(radius: 16, closed: false).stroke(glow.opacity(0.25), lineWidth: 1) } }
+                    } else if fluid {
+                        FluidPill(emerge: emerged ? 1 : 0).fill(.black)
+                            .overlay { if let glow { FluidPill(emerge: emerged ? 1 : 0).stroke(glow.opacity(0.25), lineWidth: 1) } }
                     } else {
                         RoundedRectangle(cornerRadius: 20, style: .continuous).fill(.black)
                             .overlay { if let glow { RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(glow.opacity(0.25), lineWidth: 1) } }
@@ -629,7 +638,77 @@ struct PillShell<Content: View>: View {
                 }
                 .shadow(color: glow?.opacity(0.45) ?? .clear, radius: 12)
                 .padding(.horizontal, notch ? -NotchShape.ear : 0)
+                .overlay {
+                    if fluid, let bot {
+                        GeometryReader { geo in
+                            let (centre, r) = FluidPill.disc(in: CGRect(origin: .zero, size: geo.size), emerge: emerged ? 1 : 0)
+                            BotFace(bot: bot, size: r * 1.4).position(centre).opacity(emerged ? 1 : 0)
+                        }
+                    }
+                }
             }
             .contentShape(Rectangle())
+            // Out of the pill's end on a spring once it shows, and again for another bot.
+            .task(id: fluid ? bot?.id : nil) {
+                guard fluid else { return }
+                emerged = false
+                if !still { try? await Task.sleep(for: .milliseconds(120)) }
+                withAnimation(still ? nil : .spring(duration: 0.55, bounce: 0.3)) { emerged = true }
+            }
+    }
+}
+
+/// A pill with a disc eased out of its left end, joined by a waist: the
+/// metaball construction, tangent cubics between the disc and the pill's
+/// rounded end, so the join has no corner and its neck follows the gap.
+struct FluidPill: Shape {
+    static let radius: CGFloat = 20
+    static let waist: CGFloat = 4
+    /// Room left of the pill for the disc.
+    static let slot = 2 * radius + waist
+    /// 0 is the disc sunk in the pill's end, 1 out in its slot.
+    var emerge: CGFloat
+    var animatableData: CGFloat {
+        get { emerge }
+        set { emerge = newValue }
+    }
+
+    /// The disc's centre and radius, level with the first row so a pill grown taller keeps it at its top.
+    static func disc(in rect: CGRect, emerge: CGFloat) -> (CGPoint, CGFloat) {
+        let r = min(radius, rect.height / 2)
+        let end = rect.minX + slot + r, rest = rect.minX + slot - waist - r
+        return (CGPoint(x: end + (rest - end) * emerge, y: rect.minY + r), r)
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let pill = RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
+            .path(in: CGRect(x: rect.minX + Self.slot, y: rect.minY, width: rect.width - Self.slot, height: rect.height))
+        let (c, r) = Self.disc(in: rect, emerge: emerge)
+        var blob = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
+        if let neck = Self.neck(r, c, CGPoint(x: rect.minX + Self.slot + r, y: c.y)) { blob = blob.union(neck) }
+        return pill.union(blob)
+    }
+
+    /// The bridge between two circles of radius `r`: tangent points spread by `v`, joined by cubics.
+    static func neck(_ r: CGFloat, _ c1: CGPoint, _ c2: CGPoint, v: CGFloat = 0.55, handle: CGFloat = 2.4) -> Path? {
+        let d = hypot(c2.x - c1.x, c2.y - c1.y)
+        guard d > 0.5, d < r * 3.5 else { return nil }
+        // Equal radii: both overlaps are one angle, and the widest spread is a right angle.
+        let u = d < 2 * r ? acos(d / (2 * r)) : 0, spread = CGFloat.pi / 2
+        let a0 = atan2(c2.y - c1.y, c2.x - c1.x)
+        let a1 = a0 + u + (spread - u) * v, a2 = a0 - u - (spread - u) * v
+        let a3 = a0 + .pi - u - (.pi - u - spread) * v, a4 = a0 - .pi + u + (.pi - u - spread) * v
+        func at(_ c: CGPoint, _ a: CGFloat, _ l: CGFloat) -> CGPoint { CGPoint(x: c.x + l * cos(a), y: c.y + l * sin(a)) }
+        let p1 = at(c1, a1, r), p2 = at(c1, a2, r), p3 = at(c2, a3, r), p4 = at(c2, a4, r)
+        let k = min(v * handle, hypot(p1.x - p3.x, p1.y - p3.y) / (2 * r)) * min(1, d / r)
+        var path = Path()
+        path.move(to: p1)
+        path.addCurve(to: p3, control1: at(p1, a1 - .pi / 2, r * k), control2: at(p3, a3 + .pi / 2, r * k))
+        path.addLine(to: c2)
+        path.addLine(to: p4)
+        path.addCurve(to: p2, control1: at(p4, a4 - .pi / 2, r * k), control2: at(p2, a2 + .pi / 2, r * k))
+        path.addLine(to: c1)
+        path.closeSubpath()
+        return path
     }
 }
