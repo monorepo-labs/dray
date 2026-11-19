@@ -5,9 +5,10 @@ import type { SignInMethod } from "@/types/events";
 
 /// What the gate is showing. `revoked` is a saved sign-in the site turned
 /// away; `waiting` a browser sign-in in flight, `finishing` once the browser
-/// is back and it can no longer be cancelled.
+/// is back and it can no longer be cancelled. `emailOff` is the site saying
+/// email sign-in isn't open yet.
 export type GateView =
-  | { kind: "choose"; revoked: boolean; error: string | null; offline: boolean }
+  | { kind: "choose"; revoked: boolean; error: string | null; offline: boolean; emailOff: boolean }
   | { kind: "waiting"; method: SignInMethod; finishing: boolean };
 
 const METHOD: Record<SignInMethod, string> = { github: "GitHub", google: "Google", email: "email" };
@@ -61,7 +62,7 @@ function body(
         </Cards>
       </>
     );
-  const { error, offline, revoked } = view;
+  const { error, offline, revoked, emailOff } = view;
   const failed = !offline && error;
   const label = failed ? failed : revoked ? "You've been signed out" : "Welcome to Dray";
   const heading = offline
@@ -78,7 +79,11 @@ function body(
       <Cards>
         <Card icon={<GitHubIcon />} label="GitHub" corner onClick={() => act.onPick("github")} />
         <Card icon={<GoogleIcon />} label="Google" corner onClick={() => act.onPick("google")} />
-        <Card icon={<MailIcon />} label="Email" corner onClick={() => act.onPick("email")} />
+        {emailOff ? (
+          <Card icon={<MailIcon />} label="Email" detail="Coming in the next few days" off />
+        ) : (
+          <Card icon={<MailIcon />} label="Email" corner onClick={() => act.onPick("email")} />
+        )}
         {offline && <Card icon={<SkipIcon />} label="Skip for now" onClick={act.onSkip} />}
       </Cards>
     </>
@@ -109,31 +114,44 @@ function Cards({ children }: { children: ReactNode }) {
 }
 
 /// One card. Without `onClick` it only says something, like the waiting one;
-/// `dim` greys out one that can't be used right now.
+/// `dim` greys out one that can't be used right now, and `off` fades a way in
+/// that isn't open yet, leaving its `detail` readable, as the site does.
 function Card({
   icon,
   label,
+  detail,
   corner = false,
   dim = false,
+  off = false,
   onClick,
 }: {
   icon: ReactNode;
   label: string;
+  detail?: string;
   corner?: boolean;
   dim?: boolean;
+  off?: boolean;
   onClick?: () => void;
 }) {
   const inner = (
     <>
-      <span className="flex items-start justify-between">
+      <span className={`flex items-start justify-between ${off ? "opacity-40" : ""}`}>
         {icon}
         {corner && <CornerArrow />}
       </span>
-      <span className="text-[17px] leading-6 tracking-[-0.01em] text-white/80">{label}</span>
+      <span className="flex flex-col gap-0.5">
+        <span className={`text-[17px] leading-6 tracking-[-0.01em] ${off ? "text-white/40" : "text-white/80"}`}>{label}</span>
+        {detail && <span className="text-[13px] leading-[18px] text-white/40">{detail}</span>}
+      </span>
     </>
   );
   const cls = `flex h-[220px] min-w-0 flex-1 basis-0 flex-col justify-between bg-[#1C1C1C] p-6 text-left ${dim ? "opacity-40" : ""}`;
-  if (!onClick) return <div className={cls}>{inner}</div>;
+  if (!onClick)
+    return (
+      <div aria-disabled={off || undefined} className={cls}>
+        {inner}
+      </div>
+    );
   return (
     <button
       type="button"

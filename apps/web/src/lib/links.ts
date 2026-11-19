@@ -25,6 +25,9 @@ export const FEEDBACK = "https://x.com/yogesharc";
 
 export const COMPANY = "Monorepo Labs";
 
+/// Where people write for help, and where account deletion requests go.
+export const SUPPORT_EMAIL = "support@drayhq.com";
+
 /// Where the next sponsor signs up: the site's own page, which sends them on
 /// to Dodo's checkout.
 export const SPONSOR = "/support";

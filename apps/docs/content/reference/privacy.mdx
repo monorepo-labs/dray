@@ -1,9 +1,23 @@
 ---
 title: Privacy
-description: Exactly which analytics events Dray sends and what they carry, what is never sent, how to turn analytics off with `DRAY_NO_ANALYTICS`, and how surveys and the website measure visits.
+description: Dray's privacy policy. What the desktop app, the iPhone and iPad app, Dray accounts and drayhq.com collect, what is never sent, how to turn analytics off, and how to delete your account.
 sidebar:
   order: 4
 ---
+
+This is Dray's privacy policy. It covers the Dray desktop app, the Dray app for iPhone and iPad, Dray accounts, and drayhq.com with these docs. "We" and "us" here mean Dray.
+
+Last updated: 19 November 2026.
+
+In short:
+
+- Your prompts, code, transcripts and files stay on your own machines.
+- The desktop app sends a few [anonymous usage events](#analytics-in-the-desktop-app). You can [turn them off](#turn-analytics-off).
+- The [iPhone and iPad app](#the-iphone-and-ipad-app) collects nothing.
+- A [Dray account](#your-dray-account) holds your name, email address and the machines you sign in on.
+- We sell nothing, show no ads and do not track you across other apps or sites.
+
+## Analytics in the desktop app
 
 Dray sends a small set of anonymous usage events, so we can see which builds are in use, which features get used and where the app breaks. Your prompts, code, conversations, file paths, session titles and error messages never leave your machine through analytics. Analytics is on, and Settings has no switch for it.
 
@@ -27,6 +41,8 @@ Every event carries the same few facts about the build:
 | `os`, `arch` | `macos`, `aarch64` |
 | `is_debug` | `false` |
 | `source` | `app` |
+
+PostHog, the service that receives events, keeps the IP address each event comes from, and uses it to tell the country.
 
 Then each event adds its own:
 
@@ -72,7 +88,50 @@ When you start a session on another machine from the Mac app, the app sends that
 
 ## The website and these docs
 
-drayhq.com and these docs count page views, plus clicks on the download and sponsor buttons, in the same PostHog project. They set a PostHog cookie holding a random id, so repeat visits and moves between pages count as one visitor. Nothing ties that id to who you are. Click tracking and session recording are off.
+drayhq.com and these docs count page views, plus clicks on the download, iPhone, sponsor and FAQ buttons and the switch between dark and light, in the same PostHog project. They set a PostHog cookie holding a random id, so repeat visits and moves between pages count as one visitor. Nothing ties that id to who you are, and signing in does not tell PostHog who you are. Click tracking and session recording are off.
+
+PostHog keeps the IP address each visit comes from, and uses it to tell the country.
+
+A page view carries the page's address. On your account pages that address holds your org's short name, such as `/app/your-org/servers`.
+
+## Your Dray account
+
+You sign in to the desktop app with a Dray account, in your browser on drayhq.com. The same account links your servers to an org. The iPhone and iPad app needs no account.
+
+You sign in with GitHub, Google, or an email address and password. With GitHub or Google, they tell us your name, email address and profile picture. We ask for nothing else, and get no access to your repositories or other data there.
+
+Your account holds:
+
+| What | Why |
+|---|---|
+| Your name and email address | To sign you in, show who you are, and send you sign-in codes. |
+| Your profile picture, from GitHub or Google | Shown beside your name on drayhq.com. |
+| A username, made from your email address | Yours to change in your account settings. |
+| A password, stored hashed, if you sign up with email | To sign you in. We never see the password itself. |
+| Your orgs and who is in them | So members of an org can share its servers. |
+| The machines you sign in on or link, by the name each gives itself | So you can see and unlink them. On a Mac this is its computer name. |
+| The IP address and browser of each sign-in on the site | Saved with that sign-in. |
+
+Sign-in codes reach you by email, sent through Bento.
+
+Your account is kept apart from analytics. The desktop app's events carry its random install id, never your account, and the website never tells PostHog who you are.
+
+### Change or delete your account
+
+Change your name and username in your account settings on drayhq.com. To delete your account and everything it holds, email [support@drayhq.com](mailto:support@drayhq.com) from the address you sign in with. There is no delete button yet.
+
+## The iPhone and iPad app
+
+The Dray app for iPhone and iPad collects nothing. It has no analytics, no crash reporting, no ads and no account.
+
+It talks to the Dray servers you add, and to nothing of ours. Your sessions, code and messages travel between the app and your own machines. Each server's address and token stay on your device, the token in the Keychain.
+
+- **Dictation.** On iOS 26 and later, your speech can be turned into text on the iPhone itself. Or, when you pick your Mac in Settings › Dictation, the recording goes to the Dray server on your Mac, which turns it into text there. Either way, your voice never reaches us.
+- **Camera.** Used only to scan a pairing QR code. The picture stays on the device.
+- **Photos.** The app only adds pictures you choose to save. It never reads your library.
+- **Other connections.** The app reads GitHub's public list of Dray releases, to tell you when a server is out of date. A picture in a transcript that points to a web address is loaded from that address. Links open in your browser.
+- **Your Mac's count.** When the phone works through a Mac, the Mac app counts it the way it counts everything else on this page. A dictation from the phone is counted with where you dictated set to `phone`, and a task you start from the phone is counted as a session. Nothing else about it is sent.
+- **Deleting your data.** We hold none from the app. Remove a server in Settings to forget it and its token on the device. Do that before you delete the app: iOS can keep Keychain items after an app is deleted.
 
 ## Other connections Dray makes
 
@@ -81,13 +140,34 @@ Besides analytics, Dray connects to the network for:
 - **Your agents.** Each agent CLI talks to its own provider, as it does in a terminal. Dray also asks the session's own agent, on its cheapest model, to write each session's title from your first prompt. For fx, Dray reads Vercel's public model list to know each model's effort levels.
 - **Updates.** Checking for and downloading new versions of the app and the `dray` CLI.
 - **The changelog.** Reading what's new from drayhq.com.
+- **Your Dray account.** Signing in through drayhq.com, and checking now and then that the sign-in still holds.
 - **Downloads you trigger or need:** the Chromium framework for Dray's browser (from Spotify's CEF build server), dictation models (from Hugging Face).
 - **GitHub and Linear,** when you use pull requests or issues, through `gh` or your Linear key.
 - **OpenTunnel,** only while [Remote access](/reference/remote-access#remote-access) is on or a [public link](/reference/remote-access#share-a-dev-server) is live.
 
-Dictation runs on your Mac. Your voice is never sent anywhere.
+Dictation runs on your Mac. Your voice never leaves it, except when your iPhone sends a recording to your own Mac to be turned into text (see [The iPhone and iPad app](#the-iphone-and-ipad-app)).
+
+## Services we use
+
+- **PostHog** receives analytics from the desktop app and the website.
+- **Vercel** hosts drayhq.com and these docs.
+- **Railway** hosts the database that holds Dray accounts.
+- **GitHub** and **Google** sign you in, when you choose them.
+- **Bento** sends sign-in codes by email.
+- **Dodo Payments** takes payments when you sponsor Dray. Your card details go to Dodo, never to us.
+
+We sell no data, show no ads, and share nothing beyond these services.
+
+## Changes to this policy
+
+When what Dray collects changes, this page changes with it, and the date at the top says when. Every past version is public in [Dray's GitHub repository](https://github.com/monorepo-labs/dray).
+
+## Questions
+
+Email [support@drayhq.com](mailto:support@drayhq.com). For other help, see [Help](https://www.drayhq.com/help).
 
 ## Limits
 
 - There is no switch in Settings. `DRAY_NO_ANALYTICS` is the only way to turn analytics off.
 - Surveys are drawn by PostHog and look like PostHog's, not like Dray.
+- There is no button to delete your account yet. Email us instead.

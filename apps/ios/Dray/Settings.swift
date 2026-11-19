@@ -52,6 +52,10 @@ struct SettingsView: View {
                         Link(destination: URL(string: "https://drayhq.com")!) { SettingsRow("Website", trailing: "arrow.up.right") }
                         RowDivider()
                         Link(destination: URL(string: "https://drayhq.com/docs")!) { SettingsRow("Docs", trailing: "arrow.up.right") }
+                        RowDivider()
+                        Link(destination: URL(string: "https://drayhq.com/docs/reference/privacy")!) { SettingsRow("Privacy Policy", trailing: "arrow.up.right") }
+                        RowDivider()
+                        Link(destination: URL(string: "https://drayhq.com/terms")!) { SettingsRow("Terms of Service", trailing: "arrow.up.right") }
                     }
                     .buttonStyle(RowButtonStyle())
                 }

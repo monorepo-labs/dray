@@ -81,6 +81,7 @@ mod tests {
                     machine: None,
                     bot_id: None,
                     routine: None,
+                    ..Default::default()
                 }),
                 cwd: None,
                 kickoff,

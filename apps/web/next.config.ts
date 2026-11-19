@@ -44,9 +44,14 @@ const config: NextConfig = {
         : []),
     ];
   },
-  // The server page moved into the docs.
+  // The server page moved into the docs. Privacy and terms live there too, and
+  // keep short addresses for the App Store and anyone typing one.
   async redirects() {
-    return [{ source: "/server", destination: "/docs/server", permanent: true }];
+    return [
+      { source: "/server", destination: "/docs/server", permanent: true },
+      { source: "/privacy", destination: "/docs/reference/privacy", permanent: false },
+      { source: "/terms", destination: "/docs/reference/terms", permanent: false },
+    ];
   },
   // Required by the rewrite above: PostHog's API cares about the trailing
   // slash, and Next's own redirect would strip it before the proxy saw it.

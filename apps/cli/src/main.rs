@@ -610,7 +610,7 @@ fn new(args: New) -> Result<(), String> {
     });
 
     match send(request)? {
-        Response::Created { session, base_ref } => {
+        Response::Created { session, base_ref, warning } => {
             // The id alone on stdout, so `$(dray session new …)` captures something
             // usable; everything a human wants goes to stderr beside it.
             println!("{}", session.session_id);
@@ -643,6 +643,9 @@ fn new(args: New) -> Result<(), String> {
                     "This Dray app does not know --hidden, so the session shows in the sidebar. \
                      Update the Dray app."
                 );
+            }
+            if let Some(warning) = warning {
+                eprintln!("{warning}");
             }
             Ok(())
         }

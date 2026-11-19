@@ -806,7 +806,7 @@ pub struct LearnedFile {
 /// Persisted, unlike most of what the app synthesizes: the transcript is
 /// replayed from the log, so attribution that lived only in memory would be
 /// gone on the next open.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct MessageSender {
@@ -826,6 +826,22 @@ pub struct MessageSender {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub routine: Option<bool>,
+    /// The bot-to-bot exchange a bot's message belongs to, and how many
+    /// messages deep it is. Written by the server alone, so no bot can reset it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub chain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub hop: Option<u32>,
+    /// Sent with `--ask`: the receiving bot's reply is passed back to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ask: Option<bool>,
+    /// The answer to an `--ask`, passed back by Dray. Needs no answer itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reply: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

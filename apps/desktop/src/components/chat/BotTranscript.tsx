@@ -231,7 +231,7 @@ const ChatRow = memo(function ChatRow({ item, time, tight, isNew, bots, taskOf, 
       ) : item.kind === "botMessage" ? (
         <>
           <BotLine
-            verb="Message from"
+            verb={item.event.payload.type === "user_message" && item.event.payload.from?.reply ? "Reply from" : "Message from"}
             incoming
             bot={bots.find((b) => b.id === item.botId)}
             fallback={{ id: item.botId, title: item.title }}

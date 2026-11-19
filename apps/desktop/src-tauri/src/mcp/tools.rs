@@ -481,7 +481,7 @@ async fn wait_for_bot(bot: &Bot, seconds: Option<u64>) -> Result<Value, String> 
 /// `dray bot send` with no sender, so it lands as the user's own message, the
 /// way the app's composer sends one, and starts the bot's chat where it has none.
 async fn send_to_bot(bot: &str, message: &str, sink: &Sink) -> Result<Value, String> {
-    let send = SendToBot { bot: bot.into(), prompt: message.into(), from_session_id: None };
+    let send = SendToBot { bot: bot.into(), prompt: message.into(), ..Default::default() };
     match orchestrate(Request::SendToBot(send), sink).await? {
         Response::BotSent { bot, queued } => Ok(json!({ "sent": true, "queued": queued, "session_id": bot.session_id })),
         other => Err(format!("unexpected answer: {other:?}")),

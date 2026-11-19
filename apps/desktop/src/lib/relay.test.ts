@@ -25,6 +25,16 @@ describe("stripSenderPrefix", () => {
     const bot = { sessionId: "abc-123", title: "Ops", machine: null, botId: "b1" };
     expect(senderPrefix(bot)).toBe('[message from the Dray bot "Ops" (abc-123)]\n\n');
     expect(stripSenderPrefix(`${senderPrefix(bot)}hi`, bot)).toBe("hi");
+    // An ask and its passed-back answer, as `attribute` words them.
+    const ask = { ...bot, ask: true };
+    expect(senderPrefix(ask)).toBe(
+      '[message from the Dray bot "Ops" (abc-123); it asks for an answer: end your turn with it, written for that bot, and Dray passes it back]\n\n',
+    );
+    const reply = { ...bot, reply: true };
+    expect(stripSenderPrefix(`${senderPrefix(reply)}green`, reply)).toBe("green");
+    expect(senderPrefix(reply)).toBe(
+      '[reply from the Dray bot "Ops" (abc-123) to your question, passed back by Dray; it needs no answer]\n\n',
+    );
   });
 
   it("survives a title holding brackets and quotes", () => {

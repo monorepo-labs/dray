@@ -492,7 +492,7 @@ mod tests {
     #[test]
     fn a_task_report_is_read_past_its_sender_line() {
         let id = "learn-report-test";
-        let from = MessageSender { session_id: "t1".into(), title: "Fork box".into(), machine: None, bot_id: None, routine: None };
+        let from = MessageSender { session_id: "t1".into(), title: "Fork box".into(), machine: None, bot_id: None, routine: None, ..Default::default() };
         note_prompt(id, "[message from the Dray session \"Fork box\" (t1)]\n\nCould not log in.", Some(&from), false);
         assert_eq!(take_notes(id).failed, vec![("t1".to_string(), "Fork box".to_string())]);
     }
@@ -500,7 +500,7 @@ mod tests {
     #[test]
     fn a_routine_is_never_a_failed_task() {
         let id = "learn-routine-test";
-        let from = MessageSender { session_id: "r1".into(), title: "CI".into(), machine: None, bot_id: None, routine: Some(true) };
+        let from = MessageSender { session_id: "r1".into(), title: "CI".into(), machine: None, bot_id: None, routine: Some(true), ..Default::default() };
         note_prompt(id, "Routine \"CI\" (r1) is due.\n\nIts check `gh run list` failed (exit 1).", Some(&from), false);
         assert!(take_notes(id).failed.is_empty());
     }

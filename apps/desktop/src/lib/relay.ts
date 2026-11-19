@@ -11,7 +11,12 @@ import type { MessageSender } from "@/types/events";
 export function senderPrefix(from: MessageSender, wording = ""): string {
   const where = from.machine ? ` on ${from.machine}${wording}` : "";
   const kind = from.botId ? "bot" : "session";
-  return `[message from the Dray ${kind} "${from.title}" (${from.sessionId})${where}]\n\n`;
+  const who = `the Dray ${kind} "${from.title}" (${from.sessionId})${where}`;
+  if (from.reply) return `[reply from ${who} to your question, passed back by Dray; it needs no answer]\n\n`;
+  const asks = from.ask
+    ? "; it asks for an answer: end your turn with it, written for that bot, and Dray passes it back"
+    : "";
+  return `[message from ${who}${asks}]\n\n`;
 }
 
 /// What a remote sender's line said before #760, when trust ran one way.

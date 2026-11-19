@@ -781,7 +781,7 @@ pub const SLUG_PREFIX: &str = "github:";
 
 /// A leading `/` is taken too: the app qualifies a remote server's key as a
 /// path, `dray://<server>/github:…`, and unwraps it to `/github:…`.
-fn slug_of(cwd: &str) -> Option<&str> {
+pub(crate) fn slug_of(cwd: &str) -> Option<&str> {
     let cwd = cwd.strip_prefix('/').unwrap_or(cwd);
     cwd.strip_prefix(SLUG_PREFIX).filter(|slug| slug.contains('/'))
 }
@@ -1298,7 +1298,7 @@ pub async fn merge_pr(
     crate::analytics::feature_used("pr_merged");
     // Only ever the reader's merge, from a client: a bot and its tasks merge
     // with `gh` and never reach this, so the bot is told of it.
-    crate::bots::note_merge(&cwd, number).await;
+    crate::bots::note_merge(&cwd, number, settle.as_deref(), &sink).await;
     let Some(task) = settle else { return Ok(false) };
     // Off the reply: a task on another machine can take a while to settle.
     tokio::spawn(async move {
@@ -1313,12 +1313,18 @@ pub async fn merge_pr(
 /// The PR's head branch, where it is one of this repo's: a fork's branch can
 /// share a task's name, and unknown counts as a fork.
 pub(crate) async fn pr_head(cwd: &str, number: u64) -> Option<String> {
-    let out = gh(cwd, &["pr", "view", &number.to_string(), "--json", "headRefName,isCrossRepository"]).await.ok()?;
-    let pr: serde_json::Value = serde_json::from_str(&out).ok()?;
+    pr_head_read(cwd, number).await.ok().flatten()
+}
+
+/// [`pr_head`], with a failed read kept apart from a fork's PR: `Err` where
+/// GitHub could not be asked, so a caller can ask again later.
+pub(crate) async fn pr_head_read(cwd: &str, number: u64) -> Result<Option<String>, String> {
+    let out = gh(cwd, &["pr", "view", &number.to_string(), "--json", "headRefName,isCrossRepository"]).await?;
+    let pr: serde_json::Value = serde_json::from_str(&out).map_err(|e| e.to_string())?;
     if pr["isCrossRepository"].as_bool() != Some(false) {
-        return None;
+        return Ok(None);
     }
-    pr["headRefName"].as_str().map(str::to_string)
+    Ok(pr["headRefName"].as_str().map(str::to_string))
 }
 
 /// Whether the PR is merged, or `None` where asking failed too.

@@ -20,7 +20,9 @@ phone reads and drives it over the same WebSocket the desktop uses
   turn's: swipe or the strip to page, pinch to zoom, drag down to close.
 - **Reply** from a dock at the session's foot, the list's orb held to talk:
   the words show as the bubble they will send as, the keyboard edits them
-  in a sheet that can also send, and Cancel asks first. The model chip and
+  in a sheet that can also send, and Cancel asks first. A swipe up from the
+  resting orb or under it opens that sheet too, on every dock (#1302);
+  "Swipe up to type" sits over the orb until the reader has done it three times. The model chip and
   "···" open **This task**: the session's model, effort, fast mode and
   stance for the next reply, each locked mid-turn where the harness can't
   carry it onto a queued prompt (`liveControls.ts`, restated in

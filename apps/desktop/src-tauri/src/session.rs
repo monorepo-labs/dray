@@ -3377,15 +3377,18 @@ impl std::fmt::Display for Undelivered {
 }
 
 /// A bot chat's hand-over, taken for one send and put back unless that send
-/// reached the agent, so a retry still carries the conversation.
+/// reached the agent, so a retry still carries the conversation. An ask the
+/// prompt armed is taken back the same way, or the next turn would answer it.
 struct HandoverGuard<'a> {
     session_id: &'a str,
     text: Option<String>,
+    ask: bool,
 }
 
 impl HandoverGuard<'_> {
     fn sent(&mut self) {
         self.text = None;
+        self.ask = false;
     }
 }
 
@@ -3393,6 +3396,9 @@ impl Drop for HandoverGuard<'_> {
     fn drop(&mut self) {
         if let Some(text) = self.text.take() {
             crate::bots::restore_handover(self.session_id, text);
+        }
+        if self.ask {
+            crate::bots::talk::undo_ask(self.session_id);
         }
     }
 }
@@ -3468,7 +3474,11 @@ async fn deliver_prompt(
     let slash = text.starts_with('/');
     let fx = matches!(transport, Transport::Fx(_));
     let lead_in = send && (!slash || fx || matches!(transport, Transport::Rpc(_)));
-    let mut handover = HandoverGuard { session_id, text: if lead_in { take_hidden(session_id).await } else { None } };
+    let mut handover =
+        HandoverGuard { session_id, text: if lead_in { take_hidden(session_id).await } else { None }, ask: false };
+    // Here, where the prompt reaches the child, not at send: a queued message
+    // joins whichever turn takes it, and that turn is the one that answers.
+    handover.ask = crate::bots::talk::delivered(session_id, from.as_ref());
     let given = lead_in_around(handover.text.as_deref(), &text, slash && fx);
 
     // Ahead of the event for a second reason, and this one is about failure
@@ -3795,6 +3805,16 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                 }
                 if !quiet_run && !waiting && !silent_bot_turn {
                     crate::push::notify(ctx.session_id, &agent_event.payload, said);
+                }
+                let asks = crate::bots::talk::take_asks(ctx.session_id);
+                if !asks.is_empty() {
+                    let text = report_text(*status, stop_reason.as_deref(), said);
+                    let pass = crate::bots::talk::pass_back(ctx.session_id.to_string(), asks, text, app.clone());
+                    tokio::spawn(async move {
+                        if let Err(e) = pass.await {
+                            eprintln!("[bot answer err] {e:#}");
+                        }
+                    });
                 }
                 ask_name = crate::bots::take_name_ask(ctx.session_id) && *status == TurnStatus::Success;
                 // Awaited, not spawned: the queued flush below would start the
@@ -4336,7 +4356,7 @@ async fn flush_one_per_turn(
         // success the reservation stands as `InProgress` and the turn is this
         // batch's; on failure every message is already on screen and in the log,
         // so the sentence saying why is the only thing still owing.
-        let mut handover = HandoverGuard { session_id, text: None };
+        let mut handover = HandoverGuard { session_id, text: None, ask: false };
         if !texts.is_empty() {
             handover.text = take_hidden(session_id).await;
         }
@@ -4350,6 +4370,9 @@ async fn flush_one_per_turn(
                 }
                 Err(err) => {
                     eprintln!("[queued flush err] {err}");
+                    // Each message armed its ask as it was logged; the turn
+                    // that would answer them never opened.
+                    crate::bots::talk::take_asks(session_id);
                     report_send_failure(session_id, harness, &err.to_string(), seq, app)
                         .await;
                 }
@@ -4641,7 +4664,7 @@ mod tests {
         };
         let guard = slot.lock().await;
         let session = guard.as_ref().unwrap();
-        let report = MessageSender { session_id: "t".into(), title: "T".into(), machine: None, bot_id: None, routine: None };
+        let report = MessageSender { session_id: "t".into(), title: "T".into(), machine: None, bot_id: None, routine: None, ..Default::default() };
         session.queue_msg("mine", &[], &[], None, &sink).await;
         session.queue_msg("done", &[], &[], Some(report), &sink).await;
 
