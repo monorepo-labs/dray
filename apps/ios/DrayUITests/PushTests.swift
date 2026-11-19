@@ -52,7 +52,7 @@ final class PushTests: XCTestCase {
     func testReadyToMerge() throws {
         let app = try paired()
         XCUIDevice.shared.press(.home)
-        let ready = banner("label CONTAINS 'ready to merge'")
+        let ready = banner("label CONTAINS[c] 'ready to merge'")
         sleep(1)
         snap(springboard, "ready")
         ready.tap()
@@ -60,6 +60,40 @@ final class PushTests: XCTestCase {
         XCTAssertTrue(app.dock.waitForExistence(timeout: 15), "tapping the alert opened no chat")
         sleep(2)
         snap(app, "ready-chat")
+    }
+
+    /// A bot's hidden task: its question alerts like any task's, is answered from
+    /// the alert, and every tap opens the bot's chat, not the task. Driven: a bot
+    /// named Pip, its task "Pick a color" (Red, Green, Blue), then "Pick a pet",
+    /// then a merge card for the first.
+    func testBotTask() throws {
+        let app = try paired()
+        XCUIDevice.shared.press(.home)
+
+        try dressed(app, "question")
+        let color = banner("label CONTAINS 'Pick a color'")
+        snap(springboard, "bot-task-question")
+        color.press(forDuration: 1.2)
+        XCTAssertTrue(springboard.buttons["Green"].waitForExistence(timeout: 5), "the question's options are not on its alert")
+        springboard.buttons["Green"].tap()
+
+        try dressed(app, "question")
+        let pet = banner("label CONTAINS 'Pick a pet'")
+        pet.tap()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "tapping the alert did not open Dray")
+        XCTAssertTrue(app.staticTexts["Pip"].firstMatch.waitForExistence(timeout: 15), "the ask's tap did not open Pip's chat")
+        sleep(2)
+        snap(app, "bot-task-ask-opened")
+        XCUIDevice.shared.press(.home)
+
+        let ready = banner("label CONTAINS 'Pick a color' AND label CONTAINS[c] 'ready to merge'")
+        sleep(1)
+        snap(springboard, "bot-task-ready")
+        ready.tap()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "tapping the alert did not open Dray")
+        XCTAssertTrue(app.staticTexts["Pip"].firstMatch.waitForExistence(timeout: 15), "the ready tap did not open Pip's chat")
+        sleep(2)
+        snap(app, "bot-task-ready-opened")
     }
 
     /// Settings → Notifications: the main switch takes this phone's handle back
@@ -109,6 +143,8 @@ final class PushTests: XCTestCase {
         XCUIDevice.shared.system.open(URL(string: "dray://debug-push?file=\(file)")!)
         sleep(1)
         XCUIDevice.shared.press(.home)
+        // Read by now; gone, so the next alert of this kind is waited for, not this one again.
+        try? FileManager.default.removeItem(atPath: file)
     }
 
     /// The banner on screen matching `predicate`, waited on for as long as a turn may take.

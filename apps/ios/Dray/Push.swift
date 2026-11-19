@@ -183,7 +183,9 @@ final class Push: NSObject, UNUserNotificationCenterDelegate {
             let note = UNMutableNotificationContent()
             note.title = title
             note.body = "Couldn't send your answer: \(error.localizedDescription). Tap to answer in Dray."
-            note.userInfo = ["dray": ["kind": "done", "server": alert.server.uuidString, "session": alert.session]]
+            var dray = ["kind": "done", "server": alert.server.uuidString, "session": alert.session]
+            dray["open"] = alert.open
+            note.userInfo = ["dray": dray]
             try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: note, trigger: nil))
         }
     }
@@ -242,12 +244,15 @@ struct PushAlert {
     let kind: String
     let server: UUID
     let session: String
+    /// The chat a tap opens where not `session`: a bot's task opens the bot's chat.
+    let open: String?
     let request: String?
     let allow: String?
     let deny: String?
     let question: (text: String, options: [String])?
 
-    var key: SessionKey { SessionKey(server: server, id: session) }
+    /// The chat the alert belongs to on screen; actions still answer `session`.
+    var key: SessionKey { SessionKey(server: server, id: open ?? session) }
 
     init?(_ info: [AnyHashable: Any]) {
         guard let d = info["dray"] as? [String: Any], let kind = d["kind"] as? String,
@@ -255,6 +260,7 @@ struct PushAlert {
         self.kind = kind
         self.server = server
         self.session = session
+        open = d["open"] as? String
         request = d["request"] as? String
         allow = d["allow"] as? String
         deny = d["deny"] as? String

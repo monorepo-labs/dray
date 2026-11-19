@@ -146,6 +146,8 @@ export type Alert = {
   /// The phone's own id for the server, echoed back so a tap opens the right chat.
   server: string;
   session: string;
+  /// The chat a tap opens, where not `session`: a bot's task opens the bot's chat.
+  open?: string;
   title: string;
   body: string;
   request?: string;
@@ -171,6 +173,7 @@ export function readAlert(v: Record<string, unknown>): Alert | null {
     session,
     title: str(v.title, 100) || "Dray",
     body: str(v.body, 240) ?? "",
+    open: str(v.open, 128),
   };
   if (kind === "permission" || kind === "question") {
     alert.request = str(v.request, 128);
@@ -210,7 +213,7 @@ export function apnsPayload(a: Alert): object {
     aps: {
       alert: { title, body },
       sound: "default",
-      "thread-id": a.session,
+      "thread-id": a.open ?? a.session,
       "mutable-content": 1,
       category: `dray.${kind}`,
     },

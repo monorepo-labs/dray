@@ -85,18 +85,36 @@ fn first_line(text: &str) -> String {
     out
 }
 
-/// Who an alert is from, and the bot's face where it is a bot's chat.
-/// `None` for a session that stays quiet: a hidden task its bot reports on.
-async fn sender(session_id: &str) -> Option<(String, Option<Value>)> {
+/// Who an alert is from.
+struct Sender {
+    name: String,
+    /// The bot's face, on its own chat's alerts alone.
+    face: Option<Value>,
+    /// The chat a tap opens where it is not the session itself: a bot's task
+    /// opens the bot's chat, where its card waits.
+    open: Option<String>,
+}
+
+/// `None` for a session that stays quiet: a hidden task's Done, which its bot
+/// reports, and any alert from a hidden task outside a bot's tree.
+async fn sender(session_id: &str, kind: &str) -> Option<Sender> {
     let item = store::get_session_index_item(session_id).await.ok().flatten()?;
     if let Some(bot) = crate::bots::bot_at(&item.cwd).await {
         let face = json!({ "id": bot.id, "shape": bot.avatar.as_ref().map(|a| &a.shape), "hue": bot.avatar.as_ref().map(|a| a.hue) });
-        return Some((bot.name, Some(face)));
+        return Some(Sender { name: bot.name, face: Some(face), open: None });
+    }
+    if item.hidden && kind == "done" {
+        return None;
+    }
+    // A bot's task looks like any task, but its chat is the bot's.
+    if let Some(chat) = crate::bots::bot_chat_of(&item).await {
+        let open = crate::bots::current_chat(chat).await.session_id;
+        return Some(Sender { name: item.title, face: None, open: Some(open) });
     }
     if item.hidden {
         return None;
     }
-    Some((item.title, None))
+    Some(Sender { name: item.title, face: None, open: None })
 }
 
 /// The alert a payload raises, if any, without who it is from.
@@ -136,12 +154,8 @@ fn alert(payload: &AgentEventPayload, said: Option<&str>) -> Option<Value> {
             Some(json!({ "kind": "question", "body": first_line(&first.question), "request": request_id, "question": question }))
         }
         // Named for the task, not the chat it is posted in: a bot's chat holds many.
-        AgentEventPayload::MergeCard { title, number, url, .. } => {
-            let pr = match crate::github::slug_from_pr_url(url) {
-                Some(repo) => format!("{repo}#{number}"),
-                None => format!("#{number}"),
-            };
-            Some(json!({ "kind": "ready", "title": title, "body": format!("{pr} is ready to merge") }))
+        AgentEventPayload::MergeCard { title, .. } => {
+            Some(json!({ "kind": "ready", "title": title, "body": "Ready to merge" }))
         }
         _ => None,
     }
@@ -158,11 +172,12 @@ pub fn notify(session_id: &str, payload: &AgentEventPayload, said: Option<&str>)
         if phones.is_empty() || at_the_computer() {
             return;
         }
-        let Some((name, bot)) = sender(&session_id).await else { return };
+        let Some(from) = sender(&session_id, &kind).await else { return };
         alert["session"] = json!(session_id);
+        alert["open"] = json!(from.open);
         if alert["title"].is_null() {
-            alert["title"] = json!(name);
-            alert["bot"] = json!(bot);
+            alert["title"] = json!(from.name);
+            alert["bot"] = json!(from.face);
         }
         for phone in phones {
             let mut body = alert.clone();
@@ -214,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn ready_to_merge_names_the_task_and_pr() {
+    fn ready_to_merge_names_the_task() {
         let card = AgentEventPayload::MergeCard {
             task_id: "t".into(),
             title: "Fix login".into(),
@@ -227,7 +242,7 @@ mod tests {
         };
         let a = alert(&card, None).unwrap();
         assert_eq!((a["kind"].as_str(), a["title"].as_str()), (Some("ready"), Some("Fix login")));
-        assert_eq!(a["body"], "acme/app#12 is ready to merge");
+        assert_eq!(a["body"], "Ready to merge");
     }
 
     #[test]
