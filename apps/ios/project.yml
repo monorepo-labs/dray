@@ -25,8 +25,17 @@ targets:
       # Bot faces: the app's Blobatar bundled for JavaScriptCore, the Island's own copy.
       - path: ../island/Island/botface.js
         buildPhase: resources
+      # The extension's dressing, for the simulator test that simctl push gives no extension.
+      - path: DrayNotify/Dress.swift
     dependencies:
       - package: ThinkingOrbs
+      - target: DrayNotify
+    entitlements:
+      # Push, and a bot's alert drawn as a message from it (#1299).
+      path: Dray/Dray.entitlements
+      properties:
+        aps-environment: development
+        com.apple.developer.usernotifications.communication: true
     scheme:
       testTargets: [DrayTests, DrayUITests]
     settings:
@@ -49,6 +58,29 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         # Only HTTPS and standard crypto, so TestFlight asks nothing about export.
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+  # Dresses an alert before it shows: a bot's face as the sender, a question's options as buttons.
+  DrayNotify:
+    type: app-extension
+    platform: iOS
+    sources:
+      - DrayNotify
+      - path: Dray/BotFace.swift
+      - path: Dray/BotAvatar.swift
+      - path: ../island/Island/botface.js
+        buildPhase: resources
+    info:
+      path: DrayNotify/Info.plist
+      properties:
+        CFBundleDisplayName: Dray
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yogesh.dray.ios.notify
+        TARGETED_DEVICE_FAMILY: "1,2"
   DrayTests:
     type: bundle.unit-test
     platform: iOS

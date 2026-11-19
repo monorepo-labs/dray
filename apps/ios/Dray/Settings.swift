@@ -1,6 +1,7 @@
 import AVFoundation
 import SwiftUI
 import UIKit
+import UserNotifications
 
 /// Where Settings can go: a server's page, every server, Dictation, Appearance.
 enum SettingsPage: Hashable {
@@ -18,6 +19,7 @@ struct SettingsView: View {
     @State private var path: [SettingsPage]
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
     @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
+    @State private var notifyBlocked = false
 
     init(focus: UUID?) { _path = State(initialValue: focus.map { [.server($0)] } ?? []) }
 
@@ -33,11 +35,22 @@ struct SettingsView: View {
                                         value: store.dictationEngine(dictationPick).map { store.name(of: $0) } ?? "None")
                         }
                         RowDivider(inset: 48)
+                        NotificationsRow(blocked: $notifyBlocked)
+                        RowDivider(inset: 48)
                         NavigationLink(value: SettingsPage.appearance) {
                             SettingsRow("Appearance", icon: "circle.lefthalf.filled", value: hideSessions ? "Bots only" : nil)
                         }
                     }
                     .buttonStyle(RowButtonStyle())
+
+                    if notifyBlocked {
+                        Link("iOS has notifications off for Dray. Turn them on in Settings.",
+                             destination: URL(string: UIApplication.openNotificationSettingsURLString)!)
+                            .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
+                            .padding(.horizontal, Theme.Space.m)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, -20)
+                    }
 
                     RowGroup {
                         SettingsRow("Version", value: version, trailing: nil)
@@ -820,6 +833,37 @@ struct DictationSettings: View {
         case .denied: "Not allowed"
         default: "Not asked yet"
         }
+    }
+}
+
+// MARK: Notifications
+
+/// One switch for every alert: a task done, a permission or a question asked.
+/// `blocked` says iOS itself has them off, which this switch cannot undo.
+struct NotificationsRow: View {
+    @Binding var blocked: Bool
+    @AppStorage(Push.allowKey) private var on = true
+    @Environment(\.scenePhase) private var phase
+
+    var body: some View {
+        Toggle(isOn: Binding(get: { on }, set: { v in Task { await Push.shared.set(v); await check() } })) {
+            HStack(spacing: Theme.Space.m) {
+                Image(systemName: "bell").font(Theme.Font.body.font).foregroundStyle(Theme.secondary).frame(width: 20)
+                    .accessibilityHidden(true)
+                Text("Notifications")
+            }
+        }
+        .toggleStyle(SwitchStyle())
+        .font(Theme.Font.body)
+        .padding(.leading, Theme.Space.l).padding(.trailing, 14)
+        .frame(minHeight: 52)
+        // Back from iOS Settings is where the answer changes.
+        .task(id: phase) { await check() }
+    }
+
+    private func check() async {
+        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        blocked = on && status == .denied
     }
 }
 

@@ -3,6 +3,7 @@ import ThinkingOrbs
 
 @main
 struct DrayApp: App {
+    @UIApplicationDelegateAdaptor private var delegate: AppDelegate
     @State private var store: Store
     @State private var task: NewTask
 
@@ -10,6 +11,8 @@ struct DrayApp: App {
         let store = Store()
         _store = State(initialValue: store)
         _task = State(initialValue: NewTask(store: store))
+        // Before launch ends, so a tapped or answered alert that launched the app reaches it.
+        Push.shared.start(store)
     }
     @Environment(\.scenePhase) private var phase
 
@@ -82,7 +85,21 @@ struct RootView: View {
             }
         }
         .onChange(of: selection) { opened = [] }
+        .onChange(of: opened.last ?? selection, initial: true) { _, now in Push.shared.viewing = now }
+        .onChange(of: Push.shared.opening, initial: true) { _, key in
+            guard let key else { return }
+            Push.shared.opening = nil
+            sheet = nil
+            selection = key
+        }
         .onOpenURL { url in
+            #if DEBUG
+            if url.host == "debug-push", let file = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "file" })?.value {
+                Task { await Push.shared.showDressed(file) }
+                return
+            }
+            #endif
             if let link = PairLink(url.absoluteString) { sheet = .add(link, scan: false) }
         }
         .overlay(alignment: .top) { ErrorToast() }

@@ -8,7 +8,7 @@ final class SettingsTests: XCTestCase {
         app.buttons["Settings"].tap()
         XCTAssertTrue(labelled(app, "Dictation").waitForExistence(timeout: 10))
         sleep(2)
-        XCTAssertFalse(labelled(app, "Notifications").exists, "Settings still offers Notifications")
+        XCTAssertTrue(labelled(app, "Notifications").exists, "Settings offers no Notifications switch")
         snap(app, "settings-root")
         labelled(app, "Dictation").tap()
         sleep(1)

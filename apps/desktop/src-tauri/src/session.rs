@@ -3791,10 +3791,16 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                 if !quiet_run && !waiting {
                     report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
                 }
+                if !quiet_run && !waiting && !silent_bot_turn {
+                    crate::push::notify(ctx.session_id, ctx.session_cwd, &agent_event.payload, said);
+                }
                 ask_name = crate::bots::take_name_ask(ctx.session_id) && *status == TurnStatus::Success;
                 // Awaited, not spawned: the queued flush below would start the
                 // next turn, which could overwrite this one's notes unsaved.
                 bot_turn = crate::bots::commit_turn(ctx.session_cwd, notes, app).await;
+            }
+            AgentEventPayload::PermissionRequested { .. } | AgentEventPayload::QuestionsAsked { .. } => {
+                crate::push::notify(ctx.session_id, ctx.session_cwd, &agent_event.payload, None);
             }
             _ => {}
         }

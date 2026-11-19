@@ -130,6 +130,8 @@ final class Store {
     /// The Island's This Mac; the phone has none.
     @ObservationIgnored private var home: UUID?
     @ObservationIgnored var boatChanged: () -> Void = {}
+    /// The phone's: a server came up, so it can be handed this phone's push handle.
+    @ObservationIgnored var onConnected: (UUID) -> Void = { _ in }
     @ObservationIgnored private let path = NWPathMonitor()
     @ObservationIgnored private var reading: Set<UUID> = []
     @ObservationIgnored private var statuses: [SessionKey: StatusEvent] = [:]
@@ -511,6 +513,7 @@ final class Store {
     /// transcript, so nothing that happened while it was down is missed.
     private func connected(_ server: UUID) async {
         if server == home { linksMayHaveMoved() }
+        onConnected(server)
         Task { await loadBots(server) }
         // Its own task: a sandbox's sessions need not wait on this server's.
         Task { await loadShared(server) }

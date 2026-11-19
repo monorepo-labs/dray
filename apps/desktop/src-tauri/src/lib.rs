@@ -69,6 +69,7 @@ pub mod orchestration;
 pub mod bots;
 pub mod drafts;
 pub mod projects;
+pub mod push;
 pub mod remote_reports;
 pub mod held_flags;
 pub mod routines;
