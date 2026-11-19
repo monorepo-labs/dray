@@ -274,7 +274,7 @@ fn tree_parent<'a>(item: &'a SessionIndexItem, live: &HashSet<&str>) -> Option<&
 
 /// Every unsettled session under `roots`, at any depth: depth-first, each level
 /// newest started first. A cycle in the index costs a short list.
-fn crew<'a>(items: &'a [SessionIndexItem], roots: &[&'a str]) -> Vec<&'a SessionIndexItem> {
+pub(crate) fn crew<'a>(items: &'a [SessionIndexItem], roots: &[&'a str]) -> Vec<&'a SessionIndexItem> {
     let live: HashSet<&str> = items.iter().filter(|i| !i.archived).map(|i| i.session_id.as_str()).collect();
     let mut by_parent: HashMap<&str, Vec<&SessionIndexItem>> = HashMap::new();
     for item in items {

@@ -125,6 +125,8 @@ describe("botItems", () => {
       { target: "abc12345", text: "line one\nline two" },
     ]);
     expect(sentMessages("dray session ls")).toEqual([]);
+    expect(sentMessages(`dray bot send --ask Ops "is CI green?"`)).toEqual([{ target: "Ops", text: "is CI green?", bot: true }]);
+    expect(sentMessages(`dray bot send Ops --ask "is CI green?"`)).toEqual([{ target: "Ops", text: "is CI green?", bot: true }]);
   });
 
   it("reads every send out of one command", () => {

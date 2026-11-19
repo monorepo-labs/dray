@@ -122,7 +122,7 @@ pub fn run(command: DraftCommand) -> Result<(), String> {
                 parent_session_id: parent_session_id(),
             });
             match send(request)? {
-                Response::Created { session, base_ref } => {
+                Response::Created { session, base_ref, .. } => {
                     println!("{}", session.session_id);
                     eprintln!(
                         "Started \"{}\"{}{}{}",

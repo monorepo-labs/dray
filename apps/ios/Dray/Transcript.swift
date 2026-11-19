@@ -303,11 +303,17 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
 /// client does not keep. That much is read to the line's end rather than
 /// rebuilt: everything before it matched whole, so it cannot take any of the
 /// message, and without it a remote sender's line stayed drawn in the bubble.
+///
+/// A bot's `--ask` adds "; it asks for an answer…" after the id, and the answer
+/// passed back opens "[reply from" (#1303); both are read to the line's end too.
 func stripSender(_ text: String, title: String?, id: String?, bot: Bool = false) -> String {
     guard let title, let id else { return text }
-    let opening = "[message from the Dray \(bot ? "bot" : "session") \"\(title)\" (\(id))"
-    guard text.hasPrefix(opening) else { return text }
-    let rest = text.dropFirst(opening.count)
-    guard rest.hasPrefix("]\n\n") || rest.hasPrefix(" on "), let end = rest.range(of: "]\n\n") else { return text }
-    return String(rest[end.upperBound...])
+    let who = "the Dray \(bot ? "bot" : "session") \"\(title)\" (\(id))"
+    for opening in ["[message from \(who)", "[reply from \(who)"] where text.hasPrefix(opening) {
+        let rest = text.dropFirst(opening.count)
+        let known = ["]\n\n", " on ", "; ", " to your question"].contains { rest.hasPrefix($0) }
+        guard known, let end = rest.range(of: "]\n\n") else { return text }
+        return String(rest[end.upperBound...])
+    }
+    return text
 }

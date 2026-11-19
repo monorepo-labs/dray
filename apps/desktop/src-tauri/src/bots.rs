@@ -7,6 +7,7 @@ use ts_rs::TS;
 
 pub mod learn;
 pub mod react;
+pub mod talk;
 
 use crate::{
     events::ApprovalPolicy,
@@ -495,11 +496,9 @@ pub async fn note_merge(cwd: &str, number: u64) {
 /// The list for the bot chat `session_id` belongs to, taken once, as the
 /// hidden lines that go ahead of its next prompt.
 pub async fn take_since(session_id: &str) -> Option<String> {
-    if SINCE.lock().unwrap().is_empty() && NOTES.lock().unwrap().is_empty() {
-        return None;
-    }
     let item = crate::store::get_session_index_item(session_id).await.ok().flatten()?;
     let mut lines: Vec<String> = Vec::new();
+    lines.extend(roster_note(session_id, &item.cwd).await);
     NOTES.lock().unwrap().retain(|(path, note)| {
         let mine = same_dir(path, &item.cwd);
         if mine {
@@ -829,7 +828,7 @@ pub async fn last_session_of(bot: &Bot) -> Option<SessionIndexItem> {
         .max_by_key(|i| chrono::DateTime::parse_from_rfc3339(&i.created).ok())
 }
 
-/// What `dray bot ls` prints for a bot.
+/// What the CLI is told about a bot it made, renamed or messaged.
 pub async fn summary(bot: Bot) -> dray_proto::BotSummary {
     let session_id = chat_of(&bot).await.map(|i| i.session_id);
     dray_proto::BotSummary {
@@ -839,7 +838,127 @@ pub async fn summary(bot: Bot) -> dray_proto::BotSummary {
         id: bot.id,
         name: bot.name,
         path: bot.path,
+        role: None,
+        working: false,
+        tasks: Vec::new(),
     }
+}
+
+/// What `dray bot ls` prints for a bot: [`summary`] with its role, whether it
+/// is mid-turn, and its open tasks, so a bot can see who already works on what.
+/// `items` is the whole index, settled sessions too, for the tree walk.
+pub async fn listing(bot: Bot, items: &[SessionIndexItem]) -> dray_proto::BotSummary {
+    let role = role(&bot).await;
+    let chat = chat_of(&bot).await;
+    let tasks = open_tasks(&bot, items)
+        .into_iter()
+        .map(|t| dray_proto::BotTask {
+            session_id: t.session_id.clone(),
+            title: t.title.clone(),
+            project_path: t.project_path.clone(),
+            branch: t.branch.clone(),
+            working: t.status == crate::store::SessionStatus::InProgress,
+        })
+        .collect();
+    let mut out = summary(bot).await;
+    out.role = role;
+    out.working = chat.is_some_and(|c| c.status == crate::store::SessionStatus::InProgress);
+    out.tasks = tasks;
+    out
+}
+
+/// `bot`'s unsettled tasks at any depth, out of the whole index. Every session
+/// in its folder is a root, routine runs and settled chats included, so a task
+/// a run started is listed while the run itself, a root, never is.
+fn open_tasks<'a>(bot: &Bot, items: &'a [SessionIndexItem]) -> Vec<&'a SessionIndexItem> {
+    let roots: Vec<&str> =
+        items.iter().filter(|i| same_dir(&i.cwd, &bot.path)).map(|i| i.session_id.as_str()).collect();
+    if roots.is_empty() {
+        return Vec::new();
+    }
+    crate::stalls::crew(items, &roots)
+}
+
+/// The warning a task of `own`'s starting in `project` gets, where other bots
+/// have open tasks there. Soft on purpose: the bot reads it and decides,
+/// since two tasks in one repo are usually on different things.
+pub async fn overlap(project: &str, own: &Bot) -> Option<String> {
+    let bots = read_list().await.ok()?;
+    let items = crate::store::read_index().await.ok()?;
+    let mut lines = Vec::new();
+    for bot in bots.iter().filter(|b| b.id != own.id) {
+        let tasks: Vec<String> = open_tasks(bot, &items)
+            .into_iter()
+            .filter(|t| same_dir(&t.project_path, project))
+            .map(|t| format!("\"{}\" ({})", t.title, t.session_id))
+            .collect();
+        if !tasks.is_empty() {
+            lines.push(format!("- {}: {}", bot.name, tasks.join(", ")));
+        }
+    }
+    (!lines.is_empty()).then(|| {
+        format!(
+            "Other bots have open tasks in this project:\n{}\nIf this task overlaps one of theirs, ask that bot with `dray bot send --ask` before going further.",
+            lines.join("\n")
+        )
+    })
+}
+
+/// What a bot is for, as the others read it: the first line of its
+/// `AGENTS.md`, markdown marks taken off. `None` while the file is empty.
+async fn role(bot: &Bot) -> Option<String> {
+    role_line(&read_file(&Path::new(&bot.path).join(INSTRUCTIONS)).await)
+}
+
+/// Longest role shown, in characters: one line in every other bot's prompt.
+const ROLE_CAP: usize = 160;
+
+fn role_line(instructions: &str) -> Option<String> {
+    let line = instructions
+        .lines()
+        .map(|l| l.trim_start_matches(['#', '-', '*', '>', ' ', '\t']).trim())
+        .find(|l| !l.is_empty())?;
+    Some(match line.char_indices().nth(ROLE_CAP) {
+        Some((at, _)) => format!("{}…", &line[..at]),
+        None => line.to_string(),
+    })
+}
+
+/// The other bots as `bot`'s prompt lists them, one line each with its role.
+async fn roster(bots: &[Bot], bot: &Bot) -> String {
+    let mut lines = Vec::new();
+    for other in bots.iter().filter(|b| b.id != bot.id) {
+        let role = role(other).await.unwrap_or_else(|| "no role written yet".into());
+        // No ids: a message names its sender by chat session, and a second id
+        // for the same bot read to a bot as a second bot.
+        lines.push(format!("- \"{}\": {role}", other.name));
+    }
+    if lines.is_empty() {
+        "There are no other bots yet.".into()
+    } else {
+        format!("The other bots, each with its role:\n\n{}", lines.join("\n"))
+    }
+}
+
+/// The roster each bot session's prompt was given, so a change to the bots or
+/// their roles reaches a running chat ahead of its next prompt, as OpenBot
+/// resends its teammate list. In memory: a respawn reads a fresh prompt.
+static ROSTER_SEEN: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// The note for `session_id` where the roster moved since it last saw it. A
+/// bot chat with no roster on record — resumed after a restart without a fresh
+/// prompt, as fx and grok are — is given the current one once.
+async fn roster_note(session_id: &str, cwd: &str) -> Option<String> {
+    let bots = read_list().await.ok()?;
+    let bot = bots.iter().find(|b| same_dir(&b.path, cwd))?;
+    let seen = ROSTER_SEEN.lock().unwrap().get(session_id).cloned();
+    let now = roster(&bots, bot).await;
+    if seen.as_ref() == Some(&now) {
+        return None;
+    }
+    ROSTER_SEEN.lock().unwrap().insert(session_id.to_string(), now.clone());
+    Some(format!("[Dray: the other bots changed. This replaces the list you were given. {now}]\n\n"))
 }
 
 /// The folder, both files and the list entry. Takes no lock: callers hold it.
@@ -1281,7 +1400,8 @@ pub async fn system_prompt(base: &str, session_id: &str, cwd: &str, harness: Har
             base.to_string()
         };
     };
-    let others: Vec<&str> = bots.iter().filter(|b| b.id != bot.id).map(|b| b.name.as_str()).collect();
+    let others = roster(&bots, bot).await;
+    ROSTER_SEEN.lock().unwrap().insert(session_id.to_string(), others.clone());
     prepare_folder(bot).await;
     let instructions = read_file(&Path::new(&bot.path).join(INSTRUCTIONS)).await;
     let user = user_name().await;
@@ -1619,7 +1739,7 @@ fn instructions_note(instructions: &str) -> String {
     }
 }
 
-fn bot_block(bot: &Bot, others: &[&str], instructions: &str, user: Option<&str>, harness: Harness) -> String {
+fn bot_block(bot: &Bot, others: &str, instructions: &str, user: Option<&str>, harness: Harness) -> String {
     let user = match user {
         Some(user) => format!(
             "Call the user {user}. If they ask to be called something else, write just that name to `{USER_FILE}` in your folder and use it from then on; Dray shares it with the other bots."
@@ -1628,19 +1748,16 @@ fn bot_block(bot: &Bot, others: &[&str], instructions: &str, user: Option<&str>,
             "You don't know the user's name yet. Never guess it, from git, the computer's account or anywhere else. Your chat opens by asking what to call them; when they say, write just that name to `{USER_FILE}` in your folder and use it from then on. Dray shares it with the other bots."
         ),
     };
-    let others = match others {
-        [] => "There are no other bots yet.".to_string(),
-        names => format!("The other bots now: {}.", names.iter().map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(", ")),
-    };
     fill(
         BOT_PROMPT,
         &[
             ("name", &bot.name),
             ("path", &bot.path),
             ("instructions", &instructions_note(instructions)),
-            ("others", &others),
+            ("others", others),
             ("user", &user),
             ("long_work", long_work(harness)),
+            ("max_hops", &talk::MAX_HOPS.to_string()),
         ],
     )
 }
@@ -1724,9 +1841,48 @@ mod tests {
         }
     }
 
+    fn indexed(id: &str, cwd: &str, parent: Option<&str>, run: bool) -> SessionIndexItem {
+        let mut item: SessionIndexItem = serde_json::from_value(serde_json::json!({
+            "sessionId": id, "harness": "claude_code", "cwd": cwd, "projectPath": "/r",
+            "title": id, "status": "idle", "parentSessionId": parent,
+            "created": "2026-01-01T00:00:00Z", "modified": "2026-01-01T00:00:00Z",
+            "archived": false, "pinned": false,
+        }))
+        .unwrap();
+        if run {
+            item.routine_run = Some("r1".into());
+        }
+        item
+    }
+
+    /// A task a routine run started is the bot's, though the run is not a task.
+    #[test]
+    fn open_tasks_include_what_a_routine_run_started() {
+        let items = [
+            indexed("chat", "/h/bots/b", None, false),
+            indexed("run", "/h/bots/b", Some("chat"), true),
+            indexed("by-chat", "/r", Some("chat"), false),
+            indexed("by-run", "/r", Some("run"), false),
+            indexed("elsewhere", "/r", Some("other"), false),
+        ];
+        let ids: Vec<&str> = open_tasks(&bot(), &items).iter().map(|i| i.session_id.as_str()).collect();
+        assert_eq!(ids.len(), 2, "{ids:?}");
+        assert!(ids.contains(&"by-chat") && ids.contains(&"by-run"));
+    }
+
+    #[test]
+    fn a_role_is_the_first_line_of_agents_md_bare() {
+        assert_eq!(role_line(""), None);
+        assert_eq!(role_line("\n  \n# \n"), None);
+        assert_eq!(role_line("\n# Runs releases for dray.\n\nMore rules."), Some("Runs releases for dray.".into()));
+        assert_eq!(role_line("- Watches CI"), Some("Watches CI".into()));
+        let long = "é".repeat(ROLE_CAP + 5);
+        assert_eq!(role_line(&long), Some(format!("{}…", "é".repeat(ROLE_CAP))));
+    }
+
     #[test]
     fn block_points_at_the_instructions_and_memory_without_their_text() {
-        let block = bot_block(&bot(), &["Research"], "Watch CI.", None, Harness::ClaudeCode);
+        let block = bot_block(&bot(), "The other bots, each with its role:\n\n- \"Research\": Reads papers.", "Watch CI.", None, Harness::ClaudeCode);
         assert!(!block.contains("Watch CI."), "the agent loads AGENTS.md itself");
         assert!(block.contains(&format!("`{INSTRUCTIONS}`")));
         assert!(block.contains("/h/bots/b"));
@@ -1734,8 +1890,7 @@ mod tests {
         assert!(block.contains("YYYY-MM-DD-short-title.md"));
         assert!(block.contains("never ask it to report back"));
         assert!(block.contains("dray session settle <id> --delete-worktree"));
-        assert!(block.contains("The other bots now: \"Research\"."));
-        assert!(bot_block(&bot(), &[], "", None, Harness::ClaudeCode).contains("There are no other bots yet."));
+        assert!(block.contains("- \"Research\": Reads papers."));
     }
 
     /// Claude Code and grok are told to use a background subagent, naming the
@@ -1743,12 +1898,12 @@ mod tests {
     /// goes to a task.
     #[test]
     fn long_work_goes_where_the_harness_can_take_it() {
-        let claude = bot_block(&bot(), &[], "", None, Harness::ClaudeCode);
+        let claude = bot_block(&bot(), "", "", None, Harness::ClaudeCode);
         assert!(claude.contains("the Agent tool with `run_in_background: true`"));
-        let grok = bot_block(&bot(), &[], "", None, Harness::Grok);
+        let grok = bot_block(&bot(), "", "", None, Harness::Grok);
         assert!(grok.contains("`spawn_subagent` with `background: true`"));
         for harness in [Harness::Pi, Harness::Codex, Harness::Fx] {
-            let block = bot_block(&bot(), &[], "", None, harness);
+            let block = bot_block(&bot(), "", "", None, harness);
             assert!(!block.contains("subagent"), "{harness:?}");
             assert!(block.contains("start it with `--no-worktree`"), "{harness:?}");
         }
@@ -1842,15 +1997,15 @@ mod tests {
 
     #[test]
     fn the_block_speaks_of_the_file_only_where_the_bot_must_act() {
-        assert!(bot_block(&bot(), &[], " \n", None, Harness::ClaudeCode).contains("is empty: your job is whatever the user tells you first"));
+        assert!(bot_block(&bot(), "", " \n", None, Harness::ClaudeCode).contains("is empty: your job is whatever the user tells you first"));
         let long = "é".repeat(FILE_CAP + 1);
-        assert!(bot_block(&bot(), &[], &long, None, Harness::ClaudeCode).contains(&format!("is {} characters, over its", FILE_CAP + 1)));
-        assert!(!bot_block(&bot(), &[], "Watch CI.", None, Harness::ClaudeCode).contains("characters, over its"));
+        assert!(bot_block(&bot(), "", &long, None, Harness::ClaudeCode).contains(&format!("is {} characters, over its", FILE_CAP + 1)));
+        assert!(!bot_block(&bot(), "", "Watch CI.", None, Harness::ClaudeCode).contains("characters, over its"));
     }
 
     #[test]
     fn every_template_is_filled_whole() {
-        let block = bot_block(&bot(), &[], "a", Some("Yogesh"), Harness::ClaudeCode);
+        let block = bot_block(&bot(), "", "a", Some("Yogesh"), Harness::ClaudeCode);
         let kickoff = fill(KICKOFF_PROMPT, &[("name", "Ops"), ("projects", "dray"), ("greet", "Hi"), ("unnamed", "")]);
         let review = fill(include_str!("bots/review_prompt.md"), &[("reason", "The user just corrected you.")]);
         for text in [&block, &kickoff, &review] {
@@ -1861,10 +2016,10 @@ mod tests {
 
     #[test]
     fn the_bot_is_told_its_name_and_the_users() {
-        let known = bot_block(&bot(), &[], "", Some("Yogesh"), Harness::ClaudeCode);
+        let known = bot_block(&bot(), "", "", Some("Yogesh"), Harness::ClaudeCode);
         assert!(known.starts_with("# Your name is Ops"));
         assert!(known.contains("Call the user Yogesh."));
-        let unknown = bot_block(&bot(), &[], "", None, Harness::ClaudeCode);
+        let unknown = bot_block(&bot(), "", "", None, Harness::ClaudeCode);
         assert!(unknown.contains("Never guess it"));
         assert!(unknown.contains(USER_FILE));
     }

@@ -7,9 +7,9 @@ use super::{parent_session_id, send, unexpected};
 pub enum BotCommand {
     /// Make a bot: one long-lived chat with instructions and memory of its own.
     New(NewBot),
-    /// List bots, with each one's chat.
+    /// List bots: each one's chat, role, whether it is working, and its open tasks.
     Ls(BotLs),
-    /// Message a bot. It lands in the bot's chat; nothing comes back on its own.
+    /// Message a bot. It lands in the bot's chat; with --ask its answer comes back to you.
     Send(BotSend),
     /// Rename a bot.
     Rename(BotRename),
@@ -58,6 +58,10 @@ pub struct BotSend {
     bot: String,
     /// The message. Write it for someone who cannot see your conversation.
     prompt: String,
+    /// Wants an answer: Dray passes the bot's reply back to your chat when its
+    /// turn ends. Without it nothing comes back on its own.
+    #[arg(long)]
+    ask: bool,
 }
 
 #[derive(Args)]
@@ -95,6 +99,9 @@ pub fn run(command: BotCommand) -> Result<(), String> {
                 } else {
                     for bot in &bots {
                         println!("{}", line(bot));
+                        for detail in details(bot) {
+                            println!("    {detail}");
+                        }
                     }
                 }
                 Ok(())
@@ -107,6 +114,7 @@ pub fn run(command: BotCommand) -> Result<(), String> {
                 bot: args.bot,
                 prompt: args.prompt,
                 from_session_id: parent_session_id(),
+                ask: args.ask,
             });
             match send(request)? {
                 Response::BotSent { bot, queued } => {
@@ -159,9 +167,22 @@ fn hue(colour: &str) -> Result<f64, String> {
 }
 
 /// One bot per line: id, its chat's session (or a dash before it has one),
-/// then its name.
+/// then its name and whether it is working.
 fn line(bot: &BotSummary) -> String {
-    format!("{}  {:<36}  {}", bot.id, bot.session_id.as_deref().unwrap_or("-"), bot.name)
+    let working = if bot.working { "  (working)" } else { "" };
+    format!("{}  {:<36}  {}{working}", bot.id, bot.session_id.as_deref().unwrap_or("-"), bot.name)
+}
+
+/// The indented lines under a bot: its role, then one per open task.
+fn details(bot: &BotSummary) -> Vec<String> {
+    let mut out = vec![format!("role: {}", bot.role.as_deref().unwrap_or("none written yet"))];
+    for task in &bot.tasks {
+        let project = task.project_path.rsplit('/').next().unwrap_or(&task.project_path);
+        let branch = task.branch.as_deref().map(|b| format!(", {b}")).unwrap_or_default();
+        let working = if task.working { ", working" } else { "" };
+        out.push(format!("task: \"{}\" ({}) in {project}{branch}{working}", task.title, task.session_id));
+    }
+    out
 }
 
 #[cfg(test)]

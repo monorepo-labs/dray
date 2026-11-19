@@ -48,8 +48,9 @@ use std::path::PathBuf;
 /// bot verbs, v18 `merge_card`, v19 `set_need`, v20 `react`, and v21
 /// `add_image`, which an older app would turn into a one-frame video. v22
 /// added `set_model`, which an older app reads as a broken CLI, and v23 the
-/// routine verbs.
-pub const PROTOCOL_VERSION: u32 = 23;
+/// routine verbs. v24 added `ask` on a bot send: an older app delivers the
+/// message and passes no answer back, so the asking bot waits on nothing.
+pub const PROTOCOL_VERSION: u32 = 24;
 
 /// Remote MCP (#863), held out of release builds until Dray accounts (#874)
 /// land (#900). Gates `/mcp`, the assistant commands and the CLI's `assistant`
@@ -99,6 +100,7 @@ impl Request {
     /// as the half to update. No wildcard arm: a new variant has to say which.
     pub fn version(&self) -> u32 {
         match self {
+            Request::SendToBot(send) if send.ask => 24,
             Request::CreateSession(create) if create.base.is_some() => 10,
             Request::CreateDraft(draft) if draft.base.is_some() => 10,
             Request::CreateSession(_)
@@ -345,8 +347,9 @@ pub struct RenameBot {
     pub name: String,
 }
 
-/// A message into a bot's chat, starting one where it has none. Nothing comes
-/// back on its own: the bot replies, if it wants to, with a send of its own.
+/// A message into a bot's chat, starting one where it has none. Without `ask`
+/// nothing comes back on its own: the bot replies, if it wants to, with a send
+/// of its own.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendToBot {
@@ -355,6 +358,10 @@ pub struct SendToBot {
     /// The calling session, from `DRAY_SESSION_ID`, as [`SendMessage`] has it.
     #[serde(default)]
     pub from_session_id: Option<String>,
+    /// Wants an answer: the server passes the bot's reply, its turn's last
+    /// words, back to the sending bot's chat once that turn ends.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ask: bool,
 }
 
 /// What the CLI is told about a bot.
@@ -373,6 +380,30 @@ pub struct BotSummary {
     pub shape: Option<String>,
     #[serde(default)]
     pub hue: Option<f64>,
+    /// The first line of its `AGENTS.md`: what it is for, as other bots read it.
+    /// Filled by `dray bot ls` alone, like the two below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Whether its chat is mid-turn.
+    #[serde(default)]
+    pub working: bool,
+    /// Its unsettled tasks, at any depth.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<BotTask>,
+}
+
+/// One of a bot's open tasks, as `dray bot ls` shows it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotTask {
+    pub session_id: String,
+    pub title: String,
+    /// The repo it works in, the grouping path, not its worktree.
+    pub project_path: String,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub working: bool,
 }
 
 /// A pairing code for an assistant to sign in to this server's `/mcp` with.
@@ -990,6 +1021,10 @@ pub enum Response {
         /// reads the request.
         #[serde(default)]
         base_ref: Option<String>,
+        /// Said to a bot's task starting in a project where another bot has
+        /// open tasks: who, and which, so the bot checks before it overlaps.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        warning: Option<String>,
     },
     Listed { sessions: Vec<SessionSummary> },
     /// A draft written, or one taken off the list — the answer to
@@ -1414,6 +1449,9 @@ mod tests {
         for request in &routines {
             assert_eq!(Envelope::new(request.clone()).v, 23, "{request:?}");
         }
+        // Only an ask needs the app that passes the answer back.
+        let ask = Request::SendToBot(SendToBot { ask: true, ..Default::default() });
+        assert_eq!(Envelope::new(ask.clone()).v, 24);
         let newest = old
             .iter()
             .chain(&drafts)
@@ -1426,6 +1464,7 @@ mod tests {
             .chain(&bots)
             .chain([&card, &need, &react, &image, &model])
             .chain(&routines)
+            .chain([&ask])
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));
