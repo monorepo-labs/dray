@@ -1,7 +1,6 @@
 import { preload } from "react-dom";
 import { DownloadButton } from "@/components/DownloadButton";
 import { LinuxMenu } from "@/components/LinuxMenu";
-import { availableLinuxFiles } from "@/lib/linux";
 import { Hero as AppWindow } from "@/components/illustrations/Hero";
 import { SponsorLink } from "@/components/SponsorLink";
 import { LABEL } from "./Section";
@@ -11,9 +10,7 @@ import { SiteNav } from "./SiteNav";
 
 /// The top of the page: nav, headline, the live app window and the sponsor line,
 /// over the pixel-blue backdrop.
-export async function Hero() {
-  const linuxFiles = await availableLinuxFiles();
-
+export function Hero() {
   // The phone still is the page's LCP, and lazy loading started it only after
   // layout. A preload in <head> starts it at once for the system's scheme; a
   // saved pick that disagrees falls back to the lazy <img> below.
@@ -35,7 +32,7 @@ export async function Hero() {
           <div className="mt-8 flex flex-wrap items-start justify-between gap-4 pr-5">
             <div className="flex flex-wrap items-center gap-3">
               <DownloadButton from="hero" className="inline-flex h-10 items-center gap-2 rounded-[6px] bg-white px-4 text-[14px] leading-5 font-medium text-[#0B0B0F] shadow-[inset_0_-1px_0_#4D4C4C,0_1px_2px_#00000040,0_10px_28px_-10px_#00000099] transition-opacity hover:opacity-90 [&>svg]:-mt-0.5 light:bg-[#0A0A0A] light:text-white light:shadow-[inset_0_-1px_0_#000,0_1px_2px_#00000040]" />
-              <LinuxMenu available={linuxFiles} className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-[6px] border border-white/20 px-4 text-[14px] leading-5 font-medium text-white transition-colors hover:bg-white/10 light:border-black/15 light:text-[#0A0A0A] light:hover:bg-black/5" />
+              <LinuxMenu className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-[6px] border border-white/20 px-4 text-[14px] leading-5 font-medium text-white transition-colors hover:bg-white/10 light:border-black/15 light:text-[#0A0A0A] light:hover:bg-black/5" />
             </div>
             <p className="text-[14px] leading-5 tracking-[-0.01em] text-white/30 light:text-black/40">Free and open source</p>
           </div>

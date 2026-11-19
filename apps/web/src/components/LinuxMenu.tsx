@@ -36,9 +36,8 @@ export function LinuxFileLink({
 
 const ROW = "flex h-9 items-center justify-between gap-4 rounded-[5px] px-2.5 text-[14px] leading-5";
 
-/// "Download for Linux", opening a menu of the four files. `available` names
-/// the files R2 holds, read on the server; the rest read "Soon".
-export function LinuxMenu({ available, className }: { available: string[]; className: string }) {
+/// "Download for Linux", opening a menu of the four files.
+export function LinuxMenu({ className }: { className: string }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
@@ -73,7 +72,7 @@ export function LinuxMenu({ available, className }: { available: string[]; class
               </p>
               {(["x64", "arm64"] as const).map((arch) => {
                 const file = f.files[arch];
-                return available.includes(file) ? (
+                return (
                   <LinuxFileLink
                     key={arch}
                     file={file}
@@ -85,11 +84,6 @@ export function LinuxMenu({ available, className }: { available: string[]; class
                     {arch}
                     <span className="font-mono text-[11px] text-white/40 light:text-black/40">{file}</span>
                   </LinuxFileLink>
-                ) : (
-                  <div key={arch} aria-disabled="true" className={`${ROW} text-white/35 light:text-black/30`}>
-                    {arch}
-                    <span className="font-mono text-[10px] tracking-[0.06em] uppercase">Soon</span>
-                  </div>
                 );
               })}
             </div>

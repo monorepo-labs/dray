@@ -6,7 +6,7 @@ import { LinuxFileLink } from "@/components/LinuxMenu";
 import { Closing, CopyLine } from "@/components/home/Closing";
 import { CARD_BODY, CARD_TITLE, LABEL } from "@/components/home/Section";
 import { SiteNav } from "@/components/home/SiteNav";
-import { LINUX_FORMATS, availableLinuxFiles, type LinuxFormat } from "@/lib/linux";
+import { LINUX_FORMATS, type LinuxFormat } from "@/lib/linux";
 
 import { DmgLink } from "./client";
 import { H1, LEDE, LINK } from "./styles";
@@ -23,8 +23,6 @@ const KICKER = `${LABEL} text-[#A1A1A1] light:text-[#6B6B6B]`;
 const BIG_TITLE = "flex items-center gap-3 text-[28px] leading-[32px] tracking-[-0.03em] text-white light:text-[#0A0A0A]";
 const FILLED =
   "inline-flex h-10 items-center gap-2 rounded-[6px] bg-white px-4 text-[14px] leading-5 font-medium text-[#0B0B0F] shadow-[inset_0_-1px_0_#4D4C4C,0_1px_2px_#00000040] transition-opacity hover:opacity-90 light:bg-[#0A0A0A] light:text-white light:shadow-[inset_0_-1px_0_#000,0_1px_2px_#00000040]";
-const MISSING =
-  "inline-flex h-10 cursor-default items-center gap-2 rounded-[6px] bg-white/[0.06] px-4 text-[14px] leading-5 font-medium text-white/40 light:bg-black/[0.05] light:text-black/35";
 const CODE =
   "rounded-[4px] bg-white/10 px-1.5 py-0.5 font-mono text-[12.5px] whitespace-nowrap text-white light:bg-black/[0.06] light:text-[#0A0A0A]";
 const HINT = "text-[14px] leading-[22px] text-[#8A8A8A] light:text-[#6B6B6B]";
@@ -53,9 +51,7 @@ const SOON = [
 /// Every way to get Dray, one card per platform, and nothing else: no ask,
 /// no auto-start. The Download for macOS buttons elsewhere go by way of
 /// `/thank-you`, which starts the dmg and asks for support.
-export default async function Downloads() {
-  const available = await availableLinuxFiles();
-
+export default function Downloads() {
   return (
     <div
       data-home
@@ -104,16 +100,11 @@ export default async function Downloads() {
                   <div className="flex flex-wrap gap-2">
                     {(["x64", "arm64"] as const).map((arch) => {
                       const file = f.files[arch];
-                      return available.includes(file) ? (
+                      return (
                         <LinuxFileLink key={arch} file={file} format={f.id} arch={arch} from="downloads" className={FILLED}>
                           <DownArrow />
                           {arch}
                         </LinuxFileLink>
-                      ) : (
-                        <span key={arch} aria-disabled="true" className={MISSING}>
-                          {arch}
-                          <span className={`${LABEL} text-[10px]`}>Soon</span>
-                        </span>
                       );
                     })}
                   </div>
