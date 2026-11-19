@@ -2424,7 +2424,14 @@ mod tests {
     }
 
     fn account(name: &str, username: Option<&str>) -> crate::dray_account::DrayUser {
-        crate::dray_account::DrayUser { id: "u".into(), name: name.into(), username: username.map(Into::into), image: None }
+        crate::dray_account::DrayUser {
+            id: "u".into(),
+            name: name.into(),
+            email: None,
+            username: username.map(Into::into),
+            image: None,
+            providers: Vec::new(),
+        }
     }
 
     #[test]

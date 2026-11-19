@@ -12,7 +12,6 @@ import {
   KeyIcon,
   NewspaperIcon,
   ServerStackIcon,
-  UserCircleIcon,
 } from "@heroicons/react/16/solid";
 import { ArrowLeft, Check, ChevronDown, Heart, RotateCcw, Star } from "lucide-react";
 
@@ -58,7 +57,7 @@ import {
   OPEN_FILE_KEY,
   pickFileOpener,
 } from "@/lib/openWith";
-import AccountSettings from "@/components/settings/AccountSettings";
+import AccountCard from "@/components/settings/AccountCard";
 import AccountsSettings from "@/components/settings/AccountsSettings";
 import AppShell from "@/components/layout/AppShell";
 import WindowControls from "@/components/layout/WindowControls";
@@ -232,7 +231,6 @@ export default function SettingsPage({
           />
         ),
         servers: <ServersSettings />,
-        account: <AccountSettings />,
         accounts: <AccountsSettings cwd={cwd} />,
         transcription: (
           <TranscriptionSettings
@@ -1453,7 +1451,6 @@ function Section({ title, children }: { title?: string; children: ReactNode }) {
 /// are Heroicons' filled 16px set, drawn for small sizes, at the sidebar rows'
 /// own 14px. No keyboard in heroicons, so Shortcuts takes the bolt.
 const ALL_TABS = [
-  { id: "account", label: "Account", Icon: UserCircleIcon },
   { id: "appearance", label: "Appearance", Icon: PaintBrushIcon },
   { id: "spaces", label: "Spaces", Icon: Square3Stack3DIcon },
   { id: "servers", label: "Servers", Icon: ServerStackIcon },
@@ -1574,7 +1571,10 @@ function SettingsTabs({
         </header>
       }
       sidebar={
-        <aside className="flex w-60 shrink-0 flex-col px-2">
+        // Scrolls, since the account card above twelve tabs nearly fills a
+        // window at its 480px minimum and the shell clips what overflows.
+        <aside className="flex min-h-0 w-60 shrink-0 flex-col overflow-y-auto px-2">
+          <AccountCard />
           <div
             role="tablist"
             aria-label="Settings"

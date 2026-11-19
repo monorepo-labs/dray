@@ -856,11 +856,22 @@ emailOff: boolean, };
 /**
  * The account, as the site describes it.
  */
-export type DrayUser = { id: string, name: string, username: string | null, 
+export type DrayUser = { id: string, name: string, 
+/**
+ * Absent from a site older than the account card, and from an
+ * `account.json` it wrote.
+ */
+email: string | null, username: string | null, 
 /**
  * The Google or GitHub picture, where the account has one.
  */
-image: string | null, };
+image: string | null, 
+/**
+ * `github` and `google` sign-ins linked to the account, oldest first.
+ * Strings, not an enum, so a provider added on the site costs this
+ * build a mark rather than the whole account.
+ */
+providers: Array<string>, };
 
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
