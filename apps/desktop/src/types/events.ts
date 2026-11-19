@@ -845,7 +845,13 @@ finishing: boolean,
  * Why the last sign-in ended without signing in: `cancelled`,
  * `timed_out`, `offline`, or a sentence for anything else.
  */
-error: string | null, };
+error: string | null,
+/**
+ * The site has email sign-in turned off (#1298), so the gate fades its
+ * card. False until the site says so, so a site that never answers
+ * takes no way in away.
+ */
+emailOff: boolean, };
 
 /**
  * The account, as the site describes it.

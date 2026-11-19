@@ -153,6 +153,7 @@ export default function AccountGate({ children }: { children: ReactNode }) {
       revoked: everSignedIn.current && !readerSignedOut,
       offline: error === "offline",
       error: error === "offline" ? null : error ? (ERRORS[error] ?? error) : failed,
+      emailOff: account?.emailOff ?? false,
     };
   }
   return <SignInGate view={view} onPick={pick} onOpenAgain={openAgain} onCancel={cancel} onSkip={() => setSkipped(true)} />;
