@@ -2070,7 +2070,7 @@ fn waiting_card(state: &Entity<Island>, island: &Island, chat: &str, task: &crat
         .id(gpui::SharedString::from(format!("waiting-{id}")))
         .flex_none()
         .flex()
-        .items_start()
+        .items_center()
         .gap(px(10.))
         .px(px(10.))
         .py(px(7.))
