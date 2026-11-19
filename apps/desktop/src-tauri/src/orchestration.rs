@@ -2471,10 +2471,14 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
     let prompt = attribute(&send.prompt, from.as_ref());
     // A routine's run asking its bot something itself, not its report: the
     // run waits on the answer, so its turn ending is not the run ending.
-    let asking_run = from
-        .as_ref()
-        .filter(|f| self_sent && f.routine == Some(true))
-        .map(|f| f.session_id.clone());
+    // Only a question to its own bot's chat, the one place an answer comes from.
+    let asking_run = match from.as_ref().filter(|f| self_sent && f.routine == Some(true)) {
+        Some(f) => store::get_session_index_item(&f.session_id)
+            .await?
+            .filter(|run| target.routine_run.is_none() && crate::bots::same_folder(&run.cwd, &target.cwd))
+            .map(|run| run.session_id),
+        None => None,
+    };
 
     let manager = manager();
     let outcome = manager
@@ -2540,8 +2544,10 @@ async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
     }
     if let Some(chat) = bots::chat_of(&bot).await {
         drop(first);
+        // The sender passed on, so a run's one-way note to a bot never reads as
+        // a question it waits on (`asked` is for `dray session send` alone).
         let send = SendMessage { session_id: chat.session_id, prompt: send.prompt, from_session_id: send.from_session_id };
-        let queued = matches!(send_message(send, None, app).await?, Response::Sent { queued: true });
+        let queued = matches!(send_message(send, from, app).await?, Response::Sent { queued: true });
         return Ok(Response::BotSent { bot: bots::summary(bot).await, queued });
     }
 

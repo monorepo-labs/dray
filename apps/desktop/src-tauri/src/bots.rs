@@ -1217,6 +1217,11 @@ fn same_dir(a: &str, b: &str) -> bool {
     a.trim_end_matches('/') == b.trim_end_matches('/')
 }
 
+/// Whether two sessions' `cwd`s are one folder, as a bot's chat and its runs share.
+pub fn same_folder(a: &str, b: &str) -> bool {
+    same_dir(a, b)
+}
+
 /// Whether `item` is a bot's session, or anything one started, at any depth.
 ///
 /// Everything under a bot runs hidden and reports back after every turn, and a
