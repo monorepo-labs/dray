@@ -1082,7 +1082,7 @@ export default function Sidebar({
   draftsShown,
   onToggleDrafts,
 }: SidebarProps) {
-  const { style, handle, width, held, snap } = useResizable({
+  const { style, handle, width, snap } = useResizable({
     storageKey: "ade.sidebarWidth",
     initial: SIDEBAR_MIN,
     min: SIDEBAR_MIN,
@@ -1517,15 +1517,15 @@ export default function Sidebar({
             // Only where there is nothing to lose. Clicking away from a query
             // that is narrowing the list is not a request to drop it.
             //
-            // Over the rail, closing folds it and moves everything under a
-            // press that took the focus, so the close waits for the release:
-            // the click then lands on what was pressed.
+            // Closing moves everything under a press that took the focus —
+            // the field's own row goes, and over the rail the sidebar folds —
+            // so the close waits for the release: the click then lands on
+            // what was pressed.
             // Focus coming back takes it away, or a query typed after a Tab
             // out would be closed over by the next click, still filtering.
             onFocus={cancelFold}
             onBlur={() => {
               if (search) return;
-              if (held !== SIDEBAR_RAIL) return onSearchOpenChange(false);
               cancelFold();
               const fold = () => {
                 pendingFold.current = undefined;
