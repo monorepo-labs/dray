@@ -17,7 +17,7 @@
 
 - Is Dray free? Yes. Apache 2.0.
 - Is Dray safe to use with a Claude subscription? Yes. Dray runs Anthropic's own Claude Code CLI, so it works within Anthropic's terms.
-- Does Dray run on Linux? Yes. The Linux app is in beta: a .deb for Debian and Ubuntu, or an AppImage for any distro, on x64 and arm64. Dray also runs as a server on Linux.
+- Does Dray run on Linux? Yes. The Linux app is in beta: a .deb for Debian and Ubuntu, or an AppImage for other distros with glibc 2.35 or newer, on x64 and arm64. Dray also runs as a server on Linux.
 
 ## Sponsored by
 

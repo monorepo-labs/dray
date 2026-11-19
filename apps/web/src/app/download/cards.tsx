@@ -85,7 +85,7 @@ export function DownloadCards() {
         </DmgLink>
       </Card>
 
-      <Card art={<TuxMark className={ART} />} name="Linux" beta line="x64 and arm64. Debian, Ubuntu or any distro.">
+      <Card art={<TuxMark className={ART} />} name="Linux" beta line="x64 and arm64. Debian, Ubuntu and more.">
         <LinuxMenu from="downloads" icon={<TuxMark className="size-4" />} className={BUTTON} />
       </Card>
 

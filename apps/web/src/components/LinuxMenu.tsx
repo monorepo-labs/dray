@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { BetaTag } from "@/components/BetaTag";
 import { LinuxGlyph } from "@/components/LinuxGlyph";
@@ -73,6 +73,17 @@ export function LinuxMenu({
     };
   }, [open]);
 
+  // Anchored left, the panel can run past the window's right edge (a right-hand
+  // card on /download), where the page clips it. Slide it back in before paint.
+  const panel = useRef<HTMLDivElement>(null);
+  const [shift, setShift] = useState(0);
+  useLayoutEffect(() => {
+    if (!open || !panel.current) return setShift(0);
+    const { left, right } = panel.current.getBoundingClientRect();
+    const over = right - (document.documentElement.clientWidth - 20);
+    setShift(over > 0 ? -Math.min(over, left - 20) : 0);
+  }, [open]);
+
   return (
     <div ref={box} className="relative">
       <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} className={className}>
@@ -83,7 +94,7 @@ export function LinuxMenu({
         </svg>
       </button>
       {open && (
-        <div className="absolute top-full left-0 z-30 mt-2 w-[min(420px,calc(100vw-40px))] rounded-[8px] border border-white/15 bg-[#111112] p-2 shadow-[0_16px_40px_-8px_#000000CC] light:border-black/10 light:bg-white light:shadow-[0_16px_40px_-12px_#00000040]">
+        <div ref={panel} style={{ left: shift }} className="absolute top-full z-30 mt-2 w-[min(420px,calc(100vw-40px))] rounded-[8px] border border-white/15 bg-[#111112] p-2 shadow-[0_16px_40px_-8px_#000000CC] light:border-black/10 light:bg-white light:shadow-[0_16px_40px_-12px_#00000040]">
           <div className="grid grid-cols-2 gap-2">
             {LINUX_FORMATS.map((f) => (
               <div key={f.id} className="flex flex-col gap-3 rounded-[6px] bg-white/[0.05] p-3 light:bg-black/[0.04]">

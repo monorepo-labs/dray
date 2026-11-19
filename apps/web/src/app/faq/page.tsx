@@ -114,7 +114,7 @@ const GROUPS: { title: string; entries: FaqEntry[] }[] = [
       },
       {
         q: "Does Dray run on Linux?",
-        a: "Yes. The Linux app is in beta: a .deb for Debian and Ubuntu, or an AppImage for any distro, on x64 and arm64. Dray also runs as a server on a Linux box, driven from the app on another machine.",
+        a: "Yes. The Linux app is in beta: a .deb for Debian and Ubuntu, or an AppImage for other distros with glibc 2.35 or newer, on x64 and arm64. Dray also runs as a server on a Linux box, driven from the app on another machine.",
         link: { label: "Download for Linux", href: "/download" },
       },
     ],

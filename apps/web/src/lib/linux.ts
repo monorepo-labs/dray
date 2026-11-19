@@ -12,7 +12,7 @@ export const LINUX_FORMATS = [
   {
     id: "appimage",
     name: "AppImage",
-    target: "Any distro, no install",
+    target: "Other distros, glibc 2.35+",
     files: { x64: "Dray_amd64.AppImage", arm64: "Dray_arm64.AppImage" },
   },
 ] as const;
