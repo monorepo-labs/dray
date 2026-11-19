@@ -49,6 +49,7 @@ export function SignInMethods({
   const [notice, setNotice] = useState<string | null>(
     via === "email" && !emailOpen ? "Email sign-in is coming in the next few days" : null,
   );
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -108,7 +109,7 @@ export function SignInMethods({
     setError(error.message ?? "Couldn't sign in");
   };
   const signUp = async (e: FormEvent) => {
-    const error = await run(e, () => authClient.signUp.email({ email, password, name: email.split("@")[0] }));
+    const error = await run(e, () => authClient.signUp.email({ email, password, name: name.trim() }));
     if (error) return setError(error.message ?? "Couldn't create the account");
     go("verify");
   };
@@ -179,7 +180,7 @@ export function SignInMethods({
       </>
     );
 
-  const emailField = (
+  const emailField = (focus = true) => (
     <FieldCard label="Email">
       <input
         className={FIELD}
@@ -187,7 +188,7 @@ export function SignInMethods({
         autoComplete="email"
         placeholder="you@example.com"
         required
-        autoFocus
+        autoFocus={focus}
         value={email}
         onChange={(e) => setEmail(e.target.value)}
       />
@@ -214,7 +215,8 @@ export function SignInMethods({
     </button>
   );
   const step = (onSubmit: (e: FormEvent) => void, plain: string, heading: string, cards: ReactNode, links: ReactNode) => (
-    <form onSubmit={onSubmit}>
+    // Keyed so each step mounts its own inputs: reused ones never take `autoFocus`.
+    <form key={mode} onSubmit={onSubmit}>
       {label(plain)}
       <Heading>{heading}</Heading>
       <Cards>{cards}</Cards>
@@ -228,7 +230,7 @@ export function SignInMethods({
       "Welcome to Dray",
       "Sign in with email.",
       <>
-        {emailField}
+        {emailField()}
         {passwordField("Password", "current-password")}
         <BlueCard label="Sign in" busy={busy === "form"} />
       </>,
@@ -243,7 +245,19 @@ export function SignInMethods({
       "Welcome to Dray",
       "Create your account.",
       <>
-        {emailField}
+        <FieldCard label="Name">
+          <input
+            className={FIELD}
+            autoComplete="name"
+            placeholder="Your name"
+            required
+            autoFocus
+            value={name}
+            // Spaces alone would pass `required` and leave an empty name.
+            onChange={(e) => setName(e.target.value.trimStart())}
+          />
+        </FieldCard>
+        {emailField(false)}
         {passwordField("Password", "new-password")}
         <BlueCard label="Create account" busy={busy === "form"} />
       </>,
@@ -266,7 +280,7 @@ export function SignInMethods({
       "Forgot password",
       "We'll email you a code to reset it.",
       <>
-        {emailField}
+        {emailField()}
         <BlueCard label="Send a code" busy={busy === "form"} />
       </>,
       <Links onBack={() => go("sign-in")} />,
