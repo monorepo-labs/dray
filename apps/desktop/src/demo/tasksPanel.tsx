@@ -14,6 +14,16 @@ import "../App.css";
 /// a draft, a merged one, a task waiting on the reader, one working, one idle
 /// with a background task still running, one pinned and one set aside. Merge waits a second and resolves, so its busy
 /// and done states can be watched; the real one is `merge_pr`.
+// Takes on the "waiting on you" title colour, `--accent-command`, side by side
+// on the real panel. The first is what ships in Default light.
+const ASKING_TAKES = [
+  { name: "A · was", colour: "oklch(0.65 0.14 78)" },
+  { name: "B · deep amber", colour: "oklch(0.55 0.12 65)" },
+  { name: "C · orange", colour: "oklch(0.6 0.17 45)" },
+  { name: "D · blue (picked)", colour: "oklch(0.55 0.16 250)" },
+  { name: "E · ink", colour: "oklch(0.22 0 0)" },
+];
+
 const task = (id: string, title: string, flags: Partial<SessionIndexItem> = {}): SessionIndexItem =>
   ({
     sessionId: `01a1d000-0000-7000-8000-00000000000${id}`,
@@ -27,6 +37,16 @@ const task = (id: string, title: string, flags: Partial<SessionIndexItem> = {}):
     branch: `worktree-task-${id}`,
     ...flags,
   }) as unknown as SessionIndexItem;
+
+const asking = (id: string, title: string): CrewRow => ({
+  item: task(id, title), busy: false, asking: true, unread: false, background: false, serving: [],
+});
+const TAKE_ROWS: CrewRow[] = [
+  asking("6", "Pick a size"),
+  asking("7", "Choose a colour"),
+  asking("8", "Touch a marker file"),
+  { item: task("9", "Suggest a button label"), busy: false, asking: false, unread: false, background: false, serving: [] },
+];
 
 const pr = (number: number, more: Partial<PrMark>): PrMark => ({
   number,
@@ -78,7 +98,35 @@ function Demo() {
   return (
     <TooltipProvider>
       <div className="flex flex-col gap-4 p-10">
-        <h1 className="text-lg font-medium">Bot Tasks tab</h1>
+        <h1 className="text-lg font-medium">Waiting-on-you title colour</h1>
+        <div className="flex flex-wrap gap-4">
+          {ASKING_TAKES.map((take) => (
+            <div key={take.name} className="flex flex-col gap-2">
+              <span className="text-ui text-muted-foreground">
+                {take.name} <span className="font-mono text-[11px]">{take.colour}</span>
+              </span>
+              <div
+                className="flex flex-col rounded-xl bg-(--surface-sheet) shadow-(--shadow-sheet)"
+                style={{ width: 260, height: 190, "--task-asking": take.colour } as React.CSSProperties}
+              >
+                <TasksPanel
+                  rows={TAKE_ROWS}
+                  prOf={() => undefined}
+                  mergeBlock={() => null}
+                  onOpen={() => {}}
+                  onSetFlags={setFlags}
+                  onFork={async () => {}}
+                  onDelete={async () => {}}
+                  onDetach={async () => {}}
+                  onFixConflicts={async () => {}}
+                  now={Date.now()}
+                  onMerge={async () => {}}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+        <h1 className="mt-6 text-lg font-medium">Bot Tasks tab</h1>
         <p className="max-w-xl text-ui text-muted-foreground">
           #912 and #915 are ready, so they draw Merge. The PR glyph carries draft, merged and failing checks, a spinner
           running ones; words for conflicts and review. #917, #919 and #920 were nudged to fix their PRs, so each says

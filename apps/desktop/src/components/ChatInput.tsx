@@ -1021,7 +1021,7 @@ export default function ChatInput({
               // darker than itself, and the card is glass there, so being lighter
               // than the page does not draw the box on its own.
               !isNewTask &&
-                "border border-edge-surface bg-composer shadow-(--shadow-surface) backdrop-blur-xl",
+                "border border-edge-surface bg-composer shadow-[var(--shadow-composer,var(--shadow-surface))] backdrop-blur-xl",
             )}
           >
             {/* Covers the card rather than replacing anything, so the text and

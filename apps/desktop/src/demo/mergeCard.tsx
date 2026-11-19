@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
 
 import EventRow from "@/components/chat/EventRow";
@@ -6,6 +6,7 @@ import { MergeCardChatContext, MergeCardHostContext, type MergeCardHost } from "
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
+import { useTheme } from "@/hooks/useTheme";
 import { readerMessagesAfter } from "@/lib/mergeCard";
 import type { AgentEvent, PrMark } from "@/types/events";
 import "../App.css";
@@ -70,8 +71,24 @@ const EVENTS: AgentEvent[] = [
 
 const NO_RESULTS = new Map();
 
+// Ring widths side by side, each column wearing its own palette and mode the
+// way a theme swatch does, so light and dark sit on one page. The page itself
+// stays light: `dark:` variants match any `.dark` ancestor, which would reach
+// into the light columns too.
+const RINGS = [
+  { mode: "light", width: "0.5px", ring: "0 0 0 0.5px oklch(0 0 0 / 6%), var(--shadow-card)" },
+  { mode: "light", width: "1px", ring: "0 0 0 1px oklch(0 0 0 / 6%), var(--shadow-card)" },
+  { mode: "dark", width: "0.5px", ring: "0 0 0 0.5px oklch(1 0 0 / 8%)" },
+  { mode: "dark", width: "1px", ring: "0 0 0 1px oklch(1 0 0 / 8%)" },
+] as const;
+const COMPARE = [card(912, "Fix the pricing page copy"), card(917, "Rename the CLI flags")];
+
 function Demo() {
   const [events, setEvents] = useState(EVENTS);
+  const { setMode } = useTheme();
+  useEffect(() => {
+    setMode("light");
+  }, [setMode]);
   const [marks, setMarks] = useState(MARKS);
   const chat = useMemo(() => ({ after: readerMessagesAfter(events), bot: true }), [events]);
   const host: MergeCardHost = {
@@ -95,7 +112,38 @@ function Demo() {
       <MergeCardHostContext value={host}>
         <MergeCardChatContext value={chat}>
           <div className="mx-auto flex max-w-3xl flex-col gap-4 p-10" data-bot-chat>
-            <h1 className="text-lg font-medium">Merge cards</h1>
+            <h1 className="text-lg font-medium">Ring width</h1>
+          </div>
+          <div className="grid grid-cols-2 gap-4 px-10 pb-6 xl:grid-cols-4">
+            {RINGS.map((r) => (
+              <div
+                key={r.mode + r.width}
+                data-theme="default"
+                data-mode={r.mode}
+                className={r.mode === "dark" ? "dark rounded-xl bg-(--background) text-foreground" : "rounded-xl bg-(--background) text-foreground"}
+                // `--card` is an alias set at the root, so it resolved against the page's
+                // light palette; naming it here makes it read this column's.
+                style={
+                  {
+                    "--shadow-raised-card": r.ring,
+                    "--card": "var(--surface-card)",
+                    "--card-foreground": "var(--foreground)",
+                  } as React.CSSProperties
+                }
+              >
+                <div className="flex h-full flex-col gap-3 rounded-xl bg-(--surface-sheet) p-4">
+                  <span className="text-ui text-muted-foreground">
+                    {r.mode === "light" ? "Light" : "Dark"} · {r.width} ring
+                  </span>
+                  {COMPARE.map((e) => (
+                    <EventRow key={e.id} event={e} resultByCallId={NO_RESULTS} />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mx-auto flex max-w-3xl flex-col gap-4 p-10 pt-0" data-bot-chat>
+            <h1 className="mt-6 text-lg font-medium">Merge cards</h1>
             <p className="text-ui text-muted-foreground">
               #912 is ready and draws Merge. #901 is merged, so it is one line. Send three messages and the unmerged
               cards collapse to a line that still carries Merge where it can.

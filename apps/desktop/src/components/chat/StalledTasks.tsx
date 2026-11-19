@@ -159,7 +159,7 @@ function StalledRow({
           setHovered(false);
           prefetch.onPointerLeave();
         }}
-        className="group flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
+        className="group flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 outline-none hover:bg-[var(--fill-soft,color-mix(in_oklab,var(--muted)_50%,transparent))] focus-visible:ring-2 focus-visible:ring-ring"
       >
         <BotAvatar seed={id} avatar={seededAvatar(id)} follow={hovered} className="block size-8 shrink-0 scale-[1.18]" />
         <span className="flex min-w-0 flex-1 flex-col">
