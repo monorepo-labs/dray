@@ -215,7 +215,8 @@ export function SignInMethods({
     </button>
   );
   const step = (onSubmit: (e: FormEvent) => void, plain: string, heading: string, cards: ReactNode, links: ReactNode) => (
-    <form onSubmit={onSubmit}>
+    // Keyed so each step mounts its own inputs: reused ones never take `autoFocus`.
+    <form key={mode} onSubmit={onSubmit}>
       {label(plain)}
       <Heading>{heading}</Heading>
       <Cards>{cards}</Cards>
