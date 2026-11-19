@@ -25,7 +25,10 @@ export function Hero() {
       <div className="relative mx-auto w-full max-w-[960px]">
         <SiteNav />
 
-        <div className="pt-16 sm:pt-[117px] lg:ml-[102px] lg:max-w-[756px]">
+        {/* The line's 20px and its 24px gap come off the top padding, so the
+            headline stays where it was. */}
+        <div className="pt-5 sm:pt-[73px] lg:ml-[102px] lg:max-w-[756px]">
+          <p className="mb-6 text-[14px] leading-5 tracking-[-0.01em] text-white/30 light:text-black/40">Free and open source</p>
           <h1 className="font-inter text-[36px] leading-[40px] font-[350] tracking-[-0.03em] text-balance text-white sm:text-[46px] light:text-[#0A0A0A] sm:leading-[54px]">
             Work on dozens of coding tasks without getting overwhelmed.
           </h1>
