@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import {
   BoltIcon,
   ChatBubbleBottomCenterTextIcon,
@@ -207,6 +207,13 @@ export default function SettingsPage({
               />
               <PanelSideRow value={panelSide} onChange={onPanelSideChange} />
             </Section>
+            {MarkdownDevRows && (
+              <Section title="Developer">
+                <Suspense fallback={null}>
+                  <MarkdownDevRows />
+                </Suspense>
+              </Section>
+            )}
           </>
         ),
         composer: <HandoffSettings />,
@@ -1448,6 +1455,12 @@ function Section({ title, children }: { title?: string; children: ReactNode }) {
     </section>
   );
 }
+
+/// The markdown renderer switch and its benchmark, which exist in a dev build
+/// alone; `import.meta.env.DEV` folds to a constant, so neither is bundled.
+const MarkdownDevRows = import.meta.env.DEV
+  ? lazy(() => import("@/components/settings/MarkdownDevRows"))
+  : null;
 
 /// Set *and* order, so a group added later is one entry plus one body. Icons
 /// are Heroicons' filled 16px set, drawn for small sizes, at the sidebar rows'

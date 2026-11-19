@@ -1,0 +1,66 @@
+/* Words' stylesheet in Tailwind's components layer, so the utilities on the
+   root outrank it. Unlayered, it would beat every one of them. */
+@import "@pierre/words/styles.css" layer(components);
+
+/* The highlighter writes the light colour inline and the dark one as a
+   variable; the app's `.dark` class picks, as it does for Shiki. */
+.dark .dray-words [data-markdown="code"] span[style*="--hls-dark"] {
+  color: var(--hls-dark) !important;
+}
+
+/* The block chrome `Markdown.tsx` and App.css give Streamdown's code block. */
+.dray-words [data-markdown="code-block"] {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-block: 1rem;
+}
+
+.dray-words [data-markdown="code-block"] pre {
+  font-size: inherit;
+  line-height: 1.6;
+  max-height: none;
+}
+
+/* No header row: the language label goes and the copy control floats over the
+   block's corner, shown on hover. */
+.dray-words [data-markdown="code-header"] {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  transition: opacity 150ms;
+}
+
+.dray-words [data-markdown="code-header"] > span:first-child {
+  display: none;
+}
+
+.dray-words [data-markdown="code-header"] button {
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-sm);
+  color: var(--muted-foreground);
+  font: 500 11px/1 var(--font-sans);
+}
+
+.dray-words [data-markdown="code-header"] button:hover {
+  background: color-mix(in oklab, var(--muted) 60%, transparent);
+}
+
+.dray-words [data-markdown="code-block"]:hover [data-markdown="code-header"] {
+  opacity: 1;
+}
+
+.dray-words .md-table-scroll > [data-markdown="table"] {
+  display: table;
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  font-size: inherit;
+}
+
+.dray-words [data-markdown="code"]:not(pre code) {
+  background: var(--muted);
+}

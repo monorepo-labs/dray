@@ -21,6 +21,8 @@
     "@fontsource-variable/geist-mono": "^5.3.0",
     "@heroicons/react": "^2.2.0",
     "@pierre/diffs": "^1.6.1",
+    "@pierre/highlights": "0.5.1",
+    "@pierre/words": "0.2.2",
     "@shadcn/react": "^0.3.1",
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-dialog": "~2.8.3",

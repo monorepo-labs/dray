@@ -1,5 +1,5 @@
 import { fileSrc, qualify, serverOfSession } from "@/lib/transport";
-import { memo, useMemo } from "react";
+import { lazy, memo, Suspense, useMemo } from "react";
 import { Streamdown, type Components, type ThemeInput } from "streamdown";
 
 import FileLink from "@/components/chat/FileLink";
@@ -21,6 +21,7 @@ import {
   REHYPE_PLUGINS,
   REHYPE_PLUGINS_WITH_FILE_PATHS,
 } from "@/lib/markdownPlugins";
+import { useMarkdownRenderer } from "@/lib/markdownRenderer";
 import { cn } from "@/lib/utils";
 
 type MarkdownProps = {
@@ -342,5 +343,28 @@ function textOf(node: React.ReactNode): string | null {
   return null;
 }
 
+/// Words, loaded only once the dev switch picks it. `components` is dropped:
+/// it is React, and Words' hooks take HTML strings.
+const WordsMarkdown = import.meta.env.DEV
+  ? lazy(() => import("@/components/chat/WordsMarkdown"))
+  : null;
+
+/// The dev build's renderer switch. A production build never reaches it.
+function SwitchedMarkdown(props: MarkdownProps) {
+  const renderer = useMarkdownRenderer();
+  if (renderer === "words" && WordsMarkdown) {
+    const { components: _components, ...rest } = props;
+    return (
+      <Suspense fallback={null}>
+        <WordsMarkdown {...rest} />
+      </Suspense>
+    );
+  }
+  return <MarkdownImpl {...props} />;
+}
+
+/// The shipped renderer, whatever the dev switch says — for the benchmark.
+export const StreamdownMarkdown = memo(MarkdownImpl);
+
 // Every event re-renders the running turn, so identical text must not re-parse.
-export const Markdown = memo(MarkdownImpl);
+export const Markdown = import.meta.env.DEV ? memo(SwitchedMarkdown) : StreamdownMarkdown;

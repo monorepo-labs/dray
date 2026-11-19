@@ -33,6 +33,9 @@ apps/desktop/public/file-icons
 apps/desktop/demo/system-sounds/
 apps/desktop/demo/oss-sounds/
 
+# Markdown benchmark runs, written by the dev server (apps/desktop/bench/markdown).
+apps/desktop/bench/markdown/results/
+
 # Next.js
 .next
 out
