@@ -856,7 +856,12 @@ emailOff: boolean, };
 /**
  * The account, as the site describes it.
  */
-export type DrayUser = { id: string, name: string, username: string | null, 
+export type DrayUser = { id: string, name: string, 
+/**
+ * Absent from a site older than the account card, and from an
+ * `account.json` it wrote.
+ */
+email: string | null, username: string | null, 
 /**
  * The Google or GitHub picture, where the account has one.
  */

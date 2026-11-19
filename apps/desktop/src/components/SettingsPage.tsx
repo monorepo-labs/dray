@@ -58,6 +58,13 @@ import {
   OPEN_FILE_KEY,
   pickFileOpener,
 } from "@/lib/openWith";
+import {
+  AccountCardSwitch,
+  MenuAccountCard,
+  PageAccountCard,
+  SidebarAccountCard,
+  useAccountCardVariant,
+} from "@/components/settings/AccountCard";
 import AccountSettings from "@/components/settings/AccountSettings";
 import AccountsSettings from "@/components/settings/AccountsSettings";
 import AppShell from "@/components/layout/AppShell";
@@ -1511,7 +1518,11 @@ function SettingsTabs({
   children: (goTo: (tab: SettingsTab) => void) => Record<SettingsTab, ReactNode>;
 }) {
   const id = useId();
-  const [tab, setTab] = useState<SettingsTab>(initialTab);
+  const [accountCard, setAccountCard] = useAccountCardVariant();
+  // Every card variant draws the account itself, so the tab goes.
+  const tabs = accountCard === "tab" ? SETTINGS_TABS : SETTINGS_TABS.filter((t) => t.id !== "account");
+  const [picked, setTab] = useState<SettingsTab>(initialTab);
+  const tab = tabs.some((t) => t.id === picked) ? picked : tabs[0].id;
   // A route in from outside — the What's new card's View all, the mic's
   // missing model — can land while the page is already open.
   useEffect(() => setTab(initialTab), [initialTab]);
@@ -1519,10 +1530,8 @@ function SettingsTabs({
   // ref holds nothing on the first one.
   const [slot, setSlot] = useState<HTMLElement | null>(null);
 
-  const index = SETTINGS_TABS.findIndex((t) => t.id === tab);
-  const { refs, onKeyDown } = useRovingGroup(SETTINGS_TABS.length, index, (next) =>
-    setTab(SETTINGS_TABS[next].id),
-  );
+  const index = tabs.findIndex((t) => t.id === tab);
+  const { refs, onKeyDown } = useRovingGroup(tabs.length, index, (next) => setTab(tabs[next].id));
 
   // Focus lands on the picked group, so the arrows work at once and nothing
   // behind the page keeps it.
@@ -1575,6 +1584,8 @@ function SettingsTabs({
       }
       sidebar={
         <aside className="flex w-60 shrink-0 flex-col px-2">
+          {accountCard === "sidebar" && <SidebarAccountCard />}
+          {accountCard === "menu" && <MenuAccountCard />}
           <div
             role="tablist"
             aria-label="Settings"
@@ -1582,7 +1593,7 @@ function SettingsTabs({
             onKeyDown={onKeyDown}
             className="flex flex-col gap-px"
           >
-            {SETTINGS_TABS.map(({ id: value, label, Icon }, i) => (
+            {tabs.map(({ id: value, label, Icon }, i) => (
               <TabButton
                 key={value}
                 ref={(el) => {
@@ -1602,6 +1613,7 @@ function SettingsTabs({
               </TabButton>
             ))}
           </div>
+          <AccountCardSwitch value={accountCard} onChange={setAccountCard} />
         </aside>
       }
       footer={null}
@@ -1621,7 +1633,7 @@ function SettingsTabs({
               rather than taking the column's gap like a section of its own. */}
           <div className="flex flex-col gap-1">
             <div className="flex h-7 items-center gap-2">
-              <h1 className="text-base font-medium">{SETTINGS_TABS[index].label}</h1>
+              <h1 className="text-base font-medium">{tabs[index].label}</h1>
               <div ref={setSlot} className="contents" />
             </div>
             {TAB_SUBTITLES[tab] && (
@@ -1634,6 +1646,7 @@ function SettingsTabs({
             aria-labelledby={`${id}-${tab}`}
             className="flex flex-col gap-7 [&>*]:shrink-0"
           >
+            {accountCard === "page" && index === 0 && <PageAccountCard />}
             <SettingsHeaderSlot.Provider value={slot}>{children(setTab)[tab]}</SettingsHeaderSlot.Provider>
           </div>
         </div>

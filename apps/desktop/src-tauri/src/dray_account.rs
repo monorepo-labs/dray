@@ -36,6 +36,10 @@ const SIGN_IN_LIFE: Duration = Duration::from_secs(10 * 60);
 pub struct DrayUser {
     pub id: String,
     pub name: String,
+    /// Absent from a site older than the account card, and from an
+    /// `account.json` it wrote.
+    #[serde(default)]
+    pub email: Option<String>,
     pub username: Option<String>,
     /// The Google or GitHub picture, where the account has one.
     pub image: Option<String>,
@@ -501,11 +505,12 @@ mod tests {
     fn reads_the_account_a_sign_in_brings() {
         let body = json!({
             "token": "drs_x",
-            "account": { "token": "dra_y", "user": { "id": "u1", "name": "Sam", "username": "sam", "image": null } },
+            "account": { "token": "dra_y", "user": { "id": "u1", "name": "Sam", "email": "sam@example.com", "username": "sam", "image": null } },
         });
         let held = from_claim(&body, "https://drayhq.com").unwrap();
         assert_eq!(held.token, "dra_y");
         assert_eq!(held.user.username.as_deref(), Some("sam"));
+        assert_eq!(held.user.email.as_deref(), Some("sam@example.com"));
         assert!(from_claim(&json!({ "token": "drs_x" }), "s").is_none());
     }
 

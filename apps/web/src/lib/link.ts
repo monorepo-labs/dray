@@ -59,7 +59,7 @@ export async function serverForToken(token: string) {
 }
 
 /// Who an app is signed in as.
-export type AppUser = { id: string; name: string; username: string | null; image: string | null };
+export type AppUser = { id: string; name: string; email: string; username: string | null; image: string | null };
 
 /// The account an app credential belongs to. Takes the caller's client
 /// where it reads inside a transaction that made the row.
@@ -68,7 +68,7 @@ export async function userForAppToken(
   db: { query: typeof pool.query } = pool,
 ): Promise<AppUser | null> {
   const { rows } = await db.query<AppUser>(
-    `select u.id, u.name, u.username, u.image from app_session a join "user" u on u.id = a."userId"
+    `select u.id, u.name, u.email, u.username, u.image from app_session a join "user" u on u.id = a."userId"
       where a."tokenHash" = $1`,
     [hashSecret(token)],
   );
