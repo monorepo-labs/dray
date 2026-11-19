@@ -328,8 +328,11 @@ struct DonePill: View {
                         .foregroundStyle(.white)
                     // Several are a count alone; their titles wait for the pointer.
                     if items.count == 1, let first = items.first {
-                        // A note takes the room "Done" left, so the title gives it back to fit the pill's window.
-                        DoneTitle(title: first.title, cap: first.note == nil ? 240 : 160)
+                        // A bot's face beside the pill says whose it is, so its name would say it twice.
+                        if store.bot(first.key) == nil {
+                            // A note takes the room "Done" left, so the title gives it back to fit the pill's window.
+                            DoneTitle(title: first.title, cap: first.note == nil ? 240 : 160)
+                        }
                         OpenInAppButton(chord: true) { openInApp(first.key) }
                     }
                 }
@@ -600,23 +603,20 @@ struct PillShell<Content: View>: View {
     let notchHeight: CGFloat
     /// A soft edge in this colour while news is fresh; `Composer.glowing` says when.
     var glow: Color? = nil
-    /// One bot's news: its face in a disc that eases out of the pill above the
-    /// Dock; at the notch, whose flat top has no end to grow from, it leads the words.
+    /// One bot's news: its face in a disc that eases out of the pill's end
+    /// above the Dock, or drops from its flat bottom at the notch.
     var bot: Bot? = nil
     @ViewBuilder let content: Content
     @State private var emerged = false
     @Environment(\.accessibilityReduceMotion) private var still
 
     var body: some View {
-        let fluid = bot != nil && !notch
-        HStack(spacing: 8) {
-            if notch, let bot { BotFace(bot: bot, size: 18) }
-            content
-        }
+        let fluid = bot != nil
+        content
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .padding(.top, notchHeight)
-            .padding(.leading, fluid ? FluidPill.slot : 0)
+            .padding(.leading, fluid && !notch ? FluidPill.slot : 0)
             // A floor to clear the notch, and no ceiling, so it hugs its words. Above the Dock there is nothing to clear.
             .frame(minWidth: notch ? 200 : 0)
             // Its own size, whatever the card it hangs from proposes; a narrower proposal centred the words in a clipped 200pt slot.
@@ -625,7 +625,11 @@ struct PillShell<Content: View>: View {
             .clipped()
             .background {
                 Group {
-                    if notch {
+                    if notch, fluid {
+                        DropNotch(emerge: emerged ? 1 : 0).fill(.black)
+                            // Clear of the top edge, which is the screen's: a line there reads as a border on the menu bar.
+                            .overlay { if let glow { DropNotch(emerge: emerged ? 1 : 0).stroke(glow.opacity(0.25), lineWidth: 1).mask(Rectangle().padding(.top, 1)) } }
+                    } else if notch {
                         NotchShape(radius: 16).fill(.black)
                             .overlay { if let glow { NotchShape(radius: 16, closed: false).stroke(glow.opacity(0.25), lineWidth: 1) } }
                     } else if fluid {
@@ -641,7 +645,8 @@ struct PillShell<Content: View>: View {
                 .overlay {
                     if fluid, let bot {
                         GeometryReader { geo in
-                            let (centre, r) = FluidPill.disc(in: CGRect(origin: .zero, size: geo.size), emerge: emerged ? 1 : 0)
+                            let rect = CGRect(origin: .zero, size: geo.size), emerge: CGFloat = emerged ? 1 : 0
+                            let (centre, r) = notch ? DropNotch.disc(in: rect, emerge: emerge) : FluidPill.disc(in: rect, emerge: emerge)
                             BotFace(bot: bot, size: r * 1.4).position(centre).opacity(emerged ? 1 : 0)
                         }
                     }
@@ -655,6 +660,49 @@ struct PillShell<Content: View>: View {
                 if !still { try? await Task.sleep(for: .milliseconds(120)) }
                 withAnimation(still ? nil : .spring(duration: 0.55, bounce: 0.3)) { emerged = true }
             }
+    }
+}
+
+/// The notch's pill with a disc dropping from the middle of its flat bottom,
+/// joined by two fillets tangent to the edge and to the disc, so the waist has no corner.
+struct DropNotch: Shape {
+    static let radius: CGFloat = 20
+    static let gap: CGFloat = 4
+    static let fillet: CGFloat = 14
+    /// 0 is the disc sunk in the pill, 1 hanging below it.
+    var emerge: CGFloat
+    var animatableData: CGFloat {
+        get { emerge }
+        set { emerge = newValue }
+    }
+
+    static func disc(in rect: CGRect, emerge: CGFloat) -> (CGPoint, CGFloat) {
+        let gap = -2 * radius + (2 * radius + Self.gap) * emerge
+        return (CGPoint(x: rect.midX, y: rect.maxY + gap + radius), radius)
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let (c, r) = Self.disc(in: rect, emerge: emerge)
+        let f = Self.fillet, edge = rect.maxY
+        // Each fillet's centre sits `f` below the edge and `r + f` from the disc's.
+        let dx = sqrt(max(0, (r + f) * (r + f) - pow(c.y - edge - f, 2)))
+        func fillet(_ side: CGFloat) -> [CGPoint] {
+            let fc = CGPoint(x: c.x + side * dx, y: edge + f)
+            let tangent = CGPoint(x: c.x + (fc.x - c.x) * r / (r + f), y: c.y + (fc.y - c.y) * r / (r + f))
+            let from = -CGFloat.pi / 2, to = atan2(tangent.y - fc.y, tangent.x - fc.x)
+            var sweep = to - from
+            if sweep > .pi { sweep -= 2 * .pi } else if sweep < -.pi { sweep += 2 * .pi }
+            return (0...16).map { i in
+                let a = from + sweep * CGFloat(i) / 16
+                return CGPoint(x: fc.x + f * cos(a), y: fc.y + f * sin(a))
+            }
+        }
+        var neck = Path()
+        // Starts inside the pill, so the union leaves no seam along the edge.
+        neck.addLines([CGPoint(x: c.x - dx, y: edge - 2)] + fillet(-1) + [c] + fillet(1).reversed() + [CGPoint(x: c.x + dx, y: edge - 2)])
+        neck.closeSubpath()
+        let disc = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
+        return NotchShape(radius: 16).path(in: rect).union(disc.union(neck))
     }
 }
 
