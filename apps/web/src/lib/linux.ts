@@ -24,8 +24,8 @@ export function linuxUrl(file: string): string {
   return `https://downloads.drayhq.com/${file}`;
 }
 
-/// The Linux menu's takes, A to E, stepped through on `/review/linux-menu`
-/// while one is picked. Here rather than beside the menu, since a server page
-/// cannot read a value out of a client module. The homepage draws A.
-export const VARIANTS = ["A", "B", "C", "D", "E"] as const;
-export type Variant = (typeof VARIANTS)[number];
+/// Where the Linux menu puts its Beta tag, stepped through on
+/// `/review/linux-menu` while one is picked. Here rather than beside the menu,
+/// since a server page cannot read a value out of a client module.
+export const BETA_SPOTS = ["footer", "edge", "centre"] as const;
+export type BetaSpot = (typeof BETA_SPOTS)[number];
