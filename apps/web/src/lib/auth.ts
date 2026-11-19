@@ -1,5 +1,5 @@
 import { betterAuth } from "better-auth";
-import { APIError } from "better-auth/api";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { emailOTP } from "better-auth/plugins/email-otp";
 import { organization } from "better-auth/plugins/organization";
@@ -66,6 +66,15 @@ export const auth = betterAuth({
     // Only where its OAuth app is configured, so a site without keys still starts.
     ...(process.env.GITHUB_CLIENT_ID && {
       github: { clientId: process.env.GITHUB_CLIENT_ID, clientSecret: process.env.GITHUB_CLIENT_SECRET! },
+    }),
+  },
+  // The page trims the name too; this holds for a sign-up posted straight here.
+  hooks: {
+    before: createAuthMiddleware(async (ctx) => {
+      if (ctx.path !== "/sign-up/email") return;
+      const name = typeof ctx.body?.name === "string" ? ctx.body.name.trim() : "";
+      if (!name) throw new APIError("BAD_REQUEST", { message: "Enter your name" });
+      return { context: { ...ctx, body: { ...ctx.body, name } } };
     }),
   },
   databaseHooks: {
