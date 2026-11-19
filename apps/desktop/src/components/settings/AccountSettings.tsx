@@ -1,13 +1,13 @@
 import { useState } from "react";
 
 import { markSignOut } from "@/components/AccountGate";
+import { AccountAvatar } from "@/components/settings/AccountCard";
 import { CancelOrConfirm } from "@/components/settings/InRowConfirm";
 import { Button } from "@/components/ui/button";
 import { useDrayAccount, useOrgLink } from "@/hooks/useOrgLink";
 import { MACHINE } from "@/lib/platform";
 import { useLocalServer } from "@/lib/servers";
 import { invoke, LOCAL } from "@/lib/transport";
-import type { DrayUser } from "@/types/events";
 
 /// The Dray account the app is signed in to (#874, #1277). Signing in happens
 /// on the gate before the app opens, so this tab shows who and offers Sign
@@ -30,7 +30,7 @@ export default function AccountSettings() {
 
   return (
     <div className="flex min-h-9 items-center gap-3">
-      <Avatar user={account.user} />
+      <AccountAvatar user={account.user} />
       <div className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-ui font-medium">{account.user.name}</span>
         {account.user.username && (
@@ -56,30 +56,5 @@ export default function AccountSettings() {
         </Button>
       )}
     </div>
-  );
-}
-
-/// The account's picture, or the name's first letter where there is none or
-/// it fails to load.
-function Avatar({ user }: { user: DrayUser }) {
-  const [failed, setFailed] = useState(false);
-  if (user.image && !failed) {
-    return (
-      <img
-        src={user.image}
-        alt=""
-        referrerPolicy="no-referrer"
-        onError={() => setFailed(true)}
-        className="size-8 shrink-0 rounded-full"
-      />
-    );
-  }
-  return (
-    <span
-      aria-hidden
-      className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-ui font-medium text-muted-foreground"
-    >
-      {user.name.trim().charAt(0).toUpperCase() || "?"}
-    </span>
   );
 }

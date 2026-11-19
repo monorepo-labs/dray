@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronsUpDown } from "lucide-react";
+import { ChevronsUpDown, Mail } from "lucide-react";
 
 import { markSignOut } from "@/components/AccountGate";
 import GitHubIcon from "@/components/GitHubIcon";
@@ -62,7 +62,8 @@ function signOut() {
 }
 
 /// The account's picture, or its initials where there is none or it fails to
-/// load: first and last name, on Apple's grey monogram.
+/// load: first and last name. Size it with `size-*` alone; the letters scale
+/// with the circle.
 export function AccountAvatar({ user, className }: { user: DrayUser; className?: string }) {
   const [failed, setFailed] = useState(false);
   if (user.image && !failed) {
@@ -76,18 +77,27 @@ export function AccountAvatar({ user, className }: { user: DrayUser; className?:
       />
     );
   }
+  // SVG so the baseline is placed by hand: a centred line box puts the caps
+  // wherever the engine's ascent and descent say, which drifted on macOS.
+  // 0.355 is half Geist's 710/1000 cap height, so the capitals sit at centre.
   return (
-    <span
-      aria-hidden
-      className={cn(
-        "flex size-8 shrink-0 items-center justify-center rounded-full bg-linear-to-b from-[#a9aeb8] to-[#868b95] font-medium text-white select-none",
-        className,
-      )}
-    >
-      {initials(user.name)}
-    </span>
+    <svg aria-hidden viewBox="0 0 100 100" className={cn("size-8 shrink-0 select-none", className)}>
+      <circle cx="50" cy="50" r="50" className="fill-muted-foreground" />
+      <text
+        x="50"
+        y={50 + 0.355 * INITIALS_SIZE}
+        textAnchor="middle"
+        fontSize={INITIALS_SIZE}
+        className="fill-background font-sans font-medium"
+      >
+        {initials(user.name)}
+      </text>
+    </svg>
   );
 }
+
+/// The letters' size against a 100-unit circle.
+const INITIALS_SIZE = 40;
 
 function initials(name: string) {
   const words = name.trim().split(/\s+/).filter(Boolean);
@@ -143,7 +153,7 @@ export function SidebarAccountCard() {
   return (
     <div className="mb-3 flex flex-col gap-2.5 rounded-xl bg-card p-2.5">
       <div className="flex items-center gap-2.5">
-        <AccountAvatar user={user} className="size-9 text-sm" />
+        <AccountAvatar user={user} className="size-9" />
         <NameAndEmail user={user} />
       </div>
       <SignOutInPlace linked={linked} wide />
@@ -158,7 +168,7 @@ export function PageAccountCard() {
   if (!user) return null;
   return (
     <section className="flex flex-col items-center gap-3 rounded-xl border border-border/60 bg-card px-6 py-6 text-center">
-      <AccountAvatar user={user} className="size-16 text-2xl" />
+      <AccountAvatar user={user} className="size-16" />
       <div className="flex flex-col gap-0.5">
         <span className="text-base font-medium text-foreground">{user.name}</span>
         {user.email && <span className="text-ui text-muted-foreground">{user.email}</span>}
@@ -180,11 +190,13 @@ function GoogleIcon({ className }: { className?: string }) {
   );
 }
 
-/// The sign-ins worth naming. An email-only account names none.
+/// The sign-ins the site reports. An account with neither signed in with
+/// email, the only other way in.
 const PROVIDERS = [
   { id: "github", label: "GitHub", Icon: GitHubIcon },
   { id: "google", label: "Google", Icon: GoogleIcon },
 ];
+const EMAIL = { id: "email", label: "email", Icon: Mail };
 
 /// Variant C: one compact row at the top of Settings' list; Sign out lives
 /// in the menu it opens, and asks before it acts.
@@ -192,7 +204,8 @@ export function MenuAccountCard() {
   const { user, linked } = useAccount();
   const [asking, setAsking] = useState(false);
   if (!user) return null;
-  const providers = PROVIDERS.filter((p) => user.providers.includes(p.id));
+  const social = PROVIDERS.filter((p) => user.providers.includes(p.id));
+  const ways = social.length ? social : [EMAIL];
   return (
     <>
       <DropdownMenu>
@@ -201,26 +214,22 @@ export function MenuAccountCard() {
             type="button"
             className="mb-3 flex w-full cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-(--fill-soft,var(--sidebar-accent)) data-[state=open]:bg-(--fill-soft,var(--sidebar-accent))"
           >
-            <AccountAvatar user={user} className="size-7 text-xs" />
+            <AccountAvatar user={user} className="size-7" />
             <NameAndEmail user={user} />
             <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
           </button>
         </DropdownMenuTrigger>
         {/* The row already says who; the menu says only how, and the way out. */}
         <DropdownMenuContent align="start" className="w-(--radix-dropdown-menu-trigger-width)">
-          {providers.length > 0 && (
-            <>
-              <DropdownMenuLabel className="flex items-center gap-2 font-normal text-muted-foreground">
-                <span className="flex shrink-0 items-center gap-1">
-                  {providers.map((p) => (
-                    <p.Icon key={p.id} className="size-3.5" />
-                  ))}
-                </span>
-                <span className="truncate">Signed in with {providers.map((p) => p.label).join(" and ")}</span>
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-            </>
-          )}
+          <DropdownMenuLabel className="flex items-center gap-2 font-normal text-muted-foreground">
+            <span className="flex shrink-0 items-center gap-1">
+              {ways.map((w) => (
+                <w.Icon key={w.id} className="size-3.5" />
+              ))}
+            </span>
+            <span className="truncate">Signed in with {ways.map((w) => w.label).join(" and ")}</span>
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => setAsking(true)}>Sign out…</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
