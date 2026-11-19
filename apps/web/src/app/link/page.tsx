@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 
 import { LinkApprove } from "@/components/account/LinkApprove";
-import { BlueCard, Cards, FIELD, FieldCard, Heading, Label, SignInShell } from "@/components/account/SignInParts";
+import { BlueCard, Cards, FIELD, FieldCard, Heading, Label } from "@/components/account/SignInParts";
+import { SignInShell } from "@/components/account/SignInShell";
 import { pool } from "@/lib/db";
 import { normalizeCode, showCode } from "@/lib/link";
 import { managesServers, requireSession } from "@/lib/session";

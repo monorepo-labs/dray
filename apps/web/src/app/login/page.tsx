@@ -3,8 +3,9 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { AccountChooser } from "@/components/account/AccountChooser";
-import { Heading, Label, SignInShell } from "@/components/account/SignInParts";
 import { SignInMethods } from "@/components/account/SignInMethods";
+import { Heading, Label } from "@/components/account/SignInParts";
+import { SignInShell } from "@/components/account/SignInShell";
 import { auth } from "@/lib/auth";
 
 export const metadata: Metadata = { title: "Sign in - Dray" };

@@ -1,32 +1,9 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
-
-import { Wordmark } from "@/components/Wordmark";
 
 // The sign-in pages in the desktop app's gate language (#1277): black, the
 // striped tiles along the bottom, a mono label over a light heading, and
 // 220px cards in a row. In the site's light scheme the same page turns white
 // with pale tiles, the way the homepage does; the blue card stays blue.
-
-/// The whole page around one sign-in step.
-export function SignInShell({ children }: { children: ReactNode }) {
-  return (
-    <div
-      data-home
-      className="relative flex min-h-screen flex-col overflow-x-clip bg-black font-sans text-white antialiased light:bg-white light:text-[#0A0A0A]"
-    >
-      <Tiles />
-      <header className="relative mx-auto flex h-[88px] w-full max-w-[1008px] shrink-0 items-end px-6">
-        <Link href="/" aria-label="Dray home" className="flex h-10 items-center">
-          <Wordmark className="h-[13px] w-auto text-white light:text-[#0A0A0A]" />
-        </Link>
-      </header>
-      <main className="relative flex flex-1 items-center justify-center px-6 pt-16 pb-[200px] sm:pb-[240px]">
-        <div className="flex w-full max-w-[960px] flex-col">{children}</div>
-      </main>
-    </div>
-  );
-}
 
 /// The mono line over the heading; red where it says something went wrong.
 export function Label({ children, danger = false }: { children: ReactNode; danger?: boolean }) {
@@ -308,7 +285,7 @@ function pts(list: string, tone: string): [number, number, string][] {
   });
 }
 
-function Tiles() {
+export function Tiles() {
   return (
     <svg
       aria-hidden
