@@ -1,10 +1,11 @@
 //! Routines: scheduled checks a bot makes for itself (#972).
 //!
-//! A routine wakes its bot's chat on a schedule with a hidden message, the way
-//! a stall nudge does, and the bot ends the turn silently when nothing matters.
-//! An optional shell `check` runs first and the bot is woken only when its
-//! output changed, so a routine watching for something costs no model call
-//! while nothing moves. The server runs them, so they fire with the window
+//! Each run is a hidden session of its own in the bot's folder, on the bot's
+//! agent and model, and reports back to the bot the way a task does; the bot
+//! decides what the user hears. Runs of different routines go side by side.
+//! An optional shell `check` runs first and a run starts only when its output
+//! changed, so a routine watching for something costs no model call while
+//! nothing moves. The server runs them, so they fire with the window
 //! closed; `routines.json` under the home holds the list. Not in the bot's
 //! folder: that is committed after every turn, and run times would churn it.
 
@@ -19,7 +20,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 use ts_rs::TS;
 
-use crate::{bots, events::MessageSender, sink::Sink, store, Fail};
+use crate::{bots, sink::Sink, store, Fail};
 
 pub const ROUTINES_CHANGED: &str = "routines_changed";
 
@@ -50,7 +51,7 @@ pub struct Schedule {
 }
 
 /// How a run ended. `outcome` is a string, not an enum, for [`Schedule`]'s
-/// reason: `running`, `silent`, `replied`, `failed`, `no_change`,
+/// reason: `silent`, `replied`, `failed`, `no_change`,
 /// `check_failed` or `skipped`. `text` is the reply's first line, or why.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -91,14 +92,28 @@ pub struct Routine {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(skip)]
     pub check_failing: bool,
+    /// The session of the run still going, if one is. On the file rather than
+    /// only in memory, so a restart can tell the run it cut off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub run_session: Option<String>,
 }
 
 /// The file is rewritten whole, by the scheduler and every verb.
 static LOCK: Mutex<()> = Mutex::const_new(());
 
-/// Bot chat → the routine whose message started its running turn, so the
-/// turn's end can be written as that run's result.
+/// Run session → its routine, while its first turn runs, so that turn's end
+/// can be written as the run's result.
 static RUNNING: LazyLock<std::sync::Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
+
+/// Run session → its routine, between minting the id and the index entry
+/// landing; [`pending_run`] is how `send_msg` stamps the entry.
+static PENDING: LazyLock<std::sync::Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
+
+/// The routine `session_id` is a run of, while it is being created.
+pub fn pending_run(session_id: &str) -> Option<String> {
+    PENDING.lock().unwrap().get(session_id).cloned()
+}
 
 async fn path() -> Result<std::path::PathBuf> {
     Ok(store::get_home_app_dir().await?.join("routines.json"))
@@ -321,6 +336,7 @@ pub async fn add(bot: &bots::Bot, name: &str, prompt: &str, schedule: Schedule, 
             last_result: None,
             check_hash: None,
             check_failing: false,
+            run_session: None,
         };
         list.push(routine.clone());
         Ok(routine)
@@ -381,10 +397,12 @@ static NUDGE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 /// The scheduler. Ticks on the wall clock, so a routine due while the machine
 /// slept runs on the first tick after it wakes.
 pub async fn run(sink: Sink) {
-    // A turn cut off by a restart never reports its end.
+    // A run cut off by a restart never reports its end: its child died with the
+    // server that spawned it.
     let interrupted = edit(|list| {
         let mut any = false;
-        for r in list.iter_mut().filter(|r| r.last_result.as_ref().is_some_and(|l| l.outcome == "running")) {
+        for r in list.iter_mut().filter(|r| r.run_session.is_some()) {
+            r.run_session = None;
             r.last_result = Some(result("failed", Some("Interrupted by a restart".into())));
             any = true;
         }
@@ -394,7 +412,7 @@ pub async fn run(sink: Sink) {
     if matches!(interrupted, Ok(true)) {
         sink.emit(ROUTINES_CHANGED, ()).ok();
     }
-    // Bots with a run between its check and its message landing.
+    // Routines between their check and their run's session existing.
     let firing: std::sync::Arc<std::sync::Mutex<HashSet<String>>> = Default::default();
     loop {
         tokio::select! {
@@ -408,7 +426,9 @@ pub async fn run(sink: Sink) {
 }
 
 /// Fires every routine that is due. Its next run is written *before* it fires,
-/// so a crash mid-run skips that run rather than repeating it.
+/// so a crash mid-run skips that run rather than repeating it. Routines run
+/// side by side, each in a session of its own; only a routine whose last run is
+/// still going waits, and stays due until it ends.
 async fn tick(sink: &Sink, firing: &std::sync::Arc<std::sync::Mutex<HashSet<String>>>) -> Result<()> {
     let forced = std::mem::take(&mut *FORCED.lock().unwrap());
     let bots = bots::list_bots().await?;
@@ -420,39 +440,6 @@ async fn tick(sink: &Sink, firing: &std::sync::Arc<std::sync::Mutex<HashSet<Stri
                 .and_then(|n| DateTime::parse_from_rfc3339(n).ok())
                 .is_some_and(|n| n <= now)
     };
-    let mut candidates = Vec::new();
-    for r in list(None).await? {
-        if !is_due(&r) && !forced.contains(&r.id) {
-            continue;
-        }
-        if firing.lock().unwrap().contains(&r.bot_id) {
-            // Its bot is mid-run: a Run now waits for the next tick rather than
-            // being dropped, since a paused routine has no schedule to bring it back.
-            if forced.contains(&r.id) {
-                FORCED.lock().unwrap().insert(r.id.clone());
-            }
-            continue;
-        }
-        candidates.push(r);
-    }
-    // Asked outside the lock: a turn's end records its result under it, and
-    // this question waits on that session's slot.
-    let mut ready = HashSet::new();
-    for r in &candidates {
-        let Some(bot) = bots.iter().find(|b| b.id == r.bot_id) else { continue };
-        // A bot mid-turn is left due: its message would queue behind the
-        // turn, and that turn's end would be read as this run's.
-        let busy = match bots::chat_of(bot).await {
-            Some(chat) => crate::session::manager().turn_in_flight(&chat.session_id).await,
-            None => false,
-        };
-        if busy && forced.contains(&r.id) {
-            FORCED.lock().unwrap().insert(r.id.clone());
-        }
-        if !busy {
-            ready.insert(r.id.clone());
-        }
-    }
 
     let mut due = Vec::new();
     let mut changed = false;
@@ -462,16 +449,16 @@ async fn tick(sink: &Sink, firing: &std::sync::Arc<std::sync::Mutex<HashSet<Stri
         let before = list.len();
         list.retain(|r| bots.iter().any(|b| b.id == r.bot_id));
         changed |= list.len() != before;
-        for r in list.iter_mut().filter(|r| ready.contains(&r.id)) {
-            let Some(bot) = bots.iter().find(|b| b.id == r.bot_id) else { continue };
-            // Read again: paused or edited while the chat was asked about.
+        for r in list.iter_mut() {
             let scheduled = is_due(r);
             if !scheduled && !forced.contains(&r.id) {
                 continue;
             }
-            // One run per bot at a time: two would share its chat, and the
-            // first turn to end would be read as both. The other stays due.
-            if !firing.lock().unwrap().insert(r.bot_id.clone()) {
+            let Some(bot) = bots.iter().find(|b| b.id == r.bot_id) else { continue };
+            // Its last run is still going. A Run now waits for the next tick
+            // rather than being dropped, since a paused routine has no schedule
+            // to bring it back.
+            if r.run_session.is_some() || !firing.lock().unwrap().insert(r.id.clone()) {
                 if forced.contains(&r.id) {
                     FORCED.lock().unwrap().insert(r.id.clone());
                 }
@@ -494,12 +481,12 @@ async fn tick(sink: &Sink, firing: &std::sync::Arc<std::sync::Mutex<HashSet<Stri
         let sink = sink.clone();
         let firing = firing.clone();
         tokio::spawn(async move {
-            let (id, bot_id) = (routine.id.clone(), bot.id.clone());
+            let id = routine.id.clone();
             if let Err(e) = fire(routine, bot, &sink).await {
                 eprintln!("[routine {id}] {e:#}");
                 record(&id, result("failed", Some(format!("{e:#}"))), None, &sink).await;
             }
-            firing.lock().unwrap().remove(&bot_id);
+            firing.lock().unwrap().remove(&id);
         });
     }
     Ok(())
@@ -540,7 +527,7 @@ fn hash(text: &str) -> String {
     Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// One run: the check, then the message.
+/// One run: the check, then a session of its own.
 async fn fire(routine: Routine, bot: bots::Bot, sink: &Sink) -> Result<()> {
     let mut seen = None;
     let mut note = String::new();
@@ -557,7 +544,7 @@ async fn fire(routine: Routine, bot: bots::Bot, sink: &Sink) -> Result<()> {
                 note = format!(
                     "\n\nIts check `{check}` {}:\n\n```\n{shown}\n```",
                     if first {
-                        "ran for the first time, so this only sets what later runs are compared against. Unless it already shows what the routine watches for, say nothing. It printed"
+                        "ran for the first time, so this only sets what later runs are compared against. Unless it already shows what the routine watches for, report only that it is set up. It printed"
                     } else {
                         "printed something new"
                     }
@@ -566,7 +553,7 @@ async fn fire(routine: Routine, bot: bots::Bot, sink: &Sink) -> Result<()> {
             }
             Err(why) => {
                 // A failure is never a change, and only the first of a run of
-                // them wakes the bot, which can mend its check.
+                // them starts a run, whose report lets the bot mend the check.
                 let failing_already = routine.check_failing;
                 if failing_already {
                     let hash = routine.check_hash.clone().unwrap_or_default();
@@ -574,7 +561,7 @@ async fn fire(routine: Routine, bot: bots::Bot, sink: &Sink) -> Result<()> {
                     return Ok(());
                 }
                 note = format!(
-                    "\n\nIts check `{check}` failed ({why}). Fix the check with `dray bot routine rm` and `add` if it is wrong; nothing more is said while it keeps failing."
+                    "\n\nIts check `{check}` failed ({why}). Say so in your report, so the bot can fix the check; no run starts while it keeps failing."
                 );
                 seen = Some((routine.check_hash.clone().unwrap_or_default(), true));
             }
@@ -587,33 +574,51 @@ async fn fire(routine: Routine, bot: bots::Bot, sink: &Sink) -> Result<()> {
         return Ok(());
     };
     let prompt = format!(
-        "Routine \"{}\" ({}) is due, {}. This is Dray, not the user; the user sees only what you write back.\n\n{}{note}\n\n\
-         Write to the user only when this run finds something they need to know now. Otherwise end your turn with no text at all: \
-         no status, no \"still waiting\", no \"nothing new\". Don't make or change routines during this run.",
-        routine.name,
-        routine.id,
-        routine.schedule.describe().to_lowercase(),
-        routine.prompt,
+        "You are one run of the routine \"{name}\" ({id}), which {bot} set up to run {schedule}. Dray started you in {bot}'s folder; \
+         you are not {bot}'s chat, and the user never sees what you write. When your turn ends, your last message goes to {bot} as a report, \
+         and {bot} decides what the user hears.\n\n\
+         The routine's job:\n\n{job}{note}\n\n\
+         If you need context only {bot} has, ask it with `dray session send {chat} \"<question>\"` and end your turn; its answer arrives here as a message. \
+         End with what {bot} needs to know from this run, in a line or two, or that nothing changed. Don't make or change routines.",
+        name = routine.name,
+        id = routine.id,
+        bot = bot.name,
+        schedule = routine.schedule.describe().to_lowercase(),
+        job = routine.prompt,
+        chat = chat.session_id,
     );
-    let from = MessageSender {
-        session_id: routine.id.clone(),
-        title: routine.name.clone(),
-        machine: None,
-        bot_id: None,
-        routine: Some(true),
-    };
-    RUNNING.lock().unwrap().insert(chat.session_id.clone(), routine.id.clone());
-    record(&routine.id, result("running", None), None, sink).await;
-    if let Err(e) = crate::orchestration::send_routine(chat.session_id.clone(), prompt, from, sink).await {
-        RUNNING.lock().unwrap().remove(&chat.session_id);
+    let session_id = uuid::Uuid::now_v7().to_string();
+    PENDING.lock().unwrap().insert(session_id.clone(), routine.id.clone());
+    RUNNING.lock().unwrap().insert(session_id.clone(), routine.id.clone());
+    // Written before the spawn, so a server stopping mid-run finds it on restart.
+    set_run_session(&routine.id, Some(session_id.clone())).await;
+    let started = crate::orchestration::start_routine_run(&chat, &bot, &session_id, &routine.name, &prompt, sink).await;
+    PENDING.lock().unwrap().remove(&session_id);
+    if let Err(e) = started {
+        RUNNING.lock().unwrap().remove(&session_id);
+        set_run_session(&routine.id, None).await;
         return Err(e);
     }
-    // Only once the bot has it: saved before a send that failed, the change
-    // would read as old on every later run and the bot would never hear of it.
+    // Only once the run exists: saved before a start that failed, the change
+    // would read as old on every later run and nobody would ever hear of it.
     if let Some(seen) = seen {
         save_check(&routine.id, seen).await;
     }
     Ok(())
+}
+
+/// Records the run in flight, or that none is.
+async fn set_run_session(id: &str, session: Option<String>) {
+    let saved = edit(|list| {
+        if let Some(r) = list.iter_mut().find(|r| r.id == id) {
+            r.run_session = session;
+        }
+        Ok(())
+    })
+    .await;
+    if let Err(e) = saved {
+        eprintln!("[routine {id}] {e:#}");
+    }
 }
 
 /// Writes a run's result, and the check's state where `seen` carries it.
@@ -658,10 +663,11 @@ async fn save_check(id: &str, seen: (String, bool)) {
     }
 }
 
-/// A bot chat's turn ended. Where a routine started it, that is the run's
-/// result: silent, the reply's first line, or failed.
-pub async fn turn_ended(chat: &str, said: Option<&str>, ok: bool, sink: &Sink) {
-    let Some(id) = RUNNING.lock().unwrap().remove(chat) else { return };
+/// A session's turn ended. Where it was a routine's run, its first turn is the
+/// run's result: silent, its report's first line, or failed; and the routine
+/// is free to run again.
+pub async fn turn_ended(session_id: &str, said: Option<&str>, ok: bool, sink: &Sink) {
+    let Some(id) = RUNNING.lock().unwrap().remove(session_id) else { return };
     let run = match (ok, said.map(str::trim).filter(|s| !s.is_empty())) {
         (false, _) => result("failed", Some("The turn failed".into())),
         (true, None) => result("silent", None),
@@ -671,7 +677,22 @@ pub async fn turn_ended(chat: &str, said: Option<&str>, ok: bool, sink: &Sink) {
             result("replied", Some(short))
         }
     };
-    record(&id, run, None, sink).await;
+    let saved = edit(|list| {
+        if let Some(r) = list.iter_mut().find(|r| r.id == id) {
+            r.last_result = Some(run);
+            if r.run_session.as_deref() == Some(session_id) {
+                r.run_session = None;
+            }
+        }
+        Ok(())
+    })
+    .await;
+    match saved {
+        Ok(()) => {
+            sink.emit(ROUTINES_CHANGED, ()).ok();
+        }
+        Err(e) => eprintln!("[routine {id}] {e:#}"),
+    }
 }
 
 /// The bot `bot` names, else the one whose chat `from_session_id` is.

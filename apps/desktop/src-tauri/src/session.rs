@@ -1208,6 +1208,9 @@ impl SessionManager {
             // later would be one more thing moving while the first turn starts.
             item.issues = linked_issues.clone();
             item.hidden = hidden;
+            // In the entry's first write, or a client reading the index between
+            // two writes would take the run for the bot's chat.
+            item.routine_run = crate::routines::pending_run(session_id);
             let title = title.map(str::trim).filter(|t| !t.is_empty());
             if let Some(title) = title {
                 item.title = title.to_string();

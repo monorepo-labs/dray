@@ -1888,7 +1888,7 @@ nextRun: string | null, lastResult: RunResult | null, };
 
 /**
  * How a run ended. `outcome` is a string, not an enum, for [`Schedule`]'s
- * reason: `running`, `silent`, `replied`, `failed`, `no_change`,
+ * reason: `silent`, `replied`, `failed`, `no_change`,
  * `check_failed` or `skipped`. `text` is the reply's first line, or why.
  */
 export type RunResult = { outcome: string, text?: string, at: string, };
@@ -2142,7 +2142,13 @@ need?: TaskNeed,
  * task, and a client holding the index's active side alone cannot walk
  * through a settled parent to find the bot.
  */
-adoptedBy?: string, };
+adoptedBy?: string, 
+/**
+ * The routine this session is one run of (#972). A run lives in its bot's
+ * folder, which otherwise makes a session part of the bot's chat, so every
+ * reader of "the chat" and "the tasks" skips a session carrying this.
+ */
+routineRun?: string, };
 
 /**
  * Session-level facts, known at startup.
@@ -2332,7 +2338,13 @@ need?: TaskNeed,
  * task, and a client holding the index's active side alone cannot walk
  * through a settled parent to find the bot.
  */
-adoptedBy?: string, };
+adoptedBy?: string, 
+/**
+ * The routine this session is one run of (#972). A run lives in its bot's
+ * folder, which otherwise makes a session part of the bot's chat, so every
+ * reader of "the chat" and "the tasks" skips a session carrying this.
+ */
+routineRun?: string, };
 
 /**
  * Driven by [`StatusTracker`](crate::session::StatusTracker). `Completed`

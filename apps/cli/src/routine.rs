@@ -118,7 +118,7 @@ pub fn run(command: RoutineCommand) -> Result<(), String> {
         }
         RoutineCommand::Run(args) => {
             let routine = answered(send(Request::RunRoutine(one(args.routine)))?)?;
-            eprintln!("\"{}\" runs within 30 seconds, once this bot's turn has ended.", routine.name);
+            eprintln!("\"{}\" runs within 30 seconds, in a session of its own.", routine.name);
             Ok(())
         }
     }

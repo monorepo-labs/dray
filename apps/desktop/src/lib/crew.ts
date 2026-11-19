@@ -58,7 +58,8 @@ export function crewRows(
   const byParent = new Map<string, SessionIndexItem[]>();
   for (const i of items) {
     const parent = treeParent(i, live);
-    if (i.archived || !parent || parent === i.sessionId) continue;
+    // A routine's run is the bot's own scheduled work, not a task to list.
+    if (i.archived || !parent || parent === i.sessionId || i.routineRun) continue;
     const siblings = byParent.get(parent) ?? [];
     siblings.push(i);
     byParent.set(parent, siblings);

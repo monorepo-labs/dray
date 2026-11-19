@@ -571,7 +571,8 @@ pub(crate) async fn chat_sessions(path: &str) -> Result<Vec<SessionIndexItem>> {
     let mut items: Vec<SessionIndexItem> = crate::store::list_session_index_items(false)
         .await?
         .into_iter()
-        .filter(|i| same_dir(&i.cwd, path))
+        // A routine run shares the folder and is never the conversation.
+        .filter(|i| same_dir(&i.cwd, path) && i.routine_run.is_none())
         .collect();
     items.sort_by_key(|i| chrono::DateTime::parse_from_rfc3339(&i.created).ok());
     Ok(items)
@@ -822,7 +823,7 @@ pub async fn last_session_of(bot: &Bot) -> Option<SessionIndexItem> {
     let index = crate::store::read_index().await.ok()?;
     index
         .into_iter()
-        .filter(|i| same_dir(&i.cwd, &bot.path))
+        .filter(|i| same_dir(&i.cwd, &bot.path) && i.routine_run.is_none())
         .max_by_key(|i| chrono::DateTime::parse_from_rfc3339(&i.created).ok())
 }
 

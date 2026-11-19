@@ -2814,11 +2814,48 @@ async fn routine_summary(r: crate::routines::Routine) -> dray_proto::RoutineSumm
     }
 }
 
-/// A routine's message into its bot's chat (#972), sent the way a task's
-/// report is, so the chat hides it and a silent answer raises nothing.
-pub async fn send_routine(chat: String, prompt: String, from: MessageSender, app: &Sink) -> Result<()> {
-    let send = SendMessage { session_id: chat, prompt, from_session_id: None };
-    send_message(send, Some(from), app).await.map(drop)
+/// Starts one run of a routine (#972): a hidden session in the bot's folder on
+/// its chat's agent, model, effort and stance, with no worktree, whose parent
+/// is the chat, so it reports back like a task. Not through `create_session`,
+/// which refuses a bot's folder as a project; `session_id` was minted by the
+/// caller and is stamped a run by `routines::pending_run`.
+pub async fn start_routine_run(
+    chat: &SessionIndexItem,
+    bot: &crate::bots::Bot,
+    session_id: &str,
+    title: &str,
+    prompt: &str,
+    app: &Sink,
+) -> Result<()> {
+    let outcome = manager()
+        .send_msg(
+            session_id,
+            prompt,
+            &[],
+            &[],
+            chat.harness,
+            chat.model.clone(),
+            chat.effort,
+            chat.permission_mode,
+            chat.fast,
+            &bot.path,
+            None,
+            false,
+            None,
+            None,
+            true,
+            Some(&chat.session_id),
+            true,
+            Some(title),
+            None,
+            None,
+            app,
+        )
+        .await?;
+    if let Some(snapshot) = outcome.snapshot {
+        app.emit(SESSION_CREATED, &snapshot.index_item).ok();
+    }
+    Ok(())
 }
 
 /// The prompt as the receiving *agent* will read it, with its sender named.
@@ -2850,11 +2887,13 @@ fn attribute(prompt: &str, from: Option<&MessageSender>) -> String {
     let Some(MessageSender { session_id, title, machine, bot_id, routine }) = from else {
         return prompt.to_string();
     };
-    // A routine's message names itself in its own first line.
-    if *routine == Some(true) {
-        return prompt.to_string();
-    }
-    let kind = if bot_id.is_some() { "bot" } else { "session" };
+    let kind = if *routine == Some(true) {
+        "routine"
+    } else if bot_id.is_some() {
+        "bot"
+    } else {
+        "session"
+    };
     let on = machine.as_deref().map(|m| format!(" on {m}")).unwrap_or_default();
     format!("[message from the Dray {kind} \"{title}\" ({session_id}){on}]\n\n{prompt}")
 }
@@ -2868,6 +2907,17 @@ fn attribute(prompt: &str, from: Option<&MessageSender>) -> String {
 async fn sender(from_session_id: Option<&str>) -> Option<MessageSender> {
     let from = from_session_id?;
     let item = store::get_session_index_item(from).await.ok().flatten()?;
+    // A routine's run sits in its bot's folder but is not the bot: named as the
+    // routine, so the bot reads its own scheduled work rather than a colleague.
+    if item.routine_run.is_some() {
+        return Some(MessageSender {
+            session_id: item.session_id,
+            title: item.title,
+            machine: None,
+            bot_id: None,
+            routine: Some(true),
+        });
+    }
     // A bot is named as the bot rather than by its chat's title, so the reader
     // and the receiving agent both know which bot wrote.
     let bot = crate::bots::bot_at(&item.cwd).await;

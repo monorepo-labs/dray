@@ -279,7 +279,8 @@ fn crew<'a>(items: &'a [SessionIndexItem], roots: &[&'a str]) -> Vec<&'a Session
     let mut by_parent: HashMap<&str, Vec<&SessionIndexItem>> = HashMap::new();
     for item in items {
         let Some(parent) = tree_parent(item, &live) else { continue };
-        if item.archived || parent == item.session_id {
+        // A routine's run is the bot's own scheduled work, never a task to judge.
+        if item.archived || parent == item.session_id || item.routine_run.is_some() {
             continue;
         }
         by_parent.entry(parent).or_default().push(item);
