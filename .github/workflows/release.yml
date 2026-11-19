@@ -563,8 +563,11 @@ jobs:
         if: inputs.linux_tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
+          # A dry run promises to publish nothing; `linux_tag` publishes.
+          [ "$DRY_RUN" != true ] || { echo "linux_tag publishes, so it cannot ride a dry run" >&2; exit 1; }
           [[ "$TAG" == v* ]] || { echo "linux_tag must be a v* tag, got $TAG" >&2; exit 1; }
           V="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
           [ "v$V" = "$TAG" ] || { echo "$TAG carries tauri.conf.json version $V" >&2; exit 1; }
