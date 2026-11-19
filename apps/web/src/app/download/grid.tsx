@@ -17,10 +17,11 @@ const ARCHES = ["x64", "arm64"] as const;
 const TEXT = "text-white light:text-[#0A0A0A]";
 const MUTED = "text-[#8A8A8A] light:text-[#6B6B6B]";
 const SURFACE = "bg-[#141414] light:bg-white";
-/// Every download is the site's blue under the closing band's stripes (1px of
-/// shade every 6px), so the eye finds the actions first.
-const BLUE =
-  "group bg-[#1612F8] bg-[repeating-linear-gradient(90deg,#0000001F_0_1px,transparent_1px_6px)] text-white transition-colors hover:bg-[#2D2AFF]";
+/// Every download is filled like the hero's button, white in dark and black in
+/// light, under the closing band's stripes (1px every 6px), so the eye finds
+/// the actions first.
+const FILLED =
+  "group bg-white bg-[repeating-linear-gradient(90deg,#0000000F_0_1px,transparent_1px_6px)] text-[#0B0B0F] transition-colors hover:bg-[#E6E6E6] light:bg-[#0A0A0A] light:bg-[repeating-linear-gradient(90deg,#FFFFFF1A_0_1px,transparent_1px_6px)] light:text-white light:hover:bg-[#262626]";
 const ICON = `size-7 shrink-0 ${TEXT}`;
 
 function DownArrow() {
@@ -76,10 +77,10 @@ function CopyCommand() {
           () => line.current && window.getSelection()?.selectAllChildren(line.current),
         )
       }
-      className={`${BLUE} flex w-full cursor-pointer items-center justify-between gap-4 px-6 py-5 text-left`}
+      className={`${FILLED} flex w-full cursor-pointer items-center justify-between gap-4 px-6 py-5 text-left`}
     >
       <code className="min-w-0 flex-1 truncate font-mono text-[14px] leading-6">
-        <span className="text-[#FFE14D] select-none">$ </span>
+        <span className="text-black/40 select-none light:text-white/50">$ </span>
         <span ref={line}>{INSTALL_LINE}</span>
       </code>
       <span aria-live="polite" className="shrink-0 text-[14px] font-medium">
@@ -105,10 +106,10 @@ export function DownloadGrid() {
         <div className={left}>
           <Platform icon={<AppleGlyph className={`${ICON} -mt-1`} />} name="Mac" line="macOS 11 or later" />
         </div>
-        <DmgLink className={`${BLUE} flex items-center justify-between gap-4 px-6 py-5`}>
+        <DmgLink className={`${FILLED} flex items-center justify-between gap-4 px-6 py-5`}>
           <span>
             <span className="block text-[16px] leading-6 font-medium">Download for macOS</span>
-            <span className="block text-[13px] leading-5 text-white/70">Apple silicon and Intel, one .dmg</span>
+            <span className="block text-[13px] leading-5 text-black/55 light:text-white/65">Apple silicon and Intel, one .dmg</span>
           </span>
           <DownArrow />
         </DmgLink>
@@ -132,7 +133,7 @@ export function DownloadGrid() {
                   format={f.id}
                   arch={arch}
                   from="downloads"
-                  className={`${BLUE} flex items-center justify-center gap-2 text-[14px] font-medium`}
+                  className={`${FILLED} flex items-center justify-center gap-2 text-[14px] font-medium`}
                 >
                   {arch}
                   <DownArrow />
