@@ -23,6 +23,7 @@ targets:
       - Island
       # The iOS app's client of dray-serve, shared by path rather than by package.
       - path: ../ios/Dray/Wire.swift
+      - path: ../ios/Dray/BotAvatar.swift
       - path: ../ios/Dray/Connection.swift
       - path: ../ios/Dray/Store.swift
       - path: ../ios/Dray/Transcript.swift
@@ -62,6 +63,7 @@ targets:
       - Demo
       - Island
       - path: ../ios/Dray/Wire.swift
+      - path: ../ios/Dray/BotAvatar.swift
       - path: ../ios/Dray/Connection.swift
       - path: ../ios/Dray/Store.swift
       - path: ../ios/Dray/Transcript.swift

@@ -2,6 +2,13 @@ import SwiftUI
 import ThinkingOrbs
 
 /// Opens a bot's task over its chat, so Back returns to the bot.
+extension BotFace {
+    /// Here rather than beside the face, which the alert extension compiles without `Bot`.
+    init(bot: Bot, size: CGFloat = 20) {
+        self.init(seed: bot.id, avatar: bot.avatar, size: size)
+    }
+}
+
 struct OpenTaskKey: EnvironmentKey { static let defaultValue: ((SessionKey) -> Void)? = nil }
 /// Selects a session in the list: another bot's chat, from a chip in this one.
 struct OpenSessionKey: EnvironmentKey { static let defaultValue: ((SessionKey) -> Void)? = nil }

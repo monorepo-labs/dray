@@ -2116,7 +2116,9 @@ impl SessionManager {
     /// is mid-turn — and off the log otherwise, under the slot's lock either way
     /// so a spawn cannot take the same `seq`.
     pub async fn post_event(&self, session_id: &str, harness: Harness, payload: AgentEventPayload, app: &Sink) -> Result<()> {
-        self.log_event(session_id, harness, payload, app).await?;
+        self.log_event(session_id, harness, payload.clone(), app).await?;
+        // A merge card, by hand or automatic, is the phone's "ready to merge".
+        crate::push::notify(session_id, &payload, None);
         POSTED.lock().unwrap().insert(session_id.to_string());
         Ok(())
     }
@@ -3801,6 +3803,9 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                 if !quiet_run && !waiting {
                     report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
                 }
+                if !quiet_run && !waiting && !silent_bot_turn {
+                    crate::push::notify(ctx.session_id, &agent_event.payload, said);
+                }
                 let asks = crate::bots::talk::take_asks(ctx.session_id);
                 if !asks.is_empty() {
                     let text = report_text(*status, stop_reason.as_deref(), said);
@@ -3815,6 +3820,9 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                 // Awaited, not spawned: the queued flush below would start the
                 // next turn, which could overwrite this one's notes unsaved.
                 bot_turn = crate::bots::commit_turn(ctx.session_cwd, notes, app).await;
+            }
+            AgentEventPayload::PermissionRequested { .. } | AgentEventPayload::QuestionsAsked { .. } => {
+                crate::push::notify(ctx.session_id, &agent_event.payload, None);
             }
             _ => {}
         }

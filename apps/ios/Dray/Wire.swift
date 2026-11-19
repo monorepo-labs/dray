@@ -203,12 +203,6 @@ struct BotPreview: Codable, Hashable {
     let replies: Int
 }
 
-/// A Blobatar face: a shape name and hue degrees.
-struct BotAvatar: Codable, Hashable {
-    let shape: String
-    let hue: Double
-}
-
 /// One branch's pull request, as `pr_marks` answers it. Only `OPEN` and
 /// `MERGED` are asked for; `checksState` is `RUNNING`, `FAILING` or `CLEAR`.
 struct PrMark: Decodable, Hashable {
