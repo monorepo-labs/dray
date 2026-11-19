@@ -43,6 +43,11 @@ pub struct DrayUser {
     pub username: Option<String>,
     /// The Google or GitHub picture, where the account has one.
     pub image: Option<String>,
+    /// `github` and `google` sign-ins linked to the account, oldest first.
+    /// Strings, not an enum, so a provider added on the site costs this
+    /// build a mark rather than the whole account.
+    #[serde(default)]
+    pub providers: Vec<String>,
 }
 
 /// How the reader chose to sign in, passed through to the site.
@@ -505,12 +510,13 @@ mod tests {
     fn reads_the_account_a_sign_in_brings() {
         let body = json!({
             "token": "drs_x",
-            "account": { "token": "dra_y", "user": { "id": "u1", "name": "Sam", "email": "sam@example.com", "username": "sam", "image": null } },
+            "account": { "token": "dra_y", "user": { "id": "u1", "name": "Sam", "email": "sam@example.com", "username": "sam", "image": null, "providers": ["github"] } },
         });
         let held = from_claim(&body, "https://drayhq.com").unwrap();
         assert_eq!(held.token, "dra_y");
         assert_eq!(held.user.username.as_deref(), Some("sam"));
         assert_eq!(held.user.email.as_deref(), Some("sam@example.com"));
+        assert_eq!(held.user.providers, ["github"]);
         assert!(from_claim(&json!({ "token": "drs_x" }), "s").is_none());
     }
 

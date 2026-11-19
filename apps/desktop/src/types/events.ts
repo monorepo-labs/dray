@@ -865,7 +865,13 @@ email: string | null, username: string | null,
 /**
  * The Google or GitHub picture, where the account has one.
  */
-image: string | null, };
+image: string | null, 
+/**
+ * `github` and `google` sign-ins linked to the account, oldest first.
+ * Strings, not an enum, so a provider added on the site costs this
+ * build a mark rather than the whole account.
+ */
+providers: Array<string>, };
 
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 

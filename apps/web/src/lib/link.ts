@@ -59,7 +59,16 @@ export async function serverForToken(token: string) {
 }
 
 /// Who an app is signed in as.
-export type AppUser = { id: string; name: string; email: string; username: string | null; image: string | null };
+/// `providers` lists the Google and GitHub sign-ins linked to the account,
+/// oldest first; an email-only account has none.
+export type AppUser = {
+  id: string;
+  name: string;
+  email: string;
+  username: string | null;
+  image: string | null;
+  providers: string[];
+};
 
 /// The account an app credential belongs to. Takes the caller's client
 /// where it reads inside a transaction that made the row.
@@ -68,7 +77,11 @@ export async function userForAppToken(
   db: { query: typeof pool.query } = pool,
 ): Promise<AppUser | null> {
   const { rows } = await db.query<AppUser>(
-    `select u.id, u.name, u.email, u.username, u.image from app_session a join "user" u on u.id = a."userId"
+    `select u.id, u.name, u.email, u.username, u.image,
+            array(select l."providerId" from "account" l
+                   where l."userId" = u.id and l."providerId" in ('github', 'google')
+                   order by l."createdAt") as providers
+       from app_session a join "user" u on u.id = a."userId"
       where a."tokenHash" = $1`,
     [hashSecret(token)],
   );
