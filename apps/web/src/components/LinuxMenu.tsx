@@ -77,11 +77,19 @@ export function LinuxMenu({
   // card on /download), where the page clips it. Slide it back in before paint.
   const panel = useRef<HTMLDivElement>(null);
   const [shift, setShift] = useState(0);
+  // Measured off the button, not the panel, so a resize or a rotation re-reads
+  // from the unshifted spot rather than compounding the last offset.
   useLayoutEffect(() => {
-    if (!open || !panel.current) return setShift(0);
-    const { left, right } = panel.current.getBoundingClientRect();
-    const over = right - (document.documentElement.clientWidth - 20);
-    setShift(over > 0 ? -Math.min(over, left - 20) : 0);
+    if (!open) return setShift(0);
+    const place = () => {
+      if (!box.current || !panel.current) return;
+      const left = box.current.getBoundingClientRect().left;
+      const over = left + panel.current.offsetWidth - (document.documentElement.clientWidth - 20);
+      setShift(over > 0 ? -Math.min(over, left - 20) : 0);
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
   }, [open]);
 
   return (
