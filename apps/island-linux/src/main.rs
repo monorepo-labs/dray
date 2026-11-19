@@ -2523,12 +2523,17 @@ pub fn merge_waiting(island: &Entity<Island>, chat: String, task_id: String, met
     let task = island.read(cx).waiting.get(&chat).and_then(|rows| rows.iter().find(|t| t.id == task_id)).cloned();
     let Some(task) = task else { return };
     let Some(pr) = task.pr.clone() else { return };
+    // Checked here, not only on the button: a second click queued before the
+    // card redraws would otherwise send a second merge for the same task.
+    if island.read(cx).merges.get(&task_id).is_some_and(|m| m.merging) || island.read(cx).server.is_none() {
+        return;
+    }
+    set_merge(island, &task_id, |m| *m = MergeState { merging: true, ..Default::default() }, cx);
     // The app names another machine's repo `dray://<machine>/<path>`, which
     // this computer's server cannot reach, so the card offers no Merge there.
     let cwd = island.read(cx).session(&task.id).map_or(task.project_path.clone(), |s| s.project_path.clone());
     let args = json!({ "cwd": cwd, "number": pr.number, "method": method, "settle": task.id });
     let Some(reply) = island.read(cx).server.as_ref().map(|s| s.call("merge_pr", args)) else { return };
-    set_merge(island, &task_id, |m| *m = MergeState { merging: true, ..Default::default() }, cx);
     let island = island.clone();
     cx.spawn(async move |cx| {
         // `wait`'s 30s is too short for a merge, which runs `gh` and may wait on GitHub.

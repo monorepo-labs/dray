@@ -1989,7 +1989,9 @@ fn done_face(state: &Entity<Island>, island: &Island, lead: Option<AnyElement>, 
         div()
             .id("done-list")
             .w(px(if cards { 440. } else { 360. } - 32.))
-            .max_h(px(if cards { BODY_CAP } else { 5. * ROW }))
+            // The window never outgrows the work area, so a short screen takes
+            // the header, padding and a dropped disc off the cards' cap.
+            .max_h(px(if cards { BODY_CAP.min(crate::work_height(cx) - 140.).max(5. * ROW) } else { 5. * ROW }))
             .overflow_y_scroll()
             .flex()
             .flex_col()
