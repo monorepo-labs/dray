@@ -110,7 +110,9 @@ async fn sender(session_id: &str, kind: &str) -> Option<Sender> {
         let open = crate::bots::current_chat(chat).await.session_id;
         return Some(Sender { name: item.title, face: None, open: Some(open) });
     }
-    if item.hidden {
+    // A bot on another machine started this one: its chat is in no index here,
+    // so a tap opens the task, on this machine where it runs.
+    if item.hidden && !crate::bots::in_bot_tree(&item).await {
         return None;
     }
     Some(Sender { name: item.title, face: None, open: None })

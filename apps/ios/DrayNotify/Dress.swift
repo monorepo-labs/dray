@@ -37,9 +37,11 @@ func dressAlert(_ content: UNNotificationContent) async -> UNNotificationContent
 /// A category for one question: an action per option, and Reply where any answer
 /// goes and iOS has room, four actions being all it shows. Without Reply, tapping
 /// the alert opens the app, where a typed answer still can be given.
-/// One whose alert is gone is dropped, since iOS holds every category registered.
+/// One whose alert is gone is dropped, since iOS holds every category registered;
+/// the id carries when it was made, so one whose alert is still on its way stays.
 private func category(_ request: String, options: [String], freeText: Bool) async -> String {
-    let id = questionCategoryPrefix + request
+    let now = Int(Date().timeIntervalSince1970)
+    let id = questionCategoryPrefix + "\(now)." + request
     var actions = options.enumerated().map { UNNotificationAction(identifier: "q.\($0.offset)", title: $0.element) }
     if freeText && actions.count < 4 {
         actions.append(UNTextInputNotificationAction(identifier: "q.text", title: "Reply…", options: [],
@@ -48,7 +50,11 @@ private func category(_ request: String, options: [String], freeText: Bool) asyn
     let center = UNUserNotificationCenter.current()
     let held = await center.notificationCategories()
     let shown = Set(await center.deliveredNotifications().map(\.request.content.categoryIdentifier))
-    let stale = held.filter { $0.identifier.hasPrefix(questionCategoryPrefix) && !shown.contains($0.identifier) }
+    let stale = held.filter { c in
+        guard c.identifier.hasPrefix(questionCategoryPrefix), !shown.contains(c.identifier) else { return false }
+        let made = Int(c.identifier.dropFirst(questionCategoryPrefix.count).prefix { $0 != "." }) ?? 0
+        return now - made > 600
+    }
     center.setNotificationCategories(held.subtracting(stale).union([UNNotificationCategory(identifier: id, actions: actions, intentIdentifiers: [])]))
     return id
 }
