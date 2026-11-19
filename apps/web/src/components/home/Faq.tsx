@@ -59,7 +59,7 @@ const FAQ: [string, string][] = [
   ],
   [
     "Does Dray run on Linux?",
-    "Yes, as a server. Your agents run on Linux, and you drive them from the Dray app on your Mac.",
+    "Yes. The Linux app is in beta: a .deb for Debian and Ubuntu, or an AppImage for any distro, on x64 and arm64. Dray also runs as a server on a Linux box, driven from the app on another machine.",
   ],
 ];
 

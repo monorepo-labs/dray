@@ -5,17 +5,19 @@ sidebar:
   order: 1
 ---
 
-Dray is a Mac app. It runs the coding agent CLIs you install yourself, so setting it up is two things: the app, and at least one agent.
+Dray is a Mac app, with a Linux version in beta. It runs the coding agent CLIs you install yourself, so setting it up is two things: the app, and at least one agent.
 
 ## Requirements
 
-- macOS 11 or later. Dray Island, the panel you can open over any app, needs macOS 15.
-- Apple silicon or Intel. There is one universal download for both.
+- On a Mac: macOS 11 or later, Apple silicon or Intel. There is one universal download for both. Dray Island, the panel you can open over any app, needs macOS 15.
+- On Linux (beta): x64 or arm64. The `.deb` needs Ubuntu 22.04 or later, or Debian 12 or later. The AppImage runs on any distro and needs no extra packages.
 - At least one agent CLI: Claude Code, Codex, pi, fx or Grok Build. See [Agents](/using-dray/agents).
 - git, for branches and worktrees. A folder that is not a git repository still works, without those two.
 - Optional: the GitHub CLI (`gh`), signed in. Dray uses it to list your repositories when you attach a project, and for the pull request tab.
 
 ## Download and install
+
+### On a Mac
 
 <Steps>
   <Step title="Download">
@@ -28,6 +30,15 @@ Dray is a Mac app. It runs the coding agent CLIs you install yourself, so settin
     Open Dray from Applications. It is signed and notarized by Apple.
   </Step>
 </Steps>
+
+### On Linux (beta)
+
+Get the file for your system from [drayhq.com/download/linux](https://www.drayhq.com/download/linux). There are two kinds, each for x64 and arm64:
+
+- **`.deb`**, for Debian and Ubuntu. Double-click it and press **Install**, or run `sudo apt install ./Dray_amd64.deb` (`Dray_arm64.deb` on arm64). apt installs what it needs. Then open Dray from your app menu.
+- **AppImage**, for any other distro. Make it executable with `chmod +x Dray_amd64.AppImage` (or Properties → Allow executing as program), then double-click it.
+
+Both update themselves, like the Mac app. A `.deb` asks for your password once per update.
 
 ## Install an agent
 
@@ -86,5 +97,6 @@ You can see how far it has got in Settings → Integrations → **Browser**, and
 
 ## Limits
 
-- Mac only. Dray can also run on a Linux server that you drive from the Mac app: see [Connect a server](/server).
+- The Linux app is a beta. If something breaks, [open an issue](https://github.com/monorepo-labs/dray/issues/new).
+- Dray can also run on a Linux server that you drive from the app: see [Connect a server](/server).
 - Dray does not install an agent or sign you in to one. Each agent uses its own login, subscription or key.

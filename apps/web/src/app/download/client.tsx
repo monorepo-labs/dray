@@ -18,6 +18,33 @@ export function StartDownload() {
   return null;
 }
 
+/// One of the Linux page's files, counted by format and arch so the page can
+/// tell which of the four are wanted. `/download/linux` starts nothing on
+/// its own, so this click is the download.
+export function LinuxFileLink({
+  href,
+  format,
+  arch,
+  className,
+  children,
+}: {
+  href: string;
+  format: "deb" | "appimage";
+  arch: "x64" | "arm64";
+  className: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <a
+      href={href}
+      onClick={() => posthog.capture("linux_download", { format, arch }, { transport: "sendBeacon" })}
+      className={className}
+    >
+      {children}
+    </a>
+  );
+}
+
 /// An outbound link off the download page, counted by where it leads, so the
 /// ask can be judged by how many readers act on it.
 export function SupportLink({

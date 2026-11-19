@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 
-import { DownloadButton } from "@/components/DownloadButton";
+import { DownloadButton, OtherPlatformLink } from "@/components/DownloadButton";
 import { CARD_TITLE, LABEL as LABEL_TYPE, Title } from "@/components/home/Section";
 import { Stripes } from "@/components/home/Stripes";
 import { FEEDBACK, INSTALL_LINE, REPO, SPONSOR } from "@/lib/links";
@@ -31,8 +31,11 @@ export function Closing() {
         </Title>
 
         <div className="mt-12 grid gap-[2px] sm:grid-cols-2 lg:mt-20">
-          <Way label="On your Mac" title="Download the app.">
-            <DownloadButton from="cta" className="inline-flex h-10 items-center gap-2 self-start rounded-[6px] bg-white px-4 text-[14px] leading-5 font-medium text-[#0B0B0F] shadow-[inset_0_-1px_0_#4D4C4C,0_1px_2px_#00000040] transition-opacity hover:opacity-90 [&>svg]:-mt-0.5" />
+          <Way label="On your computer" title="Download the app.">
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+              <DownloadButton from="cta" className="inline-flex h-10 items-center gap-2 rounded-[6px] bg-white px-4 text-[14px] leading-5 font-medium text-[#0B0B0F] shadow-[inset_0_-1px_0_#4D4C4C,0_1px_2px_#00000040] transition-opacity hover:opacity-90 [&>svg]:-mt-0.5" />
+              <OtherPlatformLink className="inline-flex items-center gap-2 text-[14px] leading-5 tracking-[-0.01em] text-white/70 transition-colors hover:text-white" />
+            </div>
           </Way>
           <Way label="On a server" title="Install the CLI.">
             <CopyLine />

@@ -31,7 +31,7 @@ const SCHEMA = JSON.stringify({
       url: SITE,
       description: "One Mac app for every coding agent: Claude Code, Codex, Grok Build, pi and fx.",
       applicationCategory: "DeveloperApplication",
-      operatingSystem: "macOS",
+      operatingSystem: "macOS, Linux",
       downloadUrl: DOWNLOAD,
       license: "https://www.apache.org/licenses/LICENSE-2.0",
       offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
