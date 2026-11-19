@@ -89,7 +89,7 @@ export function LinkApprove({
                 aria-label="Org"
                 value={orgId}
                 onChange={(e) => setOrgId(e.target.value)}
-                className="-ml-1 w-full max-w-full cursor-pointer truncate bg-transparent pr-2 text-white/80 outline-none [&>option]:bg-[#1C1C1C]"
+                className="-ml-1 w-full max-w-full cursor-pointer truncate bg-transparent pr-2 text-white/80 outline-none light:text-black/80 [&>option]:bg-[#1C1C1C] light:[&>option]:bg-white"
               >
                 {orgs.map((o) => (
                   <option key={o.id} value={o.id}>

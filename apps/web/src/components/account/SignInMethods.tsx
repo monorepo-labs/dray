@@ -17,6 +17,7 @@ import {
   LINK,
   Links,
   MailIcon,
+  RULE,
   Spinner,
 } from "./SignInParts";
 
@@ -312,9 +313,9 @@ function CodeBoxes({ value, onChange }: { value: string; onChange: (code: string
         return (
           <span
             key={i}
-            className={`flex h-[140px] min-w-0 flex-1 basis-0 items-center justify-center bg-[#1C1C1C] font-inter text-[44px] font-light text-white sm:h-[220px] sm:text-[56px] ${current ? "shadow-[inset_0_-2px_0_#FFFFFFE6]" : ""}`}
+            className={`flex h-[140px] min-w-0 flex-1 basis-0 items-center justify-center bg-[#1C1C1C] font-inter text-[44px] font-light text-white sm:h-[220px] sm:text-[56px] light:bg-[#F4F4F5] light:text-[#0A0A0A] ${current ? RULE : ""}`}
           >
-            {value[i] ?? (current && <span className="h-14 w-px animate-pulse bg-white/90" />)}
+            {value[i] ?? (current && <span className="h-14 w-px animate-pulse bg-white/90 light:bg-black/90" />)}
           </span>
         );
       })}

@@ -5,20 +5,20 @@ import { Wordmark } from "@/components/Wordmark";
 
 // The sign-in pages in the desktop app's gate language (#1277): black, the
 // striped tiles along the bottom, a mono label over a light heading, and
-// 220px cards in a row. Always dark, like the gate, whatever the scheme.
+// 220px cards in a row. In the site's light scheme the same page turns white
+// with pale tiles, the way the homepage does; the blue card stays blue.
 
 /// The whole page around one sign-in step.
 export function SignInShell({ children }: { children: ReactNode }) {
   return (
     <div
       data-home
-      data-scheme="dark"
-      className="relative flex min-h-screen flex-col overflow-x-clip bg-black font-sans text-white antialiased"
+      className="relative flex min-h-screen flex-col overflow-x-clip bg-black font-sans text-white antialiased light:bg-white light:text-[#0A0A0A]"
     >
       <Tiles />
       <header className="relative mx-auto flex h-[88px] w-full max-w-[1008px] shrink-0 items-end px-6">
         <Link href="/" aria-label="Dray home" className="flex h-10 items-center">
-          <Wordmark className="h-[13px] w-auto text-white" />
+          <Wordmark className="h-[13px] w-auto text-white light:text-[#0A0A0A]" />
         </Link>
       </header>
       <main className="relative flex flex-1 items-center justify-center px-6 pt-16 pb-[200px] sm:pb-[240px]">
@@ -32,7 +32,7 @@ export function SignInShell({ children }: { children: ReactNode }) {
 export function Label({ children, danger = false }: { children: ReactNode; danger?: boolean }) {
   return (
     <p
-      className={`flex items-center gap-2 font-mono text-[11px] leading-[14px] tracking-[0.06em] uppercase lg:pl-[102px] ${danger ? "text-[#FF6467]" : "text-white/50"}`}
+      className={`flex items-center gap-2 font-mono text-[11px] leading-[14px] tracking-[0.06em] uppercase lg:pl-[102px] ${danger ? "text-[#FF6467] light:text-[#E5484D]" : "text-white/50 light:text-black/50"}`}
     >
       <Mark />
       <span className="min-w-0">{children}</span>
@@ -53,8 +53,9 @@ export function Cards({ children }: { children: ReactNode }) {
 }
 
 const CARD = "flex h-[140px] min-w-0 flex-1 basis-0 flex-col justify-between p-6 text-left sm:h-[220px]";
-const GRAY = `${CARD} bg-[#1C1C1C]`;
-const ACTIVE = "cursor-pointer outline-none transition-colors hover:bg-[#242424] focus-visible:bg-[#242424] disabled:cursor-default disabled:hover:bg-[#1C1C1C]";
+const GRAY = `${CARD} bg-[#1C1C1C] light:bg-[#F4F4F5]`;
+const ACTIVE =
+  "cursor-pointer outline-none transition-colors hover:bg-[#242424] focus-visible:bg-[#242424] disabled:cursor-default disabled:hover:bg-[#1C1C1C] light:hover:bg-[#EBEBED] light:focus-visible:bg-[#EBEBED] light:disabled:hover:bg-[#F4F4F5]";
 
 /// One gray card: an icon up top, what it does at the foot. A link with
 /// `href`, a button with `onClick`, and only words with neither.
@@ -79,11 +80,11 @@ export function Card({
     <>
       <span className="flex items-start justify-between">
         {icon}
-        {corner && <CornerArrow />}
+        {corner && <CornerArrow className="stroke-white/40 light:stroke-black/40" />}
       </span>
       <span className="flex flex-col gap-0.5">
-        <span className="text-[17px] leading-6 tracking-[-0.01em] text-white/80">{label}</span>
-        {detail && <span className="text-[13px] leading-[18px] text-white/40">{detail}</span>}
+        <span className="text-[17px] leading-6 tracking-[-0.01em] text-white/80 light:text-black/80">{label}</span>
+        {detail && <span className="text-[13px] leading-[18px] text-white/40 light:text-black/45">{detail}</span>}
       </span>
     </>
   );
@@ -124,7 +125,7 @@ export function BlueCard({
     <>
       <span className="flex items-start justify-between">
         {busy ? <Spinner size={20} /> : (icon ?? <ArrowIcon />)}
-        {corner && <CornerArrow stroke="#FFFFFFB3" />}
+        {corner && <CornerArrow className="stroke-white/70" />}
       </span>
       <span className="flex flex-col gap-0.5">
         <span className="text-[17px] leading-6 font-medium tracking-[-0.01em]">{label}</span>
@@ -146,26 +147,33 @@ export function BlueCard({
 }
 
 /// A form field drawn as a card: its name up top, what is typed at the foot,
-/// and a white rule under the one being typed in.
+/// and a rule under the one being typed in.
 export function FieldCard({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <label className={`${GRAY} cursor-text focus-within:shadow-[inset_0_-2px_0_#FFFFFFE6]`}>
-      <span className="font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white/50 uppercase">{label}</span>
+    <label className={`${GRAY} cursor-text ${RULE_WITHIN}`}>
+      <span className="font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white/50 uppercase light:text-black/50">
+        {label}
+      </span>
       {children}
     </label>
   );
 }
 
+/// The rule under the field being typed in.
+export const RULE = "shadow-[inset_0_-2px_0_#FFFFFFE6] light:shadow-[inset_0_-2px_0_#000000E6]";
+const RULE_WITHIN =
+  "focus-within:shadow-[inset_0_-2px_0_#FFFFFFE6] light:focus-within:shadow-[inset_0_-2px_0_#000000E6]";
+
 /// The input a `FieldCard` holds.
 export const FIELD =
-  "w-full min-w-0 bg-transparent text-[17px] leading-6 tracking-[-0.01em] text-white/90 caret-white outline-none placeholder:text-white/30 autofill:shadow-[inset_0_0_0_1000px_#1C1C1C] autofill:[-webkit-text-fill-color:#ffffffe6]";
+  "w-full min-w-0 bg-transparent text-[17px] leading-6 tracking-[-0.01em] text-white/90 caret-white outline-none placeholder:text-white/30 autofill:shadow-[inset_0_0_0_1000px_#1C1C1C] autofill:[-webkit-text-fill-color:#ffffffe6] light:text-black/90 light:caret-black light:placeholder:text-black/30 light:autofill:shadow-[inset_0_0_0_1000px_#F4F4F5] light:autofill:[-webkit-text-fill-color:#000000e6]";
 
 /// The row under the cards: a back arrow, then the step's other ways out.
 export function Links({ onBack, children }: { onBack?: () => void; children?: ReactNode }) {
   return (
     <div className="mt-5 flex flex-wrap items-center gap-x-7 gap-y-3">
       {onBack && (
-        <button type="button" onClick={onBack} aria-label="Back" className="-m-1 cursor-pointer p-1 text-white/90 hover:text-white">
+        <button type="button" onClick={onBack} aria-label="Back" className="-m-1 cursor-pointer p-1 text-white/90 hover:text-white light:text-black/90 light:hover:text-black">
           <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
             <path d="M20 12H6M12 5l-7 7 7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" />
           </svg>
@@ -177,7 +185,7 @@ export function Links({ onBack, children }: { onBack?: () => void; children?: Re
 }
 
 export const LINK =
-  "cursor-pointer font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white/50 uppercase transition-colors hover:text-white disabled:cursor-default disabled:hover:text-white/50";
+  "cursor-pointer font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white/50 uppercase transition-colors hover:text-white disabled:cursor-default disabled:hover:text-white/50 light:text-black/50 light:hover:text-black light:disabled:hover:text-black/50";
 
 export function Mark() {
   return (
@@ -190,16 +198,17 @@ export function Mark() {
   );
 }
 
-function CornerArrow({ stroke = "#FFFFFF66" }: { stroke?: string }) {
+function CornerArrow({ className }: { className: string }) {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden className="shrink-0">
-      <path d="M7 17 17 7M7 7h10v10" fill="none" stroke={stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden className={`shrink-0 ${className}`}>
+      <path d="M7 17 17 7M7 7h10v10" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
 
-// Icons at 90%, card labels at 80%: the gate's picked Z1 frame.
-const ICON = "#FFFFFFE6";
+// Icons at 90% of the text colour, card labels at 80%: the gate's picked Z1
+// frame, so either scheme's text colour carries them.
+const ICON = "currentColor";
 
 function ArrowIcon() {
   return (
@@ -212,7 +221,7 @@ function ArrowIcon() {
 export function Spinner({ size = 28 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" className="animate-spin" aria-hidden>
-      <circle cx="12" cy="12" r="9" fill="none" stroke="#FFFFFF33" strokeWidth="2" />
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeOpacity="0.2" strokeWidth="2" />
       <path d="M21 12a9 9 0 0 0-9-9" fill="none" stroke={ICON} strokeWidth="2" strokeLinecap="square" />
     </svg>
   );
@@ -220,7 +229,7 @@ export function Spinner({ size = 28 }: { size?: number }) {
 
 export function GitHubIcon() {
   return (
-    <svg width="40" height="40" viewBox="0 0 24 24" aria-hidden>
+    <svg width="40" height="40" viewBox="0 0 24 24" aria-hidden className="opacity-90">
       <path
         fill={ICON}
         d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.2-.4-.6-1.6 0-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.6.2 2.8 0 3.2.9.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.5.4.9 1 .9 2.2v3.3c0 .3.1.7.8.6A12 12 0 0 0 12 .3"
@@ -242,7 +251,7 @@ export function GoogleIcon() {
 
 export function MailIcon() {
   return (
-    <svg width="40" height="40" viewBox="0 0 24 24" aria-hidden>
+    <svg width="40" height="40" viewBox="0 0 24 24" aria-hidden className="opacity-90">
       <path fill={ICON} d="M2 5h20v1.4l-10 6.4L2 6.4z" />
       <path fill={ICON} d="M2 8.8l10 6.4 10-6.4V19H2z" />
     </svg>
@@ -251,7 +260,7 @@ export function MailIcon() {
 
 export function SignOutIcon() {
   return (
-    <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden>
+    <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden className="opacity-90">
       <path d="M9 4H4v16h5M15 8l4 4-4 4M19 12H9" fill="none" stroke={ICON} strokeWidth="2" strokeLinecap="square" />
     </svg>
   );
@@ -259,7 +268,7 @@ export function SignOutIcon() {
 
 export function ServerIcon() {
   return (
-    <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden>
+    <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden className="opacity-90">
       <path d="M3 4h18v7H3zM3 13h18v7H3z" fill="none" stroke={ICON} strokeWidth="2" strokeLinecap="square" />
       <path d="M7 7.5h2M7 16.5h2" stroke={ICON} strokeWidth="2" strokeLinecap="square" />
     </svg>
@@ -268,7 +277,7 @@ export function ServerIcon() {
 
 export function OrgIcon() {
   return (
-    <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden>
+    <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden className="opacity-90">
       <path d="M4 21V3h10v18M14 9h6v12M2 21h20M8 7h2M8 11h2M8 15h2" fill="none" stroke={ICON} strokeWidth="2" strokeLinecap="square" />
     </svg>
   );
@@ -276,24 +285,26 @@ export function OrgIcon() {
 
 export function CloseIcon() {
   return (
-    <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden>
+    <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden className="opacity-90">
       <path d="M5 5l14 14M19 5 5 19" fill="none" stroke={ICON} strokeWidth="2" strokeLinecap="square" />
     </svg>
   );
 }
 
-/// The gate's tiles: `[x, y, fill]` on a 60px grid of a 1440×300 strip.
+/// The gate's tiles: `[x, y, tone]` on a 60px grid of a 1440×300 strip.
+/// Each tone is a dark fill and its light twin, as faint on white as the
+/// dark one is on black.
 const TILES: [number, number, string][] = [
-  ...pts("0 180,60 60,180 240,300 180,420 240,480 180,660 180,720 120,960 120,1020 180,1020 240,1080 240,1140 120,1140 240,1200 240,1260 120", "#121212"),
-  ...pts("0 240,120 240,180 120,180 180,240 180,300 120,420 180,540 180,540 240,660 120,660 240,720 240,780 240,840 120,900 120,960 180,1260 240,1380 240", "#0C0C0C"),
-  ...pts("60 180,60 240,240 240,300 240,360 60,360 240,600 180,600 240,840 180,840 240,900 240,1140 180,1260 60,1320 240", "#181818"),
-  ...pts("480 240,960 240,1260 180", "#1F1F1F"),
+  ...pts("0 180,60 60,180 240,300 180,420 240,480 180,660 180,720 120,960 120,1020 180,1020 240,1080 240,1140 120,1140 240,1200 240,1260 120", "fill-[#121212] light:fill-[#F2F2F3]"),
+  ...pts("0 240,120 240,180 120,180 180,240 180,300 120,420 180,540 180,540 240,660 120,660 240,720 240,780 240,840 120,900 120,960 180,1260 240,1380 240", "fill-[#0C0C0C] light:fill-[#F8F8F9]"),
+  ...pts("60 180,60 240,240 240,300 240,360 60,360 240,600 180,600 240,840 180,840 240,900 240,1140 180,1260 60,1320 240", "fill-[#181818] light:fill-[#EBEBED]"),
+  ...pts("480 240,960 240,1260 180", "fill-[#1F1F1F] light:fill-[#E3E3E6]"),
 ];
 
-function pts(list: string, fill: string): [number, number, string][] {
+function pts(list: string, tone: string): [number, number, string][] {
   return list.split(",").map((p) => {
     const [x, y] = p.split(" ").map(Number);
-    return [x, y, fill];
+    return [x, y, tone];
   });
 }
 
@@ -308,12 +319,13 @@ function Tiles() {
     >
       <defs>
         <pattern id="signin-stripes" width="6" height="60" patternUnits="userSpaceOnUse">
-          <rect width="2" height="60" fill="#00000080" />
+          {/* Black bars darken a dark tile; on white, white bars lighten. */}
+          <rect width="2" height="60" className="fill-[#00000080] light:fill-white" />
         </pattern>
       </defs>
-      {TILES.map(([x, y, fill]) => (
+      {TILES.map(([x, y, tone]) => (
         <g key={`${x},${y}`}>
-          <rect x={x} y={y} width="60" height="60" fill={fill} />
+          <rect x={x} y={y} width="60" height="60" className={tone} />
           <rect x={x} y={y} width="60" height="60" fill="url(#signin-stripes)" />
         </g>
       ))}
