@@ -6,7 +6,7 @@ import { AccountChooser } from "@/components/account/AccountChooser";
 import { SignInMethods } from "@/components/account/SignInMethods";
 import { Heading, Label } from "@/components/account/SignInParts";
 import { SignInShell } from "@/components/account/SignInShell";
-import { auth } from "@/lib/auth";
+import { auth, emailSignIn } from "@/lib/auth";
 
 export const metadata: Metadata = { title: "Sign in - Dray" };
 
@@ -59,9 +59,10 @@ export default async function LoginPage({
           next={next}
           machine={new URLSearchParams(next.split("?")[1] ?? "").get("name")}
           github={github}
+          emailOpen={emailSignIn}
         />
       ) : (
-        <SignInMethods next={next} via={via} github={github} problem={problemFor(params.error)} />
+        <SignInMethods next={next} via={via} github={github} emailOpen={emailSignIn} problem={problemFor(params.error)} />
       )}
     </SignInShell>
   );

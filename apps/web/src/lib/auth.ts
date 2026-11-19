@@ -21,6 +21,22 @@ const OTP_SUBJECT = {
   "change-email": "Your Dray email change code",
 } as const;
 
+/// Email sign-in and sign-up, off until Bento approves our sending (#1298):
+/// no code can go out, so no address can be verified. `EMAIL_SIGN_IN=on`
+/// turns it back on, the server's endpoints and the page's Email card alike.
+export const emailSignIn = process.env.EMAIL_SIGN_IN === "on";
+
+const emailCodes = emailOTP({
+  overrideDefaultEmailVerification: true,
+  sendVerificationOnSignUp: true,
+  sendVerificationOTP: ({ email, otp, type }) =>
+    sendMail({
+      to: email,
+      subject: OTP_SUBJECT[type],
+      text: `Your code is ${otp}. It works for 5 minutes.\n\nIf you didn't ask for it, you can ignore this email.`,
+    }),
+});
+
 /// Better Auth for drayhq.com: GitHub, Google, and email with a password
 /// whose address is proved by an emailed code; orgs and their members.
 /// `nextCookies` lets a server action that signs in or out set its cookie.
@@ -35,7 +51,7 @@ export const auth = betterAuth({
   },
   // Verified before it can sign in, so an address someone merely typed is
   // never merged into the Google or GitHub account that really owns it.
-  emailAndPassword: { enabled: true, requireEmailVerification: true, minPasswordLength: 8 },
+  emailAndPassword: { enabled: emailSignIn, requireEmailVerification: true, minPasswordLength: 8 },
   emailVerification: { sendOnSignIn: true, autoSignInAfterVerification: true },
   account: { accountLinking: { enabled: true, trustedProviders: ["google", "github"] } },
   // A failed provider sign-in lands back on the sign-in page, which says so,
@@ -79,16 +95,8 @@ export const auth = betterAuth({
         },
       },
     }),
-    emailOTP({
-      overrideDefaultEmailVerification: true,
-      sendVerificationOnSignUp: true,
-      sendVerificationOTP: ({ email, otp, type }) =>
-        sendMail({
-          to: email,
-          subject: OTP_SUBJECT[type],
-          text: `Your code is ${otp}. It works for 5 minutes.\n\nIf you didn't ask for it, you can ignore this email.`,
-        }),
-    }),
+    // Left out while email is off, or its sign-in route would make accounts.
+    ...(emailSignIn ? [emailCodes] : []),
     drayTables,
     nextCookies(),
   ],

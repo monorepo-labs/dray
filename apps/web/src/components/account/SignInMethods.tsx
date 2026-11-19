@@ -26,23 +26,29 @@ type Mode = "methods" | "sign-in" | "sign-up" | "verify" | "forgot" | "reset";
 
 /// Every way into Dray: GitHub, Google, or an email whose address a code
 /// proves. Lands on `next` once signed in. `via` is the method the desktop
-/// app picked, started at once so the reader isn't asked twice. `problem` is
-/// why the last try failed, shown until the next one.
+/// app picked, started at once so the reader isn't asked twice. `emailOpen` is
+/// false while email sign-in is off, which leaves its card in place, disabled.
+/// `problem` is why the last try failed, shown until the next one.
 export function SignInMethods({
   next,
   via,
   github,
+  emailOpen,
   problem = null,
 }: {
   next: string;
   via: string | null;
   github: boolean;
+  emailOpen: boolean;
   problem?: string | null;
 }) {
-  const [mode, setMode] = useState<Mode>(via === "email" ? "sign-in" : "methods");
+  const [mode, setMode] = useState<Mode>(via === "email" && emailOpen ? "sign-in" : "methods");
   const [busy, setBusy] = useState<Provider | "form" | null>(null);
   const [error, setError] = useState<string | null>(problem);
-  const [notice, setNotice] = useState<string | null>(null);
+  // The desktop app may still offer Email; say why it isn't here.
+  const [notice, setNotice] = useState<string | null>(
+    via === "email" && !emailOpen ? "Email sign-in is coming in the next few days" : null,
+  );
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -164,7 +170,11 @@ export function SignInMethods({
             disabled={busy !== null}
             onClick={() => social("google")}
           />
-          <Card icon={<MailIcon />} label="Email" corner disabled={busy !== null} onClick={() => go("sign-in")} />
+          {emailOpen ? (
+            <Card icon={<MailIcon />} label="Email" corner disabled={busy !== null} onClick={() => go("sign-in")} />
+          ) : (
+            <Card icon={<MailIcon />} label="Email" detail="Coming in the next few days" disabled />
+          )}
         </Cards>
       </>
     );

@@ -18,11 +18,13 @@ export function AccountChooser({
   next,
   machine,
   github,
+  emailOpen,
 }: {
   account: Account;
   next: string;
   machine: string | null;
   github: boolean;
+  emailOpen: boolean;
 }) {
   const [switching, setSwitching] = useState(false);
   const [signedOut, setSignedOut] = useState(false);
@@ -38,7 +40,7 @@ export function AccountChooser({
     setSignedOut(true);
   };
 
-  if (signedOut) return <SignInMethods next={next} via={null} github={github} />;
+  if (signedOut) return <SignInMethods next={next} via={null} github={github} emailOpen={emailOpen} />;
 
   return (
     <>

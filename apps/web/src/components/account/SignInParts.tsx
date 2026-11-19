@@ -35,7 +35,8 @@ const ACTIVE =
   "cursor-pointer outline-none transition-colors hover:bg-[#242424] focus-visible:bg-[#242424] disabled:cursor-default disabled:hover:bg-[#1C1C1C] light:hover:bg-[#EBEBED] light:focus-visible:bg-[#EBEBED] light:disabled:hover:bg-[#F4F4F5]";
 
 /// One gray card: an icon up top, what it does at the foot. A link with
-/// `href`, a button with `onClick`, and only words with neither.
+/// `href`, a button with `onClick`, and only words with neither; `disabled`
+/// with neither draws a way in that isn't open yet, faded.
 export function Card({
   icon,
   label,
@@ -53,14 +54,19 @@ export function Card({
   onClick?: () => void;
   disabled?: boolean;
 }) {
+  const off = disabled && !href && !onClick;
   const inner = (
     <>
-      <span className="flex items-start justify-between">
+      <span className={`flex items-start justify-between ${off ? "opacity-40" : ""}`}>
         {icon}
         {corner && <CornerArrow className="stroke-white/40 light:stroke-black/40" />}
       </span>
       <span className="flex flex-col gap-0.5">
-        <span className="text-[17px] leading-6 tracking-[-0.01em] text-white/80 light:text-black/80">{label}</span>
+        <span
+          className={`text-[17px] leading-6 tracking-[-0.01em] ${off ? "text-white/40 light:text-black/40" : "text-white/80 light:text-black/80"}`}
+        >
+          {label}
+        </span>
         {detail && <span className="text-[13px] leading-[18px] text-white/40 light:text-black/45">{detail}</span>}
       </span>
     </>
@@ -77,7 +83,11 @@ export function Card({
         {inner}
       </button>
     );
-  return <div className={GRAY}>{inner}</div>;
+  return (
+    <div aria-disabled={off || undefined} className={GRAY}>
+      {inner}
+    </div>
+  );
 }
 
 /// The blue card that carries the step forward: a submit button inside a
