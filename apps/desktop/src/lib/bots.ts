@@ -212,6 +212,7 @@ export function botSession(
 export function botChat(items: readonly SessionIndexItem[], bot: Bot): SessionIndexItem[] {
   const at = trimmed(bot.path);
   return items
-    .filter((i) => !i.archived && trimmed(i.cwd) === at)
+    // A routine's run shares the folder and is never the conversation.
+    .filter((i) => !i.archived && !i.routineRun && trimmed(i.cwd) === at)
     .sort((a, b) => Date.parse(a.created) - Date.parse(b.created));
 }

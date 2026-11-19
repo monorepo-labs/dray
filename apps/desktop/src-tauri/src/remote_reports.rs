@@ -430,6 +430,7 @@ mod collect {
             title: report.title.clone(),
             machine: Some(machine.to_string()),
             bot_id: None,
+            routine: None,
         };
         let sent = crate::orchestration::deliver_report(parent.to_string(), text, from, app.clone());
         match sent.await {

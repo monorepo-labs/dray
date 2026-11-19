@@ -43,6 +43,10 @@ const APPEND_SYSTEM_PROMPT: &str = include_str!("system_prompt.md");
 /// reports success for a pattern that matches nothing.
 const ALLOWED_TOOLS: &str = "Bash(dray:*)";
 
+/// The CLI's own schedulers, OpenBot's list. Kept out of a bot's chat.
+const BOT_DISALLOWED_TOOLS: &str =
+    "CronCreate,CronDelete,CronList,ScheduleWakeup,RemoteTrigger,Skill(schedule),Skill(loop)";
+
 /// Takes a resolved [`Model`] rather than an id: there's no way to build one
 /// outside `models`, so an unknown model can't reach the spawn and this doesn't
 /// re-validate what the caller already checked.
@@ -116,6 +120,12 @@ pub async fn init(
     let mcp_config = no_reply::mcp_config();
     if bot {
         args.extend(["--mcp-config", &mcp_config]);
+    }
+
+    // A bot schedules through `dray bot routine`, which the reader can see and
+    // stop; the CLI's own schedulers are invisible to them (#972).
+    if crate::bots::bot_at(session_cwd).await.is_some() {
+        args.extend(["--disallowedTools", BOT_DISALLOWED_TOOLS]);
     }
 
     // Three ways in, and the fork is the only one naming two ids: it resumes the

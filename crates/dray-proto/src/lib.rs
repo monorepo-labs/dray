@@ -47,8 +47,9 @@ use std::path::PathBuf;
 /// v15 the assistant verbs, v16 `dray login` and `dray logout`, v17 the
 /// bot verbs, v18 `merge_card`, v19 `set_need`, v20 `react`, and v21
 /// `add_image`, which an older app would turn into a one-frame video. v22
-/// added `set_model`, which an older app reads as a broken CLI.
-pub const PROTOCOL_VERSION: u32 = 22;
+/// added `set_model`, which an older app reads as a broken CLI, and v23 the
+/// routine verbs.
+pub const PROTOCOL_VERSION: u32 = 23;
 
 /// Remote MCP (#863), held out of release builds until Dray accounts (#874)
 /// land (#900). Gates `/mcp`, the assistant commands and the CLI's `assistant`
@@ -136,6 +137,11 @@ impl Request {
             Request::React(_) => 20,
             Request::AddImage(_) => 21,
             Request::SetModel(_) => 22,
+            Request::AddRoutine(_)
+            | Request::ListRoutines(_)
+            | Request::SetRoutinePaused(_)
+            | Request::RemoveRoutine(_)
+            | Request::RunRoutine(_) => 23,
         }
     }
 }
@@ -185,6 +191,11 @@ pub enum Request {
     /// `dray image add`: [`AddVideo`]'s fields, filed as the picture it is.
     AddImage(AddVideo),
     SetModel(SetModel),
+    AddRoutine(AddRoutine),
+    ListRoutines(RoutineScope),
+    SetRoutinePaused(SetRoutinePaused),
+    RemoveRoutine(RoutineRef),
+    RunRoutine(RoutineRef),
 }
 
 /// A session's model and effort, changed the way its composer's picker does:
@@ -200,6 +211,80 @@ pub struct SetModel {
     /// it, else takes the model's own default.
     #[serde(default)]
     pub effort: Option<String>,
+}
+
+/// A bot's routine (#972): `prompt` sent into its chat on a schedule. `every`,
+/// `at` and `days` go as typed; the server reads them, so one parser decides.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddRoutine {
+    /// The bot's name or id; the calling bot where absent.
+    #[serde(default)]
+    pub bot: Option<String>,
+    #[serde(default)]
+    pub from_session_id: Option<String>,
+    pub name: String,
+    pub prompt: String,
+    #[serde(default)]
+    pub every: Option<String>,
+    #[serde(default)]
+    pub at: Option<String>,
+    #[serde(default)]
+    pub days: Option<String>,
+    /// A shell command whose output must change before the bot is woken.
+    #[serde(default)]
+    pub check: Option<String>,
+}
+
+/// Whose routines: the bot named, else the calling bot's, else every bot's.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineScope {
+    #[serde(default)]
+    pub bot: Option<String>,
+    #[serde(default)]
+    pub from_session_id: Option<String>,
+}
+
+/// A routine by id, or by name among the calling bot's.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineRef {
+    pub routine: String,
+    #[serde(default)]
+    pub from_session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetRoutinePaused {
+    pub routine: String,
+    pub paused: bool,
+    #[serde(default)]
+    pub from_session_id: Option<String>,
+}
+
+/// What the CLI is told about a routine. Times are RFC3339.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineSummary {
+    pub id: String,
+    /// The bot's name.
+    pub bot: String,
+    pub name: String,
+    pub prompt: String,
+    /// "Every 30m", "Weekdays at 09:00".
+    pub schedule: String,
+    #[serde(default)]
+    pub check: Option<String>,
+    pub paused: bool,
+    #[serde(default)]
+    pub next_run: Option<String>,
+    /// How the last run ended: "silent", "replied: <first line>"…
+    #[serde(default)]
+    pub last_result: Option<String>,
+    #[serde(default)]
+    pub last_run: Option<String>,
 }
 
 /// A merge card for a task's open pull request, posted into `session_id`'s
@@ -963,6 +1048,10 @@ pub enum Response {
     /// A message into a bot's chat, naming the bot it reached: the sender
     /// may have used a name the bot has since dropped.
     BotSent { bot: BotSummary, queued: bool },
+    /// The routine a verb acted on, as it stands after — or as it stood, for
+    /// one removed.
+    Routine { routine: RoutineSummary },
+    Routines { routines: Vec<RoutineSummary> },
     Error { message: String },
 }
 
@@ -1315,6 +1404,16 @@ mod tests {
         assert_eq!(Envelope::new(image.clone()).v, 21);
         let model = Request::SetModel(Default::default());
         assert_eq!(Envelope::new(model.clone()).v, 22);
+        let routines = [
+            Request::AddRoutine(Default::default()),
+            Request::ListRoutines(Default::default()),
+            Request::SetRoutinePaused(Default::default()),
+            Request::RemoveRoutine(Default::default()),
+            Request::RunRoutine(Default::default()),
+        ];
+        for request in &routines {
+            assert_eq!(Envelope::new(request.clone()).v, 23, "{request:?}");
+        }
         let newest = old
             .iter()
             .chain(&drafts)
@@ -1326,6 +1425,7 @@ mod tests {
             .chain(&link)
             .chain(&bots)
             .chain([&card, &need, &react, &image, &model])
+            .chain(&routines)
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));

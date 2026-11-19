@@ -1,4 +1,5 @@
 import AttachmentGrid from "@/components/AttachmentsPanel";
+import RoutinesSection from "@/components/RoutinesSection";
 import SubagentPanel from "@/components/SubagentPanel";
 import TodoList from "@/components/chat/TodoList";
 import type { HeldLog } from "@/lib/olderMedia";
@@ -16,6 +17,7 @@ export default function MorePanel({
   live,
   attachments,
   subagents,
+  routines,
 }: {
   todos: Todo[] | null;
   /// The logs the attachment grid reads, newest first — see `AttachmentGrid`.
@@ -27,6 +29,8 @@ export default function MorePanel({
   /// about now over a list that is only history.
   live: boolean;
   subagents: React.ComponentProps<typeof SubagentPanel>;
+  /// A bot chat's routines; absent outside one.
+  routines?: React.ComponentProps<typeof RoutinesSection>;
 }) {
   return (
     // One scroller for the tab, not one per section. With the checklist
@@ -43,9 +47,11 @@ export default function MorePanel({
       {/* Titles its own two sections, Background tasks and Subagents. */}
       {subagents.runs.length > 0 && <SubagentPanel {...subagents} />}
 
-      {/* Untitled: a grid of pictures names itself. Last, since Load more
-          grows it and anything under it would be pushed out of reach. */}
+      {/* Untitled: a grid of pictures names itself. */}
       {attachments && <AttachmentGrid logs={attachments} />}
+
+      {/* Under the pictures, so Load more pushes it down; kept below on purpose. */}
+      {routines && routines.routines.length > 0 && <RoutinesSection {...routines} />}
     </div>
   );
 }

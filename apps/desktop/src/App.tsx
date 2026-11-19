@@ -228,6 +228,7 @@ import {
 import { crewRows, crewSeen, inSidebar, withHiddenAsks, type CrewRow } from "@/lib/crew";
 import type { Stall } from "@/lib/stalled";
 import { useStalledTasks } from "@/hooks/useStalledTasks";
+import { useRoutines } from "@/hooks/useRoutines";
 import {
   addPickTab,
   closePickTab,
@@ -1508,6 +1509,7 @@ function App() {
     prReadAt: taskPrReadAt,
   });
   const stalls = (selectedBot && stalled.byBot.get(selectedBot.id)?.card) || NO_STALLS;
+  const routines = useRoutines(selectedBot);
 
   // Read here rather than inside the panel: the tab row needs to know whether
   // there is an open PR before that tab has ever been shown, so ordering it
@@ -1856,7 +1858,7 @@ function App() {
   }, [selectedBot, selectedSession, sessionAttachments, earlier]);
   // Older history counts too: its pictures are reached only through the
   // grid's Load more, so the tab has to be there to press it.
-  const hasMoreTab = moreForTasks || attachmentLogs !== null;
+  const hasMoreTab = moreForTasks || attachmentLogs !== null || (!!selectedBot && routines.routines.length > 0);
 
   const tabs = tabOrder({
     pr: hasPrTab,
@@ -4093,6 +4095,17 @@ function App() {
                   onOpen: stripOwner ? undefined : (run) => openSubagentTab(shownSession.sessionId, run),
                   onStopTask: handleStopTask,
                 }}
+                routines={
+                  selectedBot
+                    ? {
+                        routines: routines.routines,
+                        now: stalled.now,
+                        onPause: routines.setPaused,
+                        onDelete: routines.remove,
+                        error: routines.error,
+                      }
+                    : undefined
+                }
               />
             </TabBody>
             <TabBody active={hasPrTab && activeTab === "pr"}>

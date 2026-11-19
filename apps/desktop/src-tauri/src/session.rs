@@ -699,6 +699,7 @@ pub async fn settle_dead_child(
         LAST_REPLY.lock().unwrap().remove(session_id);
         POSTED.lock().unwrap().remove(session_id);
         report(session_id, format!("(the session's process exited mid-turn: {why})"), app);
+        crate::routines::turn_ended(session_id, None, false, app).await;
     }
 }
 
@@ -798,18 +799,28 @@ static SENDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::n
 static CLOSING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 use std::sync::atomic::Ordering::SeqCst;
 
+/// Set once the server is exiting for good, never reset.
+static EXITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Holds every send from now on, for a server that is exiting regardless.
 pub fn hold_sends() {
+    EXITING.store(true, SeqCst);
     CLOSING.store(true, SeqCst);
+}
+
+/// Whether the server is on its way out, so a child dying now was stopped by
+/// the exit rather than failing.
+pub fn exiting() -> bool {
+    EXITING.load(SeqCst)
 }
 
 /// One send counted for its whole length, waiting first while a restart is
 /// closing the server — which ends the wait by exiting, or by finding work
 /// and reopening.
-struct Sending;
+pub(crate) struct Sending;
 
 impl Sending {
-    async fn enter() -> Self {
+    pub(crate) async fn enter() -> Self {
         loop {
             SENDS.fetch_add(1, SeqCst);
             if !CLOSING.load(SeqCst) {
@@ -1207,6 +1218,9 @@ impl SessionManager {
             // later would be one more thing moving while the first turn starts.
             item.issues = linked_issues.clone();
             item.hidden = hidden;
+            // In the entry's first write, or a client reading the index between
+            // two writes would take the run for the bot's chat.
+            item.routine_run = crate::routines::pending_run(session_id);
             let title = title.map(str::trim).filter(|t| !t.is_empty());
             if let Some(title) = title {
                 item.title = title.to_string();
@@ -3765,7 +3779,18 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                     && !posted
                     && *status == TurnStatus::Success
                     && crate::bots::bot_at(ctx.session_cwd).await.is_some();
-                report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
+                // A run waiting on its bot's answer has already said what it
+                // needs in its question, so this turn's end reports nothing.
+                let waiting =
+                    crate::routines::turn_ended(ctx.session_id, said, *status == TurnStatus::Success, app).await;
+                // A routine's run that found nothing new ends silent, and the
+                // bot is not woken to read that (#972).
+                let quiet_run = crate::routines::found_nothing(said)
+                    && *status == TurnStatus::Success
+                    && crate::routines::is_run(ctx.session_id).await;
+                if !quiet_run && !waiting {
+                    report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
+                }
                 ask_name = crate::bots::take_name_ask(ctx.session_id) && *status == TurnStatus::Success;
                 // Awaited, not spawned: the queued flush below would start the
                 // next turn, which could overwrite this one's notes unsaved.
@@ -4608,7 +4633,7 @@ mod tests {
         };
         let guard = slot.lock().await;
         let session = guard.as_ref().unwrap();
-        let report = MessageSender { session_id: "t".into(), title: "T".into(), machine: None, bot_id: None };
+        let report = MessageSender { session_id: "t".into(), title: "T".into(), machine: None, bot_id: None, routine: None };
         session.queue_msg("mine", &[], &[], None, &sink).await;
         session.queue_msg("done", &[], &[], Some(report), &sink).await;
 

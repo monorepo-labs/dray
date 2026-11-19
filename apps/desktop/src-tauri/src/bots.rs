@@ -571,7 +571,8 @@ pub(crate) async fn chat_sessions(path: &str) -> Result<Vec<SessionIndexItem>> {
     let mut items: Vec<SessionIndexItem> = crate::store::list_session_index_items(false)
         .await?
         .into_iter()
-        .filter(|i| same_dir(&i.cwd, path))
+        // A routine run shares the folder and is never the conversation.
+        .filter(|i| same_dir(&i.cwd, path) && i.routine_run.is_none())
         .collect();
     items.sort_by_key(|i| chrono::DateTime::parse_from_rfc3339(&i.created).ok());
     Ok(items)
@@ -581,7 +582,9 @@ pub(crate) async fn chat_sessions(path: &str) -> Result<Vec<SessionIndexItem>> {
 /// is part of. A task started before an agent switch still names the old
 /// session as its parent, and a report sent there would wake the old agent.
 pub async fn current_chat(target: SessionIndexItem) -> SessionIndexItem {
-    if target.archived || bot_at(&target.cwd).await.is_none() {
+    // A routine's run shares the folder but is its own session: the bot's
+    // answer to its question goes to the run.
+    if target.archived || target.routine_run.is_some() || bot_at(&target.cwd).await.is_none() {
         return target;
     }
     match chat_sessions(&target.cwd).await.ok().and_then(|mut c| c.pop()) {
@@ -822,7 +825,7 @@ pub async fn last_session_of(bot: &Bot) -> Option<SessionIndexItem> {
     let index = crate::store::read_index().await.ok()?;
     index
         .into_iter()
-        .filter(|i| same_dir(&i.cwd, &bot.path))
+        .filter(|i| same_dir(&i.cwd, &bot.path) && i.routine_run.is_none())
         .max_by_key(|i| chrono::DateTime::parse_from_rfc3339(&i.created).ok())
 }
 
@@ -901,6 +904,9 @@ pub async fn delete_bot(id: String, sink: Sink) -> Result<(), Fail> {
     }
     let bot = bots.remove(at);
     save_list(&bots).await?;
+    if let Err(e) = crate::routines::remove_bot(&bot.id).await {
+        eprintln!("[routines] {e:#}");
+    }
     // Only a folder this module made: a list entry edited by hand must not
     // aim the removal anywhere else.
     if Path::new(&bot.path).starts_with(bots_dir().await?) {
@@ -1209,6 +1215,11 @@ fn holds(dir: &str, path: &str) -> bool {
 
 fn same_dir(a: &str, b: &str) -> bool {
     a.trim_end_matches('/') == b.trim_end_matches('/')
+}
+
+/// Whether two sessions' `cwd`s are one folder, as a bot's chat and its runs share.
+pub fn same_folder(a: &str, b: &str) -> bool {
+    same_dir(a, b)
 }
 
 /// Whether `item` is a bot's session, or anything one started, at any depth.

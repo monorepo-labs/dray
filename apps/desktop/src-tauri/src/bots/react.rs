@@ -80,6 +80,7 @@ mod tests {
                     title: title.into(),
                     machine: None,
                     bot_id: None,
+                    routine: None,
                 }),
                 cwd: None,
                 kickoff,

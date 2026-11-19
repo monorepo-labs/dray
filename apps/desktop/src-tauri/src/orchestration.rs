@@ -1118,6 +1118,42 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             Ok(Response::Bot { bot: summary })
         }
         Request::SendToBot(send) => send_to_bot(send, app).await,
+        Request::AddRoutine(add) => {
+            let bot = crate::routines::bot_for(add.bot.as_deref(), add.from_session_id.as_deref())
+                .await?
+                .context("pass --bot: this isn't a bot's chat")?;
+            let schedule =
+                crate::routines::Schedule::parse(add.every.as_deref(), add.at.as_deref(), add.days.as_deref())?;
+            let routine = crate::routines::add(&bot, &add.name, &add.prompt, schedule, add.check).await?;
+            app.emit(crate::routines::ROUTINES_CHANGED, ()).ok();
+            Ok(Response::Routine { routine: routine_summary(routine).await })
+        }
+        Request::ListRoutines(scope) => {
+            let bot = crate::routines::bot_for(scope.bot.as_deref(), scope.from_session_id.as_deref()).await?;
+            let mut routines = Vec::new();
+            for routine in crate::routines::list(bot.as_ref().map(|b| b.id.as_str())).await? {
+                routines.push(routine_summary(routine).await);
+            }
+            Ok(Response::Routines { routines })
+        }
+        Request::SetRoutinePaused(set) => {
+            let bot = crate::routines::bot_for(None, set.from_session_id.as_deref()).await?;
+            let routine =
+                crate::routines::set_paused(&set.routine, bot.as_ref().map(|b| b.id.as_str()), set.paused).await?;
+            app.emit(crate::routines::ROUTINES_CHANGED, ()).ok();
+            Ok(Response::Routine { routine: routine_summary(routine).await })
+        }
+        Request::RemoveRoutine(remove) => {
+            let bot = crate::routines::bot_for(None, remove.from_session_id.as_deref()).await?;
+            let routine = crate::routines::remove(&remove.routine, bot.as_ref().map(|b| b.id.as_str())).await?;
+            app.emit(crate::routines::ROUTINES_CHANGED, ()).ok();
+            Ok(Response::Routine { routine: routine_summary(routine).await })
+        }
+        Request::RunRoutine(run) => {
+            let bot = crate::routines::bot_for(None, run.from_session_id.as_deref()).await?;
+            let routine = crate::routines::run_now(&run.routine, bot.as_ref().map(|b| b.id.as_str())).await?;
+            Ok(Response::Routine { routine: routine_summary(routine).await })
+        }
         #[cfg(any(feature = "serve", feature = "desktop"))]
         Request::SetRemoteAccess(set) => {
             let now = crate::remote_access::set_remote_access(app.clone(), set.on).await.map_err(anyhow::Error::msg)?;
@@ -2427,11 +2463,22 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
         bail!("a session cannot send a message to itself");
     }
 
+    let self_sent = carried.is_none();
     let from = match carried {
         Some(from) => Some(from),
         None => sender(send.from_session_id.as_deref()).await,
     };
     let prompt = attribute(&send.prompt, from.as_ref());
+    // A routine's run asking its bot something itself, not its report: the
+    // run waits on the answer, so its turn ending is not the run ending.
+    // Only a question to its own bot's chat, the one place an answer comes from.
+    let asking_run = match from.as_ref().filter(|f| self_sent && f.routine == Some(true)) {
+        Some(f) => store::get_session_index_item(&f.session_id)
+            .await?
+            .filter(|run| target.routine_run.is_none() && crate::bots::same_folder(&run.cwd, &target.cwd))
+            .map(|run| run.session_id),
+        None => None,
+    };
 
     let manager = manager();
     let outcome = manager
@@ -2463,6 +2510,9 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
             app,
         )
         .await?;
+    if let Some(run) = asking_run {
+        crate::routines::asked(&run);
+    }
 
     Ok(Response::Sent {
         queued: outcome.queued.is_some(),
@@ -2494,8 +2544,10 @@ async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
     }
     if let Some(chat) = bots::chat_of(&bot).await {
         drop(first);
+        // The sender passed on, so a run's one-way note to a bot never reads as
+        // a question it waits on (`asked` is for `dray session send` alone).
         let send = SendMessage { session_id: chat.session_id, prompt: send.prompt, from_session_id: send.from_session_id };
-        let queued = matches!(send_message(send, None, app).await?, Response::Sent { queued: true });
+        let queued = matches!(send_message(send, from, app).await?, Response::Sent { queued: true });
         return Ok(Response::BotSent { bot: bots::summary(bot).await, queued });
     }
 
@@ -2777,6 +2829,71 @@ pub fn send_review(
     })
 }
 
+/// What `dray bot routine` prints for a routine.
+async fn routine_summary(r: crate::routines::Routine) -> dray_proto::RoutineSummary {
+    let bot = bots::list_bots().await.ok().and_then(|l| l.into_iter().find(|b| b.id == r.bot_id));
+    let last = r.last_result.as_ref();
+    dray_proto::RoutineSummary {
+        bot: bot.map_or(r.bot_id.clone(), |b| b.name),
+        schedule: r.schedule.describe(),
+        last_result: last.map(|l| match &l.text {
+            Some(text) => format!("{}: {text}", l.outcome),
+            None => l.outcome.clone(),
+        }),
+        last_run: last.map(|l| l.at.clone()),
+        id: r.id,
+        name: r.name,
+        prompt: r.prompt,
+        check: r.check,
+        paused: r.paused,
+        next_run: r.next_run,
+    }
+}
+
+/// Starts one run of a routine (#972): a hidden session in the bot's folder on
+/// its chat's agent, model, effort and stance, with no worktree, whose parent
+/// is the chat, so it reports back like a task. Not through `create_session`,
+/// which refuses a bot's folder as a project; `session_id` was minted by the
+/// caller and is stamped a run by `routines::pending_run`.
+pub async fn start_routine_run(
+    chat: &SessionIndexItem,
+    bot: &crate::bots::Bot,
+    session_id: &str,
+    title: &str,
+    prompt: &str,
+    app: &Sink,
+) -> Result<()> {
+    let outcome = manager()
+        .send_msg(
+            session_id,
+            prompt,
+            &[],
+            &[],
+            chat.harness,
+            chat.model.clone(),
+            chat.effort,
+            chat.permission_mode,
+            chat.fast,
+            &bot.path,
+            None,
+            false,
+            None,
+            None,
+            true,
+            Some(&chat.session_id),
+            true,
+            Some(title),
+            None,
+            None,
+            app,
+        )
+        .await?;
+    if let Some(snapshot) = outcome.snapshot {
+        app.emit(SESSION_CREATED, &snapshot.index_item).ok();
+    }
+    Ok(())
+}
+
 /// The prompt as the receiving *agent* will read it, with its sender named.
 ///
 /// This and [`user_message.from`](crate::events::MessageSender) carry the same
@@ -2803,10 +2920,16 @@ pub fn send_review(
 /// A sender on another machine is named with it. `dray session send <id>`
 /// finds that machine where this one holds a token for it.
 fn attribute(prompt: &str, from: Option<&MessageSender>) -> String {
-    let Some(MessageSender { session_id, title, machine, bot_id }) = from else {
+    let Some(MessageSender { session_id, title, machine, bot_id, routine }) = from else {
         return prompt.to_string();
     };
-    let kind = if bot_id.is_some() { "bot" } else { "session" };
+    let kind = if *routine == Some(true) {
+        "routine"
+    } else if bot_id.is_some() {
+        "bot"
+    } else {
+        "session"
+    };
     let on = machine.as_deref().map(|m| format!(" on {m}")).unwrap_or_default();
     format!("[message from the Dray {kind} \"{title}\" ({session_id}){on}]\n\n{prompt}")
 }
@@ -2820,6 +2943,17 @@ fn attribute(prompt: &str, from: Option<&MessageSender>) -> String {
 async fn sender(from_session_id: Option<&str>) -> Option<MessageSender> {
     let from = from_session_id?;
     let item = store::get_session_index_item(from).await.ok().flatten()?;
+    // A routine's run sits in its bot's folder but is not the bot: named as the
+    // routine, so the bot reads its own scheduled work rather than a colleague.
+    if item.routine_run.is_some() {
+        return Some(MessageSender {
+            session_id: item.session_id,
+            title: item.title,
+            machine: None,
+            bot_id: None,
+            routine: Some(true),
+        });
+    }
     // A bot is named as the bot rather than by its chat's title, so the reader
     // and the receiving agent both know which bot wrote.
     let bot = crate::bots::bot_at(&item.cwd).await;
@@ -2828,6 +2962,7 @@ async fn sender(from_session_id: Option<&str>) -> Option<MessageSender> {
         title: bot.as_ref().map_or(item.title, |b| b.name.clone()),
         machine: None,
         bot_id: bot.map(|b| b.id),
+        routine: None,
     })
 }
 
@@ -3118,6 +3253,7 @@ mod tests {
             title: "Fix the login redirect".into(),
             machine: None,
             bot_id: None,
+            routine: None,
         };
         let prompt = attribute("review is done", Some(&from));
 
@@ -3136,6 +3272,7 @@ mod tests {
             title: "Fan out".into(),
             machine: Some("Yogesh's Mac".into()),
             bot_id: None,
+            routine: None,
         };
         assert_eq!(
             attribute("go", Some(&from)),
@@ -3152,6 +3289,7 @@ mod tests {
             title: "Ops".into(),
             machine: None,
             bot_id: Some("b1".into()),
+            routine: None,
         };
         assert_eq!(attribute("hi", Some(&from)), "[message from the Dray bot \"Ops\" (abc-123)]\n\nhi");
     }

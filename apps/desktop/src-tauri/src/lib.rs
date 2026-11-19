@@ -71,6 +71,7 @@ pub mod drafts;
 pub mod projects;
 pub mod remote_reports;
 pub mod held_flags;
+pub mod routines;
 #[cfg(feature = "desktop")]
 pub mod quit;
 #[cfg(feature = "desktop")]

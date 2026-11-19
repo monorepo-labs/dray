@@ -191,6 +191,12 @@ pub struct SessionIndexItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub adopted_by: Option<String>,
+    /// The routine this session is one run of (#972). A run lives in its bot's
+    /// folder, which otherwise makes a session part of the bot's chat, so every
+    /// reader of "the chat" and "the tasks" skips a session carrying this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub routine_run: Option<String>,
     /// Every key this build does not know, carried through untouched.
     ///
     /// The index is rewritten **whole**, and `INDEX_LOCK` is an in-process
@@ -736,6 +742,7 @@ impl SessionIndexItem {
             continue_off: false,
             need: None,
             adopted_by: None,
+            routine_run: None,
             unknown: Default::default(),
         }
     }
@@ -831,6 +838,7 @@ impl SessionIndexItem {
             continue_off: false,
             need: None,
             adopted_by: None,
+            routine_run: None,
             unknown: Default::default(),
         }
     }

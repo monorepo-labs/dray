@@ -561,6 +561,7 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     tokio::spawn(crate::remote_reports::run(sink.clone()));
     tokio::spawn(crate::stalls::run(sink.clone()));
     tokio::spawn(crate::held_flags::run(sink.clone()));
+    tokio::spawn(crate::routines::run(sink.clone()));
     // Agents this server spawns reach it through `dray`, so it serves the
     // socket the desktop app does — under `DRAY_HOME` where that is set.
     tokio::spawn(async move {
@@ -2112,6 +2113,9 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         edit_bot(id: String, name: String, avatar: crate::bots::BotAvatar) => crate::bots::edit_bot(id, name, avatar, sink).await;
         bot_learned_diff(session_id: String, commit: String, path: String) => crate::bots::bot_learned_diff(session_id, commit, path).await;
         bot_undo_learned(session_id: String, commit: String, path: String) => crate::bots::bot_undo_learned(session_id, commit, path, sink).await;
+        list_routines(bot_id: String) => crate::routines::list_routines(bot_id).await;
+        set_routine_paused(id: String, paused: bool) => crate::routines::set_routine_paused(id, paused, sink).await;
+        delete_routine(id: String) => crate::routines::delete_routine(id, sink).await;
 
         // Assistants signed in to `/mcp`.
         mcp_pair(read_only: bool, replaces: Option<String>) => crate::mcp::pair(sink, read_only, replaces).await;
