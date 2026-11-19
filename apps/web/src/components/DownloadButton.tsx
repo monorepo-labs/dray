@@ -1,7 +1,25 @@
 "use client";
 
 import { AppleGlyph } from "@/components/AppleGlyph";
+import { TESTFLIGHT } from "@/lib/links";
 import { posthog } from "@/lib/posthog";
+
+/// The iPhone app's TestFlight beta, beside the download buttons. Counted as
+/// `testflight_click`, keyed by where it sits, since it leaves for Apple's page.
+export function IPhoneButton({ className, from }: { className: string; from: "hero" | "cta" }) {
+  return (
+    <a
+      href={TESTFLIGHT}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={() => posthog.capture("testflight_click", { from }, { transport: "sendBeacon" })}
+      className={className}
+    >
+      <AppleGlyph className="-mt-0.5 size-4" />
+      iPhone beta
+    </a>
+  );
+}
 
 /// The Mac download link, split out as a client component so the click can
 /// be counted. It goes to `/thank-you`, which starts the dmg itself and

@@ -8,7 +8,7 @@ import { BetaTag } from "@/components/BetaTag";
 import { LinuxFileLink } from "@/components/LinuxMenu";
 import { LinuxGlyph } from "@/components/LinuxGlyph";
 import { ServerGlyph } from "@/components/ServerGlyph";
-import { INSTALL_LINE } from "@/lib/links";
+import { INSTALL_LINE, TESTFLIGHT } from "@/lib/links";
 import { LINUX_FORMATS } from "@/lib/linux";
 
 import { DmgLink } from "./client";
@@ -90,10 +90,7 @@ function CopyCommand() {
   );
 }
 
-const SOON = [
-  { name: "iPhone", icon: <AppleGlyph className={`${ICON} -mt-1`} /> },
-  { name: "Android", icon: <AndroidGlyph className={ICON} /> },
-];
+const SOON = [{ name: "Android", icon: <AndroidGlyph className={ICON} /> }];
 
 /// One boxed grid of filled, square cells 2px apart, so the page's own
 /// background draws the lines. Each platform's right half is its blue cells.
@@ -160,6 +157,24 @@ export function DownloadGrid() {
           />
         </div>
         <CopyCommand />
+      </div>
+
+      <div className={row}>
+        <div className={left}>
+          <Platform icon={<AppleGlyph className={`${ICON} -mt-1`} />} name="iPhone" line="Your sessions on your phone" beta />
+        </div>
+        <a
+          href={TESTFLIGHT}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`${FILLED} flex items-center justify-between gap-4 px-6 py-5`}
+        >
+          <span>
+            <span className="block text-[16px] leading-6 font-medium">Join the TestFlight beta</span>
+            <span className="block text-[13px] leading-5 text-black/55 light:text-white/65">Install TestFlight from the App Store first</span>
+          </span>
+          <span aria-hidden className="text-[16px]">↗</span>
+        </a>
       </div>
 
       {SOON.map((p) => (
