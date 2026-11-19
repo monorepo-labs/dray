@@ -772,6 +772,10 @@ export default function Chat({
                   onOpenBot={openBot}
                   focus={botFocus}
                 />
+                {/* A bot chat reads as a messenger: what the reader sent sits
+                    with the conversation, above the cards waiting on them —
+                    "Waiting on you" and any ask — by the composer that answers. */}
+                {queued}
                 {botFooter}
               </>
             ) : shownTurns.map((turn, i) => (
@@ -796,11 +800,6 @@ export default function Chat({
                 />
               </div>
             ))}
-
-            {/* A bot chat reads as a messenger: what the reader sent sits with
-                the conversation, and the card waiting on them comes last, by
-                the composer that answers it. */}
-            {bot && queued}
 
             {cards.map((ask) =>
               ask.type === "questions_asked" ? (
