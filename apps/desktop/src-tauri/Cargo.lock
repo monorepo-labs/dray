@@ -1437,6 +1437,7 @@ dependencies = [
  "opentunnel",
  "qrcode",
  "reqwest",
+ "ring",
  "rubato",
  "rustls",
  "semver",

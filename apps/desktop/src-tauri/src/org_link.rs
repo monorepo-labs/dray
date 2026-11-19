@@ -205,6 +205,26 @@ async fn recheck(sink: &Sink) -> Option<Held> {
     Some(held)
 }
 
+/// What this server signs in to drayhq.com with, for MCP sign-in's calls.
+#[derive(Debug, Clone)]
+pub struct Credential {
+    pub site: String,
+    pub token: String,
+    pub server_id: String,
+}
+
+/// This server's credential, when it is linked: the same once-a-minute check
+/// [`state`] makes, so an unlink on the site lands here within a minute.
+pub async fn credential(sink: &Sink) -> Option<Credential> {
+    recheck(sink).await.map(|h| Credential { site: h.site, token: h.token, server_id: h.server_id })
+}
+
+/// The site refused this server's credential on some other call: the next
+/// [`credential`] asks rather than trusting a minute-old answer.
+pub fn recheck_soon() {
+    memory().checked = None;
+}
+
 /// Asks the site for a code and polls it until someone approves, cancels or
 /// it expires, telling clients through [`CHANGED`] each time it moves. A
 /// server already linked sends its credential, so approving moves its row

@@ -1,6 +1,7 @@
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
+import { jwt } from "better-auth/plugins/jwt";
 import { organization } from "better-auth/plugins/organization";
 
 import { pool } from "./db";
@@ -58,6 +59,11 @@ export const auth = betterAuth({
       },
     }),
     drayTables,
+    // Signs the assertion an MCP sign-in hands back to a server, which checks
+    // it against `/api/auth/jwks`. Keys live in the `jwks` table, encrypted
+    // with BETTER_AUTH_SECRET. The session-JWT header is off: nothing here
+    // reads it, and every `getSession` would sign one.
+    jwt({ jwks: { keyPairConfig: { alg: "EdDSA", crv: "Ed25519" } }, disableSettingJwtHeader: true }),
     nextCookies(),
   ],
 });

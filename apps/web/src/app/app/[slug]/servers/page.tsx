@@ -7,9 +7,15 @@ import { loadOrg } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Servers - Dray" };
 
-/// The org's linked servers, renamed and unlinked here by owners and admins.
+/// The org's linked servers, renamed and unlinked here by owners and admins,
+/// who also keep each one's allow list: who may connect an assistant to it.
 export default async function ServersPage({ params }: { params: Promise<{ slug: string }> }) {
   const { org, canManage } = await loadOrg((await params).slug);
+  const { rows: access } = await pool.query<{ serverId: string; userId: string }>(
+    `select a."serverId", a."userId" from server_access a join server s on s.id = a."serverId"
+      where s."organizationId" = $1`,
+    [org.id],
+  );
   const { rows } = await pool.query<{
     id: string;
     name: string;
@@ -44,6 +50,12 @@ export default async function ServersPage({ params }: { params: Promise<{ slug: 
                   linked: `Linked ${s.linkedBy ? `by ${s.linkedBy} ` : ""}on ${s.linkedAt.toLocaleDateString("en-US", { dateStyle: "medium", timeZone: "UTC" })}`,
                 }}
                 canManage={canManage}
+                members={org.members.map((m) => ({
+                  id: m.userId,
+                  name: m.user.name,
+                  email: m.user.email,
+                  allowed: access.some((a) => a.serverId === s.id && a.userId === m.userId),
+                }))}
               />
             ))}
           </ul>
