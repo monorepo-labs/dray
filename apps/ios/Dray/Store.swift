@@ -132,6 +132,8 @@ final class Store {
     @ObservationIgnored var boatChanged: () -> Void = {}
     /// The phone's: a server came up, so it can be handed this phone's push handle.
     @ObservationIgnored var onConnected: (UUID) -> Void = { _ in }
+    /// The phone's: a server is about to be removed, so it stops alerting this phone.
+    @ObservationIgnored var onRemoving: (Server) -> Void = { _ in }
     @ObservationIgnored private let path = NWPathMonitor()
     @ObservationIgnored private var reading: Set<UUID> = []
     @ObservationIgnored private var statuses: [SessionKey: StatusEvent] = [:]
@@ -240,6 +242,7 @@ final class Store {
     }
 
     func removeServer(_ s: Server) {
+        for gone in [s] + servers.filter({ $0.via?.parent == s.id }) { onRemoving(gone) }
         forget(s.id)
         Keychain.delete(s.id.uuidString)
         save()

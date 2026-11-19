@@ -34,12 +34,14 @@ func dressAlert(_ content: UNNotificationContent) async -> UNNotificationContent
     return (try? alert.updating(from: intent)) ?? alert
 }
 
-/// A category for one question: an action per option, and Reply where any answer goes.
+/// A category for one question: an action per option, and Reply where any answer
+/// goes and iOS has room, four actions being all it shows. Without Reply, tapping
+/// the alert opens the app, where a typed answer still can be given.
 /// One whose alert is gone is dropped, since iOS holds every category registered.
 private func category(_ request: String, options: [String], freeText: Bool) async -> String {
     let id = questionCategoryPrefix + request
     var actions = options.enumerated().map { UNNotificationAction(identifier: "q.\($0.offset)", title: $0.element) }
-    if freeText {
+    if freeText && actions.count < 4 {
         actions.append(UNTextInputNotificationAction(identifier: "q.text", title: "Reply…", options: [],
                                                      textInputButtonTitle: "Send", textInputPlaceholder: "Your answer"))
     }

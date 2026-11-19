@@ -183,16 +183,20 @@ export function readAlert(v: Record<string, unknown>): Alert | null {
     alert.allow = str(v.allow, 128);
     alert.deny = str(v.deny, 128);
   }
+  // The phone answers with these strings verbatim and the agent matches on
+  // them, so one too long is dropped whole, never shortened: the alert then
+  // opens the app instead of offering buttons that answer something else.
   const q = v.question as Record<string, unknown> | undefined;
-  if (kind === "question" && q && typeof q.text === "string") {
-    alert.question = {
-      text: q.text.slice(0, 300),
-      options: (Array.isArray(q.options) ? q.options : [])
-        .filter((o): o is string => typeof o === "string")
-        .slice(0, 4)
-        .map((o) => o.slice(0, 60)),
-      freeText: q.freeText === true,
-    };
+  const options = Array.isArray(q?.options) ? q.options : [];
+  if (
+    kind === "question" &&
+    q &&
+    typeof q.text === "string" &&
+    q.text.length <= 300 &&
+    options.length <= 4 &&
+    options.every((o) => typeof o === "string" && o.length <= 60)
+  ) {
+    alert.question = { text: q.text, options: options as string[], freeText: q.freeText === true };
   }
   const bot = v.bot as Record<string, unknown> | undefined;
   if (bot && typeof bot.id === "string") {

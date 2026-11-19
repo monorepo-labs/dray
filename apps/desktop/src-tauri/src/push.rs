@@ -6,7 +6,6 @@
 //! APNs token into, and a tag: its own id for this server, echoed back so a
 //! tap opens the right chat. The handles live in `<home>/push.json`.
 
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -143,8 +142,15 @@ fn alert(payload: &AgentEventPayload, said: Option<&str>) -> Option<Value> {
         }
         AgentEventPayload::QuestionsAsked { request_id, questions, .. } => {
             let first = questions.first()?;
-            // Several questions are answered in the app; one can be from the alert.
-            let question = (questions.len() == 1).then(|| {
+            // Only a question whose buttons answer it whole goes on the alert:
+            // one alone, a single pick, and text the relay need not shorten,
+            // since the answer is matched on the exact question and label.
+            let fits = questions.len() == 1
+                && !first.multi_select
+                && first.options.len() <= 4
+                && first.question.chars().count() <= 300
+                && first.options.iter().all(|o| o.label.chars().count() <= 60);
+            let question = fits.then(|| {
                 json!({
                     "text": first.question,
                     "options": first.options.iter().map(|o| &o.label).collect::<Vec<_>>(),
@@ -183,22 +189,29 @@ pub fn notify(session_id: &str, payload: &AgentEventPayload, said: Option<&str>)
             let mut body = alert.clone();
             body["handle"] = json!(phone.handle);
             body["server"] = json!(phone.tag);
-            let sent = crate::http()
-                .post(format!("{}/api/push/send", crate::org_link::site()))
-                .json(&body)
-                .timeout(Duration::from_secs(15))
-                .send()
-                .await;
-            match sent {
-                Ok(r) if r.status() == reqwest::StatusCode::GONE => {
+            match send(&body).await {
+                Ok(reqwest::StatusCode::GONE) => {
                     let _ = push_unregister(phone.handle).await;
                 }
-                Ok(r) if !r.status().is_success() => eprintln!("[push] relay answered {}", r.status()),
+                Ok(status) if !status.is_success() => eprintln!("[push] relay answered {status}"),
                 Err(e) => eprintln!("[push] relay unreachable: {e}"),
                 _ => {}
             }
         }
     });
+}
+
+/// Hands one alert to the relay, which lives on the site `org_link` names.
+#[cfg(any(feature = "serve", feature = "desktop"))]
+async fn send(body: &Value) -> Result<reqwest::StatusCode, reqwest::Error> {
+    let url = format!("{}/api/push/send", crate::org_link::site());
+    Ok(crate::http().post(url).json(body).timeout(std::time::Duration::from_secs(15)).send().await?.status())
+}
+
+/// A build with neither the app nor the server knows no site, so it sends nothing.
+#[cfg(not(any(feature = "serve", feature = "desktop")))]
+async fn send(_: &Value) -> Result<reqwest::StatusCode, reqwest::Error> {
+    Ok(reqwest::StatusCode::OK)
 }
 
 #[cfg(test)]
@@ -243,6 +256,24 @@ mod tests {
         let a = alert(&card, None).unwrap();
         assert_eq!((a["kind"].as_str(), a["title"].as_str()), (Some("ready"), Some("Fix login")));
         assert_eq!(a["body"], "Ready to merge");
+    }
+
+    #[test]
+    fn only_a_question_its_buttons_answer_whole_gets_them() {
+        let ask = |multi_select: bool, label: &str| AgentEventPayload::QuestionsAsked {
+            request_id: "r".into(),
+            tool_use_id: "t".into(),
+            questions: vec![crate::events::Question {
+                question: "Which color?".into(),
+                header: None,
+                multi_select,
+                options: ["Red", label].iter().map(|l| crate::events::QuestionOption { label: (*l).into(), description: None, preview: None }).collect(),
+                free_text: true,
+            }],
+        };
+        assert!(alert(&ask(false, "Green"), None).unwrap()["question"].is_object());
+        assert!(alert(&ask(true, "Green"), None).unwrap()["question"].is_null());
+        assert!(alert(&ask(false, &"g".repeat(61)), None).unwrap()["question"].is_null());
     }
 
     #[test]

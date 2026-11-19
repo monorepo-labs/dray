@@ -65,6 +65,7 @@ final class Push: NSObject, UNUserNotificationCenterDelegate {
             ]))
         }
         store.onConnected = { [weak self] server in self?.connected(server) }
+        store.onRemoving = { [weak self] server in self?.leave(server) }
         // Every launch, as Apple asks: a restored or migrated phone gets a new token.
         if Self.enabled && handle != nil { Task { await ask() } }
     }
@@ -92,11 +93,20 @@ final class Push: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    /// A server being removed stops alerting this phone. Its own socket and
+    /// token, read now, since the removal drops both from the store.
+    func leave(_ s: Server) {
+        guard let handle else { return }
+        let token = Keychain.get((s.via?.parent ?? s.id).uuidString) ?? ""
+        Task { try? await send(s, token: token, "push_unregister", ["handle": .string(handle)]) }
+    }
+
     /// APNs answered: trade the token for a handle and hand it to every server up now.
     func registered(_ token: Data) async {
         let hex = token.map { String(format: "%02x", $0) }.joined()
-        // The same token keeps its handle; sealing it again would only churn every server's file.
-        if handle != nil && UserDefaults.standard.string(forKey: "push.token") == hex { return }
+        // Sealed again on every launch, even for the same token: a server drops
+        // a handle the relay stopped taking (a new `PUSH_HANDLE_SECRET`), and
+        // only a fresh one reaches it again.
         #if DEBUG
         let env = "sandbox"
         #else
@@ -221,7 +231,11 @@ final class Push: NSObject, UNUserNotificationCenterDelegate {
             try await Task.sleep(for: .milliseconds(250))
         }
         guard let s = found else { throw DrayError("this server is no longer paired") }
-        let c = Connection(serverId: s.id, url: s.url, token: Keychain.get((s.via?.parent ?? s.id).uuidString) ?? "")
+        try await send(s, token: Keychain.get((s.via?.parent ?? s.id).uuidString) ?? "", cmd, args)
+    }
+
+    private func send(_ s: Server, token: String, _ cmd: String, _ args: [String: JSON]) async throws {
+        let c = Connection(serverId: s.id, url: s.url, token: token)
         c.via = s.via?.machine
         defer { c.stop() }
         let states = AsyncStream<Connection.State> { states in c.onState = { states.yield($0) } }

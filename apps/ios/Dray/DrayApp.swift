@@ -90,6 +90,8 @@ struct RootView: View {
             guard let key else { return }
             Push.shared.opening = nil
             sheet = nil
+            // Set even when `selection` already is `key`, where its own change never fires.
+            opened = []
             selection = key
         }
         .onOpenURL { url in
