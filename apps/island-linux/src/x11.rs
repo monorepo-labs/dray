@@ -421,9 +421,10 @@ pub fn dray_in_front() -> bool {
 }
 
 /// `WM_CLASS` is instance and class, NUL-separated; Tauri names both after
-/// the binary, `dray`.
+/// the binary: `dray-app` in a release (tauri.linux-release.conf.json), `dray`
+/// in a dev build and an AppImage from before the rename.
 fn is_dray_class(class: &str) -> bool {
-    class.split('\0').any(|part| part == "dray" || part == "dray dev")
+    class.split('\0').any(|part| matches!(part, "dray-app" | "dray" | "dray dev"))
 }
 
 /// The window holding the keyboard.
@@ -525,6 +526,16 @@ pub fn grab_done_keys(on_key: impl Fn(DoneKey) + Send + 'static) -> Option<DoneK
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The classes as `dray_in_front` reads them, lowercased: the release's
+    /// was measured with xprop on the installed .deb.
+    #[test]
+    fn knows_every_dray_window_class() {
+        assert!(is_dray_class("dray-app\0dray-app\0"));
+        assert!(is_dray_class("dray\0dray\0"));
+        assert!(is_dray_class("dray dev\0dray dev\0"));
+        assert!(!is_dray_class("firefox\0firefox\0"));
+    }
 
     fn after(start: Instant, ms: u64) -> Instant {
         start + Duration::from_millis(ms)

@@ -1,5 +1,6 @@
 import { preload } from "react-dom";
-import { DownloadButton } from "@/components/DownloadButton";
+import { DownloadButton, IPhoneButton } from "@/components/DownloadButton";
+import { LinuxMenu } from "@/components/LinuxMenu";
 import { Hero as AppWindow } from "@/components/illustrations/Hero";
 import { SponsorLink } from "@/components/SponsorLink";
 import { LABEL } from "./Section";
@@ -24,13 +25,19 @@ export function Hero() {
       <div className="relative mx-auto w-full max-w-[960px]">
         <SiteNav />
 
-        <div className="pt-16 sm:pt-[117px] lg:ml-[102px] lg:max-w-[756px]">
+        {/* The line's 20px and its 16px gap come off the top padding, so the
+            headline stays where it was. */}
+        <div className="pt-7 sm:pt-[81px] lg:ml-[102px] lg:max-w-[756px]">
+          <p className="mb-4 text-[14px] leading-5 tracking-[-0.01em] text-white/30 light:text-black/40">Free and open source</p>
           <h1 className="font-inter text-[36px] leading-[40px] font-[350] tracking-[-0.03em] text-balance text-white sm:text-[46px] light:text-[#0A0A0A] sm:leading-[54px]">
             Work on dozens of coding tasks without getting overwhelmed.
           </h1>
           <div className="mt-8 flex flex-wrap items-start justify-between gap-4 pr-5">
-            <DownloadButton from="hero" className="inline-flex h-10 items-center gap-2 rounded-[6px] bg-white px-4 text-[14px] leading-5 font-medium text-[#0B0B0F] shadow-[inset_0_-1px_0_#4D4C4C,0_1px_2px_#00000040,0_10px_28px_-10px_#00000099] transition-opacity hover:opacity-90 [&>svg]:-mt-0.5 light:bg-[#0A0A0A] light:text-white light:shadow-[inset_0_-1px_0_#000,0_1px_2px_#00000040]" />
-            <p className="text-[14px] leading-5 tracking-[-0.01em] text-white/30 light:text-black/40">Free and open source</p>
+            <div className="flex flex-wrap items-center gap-3">
+              <DownloadButton from="hero" className="inline-flex h-10 items-center gap-2 rounded-[6px] bg-white px-4 text-[14px] leading-5 font-medium text-[#0B0B0F] shadow-[inset_0_-1px_0_#4D4C4C,0_1px_2px_#00000040,0_10px_28px_-10px_#00000099] transition-opacity hover:opacity-90 [&>svg]:-mt-0.5 light:bg-[#0A0A0A] light:text-white light:shadow-[inset_0_-1px_0_#000,0_1px_2px_#00000040]" />
+              <LinuxMenu className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-[6px] border border-white/20 px-4 text-[14px] leading-5 font-medium text-white transition-colors hover:bg-white/10 light:border-black/15 light:text-[#0A0A0A] light:hover:bg-black/5" />
+              <IPhoneButton from="hero" className="inline-flex h-10 items-center gap-2 rounded-[6px] border border-white/20 px-4 text-[14px] leading-5 font-medium text-white transition-colors hover:bg-white/10 light:border-black/15 light:text-[#0A0A0A] light:hover:bg-black/5" />
+            </div>
           </div>
         </div>
 

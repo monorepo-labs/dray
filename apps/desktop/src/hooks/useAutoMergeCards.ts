@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { type CardWatch, cardDue, watchPr } from "@/lib/autoMergeCard";
+import { type CardWatch, cardDue, turnEnded, watchPr } from "@/lib/autoMergeCard";
 import { botAt } from "@/lib/bots";
 import { sessionBranch } from "@/lib/pr";
 import { invoke, LOCAL, serverOfPath, serverOfSession } from "@/lib/transport";
-import type { Bot, PrMark, SessionIndexItem } from "@/types/events";
+import type { Bot, PrMark, SessionIndexItem, SessionStatus } from "@/types/events";
 
 /// How long a ready PR whose card could not go up waits before it is tried
 /// again: a failed call, or a task whose chat is settled for now.
@@ -19,6 +19,8 @@ type Args = {
   /// When the read `prFor` answers from was asked for, which is what the
   /// card's settle window is measured in.
   readAt: (repoPath: string) => number | undefined;
+  /// Live status by session, which the index list's own copy lags.
+  statusBySession: Record<string, SessionStatus>;
 };
 
 /// Posts a merge card in the chat that started a task once GitHub says the
@@ -30,13 +32,19 @@ type Args = {
 /// what keeps it to one card per PR, the agent's own included. `done` here
 /// only saves the call, so it is dropped when a bot's chat changes: a fresh
 /// chat holds no card yet.
-export function useAutoMergeCards({ items, bots, prFor, readAt }: Args) {
+///
+/// **Never while the task is mid-turn** (`turnEnded`): it may still be pushing
+/// fixes, and a card then invites merging work that is not done.
+export function useAutoMergeCards({ items, bots, prFor, readAt, statusBySession }: Args) {
   const done = useRef(new Set<string>());
   /// When each ready PR was last tried, while it stays ready.
   const tried = useRef(new Map<string, number>());
   const inFlight = useRef(new Set<string>());
   /// Each open PR's tip and checks across reads, by URL.
   const watches = useRef(new Map<string, CardWatch>());
+  /// When this app saw each task's status or `modified` last move, on its own
+  /// clock, by session id.
+  const movedAt = useRef(new Map<string, { state: string; at: number }>());
   const [tick, setTick] = useState(0);
   const [pending, setPending] = useState(false);
 
@@ -56,7 +64,14 @@ export function useAutoMergeCards({ items, bots, prFor, readAt }: Args) {
     const now = Date.now();
     const ready = new Set<string>();
     const watched = new Set<string>();
+    const seen = new Set<string>();
     for (const task of tasks) {
+      const status = statusBySession[task.sessionId] ?? task.status;
+      const state = `${status} ${task.modified}`;
+      let moved = movedAt.current.get(task.sessionId);
+      if (moved?.state !== state) movedAt.current.set(task.sessionId, (moved = { state, at: now }));
+      seen.add(task.sessionId);
+
       const branch = sessionBranch(task);
       const mark = prFor(task.projectPath, branch);
       const asked = readAt(task.projectPath);
@@ -65,7 +80,7 @@ export function useAutoMergeCards({ items, bots, prFor, readAt }: Args) {
       const watch = watchPr(watches.current.get(key), mark, asked);
       watches.current.set(key, watch);
       watched.add(key);
-      if (!cardDue(mark, watch, asked) || done.current.has(key)) continue;
+      if (!turnEnded(status, moved.at, asked) || !cardDue(mark, watch, asked) || done.current.has(key)) continue;
       ready.add(key);
       if (inFlight.current.has(key) || now - (tried.current.get(key) ?? 0) < RETRY_MS) continue;
 
@@ -90,8 +105,9 @@ export function useAutoMergeCards({ items, bots, prFor, readAt }: Args) {
     // A PR that stops being ready is tried at once when it comes back.
     for (const key of tried.current.keys()) if (!ready.has(key)) tried.current.delete(key);
     for (const key of watches.current.keys()) if (!watched.has(key)) watches.current.delete(key);
+    for (const id of movedAt.current.keys()) if (!seen.has(id)) movedAt.current.delete(id);
     setPending(ready.size > 0);
-  }, [tasks, listed, botServers, prFor, readAt, tick]);
+  }, [tasks, listed, botServers, prFor, readAt, statusBySession, tick]);
 
   useEffect(() => {
     if (!pending) return;

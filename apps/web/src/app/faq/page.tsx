@@ -114,7 +114,8 @@ const GROUPS: { title: string; entries: FaqEntry[] }[] = [
       },
       {
         q: "Does Dray run on Linux?",
-        a: "Yes, as a server. Your agents run on Linux, and you drive them from the Dray app on your Mac.",
+        a: "Yes. The Linux app is in beta: a .deb for Debian and Ubuntu, or an AppImage for other distros with glibc 2.35 or newer, on x64 and arm64. Dray also runs as a server on a Linux box, driven from the app on another machine.",
+        link: { label: "Download for Linux", href: "/download" },
       },
     ],
   },
@@ -131,7 +132,7 @@ const GROUPS: { title: string; entries: FaqEntry[] }[] = [
       },
       {
         q: "What do I need to run it?",
-        a: "A Mac on macOS 11 or later, and at least one of the supported agents installed and signed in.",
+        a: "A Mac on macOS 11 or later, or Linux on x64 or arm64 (in beta), and at least one of the supported agents installed and signed in.",
       },
     ],
   },

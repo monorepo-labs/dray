@@ -170,9 +170,20 @@ fn file_field<'a>(name: &str, value: &'a str) -> Option<(&'static str, &'a str)>
     }
 }
 
-/// A finished session, for the island's done pill.
-pub fn done(session_id: &str) -> Result<(), String> {
-    if send(&format!("done {session_id}")) { Ok(()) } else { Err("Dray Island isn't running".into()) }
+/// A finished session for the island's done pill, or with `note` a bot's
+/// waiting notice and `rows` its card's rows. A notice is one JSON line under
+/// its own verb, since its text has spaces, and an island that does not know
+/// the verb skips the line rather than reading it as an id.
+pub fn done(session_id: &str, note: Option<String>, rows: Option<serde_json::Value>) -> Result<(), String> {
+    if send(&done_line(session_id, note, rows)) { Ok(()) } else { Err("Dray Island isn't running".into()) }
+}
+
+fn done_line(session_id: &str, note: Option<String>, rows: Option<serde_json::Value>) -> String {
+    match note {
+        None => format!("done {session_id}"),
+        // `json!`'s text escapes newlines, so the notice stays one line.
+        Some(note) => format!("waiting {}", serde_json::json!({ "id": session_id, "note": note, "rows": rows.unwrap_or_else(|| serde_json::json!([])) })),
+    }
 }
 
 /// One line down the pipe the island holds as its stdin, which it reads
@@ -186,7 +197,19 @@ fn send(line: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_field, settings_view};
+    use super::{done_line, file_field, settings_view};
+
+    #[test]
+    fn a_waiting_notice_is_one_json_line() {
+        assert_eq!(done_line("abc", None, None), "done abc");
+        let rows = serde_json::json!([{ "id": "t1", "title": "Two\nlines" }]);
+        let line = done_line("abc", Some("2 tasks waiting on you".into()), Some(rows.clone()));
+        assert!(!line.contains('\n'));
+        let (verb, json) = line.split_once(' ').unwrap();
+        assert_eq!(verb, "waiting");
+        let back: serde_json::Value = serde_json::from_str(json).unwrap();
+        assert_eq!(back, serde_json::json!({ "id": "abc", "note": "2 tasks waiting on you", "rows": rows }));
+    }
 
     #[test]
     fn settings_names_map_onto_the_islands_file_and_back() {

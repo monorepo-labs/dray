@@ -1700,18 +1700,24 @@ async fn add_video(request: dray_proto::AddVideo, image: bool) -> Result<Respons
 
 /// Posts a merge card for a task's open pull request into the calling chat.
 /// The PR is looked up now, so an agent posting too early is told so rather
-/// than leaving a card with nothing to merge.
+/// than leaving a card with nothing to merge. Refused while the task is
+/// mid-turn, as the automatic card waits then.
 async fn post_merge_card(card: dray_proto::MergeCard, app: &Sink) -> Result<Response> {
     let chat = store::get_session_index_item(&card.session_id)
         .await?
         .with_context(|| format!("no session {}", card.session_id))?;
     let task_id = &card.task_session_id;
     let task = CardTask::find(task_id).await?.with_context(|| format!("no session {task_id}"))?;
+    let busy = || format!("\"{}\" is still working; its card goes up on its own once its turn ends and the PR is ready", task.row.title);
+    anyhow::ensure!(task.row.status != store::SessionStatus::InProgress, busy());
     let branch = task.branch().await.with_context(|| format!("session {task_id} has no branch"))?;
     let (number, url) = task.open_pr(&branch).await?;
+    let _held = POSTING_CARD.lock().await;
+    // Asked again after the lookups, which take seconds: a prompt sent to the
+    // task meanwhile has opened a turn the first look could not see.
+    anyhow::ensure!(!task.working().await?, busy());
     let title = task.row.title.clone();
     let payload = task.card(branch, number, url.clone());
-    let _held = POSTING_CARD.lock().await;
     manager().post_event(&card.session_id, chat.harness, payload, app).await?;
     Ok(Response::MergeCard { number, url, title })
 }
@@ -1738,6 +1744,19 @@ impl CardTask {
             return Ok(Some(Self { row, machine: Some(machine) }));
         }
         Ok(None)
+    }
+
+    /// Whether the task is mid-turn now, when no card may go up: it may still
+    /// be pushing fixes. Read fresh, never off the row this was found with. A
+    /// task here also asks its child, which opens the turn the moment a prompt
+    /// is sent, ahead of the row's write.
+    async fn working(&self) -> Result<bool> {
+        let id = &self.row.session_id;
+        if self.machine.is_none() && manager().turn_in_flight(id).await {
+            return Ok(true);
+        }
+        let fresh = Self::find(id).await?;
+        Ok(fresh.is_some_and(|t| t.row.status == store::SessionStatus::InProgress))
     }
 
     /// The frontend's `sessionBranch`: git's own HEAD while a tree here exists,
@@ -1809,7 +1828,7 @@ async fn card_chat(parent: SessionIndexItem) -> Result<Vec<SessionIndexItem>> {
 /// parent `session_id` belongs to, once the app judges the PR ready, unless
 /// that chat already holds a card for it — one the agent posted by hand
 /// counts. Answers the chat the card is in, or `None` where there is no chat
-/// to post in yet, which the caller asks again about.
+/// to post in yet or the task is mid-turn, which the caller asks again about.
 ///
 /// Called on the parent's server, so a task on another machine finds its chat
 /// here; the task itself is looked up here or on the machines this server
@@ -1852,7 +1871,8 @@ pub async fn auto_merge_card(
     let Some(task) = CardTask::find(&task_id).await? else {
         return Ok(None);
     };
-    if task.row.archived {
+    // A task gone mid-turn since the app's look is asked again later.
+    if task.row.archived || task.working().await? {
         return Ok(None);
     }
     manager().post_event(&chat.session_id, chat.harness, task.card(branch, number, url), &sink).await?;

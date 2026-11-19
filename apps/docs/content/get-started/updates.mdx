@@ -13,6 +13,8 @@ When an update has downloaded, the bottom of the sidebar shows **Restart to upda
 
 While any session is mid-turn, the button waits. It is dimmed, and hovering it says "Waiting for the running turn to finish." Restarting would cut those turns off, so it is not offered until they end.
 
+On Linux, a `.deb` install asks for your password once, the same prompt the system's own updater shows. An AppImage replaces its own file and asks nothing.
+
 Sessions survive the restart. The background process that runs them moves onto the new version on its own, once no turn is running.
 
 If the install fails, the sidebar says "Couldn't install the update." If the update installed but Dray could not reopen itself, it says "Update installed. Quit and open Dray again."

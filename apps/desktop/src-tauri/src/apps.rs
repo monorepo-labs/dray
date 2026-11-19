@@ -649,14 +649,8 @@ pub async fn island_done(
         return Err("not a session id".into());
     }
     // Linux's island is this app's child, and hears it on the pipe it holds.
-    // It has no note to draw, so a noted one is refused and the banner goes.
     #[cfg(all(feature = "desktop", target_os = "linux"))]
-    let _ = rows;
-    #[cfg(all(feature = "desktop", target_os = "linux"))]
-    return match note {
-        None => crate::island::done(&session_id),
-        Some(_) => Err("Dray Island here shows finished sessions alone".into()),
-    };
+    return crate::island::done(&session_id, note, rows);
     #[cfg(not(all(feature = "desktop", target_os = "linux")))]
     island_done_mac(session_id, note.unwrap_or_default(), rows).await
 }

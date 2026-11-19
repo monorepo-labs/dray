@@ -4,9 +4,10 @@
 //! its row on the site and never a copy of anyone's session. Unlinking on the
 //! site deletes that row, which is what revokes it.
 //!
-//! The server runs the flow, not its client, so `dray login`, and the app's
-//! sign-in later, start the same one and watch it through [`state`] or
-//! [`CHANGED`].
+//! The server runs the flow, not its client, so `dray login` and the app's
+//! Link buttons start the same one and watch it through [`state`] or
+//! [`CHANGED`]. The app's sign-in links this machine its own way, through
+//! the browser ([`crate::dray_account`]), and hands the result to [`adopt`].
 
 use std::{
     sync::Mutex,
@@ -22,7 +23,7 @@ use crate::{sink::Sink, store};
 pub const CHANGED: &str = "org_link_changed";
 const SITE: &str = "https://www.drayhq.com";
 /// A code still this fresh is handed to a second caller rather than replaced,
-/// so `dray login` beside the app's sign-in doesn't kill the code being typed.
+/// so `dray login` beside the app's Link doesn't kill the code being typed.
 const REUSE_MIN: Duration = Duration::from_secs(60);
 /// How long a credential is trusted between checks with the site.
 const RECHECK: Duration = Duration::from_secs(60);
@@ -95,6 +96,8 @@ struct Pending {
     deadline: Instant,
     /// Tells a poll loop it has been replaced or cancelled.
     generation: u64,
+    /// The site row whose credential this flow sent, which approving re-keys.
+    replaces: Option<String>,
 }
 
 #[derive(Default)]
@@ -114,7 +117,7 @@ fn memory() -> std::sync::MutexGuard<'static, Memory> {
 }
 
 /// The site to link with: drayhq.com, or `DRAY_ACCOUNT_URL` for a local one.
-fn site() -> String {
+pub(crate) fn site() -> String {
     std::env::var("DRAY_ACCOUNT_URL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| SITE.into()).trim_end_matches('/').into()
 }
 
@@ -255,6 +258,7 @@ pub async fn start(sink: Sink) -> Result<PendingLink, String> {
             shown: shown.clone(),
             deadline: Instant::now() + Duration::from_secs(shown.expires_in_secs),
             generation: memory.generation,
+            replaces: held.filter(|h| h.site == site).map(|h| h.server_id),
         });
         memory.generation
     };
@@ -285,16 +289,10 @@ async fn poll_once(site: &str, device_code: &str) -> Poll {
     let ok = answer.status().is_success();
     let Ok(body) = answer.json::<Value>().await else { return Poll::Wait };
     if ok {
-        let held = (|| {
-            Some(Held {
-                token: body["token"].as_str()?.into(),
-                server_id: body["server"]["id"].as_str()?.into(),
-                server_name: body["server"]["name"].as_str()?.into(),
-                org: serde_json::from_value(body["org"].clone()).ok()?,
-                site: site.into(),
-            })
-        })();
-        return held.map_or_else(|| Poll::Ended(format!("{site} sent a credential this server can't read.")), Poll::Linked);
+        return held_from(&body, site).map_or_else(
+            || Poll::Ended(format!("{site} sent a credential this server can't read.")),
+            Poll::Linked,
+        );
     }
     match body["error"].as_str() {
         Some("authorization_pending") => Poll::Wait,
@@ -308,10 +306,10 @@ async fn poll_once(site: &str, device_code: &str) -> Poll {
 async fn poll(sink: Sink, site: String, generation: u64, mut interval: Duration) {
     loop {
         tokio::time::sleep(interval).await;
-        let (device_code, deadline) = {
+        let (device_code, deadline, replaces) = {
             let memory = memory();
             match memory.pending.as_ref() {
-                Some(p) if p.generation == generation => (p.device_code.clone(), p.deadline),
+                Some(p) if p.generation == generation => (p.device_code.clone(), p.deadline, p.replaces.clone()),
                 _ => return,
             }
         };
@@ -331,9 +329,18 @@ async fn poll(sink: Sink, site: String, generation: u64, mut interval: Duration)
         let current = memory().pending.as_ref().is_some_and(|p| p.generation == generation);
         let error = match outcome {
             Poll::Linked(held) if !current => {
-                // Cancelled while the claim was in flight: the site already
-                // made the link, so take it back rather than drop the credential.
-                revoke(&held).await;
+                // Cancelled while the claim was in flight. Where it re-keyed
+                // the row still on disk, revoking would delete the link this
+                // machine had, so keep it. Anything else is taken back: a new
+                // row, or one a newer flow has since moved this machine off.
+                let held_now = read().await.map(|h| h.server_id);
+                if replaces.as_ref() == Some(&held.server_id) && held_now == replaces {
+                    if write(Some(&held)).await.is_ok() {
+                        let _ = sink.emit(CHANGED, ());
+                    }
+                } else {
+                    revoke(&held).await;
+                }
                 return;
             }
             Poll::Linked(held) => write(Some(&held)).await.err(),
@@ -354,6 +361,39 @@ async fn poll(sink: Sink, site: String, generation: u64, mut interval: Duration)
     }
 }
 
+/// The link a claim's answer carries, in [`Held`]'s shape.
+fn held_from(body: &Value, site: &str) -> Option<Held> {
+    Some(Held {
+        token: body["token"].as_str()?.into(),
+        server_id: body["server"]["id"].as_str()?.into(),
+        server_name: body["server"]["name"].as_str()?.into(),
+        org: serde_json::from_value(body["org"].clone()).ok()?,
+        site: site.into(),
+    })
+}
+
+/// The credential this server holds with `site`, sent with a sign-in so the
+/// site re-keys this machine's row rather than adding a second.
+pub(crate) async fn held_token(site: &str) -> Option<String> {
+    read().await.filter(|h| h.site == site).map(|h| h.token)
+}
+
+/// Keeps the link a browser sign-in brought back ([`crate::dray_account`]),
+/// replacing whatever was held and ending any code still waiting.
+pub(crate) async fn adopt(sink: &Sink, body: &Value, site: &str) -> Result<(), String> {
+    let held = held_from(body, site).ok_or_else(|| format!("{site} sent a link this server can't read."))?;
+    let _file = FILE.lock().await;
+    write(Some(&held)).await?;
+    {
+        let mut memory = memory();
+        memory.pending = None;
+        memory.error = None;
+        memory.checked = Some(Instant::now());
+    }
+    let _ = sink.emit(CHANGED, ());
+    Ok(())
+}
+
 /// Asks the site to delete this credential's row. True once the site has
 /// none, whether this call deleted it or someone already had.
 async fn revoke(held: &Held) -> bool {
@@ -364,6 +404,18 @@ async fn revoke(held: &Held) -> bool {
         .send()
         .await;
     answer.is_ok_and(|a| a.status().is_success() || a.status() == reqwest::StatusCode::UNAUTHORIZED)
+}
+
+/// Stops waiting on a code. The site's row expires on its own, and an
+/// approval nobody collects leaves nothing behind.
+pub async fn cancel(sink: Sink) {
+    let _file = FILE.lock().await;
+    {
+        let mut memory = memory();
+        memory.pending = None;
+        memory.error = None;
+    }
+    let _ = sink.emit(CHANGED, ());
 }
 
 /// What `dray logout` reports.

@@ -336,7 +336,8 @@ Dray posts this card in your chat on its own once GitHub says a task you started
 has a pull request ready to merge, on this machine or another. So don't post one
 yourself; run the command only when the user asks for a card. It lands in your own chat with the task's
 title, the PR number, its live status, a Merge button and an Open on GitHub
-link. It is refused when the task's branch has no open pull request.
+link. It is refused when the task's branch has no open pull request, and while
+the task is still mid-turn.
 
 ```bash
 dray session need <task-id> "Pick: keep the button or drop it"   # no text clears it

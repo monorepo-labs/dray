@@ -2,7 +2,6 @@
 name = "dray"
 version = "0.30.14"
 description = "A Tauri App"
-authors = ["you"]
 edition = "2021"
 license = "Apache-2.0"
 # Two binaries once the helper exists; `tauri dev` runs `cargo run` bare.
@@ -139,12 +138,18 @@ transcribe-cpp = { version = "0.4", default-features = false, features = [
 # devices — "Rate Converter Plugin Using Speex Resampler" among them.
 cpal = { version = "0.18", features = ["pulseaudio"], optional = true }
 transcribe-cpp = { version = "0.4", default-features = false, features = [
-  "vulkan",
   "dynamic-backends",
 ], optional = true }
 # logind's `PrepareForSleep` and a banner's click, both D-Bus signals. The
 # version and features notify-rust already builds, so this costs no build.
 zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }
+
+# Vulkan on x86_64 alone: ggml compiles its shaders with `glslc`, which neither
+# Ubuntu 22.04 nor LunarG's SDK ships for arm64. arm64 dictation runs on the CPU.
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+transcribe-cpp = { version = "0.4", default-features = false, features = [
+  "vulkan",
+], optional = true }
 
 [target.'cfg(not(any(target_os = "macos", target_os = "linux")))'.dependencies]
 transcribe-cpp = { version = "0.4", default-features = false, optional = true }

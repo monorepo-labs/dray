@@ -65,6 +65,23 @@ export const drayTables = {
         denied: { type: "boolean", required: true, defaultValue: false },
       },
     },
+    // A desktop app signed in to an account. Its own credential, hashed,
+    // good for saying who you are and nothing else.
+    appSession: {
+      modelName: "app_session",
+      fields: {
+        userId: {
+          type: "string",
+          required: true,
+          index: true,
+          references: { model: "user", field: "id", onDelete: "cascade" },
+        },
+        tokenHash: { type: "string", required: true, unique: true },
+        // The machine the app runs on, as its server named itself.
+        name: { type: "string", required: true },
+        createdAt: { type: "date", required: true, defaultValue: () => new Date() },
+      },
+    },
     serverAccess: {
       modelName: "server_access",
       fields: {

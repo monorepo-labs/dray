@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "streamdown/styles.css";
 import App from "./App";
+import AccountGate from "@/components/AccountGate";
 import CrashScreen from "@/components/CrashScreen";
 import { trackActiveDay } from "@/lib/analytics";
 import { onFocusChange } from "@/lib/focus";
@@ -40,7 +41,9 @@ window.addEventListener("keydown", (e) => {
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <CrashScreen>
-      <App />
+      <AccountGate>
+        <App />
+      </AccountGate>
     </CrashScreen>
   </React.StrictMode>,
 );

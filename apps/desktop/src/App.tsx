@@ -808,14 +808,14 @@ function App() {
   // Which tab the *next* open lands on. Reset to Appearance as settings close,
   // so a mic press that sent the reader to Transcription does not leave every
   // later ⌘, opening there too.
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   // Whether that open should land with the new-space field already up. Same
   // reset as the tab, and for the same reason: it describes the way in, not the
   // dialog.
   const [namingSpace, setNamingSpace] = useState(false);
   const closeSettings = useCallback(() => {
     setSettingsOpen(false);
-    setSettingsTab("appearance");
+    setSettingsTab("account");
     setNamingSpace(false);
   }, []);
   const openChangelog = useCallback(() => {
@@ -1475,7 +1475,7 @@ function App() {
   usePrReady({ sessions: visibleSessions, prFor: prMarks.prFor, canAnnounce });
   // The same marks, turned into a merge card in the chat that started a task,
   // so landing it never waits on an agent remembering to post one.
-  useAutoMergeCards({ items: sessionIndexItems, bots, prFor: prMarks.prFor, readAt: prMarks.readAt });
+  useAutoMergeCards({ items: sessionIndexItems, bots, prFor: prMarks.prFor, readAt: prMarks.readAt, statusBySession });
 
   // Each bot's tasks that have sat untouched: drawn at the foot of its chat,
   // and a banner per bot when new ones land while the window is away.
