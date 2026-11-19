@@ -1,19 +1,20 @@
 import { createContext, useContext, useEffect, useState } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
+import Orb from "@/components/Orb";
 import { Button } from "@/components/ui/button";
 import { ChecksRunningIcon } from "@/components/PrPanel";
 import PrStateIcon from "@/components/PrStateIcon";
 import { MergeControl } from "@/components/TasksPanel";
 import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
 import { seededAvatar } from "@/lib/botAvatar";
-import { cardRepo, FULL_FOR, type MergeCardPayload } from "@/lib/mergeCard";
+import { cardRepo, FULL_FOR, runningLine, type MergeCardPayload } from "@/lib/mergeCard";
 import { openLink } from "@/lib/openLink";
 import { noteSession, serverOfSession } from "@/lib/transport";
 import { isModClick } from "@/lib/platform";
 import { mergeVerdict, readyToMerge } from "@/lib/pr";
 import { cn } from "@/lib/utils";
-import type { AgentEvent, MergeMethod, PrMark } from "@/types/events";
+import type { AgentEvent, BackgroundTask, MergeMethod, PrMark } from "@/types/events";
 
 /// What a card needs from the app: the sidebar's PR marks for live status,
 /// the task's current title, and the Tasks tab's merge.
@@ -24,6 +25,8 @@ export type MergeCardHost = {
   /// may predate the PR rather than the PR having left the window.
   missing: (repo: string, number: number) => void;
   titleOf: (taskId: string) => string | undefined;
+  /// Work the task's agent left running past its turn: shells, subagents, monitors.
+  tasksOf: (taskId: string) => readonly BackgroundTask[];
   /// Why the card offers no Merge though GitHub would take it, or `null`.
   /// `projectPath` is the qualified key the card merges through.
   mergeBlock: (card: MergeCardPayload) => string | null;
@@ -108,6 +111,9 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
   const conflicted = pr?.state === "OPEN" && mergeVerdict(pr) === "conflict";
   const running = pr?.state === "OPEN" && pr.checksState === "RUNNING";
   const status = blocked ? "Can't merge from here" : statusLine(pr);
+  // Said, never enforced: merging over it is the reader's call.
+  const tasks = merged ? [] : (host?.tasksOf(card.taskId) ?? []);
+  const work = runningLine(tasks);
   // `null` is a PR no longer among the open or recently merged: nothing left
   // to land, so it draws one line without claiming which way it went.
   const compact = merged || found === null || (chat.after.get(event.id) ?? 0) >= FULL_FOR;
@@ -136,6 +142,12 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
           <span className="size-4 shrink-0">{face}</span>
           <span className="truncate">{title}</span>
         </button>
+        {work && (
+          <span className="flex shrink-0 items-center gap-1" title={work}>
+            <Orb state="background" variant="spiral" size={12} label={work} />
+            {tasks.length} running
+          </span>
+        )}
         {mergeable && merge && <MergeControl onMerge={merge} keep={event.id} />}
         {conflicted && host && <FixConflicts onFix={() => host.fixConflicts(card)} />}
       </div>
@@ -180,6 +192,12 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
               </span>
             )}
           </p>
+          {work && (
+            <p className="flex items-center gap-1.5 text-ui text-muted-foreground">
+              <Orb state="background" variant="spiral" size={12} label="Background work running" />
+              <span className="truncate">{work}</span>
+            </p>
+          )}
         </div>
         {mergeable && merge && <MergeControl onMerge={merge} keep={event.id} named />}
         {conflicted && host && <FixConflicts onFix={() => host.fixConflicts(card)} />}

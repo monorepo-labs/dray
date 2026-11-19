@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { cardRepos, readerMessagesAfter } from "@/lib/mergeCard";
+import { cardRepos, readerMessagesAfter, runningLine } from "@/lib/mergeCard";
 import { buildTranscript } from "@/lib/transcript";
 import { noteSession } from "@/lib/transport";
 import type { AgentEvent } from "@/types/events";
@@ -44,6 +44,15 @@ describe("cardRepos", () => {
     // A remote chat keeps its server, whose `gh` reads the card.
     noteSession("remote-chat", "vps");
     expect(cardRepos([{ ...elsewhere, sessionId: "remote-chat" }])).toEqual(["dray://vps/github:o/r"]);
+  });
+});
+
+describe("runningLine", () => {
+  const task = (description: string) => ({ taskId: description, taskType: "local_bash", description });
+  it("names what runs, and says nothing once it ends", () => {
+    expect(runningLine([task("Wait for CI")])).toBe("1 running: Wait for CI");
+    expect(runningLine([task("dev server"), task(" ")])).toBe("2 running: dev server");
+    expect(runningLine([])).toBeNull();
   });
 });
 

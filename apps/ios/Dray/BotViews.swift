@@ -430,6 +430,9 @@ struct MergeCardView: View {
         let task = taskKey
         let title = task.flatMap { store.items[$0]?.title }.flatMap { $0.isEmpty ? nil : $0 } ?? card.title
         let verdict = pr.map(verdictOf)
+        // Said, never enforced: merging over it is the reader's call.
+        let tasks = pr?.state == "MERGED" ? [] : task.flatMap { store.tasks[$0] } ?? []
+        let work = runningLine(tasks)
         Group {
             if compact || pr?.state == "MERGED" || (read && pr == nil) {
                 HStack(spacing: 6) {
@@ -440,6 +443,16 @@ struct MergeCardView: View {
                     Button { task.map { openTask?($0) } } label: { Chip(face: BotFace(seed: card.taskId, size: 16), title: title) }
                         .buttonStyle(.plain)
                         .disabled(task == nil)
+                    if work != nil {
+                        HStack(spacing: 4) {
+                            Orb(.background, size: 14)
+                            Text("\(tasks.count) running")
+                        }
+                        .foregroundStyle(Theme.secondary)
+                        .fixedSize()
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("mergeCardRunning")
+                    }
                     Spacer(minLength: 0)
                     if let pr, let verdict { control(pr, verdict) }
                 }
@@ -466,6 +479,16 @@ struct MergeCardView: View {
                         }
                         .font(Theme.Font.footnote)
                         .lineLimit(1)
+                        if let work {
+                            HStack(spacing: 5) {
+                                Orb(.background, size: 14)
+                                Text(work).foregroundStyle(Theme.secondary)
+                            }
+                            .font(Theme.Font.footnote)
+                            .lineLimit(1)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityIdentifier("mergeCardRunning")
+                        }
                     }
                     Spacer(minLength: 0)
                     if let pr, let verdict { control(pr, verdict) }
@@ -519,6 +542,14 @@ struct MergeCardView: View {
         case .conflict, .draft, .unstable, .ready: return nil
         }
     }
+}
+
+/// The merge card's line for work the task's agent left running past its turn —
+/// "1 running: Wait for CI" — or nil once there is none. Desktop's `runningLine`.
+func runningLine(_ tasks: [BackgroundTask]) -> String? {
+    guard !tasks.isEmpty else { return nil }
+    let what = tasks.compactMap { $0.description?.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    return what.isEmpty ? "\(tasks.count) running" : "\(tasks.count) running: \(what.joined(separator: ", "))"
 }
 
 /// A mark's merge verdict, unread fields reading as GitHub still deciding.

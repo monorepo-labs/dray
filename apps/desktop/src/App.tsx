@@ -3443,6 +3443,7 @@ function App() {
       });
     },
     titleOf: (id) => sessionIndexItems.find((i) => i.sessionId === id)?.title,
+    tasksOf: (id) => tasksBySession[id] ?? [],
     mergeBlock: (card) => {
       const task = sessionIndexItems.find((i) => i.sessionId === card.taskId);
       // The card merges through its repo key, qualified with the chat's server.

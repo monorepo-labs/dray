@@ -78,6 +78,9 @@ function Demo() {
     prNumbered: (_repo, number) => marks.find((m) => m.number === number),
     missing: () => {},
     titleOf: () => undefined,
+    // #912 keeps a CI watch going past its turn; Merge still offers.
+    tasksOf: (id) =>
+      id.endsWith("912") ? [{ taskId: "b1", taskType: "local_bash", description: "Wait for the CI build" }] : [],
     mergeBlock: () => null,
     merge: async (c) => {
       await new Promise((done) => setTimeout(done, 1000));
