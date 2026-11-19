@@ -20,8 +20,8 @@ export async function POST(req: Request) {
   )
     return Response.json({ error: "slow_down" }, { status: 429 });
 
-  // A Done replaces the last one for its chat; an ask is one alert per request.
-  const sent = await deliver(phone.token, phone.env, apnsPayload(alert), (alert.request ?? `done-${alert.session}`).slice(0, 64));
+  // A Done or a Ready to merge replaces the last of its kind for its chat; an ask is one alert per request.
+  const sent = await deliver(phone.token, phone.env, apnsPayload(alert), (alert.request ?? `${alert.kind}-${alert.session}`).slice(0, 64));
   if (sent.status === 200) return Response.json({ ok: true });
   if (tokenGone(sent.status, sent.reason)) return Response.json({ gone: true }, { status: 410 });
   console.error(`[push] APNs ${sent.status} ${sent.reason ?? ""}`);

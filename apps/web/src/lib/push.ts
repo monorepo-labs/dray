@@ -142,7 +142,7 @@ export function tokenGone(status: number, reason?: string): boolean {
 }
 
 export type Alert = {
-  kind: "done" | "permission" | "question";
+  kind: "done" | "permission" | "question" | "ready";
   /// The phone's own id for the server, echoed back so a tap opens the right chat.
   server: string;
   session: string;
@@ -161,7 +161,7 @@ const str = (v: unknown, max: number) => (typeof v === "string" ? v.slice(0, max
 /// or null where something it needs is missing.
 export function readAlert(v: Record<string, unknown>): Alert | null {
   const kind = v.kind;
-  if (kind !== "done" && kind !== "permission" && kind !== "question") return null;
+  if (kind !== "done" && kind !== "permission" && kind !== "question" && kind !== "ready") return null;
   const server = str(v.server, 64);
   const session = str(v.session, 128);
   if (!server || !session) return null;
@@ -172,7 +172,7 @@ export function readAlert(v: Record<string, unknown>): Alert | null {
     title: str(v.title, 100) || "Dray",
     body: str(v.body, 240) ?? "",
   };
-  if (kind !== "done") {
+  if (kind === "permission" || kind === "question") {
     alert.request = str(v.request, 128);
     if (!alert.request) return null;
   }

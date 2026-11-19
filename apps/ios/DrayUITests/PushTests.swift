@@ -47,23 +47,52 @@ final class PushTests: XCTestCase {
         snap(app, "8-bot-chat")
     }
 
-    /// Settings' switch: off takes this phone's handle back from the server, on hands a new one over.
-    /// `TEST_RUNNER_DRAY_PUSH_FILE` is the test server's `push.json`.
+    /// A merge card going up raises Ready to merge, and tapping it opens that chat.
+    /// The server is driven with a task titled "Fix login redirect" whose card names PR 1308.
+    func testReadyToMerge() throws {
+        let app = try paired()
+        XCUIDevice.shared.press(.home)
+        let ready = banner("label CONTAINS 'ready to merge'")
+        sleep(1)
+        snap(springboard, "ready")
+        ready.tap()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "tapping the alert did not open Dray")
+        XCTAssertTrue(app.dock.waitForExistence(timeout: 15), "tapping the alert opened no chat")
+        sleep(2)
+        snap(app, "ready-chat")
+    }
+
+    /// Settings → Notifications: the main switch takes this phone's handle back
+    /// from the server and hands a new one over, and a kind's switch tells the
+    /// server to skip it. `TEST_RUNNER_DRAY_PUSH_FILE` is the test server's `push.json`.
     func testSettingsSwitch() throws {
         guard let file = env["DRAY_PUSH_FILE"] else { throw XCTSkip("set TEST_RUNNER_DRAY_PUSH_FILE") }
-        let held = { (try? String(contentsOfFile: file, encoding: .utf8))?.contains("dph_") == true }
+        let read = { (try? String(contentsOfFile: file, encoding: .utf8)) ?? "" }
+        let held = { read().contains("dph_") }
         let app = try paired()
         for _ in 0..<20 where !held() { sleep(1) }
         XCTAssertTrue(held(), "the server holds no handle after pairing")
         app.buttons["Settings"].tap()
-        let toggle = app.staticTexts["Notifications"]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 10), "no Notifications switch")
+        let row = app.staticTexts["Notifications"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "no Notifications row")
+        row.tap()
+        let main = app.switches["Allow notifications"]
+        XCTAssertTrue(main.waitForExistence(timeout: 5), "the Notifications page has no main switch")
+
+        app.switches["A PR is ready to merge"].tap()
+        for _ in 0..<10 where !read().contains("\"ready\"") { sleep(1) }
+        XCTAssertTrue(read().contains("\"ready\""), "the server was not told Ready to merge is off")
+        snap(app, "settings-kinds")
+        app.switches["A PR is ready to merge"].tap()
+        for _ in 0..<10 where read().contains("\"ready\"") { sleep(1) }
+        XCTAssertFalse(read().contains("\"ready\""), "the server still skips Ready to merge")
         snap(app, "settings-on")
-        toggle.tap()
+
+        main.tap()
         sleep(3)
         XCTAssertFalse(held(), "off left the handle on the server")
         snap(app, "settings-off")
-        toggle.tap()
+        main.tap()
         for _ in 0..<20 where !held() { sleep(1) }
         XCTAssertTrue(held(), "on gave the server no handle")
     }

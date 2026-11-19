@@ -1979,7 +1979,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         answer_questions(session_id: String, request_id: String, answers: HashMap<String, String>) =>
             crate::answer_questions(&session_id, &request_id, answers, sink).await;
         // A phone's alerts (#1299), through the relay.
-        push_register(handle: String, tag: String) => crate::push::push_register(handle, tag).await;
+        push_register(handle: String, tag: String, off: Option<Vec<String>>) => crate::push::push_register(handle, tag, off).await;
         push_unregister(handle: String) => crate::push::push_unregister(handle).await;
         mark_session_read(session_id: String, read: bool) => crate::mark_session_read(&session_id, read, sink).await;
         set_session_flags(session_id: String, archived: Option<bool>, pinned: Option<bool>, hidden: Option<bool>, aside: Option<bool>) =>

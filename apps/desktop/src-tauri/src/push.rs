@@ -1,5 +1,6 @@
-//! Phone alerts (#1299): a turn done, a permission asked, a question asked,
-//! sent through the push relay on drayhq.com, which alone holds the APNs key.
+//! Phone alerts (#1299): a turn done, a permission or a question asked, a
+//! pull request ready to merge, sent through the push relay on drayhq.com,
+//! which alone holds the APNs key.
 //!
 //! A phone registers over the serve wire with a handle the relay sealed its
 //! APNs token into, and a tag: its own id for this server, echoed back so a
@@ -17,6 +18,10 @@ use crate::store;
 struct Phone {
     handle: String,
     tag: String,
+    /// The kinds this phone turned off. Kept as what is off, so a kind added
+    /// later reaches a phone that never heard of it.
+    #[serde(default)]
+    off: Vec<String>,
 }
 
 /// Every read-modify-write of the file goes through this, so a register racing a 410's removal loses nothing.
@@ -40,15 +45,16 @@ async fn update(change: impl FnOnce(&mut Vec<Phone>)) -> Result<(), String> {
     store::write_private_atomic(&path, &bytes).map_err(|e| format!("could not write {}: {e}", path.display()))
 }
 
-/// A phone asks for this server's alerts. A tag already held takes the new
-/// handle, since a phone that re-registered with APNs has a new token.
-pub async fn push_register(handle: String, tag: String) -> Result<(), String> {
+/// A phone asks for this server's alerts, bar the kinds in `off`. A tag
+/// already held takes the new handle, since a phone that re-registered with
+/// APNs has a new token. `off` is absent from a phone built before it.
+pub async fn push_register(handle: String, tag: String, off: Option<Vec<String>>) -> Result<(), String> {
     if !handle.starts_with("dph_") || handle.len() > 512 || tag.is_empty() || tag.len() > 64 {
         return Err("not a push handle".into());
     }
     update(|phones| {
         phones.retain(|p| p.tag != tag && p.handle != handle);
-        phones.push(Phone { handle, tag });
+        phones.push(Phone { handle, tag, off: off.unwrap_or_default() });
     })
     .await
 }
@@ -81,12 +87,12 @@ fn first_line(text: &str) -> String {
 
 /// Who an alert is from, and the bot's face where it is a bot's chat.
 /// `None` for a session that stays quiet: a hidden task its bot reports on.
-async fn sender(session_id: &str, cwd: &str) -> Option<(String, Option<Value>)> {
-    if let Some(bot) = crate::bots::bot_at(cwd).await {
+async fn sender(session_id: &str) -> Option<(String, Option<Value>)> {
+    let item = store::get_session_index_item(session_id).await.ok().flatten()?;
+    if let Some(bot) = crate::bots::bot_at(&item.cwd).await {
         let face = json!({ "id": bot.id, "shape": bot.avatar.as_ref().map(|a| &a.shape), "hue": bot.avatar.as_ref().map(|a| a.hue) });
         return Some((bot.name, Some(face)));
     }
-    let item = store::get_session_index_item(session_id).await.ok().flatten()?;
     if item.hidden {
         return None;
     }
@@ -129,24 +135,35 @@ fn alert(payload: &AgentEventPayload, said: Option<&str>) -> Option<Value> {
             });
             Some(json!({ "kind": "question", "body": first_line(&first.question), "request": request_id, "question": question }))
         }
+        // Named for the task, not the chat it is posted in: a bot's chat holds many.
+        AgentEventPayload::MergeCard { title, number, url, .. } => {
+            let pr = match crate::github::slug_from_pr_url(url) {
+                Some(repo) => format!("{repo}#{number}"),
+                None => format!("#{number}"),
+            };
+            Some(json!({ "kind": "ready", "title": title, "body": format!("{pr} is ready to merge") }))
+        }
         _ => None,
     }
 }
 
-/// Sends the alert `payload` raises to every registered phone. Spawned: the
-/// read loop never waits on the relay.
-pub fn notify(session_id: &str, cwd: &str, payload: &AgentEventPayload, said: Option<&str>) {
+/// Sends the alert `payload` raises in `session_id` to every registered
+/// phone that has its kind on. Spawned: the read loop never waits on the relay.
+pub fn notify(session_id: &str, payload: &AgentEventPayload, said: Option<&str>) {
     let Some(mut alert) = alert(payload, said) else { return };
-    let (session_id, cwd) = (session_id.to_string(), cwd.to_string());
+    let session_id = session_id.to_string();
     tokio::spawn(async move {
-        let phones = read().await;
+        let kind = alert["kind"].as_str().unwrap_or_default().to_string();
+        let phones: Vec<Phone> = read().await.into_iter().filter(|p| !p.off.contains(&kind)).collect();
         if phones.is_empty() || at_the_computer() {
             return;
         }
-        let Some((name, bot)) = sender(&session_id, &cwd).await else { return };
+        let Some((name, bot)) = sender(&session_id).await else { return };
         alert["session"] = json!(session_id);
-        alert["title"] = json!(name);
-        alert["bot"] = json!(bot);
+        if alert["title"].is_null() {
+            alert["title"] = json!(name);
+            alert["bot"] = json!(bot);
+        }
         for phone in phones {
             let mut body = alert.clone();
             body["handle"] = json!(phone.handle);
@@ -194,5 +211,28 @@ mod tests {
         assert!(alert(&turn(Some("aborted_streaming")), None).is_none());
         assert_eq!(alert(&turn(None), None).unwrap()["body"], "Turn failed");
         assert_eq!(alert(&turn(None), Some("All green.\nDetails")).unwrap()["body"], "All green.");
+    }
+
+    #[test]
+    fn ready_to_merge_names_the_task_and_pr() {
+        let card = AgentEventPayload::MergeCard {
+            task_id: "t".into(),
+            title: "Fix login".into(),
+            project_path: "/p".into(),
+            branch: "b".into(),
+            number: 12,
+            url: "https://github.com/acme/app/pull/12".into(),
+            machine: None,
+            repo: None,
+        };
+        let a = alert(&card, None).unwrap();
+        assert_eq!((a["kind"].as_str(), a["title"].as_str()), (Some("ready"), Some("Fix login")));
+        assert_eq!(a["body"], "acme/app#12 is ready to merge");
+    }
+
+    #[test]
+    fn a_phone_saved_before_kinds_hears_everything() {
+        let phones: Vec<Phone> = serde_json::from_str(r#"[{"handle":"dph_x","tag":"t"}]"#).unwrap();
+        assert!(phones[0].off.is_empty());
     }
 }

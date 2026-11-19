@@ -3,15 +3,16 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
-/// Where Settings can go: a server's page, every server, Dictation, Appearance.
+/// Where Settings can go: a server's page, every server, Dictation, Notifications, Appearance.
 enum SettingsPage: Hashable {
     case server(UUID)
     case servers
     case dictation
+    case notifications
     case appearance
 }
 
-/// The one Settings screen: a card per server, then Add server, Dictation,
+/// The one Settings screen: a card per server, then Add server, Dictation, Notifications,
 /// Appearance and about. Opened on one server's page when a banner's Fix asks.
 struct SettingsView: View {
     @Environment(Store.self) private var store
@@ -19,7 +20,7 @@ struct SettingsView: View {
     @State private var path: [SettingsPage]
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
     @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
-    @State private var notifyBlocked = false
+    @AppStorage(Push.allowKey) private var notify = true
 
     init(focus: UUID?) { _path = State(initialValue: focus.map { [.server($0)] } ?? []) }
 
@@ -35,22 +36,15 @@ struct SettingsView: View {
                                         value: store.dictationEngine(dictationPick).map { store.name(of: $0) } ?? "None")
                         }
                         RowDivider(inset: 48)
-                        NotificationsRow(blocked: $notifyBlocked)
+                        NavigationLink(value: SettingsPage.notifications) {
+                            SettingsRow("Notifications", icon: "bell", value: notify ? "On" : "Off")
+                        }
                         RowDivider(inset: 48)
                         NavigationLink(value: SettingsPage.appearance) {
                             SettingsRow("Appearance", icon: "circle.lefthalf.filled", value: hideSessions ? "Bots only" : nil)
                         }
                     }
                     .buttonStyle(RowButtonStyle())
-
-                    if notifyBlocked {
-                        Link("iOS has notifications off for Dray. Turn them on in Settings.",
-                             destination: URL(string: UIApplication.openNotificationSettingsURLString)!)
-                            .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
-                            .padding(.horizontal, Theme.Space.m)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.top, -20)
-                    }
 
                     RowGroup {
                         SettingsRow("Version", value: version, trailing: nil)
@@ -79,6 +73,7 @@ struct SettingsView: View {
                         .navigationTitle("Servers")
                         .navigationBarTitleDisplayMode(.inline)
                 case .dictation: DictationSettings()
+                case .notifications: NotificationSettings()
                 case .appearance: AppearanceSettings()
                 }
             }
@@ -838,25 +833,48 @@ struct DictationSettings: View {
 
 // MARK: Notifications
 
-/// One switch for every alert: a task done, a permission or a question asked.
-/// `blocked` says iOS itself has them off, which this switch cannot undo.
-struct NotificationsRow: View {
-    @Binding var blocked: Bool
+/// The main switch, then one per kind of alert. The servers send only the kinds
+/// left on; iOS having them off is said, since no switch here can undo it.
+struct NotificationSettings: View {
     @AppStorage(Push.allowKey) private var on = true
+    @State private var blocked = false
     @Environment(\.scenePhase) private var phase
 
     var body: some View {
-        Toggle(isOn: Binding(get: { on }, set: { v in Task { await Push.shared.set(v); await check() } })) {
-            HStack(spacing: Theme.Space.m) {
-                Image(systemName: "bell").font(Theme.Font.body.font).foregroundStyle(Theme.secondary).frame(width: 20)
-                    .accessibilityHidden(true)
-                Text("Notifications")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    RowGroup {
+                        switchRow("Allow notifications", Binding(get: { on }, set: { v in Task { await Push.shared.set(v); await check() } }))
+                    }
+                    if blocked {
+                        Link("iOS has notifications off for Dray. Turn them on in Settings.",
+                             destination: URL(string: UIApplication.openNotificationSettingsURLString)!)
+                            .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
+                            .padding(.horizontal, Theme.Space.m)
+                    }
+                }
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    GroupLabel("Tell me when").padding(.horizontal, Theme.Space.m)
+                    RowGroup {
+                        ForEach(Array(Push.kinds.enumerated()), id: \.offset) { i, k in
+                            if i > 0 { RowDivider() }
+                            KindSwitch(kind: k.kind, label: k.label)
+                        }
+                    }
+                    .disabled(!on)
+                    .opacity(on ? 1 : 0.45)
+                    GroupLabel("A bot's own tasks stay quiet: the bot tells you about them.")
+                        .padding(.horizontal, Theme.Space.m)
+                }
             }
+            .padding(.horizontal, Theme.Space.l)
+            .padding(.top, Theme.Space.m)
         }
-        .toggleStyle(SwitchStyle())
-        .font(Theme.Font.body)
-        .padding(.leading, Theme.Space.l).padding(.trailing, 14)
-        .frame(minHeight: 52)
+        .background(Theme.card.ignoresSafeArea())
+        .foregroundStyle(Theme.text)
+        .navigationTitle("Notifications")
+        .navigationBarTitleDisplayMode(.inline)
         // Back from iOS Settings is where the answer changes.
         .task(id: phase) { await check() }
     }
@@ -865,6 +883,31 @@ struct NotificationsRow: View {
         let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
         blocked = on && status == .denied
     }
+}
+
+/// One kind's switch, which tells every server up now when it moves.
+private struct KindSwitch: View {
+    let kind: String
+    let label: String
+    @AppStorage private var on: Bool
+
+    init(kind: String, label: String) {
+        self.kind = kind
+        self.label = label
+        _on = AppStorage(wrappedValue: true, Push.key(kind))
+    }
+
+    var body: some View {
+        switchRow(label, Binding(get: { on }, set: { on = $0; Push.shared.kindsChanged() }))
+    }
+}
+
+private func switchRow(_ label: String, _ on: Binding<Bool>) -> some View {
+    Toggle(label, isOn: on)
+        .toggleStyle(SwitchStyle())
+        .font(Theme.Font.body)
+        .padding(.leading, Theme.Space.l).padding(.trailing, 14)
+        .frame(minHeight: 52)
 }
 
 // MARK: Appearance

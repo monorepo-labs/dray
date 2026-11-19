@@ -22,6 +22,23 @@ final class Push: NSObject, UNUserNotificationCenterDelegate {
 
     static var enabled: Bool { UserDefaults.standard.object(forKey: allowKey) as? Bool ?? true }
 
+    /// Each kind a server can send, as its switch in Settings says it. All on until turned off.
+    static let kinds: [(kind: String, label: String)] = [
+        ("done", "A task is done"), ("permission", "A task needs permission"),
+        ("question", "A task asks a question"), ("ready", "A PR is ready to merge"),
+    ]
+    static func key(_ kind: String) -> String { "notify.\(kind)" }
+    /// The kinds turned off, which every server is told, so a kind added later reaches this phone.
+    private var off: [String] {
+        Self.kinds.map(\.kind).filter { UserDefaults.standard.object(forKey: Self.key($0)) as? Bool == false }
+    }
+
+    /// A kind's switch moved: every server up now hears the new list.
+    func kindsChanged() {
+        guard Self.enabled, let handle else { return }
+        for s in store?.servers ?? [] where store?.serverState[s.id] == .connected { give(handle, to: s.id) }
+    }
+
     /// drayhq.com, or `-pushRelay <url>` at launch for a local relay.
     private var relay: String { UserDefaults.standard.string(forKey: "pushRelay") ?? "https://drayhq.com" }
 
@@ -44,6 +61,7 @@ final class Push: NSObject, UNUserNotificationCenterDelegate {
                 ], intentIdentifiers: []),
                 UNNotificationCategory(identifier: "dray.question", actions: [], intentIdentifiers: []),
                 UNNotificationCategory(identifier: "dray.done", actions: [], intentIdentifiers: []),
+                UNNotificationCategory(identifier: "dray.ready", actions: [], intentIdentifiers: []),
             ]))
         }
         store.onConnected = { [weak self] server in self?.connected(server) }
@@ -68,8 +86,9 @@ final class Push: NSObject, UNUserNotificationCenterDelegate {
 
     private func give(_ handle: String, to server: UUID) {
         Task {
-            _ = try? await store?.call(server, "push_register",
-                                       ["handle": .string(handle), "tag": .string(server.uuidString)], as: JSON.self)
+            _ = try? await store?.call(server, "push_register", [
+                "handle": .string(handle), "tag": .string(server.uuidString), "off": .array(off.map(JSON.string)),
+            ], as: JSON.self)
         }
     }
 
