@@ -31,7 +31,7 @@ export default function TaskStatus({ counts, onOpen }: { counts: TaskCounts; onO
     >
       {working > 0 && (
         <span className="flex items-center gap-1 text-foreground">
-          <Orb state="working" size={14} />
+          <Orb state="working" variant="gyro" size={14} />
           {working}
         </span>
       )}
