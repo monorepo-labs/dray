@@ -24,24 +24,4 @@ final class ChangesTests: XCTestCase {
             XCTAssertNotNil(UIImage(named: want), want)
         }
     }
-
-    private func event(_ id: String, _ payload: String) throws -> AgentEvent {
-        try JSONDecoder().decode(AgentEvent.self, from: Data(#"{"id":"\#(id)","sessionId":"s","payload":\#(payload)}"#.utf8))
-    }
-
-    /// A turn that changed nothing gives way to the one before it, as the desktop's `changeRange` does.
-    func testLastTurnSkipsATurnThatWroteNothing() throws {
-        let events = try [
-            event("1", #"{"type":"user_message","text":"a","baseline":"aaa"}"#),
-            event("2", #"{"type":"turn_completed","status":"success","head":"bbb"}"#),
-            event("3", #"{"type":"user_message","text":"b","baseline":"bbb"}"#),
-            event("4", #"{"type":"turn_completed","status":"success","head":"bbb"}"#),
-        ]
-        XCTAssertEqual(lastTurnRange(events, running: false)?.base, "aaa")
-        XCTAssertEqual(lastTurnRange(events, running: false)?.head, "bbb")
-        let running = try events + [event("5", #"{"type":"user_message","text":"c","baseline":"ccc"}"#)]
-        XCTAssertEqual(lastTurnRange(running, running: true)?.base, "ccc")
-        XCTAssertNil(lastTurnRange(running, running: true)?.head)
-        XCTAssertEqual(lastTurnRange(running, running: false)?.base, "aaa")
-    }
 }

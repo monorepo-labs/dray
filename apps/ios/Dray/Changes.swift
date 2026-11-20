@@ -47,29 +47,6 @@ struct Commit: Decodable, Hashable, Identifiable {
 /// Git's empty tree, the base of a root commit, as in `commit.ts`.
 let emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
-/// The desktop's `changeRange` over the events held: the newest prompt's
-/// baseline to the head its turn closed on, skipping turns that changed
-/// nothing. Open-ended only while that turn still runs; a turn left open
-/// otherwise is skipped, since diffing it against now takes in whatever else
-/// touched the checkout since. Falls back to the newest turn, which then
-/// reads as nothing changed.
-func lastTurnRange(_ events: [AgentEvent], running: Bool) -> (base: String, head: String?)? {
-    var head: String?
-    var newest: (base: String, head: String?)?
-    for e in events.reversed() {
-        if case .turnCompleted = e.payload, head == nil, let t = e.tree { head = t }
-        guard case .userMessage = e.payload, let base = e.tree else { continue }
-        let range = (base: base, head: head)
-        let first = newest == nil
-        head = nil
-        if first { newest = range }
-        if range.head == range.base { continue }
-        if range.head == nil && !(running && first) { continue }
-        return range
-    }
-    return newest
-}
-
 // MARK: Unified diff
 
 enum DiffRow: Hashable {
@@ -152,62 +129,72 @@ private struct ChangesButton: ViewModifier {
     }
 }
 
-private enum ChangesTab: String, CaseIterable {
-    case turn = "Last turn", uncommitted = "Uncommitted", branch = "Branch", commits = "Commits"
+private enum ChangesTab: String {
+    case uncommitted = "Uncommitted", branch = "Branch", commits = "Commits"
 }
 
-/// What the agent changed, four ways: its last turn, the uncommitted tree,
-/// the whole branch since it forked, and the history a commit at a time.
+/// What the agent changed, three ways: the uncommitted tree, while there is
+/// one, the whole branch since it forked, and the history a commit at a time.
 /// Reads only, as the desktop's repo view does.
 struct ChangesScreen: View {
     @Environment(Store.self) private var store
     let key: SessionKey
-    @State private var tab = ChangesTab.turn
+    @State private var tab = ChangesTab.branch
+    @State private var dirty = false
+    /// `work_status` has answered once. Until then no list reads, so the screen
+    /// never draws Branch's files only to jump to Uncommitted.
+    @State private var known = false
 
     var body: some View {
         let busy = store.items[key]?.busy ?? false
         VStack(spacing: 0) {
             Picker("Show", selection: $tab) {
-                ForEach(ChangesTab.allCases, id: \.self) { Text($0.rawValue) }
+                ForEach((dirty ? [.uncommitted] : []) + [ChangesTab.branch, .commits], id: \.self) { Text($0.rawValue) }
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, Theme.Space.l)
             .padding(.vertical, Theme.Space.s)
-
-            switch tab {
-            case .turn:
-                ChangeList(key: key, reload: "turn|\(busy)|\(store.transcripts[key]?.events.last?.id ?? "")",
-                           nothing: ("Nothing to compare", "No turn in this session took a snapshot of the folder."),
-                           clean: ("No changes", "The last turn didn't change any files.")) { store, cwd in
-                    guard let r = lastTurnRange(store.transcripts[key]?.events ?? [], running: busy) else { return nil }
-                    return try await store.call(key.server, "changes_since",
-                                                ["cwd": .string(cwd), "baseline": .string(r.base), "head": JSON(r.head)])
-                }
-            case .uncommitted:
-                ChangeList(key: key, reload: "work|\(busy)",
-                           nothing: ("Not a repository", "This folder isn't tracked by git."),
-                           clean: ("Nothing uncommitted", "The working tree matches the last commit.")) { store, cwd in
-                    let tree: String? = try await store.call(key.server, "head_tree", ["cwd": .string(cwd)])
-                    guard let tree else { return nil }
-                    return try await store.call(key.server, "changes_since",
-                                                ["cwd": .string(cwd), "baseline": .string(tree), "head": nil])
-                }
-            case .branch:
-                ChangeList(key: key, reload: "branch|\(busy)",
-                           nothing: ("No commits on this branch", "Committed work since the branch forked shows here."),
-                           clean: ("No changes", "This branch's commits add up to no change.")) { store, cwd in
-                    let commits = try await branchCommits(store, cwd)
-                    guard let newest = commits.first, let oldest = commits.last else { return nil }
-                    return try await store.call(key.server, "changes_since",
-                                                ["cwd": .string(cwd), "baseline": .string(oldest.base), "head": .string(newest.sha)])
-                }
-            case .commits:
-                CommitList(key: key, reload: "\(busy)")
-            }
+            if known { list(tab, busy: busy) } else { Spacer() }
         }
         .page()
         .navigationTitle("Changes")
         .navigationBarTitleDisplayMode(.inline)
+        // Re-asked as each turn starts and ends, since a turn is what dirties or commits the tree.
+        .task(id: busy) { await readDirty() }
+    }
+
+    /// Whether the tree holds uncommitted work: Uncommitted shows, and leads, only then.
+    private func readDirty() async {
+        guard let cwd = store.items[key]?.cwd else { return }
+        let status: WorkStatus? = try? await store.call(key.server, "work_status", ["cwd": .string(cwd)])
+        dirty = (status?.dirty ?? 0) > 0
+        if !known, dirty { tab = .uncommitted } else if tab == .uncommitted, !dirty { tab = .branch }
+        known = true
+    }
+
+    @ViewBuilder private func list(_ tab: ChangesTab, busy: Bool) -> some View {
+        switch tab {
+        case .uncommitted:
+            ChangeList(key: key, reload: "work|\(busy)",
+                       nothing: ("Not a repository", "This folder isn't tracked by git."),
+                       clean: ("Nothing uncommitted", "The working tree matches the last commit.")) { store, cwd in
+                let tree: String? = try await store.call(key.server, "head_tree", ["cwd": .string(cwd)])
+                guard let tree else { return nil }
+                return try await store.call(key.server, "changes_since",
+                                            ["cwd": .string(cwd), "baseline": .string(tree), "head": nil])
+            }
+        case .branch:
+            ChangeList(key: key, reload: "branch|\(busy)",
+                       nothing: ("No commits on this branch", "Committed work since the branch forked shows here."),
+                       clean: ("No changes", "This branch's commits add up to no change.")) { store, cwd in
+                let commits = try await branchCommits(store, cwd)
+                guard let newest = commits.first, let oldest = commits.last else { return nil }
+                return try await store.call(key.server, "changes_since",
+                                            ["cwd": .string(cwd), "baseline": .string(oldest.base), "head": .string(newest.sha)])
+            }
+        case .commits:
+            CommitList(key: key, reload: "\(busy)")
+        }
     }
 
     /// Every commit the branch made since it forked, newest first.
