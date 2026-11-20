@@ -265,6 +265,7 @@ function TaskRow({
       forkDisabled={row.busy}
       onDelete={() => void onDelete(id)}
       onDetach={() => void onDetach(id)}
+      detachLabel={row.nested ? "Detach from parent" : "Detach from bot"}
       onSettle={row.busy ? undefined : () => settle()}
       aside={!!item.aside}
       // Setting aside unpins, or the row would stay up top.

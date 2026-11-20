@@ -20,6 +20,8 @@ export type CrewRow = {
   /// these ports: a dev server left up for the reader to try. The task waits
   /// on the reader, not on work. Empty otherwise.
   serving: readonly number[];
+  /// Started by one of the listed tasks, not by the selected session itself.
+  nested?: boolean;
 };
 
 /// The live maps a row is read off.
@@ -68,18 +70,18 @@ export function crewRows(
   const roots = [parentId, ...also];
   // A cycle in the index costs a short list rather than a hung render.
   const seen = new Set(roots);
-  const walk = (ids: readonly string[]) => {
+  const walk = (ids: readonly string[], nested: boolean) => {
     const kids = ids.flatMap((id) => byParent.get(id) ?? []).sort(
       (a, b) => Date.parse(b.created) - Date.parse(a.created),
     );
     for (const kid of kids) {
       if (seen.has(kid.sessionId)) continue;
       seen.add(kid.sessionId);
-      out.push(rowState(kid, state));
-      walk([kid.sessionId]);
+      out.push(nested ? { ...rowState(kid, state), nested } : rowState(kid, state));
+      walk([kid.sessionId], true);
     }
   };
-  walk(roots);
+  walk(roots, false);
   return out;
 }
 

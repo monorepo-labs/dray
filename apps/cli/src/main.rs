@@ -145,6 +145,10 @@ enum SessionCommand {
     SetAside(SessionArg),
     /// Take a session out of set-aside.
     UnsetAside(SessionArg),
+    /// Take a task out of the session that started it, like the sidebar's
+    /// Detach from parent: it stands on its own in the sidebar, shown even if
+    /// it ran hidden, and reports back to nobody. One-way.
+    Detach(SessionArg),
     /// Post a card in this session's chat for a task's open pull request, so
     /// the user can merge it from the chat.
     MergeCard(SessionArg),
@@ -572,6 +576,9 @@ fn session(command: SessionCommand) -> Result<(), String> {
         }
         SessionCommand::UnsetAside(args) => {
             (Request::SetAside(SetAside { session_id: args.session_id, aside: false }), "Brought back")
+        }
+        SessionCommand::Detach(args) => {
+            (Request::DetachSession(SessionRef { session_id: args.session_id }), "Detached")
         }
     };
     match send(request)? {
