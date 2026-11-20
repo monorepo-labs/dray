@@ -25,19 +25,19 @@ import {
 import { cn } from "@/lib/utils";
 import type { Bot, PrUnavailable, SessionIndexItem } from "@/types/events";
 
-/// Every open PR involving the reader across GitHub, from one search, or
-/// every open PR in this space's projects, from the sidebar's marks.
-export type PullsScope = "mine" | "space";
+/// Which workspace's projects the page lists: the active space's, or every one.
+export type PullsScope = "space" | "all";
 
 const PEOPLE: readonly { value: PeopleFilter; label: string }[] = [
   { value: "all", label: "All" },
+  { value: "involving", label: "Involving me" },
   { value: "mine", label: "Mine" },
   { value: "review", label: "Review requested" },
 ];
 
 const SCOPES = [
-  { value: "mine", label: "Involving me" },
   { value: "space", label: "This space" },
+  { value: "all", label: "All spaces" },
 ] as const;
 
 /// Every open pull request in the projects on screen, filed by what it wants
@@ -53,6 +53,8 @@ export default function PullsView({
   hasRepos,
   missing,
   errors,
+  people,
+  onPeople,
   scope,
   onScope,
   owners,
@@ -77,6 +79,8 @@ export default function PullsView({
   missing: { kind: "no_cli" | "not_authenticated"; cwd: string } | null;
   /// Repos whose last read failed for a reason worth saying.
   errors: { name: string; error: PrUnavailable }[];
+  people: PeopleFilter;
+  onPeople: (people: PeopleFilter) => void;
   scope: PullsScope;
   onScope: (scope: PullsScope) => void;
   /// Who "Involving me" can be narrowed to: the reader, then their orgs.
@@ -93,14 +97,20 @@ export default function PullsView({
   loading: boolean;
   onRefresh: () => void;
 }) {
-  const [people, setPeople] = useState<PeopleFilter>("all");
   const [repo, setRepo] = useState<string | null>(null);
 
   const repos = useMemo(() => [...new Set(rows.map(rowRepoName))].sort(), [rows]);
   // A repo picked under another scope may have no rows here; the filter then
   // reads as off rather than hiding the whole list behind a name not listed.
   const repoShown = repo && repos.includes(repo) ? repo : null;
-  const shown = rows.filter((row) => matchesPeople(row, people) && (!repoShown || rowRepoName(row) === repoShown));
+  // Owners on offer: those the search has met, and those of the rows here.
+  const ownerList = [...new Set([...owners, ...rows.map((row) => rowRepoName(row).split("/")[0])])];
+  const shown = rows.filter(
+    (row) =>
+      matchesPeople(row, people) &&
+      (!owner || rowRepoName(row).split("/")[0].toLowerCase() === owner.toLowerCase()) &&
+      (!repoShown || rowRepoName(row) === repoShown),
+  );
   const sections = SECTIONS.map((section) => ({
     ...section,
     rows: shown.filter((row) => inboxSection(row.mark) === section.key),
@@ -129,7 +139,7 @@ export default function PullsView({
           <button
             key={option.value}
             type="button"
-            onClick={() => setPeople(option.value)}
+            onClick={() => onPeople(option.value)}
             className={cn(
               "shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-ui transition-colors",
               people === option.value
@@ -146,10 +156,10 @@ export default function PullsView({
         <div className="flex-1" aria-hidden />
 
         <div className="flex shrink-0 items-center gap-1.5">
-          {scope === "mine" && (
+          {ownerList.length > 0 && (
             <RepoMenu
               repo={owner}
-              repos={(owner && !owners.includes(owner) ? [owner, ...owners] : owners).map((name) => ({ id: name, name }))}
+              repos={(owner && !ownerList.includes(owner) ? [owner, ...ownerList] : ownerList).map((name) => ({ id: name, name }))}
               onPick={onOwner}
               placeholder="All owners"
               anyLabel="All owners"
@@ -202,9 +212,7 @@ export default function PullsView({
           <p className="px-3 py-4 text-ui text-muted-foreground">
             {rows.length > 0
               ? "No pull request matches these filters."
-              : scope === "space"
-                ? "No open pull requests in this space."
-                : "No open pull requests involving you."}
+              : `No open pull requests${people === "involving" ? " involving you" : ""}${scope === "space" ? " in this space" : ""}.`}
           </p>
         ) : (
           sections.map((section) => (

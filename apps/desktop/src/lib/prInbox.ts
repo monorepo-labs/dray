@@ -69,7 +69,9 @@ export function inboxSection(mark: PrMark): InboxSection {
   return "waiting";
 }
 
-export type PeopleFilter = "all" | "mine" | "review";
+/// Who a PR is about. "Involving me" lists from one GitHub search; the rest
+/// narrow the space's PRs, read through the marks.
+export type PeopleFilter = "all" | "involving" | "mine" | "review";
 
 export function matchesPeople(row: InboxRow, filter: PeopleFilter): boolean {
   if (filter === "mine") return row.listing.viewerDidAuthor;
