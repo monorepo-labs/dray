@@ -208,7 +208,8 @@ import { changeRange, lastToolResult, writingTurns } from "@/lib/changes";
 import { useOlderWrites } from "@/hooks/useOlderWrites";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
-import { prBadgeCount, prRepoSlug, sessionBranch, slugKey, slugOf } from "@/lib/pr";
+import { marksRepo, prBadgeCount, prRepoSlug, sessionBranch, slugKey, slugOf } from "@/lib/pr";
+import { usePrSearch } from "@/hooks/usePrSearch";
 import { inboxRows, sessionsForPr, type InboxRow, type PrCheckout, type PrPicks } from "@/lib/prInbox";
 import type { PullsScope } from "@/components/PullsView";
 import { holdSettle } from "@/lib/heldFlags";
@@ -764,7 +765,9 @@ function App() {
   // The pull requests page's own state, beside the issues page's: the PR its
   // pane shows, and whether it lists this space or every one.
   const [pickedPr, setPickedPr] = useState<InboxRow | null>(null);
-  const [pullsScope, setPullsScope] = useState<PullsScope>("space");
+  const [pullsScope, setPullsScope] = useState<PullsScope>("mine");
+  // The owner the "involving me" search is narrowed to, or every one.
+  const [pullsOwner, setPullsOwner] = useState<string | null>(null);
 
   const storedViewTab: ViewTab = selectedSessionId ? viewTabs[selectedSessionId] ?? "chat" : "chat";
   const selectedBotId = botAt(bots, sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.cwd ?? "")?.id;
@@ -1474,10 +1477,11 @@ function App() {
   // (`inBotTree`).
   const pullsKeys = useMemo(
     () =>
-      pullsOpen
+      // "Involving me" lists from one GitHub search and reads no repo here.
+      pullsOpen && pullsScope === "space"
         ? [
             ...new Set([
-              ...(pullsScope === "all" ? projects : spaceProjects).map((p) => p.path),
+              ...spaceProjects.map((p) => p.path),
               ...(botRepoKey ? botRepoKey.split("\n") : []),
             ]),
           ]
@@ -1600,15 +1604,55 @@ function App() {
   // One that has left the list stays only while its repo is still one the page
   // reads — a PR merged from the pane keeps its pane — and goes with a space
   // or scope switch that takes its repo away, the spaces rule for the screen.
-  const pullRows = useMemo(() => inboxRows(pullsKeys, prMarks.marksIn), [pullsKeys, prMarks.marksIn]);
+  const prSearch = usePrSearch(pullsOpen && pullsScope === "mine", pullsOwner);
+  // Each searched repo's checkout among This Mac's projects, matched on their
+  // git remotes, so a row reads and starts through the checkout where there is
+  // one and through its `github:` slug, cloning on start, where there is none.
+  const [searchCheckouts, setSearchCheckouts] = useState<Record<string, string>>({});
+  const searchRepoKey = [...new Set((prSearch.answer?.prs ?? []).map((p) => marksRepo([p.mark]) ?? ""))].filter(Boolean).sort().join("\n");
+  const localProjectKey = projects.filter((p) => serverOfPath(p.path) === LOCAL).map((p) => p.path).join("\n");
+  useEffect(() => {
+    if (!searchRepoKey || !localProjectKey) return;
+    let gone = false;
+    invoke<Record<string, string>>("repo_checkouts", { paths: localProjectKey.split("\n"), repos: searchRepoKey.split("\n") }, LOCAL)
+      .then((found) => !gone && setSearchCheckouts(found))
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
+  }, [searchRepoKey, localProjectKey]);
+  // Who "Involving me" narrows to: the reader, every owner a search has turned
+  // up — a personal repo of someone else's included — then the reader's orgs.
+  // Gathered, never dropped, so narrowing to one keeps the others on offer.
+  const [pullsOwners, setPullsOwners] = useState<string[]>([]);
+  useEffect(() => {
+    const found = prSearch.answer;
+    if (!found) return;
+    const seen = [found.viewer, ...found.prs.map((p) => p.repo.split("/")[0]), ...found.orgs].filter(Boolean);
+    setPullsOwners((prev) => {
+      const next = [...new Set([...prev, ...seen])];
+      return next.length === prev.length ? prev : next;
+    });
+  }, [prSearch.answer]);
+  const pullRows = useMemo(() => {
+    if (pullsScope === "space") return inboxRows(pullsKeys, prMarks.marksIn);
+    return (prSearch.answer?.prs ?? []).flatMap(({ repo, mark }) => {
+      const key = marksRepo([mark]);
+      if (!key || !mark.listing) return [];
+      return [{ key: searchCheckouts[key] ?? slugKey(repo), repo: key, mark, listing: mark.listing }];
+    });
+  }, [pullsScope, pullsKeys, prMarks.marksIn, prSearch.answer, searchCheckouts]);
   const pickedRow =
     (pickedPr && pullRows.find((r) => r.mark.url === pickedPr.mark.url)) ??
-    (pickedPr && pullsKeys.includes(pickedPr.key) ? pickedPr : null);
+    (pickedPr && (pullsScope === "mine" || pullsKeys.includes(pickedPr.key)) ? pickedPr : null);
   const pickedPrData = usePullRequest(
     pickedRow?.key ?? "",
     pickedRow?.mark.headRefName ?? null,
     pullsOpen && !!pickedRow,
-    () => prMarks.refreshAfterWrite(),
+    () => {
+      prMarks.refreshAfterWrite();
+      if (pullsScope === "mine") void prSearch.refresh();
+    },
   );
   // Matching a PR to its session needs both sides of the index — a settled
   // session is what a new one takes its picks from, and a live one must never
@@ -1648,17 +1692,26 @@ function App() {
   );
   const pullsMissing = useMemo(() => {
     if (pullRows.length > 0) return null;
+    const searchError = pullsScope === "mine" ? prSearch.error : null;
+    if (searchError?.kind === "no_cli" || searchError?.kind === "not_authenticated") {
+      return { kind: searchError.kind, cwd: "" };
+    }
     for (const key of pullsKeys) {
       const error = prMarks.errorFor(key);
       if (error?.kind === "no_cli" || error?.kind === "not_authenticated") return { kind: error.kind, cwd: key };
     }
     return null;
-  }, [pullRows, pullsKeys, prMarks.errorFor]);
-  const pullsErrors = pullsKeys.flatMap((key) => {
+  }, [pullRows, pullsKeys, prMarks.errorFor, pullsScope, prSearch.error]);
+  const pullsErrors = pullsScope === "mine"
+    ? prSearch.error?.kind === "other" ? [{ name: "GitHub search", error: prSearch.error }] : []
+    : pullsKeys.flatMap((key) => {
     const error = prMarks.errorFor(key);
     return error?.kind === "other" ? [{ name: projects.find((p) => p.path === key)?.name ?? key, error }] : [];
   });
-  const pullsLoaded = pullsKeys.some((key) => prMarks.marksIn(key) !== undefined || prMarks.errorFor(key));
+  const pullsLoaded =
+    pullsScope === "mine"
+      ? !!prSearch.answer || !!prSearch.error
+      : pullsKeys.some((key) => prMarks.marksIn(key) !== undefined || prMarks.errorFor(key));
   const [pullsReading, setPullsReading] = useState(false);
   /// The checkout a PR's new session is made in: the one the PR was read
   /// through, else any attached checkout of its repo — never a `github:` key,
@@ -1763,6 +1816,7 @@ function App() {
     }
   };
   const refreshPulls = () => {
+    if (pullsScope === "mine") return void prSearch.refresh();
     setPullsReading(true);
     void prMarks.refreshRepos(pullsKeys).finally(() => setPullsReading(false));
   };
@@ -4607,17 +4661,26 @@ function App() {
           <PullsView
             rows={pullRows}
             loaded={pullsLoaded}
-            hasRepos={pullsKeys.length > 0}
+            hasRepos={pullsScope === "mine" || pullsKeys.length > 0}
             missing={pullsMissing}
             errors={pullsErrors}
             scope={pullsScope}
-            onScope={setPullsScope}
+            onScope={(scope) => {
+              setPullsScope(scope);
+              setPickedPr(null);
+            }}
+            owners={pullsOwners}
+            owner={pullsOwner}
+            onOwner={(owner) => {
+              setPullsOwner(owner);
+              setPickedPr(null);
+            }}
             sessionsFor={sessionsForRow}
             botOf={botOfPrSession}
             onOpenSession={openPrSession}
             picked={pickedRow}
             onPick={setPickedPr}
-            loading={pullsReading}
+            loading={pullsScope === "mine" ? prSearch.loading : pullsReading}
             onRefresh={refreshPulls}
           />
         </MountOnce>

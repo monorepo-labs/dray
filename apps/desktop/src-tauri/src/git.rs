@@ -1742,6 +1742,27 @@ pub async fn branch_checked_out(project_path: &str, branch: &str) -> bool {
         .is_some_and(|out| out.lines().any(|line| line == wanted))
 }
 
+/// Which of `paths`, attached checkouts, holds each of `repos` (`host/owner/name`,
+/// [`repo_key`]'s spelling), read off their git remotes the way
+/// [`create_worktree_on_branch`] picks one: the pull requests page lists PRs
+/// from a GitHub search, and this is how a row finds the checkout a task on it
+/// runs in, with no network read. The first checkout naming a repo wins.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn repo_checkouts(
+    paths: Vec<String>,
+    repos: Vec<String>,
+) -> Result<std::collections::HashMap<String, String>, crate::Fail> {
+    let mut found = std::collections::HashMap::new();
+    for path in paths {
+        for repo in &repos {
+            if !found.contains_key(repo) && remote_for(&path, repo).await.is_some() {
+                found.insert(repo.clone(), path.clone());
+            }
+        }
+    }
+    Ok(found)
+}
+
 /// How long [`create_worktree_on_branch`] waits on its fetch.
 const FETCH_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 

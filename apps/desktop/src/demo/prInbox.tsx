@@ -236,6 +236,7 @@ function Demo() {
   const [, setTick] = useState(0);
   onSent = () => setTick((n) => n + 1);
 
+  const [owner, setOwner] = useState<string | null>(null);
   const keys = scope === "space" ? [DRAY] : [DRAY, SITE];
   const rows = useMemo(() => inboxRows(keys, (key) => MARKS[key]), [scope]); // eslint-disable-line react-hooks/exhaustive-deps
   const sessionsFor = (row: InboxRow) => sessionsForPr(row, SESSIONS, () => undefined);
@@ -251,8 +252,11 @@ function Demo() {
               loaded
               hasRepos
               missing={null}
-              errors={scope === "all" ? [{ name: "site", error: { kind: "other", detail: "API rate limit exceeded" } }] : []}
+              errors={scope === "mine" ? [{ name: "site", error: { kind: "other", detail: "API rate limit exceeded" } }] : []}
               scope={scope}
+              owners={["ada", "acme"]}
+              owner={owner}
+              onOwner={setOwner}
               onScope={setScope}
               sessionsFor={sessionsFor}
               botOf={() => undefined}

@@ -1334,25 +1334,155 @@ fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
         .into_iter()
         .map(|pr| (PrMarkState::Open, pr))
         .chain(merged.into_iter().map(|pr| (PrMarkState::Merged, pr)))
-        .map(|(state, mut pr)| {
-            let listing = pr.listing();
-            let (checks_state, check_count) = read_checks(pr.commits);
-            PrMark {
-                number: pr.number,
-                url: pr.url,
-                checks_state,
-                check_count,
-                head_ref_name: pr.head_ref_name,
-                head_oid: pr.head_ref_oid.filter(|o| !o.is_empty()),
-                is_draft: pr.is_draft,
-                state,
-                mergeable: pr.mergeable,
-                merge_state_status: pr.merge_state_status,
-                review_decision: pr.review_decision.filter(|d| !d.is_empty()),
-                listing,
-            }
-        })
+        .map(|(state, pr)| mark_of(state, pr))
         .collect())
+}
+
+fn mark_of(state: PrMarkState, mut pr: RawPrMark) -> PrMark {
+    let listing = pr.listing();
+    let (checks_state, check_count) = read_checks(pr.commits);
+    PrMark {
+        number: pr.number,
+        url: pr.url,
+        checks_state,
+        check_count,
+        head_ref_name: pr.head_ref_name,
+        head_oid: pr.head_ref_oid.filter(|o| !o.is_empty()),
+        is_draft: pr.is_draft,
+        state,
+        mergeable: pr.mergeable,
+        merge_state_status: pr.merge_state_status,
+        review_decision: pr.review_decision.filter(|d| !d.is_empty()),
+        listing,
+    }
+}
+
+/// The pull requests page's list across every repository the reader can see:
+/// one GitHub search, `is:pr is:open involves:@me`, narrowed to an owner when
+/// one is picked. Each answer carries what a marks read with its listing does,
+/// plus the repo, so the page needs no checkout to list a PR.
+///
+/// Measured at 1 point with `rateLimit{cost}`, a hundred PRs across any number
+/// of repos, where reading those repos one by one is a point each. The search
+/// index lags a write by a few seconds, which a list polled on a minute does
+/// not notice. `viewer` and its organizations ride along free, for the owner
+/// menu.
+const QUERY_SEARCH: &str = r#"
+query($q:String!){
+ viewer{login organizations(first:50){nodes{login}}}
+ search(query:$q,type:ISSUE,first:100){nodes{... on PullRequest{
+  number url headRefName headRefOid isDraft mergeable mergeStateStatus reviewDecision $LISTING
+  repository{nameWithOwner}
+  commits(last:1){nodes{commit{statusCheckRollup{state contexts{totalCount}}}}}
+ }}}
+}"#;
+
+/// What the pull requests page lists: the reader's open pull requests across
+/// GitHub, and the owners they can narrow it to.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct PrSearch {
+    /// The reader's own login, first among the owners.
+    pub viewer: String,
+    /// The organizations the reader belongs to, as GitHub lists them.
+    pub orgs: Vec<String>,
+    pub prs: Vec<SearchedPr>,
+}
+
+/// One pull request the search found, with the repo it lives in.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SearchedPr {
+    /// `owner/name`, the slug `github:` keys and `gh --repo` take.
+    pub repo: String,
+    pub mark: PrMark,
+}
+
+#[derive(Deserialize)]
+struct RawSearchData {
+    viewer: Option<RawViewer>,
+    search: Option<Nodes<serde_json::Value>>,
+}
+
+#[derive(Deserialize)]
+struct RawViewer {
+    #[serde(default)]
+    login: String,
+    organizations: Option<Nodes<RawAuthor>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawSearched {
+    #[serde(flatten)]
+    pr: RawPrMark,
+    repository: Option<RawNamed>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawNamed {
+    #[serde(default)]
+    name_with_owner: String,
+}
+
+/// The reader's open pull requests across GitHub; `owner` narrows them to one
+/// organization (`org:`) or to the reader's own account (`user:`).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn pr_search(owner: Option<String>) -> Result<PrSearch, PrUnavailable> {
+    pr_search_inner(owner.as_deref()).await.map_err(unavailable)
+}
+
+async fn pr_search_inner(owner: Option<&str>) -> Result<PrSearch, String> {
+    let home = std::env::home_dir().ok_or("no home directory")?;
+    let home = home.to_str().ok_or("home directory is not UTF-8")?;
+    // A login is letters, digits and dashes; anything else is no owner GitHub
+    // has, and would be search syntax smuggled into the query.
+    let owner = owner.filter(|o| !o.is_empty() && o.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+    let viewer = match owner {
+        Some(_) => gh(home, &["api", "user", "--jq", ".login"]).await?.trim().to_string(),
+        None => String::new(),
+    };
+    let scope = match owner {
+        Some(o) if o.eq_ignore_ascii_case(&viewer) => format!(" user:{o}"),
+        Some(o) => format!(" org:{o}"),
+        None => String::new(),
+    };
+    let q = format!("q=is:pr is:open involves:@me archived:false sort:updated-desc{scope}");
+    let query = format!("query={}", QUERY_SEARCH.replace("$LISTING", LISTING));
+    read_pr_search(&gh(home, &["api", "graphql", "-f", &q, "-f", &query]).await?)
+}
+
+/// Splits parsing off the spawn, like [`read_prs`].
+fn read_pr_search(out: &str) -> Result<PrSearch, String> {
+    #[derive(Deserialize)]
+    struct Answer {
+        data: Option<RawSearchData>,
+        #[serde(default)]
+        errors: Vec<GraphQlError>,
+    }
+    let answer: Answer = serde_json::from_str(out).map_err(|e| format!("could not read GitHub's answer: {e}"))?;
+    if let Some(first) = answer.errors.first() {
+        return Err(first.message.clone());
+    }
+    let data = answer.data.ok_or("GitHub answered with nothing")?;
+    let viewer = data.viewer.unwrap_or(RawViewer { login: String::new(), organizations: None });
+    let prs = Nodes::take(data.search)
+        .into_iter()
+        // A node the fragment did not match — never a PR — arrives empty.
+        .filter_map(|node| serde_json::from_value::<RawSearched>(node).ok())
+        .filter_map(|found| {
+            let repo = found.repository?.name_with_owner;
+            (!repo.is_empty()).then(|| SearchedPr { repo, mark: mark_of(PrMarkState::Open, found.pr) })
+        })
+        .collect();
+    Ok(PrSearch {
+        viewer: viewer.login,
+        orgs: Nodes::take(viewer.organizations).into_iter().map(|o| o.login).filter(|l| !l.is_empty()).collect(),
+        prs,
+    })
 }
 
 /// Merges the PR. Returns once `gh` has, so the caller can refetch and show
@@ -1924,6 +2054,27 @@ mod tests {
         assert_eq!(prs[0].merge_state_status.as_deref(), Some("CLEAN"));
         assert_eq!(prs[1].mergeable, None);
         assert_eq!(prs[1].merge_state_status, None);
+    }
+
+    /// The search reads each PR as the marks do, with its repo; an empty node
+    /// is skipped, and the viewer's orgs come along.
+    #[test]
+    fn a_search_lists_prs_across_repos() {
+        let out = r#"{"data":{"viewer":{"login":"me","organizations":{"nodes":[{"login":"acme"}]}},
+            "search":{"nodes":[
+              {"number":9,"url":"https://github.com/acme/app/pull/9","headRefName":"fix","isDraft":false,
+               "title":"Fix","updatedAt":"2026-11-20T11:04:51Z","isCrossRepository":false,"viewerDidAuthor":true,
+               "author":{"login":"me"},"repository":{"nameWithOwner":"acme/app"},
+               "commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE","contexts":{"totalCount":2}}}}]}},
+              {}]}}}"#;
+        let found = read_pr_search(out).expect("parses");
+        assert_eq!(found.viewer, "me");
+        assert_eq!(found.orgs, ["acme"]);
+        assert_eq!(found.prs.len(), 1);
+        assert_eq!(found.prs[0].repo, "acme/app");
+        assert_eq!(found.prs[0].mark.listing.as_ref().map(|l| l.title.as_str()), Some("Fix"));
+        assert!(matches!(found.prs[0].mark.checks_state, PrChecksState::Failing));
+        assert!(read_pr_search(r#"{"errors":[{"message":"bad"}]}"#).is_err());
     }
 
     /// The listing is spliced into the open half and nowhere else, and only
