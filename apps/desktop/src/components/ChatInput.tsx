@@ -1187,8 +1187,10 @@ export default function ChatInput({
                     //
                     // ⇧Tab flips the `#` menu between issues and pull requests,
                     // with or without rows: an empty list is where it is wanted.
+                    // Stopped, since ⇧Tab is also `model.next` on the document.
                     if (menuOpen && issue && e.key === "Tab" && e.shiftKey) {
                       e.preventDefault();
+                      e.stopPropagation();
                       setMentionKind(listingPrs ? "issues" : "prs");
                       return;
                     }

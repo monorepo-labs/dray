@@ -293,8 +293,9 @@ export default function PickerMenu<T>({
             row — so a line beneath it cut a menu this small into two panels
             over a distinction the shapes make on their own. The framed state
             insets it to match the list's own `p-1`; the bare one has no box to
-            be held away from. */}
-        {header && <div className={cn(!bare && "p-1 pb-0")}>{header}</div>}
+            be held away from, but keeps the 4px under it that `p-1` gives the
+            framed list, or the switch sits flush on the highlighted first row. */}
+        {header && <div className={cn(bare ? "pb-1" : "p-1 pb-0")}>{header}</div>}
 
         <div
           ref={listRef}
