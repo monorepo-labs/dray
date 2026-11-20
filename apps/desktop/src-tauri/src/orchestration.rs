@@ -502,6 +502,7 @@ fn session_named(request: &Request) -> Option<&str> {
         Request::RenameSession(r) => Some(&r.session_id),
         Request::StopSession(r) => Some(&r.session_id),
         Request::SettleSession(r) => Some(&r.session_id),
+        Request::DetachSession(r) => Some(&r.session_id),
         Request::SetAside(r) => Some(&r.session_id),
         Request::Share(r) => Some(&r.session_id),
         Request::Browser(r) => Some(&r.session_id),
@@ -1114,6 +1115,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             answer_session(&stop.session_id).await
         }
         Request::SettleSession(settle) => settle_session(settle, app).await,
+        Request::DetachSession(detach) => detach_session(&detach.session_id, app).await,
         Request::CreateBot(create) => {
             let avatar = bots::face(create.shape.as_deref(), create.hue)?;
             let bot = bots::create_bot(create.name, Some(avatar)).await?;
@@ -1531,6 +1533,19 @@ async fn settle_session(settle: dray_proto::SettleSession, app: &Sink) -> Result
         announce_change(&moved, app).await;
         removed.context("settled, but the worktree was not deleted")?;
     }
+    answer_session(id).await
+}
+
+/// `dray session detach`: the sidebar's Detach from parent, so a bot can hand
+/// a hidden task to the reader. Refused where it would change nothing, since
+/// a caller detaching a top-level session has the wrong id.
+async fn detach_session(id: &str, app: &Sink) -> Result<Response> {
+    let item = store::get_session_index_item(id).await?.with_context(|| format!("no session {id}"))?;
+    if item.parent_session_id.is_none() && item.adopted_by.is_none() && !item.hidden {
+        bail!("session {id} has no parent to detach from");
+    }
+    store::detach_session(id).await?.with_context(|| format!("no session {id}"))?;
+    announce_change(&[id.to_string()], app).await;
     answer_session(id).await
 }
 

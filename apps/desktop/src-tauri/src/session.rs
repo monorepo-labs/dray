@@ -712,8 +712,7 @@ pub async fn settle_dead_child(
     // This close never passes through `ingest_event`, where a bot's child
     // reports; without this the bot would wait on a turn that is over.
     if died_mid_turn {
-        LAST_REPLY.lock().unwrap().remove(session_id);
-        POSTED.lock().unwrap().remove(session_id);
+        forget_turn(session_id);
         report(session_id, format!("(the session's process exited mid-turn: {why})"), app);
         crate::routines::turn_ended(session_id, None, false, app).await;
     }
@@ -2193,6 +2192,7 @@ impl SessionManager {
             Some(s) => (s.harness, s.seq.fetch_add(1, Relaxed)),
             None => (harness, next_seq_by_session_id(session_id).await?),
         };
+        note_reaction(session_id, &payload);
         let event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
         app.emit("agent_event", &event)?;
         append_session_event(session_id, event).await
@@ -3736,6 +3736,86 @@ static LAST_REPLY: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>
 static POSTED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
     std::sync::LazyLock::new(Default::default);
 
+/// The emoji each bot reacted with this turn. A reply saying only that emoji
+/// says it twice, whatever led the agent to write it, so it is dropped.
+static REACTED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Bot chats whose turn a silent tool (`react`, `no_reply_needed`) closed,
+/// with the ids of those calls not refused: one batch can hold both, and a
+/// refused `react` beside a `no_reply_needed` leaves the turn closed. Anything the agent writes after it is filler: a CLI
+/// that ignores `claude/endTurn`, or a batch holding an errored result, gives
+/// the model one more call, and it narrated the close ("(Turn ended without a
+/// reply.)"). Closed on the call itself, not on Dray's answer to it: the CLI
+/// runs the tool while the response is still streaming, and a stray token the
+/// model wrote after the call ("ↀ") could reach the pipe before the call did.
+static CLOSED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, std::collections::HashSet<String>>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Drops what `session_id`'s turn noted for its close, for a turn that closes
+/// without a `TurnCompleted` reaching `ingest_event`: kept, it would count
+/// against the next turn.
+fn forget_turn(session_id: &str) {
+    LAST_REPLY.lock().unwrap().remove(session_id);
+    POSTED.lock().unwrap().remove(session_id);
+    REACTED.lock().unwrap().remove(session_id);
+    CLOSED.lock().unwrap().remove(session_id);
+}
+
+/// Records a reaction landing in `session_id`, for [`REACTED`].
+fn note_reaction(session_id: &str, payload: &AgentEventPayload) {
+    if let AgentEventPayload::Reaction { emoji, .. } = payload {
+        REACTED.lock().unwrap().insert(session_id.to_string(), emoji.clone());
+    }
+}
+
+/// Whether a main-thread event in `session_id` must be dropped: text after a
+/// silent tool closed the turn, its stream included so no preview flashes, or
+/// a reply only repeating this turn's reaction. A turn's close forgets both,
+/// and takes what they dropped out of its `final_text` so the turn still counts
+/// as silent.
+fn drops_echo(session_id: &str, payload: &mut AgentEventPayload) -> bool {
+    use crate::{bots::react::echoes, harness::claude_code::no_reply};
+    note_reaction(session_id, payload);
+    // A new turn opens on its own `init`, so a mark a dead child left behind
+    // — replaced before its cleanup ran `forget_turn` — never reaches it.
+    if matches!(payload, AgentEventPayload::TurnStarted(_)) {
+        CLOSED.lock().unwrap().remove(session_id);
+    }
+    let closed = CLOSED.lock().unwrap().contains_key(session_id);
+    let mut reacted = REACTED.lock().unwrap();
+    match payload {
+        AgentEventPayload::ToolCallStarted { call_id, name, .. } if no_reply::is_silent(name) => {
+            CLOSED.lock().unwrap().entry(session_id.to_string()).or_default().insert(call_id.clone());
+            false
+        }
+        // A refused `react` carries no `endTurn`, and the bot must answer it.
+        AgentEventPayload::ToolCallCompleted { call_id, result } if result.is_error => {
+            let mut closed = CLOSED.lock().unwrap();
+            if let Some(calls) = closed.get_mut(session_id) {
+                calls.remove(call_id.as_str());
+                if calls.is_empty() {
+                    closed.remove(session_id);
+                }
+            }
+            false
+        }
+        AgentEventPayload::Delta(_) => closed,
+        AgentEventPayload::AssistantText { text, .. } => {
+            closed || reacted.get(session_id).is_some_and(|e| echoes(text, e))
+        }
+        AgentEventPayload::TurnCompleted { final_text, .. } => {
+            let emoji = reacted.remove(session_id);
+            let echoed = matches!((&emoji, final_text.as_deref()), (Some(e), Some(t)) if echoes(t, e));
+            if CLOSED.lock().unwrap().remove(session_id).is_some() || echoed {
+                *final_text = None;
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
 /// Sends `text` to the session that started `session_id`, where it is a bot's.
 fn report(session_id: &str, text: String, app: &Sink) {
     let report = crate::orchestration::report_to_parent(session_id.to_string(), text, app.clone());
@@ -3782,6 +3862,11 @@ fn report_text(status: TurnStatus, stop_reason: Option<&str>, final_text: Option
 }
 
 async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink, tracked: bool) {
+    // Never logged or drawn: the `block_stop` behind it retires its preview.
+    if agent_event.subagent.is_none() && drops_echo(ctx.session_id, &mut agent_event.payload) {
+        return;
+    }
+
     // Filled here rather than in the mapper because only the session layer
     // knows the cwd. Freezing the tree id onto the closing event is what
     // stops an idle session's diff from absorbing everything that later
@@ -4633,7 +4718,7 @@ pub async fn strand_queue_on_exit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::claude_code::{mapper::Mapper, parser};
+    use crate::harness::claude_code::{mapper::Mapper, no_reply, parser};
 
     #[test]
     fn a_lead_in_never_hides_a_leading_slash() {
@@ -4641,6 +4726,115 @@ mod tests {
         assert_eq!(lead_in_around(hidden, "hi", false), "[Since your last turn: x]\n\nhi");
         assert_eq!(lead_in_around(hidden, "/hello", true), "/hello\n\n[Since your last turn: x]");
         assert_eq!(lead_in_around(None, "/hello", true), "/hello");
+    }
+
+    #[test]
+    fn a_reply_repeating_this_turns_reaction_is_dropped() {
+        let session = "echo-test";
+        let text = |t: &str| AgentEventPayload::AssistantText { block: None, text: t.into() };
+        let close = |t: &str| -> AgentEventPayload {
+            serde_json::from_value(serde_json::json!({"type": "turn_completed", "status": "success", "finalText": t}))
+                .unwrap()
+        };
+        let reaction = AgentEventPayload::Reaction { message_id: "m".into(), emoji: "❤️".into() };
+
+        assert!(!drops_echo(session, &mut text("❤️")), "no reaction yet");
+        assert!(!drops_echo(session, &mut reaction.clone()));
+        assert!(drops_echo(session, &mut text("❤")));
+        assert!(!drops_echo(session, &mut text("❤️ anytime")));
+        let mut closing = close("❤️");
+        assert!(!drops_echo(session, &mut closing));
+        assert!(matches!(closing, AgentEventPayload::TurnCompleted { final_text: None, .. }));
+
+        assert!(!drops_echo(session, &mut text("❤️")), "the next turn has not reacted");
+        let mut closing = close("❤️");
+        drops_echo(session, &mut closing);
+        assert!(matches!(closing, AgentEventPayload::TurnCompleted { final_text: Some(_), .. }));
+    }
+
+    #[test]
+    fn nothing_written_after_a_silent_tool_closed_the_turn_is_drawn() {
+        let session = "closed-test";
+        let text = |t: &str| AgentEventPayload::AssistantText { block: None, text: t.into() };
+        let close = |t: &str| -> AgentEventPayload {
+            serde_json::from_value(serde_json::json!({"type": "turn_completed", "status": "success", "finalText": t}))
+                .unwrap()
+        };
+        let delta = || {
+            AgentEventPayload::Delta(crate::events::DeltaEvent::TextDelta {
+                block: crate::events::BlockRef { message_id: "m".into(), index: 0 },
+                text: "(Turn".into(),
+            })
+        };
+
+        assert!(!drops_echo(session, &mut text("Checking.")), "the turn is still open");
+        assert!(!drops_echo(session, &mut delta()));
+        assert!(!drops_echo(session, &mut call("c1", "Bash")), "an ordinary tool closes nothing");
+        assert!(!drops_echo(session, &mut text("Ran it.")));
+        assert!(!drops_echo(session, &mut call("c2", no_reply::TOOL_NAME)), "the call itself is drawn");
+        // Before Dray has even answered the call: the CLI runs it mid-stream.
+        assert!(drops_echo(session, &mut delta()));
+        assert!(drops_echo(session, &mut text("ↀ")));
+        assert!(drops_echo(session, &mut text("(Turn ended without a reply.)")));
+        let mut closing = close("ↀ");
+        assert!(!drops_echo(session, &mut closing));
+        assert!(matches!(closing, AgentEventPayload::TurnCompleted { final_text: None, .. }));
+
+        assert!(!drops_echo(session, &mut text("Hi again.")), "the next turn is open");
+        drops_echo(session, &mut call("c3", no_reply::REACT_NAME));
+        forget_turn(session);
+        assert!(!drops_echo(session, &mut text("Resumed.")), "a dead child's close is forgotten");
+
+        drops_echo(session, &mut call("c4", no_reply::TOOL_NAME));
+        let mut opening = AgentEventPayload::TurnStarted(Default::default());
+        assert!(!drops_echo(session, &mut opening));
+        assert!(!drops_echo(session, &mut text("Answer.")), "a replacement child's turn opens clear");
+    }
+
+    #[test]
+    fn a_refused_reaction_leaves_the_turn_open_for_an_answer() {
+        let session = "refused-react";
+        let text = |t: &str| AgentEventPayload::AssistantText { block: None, text: t.into() };
+        drops_echo(session, &mut call("r1", no_reply::REACT_NAME));
+        assert!(!drops_echo(session, &mut result("other", true)), "another call's error reopens nothing");
+        assert!(drops_echo(session, &mut text("ↀ")));
+        assert!(!drops_echo(session, &mut result("r1", true)));
+        assert!(!drops_echo(session, &mut text("Noted, thanks.")), "the bot answers the refusal");
+
+        drops_echo(session, &mut call("r2", no_reply::REACT_NAME));
+        drops_echo(session, &mut result("r2", false));
+        assert!(drops_echo(session, &mut text("👍")), "a reaction that landed keeps the turn closed");
+        forget_turn(session);
+
+        drops_echo(session, &mut call("n1", no_reply::TOOL_NAME));
+        drops_echo(session, &mut call("r3", no_reply::REACT_NAME));
+        drops_echo(session, &mut result("r3", true));
+        assert!(drops_echo(session, &mut text("ↀ")), "the batch's no_reply_needed still closes it");
+        forget_turn(session);
+    }
+
+    fn call(id: &str, name: &str) -> AgentEventPayload {
+        serde_json::from_value(serde_json::json!({
+            "type": "tool_call_started", "callId": id, "name": name, "toolType": "mcp", "input": {},
+        }))
+        .unwrap()
+    }
+
+    fn result(id: &str, is_error: bool) -> AgentEventPayload {
+        serde_json::from_value(serde_json::json!({
+            "type": "tool_call_completed", "callId": id, "result": {"text": "", "isError": is_error},
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_turn_its_child_died_in_forgets_its_reaction() {
+        let session = "echo-dead-child";
+        let reaction = AgentEventPayload::Reaction { message_id: "m".into(), emoji: "👍".into() };
+        assert!(!drops_echo(session, &mut reaction.clone()));
+        forget_turn(session);
+        let mut reply = AgentEventPayload::AssistantText { block: None, text: "👍".into() };
+        assert!(!drops_echo(session, &mut reply), "the resumed turn never reacted");
     }
 
     #[test]

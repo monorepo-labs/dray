@@ -80,6 +80,8 @@ struct PrUnavailable: Decodable, Equatable {
 /// `work_status`'s answer, read for the branch a checkout is on.
 struct WorkStatus: Decodable {
     let branch: String?
+    /// Uncommitted paths: whether the Changes screen offers Uncommitted.
+    var dirty: Int? = nil
 }
 
 /// The branch a session's work lands on; `sessionBranch` in `pr.ts`, whose

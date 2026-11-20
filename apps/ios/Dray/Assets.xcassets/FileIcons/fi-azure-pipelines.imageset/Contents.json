@@ -1,0 +1,12 @@
+{
+  "images": [
+    {
+      "filename": "azure-pipelines.svg",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  }
+}

@@ -327,11 +327,17 @@ dray session settle <id> --delete-worktree  # and the worktree and branch go too
 dray session unsettle <id>
 dray session set-aside <id>                 # sink it in the sidebar: started, not wanted now
 dray session unset-aside <id>
+dray session detach <id>                    # out of its parent: a top-level row of its own
 ```
 
 These are the user's sidebar buttons, so act on sessions the user named, or
 ones you started yourself. A rename sticks: no generated title replaces it.
 Settling is refused while a turn runs — stop it first, or wait.
+
+`detach` is the sidebar's Detach from parent. The session stops nesting under
+the one that started it, a hidden one shows in the sidebar, and it no longer
+reports back. Use it when the user wants to work with a task directly. There
+is no re-attach.
 
 **`--delete-worktree` deletes whatever the worktree holds**, uncommitted and
 unpushed work included, and nothing asks. Before passing it, check the tree

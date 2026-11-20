@@ -33,10 +33,13 @@ func recordingPaths(in text: String) -> [String] {
 /// screen, and a path holding no video draws nothing, as on the desktop.
 struct RecordingPlayer: View {
     @Environment(\.imageServer) private var server
+    @Environment(\.horizontalSizeClass) private var width
+    @Environment(\.verticalSizeClass) private var height
     let path: String
     @State private var player: AVPlayer?
     @State private var aspect: CGFloat = 16 / 10
     @State private var failed = false
+    @State private var fullScreen = false
 
     var body: some View {
         if failed {
@@ -45,7 +48,12 @@ struct RecordingPlayer: View {
         } else {
             Group {
                 if let player {
-                    PlayerController(player: player)
+                    PlayerController(player: player, fullScreen: $fullScreen)
+                        .overlay(alignment: .topLeading) {
+                            // A wide video on an upright phone is too short for AVKit's full layout,
+                            // and its compact one leaves full screen out until the phone is turned.
+                            if aspect > 1, width == .compact, height == .regular { expand }
+                        }
                 } else {
                     Rectangle().fill(.primary.opacity(0.06))
                 }
@@ -56,6 +64,21 @@ struct RecordingPlayer: View {
             .task(id: path) { await prepare() }
             .onDisappear { player?.pause() }
         }
+    }
+
+    /// AVKit's own full screen button, where its full layout draws it.
+    private var expand: some View {
+        Button { fullScreen = true } label: {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 34)
+                .background(.ultraThinMaterial, in: Capsule())
+                .environment(\.colorScheme, .dark)
+        }
+        .buttonStyle(.plain)
+        .padding(8)
+        .accessibilityLabel("Enter full screen")
     }
 
     private func prepare() async {
@@ -80,8 +103,10 @@ struct RecordingPlayer: View {
 }
 
 /// UIKit's player rather than SwiftUI's `VideoPlayer`, which has no full screen button.
+/// `fullScreen` presents AVKit's own full screen player on the same `AVPlayer`, closed by its X.
 private struct PlayerController: UIViewControllerRepresentable {
     let player: AVPlayer
+    @Binding var fullScreen: Bool
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
@@ -91,5 +116,12 @@ private struct PlayerController: UIViewControllerRepresentable {
 
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
         controller.player = player
+        guard fullScreen else { return }
+        DispatchQueue.main.async { fullScreen = false }
+        guard controller.presentedViewController == nil else { return }
+        let full = AVPlayerViewController()
+        full.player = player
+        full.modalPresentationStyle = .fullScreen
+        controller.present(full, animated: true)
     }
 }

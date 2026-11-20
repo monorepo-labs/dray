@@ -5,6 +5,8 @@ struct TranscriptView: View {
     @Environment(Store.self) private var store
     let key: SessionKey
     @State private var fixing = false
+    /// The screen's width, which the title's cap is taken from.
+    @State private var width: CGFloat = 0
     @State private var showingTasks = false
     @State private var showingRuns = false
     /// The run a subagent row opened the sheet on.
@@ -127,6 +129,7 @@ struct TranscriptView: View {
             }
         }
         .page()
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
         .environment(\.imageServer, store.connection(key.server))
         .environment(\.callSession, key)
         // A card arriving is the agent stopping to ask: felt, once per card.
@@ -176,6 +179,7 @@ struct TranscriptView: View {
         .modifier(LocalServersButton(key: key, shown: bot == nil))
         .task { await open() }
         .onChange(of: chatMark) { settleUnread() }
+        .changesButton(key, shown: bot == nil)
         .prPanel(key)
         .sheet(isPresented: $showingTasks) {
             BotTasksSheet(server: key.server, tasks: botTasks, runs: runKeys(bot)) { openTask?($0) }
@@ -214,7 +218,7 @@ struct TranscriptView: View {
     }
 
     private var taskTitle: some View {
-        VStack(spacing: 1) {
+        VStack(alignment: .leading, spacing: 1) {
             Text(item?.title.isEmpty == false ? item!.title : "Untitled")
                 .font(Theme.Font.headline)
                 .foregroundStyle(Theme.text)
@@ -236,7 +240,10 @@ struct TranscriptView: View {
                 .lineLimit(1)
             }
         }
-        .frame(maxWidth: 240)
+        // Wider than the room the bar leaves it, so it fills that room and starts at
+        // the left, losing its end to the buttons. Under the bar's own width on purpose:
+        // wider (or `.infinity`) kept the bar re-laying it out and the main thread never idled.
+        .frame(maxWidth: max(160, width - 120), alignment: .leading)
         .accessibilityElement(children: .combine)
     }
 

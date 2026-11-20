@@ -1,0 +1,12 @@
+{
+  "images": [
+    {
+      "filename": "esbuild.svg",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  }
+}

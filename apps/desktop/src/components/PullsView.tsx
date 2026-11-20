@@ -1,17 +1,23 @@
 import { useMemo, useState } from "react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { MessageSquare, RefreshCw } from "lucide-react";
+import { ChevronDown, MessageSquare, RefreshCw } from "lucide-react";
 
 import Avatar from "@/components/Avatar";
 import { SessionLink } from "@/components/PullDetail";
 import { ListGroup, RepoMenu } from "@/components/ListGroup";
 import { MissingCli } from "@/components/PrPanel";
 import PrStateIcon, { ChecksRunningIcon } from "@/components/PrStateIcon";
-import Segmented from "@/components/Segmented";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import Counts from "@/components/changes/Counts";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { relativeTime } from "@/lib/format";
 import {
@@ -42,10 +48,40 @@ const PEOPLE_EMPTY: Record<PeopleFilter, string> = {
   review: " awaiting your review",
 };
 
-const SCOPES = [
+const SCOPES: readonly { value: PullsScope; label: string }[] = [
   { value: "space", label: "This space" },
   { value: "all", label: "All spaces" },
-] as const;
+];
+
+/// Which spaces' repos the page lists, beside the owner and repo menus that
+/// narrow it further. Always holds a pick, so the trigger names it.
+function ScopeMenu({ scope, onScope }: { scope: PullsScope; onScope: (scope: PullsScope) => void }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-ui text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {SCOPES.find((option) => option.value === scope)?.label}
+          <ChevronDown className="size-3 opacity-60" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-40">
+        <DropdownMenuLabel>Spaces</DropdownMenuLabel>
+        {SCOPES.map((option) => (
+          <DropdownMenuCheckboxItem
+            key={option.value}
+            checked={scope === option.value}
+            onCheckedChange={() => onScope(option.value)}
+          >
+            {option.label}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 /// Every open pull request in the projects on screen, filed by what it wants
 /// from the reader. The page lists and picks; the pane beside it, owned by
@@ -157,11 +193,10 @@ export default function PullsView({
           </button>
         ))}
 
-        <Segmented value={scope} options={SCOPES} onPick={onScope} label="Spaces" className="ml-1" />
-
         <div className="flex-1" aria-hidden />
 
         <div className="flex shrink-0 items-center gap-1.5">
+          <ScopeMenu scope={scope} onScope={onScope} />
           {ownerList.length > 0 && (
             <RepoMenu
               repo={owner}
