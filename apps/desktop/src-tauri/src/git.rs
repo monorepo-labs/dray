@@ -1897,6 +1897,14 @@ pub async fn create_worktree_from_branch(project_path: &str, name: &str, branch:
                         && (!seen_remotely
                             || format!("{e:#}").contains("couldn't find remote ref")
                             || holds_unpushed(project_path, &local, &tracking).await) => {}
+                // Held by another tree, a diverged PR head is detached at the
+                // remote's tip; a picked branch keeps its local commits, so the
+                // fresh tree moves to the local tip.
+                Ok(PrTree::Detached) if has_local && holds_unpushed(project_path, &local, &tracking).await => {
+                    let path = worktrees_dir(Path::new(project_path)).join(name).to_string_lossy().into_owned();
+                    run(&path, &["checkout", "-q", "--detach", &local]).await?;
+                    return Ok(PrTree::Detached);
+                }
                 made => return made,
             }
         }
@@ -3573,6 +3581,9 @@ mod tests {
         run(at, &["checkout", "-q", "main"]).await.unwrap();
         assert_eq!(create_worktree_from_branch(at, "t-diverged", "diverged").await.unwrap(), PrTree::OnBranch);
         assert_eq!(git_line(&tree("t-diverged"), &["rev-parse", "HEAD"]).await, diverged_tip);
+        // t-diverged now holds it: a second tree is detached, at the local tip.
+        assert_eq!(create_worktree_from_branch(at, "t-diverged-2", "diverged").await.unwrap(), PrTree::Detached);
+        assert_eq!(git_line(&tree("t-diverged-2"), &["rev-parse", "HEAD"]).await, diverged_tip);
 
         // Checked out elsewhere — the project root here — is detached at its tip.
         run(at, &["checkout", "-q", "-b", "busy"]).await.unwrap();
