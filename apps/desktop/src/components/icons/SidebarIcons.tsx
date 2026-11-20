@@ -44,6 +44,25 @@ export function IssuesIcon({ className }: { className?: string }) {
   );
 }
 
+/// Pull requests: a branch reaching back into the line it came from.
+export function PullsIcon({ className }: { className?: string }) {
+  return (
+    <Filled
+      className={className}
+      shape={
+        <>
+          <circle cx="4.5" cy="3.5" r="2" />
+          <circle cx="4.5" cy="12.5" r="2" />
+          <circle cx="11.5" cy="12.5" r="2" />
+          <path d="M4.5 5.5v5" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M11.5 10.5V7a2.5 2.5 0 0 0-2.5-2.5H7.5" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M9 3 7.5 4.5 9 6" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
+        </>
+      }
+    />
+  );
+}
+
 /// New bot: a face, two eyes knocked out of a soft square.
 export function NewBotIcon({ className }: { className?: string }) {
   return (

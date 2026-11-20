@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::{fs, io::AsyncWriteExt, process::Command};
 use ts_rs::TS;
 use uuid::Uuid;
@@ -338,7 +338,8 @@ async fn run(cwd: &str, args: &[&str]) -> Result<()> {
 /// [`shared_remote`]'s, which has to die with its caller's timeout.
 async fn exec(cwd: &str, envs: &[(&str, &str)], args: &[&str]) -> Result<String> {
     let mut cmd = Command::new("git");
-    cmd.args(args).current_dir(cwd);
+    // A caller giving up on the future (a timeout) takes the child with it.
+    cmd.args(args).current_dir(cwd).kill_on_drop(true);
     for (key, value) in envs {
         cmd.env(key, value);
     }
@@ -1469,9 +1470,15 @@ pub async fn worktree_disposition(worktree_path: &str, project_path: &str) -> Wo
         )
         .await
         .unwrap_or(0),
-        // A detached HEAD has no branch to exclude, and nothing here can be
-        // deleted along with it either.
-        None => 0,
+        // A detached HEAD — a second task on a PR's branch — has no branch to
+        // exclude, and its commits are on no ref at all: deleting the tree is
+        // what would lose them.
+        None => git_count(
+            worktree_path,
+            &["rev-list", "--count", "HEAD", "--not", "--branches", "--remotes", "--tags", "--"],
+        )
+        .await
+        .unwrap_or(0),
     };
 
     WorktreeDisposition {
@@ -1628,6 +1635,166 @@ pub async fn create_worktree(project_path: &str, name: &str, base: &str) -> Resu
     .await?;
 
     Ok(path)
+}
+
+/// A pull request's head as the pull requests page names it, for a session
+/// started on it: the branch, and the repository as [`repo_key`] spells it.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct PrHead {
+    pub branch: String,
+    pub repo: String,
+    /// A task Dray started on this PR has used the branch before, so commits
+    /// on the local branch the remote lacks are that task's unpushed work, to
+    /// carry on from rather than a stale copy to refuse. Set by the server.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub ours: bool,
+}
+
+/// How a PR's tree was checked out, which decides how its agent pushes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrTree {
+    /// On the head by its own name, tracking it: a plain push updates the PR.
+    OnBranch,
+    /// Detached at the head's tip, because another tree has the branch
+    /// checked out — a second task on the PR. It pushes `HEAD:<branch>`.
+    Detached,
+}
+
+/// A worktree checked out on an existing remote branch *by its own name* — a
+/// pull request's head — and tracking it, so a plain push updates that pull
+/// request. [`create_worktree`]'s `worktree-<name>` branch forked from the head
+/// would have the agent's push open a second PR, and the pull requests page
+/// would then find no session for the first.
+///
+/// `repo` is the PR's repository as [`repo_key`] spells it, which picks the
+/// remote to fetch: in a fork's checkout `origin` is the fork and the PR's
+/// branch lives on another remote. Matched exactly, else on `owner/name` alone
+/// (an SSH host alias). No match is refused rather than read off `origin`,
+/// which in a fork is a copy of the branch the PR never sees.
+///
+/// Fetched first, since a PR opened elsewhere has no local ref here. A local
+/// branch of that name is reset onto the remote only where that loses nothing
+/// — it is an ancestor of the remote's — and refused otherwise.
+pub async fn create_worktree_on_branch(project_path: &str, name: &str, head: &PrHead) -> Result<PrTree> {
+    let branch = head.branch.as_str();
+    let path = worktrees_dir(Path::new(project_path)).join(name);
+    let path = path.to_string_lossy().into_owned();
+    let Some(remote) = remote_for(project_path, &head.repo).await else {
+        bail!(
+            "no remote in {project_path} points at {} — add one (git remote add upstream <its url>), then start the task again",
+            head.repo
+        );
+    };
+    let tracking = format!("{remote}/{branch}");
+
+    // Capped: an SSH remote waiting on a passphrase or a dead host would
+    // otherwise hold the send, and the reader's spinner, forever.
+    let refspec = format!("+refs/heads/{branch}:refs/remotes/{tracking}");
+    let args = ["fetch", "-q", "--no-tags", &remote, &refspec];
+    let fetch = exec(project_path, &[("GIT_TERMINAL_PROMPT", "0")], &args);
+    match tokio::time::timeout(FETCH_LIMIT, fetch).await {
+        Ok(fetched) => fetched.with_context(|| format!("could not fetch {branch} from {remote}"))?,
+        Err(_) => bail!("fetching {branch} from {remote} took over {}s; check that remote, then try again", FETCH_LIMIT.as_secs()),
+    };
+
+    let local = format!("refs/heads/{branch}");
+    let has_local = resolve_commit(project_path, &local).await.is_some();
+    let ahead = has_local && git(project_path, &["merge-base", "--is-ancestor", &local, &tracking]).await.is_none();
+    // Strictly ahead: the PR's current head is under the local branch. A
+    // rebased or force-pushed PR leaves the two diverged, and carrying the
+    // old local on would put the agent on commits the PR no longer has.
+    let carry = ahead
+        && head.ours
+        && git(project_path, &["merge-base", "--is-ancestor", &tracking, &local]).await.is_some();
+
+    // One branch, one tree: git checks a branch out in a single place. A tree
+    // already holding it — another task's, live or settled with its tree kept
+    // — leaves this one detached at the tip, its own commits on top, pushed by
+    // `HEAD:<branch>`. Its tip is the local branch where an earlier task of
+    // ours left work there the remote has not seen.
+    if branch_checked_out(project_path, branch).await {
+        let tip = if carry { local.as_str() } else { tracking.as_str() };
+        exec(project_path, &[], &["worktree", "add", "--detach", "--end-of-options", &path, tip]).await?;
+        return Ok(PrTree::Detached);
+    }
+
+    if ahead {
+        // An earlier task's unpushed work: carried on from, by name.
+        if carry {
+            exec(project_path, &[], &["worktree", "add", "--end-of-options", &path, branch]).await?;
+            let _ = git(project_path, &["branch", "--set-upstream-to", &tracking, "--end-of-options", branch]).await;
+            return Ok(PrTree::OnBranch);
+        }
+        // Not "push": after a rebase or force-push these are the PR's old
+        // commits, and pushing them would overwrite it.
+        bail!(
+            "your local {branch} has commits {tracking} does not — likely an older copy of the pull request. \
+             Rename it (git branch -m {branch} {branch}-old) or delete it, then start the task again"
+        );
+    }
+
+    exec(
+        project_path,
+        &[],
+        &["worktree", "add", "--track", "-B", branch, "--end-of-options", &path, &tracking],
+    )
+    .await?;
+    Ok(PrTree::OnBranch)
+}
+
+/// Whether any tree of `project_path`'s repo, the root included, has `branch`
+/// checked out.
+pub async fn branch_checked_out(project_path: &str, branch: &str) -> bool {
+    let wanted = format!("branch refs/heads/{branch}");
+    git(project_path, &["worktree", "list", "--porcelain"])
+        .await
+        .is_some_and(|out| out.lines().any(|line| line == wanted))
+}
+
+/// Which of `paths`, attached checkouts, holds each of `repos` (`host/owner/name`,
+/// [`repo_key`]'s spelling), read off their git remotes the way
+/// [`create_worktree_on_branch`] picks one: the pull requests page lists PRs
+/// from a GitHub search, and this is how a row finds the checkout a task on it
+/// runs in, with no network read. The first checkout naming a repo wins.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn repo_checkouts(
+    paths: Vec<String>,
+    repos: Vec<String>,
+) -> Result<std::collections::HashMap<String, String>, crate::Fail> {
+    let mut found = std::collections::HashMap::new();
+    for path in paths {
+        for repo in &repos {
+            if !found.contains_key(repo) && remote_for(&path, repo).await.is_some() {
+                found.insert(repo.clone(), path.clone());
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// How long [`create_worktree_on_branch`] waits on its fetch.
+const FETCH_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The remote whose URL names `repo` (`host/owner/name`), else one naming
+/// `owner/name` on any host.
+pub(crate) async fn remote_for(cwd: &str, repo: &str) -> Option<String> {
+    let out = git(cwd, &["remote", "-v"]).await?;
+    let remotes: Vec<(&str, String)> = out
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            Some((fields.next()?, repo_key(fields.next()?)))
+        })
+        .collect();
+    let tail = repo.split_once('/').map_or(repo, |(_, tail)| tail);
+    remotes
+        .iter()
+        .find(|(_, key)| key == repo)
+        .or_else(|| remotes.iter().find(|(_, key)| key.ends_with(&format!("/{tail}"))))
+        .map(|(name, _)| name.to_string())
 }
 
 /// Deletes a worktree directory and the branch it was checked out on.
@@ -3055,6 +3222,94 @@ mod tests {
         assert_eq!(pushed_branch(at, "v-elsewhere").await.unwrap(), "v-elsewhere");
         let here = current_branch(at).await.unwrap();
         assert_eq!(pushed_branch(at, &here).await.unwrap(), here);
+
+        fs::remove_dir_all(&dir).await.ok();
+        fs::remove_dir_all(&bare).await.ok();
+    }
+
+    /// A PR's head is fetched from the remote holding its repo, checked out by
+    /// its own name and tracking it; a local branch ahead of it is refused
+    /// unless a task of ours left it so, and carried on from then; a second
+    /// tree while one holds the branch is detached at its tip.
+    #[tokio::test]
+    async fn a_tree_on_a_pr_branch_tracks_it_by_name() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+        let bare = std::env::temp_dir().join(format!("dray-upstream-{}", Uuid::now_v7()));
+        fs::create_dir_all(&bare).await.unwrap();
+        run(bare.to_str().unwrap(), &["init", "-q", "--bare", "."]).await.unwrap();
+        // The fork layout: `origin` names some other repo, the PR's is `upstream`.
+        run(at, &["remote", "add", "origin", "git@github.com:me/fork.git"]).await.unwrap();
+        run(at, &["remote", "add", "upstream", bare.to_str().unwrap()]).await.unwrap();
+        run(at, &["push", "-q", "upstream", "HEAD:refs/heads/feature/pr"]).await.unwrap();
+        let upstream_key = repo_key(bare.to_str().unwrap());
+        assert_eq!(remote_for(at, &upstream_key).await.as_deref(), Some("upstream"));
+        assert_eq!(remote_for(at, "github.com/me/fork").await.as_deref(), Some("origin"));
+        assert_eq!(remote_for(at, "github-alias/me/fork").await.as_deref(), Some("origin"));
+        let head = |repo: &str, ours: bool| PrHead { branch: "feature/pr".into(), repo: repo.into(), ours };
+        let err = create_worktree_on_branch(at, "pr-0", &head("github.com/someone/else", false)).await.unwrap_err();
+        assert!(err.to_string().contains("no remote"), "{err}");
+
+        let tree = worktrees_dir(&dir).join("pr-1").to_string_lossy().into_owned();
+        let made = create_worktree_on_branch(at, "pr-1", &head(&upstream_key, false)).await.unwrap();
+        assert_eq!(made, PrTree::OnBranch);
+        assert_eq!(current_branch(&tree).await.as_deref(), Some("feature/pr"));
+        assert_eq!(
+            git_line(&tree, &["rev-parse", "--abbrev-ref", "@{u}"]).await.as_deref(),
+            Some("upstream/feature/pr")
+        );
+
+        // While pr-1 holds the branch, a second task's tree is detached at it.
+        let second = worktrees_dir(&dir).join("pr-1b").to_string_lossy().into_owned();
+        let made = create_worktree_on_branch(at, "pr-1b", &head(&upstream_key, false)).await.unwrap();
+        assert_eq!(made, PrTree::Detached);
+        assert_eq!(current_branch(&second).await, None);
+        assert_eq!(git_line(&second, &["rev-parse", "HEAD"]).await, git_line(at, &["rev-parse", "upstream/feature/pr"]).await);
+        // A commit made on the detached tree is on no ref, so deleting the tree
+        // must warn about it.
+        assert_eq!(worktree_disposition(&second, at).await.unpushed_commits, 0);
+        fs::write(Path::new(&second).join("detached.txt"), "x\n").await.unwrap();
+        run(&second, &["add", "detached.txt"]).await.unwrap();
+        run(&second, &["commit", "-qm", "detached"]).await.unwrap();
+        assert_eq!(worktree_disposition(&second, at).await.unpushed_commits, 1);
+        run(at, &["worktree", "remove", "--force", &second]).await.unwrap();
+
+        // An earlier task's unpushed commit, its tree gone.
+        fs::write(Path::new(&tree).join("keep.txt"), "local only\n").await.unwrap();
+        run(&tree, &["add", "keep.txt"]).await.unwrap();
+        run(&tree, &["commit", "-qm", "local"]).await.unwrap();
+        let ahead = git_line(at, &["rev-parse", "feature/pr"]).await;
+        run(at, &["worktree", "remove", "--force", &tree]).await.unwrap();
+
+        // Not known to be ours: refused, the commit kept.
+        let err = create_worktree_on_branch(at, "pr-2", &head(&upstream_key, false)).await.unwrap_err();
+        assert!(err.to_string().contains("has commits") && !err.to_string().contains("push"), "{err}");
+        assert_eq!(git_line(at, &["rev-parse", "feature/pr"]).await, ahead);
+
+        // Ours: carried on from, by name, still tracking the PR.
+        let resumed = worktrees_dir(&dir).join("pr-3").to_string_lossy().into_owned();
+        let made = create_worktree_on_branch(at, "pr-3", &head(&upstream_key, true)).await.unwrap();
+        assert_eq!(made, PrTree::OnBranch);
+        assert_eq!(git_line(&resumed, &["rev-parse", "HEAD"]).await, ahead);
+        assert_eq!(
+            git_line(&resumed, &["rev-parse", "--abbrev-ref", "@{u}"]).await.as_deref(),
+            Some("upstream/feature/pr")
+        );
+
+        run(at, &["worktree", "remove", "--force", &resumed]).await.unwrap();
+
+        // The PR rebased under it: local and remote diverged, so even a branch
+        // of ours is refused rather than carried on from stale commits.
+        let other = std::env::temp_dir().join(format!("dray-rebase-{}", Uuid::now_v7()));
+        run(at, &["worktree", "add", "-q", "--detach", other.to_str().unwrap(), "upstream/feature/pr"]).await.unwrap();
+        let o = other.to_str().unwrap();
+        fs::write(other.join("rebased.txt"), "y\n").await.unwrap();
+        run(o, &["add", "rebased.txt"]).await.unwrap();
+        run(o, &["commit", "-qm", "rebased"]).await.unwrap();
+        run(o, &["push", "-q", "-f", "upstream", "HEAD:refs/heads/feature/pr"]).await.unwrap();
+        run(at, &["worktree", "remove", "--force", o]).await.unwrap();
+        let err = create_worktree_on_branch(at, "pr-5", &head(&upstream_key, true)).await.unwrap_err();
+        assert!(err.to_string().contains("has commits"), "{err}");
 
         fs::remove_dir_all(&dir).await.ok();
         fs::remove_dir_all(&bare).await.ok();

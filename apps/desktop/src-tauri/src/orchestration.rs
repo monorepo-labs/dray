@@ -2103,6 +2103,7 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
             // not a message relayed into a conversation already under way.
             None,
             None,
+            None,
             app,
         )
         .await?;
@@ -2262,6 +2263,7 @@ async fn start_session(
             true,
             parent,
             hidden,
+            None,
             None,
             None,
             None,
@@ -2547,6 +2549,7 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
             None,
             from,
             None,
+            None,
             app,
         )
         .await?;
@@ -2624,7 +2627,7 @@ async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
     let outcome = manager()
         .send_msg(
             &session_id, &prompt, &[], &[], harness, model, effort, permission_mode, fast, &bot.path, None, false,
-            None, None, true, None, false, Some(&bot.name), from, None, app,
+            None, None, true, None, false, Some(&bot.name), from, None, None, app,
         )
         .await?;
     let item = outcome.snapshot.map(|s| s.index_item).context("the bot's chat started but returned no index entry")?;
@@ -2964,6 +2967,7 @@ pub async fn start_routine_run(
             Some(&chat.session_id),
             true,
             Some(title),
+            None,
             None,
             None,
             app,

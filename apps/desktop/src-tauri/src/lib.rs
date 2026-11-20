@@ -294,6 +294,7 @@ async fn send_msg(
             None,
             None,
             None,
+            None,
             &sink,
         )
         .await?;
@@ -304,6 +305,124 @@ async fn send_msg(
         sink.emit(orchestration::SESSION_CREATED, &snap.index_item).ok();
     }
     Ok(outcome)
+}
+
+/// Starts a session on a pull request's own branch, from the pull requests
+/// page, in a tree Dray checks out on the head so the agent's push updates that
+/// PR. With `bot`, it is that bot's task instead: hidden under its chat, on
+/// the chat's own agent and picks, reporting back like a task the bot started,
+/// and the bot is told the reader started it.
+///
+/// Its own command rather than a field on `send_msg`, so a server older than
+/// the page answers `unknown command` before anything is made, instead of
+/// ignoring the head and forking from the default branch.
+#[cfg_attr(feature = "desktop", tauri::command)]
+#[allow(clippy::too_many_arguments)]
+async fn start_pr_session(
+    session_id: String,
+    prompt: String,
+    harness: Harness,
+    model: ModelId,
+    effort: Option<Effort>,
+    permission_mode: ApprovalPolicy,
+    fast: bool,
+    cwd: String,
+    pr_head: git::PrHead,
+    pr_number: u64,
+    bot: Option<String>,
+    sink: Sink,
+) -> Result<store::SessionIndexItem, Fail> {
+    if !harness.names_a_cli() {
+        fail!("invalid harness");
+    }
+    if !analytics::client_counts() {
+        analytics::track_active_day();
+    }
+
+    let (parent, harness, model, effort, permission_mode, fast) = match bot.as_deref() {
+        Some(key) => {
+            let bot = bots::find_bot(key).await?;
+            let Some(chat) = bots::chat_of(&bot).await else {
+                fail!("{} has no chat yet. Write to it once, then send it the pull request.", bot.name);
+            };
+            // A task inherits its bot's agent and picks, as one the bot starts
+            // with `dray session new` does.
+            (Some(chat.session_id), chat.harness, chat.model, chat.effort, chat.permission_mode, chat.fast)
+        }
+        None => (None, harness, model, effort, permission_mode, fast),
+    };
+
+    // Ours where a task of this checkout already recorded the branch: its
+    // unpushed commits are work to carry on from, not a stale copy.
+    let mut pr_head = pr_head;
+    pr_head.ours = store::read_index()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .any(|i| i.project_path == cwd && i.branch.as_deref() == Some(pr_head.branch.as_str()));
+    let held = git::branch_checked_out(&cwd, &pr_head.branch).await;
+    let remote = git::remote_for(&cwd, &pr_head.repo).await.unwrap_or_else(|| "origin".into());
+    let prompt = with_push_line(&prompt, &pr_head.branch, &remote, held);
+
+    let outcome = manager()
+        .send_msg(
+            &session_id,
+            &prompt,
+            &[],
+            &[],
+            harness,
+            model,
+            effort,
+            permission_mode,
+            fast,
+            &cwd,
+            None,
+            true,
+            None,
+            None,
+            true,
+            parent.as_deref(),
+            parent.is_some(),
+            None,
+            None,
+            None,
+            Some(&pr_head),
+            &sink,
+        )
+        .await?;
+    let Some(item) = outcome.snapshot.map(|s| s.index_item) else {
+        fail!("the session started but returned no index entry");
+    };
+    sink.emit(orchestration::SESSION_CREATED, &item).ok();
+    if parent.is_some() {
+        // Named by number alone: the note is a list the bot trusts, and the
+        // title, read off the prompt's first line, carries the PR's own, which
+        // is the PR author's words. So would the branch.
+        let named = store::SessionIndexItem { title: format!("PR #{pr_number}"), ..item.clone() };
+        bots::note_since(&named, format!("the user started it on PR #{pr_number} from the pull requests page"), None, &sink)
+            .await;
+    }
+    Ok(item)
+}
+
+/// The page's prompt with how this task pushes put after its first paragraph,
+/// the PR's header. Said here, not by the page: only the server knows whether
+/// another tree holds the branch, which leaves this one detached
+/// ([`git::PrTree::Detached`]) and pushing by `HEAD:<branch>`.
+fn with_push_line(prompt: &str, branch: &str, remote: &str, held: bool) -> String {
+    let line = if held {
+        format!(
+            "Another task has {branch} checked out, so this tree is detached at its tip. Commit here and push with \
+             `git push {remote} HEAD:{branch}` to update the pull request; do not open another. If the push is refused, \
+             fetch and rebase onto {remote}/{branch} first."
+        )
+    } else {
+        format!("This tree is on {branch}, the pull request's own branch. Push to it to update the pull request; do not open another.")
+    };
+    match prompt.split_once("\n\n") {
+        Some((header, rest)) => format!("{header}\n\n{line}\n\n{rest}"),
+        None => format!("{prompt}\n\n{line}"),
+    }
 }
 
 /// Which agents can actually be run on this machine, and what to say about
@@ -1125,4 +1244,23 @@ pub fn run() {
                 unsafe { libc::_exit(0) }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_push_line;
+
+    /// The line lands after the PR's header, and says how this tree pushes.
+    #[test]
+    fn the_push_line_follows_the_header() {
+        let prompt = "Pull request #7 \"Fix\" — url\nBranch fix into main.\n\n`gh pr view 7 --comments` has the rest.\n\nDo it.";
+        let own = with_push_line(prompt, "fix", "upstream", false);
+        assert!(own.starts_with("Pull request #7"));
+        assert!(own.contains("into main.\n\nThis tree is on fix, the pull request's own branch."));
+        assert!(own.ends_with("Do it."));
+
+        let detached = with_push_line(prompt, "fix", "upstream", true);
+        assert!(detached.contains("`git push upstream HEAD:fix`"), "{detached}");
+        assert!(!detached.contains("This tree is on fix"));
+    }
 }
