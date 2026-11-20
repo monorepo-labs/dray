@@ -1,16 +1,7 @@
-import { Suspense, useState } from "react";
-import {
-  CircleDot,
-  Ellipsis,
-  FileDiff,
-  FileText,
-  GitPullRequest,
-  Layers,
-  ListChecks,
-  RefreshCw,
-  type LucideIcon,
-} from "lucide-react";
+import { Suspense, useRef, useState } from "react";
+import { RefreshCw } from "lucide-react";
 
+import DotTrack from "@/components/DotTrack";
 import OpenInButton from "@/components/OpenInButton";
 import TabButton from "@/components/TabButton";
 import PanelRightIcon from "@/components/icons/PanelRightIcon";
@@ -19,6 +10,8 @@ import { FILE_OPENER } from "@/lib/openWith";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useResizable } from "@/components/ResizeHandle";
+import { HAS_SWIPE, useSwipe } from "@/lib/swipe";
+import { playSwipeTick } from "@/lib/tick";
 import { cn } from "@/lib/utils";
 
 /// The header button that opens and closes the pane. Lives here rather than in
@@ -88,19 +81,6 @@ export const PANEL_LABELS: Record<PanelTab, string> = {
   // Singular: a session is working to one plan, and putting up a second
   // replaces the first.
   plan: "Plan",
-};
-
-/// Each tab's glyph, for the icon switcher a bot's pane draws in place of the
-/// tab row. Tasks takes the sidebar's own stack, which is what a bot's tasks
-/// are; More takes the ellipsis, since it is named as a catch-all.
-export const PANEL_ICONS: Record<PanelTab, LucideIcon> = {
-  changes: FileDiff,
-  tasks: Layers,
-  more: Ellipsis,
-  pr: GitPullRequest,
-  issue: CircleDot,
-  docs: FileText,
-  plan: ListChecks,
 };
 
 /// Which tabs exist, and in what order.
@@ -204,10 +184,10 @@ type RightPanelProps = {
   /// strip is worse than either, since it reads as chrome that failed to load.
   /// So the row keeps its height, loses its controls, and says what the pane is.
   heading?: string;
-  /// Draws the tabs as a row of glyphs at the foot of the pane rather than as a
-  /// row of words at its top, which then names the open one. A bot's pane: its
-  /// views are few and stable, and words at the top read as a second tab row
-  /// over a chat that already has one.
+  /// Switches the tabs with the sidebar's dot track at the foot of the pane, a
+  /// tap or a swipe, rather than a row of words at its top, which then names
+  /// the open one. A bot's pane: its views are few and stable, and words at the
+  /// top read as a second tab row over a chat that already has one.
   switcher?: boolean;
   /// Which side of the chat column the pane stands on — the reader's pick in
   /// Settings › Appearance. The border and the drag strip face the chat.
@@ -284,8 +264,21 @@ export default function RightPanel({
     pane: open ? "panel" : undefined,
   });
 
+  // Not for one view, which a switcher would only offer back to itself.
+  const switches = switcher && tabs.length > 1;
+  // Wraps, as the sidebar's does: a tap has no direction, so a dead end at the
+  // last view would just look broken.
+  const step = (delta: -1 | 1) => {
+    if (!switches) return;
+    playSwipeTick();
+    onTabChange(tabs[(tabs.indexOf(tab) + delta + tabs.length) % tabs.length]);
+  };
+  const asideRef = useRef<HTMLElement>(null);
+  useSwipe(asideRef, step);
+
   return (
     <aside
+      ref={asideRef}
       style={style}
       className={cn(
         // No border of its own: it sits in a card, whose ring is the edge.
@@ -385,56 +378,48 @@ export default function RightPanel({
 
       {children}
 
-      {/* Not for one view, which a switcher would only offer back to itself. */}
-      {switcher && tabs.length > 1 && <PanelSwitcher tabs={tabs} tab={tab} onTabChange={onTabChange} />}
+      {switches && <PanelSwitcher count={tabs.length} activeIndex={tabs.indexOf(tab)} onStep={step} />}
     </aside>
   );
 }
 
-/// The foot of a bot's pane: one glyph per view, centred, names in tooltips
-/// alone — the way a space switcher sits under a sidebar. Ghost buttons with
-/// the tab row's selected fill on the open one, so it reads as the same
-/// control laid down rather than a new one.
+/// The foot of a bot's pane: the sidebar project switcher's dot track, alone.
+/// The heading names the view, so the dots carry no label of their own. The
+/// whole band is one tap target that steps on and wraps, as the sidebar's
+/// does; the chord and a swipe over the pane step it too.
 function PanelSwitcher({
-  tabs,
-  tab,
-  onTabChange,
+  count,
+  activeIndex,
+  onStep,
 }: {
-  tabs: readonly PanelTab[];
-  tab: PanelTab;
-  onTabChange: (tab: PanelTab) => void;
+  count: number;
+  activeIndex: number;
+  onStep: (delta: -1 | 1) => void;
 }) {
   return (
-    <div role="tablist" aria-label="Panel views" className="flex shrink-0 items-center justify-center gap-1 px-2 py-2">
-      {tabs.map((value) => {
-        const Icon = PANEL_ICONS[value];
-        return (
-          <Tooltip key={value}>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={tab === value}
-                aria-label={PANEL_LABELS[value]}
-                onClick={() => onTabChange(value)}
-                className={cn(
-                  "flex size-7 cursor-default items-center justify-center rounded-md transition-colors",
-                  tab === value
-                    ? "bg-[var(--fill-soft,var(--sidebar-accent))] text-sidebar-accent-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Icon className="size-4" strokeWidth={1.75} />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              {PANEL_LABELS[value]}
-              <ShortcutKeys ids={["panel.tab.prev", "panel.tab.next"]} />
-            </TooltipContent>
-          </Tooltip>
-        );
-      })}
-    </div>
+    <Tooltip delayDuration={400}>
+      <TooltipTrigger asChild>
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="Next panel view"
+          onClick={() => onStep(1)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onStep(1);
+            }
+          }}
+          className="flex shrink-0 cursor-pointer justify-center py-3 select-none focus-visible:outline-none"
+        >
+          <DotTrack count={count} activeIndex={activeIndex} />
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="flex items-center gap-1.5 px-1.5">
+        <ShortcutKeys ids={["panel.tab.prev", "panel.tab.next"]} />
+        {HAS_SWIPE && "or swipe the panel"}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

@@ -1891,6 +1891,9 @@ function App() {
     // moving; ⌘E is what shuts it again.
     if (!panelShown) return issuesOpen || !shownSession ? undefined : showPanel(tabs[0]);
     const from = tabs.indexOf(activeTab);
+    // A bot's pane switches like the sidebar's project filter, which ticks on
+    // the chord as on the tap and the swipe.
+    if (selectedBot && tabs.length > 1) playSwipeTick();
     setPanelTab(tabs[(from + delta + tabs.length) % tabs.length]);
   };
 
