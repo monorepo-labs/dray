@@ -25,6 +25,7 @@ final class ImageRetryTests: XCTestCase {
         snap(app, "2-cold-server-down")
         waitConnected(app)
         snap(app, "3-cold-server-back")
+        assertAllLoaded(app, "after a cold start")
         app.terminate()
 
         try down(proxy, 30)
@@ -37,6 +38,7 @@ final class ImageRetryTests: XCTestCase {
         app.activate()
         waitConnected(app)
         snap(app, "4-back-from-background")
+        assertAllLoaded(app, "back from the background")
         app.windows.firstMatch.swipeDown()
         sleep(2)
         snap(app, "5-scrolled-back")
@@ -47,6 +49,16 @@ final class ImageRetryTests: XCTestCase {
         XCTAssertTrue(bot.waitForExistence(timeout: 20), "no bot row")
         bot.tap()
         XCTAssertTrue(app.buttons["Open image"].firstMatch.waitForExistence(timeout: 15), "no image in the chat")
+    }
+
+    /// Every picture drawn: a failed one is a strip some 12pt tall, a loaded one ten times that.
+    /// Odd ones come through `read_file`, even ones through `/file`.
+    private func assertAllLoaded(_ app: XCUIApplication, _ when: String) {
+        let images = app.buttons.matching(identifier: "Open image").allElementsBoundByIndex
+        XCTAssertEqual(images.count, 6, "\(when): not every picture is in the chat")
+        for (i, image) in images.enumerated() {
+            XCTAssertGreaterThan(image.frame.height, 60, "\(when): picture \(i + 1) never loaded")
+        }
     }
 
     /// The reconnect's banner gone, then time for the pictures to land.
