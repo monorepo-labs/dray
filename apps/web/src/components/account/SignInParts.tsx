@@ -37,7 +37,8 @@ const ACTIVE =
 /// One gray card: an icon up top, what it does at the foot. A link with
 /// `href`, a button with `onClick`, and only words with neither; `disabled`
 /// with neither draws a way in that isn't open yet, faded. `tag` sits in the
-/// top corner and is never faded, so "Last used" still reads on a closed way in.
+/// bottom corner and is never faded, so "Last used" still reads on a closed way
+/// in; on a card too narrow for both, it wraps under the label.
 export function Card({
   icon,
   label,
@@ -60,22 +61,20 @@ export function Card({
   const off = disabled && !href && !onClick;
   const inner = (
     <>
-      <span className="flex items-start justify-between gap-3">
-        <span className={off ? "opacity-40" : ""}>{icon}</span>
-        {(tag || corner) && (
-          <span className="flex items-center gap-3">
-            {tag}
-            {corner && <CornerArrow className="stroke-white/40 light:stroke-black/40" />}
-          </span>
-        )}
+      <span className={`flex items-start justify-between ${off ? "opacity-40" : ""}`}>
+        {icon}
+        {corner && <CornerArrow className="stroke-white/40 light:stroke-black/40" />}
       </span>
-      <span className="flex flex-col gap-0.5">
-        <span
-          className={`text-[17px] leading-6 tracking-[-0.01em] ${off ? "text-white/40 light:text-black/40" : "text-white/80 light:text-black/80"}`}
-        >
-          {label}
+      <span className="flex flex-wrap items-end justify-between gap-x-3 gap-y-2">
+        <span className="flex flex-col gap-0.5">
+          <span
+            className={`text-[17px] leading-6 tracking-[-0.01em] ${off ? "text-white/40 light:text-black/40" : "text-white/80 light:text-black/80"}`}
+          >
+            {label}
+          </span>
+          {detail && <span className="text-[13px] leading-[18px] text-white/40 light:text-black/45">{detail}</span>}
         </span>
-        {detail && <span className="text-[13px] leading-[18px] text-white/40 light:text-black/45">{detail}</span>}
+        {tag && <span className="ml-auto">{tag}</span>}
       </span>
     </>
   );
