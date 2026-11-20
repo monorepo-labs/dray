@@ -383,9 +383,11 @@ async fn start_pr_session(
     };
     sink.emit(orchestration::SESSION_CREATED, &item).ok();
     if parent.is_some() {
-        // No branch name or PR title: the note is a list the bot trusts, and
-        // both are the PR author's words.
-        bots::note_since(&item, format!("the user started it on PR #{pr_number} from the pull requests page"), None, &sink)
+        // Named by number alone: the note is a list the bot trusts, and the
+        // title, read off the prompt's first line, carries the PR's own, which
+        // is the PR author's words. So would the branch.
+        let named = store::SessionIndexItem { title: format!("PR #{pr_number}"), ..item.clone() };
+        bots::note_since(&named, format!("the user started it on PR #{pr_number} from the pull requests page"), None, &sink)
             .await;
     }
     Ok(item)

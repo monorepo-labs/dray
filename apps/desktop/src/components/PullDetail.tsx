@@ -5,7 +5,6 @@ import { ChevronDown, ChevronRight, GitBranch } from "lucide-react";
 import BotAvatar from "@/components/BotAvatar";
 import PrPanel, { CommentPickContext } from "@/components/PrPanel";
 import { EFFORT_LABELS } from "@/components/composer/ModelSelector";
-import PermissionSelector from "@/components/composer/PermissionSelector";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -117,7 +116,7 @@ export default function PullDetail({
     <div className="flex min-h-0 flex-1 flex-col">
       {live.length > 0 && (
         <div className="flex shrink-0 items-center gap-1.5 border-b border-border px-3 py-2 text-ui">
-          <span className="shrink-0 text-muted-foreground">{live.length > 1 ? "Sessions" : "Session"}</span>
+          <span className="shrink-0 text-muted-foreground">{live.length > 1 ? "Tasks" : "Task"}</span>
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
             {live.map((s) => (
               <SessionLink key={s.sessionId} item={s} bot={botOf(s)} onOpen={() => onOpenSession(s)} />
@@ -192,7 +191,7 @@ export default function PullDetail({
                   <div className="ml-auto flex items-center gap-1.5">
                     <BotButton bots={bots} disabled={!canSend} onSend={(bot) => void send(bot)} />
                     <Button size="xs" disabled={!canSend || !server} onClick={() => void send()}>
-                      {sending ? "Starting…" : "Start session"}
+                      {sending ? "Starting…" : "Start Task"}
                     </Button>
                   </div>
                 )}
@@ -261,7 +260,7 @@ export function SessionLink({
           <ChevronRight className="size-3 shrink-0 opacity-60" />
         </button>
       </TooltipTrigger>
-      <TooltipContent>{bot ? `Open ${bot.name}'s task` : "Open session"}</TooltipContent>
+      <TooltipContent>{bot ? `Open ${bot.name}'s task` : "Open task"}</TooltipContent>
     </Tooltip>
   );
 }
@@ -339,14 +338,16 @@ function BotButton({ bots, disabled, onSend }: { bots: Bot[]; disabled: boolean;
   );
 }
 
-/// What Start session runs on: the newest settled session's picks, since that
-/// is the agent that did the work, else a new task's remembered ones — never
-/// the selected session's, which the main composer mirrors.
+/// What Start Task runs on: the newest settled session's agent and model,
+/// since that is the agent that did the work, else a new task's remembered
+/// ones — never the selected session's, which the main composer mirrors.
+/// Always Auto: the pane offers no stance, and a stance carried over from a
+/// settled session or the composer is one the reader never saw here.
 function useStartPicks(settled: SessionIndexItem | undefined) {
   return useState<PrPicks>(() => {
     if (settled) {
-      const { harness, model, effort, permissionMode, fast } = settled;
-      return { harness, model, effort, permissionMode, fast };
+      const { harness, model, effort, fast } = settled;
+      return { harness, model, effort, permissionMode: "auto", fast };
     }
     const stored = readComposerPrefs();
     const model = rememberedModel(stored.modelByHarness, stored.harness);
@@ -354,14 +355,14 @@ function useStartPicks(settled: SessionIndexItem | undefined) {
       harness: stored.harness,
       model,
       effort: stored.effortByModel[model] ?? null,
-      permissionMode: stored.permissionMode,
+      permissionMode: "auto",
       fast: stored.fast,
     };
   });
 }
 
-/// The agent, model and stance Start session uses, changeable in place. The
-/// model list is the server's own, read once per agent.
+/// The agent and model Start Task uses, the model changeable in place. The
+/// list is the server's own, read once per agent.
 function PicksRow({
   server,
   picks,
@@ -423,11 +424,6 @@ function PicksRow({
           </DropdownMenuRadioGroup>
         </DropdownMenuContent>
       </DropdownMenu>
-      <PermissionSelector
-        harness={picks.harness}
-        value={picks.permissionMode}
-        onChange={(permissionMode) => onChange({ ...picks, permissionMode })}
-      />
     </div>
   );
 }

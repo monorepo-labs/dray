@@ -1695,7 +1695,7 @@ function App() {
     bot: Bot | null,
   ): Promise<{ started: SessionIndexItem } | { error: string }> => {
     const projectPath = prCheckout(row);
-    if (!projectPath) return { error: "No checkout of this repository is attached here, so there is nowhere to start a session." };
+    if (!projectPath) return { error: "No checkout of this repository is attached here, so there is nowhere to start a task." };
     const server = serverOfPath(projectPath);
     // With the archived view up, the live side is the page's own read, which a
     // session started since is missing from: ask again before making a second.
@@ -1734,7 +1734,7 @@ function App() {
       const said = e instanceof Error ? e.message : String(e);
       // Asked before anything is made, so nothing is left to tidy up.
       if (said.includes("unknown command")) {
-        return { error: "This server is older than the pull requests page. Update it, then start the session again." };
+        return { error: "This server is older than the pull requests page. Update it, then start the task again." };
       }
       return { error: said };
     }
