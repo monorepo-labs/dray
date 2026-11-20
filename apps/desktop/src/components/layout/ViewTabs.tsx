@@ -28,6 +28,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useDragReorder } from "@/hooks/useDragReorder";
+import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
 import { serverName, useServers } from "@/lib/servers";
 import { LOCAL, type ServerId } from "@/lib/transport";
 import { useDigitHotkey, useHotkey } from "@/hooks/useHotkey";
@@ -234,6 +235,8 @@ type Item = {
   keepsView?: boolean;
   /// The remote server the tab's session runs on; absent for This Mac.
   machine?: string;
+  /// A task's or a bot chat's session, its transcript read on hover.
+  prefetch?: string;
   /// A split group, drawn as one tab: its members, lead first.
   group?: Member[];
 };
@@ -342,6 +345,8 @@ export default function ViewTabs({
       active: own === "chat",
       pick: () => onChange("chat"),
       rename,
+      // A bot's chat, out of view while one of its tasks is lit.
+      prefetch: tasks ? sessionId : undefined,
     },
     ...(shown.changes
       ? [
@@ -485,6 +490,7 @@ export default function ViewTabs({
       ),
       label: task.title,
       active: tasks?.lit === task.sessionId,
+      prefetch: task.sessionId,
       pick: () => tasks?.onPick(task.sessionId),
       close: () => {
         pushClosedTab(sessionId, { key: `task:${task.sessionId}` });
@@ -545,7 +551,7 @@ export default function ViewTabs({
     if (!group) return [item];
     const members = group.keys.flatMap((k) => {
       const head = headOf(k);
-      return head ? [{ key: k, ...head, close: memberClose(group, k, item.active) }] : [];
+      return head ? [{ key: k, ...head, prefetch: byKey.get(k)?.prefetch, close: memberClose(group, k, item.active) }] : [];
     });
     return [{ key, icon: item.icon, label: item.label, active: item.active, pick: item.pick, group: members }];
   });
@@ -872,6 +878,7 @@ export default function ViewTabs({
           onPick={item.pick}
           rename={item.rename}
           machine={item.machine}
+          prefetch={item.prefetch}
           onClose={item.close && (() => closeAt(i))}
           onDuplicate={item.duplicate}
           onPointerDown={(e) => drag.start(e, i)}
@@ -948,7 +955,7 @@ export default function ViewTabs({
   );
 }
 
-type Member = { key: TabKey; icon: React.ReactNode; label: string; close?: () => void };
+type Member = { key: TabKey; icon: React.ReactNode; label: string; prefetch?: string; close?: () => void };
 
 /// A split group as one tab: a rounded outline holding its members side by
 /// side, each its icon and title, icons alone once a member's slot is too
@@ -1005,45 +1012,75 @@ function GroupTab({
       )}
     >
       {reorder.shown.map((m, i) => (
-        <span
+        <GroupMember
           key={m.key}
-          onPointerDown={(e) => {
-            if (!e.altKey) return;
-            // Not the row's drag: this one stays inside the group.
-            e.stopPropagation();
-            reorder.start(e, i);
-          }}
-          style={{ transform: reorder.offset(i) }}
-          className={cn(
-            "group/member @container flex h-full min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md pl-2 @[64px]:justify-start",
-            m.close ? "pr-1" : "pr-2",
-            reorder.drag?.from === i && "relative z-10 bg-surface-thumb ring-1 ring-hairline",
-            !!reorder.drag && reorder.drag.from !== i && "transition-transform",
-          )}
-        >
-          {m.icon}
-          <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap mask-[linear-gradient(to_right,black_calc(100%-1.25rem),transparent)] @max-[64px]:hidden">
-            {m.label}
-          </span>
-          {/* On hover alone, the way a background tab's cross is. */}
-          {m.close && (
-            <button
-              type="button"
-              aria-label={`Close ${m.label}`}
-              // Or the press starts dragging the group.
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                m.close?.();
-              }}
-              className="shrink-0 cursor-pointer rounded-sm p-0.5 text-muted-foreground opacity-0 transition-colors group-hover/member:opacity-100 hover:text-foreground @max-[64px]:hidden"
-            >
-              <X className="size-3" strokeWidth={2} />
-            </button>
-          )}
-        </span>
+          member={m}
+          onReorder={(e) => reorder.start(e, i)}
+          transform={reorder.offset(i)}
+          held={reorder.drag?.from === i}
+          gliding={!!reorder.drag && reorder.drag.from !== i}
+        />
       ))}
     </div>
+  );
+}
+
+/// One member of a group's tab: its icon and title, and its close cross on
+/// hover. A task member reads its transcript once the pointer rests on it.
+function GroupMember({
+  member: m,
+  onReorder,
+  transform,
+  held,
+  gliding,
+}: {
+  member: Member;
+  onReorder: (e: React.PointerEvent<HTMLSpanElement>) => void;
+  transform?: string;
+  held: boolean;
+  gliding: boolean;
+}) {
+  const hover = useHoverPrefetch(m.prefetch);
+  return (
+    <span
+      onPointerEnter={hover.onPointerEnter}
+      onPointerLeave={hover.onPointerLeave}
+      onPointerDown={(e) => {
+        hover.onPointerDown();
+        if (!e.altKey) return;
+        // Not the row's drag: this one stays inside the group.
+        e.stopPropagation();
+        onReorder(e);
+      }}
+      style={{ transform }}
+      className={cn(
+        "group/member @container flex h-full min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md pl-2 @[64px]:justify-start",
+        m.close ? "pr-1" : "pr-2",
+        held && "relative z-10 bg-surface-thumb ring-1 ring-hairline",
+        gliding && "transition-transform",
+      )}
+    >
+      {m.icon}
+      <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap mask-[linear-gradient(to_right,black_calc(100%-1.25rem),transparent)] @max-[64px]:hidden">
+        {m.label}
+      </span>
+      {/* On hover alone, the way a background tab's cross is. */}
+      {m.close && (
+        <button
+          type="button"
+          aria-label={`Close ${m.label}`}
+          // Or the press starts dragging the group.
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            m.close?.();
+          }}
+          className="shrink-0 cursor-pointer rounded-sm p-0.5 text-muted-foreground opacity-0 transition-colors group-hover/member:opacity-100 hover:text-foreground @max-[64px]:hidden"
+        >
+          <X className="size-3" strokeWidth={2} />
+        </button>
+      )}
+    </span>
   );
 }
 
@@ -1079,10 +1116,13 @@ export function ItemTab({
   rename,
   overlay,
   machine,
+  prefetch,
 }: {
   icon: React.ReactNode;
   /// The remote server the tab's session runs on; absent for This Mac.
   machine?: string;
+  /// The session whose transcript a resting pointer reads ahead of the click.
+  prefetch?: string;
   /// Drawn over the whole tab, out of the row's flow: the agent's beam.
   overlay?: React.ReactNode;
   label: string;
@@ -1109,6 +1149,7 @@ export function ItemTab({
   rename?: Rename;
 }) {
   const pick = onPick;
+  const hover = useHoverPrefetch(prefetch);
   const [renaming, setRenaming] = useState(false);
   const lastClick = useRef(-Infinity);
   // Closed by the tab going inactive, not only by blur: the drag hook cancels
@@ -1146,7 +1187,12 @@ export function ItemTab({
         e.preventDefault();
         onClose();
       }}
-      onPointerDown={onPointerDown}
+      onPointerEnter={hover.onPointerEnter}
+      onPointerLeave={hover.onPointerLeave}
+      onPointerDown={(e) => {
+        hover.onPointerDown();
+        onPointerDown?.(e);
+      }}
       style={{ transform }}
       className={cn(
         "group relative flex cursor-default items-center gap-1.5 h-7 rounded-md pl-2 text-ui select-none",
