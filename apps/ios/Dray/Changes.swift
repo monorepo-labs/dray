@@ -618,6 +618,8 @@ private struct DiffScreen: View {
     let file: ChangedFile
 
     @State private var rows: [DiffRow]?
+    /// Each side's lines coloured whole, so a span crossing lines — a block comment — reads right.
+    @State private var colored: (old: [AttributedString]?, new: [AttributedString]?)
     @State private var withheld: String?
     @State private var error: String?
 
@@ -657,6 +659,12 @@ private struct DiffScreen: View {
             if let u = v.unreadable { withheld = u; return }
             // Off the main thread: a long file's difference takes a moment.
             rows = await Task.detached { unifiedDiff(old: v.oldText, new: v.newText) }.value
+            if let old = v.oldText {
+                colored.old = await Highlighter.shared.lines(old, lang: highlightLanguage(file.oldPath ?? file.path))
+            }
+            if let new = v.newText {
+                colored.new = await Highlighter.shared.lines(new, lang: highlightLanguage(file.path))
+            }
         } catch {
             self.error = error.localizedDescription
         }
@@ -679,7 +687,7 @@ private struct DiffScreen: View {
                 }
                 .padding(.horizontal, Theme.Space.l).padding(.bottom, Theme.Space.m)
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(rows.indices, id: \.self) { DiffLine(row: rows[$0], digits: digits) }
+                    ForEach(rows.indices, id: \.self) { DiffLine(row: rows[$0], digits: digits, colored: coloredLine(rows[$0])) }
                 }
                 .padding(.vertical, Theme.Space.xs)
                 .well()
@@ -689,11 +697,19 @@ private struct DiffScreen: View {
             .padding(.vertical, Theme.Space.m)
         }
     }
+
+    /// A removal's number counts the old side's lines, every other row's the new side's.
+    private func coloredLine(_ row: DiffRow) -> AttributedString? {
+        guard case .line(let sign, let number, _) = row,
+              let side = sign == "-" ? colored.old : colored.new, number <= side.count else { return nil }
+        return side[number - 1]
+    }
 }
 
 private struct DiffLine: View {
     let row: DiffRow
     let digits: Int
+    var colored: AttributedString?
 
     var body: some View {
         switch row {
@@ -722,7 +738,7 @@ private struct DiffLine: View {
                 }
                 .foregroundStyle(Theme.tertiary)
                 Text(String(sign)).foregroundStyle(sign == " " ? Theme.tertiary : tint)
-                Text(text.isEmpty ? " " : text)
+                Text(text.isEmpty ? AttributedString(" ") : colored ?? AttributedString(text))
                     .foregroundStyle(Theme.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
