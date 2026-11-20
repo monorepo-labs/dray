@@ -1557,31 +1557,29 @@ pub fn worktrees_dir(project_path: &Path) -> PathBuf {
     project_path.join(".claude").join("worktrees")
 }
 
-/// `branch` as this checkout can start from it: the local branch, else the
-/// one pushed to `origin`, fetched first so a push made moments ago is there.
-/// A failed fetch is an error rather than the cached copy: a session started
-/// on yesterday's commit reviews work that is not the work asked about.
-pub async fn pushed_branch(cwd: &str, branch: &str) -> Result<String> {
-    if resolve_commit(cwd, branch).await.is_some() {
-        return Ok(branch.to_string());
+/// `name` as this checkout can start from it: as written where it resolves
+/// here, else the commit it names on `origin`, fetched now so a push made
+/// moments ago is there. A failed fetch is an error rather than the cached
+/// copy: a session started on yesterday's commit reviews work that is not the
+/// work asked about.
+///
+/// Fetched into a ref of this call's own and read back from there, whatever
+/// `name` is — branch, tag, full ref. FETCH_HEAD and the tracking refs are
+/// shared by every fetch in the repo, so another task's fetch landing between
+/// the two could hand this one its commit.
+pub async fn pushed_branch(cwd: &str, name: &str) -> Result<String> {
+    if resolve_commit(cwd, name).await.is_some() {
+        return Ok(name.to_string());
     }
-    exec(cwd, &[], &["fetch", "-q", "origin", "--end-of-options", branch])
-        .await
-        .with_context(|| format!("could not fetch {branch} from origin — push it, then try again"))?;
-    let remote = format!("origin/{branch}");
-    if resolve_commit(cwd, &remote).await.is_some() {
-        return Ok(remote);
-    }
-    if resolve_commit(cwd, branch).await.is_some() {
-        return Ok(branch.to_string());
-    }
-    // A tag on a commit already here is left in FETCH_HEAD alone, which any
-    // other fetch in this repo can overwrite, so it is fetched under its name.
-    let refspec = format!("+refs/tags/{branch}:refs/tags/{branch}");
-    exec(cwd, &[], &["fetch", "-q", "--no-tags", "origin", &refspec])
-        .await
-        .with_context(|| format!("fetched {branch} from origin, but it names no commit"))?;
-    Ok(branch.to_string())
+    let temp = format!("refs/dray/fetch/{}", Uuid::now_v7());
+    let refspec = format!("+{name}:{temp}");
+    let fetched = exec(cwd, &[("GIT_TERMINAL_PROMPT", "0")], &["fetch", "-q", "--no-tags", "origin", &refspec]).await;
+    let commit = match fetched {
+        Ok(_) => resolve_commit(cwd, &temp).await,
+        Err(e) => return Err(e.context(format!("could not fetch {name} from origin — push it, then try again"))),
+    };
+    let _ = git(cwd, &["update-ref", "-d", &temp]).await;
+    commit.with_context(|| format!("fetched {name} from origin, but it names no commit"))
 }
 
 /// The commit `base` names, or `None` when it names nothing in this repo.
@@ -3351,10 +3349,11 @@ mod tests {
         fs::remove_dir_all(&bare).await.ok();
     }
 
-    /// A branch pushed from another machine and never fetched here resolves
-    /// to its `origin/` copy; one that cannot be fetched is an error.
+    /// A branch, tag or full ref pushed from another machine and never fetched
+    /// here resolves to the commit it names on `origin`, and leaves no ref of
+    /// its own behind; one that cannot be fetched is an error.
     #[tokio::test]
-    async fn a_branch_pushed_elsewhere_resolves_to_its_origin_copy() {
+    async fn a_ref_pushed_elsewhere_resolves_to_its_commit_on_origin() {
         let dir = scratch_repo().await;
         let at = dir.to_str().unwrap();
         let bare = std::env::temp_dir().join(format!("dray-origin-{}", Uuid::now_v7()));
@@ -3362,18 +3361,20 @@ mod tests {
         run(bare.to_str().unwrap(), &["init", "-q", "--bare", "."]).await.unwrap();
         run(at, &["remote", "add", "origin", bare.to_str().unwrap()]).await.unwrap();
         run(at, &["push", "-q", "origin", "HEAD:refs/heads/worktree-elsewhere"]).await.unwrap();
+        let head = resolve_commit(at, "HEAD").await;
 
-        assert_eq!(pushed_branch(at, "worktree-elsewhere").await.unwrap(), "origin/worktree-elsewhere");
+        assert_eq!(Some(pushed_branch(at, "worktree-elsewhere").await.unwrap()), head);
+        assert_eq!(Some(pushed_branch(at, "refs/heads/worktree-elsewhere").await.unwrap()), head);
         assert!(pushed_branch(at, "worktree-nowhere").await.is_err());
         run(at, &["tag", "v-elsewhere"]).await.unwrap();
         run(at, &["push", "-q", "origin", "v-elsewhere"]).await.unwrap();
         run(at, &["tag", "-d", "v-elsewhere"]).await.unwrap();
-        // A tag only the remote has is no branch. Its commit is already here,
-        // which a plain fetch would leave in FETCH_HEAD alone; it lands by name.
+        // A tag only the remote has is no branch, and its commit forks.
         assert!(!is_branch(at, "v-elsewhere").await);
-        assert_eq!(pushed_branch(at, "v-elsewhere").await.unwrap(), "v-elsewhere");
-        assert_eq!(resolve_commit(at, "v-elsewhere").await, resolve_commit(at, "HEAD").await);
-        assert!(!is_branch(at, "v-elsewhere").await, "a tag forks");
+        let fetched = pushed_branch(at, "v-elsewhere").await.unwrap();
+        assert_eq!(Some(fetched.clone()), head);
+        assert!(!is_branch(at, &fetched).await, "a commit forks");
+        assert_eq!(git(at, &["for-each-ref", "refs/dray/"]).await.as_deref(), Some(""), "temp refs are deleted");
         let here = current_branch(at).await.unwrap();
         assert_eq!(pushed_branch(at, &here).await.unwrap(), here);
 
