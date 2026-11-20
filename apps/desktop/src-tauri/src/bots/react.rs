@@ -31,6 +31,16 @@ pub fn emoji(said: &str) -> Option<&'static str> {
         .map(|(e, _)| *e)
 }
 
+/// Whether `reply` says nothing but `emoji`: the bot writing its reaction out
+/// again. Strict, so "Love it" or "❤️ thanks" are still replies.
+pub fn echoes(reply: &str, emoji: &str) -> bool {
+    let bare = |s: &str| -> String {
+        s.chars().filter(|&c| c != '\u{FE0F}' && crate::events::has_text(c.encode_utf8(&mut [0; 4]))).collect()
+    };
+    let emoji = bare(emoji);
+    !emoji.is_empty() && bare(reply) == emoji
+}
+
 /// The id of the newest message the user typed. A task's report, another
 /// bot's message and Dray's own prompts are no one to react to.
 pub fn target(events: &[AgentEvent]) -> Option<&str> {
@@ -103,6 +113,17 @@ mod tests {
         assert_eq!(emoji("Laugh"), Some("😂"));
         assert_eq!(emoji("sad"), Some("😢"));
         assert_eq!(emoji("🔥"), None);
+    }
+
+    #[test]
+    fn a_reply_echoes_only_the_bare_emoji() {
+        assert!(echoes("❤️", "❤️"));
+        assert!(echoes(" ❤\n", "❤️"));
+        assert!(echoes("\u{200B}👍\u{200B}", "👍"));
+        assert!(!echoes("❤️ thanks", "❤️"));
+        assert!(!echoes("love", "❤️"));
+        assert!(!echoes("👍", "❤️"));
+        assert!(!echoes("", "❤️"));
     }
 
     #[test]

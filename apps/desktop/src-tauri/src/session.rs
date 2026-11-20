@@ -2133,6 +2133,7 @@ impl SessionManager {
             Some(s) => (s.harness, s.seq.fetch_add(1, Relaxed)),
             None => (harness, next_seq_by_session_id(session_id).await?),
         };
+        note_reaction(session_id, &payload);
         let event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
         app.emit("agent_event", &event)?;
         append_session_event(session_id, event).await
@@ -3676,6 +3677,39 @@ static LAST_REPLY: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>
 static POSTED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
     std::sync::LazyLock::new(Default::default);
 
+/// The emoji each bot reacted with this turn. A reply saying only that emoji
+/// says it twice, whatever led the agent to write it, so it is dropped.
+static REACTED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Records a reaction landing in `session_id`, for [`REACTED`].
+fn note_reaction(session_id: &str, payload: &AgentEventPayload) {
+    if let AgentEventPayload::Reaction { emoji, .. } = payload {
+        REACTED.lock().unwrap().insert(session_id.to_string(), emoji.clone());
+    }
+}
+
+/// Whether a main-thread event in `session_id` only repeats the reaction placed
+/// this turn and must be dropped. A turn's close forgets the reaction, and
+/// takes the echo out of its `final_text` so the turn still counts as silent.
+fn drops_echo(session_id: &str, payload: &mut AgentEventPayload) -> bool {
+    use crate::bots::react::echoes;
+    note_reaction(session_id, payload);
+    let mut reacted = REACTED.lock().unwrap();
+    match payload {
+        AgentEventPayload::AssistantText { text, .. } => reacted.get(session_id).is_some_and(|e| echoes(text, e)),
+        AgentEventPayload::TurnCompleted { final_text, .. } => {
+            if let (Some(emoji), Some(text)) = (reacted.remove(session_id), final_text.as_deref()) {
+                if echoes(text, &emoji) {
+                    *final_text = None;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
 /// Sends `text` to the session that started `session_id`, where it is a bot's.
 fn report(session_id: &str, text: String, app: &Sink) {
     let report = crate::orchestration::report_to_parent(session_id.to_string(), text, app.clone());
@@ -3722,6 +3756,11 @@ fn report_text(status: TurnStatus, stop_reason: Option<&str>, final_text: Option
 }
 
 async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink, tracked: bool) {
+    // Never logged or drawn: the `block_stop` behind it retires its preview.
+    if agent_event.subagent.is_none() && drops_echo(ctx.session_id, &mut agent_event.payload) {
+        return;
+    }
+
     // Filled here rather than in the mapper because only the session layer
     // knows the cwd. Freezing the tree id onto the closing event is what
     // stops an idle session's diff from absorbing everything that later
@@ -4581,6 +4620,30 @@ mod tests {
         assert_eq!(lead_in_around(hidden, "hi", false), "[Since your last turn: x]\n\nhi");
         assert_eq!(lead_in_around(hidden, "/hello", true), "/hello\n\n[Since your last turn: x]");
         assert_eq!(lead_in_around(None, "/hello", true), "/hello");
+    }
+
+    #[test]
+    fn a_reply_repeating_this_turns_reaction_is_dropped() {
+        let session = "echo-test";
+        let text = |t: &str| AgentEventPayload::AssistantText { block: None, text: t.into() };
+        let close = |t: &str| -> AgentEventPayload {
+            serde_json::from_value(serde_json::json!({"type": "turn_completed", "status": "success", "finalText": t}))
+                .unwrap()
+        };
+        let reaction = AgentEventPayload::Reaction { message_id: "m".into(), emoji: "❤️".into() };
+
+        assert!(!drops_echo(session, &mut text("❤️")), "no reaction yet");
+        assert!(!drops_echo(session, &mut reaction.clone()));
+        assert!(drops_echo(session, &mut text("❤")));
+        assert!(!drops_echo(session, &mut text("❤️ anytime")));
+        let mut closing = close("❤️");
+        assert!(!drops_echo(session, &mut closing));
+        assert!(matches!(closing, AgentEventPayload::TurnCompleted { final_text: None, .. }));
+
+        assert!(!drops_echo(session, &mut text("❤️")), "the next turn has not reacted");
+        let mut closing = close("❤️");
+        drops_echo(session, &mut closing);
+        assert!(matches!(closing, AgentEventPayload::TurnCompleted { final_text: Some(_), .. }));
     }
 
     #[test]
