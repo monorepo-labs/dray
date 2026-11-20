@@ -770,7 +770,10 @@ function App() {
   // compose, the first choosing where rows come from.
   const [pullsPeople, setPullsPeople] = useState<PeopleFilter>("involving");
   const [pullsScope, setPullsScope] = useState<PullsScope>("space");
-  const pullsSearch = pullsPeople === "involving";
+  // Every people filter but All lists from one GitHub search across every
+  // repo; All lists the projects added to Dray, through their marks.
+  const pullsSearch = pullsPeople !== "all";
+  const pullsFilter = pullsPeople === "mine" ? "author" : pullsPeople === "review" ? "review_requested" : "involves";
   // The owner the "involving me" search is narrowed to, or every one.
   const [pullsOwner, setPullsOwner] = useState<string | null>(null);
 
@@ -1609,7 +1612,7 @@ function App() {
   // One that has left the list stays only while its repo is still one the page
   // reads — a PR merged from the pane keeps its pane — and goes with a space
   // or scope switch that takes its repo away, the spaces rule for the screen.
-  const prSearch = usePrSearch(pullsOpen && pullsSearch, pullsOwner);
+  const prSearch = usePrSearch(pullsOpen && pullsSearch, pullsOwner, pullsFilter);
   // Each searched repo's checkout among This Mac's projects, matched on their
   // git remotes, so a row reads and starts through the checkout where there is
   // one and through its `github:` slug, cloning on start, where there is none.

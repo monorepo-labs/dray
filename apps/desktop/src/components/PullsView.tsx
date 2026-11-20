@@ -17,7 +17,6 @@ import { relativeTime } from "@/lib/format";
 import {
   SECTIONS,
   inboxSection,
-  matchesPeople,
   rowRepoName,
   type InboxRow,
   type PeopleFilter,
@@ -34,6 +33,14 @@ const PEOPLE: readonly { value: PeopleFilter; label: string }[] = [
   { value: "mine", label: "Mine" },
   { value: "review", label: "Review requested" },
 ];
+
+/// How the empty list names the people filter it ran under.
+const PEOPLE_EMPTY: Record<PeopleFilter, string> = {
+  all: "",
+  involving: " involving you",
+  mine: " of yours",
+  review: " awaiting your review",
+};
 
 const SCOPES = [
   { value: "space", label: "This space" },
@@ -107,7 +114,6 @@ export default function PullsView({
   const ownerList = [...new Set([...owners, ...rows.map((row) => rowRepoName(row).split("/")[0])])];
   const shown = rows.filter(
     (row) =>
-      matchesPeople(row, people) &&
       (!owner || rowRepoName(row).split("/")[0].toLowerCase() === owner.toLowerCase()) &&
       (!repoShown || rowRepoName(row) === repoShown),
   );
@@ -212,7 +218,7 @@ export default function PullsView({
           <p className="px-3 py-4 text-ui text-muted-foreground">
             {rows.length > 0
               ? "No pull request matches these filters."
-              : `No open pull requests${people === "involving" ? " involving you" : ""}${scope === "space" ? " in this space" : ""}.`}
+              : `No open pull requests${PEOPLE_EMPTY[people]}${scope === "space" ? " in this space" : ""}.`}
           </p>
         ) : (
           sections.map((section) => (

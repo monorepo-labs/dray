@@ -69,15 +69,10 @@ export function inboxSection(mark: PrMark): InboxSection {
   return "waiting";
 }
 
-/// Who a PR is about. "Involving me" lists from one GitHub search; the rest
-/// narrow the space's PRs, read through the marks.
+/// Who a PR is about. All lists the projects added to Dray, through their
+/// marks; each of the others is one GitHub search across every repo
+/// (`involves:@me`, `author:@me`, `review-requested:@me`).
 export type PeopleFilter = "all" | "involving" | "mine" | "review";
-
-export function matchesPeople(row: InboxRow, filter: PeopleFilter): boolean {
-  if (filter === "mine") return row.listing.viewerDidAuthor;
-  if (filter === "review") return row.listing.reviewRequested;
-  return true;
-}
 
 /// Every task a PR has had, newest first: same repo and `sessionBranch` naming
 /// the PR's head — the reading the sidebar's mark uses, so the two never

@@ -2019,7 +2019,12 @@ export type SearchedPr = {
 /**
  * `owner/name`, the slug `github:` keys and `gh --repo` take.
  */
-repo: string, mark: PrMark, };
+repo: string, 
+/**
+ * The repo's owner is an organization, not a person: what the Owner menu
+ * searches it by (`org:` or `user:`), membership or not.
+ */
+ownerIsOrg: boolean, mark: PrMark, };
 
 /**
  * What a send did. The two fields are mutually exclusive in practice — a

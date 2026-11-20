@@ -4,7 +4,6 @@ import {
   commentKey,
   inboxRows,
   inboxSection,
-  matchesPeople,
   pickableKeys,
   plainComment,
   prPrompt,
@@ -126,16 +125,6 @@ describe("inboxSection", () => {
 
   it("does not file changes asked of someone else's PR as the reader's", () => {
     expect(inboxSection(mark({ reviewDecision: "CHANGES_REQUESTED" }))).toBe("waiting");
-  });
-});
-
-describe("matchesPeople", () => {
-  it("narrows to the reader's own and to reviews asked of them", () => {
-    const mine = row({ listing: listing({ viewerDidAuthor: true }) });
-    const asked = row({ listing: listing({ reviewRequested: true }) });
-    expect([matchesPeople(mine, "mine"), matchesPeople(asked, "mine")]).toEqual([true, false]);
-    expect([matchesPeople(mine, "review"), matchesPeople(asked, "review")]).toEqual([false, true]);
-    expect(matchesPeople(mine, "all")).toBe(true);
   });
 });
 

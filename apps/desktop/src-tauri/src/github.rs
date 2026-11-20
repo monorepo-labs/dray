@@ -1372,7 +1372,7 @@ query($q:String!){
  viewer{login organizations(first:50){nodes{login}}}
  search(query:$q,type:ISSUE,first:100){nodes{... on PullRequest{
   number url headRefName headRefOid isDraft mergeable mergeStateStatus reviewDecision $LISTING
-  repository{nameWithOwner}
+  repository{nameWithOwner owner{__typename}}
   commits(last:1){nodes{commit{statusCheckRollup{state contexts{totalCount}}}}}
  }}}
 }"#;
@@ -1397,6 +1397,9 @@ pub struct PrSearch {
 pub struct SearchedPr {
     /// `owner/name`, the slug `github:` keys and `gh --repo` take.
     pub repo: String,
+    /// The repo's owner is an organization, not a person: what the Owner menu
+    /// searches it by (`org:` or `user:`), membership or not.
+    pub owner_is_org: bool,
     pub mark: PrMark,
 }
 
@@ -1426,19 +1429,51 @@ struct RawSearched {
 struct RawNamed {
     #[serde(default)]
     name_with_owner: String,
+    owner: Option<RawOwner>,
 }
 
-/// The reader's open pull requests across GitHub; `owner` narrows them to one
-/// organization (`org:`) or to a person's account (`user:`). `org` says which
-/// the owner is — the caller knows the reader's orgs from an earlier answer;
-/// GitHub's search drops every PR when the qualifier names the wrong kind.
-/// Without it, only the reader's own login reads as a person.
+#[derive(Deserialize)]
+struct RawOwner {
+    #[serde(rename = "__typename", default)]
+    typename: String,
+}
+
+/// The reader's open pull requests across GitHub, as `filter` picks them:
+/// those involving the reader (the default), authored by them, or awaiting
+/// their review. `owner` narrows them to one organization (`org:`) or to a
+/// person's account (`user:`); `org` says which the owner is, read off an
+/// earlier answer — GitHub's search drops every PR when the qualifier names
+/// the wrong kind. Without it, only the reader's own login reads as a person.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn pr_search(owner: Option<String>, org: Option<bool>) -> Result<PrSearch, PrUnavailable> {
-    pr_search_inner(owner.as_deref(), org).await.map_err(unavailable)
+pub async fn pr_search(
+    owner: Option<String>,
+    org: Option<bool>,
+    filter: Option<PrSearchFilter>,
+) -> Result<PrSearch, PrUnavailable> {
+    pr_search_inner(owner.as_deref(), org, filter.unwrap_or_default()).await.map_err(unavailable)
 }
 
-async fn pr_search_inner(owner: Option<&str>, org: Option<bool>) -> Result<PrSearch, String> {
+/// Which of the reader's pull requests a search asks for.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrSearchFilter {
+    #[default]
+    Involves,
+    Author,
+    ReviewRequested,
+}
+
+impl PrSearchFilter {
+    fn qualifier(self) -> &'static str {
+        match self {
+            Self::Involves => "involves:@me",
+            Self::Author => "author:@me",
+            Self::ReviewRequested => "review-requested:@me",
+        }
+    }
+}
+
+async fn pr_search_inner(owner: Option<&str>, org: Option<bool>, filter: PrSearchFilter) -> Result<PrSearch, String> {
     let home = std::env::home_dir().ok_or("no home directory")?;
     let home = home.to_str().ok_or("home directory is not UTF-8")?;
     // A login is letters, digits and dashes; anything else is no owner GitHub
@@ -1454,7 +1489,7 @@ async fn pr_search_inner(owner: Option<&str>, org: Option<bool>) -> Result<PrSea
         Some(o) => format!(" user:{o}"),
         None => String::new(),
     };
-    let q = format!("q=is:pr is:open involves:@me archived:false sort:updated-desc{scope}");
+    let q = format!("q=is:pr is:open {} archived:false sort:updated-desc{scope}", filter.qualifier());
     let query = format!("query={}", QUERY_SEARCH.replace("$LISTING", LISTING));
     read_pr_search(&gh(home, &["api", "graphql", "-f", &q, "-f", &query]).await?)
 }
@@ -1478,8 +1513,10 @@ fn read_pr_search(out: &str) -> Result<PrSearch, String> {
         // A node the fragment did not match — never a PR — arrives empty.
         .filter_map(|node| serde_json::from_value::<RawSearched>(node).ok())
         .filter_map(|found| {
-            let repo = found.repository?.name_with_owner;
-            (!repo.is_empty()).then(|| SearchedPr { repo, mark: mark_of(PrMarkState::Open, found.pr) })
+            let named = found.repository?;
+            let owner_is_org = named.owner.is_some_and(|o| o.typename == "Organization");
+            let repo = named.name_with_owner;
+            (!repo.is_empty()).then(|| SearchedPr { repo, owner_is_org, mark: mark_of(PrMarkState::Open, found.pr) })
         })
         .collect();
     Ok(PrSearch {
@@ -2076,6 +2113,7 @@ mod tests {
         assert_eq!(found.orgs, ["acme"]);
         assert_eq!(found.prs.len(), 1);
         assert_eq!(found.prs[0].repo, "acme/app");
+        assert!(!found.prs[0].owner_is_org, "no owner type read as a person");
         assert_eq!(found.prs[0].mark.listing.as_ref().map(|l| l.title.as_str()), Some("Fix"));
         assert!(matches!(found.prs[0].mark.checks_state, PrChecksState::Failing));
         assert!(read_pr_search(r#"{"errors":[{"message":"bad"}]}"#).is_err());
