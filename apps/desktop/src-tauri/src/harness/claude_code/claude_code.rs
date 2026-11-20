@@ -352,9 +352,6 @@ async fn read_stdout(
                 }
                 None => no_reply::response(request_id, message),
             };
-            if no_reply::ends_turn(&reply) {
-                crate::session::close_silently(session_id);
-            }
             if let Err(err) = crate::session::write_line(&stdin, &reply).await {
                 eprintln!("[claude mcp reply err] {err}");
             }
