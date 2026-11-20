@@ -867,7 +867,7 @@ async fn pass(sink: &Sink) {
     drop(state);
     let reads = due.into_iter().map(|repo| async move {
         let issued = now_ms();
-        let answer = tokio::time::timeout(Duration::from_secs(20), crate::github::pr_marks(repo.clone())).await;
+        let answer = tokio::time::timeout(Duration::from_secs(20), crate::github::pr_marks(repo.clone(), None)).await;
         (repo, issued, answer)
     });
     let answers = futures_util::future::join_all(reads).await;

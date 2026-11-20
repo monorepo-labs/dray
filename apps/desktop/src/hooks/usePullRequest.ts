@@ -4,7 +4,7 @@ import { invoke } from "@/lib/transport";
 
 import { noteMergeForStar } from "@/hooks/useStarPrompt";
 import { useWindowFocused } from "@/lib/focus";
-import { isSettling } from "@/lib/pr";
+import { asUnavailable, isSettling } from "@/lib/pr";
 import { branchChanged, inRepo, panelRead } from "@/lib/prSync";
 import type { MergeMethod, PrUnavailable, PullRequest } from "@/types/events";
 
@@ -105,16 +105,6 @@ branchChanged.subscribe(({ repo, branch }) => {
 });
 
 const isOpen = (pr: PullRequest) => pr.state === "OPEN";
-
-/// What `invoke` rejected with, as the backend meant it.
-///
-/// Tauri hands the serialized `Err` back, so this is already the right shape —
-/// except when the bridge itself failed, which arrives as a string and has no
-/// kind of its own.
-function asUnavailable(e: unknown): PrUnavailable {
-  if (e && typeof e === "object" && "kind" in e) return e as PrUnavailable;
-  return { kind: "other", detail: String(e) };
-}
 
 /// Whether the tab should exist at all for this session.
 ///
@@ -225,7 +215,8 @@ export function usePullRequest(
       // A read the pointer started ahead of the click is this read: wait for
       // it, then take its answer the way a fresh cache is taken below.
       const ahead = prefetching.get(key);
-      if (!force && ahead) {
+      const joined = !force && !!ahead;
+      if (joined) {
         commit(key, (prev) => ({ ...prev, loading: true }));
         await ahead;
       }
@@ -237,7 +228,9 @@ export function usePullRequest(
       }
       // A switch runs two effects that both ask, and each started a `gh` of
       // its own for the one answer — out of a budget every agent shares.
-      if (!force && reading.get(key)) return;
+      // Not after a joined prefetch whose answer was dropped: `loading` is
+      // already up, and a read another instance holds would never clear it.
+      if (!force && !joined && reading.get(key)) return;
 
       commit(key, (prev) => ({ ...prev, loading: true }));
       reading.set(key, (reading.get(key) ?? 0) + 1);
