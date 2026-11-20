@@ -3681,6 +3681,18 @@ static POSTED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<St
 static REACTED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
     std::sync::LazyLock::new(Default::default);
 
+/// Bot chats whose turn a silent tool (`react`, `no_reply_needed`) closed.
+/// Anything the agent writes after that is filler: a CLI that ignores
+/// `claude/endTurn`, or a batch holding an errored result, gives the model one
+/// more call, and it narrated the close ("(Turn ended without a reply.)").
+static CLOSED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Marks `session_id`'s turn closed by a silent tool, for [`CLOSED`].
+pub fn close_silently(session_id: &str) {
+    CLOSED.lock().unwrap().insert(session_id.to_string());
+}
+
 /// Drops what `session_id`'s turn noted for its close, for a turn that closes
 /// without a `TurnCompleted` reaching `ingest_event`: kept, it would count
 /// against the next turn.
@@ -3688,6 +3700,7 @@ fn forget_turn(session_id: &str) {
     LAST_REPLY.lock().unwrap().remove(session_id);
     POSTED.lock().unwrap().remove(session_id);
     REACTED.lock().unwrap().remove(session_id);
+    CLOSED.lock().unwrap().remove(session_id);
 }
 
 /// Records a reaction landing in `session_id`, for [`REACTED`].
@@ -3697,20 +3710,26 @@ fn note_reaction(session_id: &str, payload: &AgentEventPayload) {
     }
 }
 
-/// Whether a main-thread event in `session_id` only repeats the reaction placed
-/// this turn and must be dropped. A turn's close forgets the reaction, and
-/// takes the echo out of its `final_text` so the turn still counts as silent.
+/// Whether a main-thread event in `session_id` must be dropped: text after a
+/// silent tool closed the turn, its stream included so no preview flashes, or
+/// a reply only repeating this turn's reaction. A turn's close forgets both,
+/// and takes what they dropped out of its `final_text` so the turn still counts
+/// as silent.
 fn drops_echo(session_id: &str, payload: &mut AgentEventPayload) -> bool {
     use crate::bots::react::echoes;
     note_reaction(session_id, payload);
+    let closed = CLOSED.lock().unwrap().contains(session_id);
     let mut reacted = REACTED.lock().unwrap();
     match payload {
-        AgentEventPayload::AssistantText { text, .. } => reacted.get(session_id).is_some_and(|e| echoes(text, e)),
+        AgentEventPayload::Delta(_) => closed,
+        AgentEventPayload::AssistantText { text, .. } => {
+            closed || reacted.get(session_id).is_some_and(|e| echoes(text, e))
+        }
         AgentEventPayload::TurnCompleted { final_text, .. } => {
-            if let (Some(emoji), Some(text)) = (reacted.remove(session_id), final_text.as_deref()) {
-                if echoes(text, &emoji) {
-                    *final_text = None;
-                }
+            let emoji = reacted.remove(session_id);
+            let echoed = matches!((&emoji, final_text.as_deref()), (Some(e), Some(t)) if echoes(t, e));
+            if CLOSED.lock().unwrap().remove(session_id) || echoed {
+                *final_text = None;
             }
             false
         }
@@ -4652,6 +4671,36 @@ mod tests {
         let mut closing = close("❤️");
         drops_echo(session, &mut closing);
         assert!(matches!(closing, AgentEventPayload::TurnCompleted { final_text: Some(_), .. }));
+    }
+
+    #[test]
+    fn nothing_written_after_a_silent_tool_closed_the_turn_is_drawn() {
+        let session = "closed-test";
+        let text = |t: &str| AgentEventPayload::AssistantText { block: None, text: t.into() };
+        let close = |t: &str| -> AgentEventPayload {
+            serde_json::from_value(serde_json::json!({"type": "turn_completed", "status": "success", "finalText": t}))
+                .unwrap()
+        };
+        let delta = || {
+            AgentEventPayload::Delta(crate::events::DeltaEvent::TextDelta {
+                block: crate::events::BlockRef { message_id: "m".into(), index: 0 },
+                text: "(Turn".into(),
+            })
+        };
+
+        assert!(!drops_echo(session, &mut text("Checking.")), "the turn is still open");
+        assert!(!drops_echo(session, &mut delta()));
+        close_silently(session);
+        assert!(drops_echo(session, &mut delta()));
+        assert!(drops_echo(session, &mut text("(Turn ended without a reply.)")));
+        let mut closing = close("(Turn ended without a reply.)");
+        assert!(!drops_echo(session, &mut closing));
+        assert!(matches!(closing, AgentEventPayload::TurnCompleted { final_text: None, .. }));
+
+        assert!(!drops_echo(session, &mut text("Hi again.")), "the next turn is open");
+        close_silently(session);
+        forget_turn(session);
+        assert!(!drops_echo(session, &mut text("Resumed.")), "a dead child's close is forgotten");
     }
 
     #[test]
