@@ -7,7 +7,11 @@ import { channel } from "@/lib/channel";
 import { useWindowFocused } from "@/lib/focus";
 import { markDisagrees, marksGaveUp, marksRepo, marksRetryDelay, pickPrMark, sameMark } from "@/lib/pr";
 import { branchChanged, inRepo, panelRead } from "@/lib/prSync";
-import type { PrMark } from "@/types/events";
+import type { PrMark, PrUnavailable } from "@/types/events";
+
+/// `gh`'s refusal as the backend types it, or the text of anything else.
+const asUnavailable = (e: unknown): PrUnavailable =>
+  e && typeof e === "object" && "kind" in e ? (e as PrUnavailable) : { kind: "other", detail: String(e) };
 
 /// How long a repo's answer counts as fresh. Longer than the panel's own 30s,
 /// because this feeds a mark rather than a view being read: the sidebar is on
@@ -76,6 +80,9 @@ const repoOf = new Map<string, string>();
 /// again: the poll reads only repos holding an open PR, and a repo whose reads
 /// all failed holds nothing.
 const failures = new Map<string, { count: number; at: number }>();
+/// Why each key's last read failed, until one lands. The sidebar draws nothing
+/// from it; the pull requests page says it under that repo's rows.
+const lastError = new Map<string, PrUnavailable>();
 
 const EMPTY: Map<string, PrMark> = new Map();
 
@@ -253,6 +260,7 @@ export function usePrMarks(
         } catch (error) {
           if (marksGaveUp(error)) failures.delete(path);
           else failures.set(path, { count: (failures.get(path)?.count ?? 0) + 1, at: Date.now() });
+          lastError.set(path, asUnavailable(error));
           // A failed read changes nothing at all — it neither writes rows nor
           // stamps, and both halves of that are load-bearing.
           //
@@ -289,6 +297,7 @@ export function usePrMarks(
         if (repo) repoOf.set(path, repo);
         for (const key of sharing(path)) {
           failures.delete(key);
+          lastError.delete(key);
           if (outdated(key, startedAt) || startedAt < (answeredAt.get(key) ?? 0)) continue;
           answeredAt.set(key, startedAt);
           const before = cache.get(key);
@@ -485,6 +494,32 @@ export function usePrMarks(
       },
       [byRepo],
     ),
+    /// Every pull request a key's last read held, open and merged, or nothing
+    /// before its first read. The pull requests page lists from it.
+    marksIn: useCallback(
+      (repoPath: string): PrMark[] | undefined => {
+        void byRepo; // re-made on every read, so a caller re-renders on one
+        const marks = numbered.get(repoPath);
+        return marks && [...marks.values()];
+      },
+      [byRepo],
+    ),
+    /// The GitHub repo a key was last read as, `host/owner/name`.
+    repoOf: useCallback(
+      (repoPath: string): string | undefined => {
+        void byRepo;
+        return repoOf.get(repoPath);
+      },
+      [byRepo],
+    ),
+    /// Why a key's last read failed, while no read since has landed.
+    errorFor: useCallback(
+      (repoPath: string): PrUnavailable | undefined => {
+        void byRepo;
+        return lastError.get(repoPath);
+      },
+      [byRepo],
+    ),
     /// When a repo's marks were asked for, or nothing before its first read.
     readAt: useCallback(
       (repoPath: string): number | undefined => {
@@ -513,7 +548,7 @@ export function usePrMarks(
     }, []),
     /// Re-reads every repo currently on screen. Called when a turn ends — that
     /// is when a pull request appears.
-    refresh: useCallback(() => void load(true), [load]),
+    refresh: useCallback(() => load(true), [load]),
     /// Re-reads one repo, for an agent saying it changed a pull request there.
     /// One repo and not every one on screen: agents push and comment all day,
     /// across every machine, and each of those re-reading the lot was most of
