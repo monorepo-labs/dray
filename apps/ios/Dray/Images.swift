@@ -101,6 +101,7 @@ struct ThumbnailRow<Content: View>: View {
 /// glyph where it could not be read. Callers size and clip it.
 struct RemoteImage: View {
     @Environment(\.imageServer) private var server
+    @Environment(Store.self) private var store
     let ref: ImageRef
     /// Fill the frame and crop, for a thumbnail; otherwise fit it whole.
     var fill = false
@@ -109,6 +110,11 @@ struct RemoteImage: View {
     /// Kept with its ref, so a view handed another picture never shows the last one meanwhile.
     @State private var loaded: (ref: ImageRef, image: PlatformImage)?
     @State private var failed = false
+
+    private struct Attempt: Equatable {
+        let ref: ImageRef
+        let up: Bool
+    }
 
     var body: some View {
         Group {
@@ -125,10 +131,11 @@ struct RemoteImage: View {
                     }
             }
         }
-        // A few spaced tries ride out a socket coming back; scrolling away and back tries afresh.
-        .task(id: ref) {
+        // A few spaced tries ride out a blip. A server out of reach for longer is tried again
+        // once it is back: the row stays mounted, so nothing else would ever try (#1347).
+        .task(id: Attempt(ref: ref, up: server.map { store.serverState[$0.serverId] == .connected } ?? false)) {
             failed = false
-            guard ImageLoader.cached(ref, server) == nil else { return }
+            guard ImageLoader.cached(ref, server) == nil, loaded?.ref != ref else { return }
             for wait in [0, 2, 5, 15] {
                 try? await Task.sleep(for: .seconds(wait))
                 if Task.isCancelled { return }

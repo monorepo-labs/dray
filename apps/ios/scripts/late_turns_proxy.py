@@ -7,7 +7,9 @@ change the way it does on a phone:
   every socket, so the app reads the turn on reconnect, as it does coming back
   from the background. The turn is tall, ends "Last line of x.", and names a
   screenshot and a recording the session holds under `browser/recordings/<id>/`,
-  where it holds any.
+  where it holds any;
+- `GET /down?for=n` drops every socket and refuses everything for n seconds,
+  as a server out of reach does.
 
 Each appended line is a copy of the log's own newest line of that type, so its
 shape is whatever the server wrote.
@@ -21,6 +23,7 @@ import asyncio, copy, json, os, sys, time, uuid
 LISTEN, UPSTREAM, HOME = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
 DELAY = float(sys.argv[4]) if len(sys.argv) > 4 else 3
 clients = set()
+down_until = 0.0
 
 
 def append_turn(tag):
@@ -66,8 +69,20 @@ async def pipe(reader, writer):
 
 
 async def handle(reader, writer):
+    global down_until
     try:
         head = await reader.read(65536)
+        if head.startswith(b"GET /down?for="):
+            down_until = time.time() + float(head.split(b" ")[1].split(b"=")[1])
+            for c in list(clients):
+                c.close()
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            await writer.drain()
+            writer.close()
+            return
+        if time.time() < down_until:
+            writer.close()
+            return
         if head.startswith(b"GET /late?tag="):
             append_turn(head.split(b" ")[1].split(b"=")[1].decode())
             for c in list(clients):
