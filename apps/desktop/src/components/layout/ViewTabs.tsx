@@ -551,7 +551,7 @@ export default function ViewTabs({
     if (!group) return [item];
     const members = group.keys.flatMap((k) => {
       const head = headOf(k);
-      return head ? [{ key: k, ...head, close: memberClose(group, k, item.active) }] : [];
+      return head ? [{ key: k, ...head, prefetch: byKey.get(k)?.prefetch, close: memberClose(group, k, item.active) }] : [];
     });
     return [{ key, icon: item.icon, label: item.label, active: item.active, pick: item.pick, group: members }];
   });
@@ -955,7 +955,7 @@ export default function ViewTabs({
   );
 }
 
-type Member = { key: TabKey; icon: React.ReactNode; label: string; close?: () => void };
+type Member = { key: TabKey; icon: React.ReactNode; label: string; prefetch?: string; close?: () => void };
 
 /// A split group as one tab: a rounded outline holding its members side by
 /// side, each its icon and title, icons alone once a member's slot is too
@@ -1012,45 +1012,75 @@ function GroupTab({
       )}
     >
       {reorder.shown.map((m, i) => (
-        <span
+        <GroupMember
           key={m.key}
-          onPointerDown={(e) => {
-            if (!e.altKey) return;
-            // Not the row's drag: this one stays inside the group.
-            e.stopPropagation();
-            reorder.start(e, i);
-          }}
-          style={{ transform: reorder.offset(i) }}
-          className={cn(
-            "group/member @container flex h-full min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md pl-2 @[64px]:justify-start",
-            m.close ? "pr-1" : "pr-2",
-            reorder.drag?.from === i && "relative z-10 bg-surface-thumb ring-1 ring-hairline",
-            !!reorder.drag && reorder.drag.from !== i && "transition-transform",
-          )}
-        >
-          {m.icon}
-          <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap mask-[linear-gradient(to_right,black_calc(100%-1.25rem),transparent)] @max-[64px]:hidden">
-            {m.label}
-          </span>
-          {/* On hover alone, the way a background tab's cross is. */}
-          {m.close && (
-            <button
-              type="button"
-              aria-label={`Close ${m.label}`}
-              // Or the press starts dragging the group.
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                m.close?.();
-              }}
-              className="shrink-0 cursor-pointer rounded-sm p-0.5 text-muted-foreground opacity-0 transition-colors group-hover/member:opacity-100 hover:text-foreground @max-[64px]:hidden"
-            >
-              <X className="size-3" strokeWidth={2} />
-            </button>
-          )}
-        </span>
+          member={m}
+          onReorder={(e) => reorder.start(e, i)}
+          transform={reorder.offset(i)}
+          held={reorder.drag?.from === i}
+          gliding={!!reorder.drag && reorder.drag.from !== i}
+        />
       ))}
     </div>
+  );
+}
+
+/// One member of a group's tab: its icon and title, and its close cross on
+/// hover. A task member reads its transcript once the pointer rests on it.
+function GroupMember({
+  member: m,
+  onReorder,
+  transform,
+  held,
+  gliding,
+}: {
+  member: Member;
+  onReorder: (e: React.PointerEvent<HTMLSpanElement>) => void;
+  transform?: string;
+  held: boolean;
+  gliding: boolean;
+}) {
+  const hover = useHoverPrefetch(m.prefetch);
+  return (
+    <span
+      onPointerEnter={hover.onPointerEnter}
+      onPointerLeave={hover.onPointerLeave}
+      onPointerDown={(e) => {
+        hover.onPointerDown();
+        if (!e.altKey) return;
+        // Not the row's drag: this one stays inside the group.
+        e.stopPropagation();
+        onReorder(e);
+      }}
+      style={{ transform }}
+      className={cn(
+        "group/member @container flex h-full min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md pl-2 @[64px]:justify-start",
+        m.close ? "pr-1" : "pr-2",
+        held && "relative z-10 bg-surface-thumb ring-1 ring-hairline",
+        gliding && "transition-transform",
+      )}
+    >
+      {m.icon}
+      <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap mask-[linear-gradient(to_right,black_calc(100%-1.25rem),transparent)] @max-[64px]:hidden">
+        {m.label}
+      </span>
+      {/* On hover alone, the way a background tab's cross is. */}
+      {m.close && (
+        <button
+          type="button"
+          aria-label={`Close ${m.label}`}
+          // Or the press starts dragging the group.
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            m.close?.();
+          }}
+          className="shrink-0 cursor-pointer rounded-sm p-0.5 text-muted-foreground opacity-0 transition-colors group-hover/member:opacity-100 hover:text-foreground @max-[64px]:hidden"
+        >
+          <X className="size-3" strokeWidth={2} />
+        </button>
+      )}
+    </span>
   );
 }
 
