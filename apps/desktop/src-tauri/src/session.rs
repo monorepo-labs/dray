@@ -3718,6 +3718,11 @@ fn note_reaction(session_id: &str, payload: &AgentEventPayload) {
 fn drops_echo(session_id: &str, payload: &mut AgentEventPayload) -> bool {
     use crate::bots::react::echoes;
     note_reaction(session_id, payload);
+    // A new turn opens on its own `init`, so a mark a dead child left behind
+    // — replaced before its cleanup ran `forget_turn` — never reaches it.
+    if matches!(payload, AgentEventPayload::TurnStarted(_)) {
+        CLOSED.lock().unwrap().remove(session_id);
+    }
     let closed = CLOSED.lock().unwrap().contains(session_id);
     let mut reacted = REACTED.lock().unwrap();
     match payload {
@@ -4701,6 +4706,11 @@ mod tests {
         close_silently(session);
         forget_turn(session);
         assert!(!drops_echo(session, &mut text("Resumed.")), "a dead child's close is forgotten");
+
+        close_silently(session);
+        let mut opening = AgentEventPayload::TurnStarted(Default::default());
+        assert!(!drops_echo(session, &mut opening));
+        assert!(!drops_echo(session, &mut text("Answer.")), "a replacement child's turn opens clear");
     }
 
     #[test]
