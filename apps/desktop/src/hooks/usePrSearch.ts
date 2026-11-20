@@ -45,7 +45,13 @@ export function usePrSearch(active: boolean, owner: string | null, filter: PrSea
     async (force: boolean) => {
       const kept = cache.get(key);
       if (kept) setAnswer(kept.answer);
-      if (!force && kept && Date.now() - kept.at < POLL_MS) return;
+      // A fresh cached answer ends the wait too: a read still running for the
+      // filter switched away from no longer clears the spinner.
+      if (!force && kept && Date.now() - kept.at < POLL_MS) {
+        setLoading(false);
+        setError(null);
+        return;
+      }
       setLoading(true);
       try {
         const found = await invoke<PrSearch>("pr_search", { owner, org: orgOf(owner), filter }, LOCAL);
