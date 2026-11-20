@@ -4,13 +4,13 @@ import { ChevronDown, ChevronRight, GitBranch } from "lucide-react";
 
 import BotAvatar from "@/components/BotAvatar";
 import PrPanel, { CommentPickContext } from "@/components/PrPanel";
-import { EFFORT_LABELS } from "@/components/composer/ModelSelector";
+import Segmented from "@/components/Segmented";
+import ModelSelector from "@/components/composer/ModelSelector";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
@@ -19,9 +19,10 @@ import { inputClassName } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { readComposerPrefs } from "@/hooks/useComposerPrefs";
 import { useDraft } from "@/hooks/useDraft";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
 import type { usePullRequest } from "@/hooks/usePullRequest";
-import { AGENT_LABELS, rememberedModel, usableEffort, usableModel } from "@/lib/model";
-import { prPrompt, unresolvedKeys, type InboxRow, type PrPicks } from "@/lib/prInbox";
+import { rememberedModel, usableEffort, usableModel } from "@/lib/model";
+import { prPrompt, unresolvedKeys, type InboxRow, type PrCheckout, type PrPicks } from "@/lib/prInbox";
 import { sendToTask } from "@/lib/sendToTask";
 import { invoke, type ServerId } from "@/lib/transport";
 import { cn } from "@/lib/utils";
@@ -39,6 +40,7 @@ export default function PullDetail({
   bots,
   botOf,
   server,
+  checkout,
   onOpenSession,
   onStart,
 }: {
@@ -50,8 +52,11 @@ export default function PullDetail({
   bots: Bot[];
   /// The bot a session is a task of, if any.
   botOf: (item: SessionIndexItem) => Bot | undefined;
-  /// Where the PR's checkout lives, or `null` with none attached.
-  server: ServerId | null;
+  /// Where the task runs: the checkout's server, or This Mac, which clones one.
+  server: ServerId;
+  /// What Start Task does about a checkout first, said under the box: nothing,
+  /// attach a checkout already on disk, or clone the repo into `~/dray`.
+  checkout: PrCheckout;
   onOpenSession: (item: SessionIndexItem) => void;
   onStart: (
     prompt: string,
@@ -183,20 +188,30 @@ export default function PullDetail({
                     </Button>
                   </>
                 )}
-                {target ? (
+                {target && (
                   <Button size="xs" className="ml-auto" disabled={!canSend} onClick={() => void send()}>
                     {sending ? "Sending…" : "Send"}
                   </Button>
-                ) : (
-                  <div className="ml-auto flex items-center gap-1.5">
-                    <BotButton bots={bots} disabled={!canSend} onSend={(bot) => void send(bot)} />
-                    <Button size="xs" disabled={!canSend || !server} onClick={() => void send()}>
-                      {sending ? "Starting…" : "Start Task"}
-                    </Button>
-                  </div>
                 )}
               </div>
-              {!target && server && <PicksRow server={server} picks={picks} onChange={setPicks} />}
+              {!target && (
+                <StartControls
+                  bots={bots}
+                  server={server}
+                  picks={picks}
+                  onPicks={setPicks}
+                  disabled={!canSend}
+                  sending={sending}
+                  onStart={(bot) => void send(bot)}
+                />
+              )}
+              {!target && checkout.kind !== "here" && (
+                <p className="text-ui text-muted-foreground">
+                  {checkout.kind === "attach"
+                    ? `Attaches ${checkout.path} first, the checkout a task of this repo already uses.`
+                    : `No copy of ${checkout.slug} here, so Start Task clones it into ~/dray first.`}
+                </p>
+              )}
             </>
           )}
 
@@ -305,39 +320,6 @@ function SessionMenu({
   );
 }
 
-/// Send to bot: one bot is named on the button, several get a menu. The task
-/// runs on the bot's own agent, in its own worktree on the PR's branch.
-function BotButton({ bots, disabled, onSend }: { bots: Bot[]; disabled: boolean; onSend: (bot: Bot) => void }) {
-  if (bots.length === 0) return null;
-  if (bots.length === 1) {
-    const [bot] = bots;
-    return (
-      <Button variant="outline" size="xs" disabled={disabled} onClick={() => onSend(bot)}>
-        <BotAvatar seed={bot.id} avatar={bot.avatar} className="block size-3.5 scale-[1.18]" />
-        Send to {bot.name}
-      </Button>
-    );
-  }
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="xs" disabled={disabled}>
-          Send to bot
-          <ChevronDown className="size-3 opacity-60" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
-        {bots.map((bot) => (
-          <DropdownMenuItem key={bot.id} onSelect={() => onSend(bot)}>
-            <BotAvatar seed={bot.id} avatar={bot.avatar} className="block size-4 scale-[1.18]" />
-            {bot.name}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
 /// What Start Task runs on: the newest settled session's agent and model,
 /// since that is the agent that did the work, else a new task's remembered
 /// ones — never the selected session's, which the main composer mirrors.
@@ -361,9 +343,180 @@ function useStartPicks(settled: SessionIndexItem | undefined) {
   });
 }
 
-/// The agent and model Start Task uses, the model changeable in place. The
-/// list is the server's own, read once per agent.
-function PicksRow({
+/// Which way Start Task is laid out — two buttons, or a switch over one — kept
+/// while Yogesh tries both. Dev builds draw a toggle for it above the controls.
+export type StartLayout = "buttons" | "switch";
+const LAYOUT_KEY = "dray.prStartLayout";
+/// The bot a PR task last went to, the default the next time.
+const LAST_BOT_KEY = "dray.prStartBot";
+/// The switch layout's last side, so it opens where the reader left it.
+const LAST_MODE_KEY = "dray.prStartMode";
+
+/// How a task for the PR starts: on the reader's own picks, or as a bot's task
+/// on that bot's agent. The bot goes first and leads, since handing a PR to a
+/// bot is the common case; the model picker belongs to the plain task alone.
+function StartControls({
+  bots,
+  server,
+  picks,
+  onPicks,
+  disabled,
+  sending,
+  onStart,
+}: {
+  bots: Bot[];
+  server: ServerId;
+  picks: PrPicks;
+  onPicks: (picks: PrPicks) => void;
+  disabled: boolean;
+  sending: boolean;
+  onStart: (bot: Bot | null) => void;
+}) {
+  const [layout, setLayout] = useLocalStorage<StartLayout>(LAYOUT_KEY, "buttons");
+  const [botId, setBotId] = useLocalStorage<string | null>(LAST_BOT_KEY, null);
+  const [mode, setMode] = useLocalStorage<"bot" | "task">(LAST_MODE_KEY, "bot");
+  const bot = bots.find((b) => b.id === botId) ?? bots[0] ?? null;
+  const start = (to: Bot | null) => {
+    if (to) setBotId(to.id);
+    onStart(to);
+  };
+  const toBot = !!bot && (layout === "buttons" || mode === "bot");
+  const picker = <TaskModelPicker server={server} picks={picks} onChange={onPicks} />;
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {import.meta.env.DEV && bots.length > 0 && (
+        <div className="flex items-center gap-1.5 text-ui text-muted-foreground">
+          <span>Layout (dev)</span>
+          <Segmented
+            value={layout}
+            options={[
+              { value: "buttons", label: "Buttons" },
+              { value: "switch", label: "Switch" },
+            ]}
+            onPick={setLayout}
+            label="Start Task layout"
+          />
+        </div>
+      )}
+      {!bot || layout === "buttons" ? (
+        <div className="flex flex-wrap items-center justify-end gap-1.5">
+          {bot && <BotStart bots={bots} bot={bot} onPick={setBotId} disabled={disabled} onStart={() => start(bot)} />}
+          <div className="flex items-center gap-0.5">
+            {picker}
+            <Button size="xs" variant={bot ? "outline" : "default"} disabled={disabled} onClick={() => start(null)}>
+              {sending ? "Starting…" : "Start Task"}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Segmented
+            value={mode}
+            options={[
+              // With several, the menu beside it names the bot, so the half
+              // says only what kind of task this is.
+              bots.length > 1
+                ? { value: "bot", label: "Bot" }
+                : {
+                    value: "bot",
+                    label: bot.name,
+                    content: (
+                      <span className="flex items-center gap-1">
+                        <BotAvatar seed={bot.id} avatar={bot.avatar} className="block size-3.5 scale-[1.18]" />
+                        {bot.name}
+                      </span>
+                    ),
+                  },
+              { value: "task", label: "Task" },
+            ]}
+            onPick={setMode}
+            label="Start as"
+          />
+          {toBot && bots.length > 1 && <BotMenu bots={bots} bot={bot} onPick={setBotId} />}
+          {!toBot && picker}
+          <Button size="xs" className="ml-auto" disabled={disabled} onClick={() => start(toBot ? bot : null)}>
+            {sending ? "Starting…" : toBot ? `Start task in ${bot.name}` : "Start Task"}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/// The bot's own start, the primary action: "Start task in <bot>", with a
+/// chevron beside it to pick another bot where there are several.
+function BotStart({
+  bots,
+  bot,
+  onPick,
+  disabled,
+  onStart,
+}: {
+  bots: Bot[];
+  bot: Bot;
+  onPick: (id: string) => void;
+  disabled: boolean;
+  onStart: () => void;
+}) {
+  return (
+    <div className="flex items-center">
+      <Button size="xs" disabled={disabled} onClick={onStart} className={cn(bots.length > 1 && "rounded-r-none")}>
+        <BotAvatar seed={bot.id} avatar={bot.avatar} className="block size-3.5 scale-[1.18]" />
+        Start task in {bot.name}
+      </Button>
+      {bots.length > 1 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="xs" aria-label="Pick a bot" className="rounded-l-none border-l border-primary-foreground/20 px-1">
+              <ChevronDown className="size-3" />
+            </Button>
+          </DropdownMenuTrigger>
+          <BotMenuItems bots={bots} bot={bot} onPick={onPick} />
+        </DropdownMenu>
+      )}
+    </div>
+  );
+}
+
+/// The switch layout's bot pick, beside the switch where there are several.
+function BotMenu({ bots, bot, onPick }: { bots: Bot[]; bot: Bot; onPick: (id: string) => void }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex items-center gap-1 rounded-md px-1 py-0.5 text-ui text-foreground hover:bg-sidebar-accent"
+        >
+          <BotAvatar seed={bot.id} avatar={bot.avatar} className="block size-3.5 scale-[1.18]" />
+          {bot.name}
+          <ChevronDown className="size-3 opacity-60" />
+        </button>
+      </DropdownMenuTrigger>
+      <BotMenuItems bots={bots} bot={bot} onPick={onPick} />
+    </DropdownMenu>
+  );
+}
+
+function BotMenuItems({ bots, bot, onPick }: { bots: Bot[]; bot: Bot; onPick: (id: string) => void }) {
+  return (
+    <DropdownMenuContent align="end" className="w-56">
+      <DropdownMenuRadioGroup value={bot.id} onValueChange={onPick}>
+        {bots.map((b) => (
+          <DropdownMenuRadioItem key={b.id} value={b.id}>
+            <BotAvatar seed={b.id} avatar={b.avatar} className="block size-4 scale-[1.18]" />
+            {b.name}
+          </DropdownMenuRadioItem>
+        ))}
+      </DropdownMenuRadioGroup>
+    </DropdownMenuContent>
+  );
+}
+
+/// The New Task composer's own model picker, on the page's picks: the agent
+/// row, models, effort and fast mode, read from the task's server. A bot's
+/// task never shows it, since it runs on the bot's own agent.
+function TaskModelPicker({
   server,
   picks,
   onChange,
@@ -373,16 +526,20 @@ function PicksRow({
   onChange: (picks: PrPicks) => void;
 }) {
   const [models, setModels] = useState<Model[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [generation, setGeneration] = useState(0);
   useEffect(() => {
     let gone = false;
+    setLoading(true);
     invoke<Model[]>("list_models", { harness: picks.harness }, server)
       .then((list) => !gone && setModels(list))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => !gone && setLoading(false));
     return () => {
       gone = true;
     };
-  }, [server, picks.harness]);
-  const model = models.find((m) => m.id === picks.model);
+  }, [server, picks.harness, generation]);
+
   // Repaired once the list lands, as the main composer repairs its own: a
   // remembered model this agent no longer runs, or an effort it lacks, would
   // reach the server as a pick nobody made.
@@ -395,35 +552,32 @@ function PicksRow({
   }, [models, picks, onChange]);
 
   return (
-    <div className="flex min-w-0 items-center gap-1 text-ui text-muted-foreground">
-      <span className="shrink-0">{AGENT_LABELS[picks.harness]}</span>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            className="flex min-w-0 items-center gap-1 rounded-md px-1 py-0.5 text-foreground hover:bg-sidebar-accent"
-          >
-            <span className="truncate">{model?.label ?? picks.model}</span>
-            {picks.effort && <span className="text-muted-foreground">{EFFORT_LABELS[picks.effort]}</span>}
-            <ChevronDown className="size-3 shrink-0 opacity-60" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-56">
-          <DropdownMenuRadioGroup
-            value={picks.model}
-            onValueChange={(id) => {
-              const next = models.find((m) => m.id === id);
-              if (next) onChange({ ...picks, model: next.id, effort: usableEffort(next, picks.effort, "high") });
-            }}
-          >
-            {models.map((m) => (
-              <DropdownMenuRadioItem key={m.id} value={m.id}>
-                {m.label}
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
+    <ModelSelector
+      server={server}
+      harness={picks.harness}
+      onHarnessChange={(harness) => {
+        const stored = readComposerPrefs();
+        const model = rememberedModel(stored.modelByHarness, harness);
+        setModels([]);
+        onChange({ ...picks, harness, model, effort: stored.effortByModel[model] ?? null });
+      }}
+      models={models}
+      modelId={picks.model}
+      effort={picks.effort}
+      fast={picks.fast}
+      onFastChange={(fast) => onChange({ ...picks, fast })}
+      fastNote={null}
+      isNewSession
+      busy={false}
+      onChange={(model, effort) => onChange({ ...picks, model, effort })}
+      onRefreshModels={() => {
+        void invoke("refresh_models", {}, server)
+          .catch(() => {})
+          .finally(() => setGeneration((n) => n + 1));
+      }}
+      onReloadModels={() => setGeneration((n) => n + 1)}
+      onSeedProvider={() => {}}
+      loadingModels={loading}
+    />
   );
 }

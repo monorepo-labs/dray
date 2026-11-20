@@ -1660,7 +1660,7 @@ pub async fn create_worktree_on_branch(project_path: &str, name: &str, branch: &
     let path = worktrees_dir(Path::new(project_path)).join(name);
     let path = path.to_string_lossy().into_owned();
     let Some(remote) = remote_for(project_path, repo).await else {
-        bail!("no remote in {project_path} points at {repo} — add one (git remote add upstream <its url>), then start the session again");
+        bail!("no remote in {project_path} points at {repo} — add one (git remote add upstream <its url>), then start the task again");
     };
     let tracking = format!("{remote}/{branch}");
 
@@ -1682,7 +1682,7 @@ pub async fn create_worktree_on_branch(project_path: &str, name: &str, branch: &
         // commits, and pushing them would overwrite it.
         bail!(
             "your local {branch} has commits {tracking} does not — likely an older copy of the pull request. \
-             Rename it (git branch -m {branch} {branch}-old) or delete it, then start the session again"
+             Rename it (git branch -m {branch} {branch}-old) or delete it, then start the task again"
         );
     }
 

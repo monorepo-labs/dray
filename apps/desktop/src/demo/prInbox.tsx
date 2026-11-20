@@ -272,7 +272,8 @@ function Demo() {
                 sessions={sessionsFor(picked)}
                 bots={[]}
                 botOf={() => undefined}
-                server={null}
+                server="local"
+                checkout={{ kind: "here", path: "/demo" }}
                 onOpenSession={(item) => alert(`Would open ${item.title}`)}
                 onStart={async (prompt) => {
                   sent.unshift({ sessionId: `new session on ${picked.mark.headRefName}`, prompt });

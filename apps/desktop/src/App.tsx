@@ -194,7 +194,7 @@ import { useAgentUpdates, useAutoUpdateAgents } from "@/hooks/useAgentUpdates";
 import { overwritesInPlace, turnRunningOn } from "@/lib/agentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import AutoContinueNotice from "@/components/composer/AutoContinueNotice";
-import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, PrMark, SessionIndexItem, SessionSnapshot, WorktreeDisposition } from "@/types/events";
+import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, PrMark, Project, SessionIndexItem, SessionSnapshot, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -208,8 +208,8 @@ import { changeRange, lastToolResult, writingTurns } from "@/lib/changes";
 import { useOlderWrites } from "@/hooks/useOlderWrites";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
-import { prBadgeCount, prRepoSlug, sessionBranch, slugKey } from "@/lib/pr";
-import { inboxRows, sessionsForPr, type InboxRow, type PrPicks } from "@/lib/prInbox";
+import { prBadgeCount, prRepoSlug, sessionBranch, slugKey, slugOf } from "@/lib/pr";
+import { inboxRows, sessionsForPr, type InboxRow, type PrCheckout, type PrPicks } from "@/lib/prInbox";
 import type { PullsScope } from "@/components/PullsView";
 import { holdSettle } from "@/lib/heldFlags";
 import { confirmMerge, mergeBlock, readLogin, useMergeAccess } from "@/lib/mergeAccess";
@@ -1666,11 +1666,23 @@ function App() {
   const prCheckout = (row: InboxRow) =>
     projects.find((p) => p.path === row.key)?.path ??
     projects.find((p) => prMarks.repoOf(p.path) === row.repo)?.path;
-  /// The bots a PR can go to: those on its checkout's server, the only ones
-  /// whose task can be made in that checkout.
+  /// What Start Task does about a checkout first. A key that is a checkout on
+  /// disk — a bot task's, read for the page though nobody attached it — is
+  /// attached; a `github:` key with no checkout anywhere is cloned into
+  /// `~/dray`, on This Mac, the attach dialog's own clone.
+  const prCheckoutPlan = (row: InboxRow): PrCheckout => {
+    const here = prCheckout(row);
+    if (here) return { kind: "here", path: here };
+    const slug = slugOf(row.key);
+    return slug ? { kind: "clone", slug } : { kind: "attach", path: row.key };
+  };
+  /// Where a PR's task runs: its checkout's server, This Mac for a clone.
+  const prServer = (plan: PrCheckout) => (plan.kind === "clone" ? LOCAL : serverOfPath(plan.path));
+  /// The bots a PR can go to: those on the server its task runs on, the only
+  /// ones whose task can be made in that checkout.
   const botsForRow = (row: InboxRow) => {
-    const checkout = prCheckout(row);
-    return checkout ? bots.filter((b) => serverOfBot(b) === serverOfPath(checkout)) : [];
+    const server = prServer(prCheckoutPlan(row));
+    return bots.filter((b) => serverOfBot(b) === server);
   };
   /// Which bot a PR's session is a task of, to name the bot beside it.
   const botOfPrSession = (item: SessionIndexItem) =>
@@ -1694,9 +1706,8 @@ function App() {
     picks: PrPicks,
     bot: Bot | null,
   ): Promise<{ started: SessionIndexItem } | { error: string }> => {
-    const projectPath = prCheckout(row);
-    if (!projectPath) return { error: "No checkout of this repository is attached here, so there is nowhere to start a task." };
-    const server = serverOfPath(projectPath);
+    const plan = prCheckoutPlan(row);
+    const server = prServer(plan);
     // With the archived view up, the live side is the page's own read, which a
     // session started since is missing from: ask again before making a second.
     if (indexSide !== false) {
@@ -1712,6 +1723,34 @@ function App() {
         setOtherIndexSide(live);
         return { error: `"${working.title}" is already working on this pull request. Send to it instead.` };
       }
+    }
+    // Attached or cloned only now, at the start, so opening a PR changes
+    // nothing on disk; done before the duplicate check above could not see a
+    // checkout it had to make.
+    let projectPath: string;
+    try {
+      if (plan.kind === "here") projectPath = plan.path;
+      else {
+        const list = await invoke<Project[]>(
+          plan.kind === "clone" ? "clone_github_repo" : "add_project",
+          plan.kind === "clone" ? { slug: plan.slug } : { path: plan.path },
+          server,
+        );
+        handleAttachProject(server, list);
+        const name = plan.kind === "clone" ? plan.slug.split("/").pop() : basename(plan.path);
+        const made = list.find((p) => basename(p.path) === name);
+        if (!made) return { error: "The checkout was made but is not in the project list." };
+        projectPath = made.path;
+        void prMarks.refreshRepos([projectPath]);
+      }
+    } catch (e) {
+      const said = e instanceof Error ? e.message : String(e);
+      return {
+        error:
+          plan.kind === "clone"
+            ? `Could not clone ${plan.slug} into ~/dray: ${said}`
+            : `Could not attach ${plan.path}: ${said}`,
+      };
     }
     try {
       const started = await invoke<SessionIndexItem>(
@@ -4232,10 +4271,8 @@ function App() {
                     sessions={sessionsForRow(pickedRow)}
                     bots={botsForRow(pickedRow)}
                     botOf={botOfPrSession}
-                    server={(() => {
-                      const checkout = prCheckout(pickedRow);
-                      return checkout ? serverOfPath(checkout) : null;
-                    })()}
+                    server={prServer(prCheckoutPlan(pickedRow))}
+                    checkout={prCheckoutPlan(pickedRow)}
                     onOpenSession={openPrSession}
                     onStart={(prompt, picks, bot) => startPrSession(pickedRow, prompt, picks, bot)}
                   />

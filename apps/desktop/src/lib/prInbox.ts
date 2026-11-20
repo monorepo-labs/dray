@@ -239,3 +239,10 @@ export type PrPicks = {
   permissionMode: ApprovalPolicy;
   fast: boolean;
 };
+
+/// Where a PR's task gets its checkout: one attached here, a checkout on disk
+/// to attach (a bot task's, read for the page), or a clone of the repo.
+export type PrCheckout =
+  | { kind: "here"; path: string }
+  | { kind: "attach"; path: string }
+  | { kind: "clone"; slug: string };
