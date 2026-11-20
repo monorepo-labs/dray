@@ -31,10 +31,14 @@ import {
 import { useDraft } from "@/hooks/useDraft";
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useHotkey } from "@/hooks/useHotkey";
-import { useIssueSearch } from "@/hooks/useIssueSearch";
+import { useBotMentionRepo } from "@/hooks/useBotMentionRepo";
+import { useGithubRepo, useIssueSearch } from "@/hooks/useIssueSearch";
+import { usePrMentions } from "@/hooks/usePrMarks";
 import { useRecentCommands } from "@/hooks/useRecentCommands";
 import { highlightSegments } from "@/lib/highlight";
 import { applyIssue, cutRange, insertIssue, issueSpan, rememberIssueTitle } from "@/lib/issue";
+import { slugKey } from "@/lib/pr";
+import { filterPrs, prEmptyNote, prIdentifier } from "@/lib/prMention";
 import { placeSegments } from "@/lib/richText";
 import { LOCAL, serverOfPath } from "@/lib/transport";
 import { forget, keepUploading, MAX_UPLOAD_BYTES } from "@/lib/uploads";
@@ -42,6 +46,8 @@ import {
   canSwitchTracker,
   effectiveTracker,
   readIssueTracker,
+  readMentionKind,
+  setMentionKind,
   subscribeIssueTracker,
   type Connected,
 } from "@/lib/issueTracker";
@@ -62,7 +68,6 @@ import type {
   Attachment,
   Bot,
   FileMatch,
-  Issue,
   QueuedMessage,
   SessionIndexItem,
   SlashCommand,
@@ -391,11 +396,42 @@ export default function ChatInput({
   // trackers are connected, which only `App`'s own read can answer.
   const trackerPick = useSyncExternalStore(subscribeIssueTracker, readIssueTracker);
   const tracker = effectiveTracker(trackerPick, issueTrackers);
+  const mentionKind = useSyncExternalStore(subscribeIssueTracker, readMentionKind);
+  const listingPrs = issue !== null && mentionKind === "prs";
+  // A bot's folder has no remote, so its menu reads a repo the reader picks.
+  const botRepo = useBotMentionRepo(bots ? cwd : null, issue !== null);
   const {
     issues,
-    loading: issuesLoading,
-    emptyNote: issuesNote,
-  } = useIssueSearch(issue?.query ?? null, tracker, cwd);
+    loading: issueRowsLoading,
+    emptyNote: issueRowsNote,
+  } = useIssueSearch(listingPrs ? null : (issue?.query ?? null), tracker, cwd, botRepo);
+  // Pull requests come off the PR marks cache the pull requests page reads, so
+  // the menu adds no read of its own.
+  const ownRepo = useGithubRepo(cwd, listingPrs && !botRepo);
+  const prRepo = botRepo ? botRepo.repo : ownRepo;
+  const prMarks = usePrMentions(prRepo ? slugKey(prRepo) : null, listingPrs);
+  const prRows = useMemo(
+    () =>
+      listingPrs
+        ? filterPrs(prMarks.prs, issue?.query ?? "").flatMap((pr) => {
+            const identifier = prIdentifier(pr);
+            return identifier ? [{ pr, identifier }] : [];
+          })
+        : [],
+    [listingPrs, prMarks.prs, issue?.query],
+  );
+  const prsLoading = listingPrs && (prRepo === undefined || prMarks.loading);
+  const issuesLoading = listingPrs ? prsLoading : issueRowsLoading;
+  const noRepoNote = "No attached project is on GitHub.";
+  const issuesNote = listingPrs
+    ? prsLoading || prRows.length > 0
+      ? undefined
+      : botRepo?.repo === null
+        ? noRepoNote
+        : prEmptyNote(prRepo ?? null, issue?.query ?? "", prMarks.error)
+    : botRepo?.repo === null && tracker === "github" && issueRowsNote
+      ? noRepoNote
+      : issueRowsNote;
   // The issue tags already in the prompt, so the list can mark them and a pick
   // can take one back out. Read through the chip pass, which is what knows where
   // a remembered title ends. The token being typed is skipped: `#DRA-53` typed in
@@ -453,7 +489,9 @@ export default function ChatInput({
       ? botMatches.length
       : files.length
     : issue
-      ? issues.length
+      ? listingPrs
+        ? prRows.length
+        : issues.length
       : session
         ? sessionMatches.length
         : commandMatches.length;
@@ -497,7 +535,7 @@ export default function ChatInput({
     if (query === null && mentionQuery === null && issueQuery === null && sessionQuery === null) {
       setDismissed(false);
     }
-  }, [query, mentionQuery, issueQuery, sessionQuery]);
+  }, [query, mentionQuery, issueQuery, sessionQuery, mentionKind]);
 
   const pickCommand = (command: SlashCommand) => {
     const next = applyCommand(message, command.name);
@@ -527,8 +565,9 @@ export default function ChatInput({
   /// Picks a row, or takes its tag back out where the prompt already has one.
   /// `keepOpen` is ⌘-click or ⌘⏎: the tag goes in and the `#query` token stays,
   /// so the list stays up for the next pick. A plain pick consumes the token
-  /// either way, the way it always has.
-  const pickIssue = (picked: Issue, keepOpen = false) => {
+  /// either way, the way it always has. A pull request is one more tag of the
+  /// same shape, `#owner/repo#12 Title`, which the send resolves like an issue.
+  const pickIssue = (picked: { identifier: string; title: string }, keepOpen = false) => {
     if (!issue) return;
 
     const placed = taggedIssues.filter((tag) => tag.identifier === picked.identifier.toLowerCase());
@@ -554,6 +593,9 @@ export default function ChatInput({
     editorRef.current?.focus();
   };
 
+  const pickPr = (row: (typeof prRows)[number], keepOpen = false) =>
+    pickIssue({ identifier: row.identifier, title: row.pr.listing?.title ?? "" }, keepOpen);
+
   const pickSession = (picked: SessionIndexItem) => {
     if (!session) return;
 
@@ -578,6 +620,11 @@ export default function ChatInput({
     }
 
     if (issue) {
+      if (listingPrs) {
+        const row = prRows[index];
+        if (row) pickPr(row, keepOpen);
+        return;
+      }
       const picked = issues[index];
       if (picked) pickIssue(picked, keepOpen);
       return;
@@ -979,9 +1026,19 @@ export default function ChatInput({
               )
             ) : issue ? (
               <IssueMentionMenu
+                kind={mentionKind}
                 issues={issues}
+                prs={prRows}
                 activeIndex={active}
                 onPick={pickIssue}
+                onPickPr={pickPr}
+                repoPick={
+                  botRepo && {
+                    repo: botRepo.repo ?? null,
+                    repos: botRepo.repos,
+                    onPick: botRepo.pick,
+                  }
+                }
                 tagged={new Set(taggedIssues.map((tag) => tag.identifier))}
                 onHover={setActiveIndex}
                 bare={isNewTask}
@@ -1104,7 +1161,7 @@ export default function ChatInput({
                           bots ? "@bots." : "@files.",
                           "/skills.",
                           canMentionSession && "&tasks.",
-                          issuesConnected && "#issues.",
+                          issuesConnected && (issueTrackers.github ? "#issues and PRs." : "#issues."),
                         ]
                           .filter(Boolean)
                           .join(" ")
@@ -1127,6 +1184,14 @@ export default function ChatInput({
                     // a picker showing placeholders has nothing to highlight, so
                     // `% rowCount` is a division by zero and Enter would be
                     // swallowed by a pick that can only land on nothing.
+                    //
+                    // ⇧Tab flips the `#` menu between issues and pull requests,
+                    // with or without rows: an empty list is where it is wanted.
+                    if (menuOpen && issue && e.key === "Tab" && e.shiftKey) {
+                      e.preventDefault();
+                      setMentionKind(listingPrs ? "issues" : "prs");
+                      return;
+                    }
                     if (menuOpen && rowCount > 0 && !e.nativeEvent.isComposing) {
                       if (e.key === "ArrowDown") {
                         e.preventDefault();

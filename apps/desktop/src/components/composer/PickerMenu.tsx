@@ -66,6 +66,7 @@ export default function PickerMenu<T>({
   emptyNote,
   header,
   keepOpenHint = false,
+  extraHint,
 }: {
   groups: PickerGroup<T>[];
   /// Named for assistive tech, which otherwise reads an unlabelled listbox.
@@ -108,6 +109,8 @@ export default function PickerMenu<T>({
   header?: ReactNode;
   /// Names ⌘⏎ in the hint row, for the one picker that keeps the list open on it.
   keepOpenHint?: boolean;
+  /// One more key in the hint row, after the rest.
+  extraHint?: ReactNode;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
@@ -213,6 +216,7 @@ export default function PickerMenu<T>({
           <span className="ml-0.5">add another</span>
         </KbdGroup>
       )}
+      {extraHint}
     </div>
   );
 
