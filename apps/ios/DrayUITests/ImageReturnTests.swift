@@ -1,14 +1,13 @@
 import XCTest
 
-/// A bot chat's markdown images show again on every return, not only the first open (#1349):
-/// back out and reopen, go to the background and come back, then a cold start with the
-/// server out of reach, which only the disk cache can draw. Against the same home as
+/// A bot chat's markdown images show again on every return, not only the first open (#1357):
+/// back out and reopen, go to the background and come back, then a relaunch, which reads
+/// them from the server again since nothing is kept on the device. Against the same home as
 /// `ImageRetryTests`: `scripts/image_retry_seed.py` behind `scripts/late_turns_proxy.py`.
 final class ImageReturnTests: XCTestCase {
     private var env: [String: String] { ProcessInfo.processInfo.environment }
 
     func testImagesShowOnEveryReturn() throws {
-        guard let proxy = env["DRAY_PROXY"] else { throw XCTSkip("set TEST_RUNNER_DRAY_PROXY") }
         var app = try pair()
         openBot(app)
         sleep(6)
@@ -30,12 +29,11 @@ final class ImageReturnTests: XCTestCase {
         check(app, "4-reopened-after-background")
 
         app.terminate()
-        try down(proxy, 60)
         app = XCUIApplication()
         app.launch()
         openBot(app)
-        sleep(3)
-        check(app, "5-cold-start-server-down")
+        sleep(6)
+        check(app, "5-relaunched")
     }
 
     private func openBot(_ app: XCUIApplication) {
@@ -79,10 +77,6 @@ final class ImageReturnTests: XCTestCase {
                                 width: CGFloat(cg.width), height: CGFloat(cg.height)))
         let rgb = px[0..<3].map(Int.init)
         return rgb.max()! - rgb.min()! > 60
-    }
-
-    private func down(_ proxy: String, _ seconds: Int) throws {
-        _ = try Data(contentsOf: URL(string: "\(proxy)/down?for=\(seconds)")!)
     }
 
     private func pair() throws -> XCUIApplication {

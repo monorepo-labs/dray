@@ -1,4 +1,3 @@
-import CryptoKit
 import SwiftUI
 
 // Pictures in a transcript, shared with the island by path: a prompt's
@@ -18,53 +17,43 @@ extension EnvironmentValues {
     @Entry var imageServer: Connection?
 }
 
-/// Loaded images, in memory and on disk, so a picture seen once draws at once
-/// on every return, across launches too, and is never fetched again.
+/// Loaded images, held in memory alone: nothing a chat shows is written to the device,
+/// so a relaunch reads them from the server again.
 @MainActor
 enum ImageLoader {
     private static let cache = NSCache<NSString, PlatformImage>()
     /// One fetch per picture, however many rows ask for it at once.
     private static var loading: [NSString: Task<PlatformImage?, Never>] = [:]
-    // ponytail: never pruned; the system purges Caches when space runs low.
-    private static let folder: URL = {
-        let url = URL.cachesDirectory.appending(path: "\(Bundle.main.bundleIdentifier ?? "Dray")/images", directoryHint: .isDirectory)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
+    /// Ephemeral, so no response lands in URLCache's store on disk. Builds before this one
+    /// read through `URLSession.shared`, whose cache may still hold pictures: cleared here.
+    private static let session: URLSession = {
+        URLCache.shared.removeAllCachedResponses()
+        return URLSession(configuration: .ephemeral)
     }()
 
-    /// Memory, then disk: iOS empties an `NSCache` once the app is in the background.
     static func cached(_ ref: ImageRef, _ server: Connection?) -> PlatformImage? {
-        guard let key = key(ref, server) else { return nil }
-        if let hit = cache.object(forKey: key) { return hit }
-        guard let data = try? Data(contentsOf: file(key)), let image = PlatformImage(data: data) else { return nil }
-        cache.setObject(image, forKey: key)
-        return image
+        key(ref, server).flatMap { cache.object(forKey: $0) }
     }
 
     static func load(_ ref: ImageRef, from server: Connection?) async -> PlatformImage? {
         guard let key = key(ref, server) else { return nil }
-        if let hit = cached(ref, server) { return hit }
+        if let hit = cache.object(forKey: key) { return hit }
         if let running = loading[key] { return await running.value }
         let task = Task { () -> PlatformImage? in
             var data: Data?
             if let request = request(ref, server),
-               let (body, response) = try? await URLSession.shared.data(for: request),
+               let (body, response) = try? await session.data(for: request),
                (response as? HTTPURLResponse)?.statusCode ?? 200 == 200, PlatformImage(data: body) != nil {
                 data = body
             }
             if data == nil { data = await readFile(ref, server) }
             guard let data, let image = PlatformImage(data: data) else { return nil }
             cache.setObject(image, forKey: key)
-            try? data.write(to: file(key), options: .atomic)
             return image
         }
         loading[key] = task
         defer { loading[key] = nil }
         return await task.value
-    }
-
-    private static func file(_ key: NSString) -> URL {
-        folder.appending(path: SHA256.hash(data: Data((key as String).utf8)).map { String(format: "%02x", $0) }.joined())
     }
 
     /// `/file` serves attachments and recordings alone, so any other path an agent
@@ -160,7 +149,7 @@ struct RemoteImage: View {
     }
 
     /// Not `.task`: a reopened chat's rows are told they disappeared the instant they
-    /// appear, while staying on screen, and that cancelled every load for good (#1349).
+    /// appear, while staying on screen, and that cancelled every load for good (#1357).
     /// A few spaced tries ride out a blip; the loader shares one fetch between them.
     private func fetch() {
         guard ImageLoader.cached(ref, server) == nil, loaded?.ref != ref else { return }
