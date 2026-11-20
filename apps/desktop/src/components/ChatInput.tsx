@@ -398,14 +398,16 @@ export default function ChatInput({
   const trackerPick = useSyncExternalStore(subscribeIssueTracker, readIssueTracker);
   const tracker = effectiveTracker(trackerPick, issueTrackers);
   const mentionKind = useSyncExternalStore(subscribeIssueTracker, readMentionKind);
-  const listingPrs = issue !== null && mentionKind === "prs";
+  const prsMode = issue !== null && mentionKind === "prs";
+  // Not while dismissed: the listed key keeps its repo on a 30s poll.
+  const listingPrs = prsMode && !dismissed;
   // A bot's folder has no remote, so its menu reads a repo the reader picks.
   const botRepo = useBotMentionRepo(bots ? cwd : null, issue !== null);
   const {
     issues,
     loading: issueRowsLoading,
     emptyNote: issueRowsNote,
-  } = useIssueSearch(listingPrs ? null : (issue?.query ?? null), tracker, cwd, botRepo);
+  } = useIssueSearch(prsMode ? null : (issue?.query ?? null), tracker, cwd, botRepo);
   // Pull requests come off the PR marks cache the pull requests page reads, so
   // the menu adds no read of its own.
   const ownRepo = useGithubRepo(cwd, listingPrs && !botRepo);
