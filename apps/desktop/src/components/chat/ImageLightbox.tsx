@@ -16,7 +16,16 @@ export type LightboxImage = { src: string; name: string; video?: boolean };
 ///
 /// A pulsing box stands in until the picture arrives. Keyed on `src` rather
 /// than a flag, so a thumb handed a different item starts loading again.
-export function Thumb({ item, className }: { item: LightboxImage; className?: string }) {
+export function Thumb({
+  item,
+  className,
+  small = false,
+}: {
+  item: LightboxImage;
+  className?: string;
+  /// A smaller play mark, for a thumb a list row's height.
+  small?: boolean;
+}) {
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const loading = loadedSrc !== item.src && "animate-pulse bg-muted";
   // An error stops the pulse too, or a broken file shimmers forever.
@@ -49,8 +58,13 @@ export function Thumb({ item, className }: { item: LightboxImage; className?: st
         className="size-full object-cover"
       />
       <span className="absolute inset-0 flex items-center justify-center">
-        <span className="flex size-6 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm">
-          <Play className="size-3 translate-x-px fill-current" />
+        <span
+          className={cn(
+            "flex items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm",
+            small ? "size-4" : "size-6",
+          )}
+        >
+          <Play className={cn("translate-x-px fill-current", small ? "size-2" : "size-3")} />
         </span>
       </span>
     </span>

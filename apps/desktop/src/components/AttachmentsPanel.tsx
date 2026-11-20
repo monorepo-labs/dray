@@ -2,13 +2,13 @@ import { useState } from "react";
 
 import ImageLightbox, { Thumb, type LightboxImage } from "@/components/chat/ImageLightbox";
 import Spinner from "@/components/ui/spinner";
-import { basename } from "@/lib/format";
+import { basename, relativeTime } from "@/lib/format";
 import { allMedia, loadOlderMedia, olderCursor, type HeldLog, type OlderMedia } from "@/lib/olderMedia";
 import { fileSrc, invoke, qualify, serverOfSession } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { SessionPage } from "@/types/events";
 
-/// How many the grid opens on, and how many each Load more adds.
+/// How many the list opens on, and how many each Load more adds.
 const LOAD_MORE = 10;
 
 type MediaFilter = "all" | "you" | "ai";
@@ -18,18 +18,26 @@ const MEDIA_FILTERS: { id: MediaFilter; label: string }[] = [
   { id: "ai", label: "AI" },
 ];
 
-/// A contact sheet of every picture and recording in `logs`, each opening the
+type Item = LightboxImage & { byYou: boolean; at?: string };
+
+const ARCHIVED = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(-\d+)?\.\w+$/i;
+
+/// Every picture and recording in `logs` as a list, each row opening the
 /// transcript's own viewer to step through the set. Opens on the newest ten
 /// and Load more adds ten, whatever the chat has paged in meanwhile: from
 /// what the transcript already holds where it can, from the log past that.
 ///
+/// A list rather than the six-column grid it replaced: a grid holding one or
+/// two pictures, or none and a Load more cell, was mostly empty cells drawing
+/// lines round nothing. A row reads the same at any count.
+///
 /// `logs` is newest first and is more than one only for a bot's chat, which
 /// an agent switch splits into several sessions read as one conversation.
-export default function AttachmentGrid({ logs }: { logs: HeldLog[] }) {
+export default function AttachmentList({ logs }: { logs: HeldLog[] }) {
   // The open picture by its source, not its position: the list is newest first,
   // so a screenshot landing while the viewer is open would shift every index.
   const [openSrc, setOpenSrc] = useState<string | null>(null);
-  const [filter, setFilter] = useState<MediaFilter>("all");
+  const [picked, setFilter] = useState<MediaFilter>("all");
   // Per session, since the pane stays mounted across a session switch.
   const [older, setOlder] = useState<Record<string, OlderMedia>>({});
   const [shownBy, setShownBy] = useState<Record<string, number>>({});
@@ -42,17 +50,22 @@ export default function AttachmentGrid({ logs }: { logs: HeldLog[] }) {
   // than through `useSessionPath`.
   const server = serverOfSession(logs[0]?.sessionId ?? "");
   const media = allMedia(logs, older);
+  // Filters only where they can split the set: over pictures all from one side
+  // they would offer to sort it into itself and nothing.
+  const filterable = media.some((m) => m.byYou) && media.some((m) => !m.byYou);
+  const filter = filterable ? picked : "all";
   const items = media
     .filter((m) => filter === "all" || m.byYou === (filter === "you"))
-    .map((m) =>
-      "video" in m
-        ? { src: fileSrc(qualify(m.video, server)), name: basename(m.video), video: true }
-        : {
-            src: m.image.path ? fileSrc(qualify(m.image.path, server)) : m.image.url,
-            name: m.image.path ? basename(m.image.path) : "image",
-          },
-    )
-    .filter((item): item is LightboxImage => Boolean(item.src));
+    .map((m): Item | null => {
+      const src =
+        "video" in m ? fileSrc(qualify(m.video, server)) : m.image.path ? fileSrc(qualify(m.image.path, server)) : m.image.url;
+      if (!src) return null;
+      const file = m.name ?? ("video" in m ? basename(m.video) : m.image.path ? basename(m.image.path) : "");
+      // A kept copy is named by its id, which says nothing on a row.
+      const name = !file || ARCHIVED.test(file) ? ("video" in m ? "Recording" : "Image") : file;
+      return { src, name, video: "video" in m, byYou: m.byYou, at: m.at };
+    })
+    .filter((item): item is Item => item !== null);
   const visible = items.slice(0, shown);
   const at = visible.findIndex((item) => item.src === openSrc);
   const hasMore = items.length > shown || logs.some((log) => olderCursor(log, older[log.sessionId]) != null);
@@ -80,79 +93,82 @@ export default function AttachmentGrid({ logs }: { logs: HeldLog[] }) {
     }
   };
 
-  // Empty cells finish the last row, so the lines run the whole width rather
-  // than stopping where the pictures do.
-  const filler = (6 - ((visible.length + (hasMore ? 1 : 0)) % 6)) % 6;
-  const cell = "aspect-square border-b-[0.5px] border-border [&:not(:nth-child(6n))]:border-r-[0.5px]";
-
   return (
-    <div className="flex shrink-0 flex-col gap-2 pt-3 pb-3">
-      {/* No filters over nothing at all: they would sort an empty set. */}
-      {media.length > 0 && (
-        <div role="group" aria-label="Show attachments from" className="flex gap-3 px-3">
-          {MEDIA_FILTERS.map(({ id, label }) => (
-            <button
-              key={id}
-              type="button"
-              aria-pressed={filter === id}
-              onClick={() => {
-                setFilter(id);
-                setOpenSrc(null);
-              }}
-              className={cn(
-                "text-ui transition-colors",
-                filter === id ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
-      {visible.length === 0 && !hasMore ? (
-        <p className="px-3 py-2 text-ui text-muted-foreground">
-          {media.length > 0 ? "Nothing here." : "No attachments yet."}
-        </p>
-      ) : (
-        // Edge to edge, with the panel's own sides as the outer frame.
-        <div className="grid grid-cols-6 border-t-[0.5px] border-border">
-          {visible.map((item) => (
-            <button
-              key={item.src}
-              type="button"
-              onClick={() => setOpenSrc(item.src)}
-              aria-label={item.video ? `Play ${item.name}` : `Open ${item.name}`}
-              // A wash laid over the picture rather than a fill behind it,
-              // which the picture would cover.
-              className={cn(
-                cell,
-                "relative cursor-default overflow-hidden after:absolute after:inset-0 after:transition-colors hover:after:bg-foreground/10",
-              )}
-            >
-              <Thumb item={item} className="size-full" />
-            </button>
-          ))}
-          {/* A cell of the grid rather than a button under it, so it reads
-              as where the next pictures will land. */}
-          {hasMore && (
-            <button
-              type="button"
-              onClick={() => void loadMore()}
-              disabled={loading}
-              aria-label={failed ? "Couldn't load more. Try again" : "Load more attachments"}
-              className={cn(
-                cell,
-                "flex items-center justify-center bg-muted/25 px-1 text-center text-ui leading-tight text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:hover:bg-muted/25",
-              )}
-            >
-              {loading ? <Spinner className="size-4" /> : failed ? "Try again" : "Load more"}
-            </button>
-          )}
-          {Array.from({ length: filler }, (_, i) => (
-            <div key={`filler-${i}`} className={cell} />
-          ))}
-        </div>
-      )}
+    <div className="flex shrink-0 flex-col">
+      {/* The heading `RunHeading` draws over Background tasks and Subagents,
+          with the filters at its far end. */}
+      <div className="flex items-center px-3 pt-4 pb-2 text-ui text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          Attachments
+          {/* Only once every one is in hand: a count of what happens to be
+              paged in would read as the total and grow under Load more. */}
+          {!hasMore && items.length > 1 && <span className="tabular-nums">{items.length}</span>}
+        </span>
+        {filterable && (
+          <div role="group" aria-label="Show attachments from" className="ml-auto flex gap-2.5">
+            {MEDIA_FILTERS.map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={filter === id}
+                onClick={() => {
+                  setFilter(id);
+                  setOpenSrc(null);
+                }}
+                className={cn("transition-colors", filter === id ? "text-foreground" : "hover:text-foreground")}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-0.5 px-1 pb-2">
+        {visible.length === 0 && (
+          // With older history unread, "none" would be a claim about the whole
+          // chat that Load more could disprove.
+          <p className="px-2 py-1 text-ui text-muted-foreground">
+            {hasMore ? "None in recent messages." : "None yet."}
+          </p>
+        )}
+        {visible.map((item) => (
+          <button
+            key={item.src}
+            type="button"
+            onClick={() => setOpenSrc(item.src)}
+            aria-label={item.video ? `Play ${item.name}` : `Open ${item.name}`}
+            className="flex cursor-default items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent/50"
+          >
+            <Thumb item={item} small className="size-9 shrink-0 overflow-hidden rounded-md ring-[0.5px] ring-border" />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate text-ui text-sidebar-foreground">{item.name}</span>
+              <span className="truncate text-xs text-muted-foreground">
+                {/* The filters' own words, so a row says which one it falls under. */}
+                {item.byYou ? "You" : "AI"}
+                {item.video && " · Recording"}
+              </span>
+            </span>
+            {item.at && (
+              <span className="shrink-0 self-start pt-0.5 text-xs text-muted-foreground tabular-nums">
+                {relativeTime(item.at)}
+              </span>
+            )}
+          </button>
+        ))}
+        {hasMore && (
+          <button
+            type="button"
+            onClick={() => void loadMore()}
+            disabled={loading}
+            className="flex cursor-default items-center gap-2 rounded-lg px-2 py-1.5 text-left text-ui text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:hover:bg-transparent"
+          >
+            {loading && <Spinner className="size-3.5" />}
+            {failed ? "Couldn't load more. Try again" : "Load more"}
+          </button>
+        )}
+      </div>
+
       <ImageLightbox
         images={visible}
         index={at === -1 ? null : at}

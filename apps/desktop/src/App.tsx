@@ -4036,6 +4036,7 @@ function App() {
             tab={activeTab}
             onTabChange={setPanelTab}
             tabs={tabs}
+            switcher={!!selectedBot}
             counts={selectedBot ? { tasks: crew.filter((r) => !r.item.aside).length } : undefined}
             widthKey={shownSession.sessionId}
             refresh={panelRefresh}
