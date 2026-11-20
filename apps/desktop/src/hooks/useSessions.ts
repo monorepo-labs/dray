@@ -48,7 +48,7 @@ import { activeSpace, allowedInSpace, moveSpace, orderProjects, PROJECT_ORDER_KE
 import { FIRST_MOUNT } from "@/lib/turnWindow";
 import { forget, stopWaiting, upload, waitFor } from "@/lib/uploads";
 import type { Draft } from "./useDrafts";
-import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueueChangedEvent, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionServingEvent, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueueChangedEvent, QueuedMessage, PrHead, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionServingEvent, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
 
@@ -879,6 +879,9 @@ const handleSendMsg = async (
   // Where a new session's worktree starts, from a draft `dray draft new
   // --base` saved. Nothing in the composer sets one.
   baseRef: string | null = null,
+  // A pull request's head the new tree is checked out on, from a draft the
+  // pull requests page saved.
+  prHead: PrHead | null = null,
 ): Promise<boolean> => {
   const attachmentPaths = attachments.map((a) => a.path);
 
@@ -1127,7 +1130,16 @@ const handleSendMsg = async (
       worktreeName: null,
       baseRef: isNewSession && worktree ? baseRef : null,
       isNewSession,
+      prHead: isNewSession && worktree ? prHead : null,
     });
+    // A server older than `prHead` ignores it and forks `worktree-<name>` from
+    // the default branch, which answers exactly like success; the branch it
+    // recorded is the only thing that says otherwise.
+    if (prHead && worktree && outcome.snapshot && outcome.snapshot.branch !== prHead.branch) {
+      setError(
+        `This server is older than the pull requests page, so the session is on its own branch rather than ${prHead.branch}. Update the server, then start it again.`,
+      );
+    }
     if (heldAtSend) {
       void settleAfterSend(heldAtSend, sentAt).catch((e) => console.error("could not settle a held flag", e));
     }

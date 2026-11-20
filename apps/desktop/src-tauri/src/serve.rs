@@ -1961,11 +1961,11 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             harness: Harness, model: ModelId, effort: Option<Effort>,
             permission_mode: ApprovalPolicy, fast: bool, cwd: String,
             branch: Option<String>, use_worktree: bool, worktree_name: Option<String>,
-            base_ref: Option<String>, is_new_session: bool,
+            base_ref: Option<String>, is_new_session: bool, pr_head: Option<crate::git::PrHead>,
         ) => crate::send_msg(
             &session_id, &prompt, attachment_paths, harness, model, effort,
             permission_mode, fast, &cwd, branch.as_deref(), use_worktree,
-            worktree_name.as_deref(), base_ref.as_deref(), is_new_session, sink,
+            worktree_name.as_deref(), base_ref.as_deref(), is_new_session, pr_head, sink,
         ).await;
         // The reader's own stop, settle and delete are noted for the task's bot
         // here, on the client wire: `dray` is how the bot does each itself.
@@ -2149,7 +2149,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
 
         // GitHub and issues.
         prs_for_branch(cwd: String, branch: String) => github::prs_for_branch(cwd, branch).await;
-        pr_marks(cwd: String) => github::pr_marks(cwd).await;
+        pr_marks(cwd: String, listing: Option<bool>) => github::pr_marks(cwd, listing).await;
         merge_pr(cwd: String, number: u64, method: MergeMethod, settle: Option<String>) =>
             github::merge_pr(cwd, number, method, settle, sink).await;
         delete_branch(cwd: String, number: u64) => github::delete_branch(cwd, number).await;

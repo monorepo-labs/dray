@@ -232,6 +232,9 @@ async fn send_msg(
     // composer. `None` for everything else the composer sends.
     base_ref: Option<&str>,
     is_new_session: bool,
+    // A draft the pull requests page saved for a PR with no live session: the
+    // tree goes on that PR's own branch. Ignored past a session's first send.
+    pr_head: Option<git::PrHead>,
     sink: Sink,
 ) -> Result<SendOutcome, Fail> {
     // The tolerant `Deserialize` reads a name this build doesn't know as
@@ -294,6 +297,7 @@ async fn send_msg(
             None,
             None,
             None,
+            pr_head.as_ref().filter(|_| is_new_session),
             &sink,
         )
         .await?;

@@ -1,5 +1,5 @@
 import { basename } from "@/lib/format";
-import type { PrCheck, PrChecksState, PrMark, PullRequest } from "@/types/events";
+import type { PrCheck, PrChecksState, PrMark, PrUnavailable, PullRequest } from "@/types/events";
 
 /// The branch a session's work lands on, for the PR lookup and the header.
 ///
@@ -26,6 +26,11 @@ import type { PrCheck, PrChecksState, PrMark, PullRequest } from "@/types/events
 /// The recorded `branch` survives the removal for this, and the sidebar's mark
 /// kept working throughout because it never had an `observed` to be misled by.
 ///
+/// The record outranks the name. Every index entry since the first release
+/// records a worktree session's branch at creation — `worktree-<name>`, or the
+/// pull request's head a tree from the pull requests page was made on — so the
+/// name is rebuilt only for an object with no record yet.
+///
 /// One function because the header and the PR lookup have to agree about which
 /// branch the session is on; two rebuilding it apart is how they come to
 /// disagree about which PR it has.
@@ -39,7 +44,7 @@ export function sessionBranch(
 ): string | null {
   if (session.worktreeRemoved) return session.branch;
   if (observed) return observed;
-  return session.worktreeName ? `worktree-${session.worktreeName}` : session.branch;
+  return session.branch ?? (session.worktreeName ? `worktree-${session.worktreeName}` : null);
 }
 
 /// Which pull request a sidebar row draws, out of every one on its branch.
@@ -126,6 +131,12 @@ export function markDisagrees(mark: PrMark | undefined, prs: PullRequest[]): boo
   if (mark.checksState === "RUNNING") return !pending;
   if (mark.checksState === "FAILING") return !failing;
   return failing && !pending;
+}
+
+/// `gh`'s refusal as the backend types it, or the text of anything else.
+export function asUnavailable(e: unknown): PrUnavailable {
+  if (e && typeof e === "object" && "kind" in e) return e as PrUnavailable;
+  return { kind: "other", detail: String(e) };
 }
 
 /// The repo a pull request's URL names, as `gh --repo` takes it: `owner/name`
