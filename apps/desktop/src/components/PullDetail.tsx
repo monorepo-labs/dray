@@ -7,7 +7,7 @@ import PrPanel, { CommentPickContext } from "@/components/PrPanel";
 import Segmented from "@/components/Segmented";
 import MachineSelector from "@/components/composer/MachineSelector";
 import ModelSelector from "@/components/composer/ModelSelector";
-import { Button } from "@/components/ui/button";
+import SendButton from "@/components/composer/SendButton";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,7 +16,6 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { inputClassName } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { readComposerPrefs } from "@/hooks/useComposerPrefs";
 import { useDraft } from "@/hooks/useDraft";
@@ -87,8 +86,17 @@ export default function PullDetail({
       }),
     [],
   );
-  const pick = useMemo(() => ({ picked, toggle }), [picked, toggle]);
   const unresolved = useMemo(() => (pr ? unresolvedKeys(pr.comments) : []), [pr]);
+  const pick = useMemo(
+    () => ({
+      picked,
+      toggle,
+      unresolved: unresolved.length,
+      selectUnresolved: () => setPicked(new Set(unresolved)),
+      clear: () => setPicked(new Set()),
+    }),
+    [picked, toggle, unresolved],
+  );
 
   const [text, setText] = useDraft(`pr:${row.mark.url}`);
   const [starting, setStarting] = useState(false);
@@ -150,34 +158,7 @@ export default function PullDetail({
 
           {writable && (
             <>
-              <textarea
-                rows={3}
-                value={text}
-                placeholder="What should the agent do with this pull request?"
-                onChange={(e) => setText(e.target.value)}
-                className={cn(inputClassName, "h-auto max-h-48 min-h-16 resize-none py-1.5 text-ui md:text-ui field-sizing-content")}
-              />
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-ui">
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  disabled={unresolved.length === 0}
-                  onClick={() => setPicked(new Set(unresolved))}
-                >
-                  Pick unresolved
-                </Button>
-                {picked.size > 0 && (
-                  <>
-                    <span className="text-muted-foreground">
-                      {picked.size} {picked.size === 1 ? "comment" : "comments"} picked
-                    </span>
-                    <Button variant="ghost" size="xs" onClick={() => setPicked(new Set())}>
-                      Clear
-                    </Button>
-                  </>
-                )}
-              </div>
-              <StartControls
+              <StartBox
                 bots={bots}
                 server={machinePick ? serverOfPath(machinePick) : server}
                 machines={machines.projects}
@@ -189,7 +170,23 @@ export default function PullDetail({
                 starting={starting}
                 cloning={cloning !== null}
                 onStart={(bot) => void start(bot)}
-              />
+              >
+                {(go) => (
+                  <textarea
+                    rows={2}
+                    value={text}
+                    placeholder="What should the agent do with this pull request?"
+                    onChange={(e) => setText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault();
+                        go();
+                      }
+                    }}
+                    className="block max-h-48 min-h-14 w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-ui outline-none placeholder:text-muted-foreground field-sizing-content"
+                  />
+                )}
+              </StartBox>
               {/* A clone goes unsaid: where the copy comes from is not the
                   reader's concern here, only that the task starts. */}
               {cloning !== null && (
@@ -295,21 +292,24 @@ const LAST_BOT_KEY = "dray.prStartBot";
 /// The switch's last side, so it opens where the reader left it.
 const LAST_MODE_KEY = "dray.prStartMode";
 
-/// How a task for the PR starts: a switch between a bot's task and the
-/// reader's own, over one Start button. A bot's task runs on the bot's own
-/// agent, so the model picker belongs to the plain task alone.
-function StartControls({
+/// The box a task for the PR starts from, shaped like the task composer: the
+/// reader's words on top, and a row under them with a switch between a bot's
+/// task and the reader's own, the plain task's model and machine, and the
+/// composer's own send arrow, which starts it. A bot's task runs on the bot's
+/// agent, where the bot is, so the pickers belong to the plain task alone.
+function StartBox({
   bots,
   server,
+  machines,
+  machine,
+  onMachine,
   picks,
   onPicks,
   disabled,
   starting,
   cloning,
-  machines,
-  machine,
-  onMachine,
   onStart,
+  children,
 }: {
   bots: Bot[];
   server: ServerId;
@@ -322,51 +322,66 @@ function StartControls({
   starting: boolean;
   cloning: boolean;
   onStart: (bot: Bot | null) => void;
+  /// The text box, handed the start so ⌘⏎ there does what the arrow does.
+  children: (start: () => void) => React.ReactNode;
 }) {
   const [botId, setBotId] = useLocalStorage<string | null>(LAST_BOT_KEY, null);
   const [mode, setMode] = useLocalStorage<"bot" | "task">(LAST_MODE_KEY, "bot");
   const bot = bots.find((b) => b.id === botId) ?? bots[0] ?? null;
   const toBot = !!bot && mode === "bot";
   const start = () => {
+    if (disabled) return;
     if (toBot) setBotId(bot.id);
     onStart(toBot ? bot : null);
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {bot && (
-        <Segmented
-          value={mode}
-          options={[
-            // With several, the menu beside it names the bot, so the half
-            // says only what kind of task this is.
-            bots.length > 1
-              ? { value: "bot", label: "Bot" }
-              : {
-                  value: "bot",
-                  label: bot.name,
-                  content: (
-                    <span className="flex items-center gap-1">
-                      <BotAvatar seed={bot.id} avatar={bot.avatar} className="block size-3.5 scale-[1.18]" />
-                      {bot.name}
-                    </span>
-                  ),
-                },
-            { value: "task", label: "Task" },
-          ]}
-          onPick={setMode}
-          label="Start as"
-        />
-      )}
-      {toBot && bots.length > 1 && <BotMenu bots={bots} bot={bot} onPick={setBotId} />}
-      {!toBot && <TaskModelPicker server={server} picks={picks} onChange={onPicks} />}
-      {/* The New Task page's own picker, over this repo's checkouts and a
-          stand-in on each machine without one; a bot's task runs where the
-          bot is, so it shows for a plain task alone. */}
-      {!toBot && <MachineSelector projects={machines} value={machine} onSelect={onMachine} />}
-      <Button size="xs" className="ml-auto" disabled={disabled} onClick={start}>
-        {cloning ? "Cloning…" : starting ? "Starting…" : toBot ? `Start task in ${bot.name}` : "Start Task"}
-      </Button>
+    <div className="rounded-2xl border border-edge-surface bg-composer shadow-[var(--shadow-composer,var(--shadow-surface))]">
+      {children(start)}
+      {/* One row, never two: the pickers shrink and truncate rather than push
+          the arrow onto a line of its own. */}
+      <div className="flex min-w-0 items-center gap-1 px-2 pb-2">
+        {bot && (
+          <Segmented
+            className="shrink-0"
+            value={mode}
+            options={[
+              // With several, the menu beside it names the bot, so the half
+              // says only what kind of task this is.
+              bots.length > 1
+                ? { value: "bot", label: "Bot" }
+                : {
+                    value: "bot",
+                    label: bot.name,
+                    content: (
+                      <span className="flex items-center gap-1">
+                        <BotAvatar seed={bot.id} avatar={bot.avatar} className="block size-3.5 scale-[1.18]" />
+                        {bot.name}
+                      </span>
+                    ),
+                  },
+              { value: "task", label: "Task" },
+            ]}
+            onPick={setMode}
+            label="Start as"
+          />
+        )}
+        {/* The reused pickers keep their look; only their labels may shorten. */}
+        <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden [&_button]:min-w-0 [&_button>span]:min-w-0 [&_button>span]:truncate">
+          {toBot && bots.length > 1 && <BotMenu bots={bots} bot={bot} onPick={setBotId} />}
+          {!toBot && <TaskModelPicker server={server} picks={picks} onChange={onPicks} />}
+          {/* The New Task page's own picker, over this repo's checkouts and a
+              stand-in on each machine without one. */}
+          {!toBot && <MachineSelector projects={machines} value={machine} onSelect={onMachine} />}
+        </div>
+        <span className="shrink-0">
+          <SendButton
+            disabled={disabled}
+            onClick={start}
+            title={cloning ? "Cloning…" : starting ? "Starting…" : toBot ? `Start task in ${bot.name}` : "Start task"}
+          />
+        </span>
+      </div>
     </div>
   );
 }
