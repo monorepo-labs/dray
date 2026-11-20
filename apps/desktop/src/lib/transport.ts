@@ -95,6 +95,7 @@ const QUALIFIED = new Set([
   "get_session_by_id",
   "fork_session",
   "send_msg",
+  "start_pr_session",
   "read_file",
   "list_bots",
   "create_bot",

@@ -413,7 +413,7 @@ function PrRow({
             )}
           </Section>
 
-          <Section title="Comments" count={pr.comments.length || undefined}>
+          <Section title="Comments" count={pr.comments.length || undefined} action={<PickActions />}>
             {pr.comments.length ? (
               // Checks are a dense column of one-line facts; comments are
               // separate things people said, so they get air between them
@@ -726,10 +726,13 @@ function Readiness({
 function Section({
   title,
   count,
+  action,
   children,
 }: {
   title: string;
   count?: string | number;
+  /// Drawn at the header's far end.
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -737,6 +740,7 @@ function Section({
       <h3 className="flex items-baseline gap-2 px-3 pb-1 text-ui text-sidebar-foreground">
         {title}
         {count !== undefined && <span className="text-muted-foreground">{count}</span>}
+        {action && <span className="ml-auto flex items-baseline gap-2">{action}</span>}
       </h3>
       {children}
     </section>
@@ -795,8 +799,47 @@ function CheckRow({ check }: { check: PrCheck }) {
 /// Which comments the reader has picked to send to an agent, on the pull
 /// requests page. Absent everywhere else, so the session's PR tab draws no
 /// boxes.
-export type CommentPick = { picked: ReadonlySet<string>; toggle: (key: string) => void };
+export type CommentPick = {
+  picked: ReadonlySet<string>;
+  toggle: (key: string) => void;
+  /// How many unresolved threads (and change-asking reviews) there are to tick.
+  unresolved: number;
+  selectUnresolved: () => void;
+  clear: () => void;
+};
 export const CommentPickContext = createContext<CommentPick | null>(null);
+
+/// The Comments header's end on the pull requests page: what is selected for
+/// the task's prompt, and a shortcut to every unresolved thread. Nothing
+/// elsewhere, where there are no boxes.
+function PickActions() {
+  const pick = useContext(CommentPickContext);
+  if (!pick) return null;
+  const n = pick.picked.size;
+  const link = "text-muted-foreground transition-colors hover:text-foreground";
+  return (
+    <>
+      {n > 0 && (
+        <>
+          <span className="text-muted-foreground">{n} selected</span>
+          <button type="button" className={link} onClick={pick.clear}>
+            Clear
+          </button>
+        </>
+      )}
+      {pick.unresolved > 0 && n === 0 && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button type="button" className={link} onClick={pick.selectUnresolved}>
+              Select unresolved
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>Tick every unresolved review thread, so the task gets them</TooltipContent>
+        </Tooltip>
+      )}
+    </>
+  );
+}
 
 /// The box that picks one comment, beside its row. A button wearing a checkbox's
 /// role rather than an input: the row next to it is a button too, and the app

@@ -40,10 +40,10 @@ fn end_turn() -> Value {
     json!({"claude/endTurn": true})
 }
 
-/// Whether `reply`, a `control_response` from this module, closes the turn:
-/// the result told the CLI to end it, so the agent has said its last word.
-pub fn ends_turn(reply: &Value) -> bool {
-    reply["response"]["response"]["mcp_response"]["result"]["_meta"]["claude/endTurn"] == true
+/// Whether `name`, a tool call's name, is one of [`TOOL_NAMES`]: a call that
+/// closes the turn, so the agent has said its last word.
+pub fn is_silent(name: &str) -> bool {
+    name == TOOL_NAME || name == REACT_NAME
 }
 
 /// `--mcp-config` declaring the in-process server.
@@ -160,9 +160,7 @@ mod tests {
         assert_eq!(call["id"], 2);
         assert_eq!(call["result"]["content"][0]["type"], "text");
         assert_eq!(call["result"]["_meta"]["claude/endTurn"], true);
-        let tools_call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": TOOL, "arguments": {}}});
-        assert!(ends_turn(&response("r1", &tools_call)));
-        assert!(!ends_turn(&response("r1", &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))));
+        assert!(is_silent(TOOL_NAME) && is_silent(REACT_NAME) && !is_silent(TOOL));
     }
 
     #[test]
@@ -177,8 +175,6 @@ mod tests {
         assert_eq!(done["id"], 4);
         assert!(done["result"]["content"][0]["text"].as_str().unwrap().contains("🎉"));
         assert_eq!(done["result"]["_meta"]["claude/endTurn"], true);
-        assert!(ends_turn(&react_response("r1", &call, Ok("🎉"))));
-        assert!(!ends_turn(&react_response("r1", &call, Err("no message".into()))));
         let refused = mcp(Err("no message".into()));
         assert_eq!(refused["result"]["isError"], true);
         assert!(refused["result"].get("_meta").is_none());

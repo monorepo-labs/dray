@@ -152,6 +152,9 @@ export function prRepoSlug(url: string | undefined): string | undefined {
 /// checkout: how a task's PR is read and merged while its machine is down.
 export const slugKey = (slug: string): string => `github:${slug}`;
 
+/// The slug a [slugKey] names, or nothing for a checkout's path.
+export const slugOf = (key: string): string | null => (key.startsWith("github:") ? key.slice("github:".length) : null);
+
 /// The GitHub repo a marks read answered for, `host/owner/name`, off its PRs'
 /// URLs. Nothing for a repo with no PRs: there is no URL to read it from.
 ///

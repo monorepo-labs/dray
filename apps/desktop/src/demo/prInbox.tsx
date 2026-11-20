@@ -6,7 +6,7 @@ import PullsView, { type PullsScope } from "@/components/PullsView";
 import RightPanel from "@/components/RightPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
-import { inboxRows, sessionsForPr, type InboxRow } from "@/lib/prInbox";
+import { inboxRows, sessionsForPr, type InboxRow, type PeopleFilter } from "@/lib/prInbox";
 import type { PrComment, PrListing, PrMark, PullRequest, SessionIndexItem } from "@/types/events";
 import "../App.css";
 
@@ -236,6 +236,8 @@ function Demo() {
   const [, setTick] = useState(0);
   onSent = () => setTick((n) => n + 1);
 
+  const [owner, setOwner] = useState<string | null>(null);
+  const [people, setPeople] = useState<PeopleFilter>("all");
   const keys = scope === "space" ? [DRAY] : [DRAY, SITE];
   const rows = useMemo(() => inboxRows(keys, (key) => MARKS[key]), [scope]); // eslint-disable-line react-hooks/exhaustive-deps
   const sessionsFor = (row: InboxRow) => sessionsForPr(row, SESSIONS, () => undefined);
@@ -252,7 +254,12 @@ function Demo() {
               hasRepos
               missing={null}
               errors={scope === "all" ? [{ name: "site", error: { kind: "other", detail: "API rate limit exceeded" } }] : []}
+              people={people}
+              onPeople={setPeople}
               scope={scope}
+              owners={["ada", "acme"]}
+              owner={owner}
+              onOwner={setOwner}
               onScope={setScope}
               sessionsFor={sessionsFor}
               botOf={() => undefined}
@@ -272,7 +279,9 @@ function Demo() {
                 sessions={sessionsFor(picked)}
                 bots={[]}
                 botOf={() => undefined}
-                server={null}
+                server="local"
+                checkout={{ kind: "here", path: "/demo" }}
+                machines={{ projects: [], clones: [], initial: "" }}
                 onOpenSession={(item) => alert(`Would open ${item.title}`)}
                 onStart={async (prompt) => {
                   sent.unshift({ sessionId: `new session on ${picked.mark.headRefName}`, prompt });

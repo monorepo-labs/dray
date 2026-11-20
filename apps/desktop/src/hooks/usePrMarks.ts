@@ -64,7 +64,7 @@ const askedAt = new Map<string, number>();
 /// the same fact as "a read will answer for me". One issued before a write is
 /// discarded when it lands — see `outdated` — so a later caller that stands
 /// down behind it waits for an answer that never comes.
-const inFlight = new Map<string, { promise: Promise<boolean>; startedAt: number }>();
+const inFlight = new Map<string, { promise: Promise<boolean>; startedAt: number; listing: boolean }>();
 
 /// The GitHub repo each key's marks came from — see `marksRepo`. Keys sharing
 /// one are read once and all given the answer, or one repo checked out on this
@@ -224,7 +224,10 @@ export function usePrMarks(
         // nothing scheduled at all — and the entry it would have replaced stays
         // on screen with no stamp and no poll to correct it, since a stale
         // merged mark is exactly what holds `anyOpen` off.
-        if (force || outdated(path, running.startedAt)) deferred.push(path);
+        // So is a read that did not ask for listings while the page now
+        // lists this repo: its answer draws no row there.
+        const wantsListing = sharing(path).some((key) => listed.has(key));
+        if (force || outdated(path, running.startedAt) || (wantsListing && !running.listing)) deferred.push(path);
         return false;
       }
       return force || Date.now() - (fetchedAt.get(path) ?? 0) >= FRESH_MS || lacksListing(path);
@@ -331,7 +334,7 @@ export function usePrMarks(
         return true;
       })();
 
-      inFlight.set(path, { promise: attempt, startedAt });
+      inFlight.set(path, { promise: attempt, startedAt, listing: sharing(path).some((key) => listed.has(key)) });
       const done = await attempt;
       // Only if it is still ours: a later read may already have claimed the
       // slot while this one was settling.

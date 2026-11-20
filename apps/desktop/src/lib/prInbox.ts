@@ -2,7 +2,8 @@
 /// session each belongs to, and what a message to that session says. Pure, so
 /// every one of them is tested; the page and `App` only draw and wire them.
 import { marksRepo, mergeVerdict, prRepoSlug, sessionBranch, stripBotMarkers } from "@/lib/pr";
-import type { ApprovalPolicy, Effort, Harness, ModelId, PrComment, PrListing, PrMark, PullRequest, SessionIndexItem } from "@/types/events";
+import type { ServerId } from "@/lib/transport";
+import type { ApprovalPolicy, Effort, Harness, ModelId, Project, PrComment, PrListing, PrMark, PullRequest, SessionIndexItem } from "@/types/events";
 
 /// One open pull request on the page. `key` is the marks key it was read
 /// through — a checkout's path, or `github:owner/name` — which is also where the
@@ -68,21 +69,16 @@ export function inboxSection(mark: PrMark): InboxSection {
   return "waiting";
 }
 
-export type PeopleFilter = "all" | "mine" | "review";
+/// Who a PR is about. All lists the projects added to Dray, through their
+/// marks; each of the others is one GitHub search across every repo
+/// (`involves:@me`, `author:@me`, `review-requested:@me`).
+export type PeopleFilter = "all" | "involving" | "mine" | "review";
 
-export function matchesPeople(row: InboxRow, filter: PeopleFilter): boolean {
-  if (filter === "mine") return row.listing.viewerDidAuthor;
-  if (filter === "review") return row.listing.reviewRequested;
-  return true;
-}
-
-/// The sessions whose work is this PR, best first: same repo and
-/// `sessionBranch` naming the PR's head — the reading the sidebar's mark uses,
-/// so the two never disagree about which session a PR is.
-///
-/// Live before settled (a settled session's tree is gone, so it is a record and
-/// not a place to send work), shown before hidden, then most recently touched.
-/// A fork's PR matches nothing: its bare head name names a branch in somebody
+/// Every task a PR has had, newest first: same repo and `sessionBranch` naming
+/// the PR's head — the reading the sidebar's mark uses, so the two never
+/// disagree about which task a PR is. Settled ones stay, since the page is
+/// where the reader finds a PR's work again; newest by start, so a task
+/// started from the page leads at once. A fork's PR matches nothing: its bare head name names a branch in somebody
 /// else's repository. `repoOf` is the marks cache's key → repo; a key it has not
 /// read is matched on the path itself.
 export function sessionsForPr(
@@ -92,7 +88,6 @@ export function sessionsForPr(
 ): SessionIndexItem[] {
   if (row.listing.isCrossRepository) return [];
   const seen = new Set<string>();
-  const rank = (i: SessionIndexItem) => (i.archived ? 2 : 0) + (i.hidden ? 1 : 0);
   return items
     .filter((i) => {
       if (seen.has(i.sessionId)) return false;
@@ -102,7 +97,7 @@ export function sessionsForPr(
         (i.projectPath === row.key || repoOf(i.projectPath) === row.repo)
       );
     })
-    .sort((a, b) => rank(a) - rank(b) || b.modified.localeCompare(a.modified));
+    .sort((a, b) => b.created.localeCompare(a.created));
 }
 
 /// What one comment is picked by. The node id, or — from a server older than
@@ -152,19 +147,33 @@ function pickedUnits(comments: readonly PrComment[], picked: ReadonlySet<string>
 /// markdown images go; a link keeps its text and keeps its URL only on
 /// github.com, where it names code or a thread. Pure, so it is tested.
 export function plainComment(body: string): string {
+  // Code is kept byte for byte: a fenced block or an inline span is what the
+  // reviewer meant literally, and `Array<T>` or `x < y` there is no markup.
   return stripBotMarkers(body)
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-    .replace(/\[([^\]]*)\]\(([^)\s]*)[^)]*\)/g, (_, text: string, url: string) =>
-      /^https:\/\/github\.com\//.test(url) && !text.includes(url) ? `${text} (${url})` : text,
-    )
-    .replace(/<\/?(?:p|div|br|h[1-6]|li|tr|details|summary|table)\b[^>]*>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&(amp|lt|gt|quot|#39|nbsp);/g, (_, e: string) => ENTITIES[e] ?? "")
+    .split(/(```[\s\S]*?```|`[^`\n]+`)/)
+    .map((part, i) => (i % 2 ? part : plainText(part)))
+    .join("")
     .split("\n")
     .map((line) => line.trimEnd())
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/// HTML elements bot comments are built from. Only these are taken for tags,
+/// so prose like `Array<T>` or `a < b > c` outside code survives too.
+const TAG = "a|b|i|em|strong|code|pre|p|div|span|br|hr|h[1-6]|ul|ol|li|table|thead|tbody|tr|td|th|details|summary|img|picture|source|sub|sup|blockquote|kbd";
+
+/// One stretch of prose, outside any code.
+function plainText(text: string): string {
+  return text
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]*)\]\(([^)\s]*)[^)]*\)/g, (_, label: string, url: string) =>
+      /^https:\/\/github\.com\//.test(url) && !label.includes(url) ? `${label} (${url})` : label,
+    )
+    .replace(new RegExp(`<\\/?(?:p|div|br|h[1-6]|li|tr|details|summary|table)\\b[^>]*>`, "gi"), "\n")
+    .replace(new RegExp(`<\\/?(?:${TAG})\\b[^>]*>`, "gi"), "")
+    .replace(/&(amp|lt|gt|quot|#39|nbsp);/g, (_, e: string) => ENTITIES[e] ?? "");
 }
 
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", nbsp: " " };
@@ -197,27 +206,22 @@ function describe(c: PrComment, indent: string, reply: boolean): string {
 /// whole, with its link, quoted line by line and said to be quoted: anyone can
 /// comment on a public repo, and this lands in front of an agent that may be
 /// allowed to edit. The reader's own words come last and are the only
-/// instruction. `fresh` is for a session that has never seen the PR, which has
-/// to be told where it is and where its push goes.
+/// instruction. Where the tree is and how it pushes is the server's to say
+/// (`with_push_line`), since only it knows whether another task holds the
+/// branch; it goes in after the header.
 export function prPrompt({
   pr,
   picked,
   text,
-  fresh = false,
 }: {
   pr: PullRequest;
   picked: ReadonlySet<string>;
   text: string;
-  fresh?: boolean;
 }): string {
   const units = pickedUnits(pr.comments, picked);
   const parts = [`Pull request #${pr.number} "${pr.title}" — ${pr.url}\nBranch ${pr.headRefName} into ${pr.baseRefName}.`];
 
-  if (fresh) {
-    parts.push(
-      `This tree is on ${pr.headRefName}, the pull request's own branch. Push to it to update the pull request; do not open another. \`gh pr view ${pr.number} --comments\` has the rest of its conversation.`,
-    );
-  }
+  parts.push(`\`gh pr view ${pr.number} --comments\` has the rest of its conversation.`);
   if (units.length) {
     parts.push(
       [
@@ -239,3 +243,15 @@ export type PrPicks = {
   permissionMode: ApprovalPolicy;
   fast: boolean;
 };
+
+/// Where a PR's task gets its checkout: one attached here, a checkout on disk
+/// to attach (a bot task's, read for the page), or a clone of the repo.
+export type PrCheckout =
+  | { kind: "here"; path: string }
+  | { kind: "attach"; path: string }
+  | { kind: "clone"; slug: string; server?: ServerId };
+
+/// Where Start Task can run a PR's task, for the machine picker: the repo's
+/// checkouts, and a stand-in at `~/dray/<name>` on each connected machine
+/// holding none, which a start there clones first. `initial` is the pick.
+export type PrMachines = { projects: Project[]; clones: string[]; initial: string };

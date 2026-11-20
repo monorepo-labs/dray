@@ -1,38 +1,38 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChevronDown, ChevronRight, GitBranch } from "lucide-react";
 
 import BotAvatar from "@/components/BotAvatar";
 import PrPanel, { CommentPickContext } from "@/components/PrPanel";
-import { EFFORT_LABELS } from "@/components/composer/ModelSelector";
-import PermissionSelector from "@/components/composer/PermissionSelector";
-import { Button } from "@/components/ui/button";
+import Segmented from "@/components/Segmented";
+import MachineSelector from "@/components/composer/MachineSelector";
+import ModelSelector from "@/components/composer/ModelSelector";
+import SendButton from "@/components/composer/SendButton";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { inputClassName } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { readComposerPrefs } from "@/hooks/useComposerPrefs";
 import { useDraft } from "@/hooks/useDraft";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
 import type { usePullRequest } from "@/hooks/usePullRequest";
-import { AGENT_LABELS, rememberedModel, usableEffort, usableModel } from "@/lib/model";
-import { prPrompt, unresolvedKeys, type InboxRow, type PrPicks } from "@/lib/prInbox";
-import { sendToTask } from "@/lib/sendToTask";
-import { invoke, type ServerId } from "@/lib/transport";
+import { rememberedModel, usableEffort, usableModel } from "@/lib/model";
+import { prPrompt, unresolvedKeys, type InboxRow, type PrCheckout, type PrMachines, type PrPicks } from "@/lib/prInbox";
+import { invoke, serverOfPath, type ServerId } from "@/lib/transport";
 import { cn } from "@/lib/utils";
-import type { Bot, Model, SessionIndexItem } from "@/types/events";
+import type { Bot, Model, Project, SessionIndexItem } from "@/types/events";
 
 /// The picked pull request on the pull requests page: the PR panel's own rows,
-/// with a box on each comment, the session working on it, and under them a
-/// composer that messages that session — or, with none, starts one right here
-/// on the PR's own branch, the reader's own or a bot's task. Mounted once per
-/// PR (keyed by `App`), so picks never carry across.
+/// with a box on each comment, every task the PR has had, newest first, and
+/// under them a composer that starts another — the reader's own or a bot's —
+/// on the PR's own branch. The page only starts tasks: a follow-up is said in
+/// the task, or to its bot, where the conversation already is. Mounted once
+/// per PR (keyed by `App`), so picks never carry across.
 export default function PullDetail({
   row,
   data,
@@ -40,24 +40,36 @@ export default function PullDetail({
   bots,
   botOf,
   server,
+  checkout,
+  machines,
   onOpenSession,
   onStart,
 }: {
   row: InboxRow;
   data: ReturnType<typeof usePullRequest>;
-  /// `sessionsForPr`'s answer, best first.
+  /// `sessionsForPr`'s answer: every task on the PR, newest first.
   sessions: SessionIndexItem[];
   /// The bots that can take this PR as a task: those on its checkout's server.
   bots: Bot[];
   /// The bot a session is a task of, if any.
   botOf: (item: SessionIndexItem) => Bot | undefined;
-  /// Where the PR's checkout lives, or `null` with none attached.
-  server: ServerId | null;
+  /// Where the task runs: the checkout's server, or This Mac, which clones one.
+  server: ServerId;
+  /// What Start Task does about a checkout first, said under the box: nothing,
+  /// attach a checkout already on disk, or clone the repo into `~/dray`.
+  checkout: PrCheckout;
+  /// Where a plain task can run, for the machine picker.
+  machines: PrMachines;
   onOpenSession: (item: SessionIndexItem) => void;
+  /// `onCloning` hears a clone's progress while the PR's repo is being cloned
+  /// first: `""` as it begins, git's own lines after, `null` once it is done.
   onStart: (
     prompt: string,
     picks: PrPicks,
     bot: Bot | null,
+    onCloning: (line: string | null) => void,
+    /// The picked machine's checkout, or its clone stand-in; `null` for a bot.
+    machine: string | null,
   ) => Promise<{ started: SessionIndexItem } | { error: string }>;
 }) {
   // The panel's read answers every PR on the head branch; this pane is one.
@@ -74,55 +86,54 @@ export default function PullDetail({
       }),
     [],
   );
-  const pick = useMemo(() => ({ picked, toggle }), [picked, toggle]);
   const unresolved = useMemo(() => (pr ? unresolvedKeys(pr.comments) : []), [pr]);
-
-  const live = sessions.filter((s) => !s.archived);
-  const [targetId, setTargetId] = useState<string | null>(null);
-  const target = live.find((s) => s.sessionId === targetId) ?? live[0] ?? null;
+  const pick = useMemo(
+    () => ({
+      picked,
+      toggle,
+      unresolved: unresolved.length,
+      selectUnresolved: () => setPicked(new Set(unresolved)),
+      clear: () => setPicked(new Set()),
+    }),
+    [picked, toggle, unresolved],
+  );
 
   const [text, setText] = useDraft(`pr:${row.mark.url}`);
-  const [sending, setSending] = useState(false);
-  const [result, setResult] = useState<{ sent: SessionIndexItem } | { error: string } | null>(null);
+  const [starting, setStarting] = useState(false);
+  // Set only while a clone runs; there is no standing note before one.
+  const [cloning, setCloning] = useState<string | null>(null);
+  const [machine, setMachine] = useState(machines.initial);
+  const machinePick = machines.projects.some((p) => p.path === machine) ? machine : machines.initial;
+  const [error, setError] = useState<string | null>(null);
   const writable = !row.listing.isCrossRepository;
   // Starting needs no words: the PR and its comments are a task on their own.
-  const canSend = !!pr && writable && !sending && (!target || text.trim().length > 0 || picked.size > 0);
-  const [picks, setPicks] = useStartPicks(sessions.find((s) => s.archived));
+  const canStart = !!pr && writable && !starting;
+  const [picks, setPicks, repairPicks] = useStartPicks(sessions[0]);
 
-  const send = async (bot: Bot | null = null) => {
-    if (!canSend || !pr) return;
-    setSending(true);
-    setResult(null);
+  const start = async (bot: Bot | null) => {
+    if (!canStart || !pr) return;
+    setStarting(true);
+    setError(null);
     try {
-      if (!target) {
-        const answer = await onStart(prPrompt({ pr, picked, text, fresh: true }), picks, bot);
-        if ("error" in answer) return setResult(answer);
-        setText("");
-        setPicked(new Set());
-        setResult({ sent: answer.started });
-        return;
-      }
-      await sendToTask(target, prPrompt({ pr, picked, text }));
+      const answer = await onStart(prPrompt({ pr, picked, text }), picks, bot, setCloning, bot ? null : machinePick);
+      if ("error" in answer) return setError(answer.error);
       setText("");
       setPicked(new Set());
-      setResult({ sent: target });
-    } catch (e) {
-      setResult({ error: e instanceof Error ? e.message : String(e) });
     } finally {
-      setSending(false);
+      setStarting(false);
+      setCloning(null);
     }
   };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {live.length > 0 && (
+      {sessions.length > 0 && (
         <div className="flex shrink-0 items-center gap-1.5 border-b border-border px-3 py-2 text-ui">
-          <span className="shrink-0 text-muted-foreground">{live.length > 1 ? "Sessions" : "Session"}</span>
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-            {live.map((s) => (
-              <SessionLink key={s.sessionId} item={s} bot={botOf(s)} onOpen={() => onOpenSession(s)} />
-            ))}
-          </div>
+          <span className="shrink-0 text-muted-foreground">Task</span>
+          <SessionLink item={sessions[0]} bot={botOf(sessions[0])} onOpen={() => onOpenSession(sessions[0])} />
+          {sessions.length > 1 && (
+            <EarlierTasks sessions={sessions.slice(1)} botOf={botOf} onOpen={onOpenSession} />
+          )}
         </div>
       )}
 
@@ -135,11 +146,6 @@ export default function PullDetail({
           <div className="flex min-h-6 items-center gap-1.5 text-ui text-muted-foreground">
             {!writable ? (
               <span>Read only. This branch lives in a fork, so an agent here can't push to it.</span>
-            ) : target ? (
-              <>
-                <span className="shrink-0">To</span>
-                <SessionMenu sessions={live} target={target} botOf={botOf} onPick={setTargetId} />
-              </>
             ) : (
               <span className="flex min-w-0 items-center gap-1.5">
                 <GitBranch className="size-3.5 shrink-0" />
@@ -152,85 +158,62 @@ export default function PullDetail({
 
           {writable && (
             <>
-              <textarea
-                rows={3}
-                value={text}
-                placeholder={target ? "Message the agent about this pull request" : "What should the agent do with this pull request?"}
-                onChange={(e) => setText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault();
-                    void send();
-                  }
-                }}
-                className={cn(inputClassName, "h-auto max-h-48 min-h-16 resize-none py-1.5 text-ui md:text-ui field-sizing-content")}
-              />
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-ui">
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  disabled={unresolved.length === 0}
-                  onClick={() => setPicked(new Set(unresolved))}
-                >
-                  Pick unresolved
-                </Button>
-                {picked.size > 0 && (
-                  <>
-                    <span className="text-muted-foreground">
-                      {picked.size} {picked.size === 1 ? "comment" : "comments"} picked
-                    </span>
-                    <Button variant="ghost" size="xs" onClick={() => setPicked(new Set())}>
-                      Clear
-                    </Button>
-                  </>
+              <StartBox
+                bots={bots}
+                server={machinePick ? serverOfPath(machinePick) : server}
+                machines={machines.projects}
+                machine={machinePick}
+                onMachine={setMachine}
+                picks={picks}
+                onPicks={setPicks}
+                onRepairPicks={repairPicks}
+                disabled={!canStart}
+                starting={starting}
+                cloning={cloning !== null}
+                onStart={(bot) => void start(bot)}
+              >
+                {(go) => (
+                  <textarea
+                    rows={2}
+                    value={text}
+                    placeholder="What should the agent do with this pull request?"
+                    onChange={(e) => setText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault();
+                        go();
+                      }
+                    }}
+                    className="block max-h-48 min-h-14 w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-ui outline-none placeholder:text-muted-foreground field-sizing-content"
+                  />
                 )}
-                {target ? (
-                  <Button size="xs" className="ml-auto" disabled={!canSend} onClick={() => void send()}>
-                    {sending ? "Sending…" : "Send"}
-                  </Button>
-                ) : (
-                  <div className="ml-auto flex items-center gap-1.5">
-                    <BotButton bots={bots} disabled={!canSend} onSend={(bot) => void send(bot)} />
-                    <Button size="xs" disabled={!canSend || !server} onClick={() => void send()}>
-                      {sending ? "Starting…" : "Start session"}
-                    </Button>
-                  </div>
-                )}
-              </div>
-              {!target && server && <PicksRow server={server} picks={picks} onChange={setPicks} />}
+              </StartBox>
+              {/* A clone goes unsaid: where the copy comes from is not the
+                  reader's concern here, only that the task starts. */}
+              {cloning !== null && (
+                <p className="truncate text-ui text-muted-foreground tabular-nums">
+                  Cloning {row.repo.split("/").slice(-2).join("/")}
+                  {cloning ? ` · ${cloning}` : "…"}
+                </p>
+              )}
+              {checkout.kind === "attach" && (
+                <p className="text-ui text-muted-foreground">
+                  Attaches {checkout.path} first, the checkout a task of this repo already uses.
+                </p>
+              )}
             </>
           )}
 
-          {result && (
-            <p className={cn("text-ui", "error" in result ? "text-destructive" : "text-muted-foreground")}>
-              {"error" in result ? (
-                result.error
-              ) : (
-                <>
-                  Sent to{" "}
-                  <button
-                    type="button"
-                    className="text-foreground underline-offset-2 hover:underline"
-                    onClick={() => onOpenSession(result.sent)}
-                  >
-                    {/* The live row's title: a new session's is replaced once generated. */}
-                    {botOf(result.sent)
-                      ? `${botOf(result.sent)?.name}'s task`
-                      : (sessions.find((s) => s.sessionId === result.sent.sessionId) ?? result.sent).title}
-                  </button>
-                  .
-                </>
-              )}
-            </p>
-          )}
+          {error && <p className="text-ui text-destructive">{error}</p>}
         </div>
       )}
     </div>
   );
 }
 
-/// A session working on the PR, by name, opening it on click. A bot's task
-/// wears its bot's face and name, since the bot is who the reader talks to.
+/// A task of the PR, by name, opening it on click: live or settled, since a
+/// settled one is still where its work and conversation are. A bot's task
+/// wears its bot's face and name, the bot being who the reader talks to.
 export function SessionLink({
   item,
   bot,
@@ -252,136 +235,258 @@ export function SessionLink({
             onOpen();
           }}
           className={cn(
-            "flex min-w-0 max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-foreground transition-colors hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+            "flex min-w-0 max-w-full items-center gap-1 rounded-md px-1 py-0.5 transition-colors hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+            item.archived ? "text-muted-foreground" : "text-foreground",
             className,
           )}
         >
           {bot && <BotAvatar seed={bot.id} avatar={bot.avatar} className="block size-3.5 shrink-0 scale-[1.18]" />}
           <span className="min-w-0 truncate">{bot ? `${bot.name} · ${item.title}` : item.title}</span>
+          {item.archived && <span className="shrink-0 text-muted-foreground/70">· Settled</span>}
           <ChevronRight className="size-3 shrink-0 opacity-60" />
         </button>
       </TooltipTrigger>
-      <TooltipContent>{bot ? `Open ${bot.name}'s task` : "Open session"}</TooltipContent>
+      <TooltipContent>{bot ? `Open ${bot.name}'s task` : "Open task"}</TooltipContent>
     </Tooltip>
   );
 }
 
-/// Which session the message goes to. A menu only where the branch has more
-/// than one live session, which is rare; otherwise just its title.
-function SessionMenu({
+/// The PR's earlier tasks, newest first, behind a count beside the latest.
+function EarlierTasks({
   sessions,
-  target,
   botOf,
-  onPick,
+  onOpen,
 }: {
   sessions: SessionIndexItem[];
-  target: SessionIndexItem;
   botOf: (item: SessionIndexItem) => Bot | undefined;
-  onPick: (id: string) => void;
+  onOpen: (item: SessionIndexItem) => void;
 }) {
-  const name = (s: SessionIndexItem) => (botOf(s) ? `${botOf(s)?.name} · ${s.title}` : s.title);
-  if (sessions.length < 2) {
-    return <span className="min-w-0 truncate text-foreground">{name(target)}</span>;
-  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button type="button" className="flex min-w-0 items-center gap-1 text-foreground">
-          <span className="truncate">{name(target)}</span>
-          <ChevronDown className="size-3 shrink-0 opacity-60" />
+        <button
+          type="button"
+          className="flex shrink-0 items-center gap-0.5 rounded-md px-1 py-0.5 text-muted-foreground hover:bg-sidebar-accent"
+        >
+          {sessions.length} earlier
+          <ChevronDown className="size-3 opacity-60" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-64">
-        {sessions.map((s) => (
-          <DropdownMenuCheckboxItem
-            key={s.sessionId}
-            checked={s.sessionId === target.sessionId}
-            onCheckedChange={() => onPick(s.sessionId)}
-          >
-            {name(s)}
-          </DropdownMenuCheckboxItem>
-        ))}
+      <DropdownMenuContent align="start" className="w-72">
+        {sessions.map((s) => {
+          const bot = botOf(s);
+          return (
+            <DropdownMenuItem key={s.sessionId} onSelect={() => onOpen(s)}>
+              {bot && <BotAvatar seed={bot.id} avatar={bot.avatar} className="block size-4 scale-[1.18]" />}
+              <span className="min-w-0 flex-1 truncate">{bot ? `${bot.name} · ${s.title}` : s.title}</span>
+              {s.archived && <span className="shrink-0 text-muted-foreground">Settled</span>}
+            </DropdownMenuItem>
+          );
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-/// Send to bot: one bot is named on the button, several get a menu. The task
-/// runs on the bot's own agent, in its own worktree on the PR's branch.
-function BotButton({ bots, disabled, onSend }: { bots: Bot[]; disabled: boolean; onSend: (bot: Bot) => void }) {
-  if (bots.length === 0) return null;
-  if (bots.length === 1) {
-    const [bot] = bots;
-    return (
-      <Button variant="outline" size="xs" disabled={disabled} onClick={() => onSend(bot)}>
-        <BotAvatar seed={bot.id} avatar={bot.avatar} className="block size-3.5 scale-[1.18]" />
-        Send to {bot.name}
-      </Button>
-    );
-  }
+/// The bot a PR task last went to, the default the next time.
+const LAST_BOT_KEY = "dray.prStartBot";
+/// The switch's last side, so it opens where the reader left it.
+const LAST_MODE_KEY = "dray.prStartMode";
+
+/// The box a task for the PR starts from, shaped like the task composer: the
+/// reader's words on top, and a row under them with a switch between a bot's
+/// task and the reader's own, the plain task's model and machine, and the
+/// composer's own send arrow, which starts it. A bot's task runs on the bot's
+/// agent, where the bot is, so the pickers belong to the plain task alone.
+function StartBox({
+  bots,
+  server,
+  machines,
+  machine,
+  onMachine,
+  picks,
+  onPicks,
+  onRepairPicks,
+  disabled,
+  starting,
+  cloning,
+  onStart,
+  children,
+}: {
+  bots: Bot[];
+  server: ServerId;
+  machines: Project[];
+  machine: string;
+  onMachine: (path: string) => void;
+  picks: PrPicks;
+  onPicks: (picks: PrPicks) => void;
+  /// The picker's own repair of a stale pick, which is not the reader choosing.
+  onRepairPicks: (picks: PrPicks) => void;
+  disabled: boolean;
+  starting: boolean;
+  cloning: boolean;
+  onStart: (bot: Bot | null) => void;
+  /// The text box, handed the start so ⌘⏎ there does what the arrow does.
+  children: (start: () => void) => React.ReactNode;
+}) {
+  const [botId, setBotId] = useLocalStorage<string | null>(LAST_BOT_KEY, null);
+  const [mode, setMode] = useLocalStorage<"bot" | "task">(LAST_MODE_KEY, "bot");
+  const bot = bots.find((b) => b.id === botId) ?? bots[0] ?? null;
+  const toBot = !!bot && mode === "bot";
+  const start = () => {
+    if (disabled) return;
+    if (toBot) setBotId(bot.id);
+    onStart(toBot ? bot : null);
+  };
+
+  return (
+    <div className="rounded-2xl bg-composer">
+      {children(start)}
+      {/* One row, never two: the pickers shrink and truncate rather than push
+          the arrow onto a line of its own. */}
+      <div className="flex min-w-0 items-center gap-1 px-2 pb-2">
+        {bot && (
+          <Segmented
+            className="shrink-0"
+            value={mode}
+            options={[
+              // With several, the menu beside it names the bot, so the half
+              // says only what kind of task this is.
+              bots.length > 1
+                ? { value: "bot", label: "Bot" }
+                : {
+                    value: "bot",
+                    label: bot.name,
+                    content: (
+                      <span className="flex items-center gap-1">
+                        <BotAvatar seed={bot.id} avatar={bot.avatar} className="block size-3.5 scale-[1.18]" />
+                        {bot.name}
+                      </span>
+                    ),
+                  },
+              { value: "task", label: "Task" },
+            ]}
+            onPick={setMode}
+            label="Start as"
+          />
+        )}
+        {/* The reused pickers keep their look; only their labels may shorten. */}
+        <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden [&_button]:min-w-0 [&_button>span]:min-w-0 [&_button>span]:truncate">
+          {toBot && bots.length > 1 && <BotMenu bots={bots} bot={bot} onPick={setBotId} />}
+          {!toBot && <TaskModelPicker server={server} picks={picks} onChange={onPicks} onRepair={onRepairPicks} />}
+          {/* The New Task page's own picker, over this repo's checkouts and a
+              stand-in on each machine without one. */}
+          {!toBot && <MachineSelector projects={machines} value={machine} onSelect={onMachine} />}
+        </div>
+        <span className="shrink-0">
+          <SendButton
+            disabled={disabled}
+            onClick={start}
+            title={cloning ? "Cloning…" : starting ? "Starting…" : toBot ? `Start task in ${bot.name}` : "Start task"}
+          />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/// The switch's bot pick, beside it where there are several.
+function BotMenu({ bots, bot, onPick }: { bots: Bot[]; bot: Bot; onPick: (id: string) => void }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="xs" disabled={disabled}>
-          Send to bot
+        <button
+          type="button"
+          className="flex items-center gap-1 rounded-md px-1 py-0.5 text-ui text-foreground hover:bg-sidebar-accent"
+        >
+          <BotAvatar seed={bot.id} avatar={bot.avatar} className="block size-3.5 scale-[1.18]" />
+          {bot.name}
           <ChevronDown className="size-3 opacity-60" />
-        </Button>
+        </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
-        {bots.map((bot) => (
-          <DropdownMenuItem key={bot.id} onSelect={() => onSend(bot)}>
-            <BotAvatar seed={bot.id} avatar={bot.avatar} className="block size-4 scale-[1.18]" />
-            {bot.name}
-          </DropdownMenuItem>
-        ))}
+      <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuRadioGroup value={bot.id} onValueChange={onPick}>
+          {bots.map((b) => (
+            <DropdownMenuRadioItem key={b.id} value={b.id}>
+              <BotAvatar seed={b.id} avatar={b.avatar} className="block size-4 scale-[1.18]" />
+              {b.name}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-/// What Start session runs on: the newest settled session's picks, since that
-/// is the agent that did the work, else a new task's remembered ones — never
-/// the selected session's, which the main composer mirrors.
-function useStartPicks(settled: SessionIndexItem | undefined) {
-  return useState<PrPicks>(() => {
-    if (settled) {
-      const { harness, model, effort, permissionMode, fast } = settled;
-      return { harness, model, effort, permissionMode, fast };
-    }
+/// What Start Task runs on: the PR's latest task's agent and model, since
+/// that is the agent that did the work, else a new task's remembered
+/// ones — never the selected session's, which the main composer mirrors.
+/// Always Auto: the pane offers no stance, and a stance carried over from a
+/// settled session or the composer is one the reader never saw here.
+///
+/// The index side holding that task can land after the pane mounts, so its
+/// picks are taken when it arrives — unless the reader has already picked,
+/// whose choice wins.
+function useStartPicks(latest: SessionIndexItem | undefined) {
+  const of = (item: SessionIndexItem): PrPicks => {
+    const { harness, model, effort, fast } = item;
+    return { harness, model, effort, permissionMode: "auto", fast };
+  };
+  const [picks, setPicks] = useState<PrPicks>(() => {
+    if (latest) return of(latest);
     const stored = readComposerPrefs();
     const model = rememberedModel(stored.modelByHarness, stored.harness);
     return {
       harness: stored.harness,
       model,
       effort: stored.effortByModel[model] ?? null,
-      permissionMode: stored.permissionMode,
+      permissionMode: "auto",
       fast: stored.fast,
     };
   });
+  const [touched, setTouched] = useState(false);
+  const seededFrom = useRef(latest?.sessionId ?? null);
+  useEffect(() => {
+    if (!latest || touched || seededFrom.current === latest.sessionId) return;
+    seededFrom.current = latest.sessionId;
+    setPicks(of(latest));
+  }, [latest, touched]);
+  const pick = useCallback((next: PrPicks) => {
+    setTouched(true);
+    setPicks(next);
+  }, []);
+  return [picks, pick, setPicks] as const;
 }
 
-/// The agent, model and stance Start session uses, changeable in place. The
-/// model list is the server's own, read once per agent.
-function PicksRow({
+/// The New Task composer's own model picker, on the page's picks: the agent
+/// row, models, effort and fast mode, read from the task's server. A bot's
+/// task never shows it, since it runs on the bot's own agent.
+function TaskModelPicker({
   server,
   picks,
   onChange,
+  onRepair,
 }: {
   server: ServerId;
   picks: PrPicks;
   onChange: (picks: PrPicks) => void;
+  onRepair: (picks: PrPicks) => void;
 }) {
   const [models, setModels] = useState<Model[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [generation, setGeneration] = useState(0);
   useEffect(() => {
     let gone = false;
+    setLoading(true);
     invoke<Model[]>("list_models", { harness: picks.harness }, server)
       .then((list) => !gone && setModels(list))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => !gone && setLoading(false));
     return () => {
       gone = true;
     };
-  }, [server, picks.harness]);
-  const model = models.find((m) => m.id === picks.model);
+  }, [server, picks.harness, generation]);
+
   // Repaired once the list lands, as the main composer repairs its own: a
   // remembered model this agent no longer runs, or an effort it lacks, would
   // reach the server as a pick nobody made.
@@ -390,44 +495,36 @@ function PicksRow({
     const runs = models.find((m) => m.id === usableModel(models, picks.model, picks.harness));
     if (!runs) return;
     const effort = usableEffort(runs, picks.effort, "high");
-    if (runs.id !== picks.model || effort !== picks.effort) onChange({ ...picks, model: runs.id, effort });
-  }, [models, picks, onChange]);
+    if (runs.id !== picks.model || effort !== picks.effort) onRepair({ ...picks, model: runs.id, effort });
+  }, [models, picks, onRepair]);
 
   return (
-    <div className="flex min-w-0 items-center gap-1 text-ui text-muted-foreground">
-      <span className="shrink-0">{AGENT_LABELS[picks.harness]}</span>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            className="flex min-w-0 items-center gap-1 rounded-md px-1 py-0.5 text-foreground hover:bg-sidebar-accent"
-          >
-            <span className="truncate">{model?.label ?? picks.model}</span>
-            {picks.effort && <span className="text-muted-foreground">{EFFORT_LABELS[picks.effort]}</span>}
-            <ChevronDown className="size-3 shrink-0 opacity-60" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-56">
-          <DropdownMenuRadioGroup
-            value={picks.model}
-            onValueChange={(id) => {
-              const next = models.find((m) => m.id === id);
-              if (next) onChange({ ...picks, model: next.id, effort: usableEffort(next, picks.effort, "high") });
-            }}
-          >
-            {models.map((m) => (
-              <DropdownMenuRadioItem key={m.id} value={m.id}>
-                {m.label}
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <PermissionSelector
-        harness={picks.harness}
-        value={picks.permissionMode}
-        onChange={(permissionMode) => onChange({ ...picks, permissionMode })}
-      />
-    </div>
+    <ModelSelector
+      server={server}
+      harness={picks.harness}
+      onHarnessChange={(harness) => {
+        const stored = readComposerPrefs();
+        const model = rememberedModel(stored.modelByHarness, harness);
+        setModels([]);
+        onChange({ ...picks, harness, model, effort: stored.effortByModel[model] ?? null });
+      }}
+      models={models}
+      modelId={picks.model}
+      effort={picks.effort}
+      fast={picks.fast}
+      onFastChange={(fast) => onChange({ ...picks, fast })}
+      fastNote={null}
+      isNewSession
+      busy={false}
+      onChange={(model, effort) => onChange({ ...picks, model, effort })}
+      onRefreshModels={() => {
+        void invoke("refresh_models", {}, server)
+          .catch(() => {})
+          .finally(() => setGeneration((n) => n + 1));
+      }}
+      onReloadModels={() => setGeneration((n) => n + 1)}
+      onSeedProvider={() => {}}
+      loadingModels={loading}
+    />
   );
 }

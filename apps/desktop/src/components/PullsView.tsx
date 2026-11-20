@@ -1,23 +1,28 @@
 import { useMemo, useState } from "react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { MessageSquare, RefreshCw } from "lucide-react";
+import { ChevronDown, MessageSquare, RefreshCw } from "lucide-react";
 
 import Avatar from "@/components/Avatar";
 import { SessionLink } from "@/components/PullDetail";
 import { ListGroup, RepoMenu } from "@/components/ListGroup";
 import { MissingCli } from "@/components/PrPanel";
 import PrStateIcon, { ChecksRunningIcon } from "@/components/PrStateIcon";
-import Segmented from "@/components/Segmented";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import Counts from "@/components/changes/Counts";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { relativeTime } from "@/lib/format";
 import {
   SECTIONS,
   inboxSection,
-  matchesPeople,
   rowRepoName,
   type InboxRow,
   type PeopleFilter,
@@ -25,18 +30,58 @@ import {
 import { cn } from "@/lib/utils";
 import type { Bot, PrUnavailable, SessionIndexItem } from "@/types/events";
 
+/// Which workspace's projects the page lists: the active space's, or every one.
 export type PullsScope = "space" | "all";
 
 const PEOPLE: readonly { value: PeopleFilter; label: string }[] = [
   { value: "all", label: "All" },
+  { value: "involving", label: "Involving me" },
   { value: "mine", label: "Mine" },
   { value: "review", label: "Review requested" },
 ];
 
-const SCOPES = [
+/// How the empty list names the people filter it ran under.
+const PEOPLE_EMPTY: Record<PeopleFilter, string> = {
+  all: "",
+  involving: " involving you",
+  mine: " of yours",
+  review: " awaiting your review",
+};
+
+const SCOPES: readonly { value: PullsScope; label: string }[] = [
   { value: "space", label: "This space" },
   { value: "all", label: "All spaces" },
-] as const;
+];
+
+/// Which spaces' repos the page lists, beside the owner and repo menus that
+/// narrow it further. Always holds a pick, so the trigger names it.
+function ScopeMenu({ scope, onScope }: { scope: PullsScope; onScope: (scope: PullsScope) => void }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-ui text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {SCOPES.find((option) => option.value === scope)?.label}
+          <ChevronDown className="size-3 opacity-60" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-40">
+        <DropdownMenuLabel>Spaces</DropdownMenuLabel>
+        {SCOPES.map((option) => (
+          <DropdownMenuCheckboxItem
+            key={option.value}
+            checked={scope === option.value}
+            onCheckedChange={() => onScope(option.value)}
+          >
+            {option.label}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 /// Every open pull request in the projects on screen, filed by what it wants
 /// from the reader. The page lists and picks; the pane beside it, owned by
@@ -51,8 +96,13 @@ export default function PullsView({
   hasRepos,
   missing,
   errors,
+  people,
+  onPeople,
   scope,
   onScope,
+  owners,
+  owner,
+  onOwner,
   sessionsFor,
   botOf,
   onOpenSession,
@@ -72,8 +122,14 @@ export default function PullsView({
   missing: { kind: "no_cli" | "not_authenticated"; cwd: string } | null;
   /// Repos whose last read failed for a reason worth saying.
   errors: { name: string; error: PrUnavailable }[];
+  people: PeopleFilter;
+  onPeople: (people: PeopleFilter) => void;
   scope: PullsScope;
   onScope: (scope: PullsScope) => void;
+  /// Who "Involving me" can be narrowed to: the reader, then their orgs.
+  owners: string[];
+  owner: string | null;
+  onOwner: (owner: string | null) => void;
   sessionsFor: (row: InboxRow) => SessionIndexItem[];
   /// The bot a session is a task of, to name it on the row.
   botOf: (item: SessionIndexItem) => Bot | undefined;
@@ -84,14 +140,19 @@ export default function PullsView({
   loading: boolean;
   onRefresh: () => void;
 }) {
-  const [people, setPeople] = useState<PeopleFilter>("all");
   const [repo, setRepo] = useState<string | null>(null);
 
   const repos = useMemo(() => [...new Set(rows.map(rowRepoName))].sort(), [rows]);
   // A repo picked under another scope may have no rows here; the filter then
   // reads as off rather than hiding the whole list behind a name not listed.
   const repoShown = repo && repos.includes(repo) ? repo : null;
-  const shown = rows.filter((row) => matchesPeople(row, people) && (!repoShown || rowRepoName(row) === repoShown));
+  // Owners on offer: those the search has met, and those of the rows here.
+  const ownerList = [...new Set([...owners, ...rows.map((row) => rowRepoName(row).split("/")[0])])];
+  const shown = rows.filter(
+    (row) =>
+      (!owner || rowRepoName(row).split("/")[0].toLowerCase() === owner.toLowerCase()) &&
+      (!repoShown || rowRepoName(row) === repoShown),
+  );
   const sections = SECTIONS.map((section) => ({
     ...section,
     rows: shown.filter((row) => inboxSection(row.mark) === section.key),
@@ -120,7 +181,7 @@ export default function PullsView({
           <button
             key={option.value}
             type="button"
-            onClick={() => setPeople(option.value)}
+            onClick={() => onPeople(option.value)}
             className={cn(
               "shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-ui transition-colors",
               people === option.value
@@ -132,12 +193,21 @@ export default function PullsView({
           </button>
         ))}
 
-        <Segmented value={scope} options={SCOPES} onPick={onScope} label="Spaces" className="ml-1" />
-
         <div className="flex-1" aria-hidden />
 
         <div className="flex shrink-0 items-center gap-1.5">
-          {repos.length > 1 && (
+          <ScopeMenu scope={scope} onScope={onScope} />
+          {ownerList.length > 0 && (
+            <RepoMenu
+              repo={owner}
+              repos={(owner && !ownerList.includes(owner) ? [owner, ...ownerList] : ownerList).map((name) => ({ id: name, name }))}
+              onPick={onOwner}
+              placeholder="All owners"
+              anyLabel="All owners"
+              heading="Owner"
+            />
+          )}
+          {repos.length > 0 && (
             <RepoMenu
               repo={repoShown}
               repos={repos.map((name) => ({ id: name, name }))}
@@ -183,9 +253,7 @@ export default function PullsView({
           <p className="px-3 py-4 text-ui text-muted-foreground">
             {rows.length > 0
               ? "No pull request matches these filters."
-              : scope === "space"
-                ? "No open pull requests in this space."
-                : "No open pull requests."}
+              : `No open pull requests${PEOPLE_EMPTY[people]}${scope === "space" ? " in this space" : ""}.`}
           </p>
         ) : (
           sections.map((section) => (
@@ -194,7 +262,7 @@ export default function PullsView({
                 <PullRow
                   key={row.mark.url}
                   row={row}
-                  session={sessionsFor(row).find((s) => !s.archived) ?? null}
+                  session={sessionsFor(row)[0] ?? null}
                   botOf={botOf}
                   onOpenSession={onOpenSession}
                   showRepo={!repoShown && repos.length > 1}
@@ -222,8 +290,8 @@ function PullRow({
   onPick,
 }: {
   row: InboxRow;
-  /// The live session behind it, if any — named on the row so a PR nobody is
-  /// working on stands out, and opened from there.
+  /// Its latest task, live or settled — named on the row so a PR nobody has
+  /// worked on stands out, and opened from there.
   session: SessionIndexItem | null;
   botOf: (item: SessionIndexItem) => Bot | undefined;
   onOpenSession: (item: SessionIndexItem) => void;
@@ -278,7 +346,7 @@ function PullRow({
         />
       ) : (
         <span className="hidden w-20 shrink-0 truncate text-muted-foreground/50 @md:inline">
-          {listing.isCrossRepository ? "Read only" : "No session"}
+          {listing.isCrossRepository ? "Read only" : "No task"}
         </span>
       )}
       <Avatar src={listing.authorAvatar} name={listing.author} />
