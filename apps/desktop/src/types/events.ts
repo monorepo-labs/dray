@@ -676,6 +676,12 @@ export type BranchList = {
  */
 current: string | null, branches: Array<string>, 
 /**
+ * Branches a remote has and this checkout holds no local copy of, by
+ * their own name (`feature/x`, not `origin/feature/x`). Only the worktree
+ * picker offers them: a tree can start on one, a checkout cannot.
+ */
+remoteBranches: Array<string>, 
+/**
  * What a `-w` worktree forks from, resolved the way the CLI resolves it.
  * Shown in place of the branch picker in worktree mode, where the picked
  * branch has no effect. `None` when the repo has no remote.

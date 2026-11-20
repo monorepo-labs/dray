@@ -313,6 +313,9 @@ function App() {
     branches,
     branch,
     useWorktree,
+    worktreeBranch,
+    setWorktreeBranch,
+    refreshBranches,
     busy,
     backgroundTasks,
     liveTaskIds,
@@ -441,8 +444,9 @@ function App() {
       fast,
       useWorktree,
       projectPath,
+      base: worktreeBranch,
     });
-  }, [openDraftId, harness, modelId, effort, permissionMode, fast, useWorktree, projectPath, updateDraft]);
+  }, [openDraftId, harness, modelId, effort, permissionMode, fast, useWorktree, projectPath, worktreeBranch, updateDraft]);
 
   // A draft emptied and then left says nothing, so it goes rather than sitting
   // in the list as an empty row. Every way out lands here, since each one
@@ -553,6 +557,7 @@ function App() {
       permissionMode,
       fast,
       useWorktree: source ? !!source.worktreeName || source.worktreeRemoved : useWorktree,
+      base: !source && useWorktree ? worktreeBranch : null,
       created: new Date().toISOString(),
     });
     if (!saved) return;
@@ -4730,6 +4735,9 @@ function App() {
               onCancelBranchSwitch={() => setPendingBranch(null)}
               useWorktree={useWorktree}
               onToggleWorktree={() => setUseWorktree((v) => !v)}
+              worktreeBranch={worktreeBranch}
+              onSelectWorktreeBranch={(branch) => setWorktreeBranch(branch)}
+              onOpenWorktreeBranches={refreshBranches}
               onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
               contextUsage={contextUsage}
               tasks={selectedBot ? { counts: taskCount, onOpen: () => showPanel("tasks") } : undefined}

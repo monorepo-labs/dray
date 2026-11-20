@@ -256,8 +256,10 @@ async fn send_msg(
     }
 
     // A draft keeps its base as written, a session id among the spellings, so
-    // it is resolved here the way `dray draft start` resolves it.
-    let base_ref = match base_ref {
+    // it is resolved here the way `dray draft start` resolves it. The worktree
+    // branch picker sends its branch here too, so the two follow one set of
+    // rules.
+    let base = match base_ref {
         Some(base) if is_new_session => Some(orchestration::resolve_base(base, cwd).await?),
         _ => None,
     };
@@ -281,17 +283,12 @@ async fn send_msg(
             branch,
             use_worktree,
             worktree_name,
-            // The composer offers no base ref of its own: a worktree session
-            // created there is one the reader is starting fresh, and the picker
-            // hides the branch list in worktree mode because `-w` would not
-            // honour it. Only a draft carrying one hands it through.
-            base_ref.as_deref(),
+            base.as_ref(),
             is_new_session,
             // The composer never has a parent, and its prompts are the user's
             // own; only the orchestration socket sets either — or hides one.
             None,
             false,
-            None,
             None,
             None,
             None,
@@ -379,14 +376,13 @@ async fn start_pr_session(
             None,
             true,
             None,
-            None,
+            Some(&git::Base::Pr(pr_head)),
             true,
             parent.as_deref(),
             parent.is_some(),
             None,
             None,
             None,
-            Some(&pr_head),
             &sink,
         )
         .await?;

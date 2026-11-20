@@ -247,8 +247,9 @@ struct New {
     harness: Option<String>,
 
     /// Base the new session's worktree on existing work: a session id, a
-    /// branch, or any git ref. Committed work only. Defaults to
-    /// origin/<default>.
+    /// branch, or any git ref. A branch is worked on by its own name, fetched
+    /// first; a session or other ref gets a branch of its own. Committed work
+    /// only. Defaults to origin/<default>.
     #[arg(long, alias = "from", value_name = "SESSION|REF")]
     base: Option<String>,
 
@@ -606,6 +607,7 @@ fn new(args: New) -> Result<(), String> {
         harness: args.harness,
         parent_session_id: parent_session_id(),
         base: args.base,
+        base_as_branch: false,
         title: args.title,
         issues: args.issues,
         // Absent rather than `false`, so leaving the flag off inherits the
@@ -632,7 +634,10 @@ fn new(args: New) -> Result<(), String> {
                 // `--base <session-id>` names a session, so the branch it
                 // resolved to is news: the caller asked with an id and only the
                 // app could say what that session's work is on.
+                // A branch worked on by its own name comes back as the
+                // session's branch.
                 match &base_ref {
+                    Some(base) if session.branch.as_deref() == Some(base) => format!(", on branch {base}"),
                     Some(base) => format!(", based on {base}"),
                     None => String::new(),
                 }
