@@ -687,6 +687,18 @@ pub async fn answer_forward(forward: Forward, app: Sink) -> Response {
                 let pushed = crate::git::pushed_branch(project, base).await?;
                 *base = crate::git::resolve_commit(project, &pushed).await.unwrap_or(pushed);
             }
+            // A named tag or commit this checkout has yet to fetch; a branch is
+            // fetched by its own rules once it starts.
+            Request::CreateSession(CreateSession {
+                base: Some(base), project_path: Some(project), base_as_branch: true, ..
+            })
+            | Request::CreateDraft(CreateDraft {
+                base: Some(base), project_path: Some(project), base_as_branch: true, ..
+            }) if store::get_session_index_item(base).await?.is_none()
+                && !crate::git::is_branch(project, base).await =>
+            {
+                *base = crate::git::pushed_branch(project, base).await?;
+            }
             _ => {}
         }
         let caller = forward.caller.as_ref();

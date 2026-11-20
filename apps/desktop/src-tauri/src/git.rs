@@ -1569,10 +1569,16 @@ pub async fn pushed_branch(cwd: &str, branch: &str) -> Result<String> {
         .await
         .with_context(|| format!("could not fetch {branch} from origin — push it, then try again"))?;
     let remote = format!("origin/{branch}");
-    match resolve_commit(cwd, &remote).await {
-        Some(_) => Ok(remote),
-        // A tag, which a fetch brings in under its own name.
-        None => Ok(branch.to_string()),
+    if resolve_commit(cwd, &remote).await.is_some() {
+        return Ok(remote);
+    }
+    // A tag, which a fetch brings in under its own name only when its commit
+    // was new here; otherwise it is in FETCH_HEAD alone, so its commit is used.
+    match resolve_commit(cwd, branch).await {
+        Some(_) => Ok(branch.to_string()),
+        None => resolve_commit(cwd, "FETCH_HEAD")
+            .await
+            .with_context(|| format!("fetched {branch} from origin, but it names no commit")),
     }
 }
 
@@ -3360,7 +3366,12 @@ mod tests {
         run(at, &["tag", "v-elsewhere"]).await.unwrap();
         run(at, &["push", "-q", "origin", "v-elsewhere"]).await.unwrap();
         run(at, &["tag", "-d", "v-elsewhere"]).await.unwrap();
-        assert_eq!(pushed_branch(at, "v-elsewhere").await.unwrap(), "v-elsewhere");
+        // A tag only the remote has is no branch. Its commit is already here,
+        // so the fetch leaves it in FETCH_HEAD alone, and that commit forks.
+        assert!(!is_branch(at, "v-elsewhere").await);
+        let fetched = pushed_branch(at, "v-elsewhere").await.unwrap();
+        assert_eq!(resolve_commit(at, &fetched).await, resolve_commit(at, "HEAD").await);
+        assert!(!is_branch(at, &fetched).await);
         let here = current_branch(at).await.unwrap();
         assert_eq!(pushed_branch(at, &here).await.unwrap(), here);
 
