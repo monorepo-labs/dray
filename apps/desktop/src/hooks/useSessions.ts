@@ -370,6 +370,8 @@ export function useSessions() {
     // The branch a new worktree starts on, null for the default branch. Per
     // project and never persisted, like `branch`.
     const [worktreeBranch, setWorktreeBranch] = useState<string | null>(null);
+    const projectPathRef = useRef(projectPath);
+    projectPathRef.current = projectPath;
     // The server New bot makes its bot on, while the dialog is open. It shares
     // the composer's picker, so the models offered must be that server's.
     const [botServer, setBotServer] = useState<ServerId | null>(null);
@@ -692,6 +694,8 @@ const retagSpace = async (from: string, to: string | null) => {
 // reachable, since a stale pick still sends: the picker draws "Attach project"
 // while `send_msg` runs happily in the project the reader just walked away from.
 const handleSelectProject = (path: string | null) => {
+  // A branch belongs to the project it was picked in.
+  if (path !== projectPathRef.current) setWorktreeBranch(null);
   setProjectPath(path);
   if (path === null) return;
   // Held here too, since this stamp is what picks a project's machine next time
@@ -727,9 +731,12 @@ const runCheckout = async (target: string, stash: boolean) => {
 // Read again each time the worktree picker opens: a task started since may have
 // made a remote-only branch local, or the reader fetched.
 const refreshBranches = () => {
-  if (!projectPath) return;
-  invoke<BranchList>("list_branches", { cwd: projectPath })
-    .then(setBranches)
+  const asked = projectPath;
+  if (!asked) return;
+  invoke<BranchList>("list_branches", { cwd: asked })
+    .then((list) => {
+      if (projectPathRef.current === asked) setBranches(list);
+    })
     .catch(() => {});
 };
 
@@ -1482,6 +1489,9 @@ const restoreDraftControls = (draft: Draft) => {
   restoreSessionControls({ ...draft, sessionId: draft.id });
   setUseWorktreeState(draft.useWorktree);
   handleSelectProject(draft.projectPath);
+  // After the project, whose switch clears it. A `dray draft new --base`
+  // session id shows here too: it is what the draft starts from.
+  setWorktreeBranch(draft.base ?? null);
 };
 
 /// Answers whether the reader ended up on the session they asked for, which is
@@ -2397,7 +2407,6 @@ useEffect(() => {
 // The guard matters because switching projects quickly would otherwise let a
 // slower repo's response land on top of the faster one's.
 useEffect(() => {
-  setWorktreeBranch(null);
   if (!projectPath) {
     setBranches(null);
     setBranch(null);

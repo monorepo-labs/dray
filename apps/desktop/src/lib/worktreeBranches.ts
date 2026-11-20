@@ -24,6 +24,7 @@ export function worktreeBranchOptions(list: BranchList, query = ""): WorktreeBra
   return {
     defaultBranch: fallback && keep(fallback) ? fallback : null,
     local: rank(list.branches),
-    remote: rank(list.remoteBranches),
+    // Absent from an older server's list.
+    remote: rank(list.remoteBranches ?? []),
   };
 }

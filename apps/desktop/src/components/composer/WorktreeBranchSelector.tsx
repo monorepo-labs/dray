@@ -33,7 +33,7 @@ export default function WorktreeBranchSelector({
   const options = useMemo(() => (branches ? worktreeBranchOptions(branches, query) : null), [branches, query]);
   if (!branches || !options) return null;
   const { defaultBranch, local, remote } = options;
-  const total = branches.branches.length + branches.remoteBranches.length;
+  const total = branches.branches.length + (branches.remoteBranches?.length ?? 0);
   // A repo with no remote and one branch has nothing to pick between, and
   // nothing worth stating either.
   if (!branches.defaultBase && total < 2) return null;

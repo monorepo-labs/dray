@@ -680,7 +680,11 @@ pub async fn answer_forward(forward: Forward, app: Sink) -> Response {
             | Request::CreateDraft(CreateDraft { base: Some(base), project_path: Some(project), .. })
                 if store::get_session_index_item(base).await?.is_none() =>
             {
-                *base = crate::git::pushed_branch(project, base).await?;
+                let pushed = crate::git::pushed_branch(project, base).await?;
+                // Pinned to its commit, so it forks as it always has. A session's
+                // branch sent from the Mac reads here like any branch, and taken
+                // by name the new task would commit onto the author's work.
+                *base = crate::git::resolve_commit(project, &pushed).await.unwrap_or(pushed);
             }
             _ => {}
         }

@@ -28,6 +28,11 @@ describe("worktreeBranchOptions", () => {
     expect(worktreeBranchOptions({ ...list, branches: ["my-fix", "fix-a"] }, "fix").local).toEqual(["fix-a", "my-fix"]);
   });
 
+  it("reads an older server's list, which has no remote branches", () => {
+    const { remoteBranches: _, ...old } = list;
+    expect(worktreeBranchOptions(old as BranchList).remote).toEqual([]);
+  });
+
   it("has no default branch without a remote one", () => {
     const options = worktreeBranchOptions({ ...list, defaultBase: null, remoteBranches: [] });
     expect(options.defaultBranch).toBeNull();

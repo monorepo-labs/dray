@@ -443,8 +443,9 @@ function App() {
       fast,
       useWorktree,
       projectPath,
+      base: worktreeBranch,
     });
-  }, [openDraftId, harness, modelId, effort, permissionMode, fast, useWorktree, projectPath, updateDraft]);
+  }, [openDraftId, harness, modelId, effort, permissionMode, fast, useWorktree, projectPath, worktreeBranch, updateDraft]);
 
   // A draft emptied and then left says nothing, so it goes rather than sitting
   // in the list as an empty row. Every way out lands here, since each one
@@ -555,6 +556,7 @@ function App() {
       permissionMode,
       fast,
       useWorktree: source ? !!source.worktreeName || source.worktreeRemoved : useWorktree,
+      base: !source && useWorktree ? worktreeBranch : null,
       created: new Date().toISOString(),
     });
     if (!saved) return;

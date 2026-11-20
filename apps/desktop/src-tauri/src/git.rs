@@ -1500,9 +1500,14 @@ pub async fn worktree_disposition(worktree_path: &str, project_path: &str) -> Wo
         )
         .await
         .unwrap_or(0),
-        // A detached HEAD has no branch to exclude, and nothing here can be
-        // deleted along with it either.
-        None => 0,
+        // A detached HEAD has no branch to exclude, but commits made on it are
+        // held by nothing else: removing the tree is what loses them.
+        None => git_count(
+            worktree_path,
+            &["rev-list", "--count", "HEAD", "--not", "--branches", "--remotes", "--tags", "--"],
+        )
+        .await
+        .unwrap_or(0),
     };
 
     WorktreeDisposition {
@@ -1864,10 +1869,13 @@ pub async fn create_worktree_from_branch(project_path: &str, name: &str, branch:
     let has_local = resolve_commit(project_path, &format!("refs/heads/{branch}")).await.is_some();
     if let Some(remote) = branch_remote(project_path, branch).await {
         if let Some(url) = git_line(project_path, &["remote", "get-url", &remote]).await {
+            // A local branch with no remote copy on record is, as far as this
+            // checkout knows, never pushed — so an unreachable remote or an
+            // expired login is no reason to refuse it.
+            let seen_remotely = resolve_commit(project_path, &format!("refs/remotes/{remote}/{branch}")).await.is_some();
             let head = PrHead { branch: branch.to_string(), repo: repo_key(&url), ours: true };
             match create_worktree_on_branch(project_path, name, &head).await {
-                // Never pushed: only this checkout's copy is left to start on.
-                Err(e) if has_local && format!("{e:#}").contains("couldn't find remote ref") => {}
+                Err(e) if has_local && (!seen_remotely || format!("{e:#}").contains("couldn't find remote ref")) => {}
                 made => return made,
             }
         }
@@ -3512,6 +3520,27 @@ mod tests {
 
         fs::remove_dir_all(&dir).await.ok();
         fs::remove_dir_all(&bare).await.ok();
+    }
+
+    /// A branch never pushed starts with its remote unreachable, and commits
+    /// made on a detached tree count as unsaved, since removing it loses them.
+    #[tokio::test]
+    async fn a_local_branch_needs_no_remote_and_detached_commits_count() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+        run(at, &["remote", "add", "origin", "/nonexistent/dray-remote.git"]).await.unwrap();
+        run(at, &["branch", "offline"]).await.unwrap();
+        let made = create_worktree_from_branch(at, "t-offline", "offline").await.unwrap();
+        assert_eq!(made, PrTree::OnBranch);
+
+        let detached = worktrees_dir(&dir).join("t-detached").to_string_lossy().into_owned();
+        run(at, &["worktree", "add", "--detach", &detached, "HEAD"]).await.unwrap();
+        assert_eq!(worktree_disposition(&detached, at).await.unpushed_commits, 0);
+        fs::write(Path::new(&detached).join("keep.txt"), "detached work\n").await.unwrap();
+        run(&detached, &["commit", "-qam", "detached work"]).await.unwrap();
+        assert_eq!(worktree_disposition(&detached, at).await.unpushed_commits, 1);
+
+        fs::remove_dir_all(&dir).await.ok();
     }
 
     /// Work that has landed is still this branch's work. Excluding
