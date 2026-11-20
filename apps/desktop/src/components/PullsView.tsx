@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ChevronDown, ChevronRight, MessageSquare, RefreshCw } from "lucide-react";
@@ -20,6 +20,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { PREFETCH_HOVER_MS } from "@/hooks/useHoverPrefetch";
+import { prefetchPullRequests } from "@/hooks/usePullRequest";
 import { relativeTime } from "@/lib/format";
 import {
   SECTIONS,
@@ -238,10 +240,24 @@ function PullRow({
   onPick: () => void;
 }) {
   const { mark, listing } = row;
+  // The pane's read starts once the pointer rests here, so a click opens on an
+  // answer rather than on a `gh` round trip; sweeping past reads nothing.
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const arm = () => {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => prefetchPullRequests(row.key, mark.headRefName), PREFETCH_HOVER_MS);
+  };
+  const disarm = () => clearTimeout(timer.current);
+  useEffect(() => disarm, []);
+
   return (
     <div
       role="button"
       tabIndex={0}
+      onPointerEnter={arm}
+      onPointerLeave={disarm}
+      onFocus={arm}
+      onBlur={disarm}
       onClick={(e) => {
         if (e.metaKey || e.ctrlKey) return void openUrl(mark.url);
         onPick();
