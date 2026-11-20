@@ -2,6 +2,7 @@
 /// session each belongs to, and what a message to that session says. Pure, so
 /// every one of them is tested; the page and `App` only draw and wire them.
 import { marksRepo, mergeVerdict, prRepoSlug, sessionBranch, stripBotMarkers } from "@/lib/pr";
+import type { Draft } from "@/hooks/useDrafts";
 import type { PrComment, PrListing, PrMark, PullRequest, SessionIndexItem } from "@/types/events";
 
 /// One open pull request on the page. `key` is the marks key it was read
@@ -206,3 +207,47 @@ export function prPrompt({
   return parts.join("\n\n");
 }
 
+/// The composer picks a new session starts on.
+export type Picks = Pick<Draft, "harness" | "model" | "effort" | "permissionMode" | "fast">;
+
+/// The draft Start session opens in the new-task composer: the prompt, the PR's
+/// project, and a worktree checked out on the PR's own branch, so the agent's
+/// push lands on that PR. Picks come from the newest settled session on the PR
+/// — the agent that did the work — else the composer's own. The reader can
+/// change any of them before sending.
+export function prDraft({
+  id,
+  projectPath,
+  row,
+  prompt,
+  settled,
+  picks,
+  created,
+}: {
+  id: string;
+  projectPath: string;
+  row: InboxRow;
+  prompt: string;
+  settled: SessionIndexItem | undefined;
+  picks: Picks;
+  created: string;
+}): Draft {
+  const chosen: Picks = settled
+    ? {
+        harness: settled.harness,
+        model: settled.model,
+        effort: settled.effort,
+        permissionMode: settled.permissionMode,
+        fast: settled.fast,
+      }
+    : picks;
+  return {
+    id,
+    prompt,
+    projectPath,
+    ...chosen,
+    useWorktree: true,
+    prHead: { branch: row.mark.headRefName, repo: row.repo },
+    created,
+  };
+}

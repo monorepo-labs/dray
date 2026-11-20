@@ -54,6 +54,14 @@ pub struct SessionIndexItem {
     /// whatever else is going on in it, not this session's work.
     #[serde(default)]
     pub worktree_removed: bool,
+    /// The tree was made on `branch` itself — a pull request's head — rather
+    /// than on `worktree-<name>`. The frontend rebuilds a worktree session's
+    /// branch from its name, since an entry from before the name was recorded
+    /// holds the root's branch there; this says the record is the one to read.
+    /// Written only when set, so no other entry changes on disk.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub own_branch: bool,
     pub title: String,
     /// The reader renamed this session, so no generated title may replace it —
     /// neither `title.rs`'s nor one a harness sends of its own (grok's
@@ -720,6 +728,7 @@ impl SessionIndexItem {
             },
             worktree_name: worktree_name.map(str::to_string),
             worktree_removed: false,
+            own_branch: false,
             title: title_from_prompt(first_prompt),
             title_locked: false,
             model,
@@ -793,6 +802,9 @@ impl SessionIndexItem {
             // same reason the parent carries the flag. A fork into a new tree
             // has one of its own and reads HEAD straight.
             worktree_removed: worktree_name.is_none() && self.worktree_removed,
+            // A fork in place keeps the parent's tree and branch; a new tree is
+            // a `worktree-<name>` one.
+            own_branch: worktree_name.is_none() && self.own_branch,
             title: fork_title(&self.title),
             // Inherited: a name the reader gave the conversation still names it.
             title_locked: self.title_locked,
@@ -3281,6 +3293,7 @@ mod tests {
             "branch": "worktree-calm-owl",
             "worktreeName": "calm-owl",
             "worktreeRemoved": true,
+            "ownBranch": true,
             "title": "Add the issue panel (fork)",
             "titleLocked": true,
             "model": "gpt56_sol",

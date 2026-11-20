@@ -6,6 +6,7 @@ import {
   inboxSection,
   matchesPeople,
   pickableKeys,
+  prDraft,
   prPrompt,
   sessionsForPr,
   unresolvedKeys,
@@ -254,3 +255,31 @@ describe("prPrompt", () => {
   });
 });
 
+describe("prDraft", () => {
+  const picks = { harness: "codex", model: "gpt-5", effort: "medium", permissionMode: "auto", fast: false } as const;
+  const base = { id: "d1", projectPath: "/p/r", row: row(), prompt: "go", picks, created: "now" };
+
+  it("opens a worktree on the PR's own branch in its repo", () => {
+    const draft = prDraft({ ...base, settled: undefined });
+    expect(draft).toMatchObject({ id: "d1", projectPath: "/p/r", prompt: "go", useWorktree: true, harness: "codex" });
+    expect(draft.prHead).toEqual({ branch: "feature", repo: "github.com/o/r" });
+  });
+
+  it("takes the settled session's picks over the composer's", () => {
+    const settled = item({
+      archived: true,
+      harness: "claude_code",
+      model: "claude-opus-5-5",
+      effort: "high",
+      permissionMode: "plan",
+      fast: true,
+    } as Partial<SessionIndexItem>);
+    expect(prDraft({ ...base, settled })).toMatchObject({
+      harness: "claude_code",
+      model: "claude-opus-5-5",
+      effort: "high",
+      permissionMode: "plan",
+      fast: true,
+    });
+  });
+});

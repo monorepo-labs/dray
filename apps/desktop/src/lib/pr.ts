@@ -26,6 +26,10 @@ import type { PrCheck, PrChecksState, PrMark, PullRequest } from "@/types/events
 /// The recorded `branch` survives the removal for this, and the sidebar's mark
 /// kept working throughout because it never had an `observed` to be misled by.
 ///
+/// `ownBranch` is a tree made on `branch` itself — a pull request's head,
+/// started from the pull requests page — so the record names it and the
+/// worktree name does not.
+///
 /// One function because the header and the PR lookup have to agree about which
 /// branch the session is on; two rebuilding it apart is how they come to
 /// disagree about which PR it has.
@@ -34,11 +38,13 @@ export function sessionBranch(
     branch: string | null;
     worktreeName: string | null;
     worktreeRemoved?: boolean;
+    ownBranch?: boolean;
   },
   observed?: string | null,
 ): string | null {
   if (session.worktreeRemoved) return session.branch;
   if (observed) return observed;
+  if (session.ownBranch) return session.branch;
   return session.worktreeName ? `worktree-${session.worktreeName}` : session.branch;
 }
 

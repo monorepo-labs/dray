@@ -75,6 +75,11 @@ describe("sessionBranch", () => {
     );
   });
 
+  it("reads a tree made on a PR's own branch off the record", () => {
+    expect(sessionBranch({ branch: "fix/thing", worktreeName: "pr-7", ownBranch: true })).toBe("fix/thing");
+    expect(sessionBranch({ branch: "fix/thing", worktreeName: "pr-7", ownBranch: true }, "other")).toBe("other");
+  });
+
   it("uses the checked-out branch otherwise", () => {
     expect(sessionBranch({ branch: "feature", worktreeName: null })).toBe("feature");
     expect(sessionBranch({ branch: null, worktreeName: null })).toBeNull();

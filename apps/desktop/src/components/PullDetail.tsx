@@ -26,12 +26,16 @@ export default function PullDetail({
   data,
   sessions,
   onOpenSession,
+  onStartSession,
 }: {
   row: InboxRow;
   data: ReturnType<typeof usePullRequest>;
   /// `sessionsForPr`'s answer, best first.
   sessions: SessionIndexItem[];
   onOpenSession: (sessionId: string) => void;
+  /// Opens the new-task composer on a draft for this PR's branch, carrying
+  /// `prompt`. Answers why it could not, or `null` once it has.
+  onStartSession: (prompt: string) => Promise<string | null>;
 }) {
   // The panel's read answers every PR on the head branch; this pane is one.
   const pr = data.prs.find((p) => p.number === row.mark.number) ?? null;
@@ -57,13 +61,22 @@ export default function PullDetail({
   const [text, setText] = useDraft(`pr:${row.mark.url}`);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<{ sent: SessionIndexItem } | { error: string } | null>(null);
-  const canSend = !!pr && !!target && !sending && (text.trim().length > 0 || picked.size > 0);
+  const writable = !row.listing.isCrossRepository;
+  // Starting needs no words: the PR and its comments are a task on their own.
+  const canSend = !!pr && writable && !sending && (!target || text.trim().length > 0 || picked.size > 0);
 
   const send = async () => {
-    if (!canSend || !pr || !target) return;
+    if (!canSend || !pr) return;
     setSending(true);
     setResult(null);
     try {
+      if (!target) {
+        // The page goes away on success, the composer taking its place.
+        const refused = await onStartSession(prPrompt({ pr, picked, text, fresh: true }));
+        if (refused) setResult({ error: refused });
+        else setText("");
+        return;
+      }
       await sendToTask(target, prPrompt({ pr, picked, text }));
       setText("");
       setPicked(new Set());
@@ -100,11 +113,11 @@ export default function PullDetail({
                 </Button>
               </>
             ) : (
-              <span>No live session for this pull request.</span>
+              <span>No live session. Start session opens the composer on {row.mark.headRefName}.</span>
             )}
           </div>
 
-          {target && !row.listing.isCrossRepository && (
+          {writable && (
             <>
               <textarea
                 rows={3}
@@ -139,7 +152,7 @@ export default function PullDetail({
                   </>
                 )}
                 <Button size="xs" className="ml-auto" disabled={!canSend} onClick={() => void send()}>
-                  {sending ? "Sending…" : "Send"}
+                  {target ? (sending ? "Sending…" : "Send") : "Start session…"}
                 </Button>
               </div>
             </>

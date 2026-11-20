@@ -1033,6 +1033,10 @@ impl SessionManager {
         // holds while it drops the schedule, so whichever goes first wins and
         // a prompt of theirs is never followed by a stale `continue`.
         claim_continue: Option<&str>,
+        // A pull request's head, checked out by its own name in a tree Dray
+        // makes so the agent's push lands on that PR. Only the pull requests
+        // page sets one, through a draft the composer sends.
+        pr_head: Option<&git::PrHead>,
         app: &Sink,
     ) -> Result<SendOutcome> {
         let _counted = Sending::enter().await;
@@ -1188,13 +1192,18 @@ impl SessionManager {
             // Ahead of the index write, unlike the spawn below: a base git
             // cannot resolve has left nothing behind at all and the caller is
             // getting the error.
-            let owned_worktree = match (base_ref, &worktree_name) {
-                (Some(base), Some(name)) => {
+            let owned_worktree = match (pr_head, base_ref, &worktree_name) {
+                (Some(head), _, Some(name)) => {
+                    git::create_worktree_on_branch(cwd, name, &head.branch, &head.repo).await?;
+                    true
+                }
+                (Some(_), _, None) => bail!("a pull request's branch needs a worktree to check it out into"),
+                (None, Some(base), Some(name)) => {
                     git::create_worktree(cwd, name, base).await?;
                     true
                 }
-                (Some(_), None) => bail!("a base ref needs a worktree to check it out into"),
-                (None, _) => false,
+                (None, Some(_), None) => bail!("a base ref needs a worktree to check it out into"),
+                (None, None, _) => false,
             };
 
             // Indexed before the process spawns, so a session that fails to
@@ -1213,6 +1222,12 @@ impl SessionManager {
                 fast,
                 parent_session_id,
             );
+            // The tree is on the PR's own branch, not `worktree-<name>`, and the
+            // record is what every reader of a session's branch goes by.
+            if let Some(head) = pr_head {
+                item.branch = Some(head.branch.clone());
+                item.own_branch = true;
+            }
             // Written with the entry rather than linked after it: the row
             // appears before the child spawns, and a tab that arrived a beat
             // later would be one more thing moving while the first turn starts.

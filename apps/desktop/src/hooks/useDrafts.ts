@@ -1,7 +1,7 @@
 import { invoke, listen } from "@/lib/transport";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { ApprovalPolicy, Effort, Harness, ModelId } from "@/types/events";
+import type { ApprovalPolicy, Effort, Harness, ModelId, PrHead } from "@/types/events";
 
 /// A task written and saved but not started: the prompt plus the composer picks
 /// it will start with. Stored whole in `~/.dray/drafts.json`, which Rust keeps
@@ -21,6 +21,9 @@ export type Draft = {
   /// Where the worktree starts, from `dray draft new --base`. The composer
   /// never sets one, and carries it through to the send.
   base?: string | null;
+  /// A pull request's head the tree is checked out on by name, from the pull
+  /// requests page's Start session. Carried through to the send like `base`.
+  prHead?: PrHead | null;
   created: string;
 };
 

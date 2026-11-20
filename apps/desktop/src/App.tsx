@@ -209,7 +209,7 @@ import { useOlderWrites } from "@/hooks/useOlderWrites";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, prRepoSlug, sessionBranch, slugKey } from "@/lib/pr";
-import { inboxRows, sessionsForPr, type InboxRow } from "@/lib/prInbox";
+import { inboxRows, prDraft, sessionsForPr, type InboxRow } from "@/lib/prInbox";
 import type { PullsScope } from "@/components/PullsView";
 import { holdSettle } from "@/lib/heldFlags";
 import { confirmMerge, mergeBlock, readLogin, useMergeAccess } from "@/lib/mergeAccess";
@@ -486,12 +486,13 @@ function App() {
     }
     const prompt = getDraft(id)?.prompt ?? message;
     const base = getDraft(id)?.base ?? null;
+    const prHead = getDraft(id)?.prHead ?? null;
     openDraftRef.current = null;
     // A send is not leaving: an attachment-only prompt has no text, and the
     // empty-draft sweep would delete a draft whose send may yet fail.
     leftDraft.current = null;
     setOpenDraftId(null);
-    const sending = handleSendMsg(message, attachments, base);
+    const sending = handleSendMsg(message, attachments, base, prHead);
     // Taken after the send's own bump, so only a move the reader makes while
     // it is out counts as leaving.
     const nav = navGen.current;
@@ -1641,6 +1642,30 @@ function App() {
   });
   const pullsLoaded = pullsKeys.some((key) => prMarks.marksIn(key) !== undefined || prMarks.errorFor(key));
   const [pullsReading, setPullsReading] = useState(false);
+  /// Start session on a PR with no live session: a draft on the PR's own
+  /// branch, opened in the new-task composer so every pick can be changed
+  /// before it starts. The project is the checkout the PR was read through,
+  /// else any attached checkout of its repo — never a `github:` key, which has
+  /// no checkout to make a tree in.
+  const startPrSession = async (row: InboxRow, prompt: string): Promise<string | null> => {
+    const projectPath =
+      projects.find((p) => p.path === row.key)?.path ??
+      projects.find((p) => prMarks.repoOf(p.path) === row.repo)?.path;
+    if (!projectPath) return "No checkout of this repository is attached here, so there is nowhere to start a session.";
+    const id = crypto.randomUUID();
+    const draft = prDraft({
+      id,
+      projectPath,
+      row,
+      prompt,
+      settled: sessionsForRow(row).find((s) => s.archived),
+      picks: { harness, model: modelId, effort, permissionMode, fast },
+      created: new Date().toISOString(),
+    });
+    if (!(await saveDraft(draft))) return "Could not save the draft for this session.";
+    openDraft(id);
+    return null;
+  };
   const refreshPulls = () => {
     setPullsReading(true);
     void prMarks.refresh().finally(() => setPullsReading(false));
@@ -4129,6 +4154,7 @@ function App() {
                 data={pickedPrData}
                 sessions={sessionsForRow(pickedRow)}
                 onOpenSession={(id) => goToSession(() => void handleSelectSessionIndexItem(id))}
+                onStartSession={(prompt) => startPrSession(pickedRow, prompt)}
               />
             )}
           </RightPanel>

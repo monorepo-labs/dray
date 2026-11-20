@@ -269,6 +269,11 @@ function Demo() {
                 data={{ prs: [pr], error: null, loading: false, acting: null, act: async () => {}, refresh: () => {} }}
                 sessions={sessionsFor(picked)}
                 onOpenSession={(id) => alert(`Would open ${id}`)}
+                onStartSession={async (prompt) => {
+                  sent.unshift({ sessionId: `new session on ${picked.mark.headRefName}`, prompt });
+                  onSent();
+                  return null;
+                }}
               />
             )}
           </RightPanel>
