@@ -1,5 +1,5 @@
 import { basename } from "@/lib/format";
-import type { PrCheck, PrChecksState, PrMark, PullRequest } from "@/types/events";
+import type { PrCheck, PrChecksState, PrMark, PrUnavailable, PullRequest } from "@/types/events";
 
 /// The branch a session's work lands on, for the PR lookup and the header.
 ///
@@ -132,6 +132,12 @@ export function markDisagrees(mark: PrMark | undefined, prs: PullRequest[]): boo
   if (mark.checksState === "RUNNING") return !pending;
   if (mark.checksState === "FAILING") return !failing;
   return failing && !pending;
+}
+
+/// `gh`'s refusal as the backend types it, or the text of anything else.
+export function asUnavailable(e: unknown): PrUnavailable {
+  if (e && typeof e === "object" && "kind" in e) return e as PrUnavailable;
+  return { kind: "other", detail: String(e) };
 }
 
 /// The repo a pull request's URL names, as `gh --repo` takes it: `owner/name`

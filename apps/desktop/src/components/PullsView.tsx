@@ -1,26 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ChevronDown, ChevronRight, MessageSquare, RefreshCw } from "lucide-react";
+import { MessageSquare, RefreshCw } from "lucide-react";
 
 import Avatar from "@/components/Avatar";
-import GitHubIcon from "@/components/GitHubIcon";
+import { ListGroup, RepoMenu } from "@/components/ListGroup";
 import { MissingCli } from "@/components/PrPanel";
 import PrStateIcon, { ChecksRunningIcon } from "@/components/PrStateIcon";
 import Segmented from "@/components/Segmented";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import Counts from "@/components/changes/Counts";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { PREFETCH_HOVER_MS } from "@/hooks/useHoverPrefetch";
+import { useHoverRead } from "@/hooks/useHoverPrefetch";
 import { prefetchPullRequests } from "@/hooks/usePullRequest";
 import { relativeTime } from "@/lib/format";
 import {
@@ -141,7 +133,15 @@ export default function PullsView({
         <div className="flex-1" aria-hidden />
 
         <div className="flex shrink-0 items-center gap-1.5">
-          {repos.length > 1 && <RepoMenu repo={repoShown} repos={repos} onPick={setRepo} />}
+          {repos.length > 1 && (
+            <RepoMenu
+              repo={repoShown}
+              repos={repos.map((name) => ({ id: name, name }))}
+              onPick={setRepo}
+              placeholder="All repositories"
+              anyLabel="All repositories"
+            />
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -185,7 +185,7 @@ export default function PullsView({
           </p>
         ) : (
           sections.map((section) => (
-            <Group key={section.key} label={section.label} count={section.rows.length}>
+            <ListGroup key={section.key} label={section.label} count={section.rows.length}>
               {section.rows.map((row) => (
                 <PullRow
                   key={row.mark.url}
@@ -196,28 +196,10 @@ export default function PullsView({
                   onPick={() => onPick(picked?.mark.url === row.mark.url ? null : row)}
                 />
               ))}
-            </Group>
+            </ListGroup>
           ))
         )}
       </div>
-    </div>
-  );
-}
-
-function Group({ label, count, children }: { label: string; count: number; children: React.ReactNode }) {
-  const [collapsed, setCollapsed] = useState(false);
-  return (
-    <div className="mb-1.5 last:mb-0">
-      <button
-        type="button"
-        onClick={() => setCollapsed((prev) => !prev)}
-        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-ui text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <ChevronRight className={cn("size-3.5 transition-transform", !collapsed && "rotate-90")} />
-        <span className="font-medium text-foreground">{label}</span>
-        <span className="tabular-nums">{count}</span>
-      </button>
-      {!collapsed && children}
     </div>
   );
 }
@@ -242,22 +224,15 @@ function PullRow({
   const { mark, listing } = row;
   // The pane's read starts once the pointer rests here, so a click opens on an
   // answer rather than on a `gh` round trip; sweeping past reads nothing.
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const arm = () => {
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => prefetchPullRequests(row.key, mark.headRefName), PREFETCH_HOVER_MS);
-  };
-  const disarm = () => clearTimeout(timer.current);
-  useEffect(() => disarm, []);
+  const prefetch = () => prefetchPullRequests(row.key, mark.headRefName);
+  const hover = useHoverRead(prefetch, mark.url);
 
   return (
     <div
       role="button"
       tabIndex={0}
-      onPointerEnter={arm}
-      onPointerLeave={disarm}
-      onFocus={arm}
-      onBlur={disarm}
+      {...hover}
+      onFocus={prefetch}
       onClick={(e) => {
         if (e.metaKey || e.ctrlKey) return void openUrl(mark.url);
         onPick();
@@ -302,37 +277,5 @@ function PullRow({
         {relativeTime(listing.updatedAt)}
       </span>
     </div>
-  );
-}
-
-function RepoMenu({ repo, repos, onPick }: { repo: string | null; repos: string[]; onPick: (repo: string | null) => void }) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-ui transition-colors",
-            repo ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <GitHubIcon className="size-3.5" />
-          <span className="max-w-40 truncate">{repo ? repo.slice(repo.indexOf("/") + 1) : "All repositories"}</span>
-          <ChevronDown className="size-3 opacity-60" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64">
-        <DropdownMenuLabel>Repository</DropdownMenuLabel>
-        <DropdownMenuCheckboxItem checked={!repo} onCheckedChange={() => onPick(null)}>
-          All repositories
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuSeparator />
-        {repos.map((name) => (
-          <DropdownMenuCheckboxItem key={name} checked={repo === name} onCheckedChange={() => onPick(name)}>
-            {name}
-          </DropdownMenuCheckboxItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

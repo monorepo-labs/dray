@@ -1498,7 +1498,7 @@ function App() {
     [archivedShown, visibleSessions, crew, cardRepoKey, botRepoKey, pullsKeys],
   );
   const botRepos = useMemo(() => (botRepoKey ? botRepoKey.split("\n") : []), [botRepoKey]);
-  const prMarks = usePrMarks(repoPaths, botRepos);
+  const prMarks = usePrMarks(repoPaths, botRepos, pullsKeys);
 
   // "This can land now" — raised off the sidebar's marks rather than the
   // panel's own read, which is the only way it can be noticed at all: the
@@ -1598,8 +1598,13 @@ function App() {
   );
   // The pull requests page. Its rows come off the marks above; the picked one
   // is re-found among them on every read, so its pane follows the latest mark.
+  // One that has left the list stays only while its repo is still one the page
+  // reads — a PR merged from the pane keeps its pane — and goes with a space
+  // or scope switch that takes its repo away, the spaces rule for the screen.
   const pullRows = useMemo(() => inboxRows(pullsKeys, prMarks.marksIn), [pullsKeys, prMarks.marksIn]);
-  const pickedRow = (pickedPr && pullRows.find((r) => r.mark.url === pickedPr.mark.url)) ?? pickedPr;
+  const pickedRow =
+    (pickedPr && pullRows.find((r) => r.mark.url === pickedPr.mark.url)) ??
+    (pickedPr && pullsKeys.includes(pickedPr.key) ? pickedPr : null);
   const pickedPrData = usePullRequest(
     pickedRow?.key ?? "",
     pickedRow?.mark.headRefName ?? null,
@@ -1610,23 +1615,37 @@ function App() {
   // session is what a new one takes its picks from, and a live one must never
   // be missed for the archived view being up — so the side the sidebar is not
   // holding is read while the page is open, from every server.
+  // Re-read when a PR is picked too, since that is when the answer is acted
+  // on, and keyed on the servers' ids rather than the list, which changes on
+  // every status a server reports.
   const [otherIndexSide, setOtherIndexSide] = useState<SessionIndexItem[]>([]);
+  const serverIds = allServers.map((s) => s.id).join("\n");
+  const pickedUrl = pickedPr?.mark.url;
   useEffect(() => {
     if (!pullsOpen || indexSide === null) return;
     let gone = false;
     void Promise.all(
-      [LOCAL, ...allServers.map((s) => s.id)].map((server) =>
+      [LOCAL, ...(serverIds ? serverIds.split("\n") : [])].map((server) =>
         invoke<SessionIndexItem[]>("list_session_index_items", { archived: !indexSide }, server).catch(() => []),
       ),
     ).then((lists) => !gone && setOtherIndexSide(lists.flat()));
     return () => {
       gone = true;
     };
-  }, [pullsOpen, indexSide, allServers]);
-  const pullSessions = useMemo(() => [...sessionIndexItems, ...otherIndexSide], [sessionIndexItems, otherIndexSide]);
+  }, [pullsOpen, indexSide, serverIds, pickedUrl]);
+  // By branch once, so each row asks about its own head rather than every
+  // session on both sides of the index.
+  const sessionsByBranch = useMemo(() => {
+    const by = new Map<string, SessionIndexItem[]>();
+    for (const item of [...sessionIndexItems, ...otherIndexSide]) {
+      const branch = sessionBranch(item);
+      if (branch) by.set(branch, [...(by.get(branch) ?? []), item]);
+    }
+    return by;
+  }, [sessionIndexItems, otherIndexSide]);
   const sessionsForRow = useCallback(
-    (row: InboxRow) => sessionsForPr(row, pullSessions, prMarks.repoOf),
-    [pullSessions, prMarks.repoOf],
+    (row: InboxRow) => sessionsForPr(row, sessionsByBranch.get(row.mark.headRefName) ?? [], prMarks.repoOf),
+    [sessionsByBranch, prMarks.repoOf],
   );
   const pullsMissing = useMemo(() => {
     if (pullRows.length > 0) return null;
@@ -1668,7 +1687,7 @@ function App() {
   };
   const refreshPulls = () => {
     setPullsReading(true);
-    void prMarks.refresh().finally(() => setPullsReading(false));
+    void prMarks.refreshRepos(pullsKeys).finally(() => setPullsReading(false));
   };
   // A draft counts: GitHub reports one as `OPEN` with `isDraft` set, and a
   // draft is still the point at which the work stops being about this turn.
@@ -4147,15 +4166,21 @@ function App() {
             refresh={{ onRefresh: pickedPrData.refresh, loading: pickedPrData.loading }}
           >
             {pickedRow && (
-              <PullDetail
-                // One mount per PR, so picked comments never carry across.
-                key={pickedRow.mark.url}
-                row={pickedRow}
-                data={pickedPrData}
-                sessions={sessionsForRow(pickedRow)}
-                onOpenSession={(id) => goToSession(() => void handleSelectSessionIndexItem(id))}
-                onStartSession={(prompt) => startPrSession(pickedRow, prompt)}
-              />
+              // `MountOnce` is the Suspense boundary the lazy pane loads behind;
+              // without one its first open suspends the whole window.
+              <TabBody active>
+                <MountOnce when>
+                  <PullDetail
+                    // One mount per PR, so picked comments never carry across.
+                    key={pickedRow.mark.url}
+                    row={pickedRow}
+                    data={pickedPrData}
+                    sessions={sessionsForRow(pickedRow)}
+                    onOpenSession={(id) => goToSession(() => void handleSelectSessionIndexItem(id))}
+                    onStartSession={(prompt) => startPrSession(pickedRow, prompt)}
+                  />
+                </MountOnce>
+              </TabBody>
             )}
           </RightPanel>
         ) : // Mounted whenever a session is, open or not — closing or switching

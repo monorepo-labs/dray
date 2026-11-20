@@ -239,11 +239,8 @@ fragment pr on PullRequest{
 /// one. `contexts{totalCount}` without a `first` is measured free: the query
 /// costs 1 point with or without both.
 ///
-/// The open half also carries what a row on the pull requests page draws —
-/// title, author, size, comment counts, and whether the viewer wrote it or is
-/// asked to review it. Scalars, objects and bare `totalCount`s, measured free:
-/// the query still costs 1 point with them. `reviewRequests` is not here, being
-/// a connection under a connection that doubles the cost.
+/// `$LISTING` is where the open half asks, for the pull requests page alone,
+/// what a row there draws — see [`LISTING`].
 ///
 /// `first:100` is a real cap on both halves. A repo with more than a hundred
 /// open pull requests marks the hundred most recently touched; a branch merged
@@ -253,9 +250,7 @@ const QUERY_MARKS: &str = r#"
 query($owner:String!,$repo:String!){
  repository(owner:$owner,name:$repo){
   open: pullRequests(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
-   number url headRefName headRefOid isDraft mergeable mergeStateStatus reviewDecision
-   title updatedAt additions deletions isCrossRepository viewerDidAuthor viewerLatestReviewRequest{id}
-   author{login avatarUrl} comments{totalCount} reviewThreads{totalCount}
+   number url headRefName headRefOid isDraft mergeable mergeStateStatus reviewDecision $LISTING
    commits(last:1){nodes{commit{statusCheckRollup{state contexts{totalCount}}}}}
   }}
   merged: pullRequests(states:MERGED,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
@@ -263,6 +258,16 @@ query($owner:String!,$repo:String!){
   }}
  }}
 "#;
+
+/// What a row on the pull requests page draws — title, author, size, comment
+/// counts, and whether the viewer wrote it or is asked to review it — spliced
+/// into [`QUERY_MARKS`] only while the page lists the repo, since the sidebar's
+/// 30s poll and every phone read would otherwise carry it for nothing. Scalars,
+/// objects and bare `totalCount`s, measured free: the query still costs 1 point
+/// with them. `reviewRequests` is not here, being a connection under a
+/// connection that doubles the cost.
+const LISTING: &str = "title updatedAt additions deletions isCrossRepository viewerDidAuthor \
+viewerLatestReviewRequest{id} author{login avatarUrl} comments{totalCount} reviewThreads{totalCount}";
 
 /// A GraphQL connection. `nodes` is nullable on every one of them, so the
 /// `Option` is load-bearing rather than defensive.
@@ -1306,13 +1311,16 @@ struct MarksRepository {
 /// rule (a worktree session's is rebuilt from its worktree name), and building
 /// the map here would be a second copy of it. One branch can carry several, so
 /// picking which one a row draws is the caller's too.
+///
+/// `listing` adds each open PR's [`PrListing`], for the pull requests page.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn pr_marks(cwd: String) -> Result<Vec<PrMark>, PrUnavailable> {
-    pr_marks_inner(&cwd).await.map_err(unavailable)
+pub async fn pr_marks(cwd: String, listing: Option<bool>) -> Result<Vec<PrMark>, PrUnavailable> {
+    pr_marks_inner(&cwd, listing.unwrap_or(false)).await.map_err(unavailable)
 }
 
-async fn pr_marks_inner(cwd: &str) -> Result<Vec<PrMark>, String> {
-    read_pr_marks(&graphql(cwd, QUERY_MARKS, None).await?)
+async fn pr_marks_inner(cwd: &str, listing: bool) -> Result<Vec<PrMark>, String> {
+    let query = QUERY_MARKS.replace("$LISTING", if listing { LISTING } else { "" });
+    read_pr_marks(&graphql(cwd, &query, None).await?)
 }
 
 /// Splits parsing off the spawn, like [`read_prs`].
@@ -1916,6 +1924,18 @@ mod tests {
         assert_eq!(prs[0].merge_state_status.as_deref(), Some("CLEAN"));
         assert_eq!(prs[1].mergeable, None);
         assert_eq!(prs[1].merge_state_status, None);
+    }
+
+    /// The listing is spliced into the open half and nowhere else, and only
+    /// when asked: a placeholder left in or doubled is a query GitHub refuses.
+    #[test]
+    fn the_listing_rides_the_marks_query_only_when_asked() {
+        assert_eq!(QUERY_MARKS.matches("$LISTING").count(), 1);
+        let open_half = QUERY_MARKS.split("merged:").next().unwrap();
+        assert!(open_half.contains("$LISTING"));
+        let without = QUERY_MARKS.replace("$LISTING", "");
+        assert!(!without.contains("viewerDidAuthor") && !without.contains("title"));
+        assert!(QUERY_MARKS.replace("$LISTING", LISTING).contains("viewerLatestReviewRequest{id}"));
     }
 
     /// The pull requests page's row rides the open half; the merged half and

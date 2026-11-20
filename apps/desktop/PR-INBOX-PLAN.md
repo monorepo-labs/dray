@@ -5,9 +5,8 @@ the active space, with checks, reviews and comments, and a box that sends a
 message to the agent session behind a PR — or starts one on the PR's branch when
 none exists. Built for monorepo-labs/dray#1337 in two PRs: the page with sending to a
 session, then Start session. Where the build moved off this plan — the detail is
-`PrPanel` itself, and a tree on a PR's branch is marked `own_branch` rather than
-`sessionBranch` changing for every session — [docs/pull-requests.md](docs/pull-requests.md)
-says what shipped.
+`PrPanel` itself — [docs/pull-requests.md](docs/pull-requests.md) says what
+shipped.
 
 Issue to create before the first code edit, upstream as CLAUDE.md says:
 `gh issue create --repo monorepo-labs/dray --assignee yogesharc --title "Pull requests page: every PR in one place, comments go to the agent"`

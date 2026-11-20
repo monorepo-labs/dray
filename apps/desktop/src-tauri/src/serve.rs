@@ -2149,7 +2149,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
 
         // GitHub and issues.
         prs_for_branch(cwd: String, branch: String) => github::prs_for_branch(cwd, branch).await;
-        pr_marks(cwd: String) => github::pr_marks(cwd).await;
+        pr_marks(cwd: String, listing: Option<bool>) => github::pr_marks(cwd, listing).await;
         merge_pr(cwd: String, number: u64, method: MergeMethod, settle: Option<String>) =>
             github::merge_pr(cwd, number, method, settle, sink).await;
         delete_branch(cwd: String, number: u64) => github::delete_branch(cwd, number).await;
