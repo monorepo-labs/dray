@@ -1165,7 +1165,11 @@ pub async fn take_continue_at(session_id: &str, at: &str) -> Result<Option<(Sess
 /// list, and detaching must not jump the row to the top of it.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>, Fail> {
-    let detached = update_item(session_id, |item| {
+    // A bot's task here whose bot runs on another machine reports through the
+    // outbox, not its parent link, so clearing the link alone kept it the bot's.
+    // First, so a failure leaves the link standing and a retry can finish.
+    crate::remote_reports::disown(session_id).await?;
+    Ok(update_item(session_id, |item| {
         item.parent_session_id = None;
         // Or the walk would still find a way up through it.
         item.adopted_by = None;
@@ -1173,13 +1177,7 @@ pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>
         item.hidden = false;
         item.clone()
     })
-    .await?;
-    // A bot's task here whose bot runs on another machine reports through the
-    // outbox, not its parent link, so clearing the link alone kept it the bot's.
-    if detached.is_some() {
-        crate::remote_reports::disown(session_id).await?;
-    }
-    Ok(detached)
+    .await?)
 }
 
 /// The hidden sessions `parent_id` started directly — the ones that follow it
