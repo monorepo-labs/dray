@@ -36,11 +36,14 @@ const ACTIVE =
 
 /// One gray card: an icon up top, what it does at the foot. A link with
 /// `href`, a button with `onClick`, and only words with neither; `disabled`
-/// with neither draws a way in that isn't open yet, faded.
+/// with neither draws a way in that isn't open yet, faded. `tag` sits in the
+/// bottom corner and is never faded, so "Last used" still reads on a closed way
+/// in; on a card too narrow for both, it wraps under the label.
 export function Card({
   icon,
   label,
   detail,
+  tag,
   corner = false,
   href,
   onClick,
@@ -49,6 +52,7 @@ export function Card({
   icon: ReactNode;
   label: ReactNode;
   detail?: ReactNode;
+  tag?: ReactNode;
   corner?: boolean;
   href?: string;
   onClick?: () => void;
@@ -61,13 +65,16 @@ export function Card({
         {icon}
         {corner && <CornerArrow className="stroke-white/40 light:stroke-black/40" />}
       </span>
-      <span className="flex flex-col gap-0.5">
-        <span
-          className={`text-[17px] leading-6 tracking-[-0.01em] ${off ? "text-white/40 light:text-black/40" : "text-white/80 light:text-black/80"}`}
-        >
-          {label}
+      <span className="flex flex-wrap items-end justify-between gap-x-3 gap-y-2">
+        <span className="flex flex-col gap-0.5">
+          <span
+            className={`text-[17px] leading-6 tracking-[-0.01em] ${off ? "text-white/40 light:text-black/40" : "text-white/80 light:text-black/80"}`}
+          >
+            {label}
+          </span>
+          {detail && <span className="text-[13px] leading-[18px] text-white/40 light:text-black/45">{detail}</span>}
         </span>
-        {detail && <span className="text-[13px] leading-[18px] text-white/40 light:text-black/45">{detail}</span>}
+        {tag && <span className="ml-auto">{tag}</span>}
       </span>
     </>
   );
@@ -87,6 +94,15 @@ export function Card({
     <div aria-disabled={off || undefined} className={GRAY}>
       {inner}
     </div>
+  );
+}
+
+/// The tag on the card this browser last signed in with.
+export function LastUsed() {
+  return (
+    <span className="bg-white/10 px-1.5 py-[3px] font-mono text-[10px] leading-3 tracking-[0.06em] whitespace-nowrap text-white/70 uppercase light:bg-black/[0.06] light:text-black/60">
+      Last used
+    </span>
   );
 }
 

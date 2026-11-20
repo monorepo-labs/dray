@@ -10,6 +10,9 @@ import type { DrayAccountState, SignInMethod, SignInStarted } from "@/types/even
 /// once rather than the gate, and a sign-in that later vanishes reads as
 /// "You've been signed out" rather than a first visit.
 const SIGNED_IN = "dray.signedIn";
+/// The way in this app last signed in with, for the gate's "Last used" tag.
+/// Here and not on the server: it describes this app's reader, not the account.
+const LAST_METHOD = "dray.lastSignInMethod";
 /// How often a skipped gate asks whether drayhq.com is back.
 const PROBE_MS = 10_000;
 /// The server's own recheck interval with drayhq.com.
@@ -44,6 +47,9 @@ export default function AccountGate({ children }: { children: ReactNode }) {
   // "You've been signed out", unless the reader chose Sign out.
   const everSignedIn = useRef(remembered);
   const url = useRef<string | null>(null);
+  const [lastUsed, setLastUsed] = useState(() => storedMethod(localStorage.getItem(LAST_METHOD)));
+  // The way in a browser sign-in took, recorded once it lands.
+  const picked = useRef<SignInMethod | null>(null);
 
   const load = useCallback(() => {
     invoke<DrayAccountState>("account_state", {}, LOCAL)
@@ -86,6 +92,13 @@ export default function AccountGate({ children }: { children: ReactNode }) {
   const signedIn = Boolean(account?.user);
   useEffect(() => {
     if (!account) return;
+    if (account.signingIn) picked.current = account.signingIn;
+    else if (account.error) picked.current = null;
+    if (account.user && picked.current) {
+      localStorage.setItem(LAST_METHOD, picked.current);
+      setLastUsed(picked.current);
+      picked.current = null;
+    }
     if (account.user) {
       everSignedIn.current = true;
       localStorage.setItem(SIGNED_IN, "1");
@@ -154,7 +167,12 @@ export default function AccountGate({ children }: { children: ReactNode }) {
       offline: error === "offline",
       error: error === "offline" ? null : error ? (ERRORS[error] ?? error) : failed,
       emailOff: account?.emailOff ?? false,
+      lastUsed,
     };
   }
   return <SignInGate view={view} onPick={pick} onOpenAgain={openAgain} onCancel={cancel} onSkip={() => setSkipped(true)} />;
+}
+
+function storedMethod(value: string | null): SignInMethod | null {
+  return value === "github" || value === "google" || value === "email" ? value : null;
 }

@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { authClient } from "@/lib/auth-client";
 
-import { SignInMethods } from "./SignInMethods";
+import { type Method, SignInMethods } from "./SignInMethods";
 import { BlueCard, Card, Cards, Heading, Label, SignOutIcon, Spinner } from "./SignInParts";
 
 type Account = { name: string; email: string; image: string | null };
@@ -19,12 +19,14 @@ export function AccountChooser({
   machine,
   github,
   emailOpen,
+  lastUsed,
 }: {
   account: Account;
   next: string;
   machine: string | null;
   github: boolean;
   emailOpen: boolean;
+  lastUsed: Method | null;
 }) {
   const [switching, setSwitching] = useState(false);
   const [signedOut, setSignedOut] = useState(false);
@@ -40,7 +42,7 @@ export function AccountChooser({
     setSignedOut(true);
   };
 
-  if (signedOut) return <SignInMethods next={next} via={null} github={github} emailOpen={emailOpen} />;
+  if (signedOut) return <SignInMethods next={next} via={null} github={github} emailOpen={emailOpen} lastUsed={lastUsed} />;
 
   return (
     <>
