@@ -1,0 +1,12 @@
+{
+  "images": [
+    {
+      "filename": "quokka.svg",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  }
+}

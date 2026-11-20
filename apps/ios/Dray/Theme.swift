@@ -94,8 +94,8 @@ enum Theme {
         static let xxl: CGFloat = 32
     }
 
-    /// The type scale, and every font the app draws: SF Pro, no monospace,
-    /// regular and semibold only. Sizes are Dynamic Type's default and scale with it.
+    /// The type scale, and every font the app draws: SF Pro, SF Mono for diff
+    /// lines alone, regular and semibold only. Sizes are Dynamic Type's default and scale with it.
     enum Font {
         /// Empty-state titles, the PR title.
         static let title = TypeStyle(20, 26, .semibold, .title3)
@@ -113,6 +113,8 @@ enum Theme {
         static let spoken = TypeStyle(20, 26, .regular, .title3)
         /// The model's name in the picks row, and nothing else.
         static let footnoteStrong = TypeStyle(13, 18, .semibold, .footnote)
+        /// A diff's lines: columns only line up in a fixed width.
+        static let code = TypeStyle(12, 17, .regular, .footnote, design: .monospaced)
     }
 
     /// The full-screen image viewer.
@@ -159,14 +161,17 @@ struct TypeStyle {
     let leading: CGFloat
     let weight: SwiftUI.Font.Weight
     let style: UIFont.TextStyle
+    var design: SwiftUI.Font.Design = .default
 
-    init(_ size: CGFloat, _ leading: CGFloat, _ weight: SwiftUI.Font.Weight, _ style: UIFont.TextStyle) {
-        (self.size, self.leading, self.weight, self.style) = (size, leading, weight, style)
+    init(_ size: CGFloat, _ leading: CGFloat, _ weight: SwiftUI.Font.Weight, _ style: UIFont.TextStyle,
+         design: SwiftUI.Font.Design = .default) {
+        (self.size, self.leading, self.weight, self.style, self.design) = (size, leading, weight, style, design)
     }
 
     /// The font at a text size; the app's current one where none is given.
     func font(_ traits: UITraitCollection? = nil) -> SwiftUI.Font {
-        .system(size: UIFontMetrics(forTextStyle: style).scaledValue(for: size, compatibleWith: traits), weight: weight)
+        .system(size: UIFontMetrics(forTextStyle: style).scaledValue(for: size, compatibleWith: traits), weight: weight,
+                design: design)
     }
 
     /// Added between lines so wrapped text sits on the scale's line height.
