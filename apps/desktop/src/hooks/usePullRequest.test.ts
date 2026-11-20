@@ -1,20 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-const invoked: unknown[][] = [];
-let failNext = false;
-vi.mock("@/lib/transport", () => ({
-  invoke: async (...args: unknown[]) => {
-    invoked.push(args);
-    if (failNext) {
-      failNext = false;
-      throw new Error("gh failed");
-    }
-    return [];
-  },
-}));
-const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
-
-import { prefetchPullRequests, prTabVisible } from "./usePullRequest";
+import { prTabVisible } from "./usePullRequest";
 import type { PullRequest } from "@/types/events";
 
 const pr = { number: 1, state: "OPEN" } as PullRequest;
@@ -41,28 +27,5 @@ describe("prTabVisible", () => {
     // reader is looking at — the panel draws that sentence under the header.
     expect(prTabVisible([pr], null)).toBe(true);
     expect(prTabVisible([pr], { kind: "other", detail: "boom" })).toBe(true);
-  });
-});
-
-describe("prefetchPullRequests", () => {
-  it("reads a branch once while the answer is fresh or still out", async () => {
-    invoked.length = 0;
-    prefetchPullRequests("/p/r", "feature");
-    prefetchPullRequests("/p/r", "feature");
-    expect(invoked).toEqual([["prs_for_branch", { cwd: "/p/r", branch: "feature" }]]);
-    await settle();
-    prefetchPullRequests("/p/r", "feature");
-    expect(invoked).toHaveLength(1);
-    prefetchPullRequests("/p/r", "other");
-    expect(invoked).toHaveLength(2);
-  });
-
-  it("tries again after a read that failed", async () => {
-    invoked.length = 0;
-    failNext = true;
-    prefetchPullRequests("/p/r", "broken");
-    await settle();
-    prefetchPullRequests("/p/r", "broken");
-    expect(invoked).toHaveLength(2);
   });
 });

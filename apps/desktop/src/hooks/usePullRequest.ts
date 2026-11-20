@@ -62,36 +62,6 @@ const latest = new Map<string, number>();
 /// start over one still out, and the first to land must not clear the other.
 const reading = new Map<string, number>();
 
-/// Reads started ahead of the hook, by [prefetchPullRequests]. The hook joins
-/// one still out rather than spawning a second `gh` for the same answer.
-const prefetching = new Map<string, Promise<unknown>>();
-
-/// Reads a branch's pull requests into the cache before anything mounts on
-/// them — the pull requests page calls it for a row the pointer rests on, so
-/// the pane opens on an answer rather than on a `gh` round trip. Nothing where
-/// the cache is fresh or a read is already out, so a pointer resting on a row
-/// costs at most one read per branch per freshness window.
-export function prefetchPullRequests(cwd: string, branch: string): void {
-  const key = keyOf(cwd, branch);
-  const fresh = Date.now() - (fetchedAt.get(key) ?? 0) < FRESH_MS;
-  if ((fresh && cache.has(key)) || reading.get(key) || prefetching.has(key)) return;
-
-  const seq = (latest.get(key) ?? 0) + 1;
-  latest.set(key, seq);
-  const read = invoke<PullRequest[]>("prs_for_branch", { cwd, branch })
-    .then((prs) => {
-      // A read the hook forced after this one started is the newer answer.
-      if (latest.get(key) !== seq) return;
-      cache.set(key, prs);
-      fetchedAt.set(key, Date.now());
-      panelRead.emit({ cwd, branch, prs });
-    })
-    // A failed read ahead is no answer; the pane's own read reports it.
-    .catch(() => {})
-    .finally(() => prefetching.delete(key));
-  prefetching.set(key, read);
-}
-
 // The sidebar's read saw this branch change. Every cwd's stamp for it under
 // that repo goes, not just the selected one: the marks are keyed by repo root
 // and the panel by cwd, which differ for a worktree session, and a stale stamp
@@ -212,15 +182,6 @@ export function usePullRequest(
     async (force: boolean) => {
       if (!branch || !key) return;
 
-      // A read the pointer started ahead of the click is this read: wait for
-      // it, then take its answer the way a fresh cache is taken below.
-      const ahead = prefetching.get(key);
-      const joined = !force && !!ahead;
-      if (joined) {
-        commit(key, (prev) => ({ ...prev, loading: true }));
-        await ahead;
-      }
-
       const fresh = Date.now() - (fetchedAt.get(key) ?? 0) < FRESH_MS;
       if (!force && fresh && cache.has(key)) {
         commit(key, () => ({ prs: cache.get(key) ?? [], error: null, loading: false }));
@@ -228,9 +189,7 @@ export function usePullRequest(
       }
       // A switch runs two effects that both ask, and each started a `gh` of
       // its own for the one answer — out of a budget every agent shares.
-      // Not after a joined prefetch whose answer was dropped: `loading` is
-      // already up, and a read another instance holds would never clear it.
-      if (!force && !joined && reading.get(key)) return;
+      if (!force && reading.get(key)) return;
 
       commit(key, (prev) => ({ ...prev, loading: true }));
       reading.set(key, (reading.get(key) ?? 0) + 1);

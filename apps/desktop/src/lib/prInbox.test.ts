@@ -6,7 +6,7 @@ import {
   inboxSection,
   matchesPeople,
   pickableKeys,
-  prDraft,
+  plainComment,
   prPrompt,
   sessionsForPr,
   unresolvedKeys,
@@ -255,31 +255,34 @@ describe("prPrompt", () => {
   });
 });
 
-describe("prDraft", () => {
-  const picks = { harness: "codex", model: "gpt-5", effort: "medium", permissionMode: "auto", fast: false } as const;
-  const base = { id: "d1", projectPath: "/p/r", row: row(), prompt: "go", picks, created: "now" };
-
-  it("opens a worktree on the PR's own branch in its repo", () => {
-    const draft = prDraft({ ...base, settled: undefined });
-    expect(draft).toMatchObject({ id: "d1", projectPath: "/p/r", prompt: "go", useWorktree: true, harness: "codex" });
-    expect(draft.prHead).toEqual({ branch: "feature", repo: "github.com/o/r" });
+describe("plainComment", () => {
+  it("keeps a bot review's words and drops its markup and buttons", () => {
+    const body = [
+      '<h2><a href="https://app.greptile.com/api/retrigger?id=1&amp;sig=abc"><picture><img alt="Retrigger" src="x.svg"></picture></a></h2>',
+      "<h3>Greptile Summary</h3>",
+      "",
+      "Fixes the <code>settle</code> path &amp; its test.",
+      "",
+      "",
+      "",
+      "![badge](https://img.shields.io/x.svg) See [the thread](https://github.com/o/r/pull/7#discussion_r1) and [docs](https://greptile.com/docs).",
+    ].join("\n");
+    const out = plainComment(body);
+    expect(out).not.toMatch(/sig=|<|greptile\.com|shields/);
+    expect(out).toContain("Greptile Summary");
+    expect(out).toContain("Fixes the settle path & its test.");
+    expect(out).toContain("See the thread (https://github.com/o/r/pull/7#discussion_r1) and docs.");
+    expect(out).not.toMatch(/\n{3,}/);
   });
 
-  it("takes the settled session's picks over the composer's", () => {
-    const settled = item({
-      archived: true,
-      harness: "claude_code",
-      model: "claude-opus-5-5",
-      effort: "high",
-      permissionMode: "plan",
-      fast: true,
-    } as Partial<SessionIndexItem>);
-    expect(prDraft({ ...base, settled })).toMatchObject({
-      harness: "claude_code",
-      model: "claude-opus-5-5",
-      effort: "high",
-      permissionMode: "plan",
-      fast: true,
-    });
+  it("leaves a plain human comment as it was", () => {
+    expect(plainComment("Use a `Set` here.\n\n> quoted")).toBe("Use a `Set` here.\n\n> quoted");
+  });
+
+  it("is what the prompt quotes", () => {
+    const pr2 = pullRequest([comment({ id: "c9", body: '<b>Bold</b> <a href="https://app.x/api?sig=1">Retry</a>' })]);
+    const prompt = prPrompt({ pr: pr2, picked: new Set(["c9"]), text: "" });
+    expect(prompt).toContain("> Bold Retry");
+    expect(prompt).not.toContain("sig=");
   });
 });

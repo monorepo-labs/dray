@@ -39,7 +39,7 @@ import { AGENT_LABELS, FX_PROVIDERS, isUnsetModel } from "@/lib/model";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import type { Effort, Harness, Model, ModelId } from "@/types/events";
 
-const EFFORT_LABELS: Record<Effort, string> = {
+export const EFFORT_LABELS: Record<Effort, string> = {
   low: "Low",
   medium: "Medium",
   high: "High",

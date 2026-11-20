@@ -41,6 +41,7 @@ import {
   type Tone,
 } from "@/lib/pr";
 import { commentKey } from "@/lib/prInbox";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type {
   MergeMethod,
@@ -808,23 +809,27 @@ function PickBox({ comment }: { comment: PrComment }) {
   // A review whose thread is picked says so while it is folded shut.
   const partly = !on && comment.replies.some((r) => r.path && pick.picked.has(commentKey(r)));
   return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={on}
-      aria-label={on ? "Unpick for the agent" : "Pick for the agent"}
-      title={on ? "Picked for the agent" : "Pick for the agent"}
-      onClick={() => pick.toggle(key)}
-      className={cn(
-        "flex size-3.5 shrink-0 items-center justify-center rounded-sm border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-        on || partly
-          ? "border-transparent bg-primary text-primary-foreground"
-          : "border-border hover:border-muted-foreground",
-      )}
-    >
-      {on && <Check className="size-2.5" strokeWidth={3} />}
-      {partly && <Minus className="size-2.5" strokeWidth={3} />}
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={on}
+          aria-label={on ? "Unpick for the agent" : "Pick for the agent"}
+          onClick={() => pick.toggle(key)}
+          className={cn(
+            "flex size-3.5 shrink-0 items-center justify-center rounded-sm border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+            on || partly
+              ? "border-transparent bg-primary text-primary-foreground"
+              : "border-border hover:border-muted-foreground",
+          )}
+        >
+          {on && <Check className="size-2.5" strokeWidth={3} />}
+          {partly && <Minus className="size-2.5" strokeWidth={3} />}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{on ? "Picked for the agent" : "Pick for the agent"}</TooltipContent>
+    </Tooltip>
   );
 }
 

@@ -127,8 +127,7 @@ import WindowControls from "@/components/layout/WindowControls";
 import { offersFast } from "@/lib/fastMode";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { nextEffort } from "@/components/composer/ModelSelector";
-import { AGENT_LABELS, HARNESS_ORDER, nextHarness, rememberedModel } from "@/lib/model";
-import { readComposerPrefs } from "@/hooks/useComposerPrefs";
+import { AGENT_LABELS, HARNESS_ORDER, nextHarness } from "@/lib/model";
 import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { closeActiveTab, ItemTab, type ViewTab } from "@/components/layout/ViewTabs";
 import ShortcutKeys from "@/components/ShortcutKeys";
@@ -210,12 +209,12 @@ import { useOlderWrites } from "@/hooks/useOlderWrites";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, prRepoSlug, sessionBranch, slugKey } from "@/lib/pr";
-import { inboxRows, prDraft, sessionsForPr, type InboxRow } from "@/lib/prInbox";
+import { inboxRows, sessionsForPr, type InboxRow, type PrPicks } from "@/lib/prInbox";
 import type { PullsScope } from "@/components/PullsView";
 import { holdSettle } from "@/lib/heldFlags";
 import { confirmMerge, mergeBlock, readLogin, useMergeAccess } from "@/lib/mergeAccess";
 import { keptRepo } from "@/lib/serverCache";
-import { botAt, botBrowser, botChat, botEntries, botSession, greetingOf, inBotTree, listenForBots, readPreviews, refreshBots, serverOfBot, useBots } from "@/lib/bots";
+import { botAt, botBrowser, botChat, botEntries, botOf, botSession, greetingOf, inBotTree, listenForBots, readPreviews, refreshBots, serverOfBot, useBots } from "@/lib/bots";
 import NewBotDialog from "@/components/NewBotDialog";
 import AgentIcon from "@/components/AgentIcon";
 import ModelSelector from "@/components/composer/ModelSelector";
@@ -487,16 +486,12 @@ function App() {
     }
     const prompt = getDraft(id)?.prompt ?? message;
     const base = getDraft(id)?.base ?? null;
-    // Only while the composer is still on the draft's project: moved to another
-    // repo, the PR's branch is no branch of it.
-    const draft = getDraft(id);
-    const prHead = draft?.prHead && draft.projectPath === projectPath ? draft.prHead : null;
     openDraftRef.current = null;
     // A send is not leaving: an attachment-only prompt has no text, and the
     // empty-draft sweep would delete a draft whose send may yet fail.
     leftDraft.current = null;
     setOpenDraftId(null);
-    const sending = handleSendMsg(message, attachments, base, prHead);
+    const sending = handleSendMsg(message, attachments, base);
     // Taken after the send's own bump, so only a move the reader makes while
     // it is out counts as leaving.
     const nav = navGen.current;
@@ -1665,54 +1660,84 @@ function App() {
   });
   const pullsLoaded = pullsKeys.some((key) => prMarks.marksIn(key) !== undefined || prMarks.errorFor(key));
   const [pullsReading, setPullsReading] = useState(false);
-  /// Start session on a PR with no live session: a draft on the PR's own
-  /// branch, opened in the new-task composer so every pick can be changed
-  /// before it starts. The project is the checkout the PR was read through,
-  /// else any attached checkout of its repo — never a `github:` key, which has
-  /// no checkout to make a tree in.
-  const startPrSession = async (row: InboxRow, prompt: string): Promise<string | null> => {
-    const projectPath =
-      projects.find((p) => p.path === row.key)?.path ??
-      projects.find((p) => prMarks.repoOf(p.path) === row.repo)?.path;
-    if (!projectPath) return "No checkout of this repository is attached here, so there is nowhere to start a session.";
+  /// The checkout a PR's new session is made in: the one the PR was read
+  /// through, else any attached checkout of its repo — never a `github:` key,
+  /// which has no checkout to make a tree in.
+  const prCheckout = (row: InboxRow) =>
+    projects.find((p) => p.path === row.key)?.path ??
+    projects.find((p) => prMarks.repoOf(p.path) === row.repo)?.path;
+  /// The bots a PR can go to: those on its checkout's server, the only ones
+  /// whose task can be made in that checkout.
+  const botsForRow = (row: InboxRow) => {
+    const checkout = prCheckout(row);
+    return checkout ? bots.filter((b) => serverOfBot(b) === serverOfPath(checkout)) : [];
+  };
+  /// Which bot a PR's session is a task of, to name the bot beside it.
+  const botOfPrSession = (item: SessionIndexItem) =>
+    item.parentSessionId ? botOf(bots, [...sessionIndexItems, ...otherIndexSide], item.sessionId) : undefined;
+  /// Opens a PR's session from the page: a bot's task as a tab in its bot's
+  /// row, the way its Tasks list opens one, anything else on its own.
+  const openPrSession = (item: SessionIndexItem) => {
+    const bot = botOfPrSession(item);
+    goToSession(() => {
+      if (!bot) return void handleSelectSessionIndexItem(item.sessionId);
+      setTaskTabs((prev) => openTaskTab(prev, bot.id, { sessionId: item.sessionId, title: item.title }));
+      pickTaskTab(bot.id, item.sessionId);
+    });
+  };
+  /// Start session on a PR with no live session, right from the page: a new
+  /// worktree on the PR's own branch, the reader's own session or `bot`'s task.
+  /// The reader stays on the page, where the PR now names its session.
+  const startPrSession = async (
+    row: InboxRow,
+    prompt: string,
+    picks: PrPicks,
+    bot: Bot | null,
+  ): Promise<{ started: SessionIndexItem } | { error: string }> => {
+    const projectPath = prCheckout(row);
+    if (!projectPath) return { error: "No checkout of this repository is attached here, so there is nowhere to start a session." };
+    const server = serverOfPath(projectPath);
     // With the archived view up, the live side is the page's own read, which a
     // session started since is missing from: ask again before making a second.
     if (indexSide !== false) {
       const live = (
         await Promise.all(
-          [LOCAL, ...(serverIds ? serverIds.split("\n") : [])].map((server) =>
-            invoke<SessionIndexItem[]>("list_session_index_items", { archived: false }, server).catch(() => []),
+          [LOCAL, ...(serverIds ? serverIds.split("\n") : [])].map((s) =>
+            invoke<SessionIndexItem[]>("list_session_index_items", { archived: false }, s).catch(() => []),
           ),
         )
       ).flat();
       const working = sessionsForPr(row, live, prMarks.repoOf).find((s) => !s.archived);
       if (working) {
         setOtherIndexSide(live);
-        return `"${working.title}" is already working on this pull request. Send to it instead.`;
+        return { error: `"${working.title}" is already working on this pull request. Send to it instead.` };
       }
     }
-    // A new task's picks, not the selected session's the composer mirrors.
-    const stored = readComposerPrefs();
-    const model = rememberedModel(stored.modelByHarness, stored.harness);
-    const id = crypto.randomUUID();
-    const draft = prDraft({
-      id,
-      projectPath,
-      row,
-      prompt,
-      settled: sessionsForRow(row).find((s) => s.archived),
-      picks: {
-        harness: stored.harness,
-        model,
-        effort: stored.effortByModel[model] ?? null,
-        permissionMode: stored.permissionMode,
-        fast: stored.fast,
-      },
-      created: new Date().toISOString(),
-    });
-    if (!(await saveDraft(draft))) return "Could not save the draft for this session.";
-    openDraft(id);
-    return null;
+    try {
+      const started = await invoke<SessionIndexItem>(
+        "start_pr_session",
+        {
+          sessionId: crypto.randomUUID(),
+          prompt,
+          ...picks,
+          cwd: projectPath,
+          prHead: { branch: row.mark.headRefName, repo: row.repo },
+          prNumber: row.mark.number,
+          bot: bot?.id ?? null,
+        },
+        server,
+      );
+      // Ahead of `session_created`, so the pane names it the moment it answers.
+      setOtherIndexSide((prev) => (prev.some((i) => i.sessionId === started.sessionId) ? prev : [...prev, started]));
+      return { started };
+    } catch (e) {
+      const said = e instanceof Error ? e.message : String(e);
+      // Asked before anything is made, so nothing is left to tidy up.
+      if (said.includes("unknown command")) {
+        return { error: "This server is older than the pull requests page. Update it, then start the session again." };
+      }
+      return { error: said };
+    }
   };
   const refreshPulls = () => {
     setPullsReading(true);
@@ -4205,8 +4230,14 @@ function App() {
                     row={pickedRow}
                     data={pickedPrData}
                     sessions={sessionsForRow(pickedRow)}
-                    onOpenSession={(id) => goToSession(() => void handleSelectSessionIndexItem(id))}
-                    onStartSession={(prompt) => startPrSession(pickedRow, prompt)}
+                    bots={botsForRow(pickedRow)}
+                    botOf={botOfPrSession}
+                    server={(() => {
+                      const checkout = prCheckout(pickedRow);
+                      return checkout ? serverOfPath(checkout) : null;
+                    })()}
+                    onOpenSession={openPrSession}
+                    onStart={(prompt, picks, bot) => startPrSession(pickedRow, prompt, picks, bot)}
                   />
                 </MountOnce>
               </TabBody>
@@ -4561,6 +4592,8 @@ function App() {
             scope={pullsScope}
             onScope={setPullsScope}
             sessionsFor={sessionsForRow}
+            botOf={botOfPrSession}
+            onOpenSession={openPrSession}
             picked={pickedRow}
             onPick={setPickedPr}
             loading={pullsReading}

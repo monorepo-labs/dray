@@ -1961,11 +1961,19 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             harness: Harness, model: ModelId, effort: Option<Effort>,
             permission_mode: ApprovalPolicy, fast: bool, cwd: String,
             branch: Option<String>, use_worktree: bool, worktree_name: Option<String>,
-            base_ref: Option<String>, is_new_session: bool, pr_head: Option<crate::git::PrHead>,
+            base_ref: Option<String>, is_new_session: bool,
         ) => crate::send_msg(
             &session_id, &prompt, attachment_paths, harness, model, effort,
             permission_mode, fast, &cwd, branch.as_deref(), use_worktree,
-            worktree_name.as_deref(), base_ref.as_deref(), is_new_session, pr_head, sink,
+            worktree_name.as_deref(), base_ref.as_deref(), is_new_session, sink,
+        ).await;
+        start_pr_session(
+            session_id: String, prompt: String, harness: Harness, model: ModelId,
+            effort: Option<Effort>, permission_mode: ApprovalPolicy, fast: bool, cwd: String,
+            pr_head: crate::git::PrHead, pr_number: u64, bot: Option<String>,
+        ) => crate::start_pr_session(
+            session_id, prompt, harness, model, effort, permission_mode, fast, cwd,
+            pr_head, pr_number, bot, sink,
         ).await;
         // The reader's own stop, settle and delete are noted for the task's bot
         // here, on the client wire: `dray` is how the bot does each itself.

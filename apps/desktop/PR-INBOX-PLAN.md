@@ -14,7 +14,7 @@ Issue to create before the first code edit, upstream as CLAUDE.md says:
 ## Decided with the reader
 
 1. **List scope:** the active space by default, **bot tasks' PRs included**, with a switch to see every space.
-2. **A new session opens in the new-task composer, prefilled**, so harness, model and stance can be changed before it starts. It is not sent straight from the page.
+2. **A new session starts right on the page**, from a composer in the PR's pane where model and stance can still change, or goes to a bot as its task; the reader stays on the page. *Changed after the first build*, which opened the new-task composer on a draft and left the page; the "Routing the message" section below still describes that first take, and [docs/pull-requests.md](docs/pull-requests.md) what shipped.
 3. **A PR whose only session is settled gets a fresh session** on the settled session's picks, not a fork of its conversation.
 4. **The issue goes upstream**, to `monorepo-labs/dray`, assigned to `yogesharc`.
 5. **Open and draft PRs only.** No merged switch, and the query's merged half is left as it is.

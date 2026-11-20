@@ -338,7 +338,8 @@ async fn run(cwd: &str, args: &[&str]) -> Result<()> {
 /// [`shared_remote`]'s, which has to die with its caller's timeout.
 async fn exec(cwd: &str, envs: &[(&str, &str)], args: &[&str]) -> Result<String> {
     let mut cmd = Command::new("git");
-    cmd.args(args).current_dir(cwd);
+    // A caller giving up on the future (a timeout) takes the child with it.
+    cmd.args(args).current_dir(cwd).kill_on_drop(true);
     for (key, value) in envs {
         cmd.env(key, value);
     }
@@ -1663,13 +1664,15 @@ pub async fn create_worktree_on_branch(project_path: &str, name: &str, branch: &
     };
     let tracking = format!("{remote}/{branch}");
 
-    exec(
-        project_path,
-        &[("GIT_TERMINAL_PROMPT", "0")],
-        &["fetch", "-q", "--no-tags", &remote, &format!("+refs/heads/{branch}:refs/remotes/{tracking}")],
-    )
-    .await
-    .with_context(|| format!("could not fetch {branch} from {remote}"))?;
+    // Capped: an SSH remote waiting on a passphrase or a dead host would
+    // otherwise hold the send, and the reader's spinner, forever.
+    let refspec = format!("+refs/heads/{branch}:refs/remotes/{tracking}");
+    let args = ["fetch", "-q", "--no-tags", &remote, &refspec];
+    let fetch = exec(project_path, &[("GIT_TERMINAL_PROMPT", "0")], &args);
+    match tokio::time::timeout(FETCH_LIMIT, fetch).await {
+        Ok(fetched) => fetched.with_context(|| format!("could not fetch {branch} from {remote}"))?,
+        Err(_) => bail!("fetching {branch} from {remote} took over {}s; check that remote, then try again", FETCH_LIMIT.as_secs()),
+    };
 
     let local = format!("refs/heads/{branch}");
     if resolve_commit(project_path, &local).await.is_some()
@@ -1700,6 +1703,9 @@ pub async fn create_worktree_on_branch(project_path: &str, name: &str, branch: &
 
     Ok(path)
 }
+
+/// How long [`create_worktree_on_branch`] waits on its fetch.
+const FETCH_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// The remote whose URL names `repo` (`host/owner/name`), else one naming
 /// `owner/name` on any host.

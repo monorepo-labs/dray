@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { MessageSquare, RefreshCw } from "lucide-react";
 
 import Avatar from "@/components/Avatar";
+import { SessionLink } from "@/components/PullDetail";
 import { ListGroup, RepoMenu } from "@/components/ListGroup";
 import { MissingCli } from "@/components/PrPanel";
 import PrStateIcon, { ChecksRunningIcon } from "@/components/PrStateIcon";
@@ -12,8 +13,6 @@ import ShortcutKeys from "@/components/ShortcutKeys";
 import Counts from "@/components/changes/Counts";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useHoverRead } from "@/hooks/useHoverPrefetch";
-import { prefetchPullRequests } from "@/hooks/usePullRequest";
 import { relativeTime } from "@/lib/format";
 import {
   SECTIONS,
@@ -24,7 +23,7 @@ import {
   type PeopleFilter,
 } from "@/lib/prInbox";
 import { cn } from "@/lib/utils";
-import type { PrUnavailable, SessionIndexItem } from "@/types/events";
+import type { Bot, PrUnavailable, SessionIndexItem } from "@/types/events";
 
 export type PullsScope = "space" | "all";
 
@@ -55,6 +54,8 @@ export default function PullsView({
   scope,
   onScope,
   sessionsFor,
+  botOf,
+  onOpenSession,
   picked,
   onPick,
   loading,
@@ -74,6 +75,9 @@ export default function PullsView({
   scope: PullsScope;
   onScope: (scope: PullsScope) => void;
   sessionsFor: (row: InboxRow) => SessionIndexItem[];
+  /// The bot a session is a task of, to name it on the row.
+  botOf: (item: SessionIndexItem) => Bot | undefined;
+  onOpenSession: (item: SessionIndexItem) => void;
   picked: InboxRow | null;
   /// `null` closes the pane.
   onPick: (row: InboxRow | null) => void;
@@ -191,6 +195,8 @@ export default function PullsView({
                   key={row.mark.url}
                   row={row}
                   session={sessionsFor(row).find((s) => !s.archived) ?? null}
+                  botOf={botOf}
+                  onOpenSession={onOpenSession}
                   showRepo={!repoShown && repos.length > 1}
                   picked={picked?.mark.url === row.mark.url}
                   onPick={() => onPick(picked?.mark.url === row.mark.url ? null : row)}
@@ -209,30 +215,30 @@ export default function PullsView({
 function PullRow({
   row,
   session,
+  botOf,
+  onOpenSession,
   showRepo,
   picked,
   onPick,
 }: {
   row: InboxRow;
   /// The live session behind it, if any — named on the row so a PR nobody is
-  /// working on stands out.
+  /// working on stands out, and opened from there.
   session: SessionIndexItem | null;
+  botOf: (item: SessionIndexItem) => Bot | undefined;
+  onOpenSession: (item: SessionIndexItem) => void;
   showRepo: boolean;
   picked: boolean;
   onPick: () => void;
 }) {
   const { mark, listing } = row;
-  // The pane's read starts once the pointer rests here, so a click opens on an
-  // answer rather than on a `gh` round trip; sweeping past reads nothing.
-  const prefetch = () => prefetchPullRequests(row.key, mark.headRefName);
-  const hover = useHoverRead(prefetch, mark.url);
 
+  // Reads nothing on hover or focus: the pane's read is 2 points of a budget
+  // every agent shares, so it waits for the click.
   return (
     <div
       role="button"
       tabIndex={0}
-      {...hover}
-      onFocus={prefetch}
       onClick={(e) => {
         if (e.metaKey || e.ctrlKey) return void openUrl(mark.url);
         onPick();
@@ -263,15 +269,18 @@ function PullRow({
         </span>
       )}
       <Counts added={listing.additions} removed={listing.deletions} className="hidden shrink-0 @lg:inline" />
-      <span
-        className={cn(
-          "hidden max-w-36 shrink-0 truncate @lg:inline",
-          session ? "text-muted-foreground" : "text-muted-foreground/50",
-        )}
-        title={session ? `Session: ${session.title}` : "No live session"}
-      >
-        {session ? session.title : "No session"}
-      </span>
+      {session ? (
+        <SessionLink
+          item={session}
+          bot={botOf(session)}
+          onOpen={() => onOpenSession(session)}
+          className="hidden max-w-44 shrink-0 text-muted-foreground @md:flex"
+        />
+      ) : (
+        <span className="hidden w-20 shrink-0 truncate text-muted-foreground/50 @md:inline">
+          {listing.isCrossRepository ? "Read only" : "No session"}
+        </span>
+      )}
       <Avatar src={listing.authorAvatar} name={listing.author} />
       <span className="w-14 shrink-0 text-right text-muted-foreground tabular-nums">
         {relativeTime(listing.updatedAt)}

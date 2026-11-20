@@ -255,6 +255,8 @@ function Demo() {
               scope={scope}
               onScope={setScope}
               sessionsFor={sessionsFor}
+              botOf={() => undefined}
+              onOpenSession={(item) => alert(`Would open ${item.title}`)}
               picked={picked}
               onPick={setPicked}
               loading={false}
@@ -268,11 +270,14 @@ function Demo() {
                 row={picked}
                 data={{ prs: [pr], error: null, loading: false, acting: null, act: async () => {}, refresh: () => {} }}
                 sessions={sessionsFor(picked)}
-                onOpenSession={(id) => alert(`Would open ${id}`)}
-                onStartSession={async (prompt) => {
+                bots={[]}
+                botOf={() => undefined}
+                server={null}
+                onOpenSession={(item) => alert(`Would open ${item.title}`)}
+                onStart={async (prompt) => {
                   sent.unshift({ sessionId: `new session on ${picked.mark.headRefName}`, prompt });
                   onSent();
-                  return null;
+                  return { error: "The demo starts nothing; the prompt is below." };
                 }}
               />
             )}

@@ -1035,7 +1035,7 @@ impl SessionManager {
         claim_continue: Option<&str>,
         // A pull request's head, checked out by its own name in a tree Dray
         // makes so the agent's push lands on that PR. Only the pull requests
-        // page sets one, through a draft the composer sends.
+        // page sets one, through `start_pr_session`.
         pr_head: Option<&git::PrHead>,
         app: &Sink,
     ) -> Result<SendOutcome> {
@@ -1254,9 +1254,11 @@ impl SessionManager {
                 if owned_worktree {
                     // Logged, not propagated: the caller has to see what
                     // actually failed, not how the tidy-up went.
-                    if let Err(undo) =
-                        git::remove_worktree(cwd, &session_cwd, item.branch.as_deref()).await
-                    {
+                    // `worktree-<name>`, as settling names it, never the
+                    // record: a tree on a PR's head leaves that branch to
+                    // the reader either way, since it may be theirs.
+                    let made = worktree_name.as_deref().map(git::worktree_branch);
+                    if let Err(undo) = git::remove_worktree(cwd, &session_cwd, made.as_deref()).await {
                         eprintln!("could not roll back {session_cwd}: {undo}");
                     }
                 }
