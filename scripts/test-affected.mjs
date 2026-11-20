@@ -30,7 +30,9 @@ const changed = [...new Set([...lines(git("diff", "--name-only", "--no-renames",
 const present = [...lines(git("ls-files")), ...untracked].filter((f) => existsSync(f));
 
 // The GPUI rewrite is an unshipped experiment; nothing here tests it, --full included.
-const skipped = ["apps/gpui"];
+// Linux's island is a Linux-only binary, as its sidecar script says, and reads
+// `/proc`, so it is tested where it ships and nowhere else.
+const skipped = ["apps/gpui", ...(process.platform === "linux" ? [] : ["apps/island-linux"])];
 const suites = [
   ...present
     .filter((f) => f.endsWith("/Cargo.toml") && !skipped.includes(posix.dirname(f)))
