@@ -28,6 +28,20 @@ export function setTranscriptPrefetch(fn: Prefetch | null) {
 /// does something else and whose ⌘-click opens the task. Letting go of ⌘
 /// before the read starts stops it starting; once started, only leaving drops it.
 export function useHoverPrefetch(sessionId: string | null | undefined, mod = false) {
+  return useHoverRead(sessionId ? () => prefetch?.(sessionId) : null, sessionId, mod);
+}
+
+/// [useHoverPrefetch]'s dwell for any read: `read` runs once the pointer has
+/// rested on the element, and the release it may hand back runs when the
+/// pointer leaves. `key` names what is read, so a row reused for another
+/// subject drops the read it held for the last one.
+export function useHoverRead(
+  read: (() => (() => void) | void) | null,
+  key: string | null | undefined,
+  mod = false,
+) {
+  const readRef = useRef(read);
+  readRef.current = read;
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const release = useRef<(() => void) | undefined>(undefined);
   const inside = useRef(false);
@@ -45,16 +59,16 @@ export function useHoverPrefetch(sessionId: string | null | undefined, mod = fal
     else letGo?.();
   };
   const arm = () => {
-    if (!sessionId || timer.current !== undefined || release.current) return;
+    if (!readRef.current || timer.current !== undefined || release.current) return;
     timer.current = setTimeout(() => {
       timer.current = undefined;
-      release.current = prefetch?.(sessionId);
+      release.current = readRef.current?.() ?? undefined;
     }, PREFETCH_HOVER_MS);
   };
   const armRef = useRef(arm);
   armRef.current = arm;
 
-  useEffect(() => stop, [sessionId]);
+  useEffect(() => stop, [key]);
 
   useEffect(() => {
     if (!mod) return;

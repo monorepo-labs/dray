@@ -25,7 +25,7 @@ import { greetingOf, previewLine, type BotEntry } from "@/lib/bots";
 import PrStateIcon, { ChecksRunningIcon, prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
 import { setRailSlot } from "@/components/RailPop";
-import { IssuesIcon, NewBotIcon, NewTaskIcon } from "@/components/icons/SidebarIcons";
+import { IssuesIcon, NewBotIcon, NewTaskIcon, PullsIcon } from "@/components/icons/SidebarIcons";
 import PanelLeftIcon from "@/components/icons/PanelLeftIcon";
 import { Button } from "@/components/ui/button";
 import {
@@ -144,6 +144,9 @@ type SidebarProps = {
   /// one. Read here rather than derived from the selection, which the page
   /// deliberately leaves alone.
   issuesOpen: boolean;
+  /// Opens the pull requests page, the issues page's way.
+  onOpenPulls: () => void;
+  pullsOpen: boolean;
   /// Saved tasks not yet started, scoped by the caller like `items`. Drawn in
   /// the drafts view alone, grouped under their projects.
   drafts: Draft[];
@@ -1054,6 +1057,8 @@ export default function Sidebar({
   onNewSession,
   onOpenIssues,
   issuesOpen,
+  onOpenPulls,
+  pullsOpen,
   onSetFlags,
   onFork,
   onDelete,
@@ -1381,6 +1386,31 @@ export default function Sidebar({
               <span data-rail-hide className="flex flex-1 items-center">
                 Issues
                 <ShortcutKeys ids={["issues.open"]} className="ml-auto" />
+              </span>
+            </>}
+          </Button>
+        </RailTip>
+
+        {/* Under Issues: where the work those tasks became waits to land.
+            Drawn whether or not `gh` works, for the Issues row's reason — the
+            page's empty state is where the cure is offered. */}
+        <RailTip on={iconOnly} label="Pull requests" keys={["pulls.open"]}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onOpenPulls}
+            data-active={pullsOpen || undefined}
+            aria-label={iconOnly ? "Pull requests" : undefined}
+            className={cn(
+              STRIP,
+              "data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground",
+            )}
+          >
+            <PullsIcon />
+            {!iconOnly && <>
+              <span data-rail-hide className="flex flex-1 items-center">
+                Pull requests
+                <ShortcutKeys ids={["pulls.open"]} className="ml-auto" />
               </span>
             </>}
           </Button>
