@@ -99,7 +99,7 @@ const EMAIL = { id: "email", label: "email", Icon: Mail };
 /// the account signs in and offers Sign out, which forgets the account,
 /// leaves this machine's link alone, and lands on the sign-in gate. Draws
 /// nothing while signed out, which happens after Skip for now offline and in a
-/// dev build, which has no gate.
+/// dev build with no saved account, since dev has no gate.
 export default function AccountCard() {
   const local = useLocalServer();
   const connected = local?.status === "connected";
