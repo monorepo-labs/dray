@@ -76,13 +76,11 @@ export function matchesPeople(row: InboxRow, filter: PeopleFilter): boolean {
   return true;
 }
 
-/// The sessions whose work is this PR, best first: same repo and
-/// `sessionBranch` naming the PR's head — the reading the sidebar's mark uses,
-/// so the two never disagree about which session a PR is.
-///
-/// Live before settled (a settled session's tree is gone, so it is a record and
-/// not a place to send work), shown before hidden, then most recently touched.
-/// A fork's PR matches nothing: its bare head name names a branch in somebody
+/// Every task a PR has had, newest first: same repo and `sessionBranch` naming
+/// the PR's head — the reading the sidebar's mark uses, so the two never
+/// disagree about which task a PR is. Settled ones stay, since the page is
+/// where the reader finds a PR's work again; newest by start, so a task
+/// started from the page leads at once. A fork's PR matches nothing: its bare head name names a branch in somebody
 /// else's repository. `repoOf` is the marks cache's key → repo; a key it has not
 /// read is matched on the path itself.
 export function sessionsForPr(
@@ -92,7 +90,6 @@ export function sessionsForPr(
 ): SessionIndexItem[] {
   if (row.listing.isCrossRepository) return [];
   const seen = new Set<string>();
-  const rank = (i: SessionIndexItem) => (i.archived ? 2 : 0) + (i.hidden ? 1 : 0);
   return items
     .filter((i) => {
       if (seen.has(i.sessionId)) return false;
@@ -102,7 +99,7 @@ export function sessionsForPr(
         (i.projectPath === row.key || repoOf(i.projectPath) === row.repo)
       );
     })
-    .sort((a, b) => rank(a) - rank(b) || b.modified.localeCompare(a.modified));
+    .sort((a, b) => b.created.localeCompare(a.created));
 }
 
 /// What one comment is picked by. The node id, or — from a server older than
@@ -197,27 +194,22 @@ function describe(c: PrComment, indent: string, reply: boolean): string {
 /// whole, with its link, quoted line by line and said to be quoted: anyone can
 /// comment on a public repo, and this lands in front of an agent that may be
 /// allowed to edit. The reader's own words come last and are the only
-/// instruction. `fresh` is for a session that has never seen the PR, which has
-/// to be told where it is and where its push goes.
+/// instruction. Where the tree is and how it pushes is the server's to say
+/// (`with_push_line`), since only it knows whether another task holds the
+/// branch; it goes in after the header.
 export function prPrompt({
   pr,
   picked,
   text,
-  fresh = false,
 }: {
   pr: PullRequest;
   picked: ReadonlySet<string>;
   text: string;
-  fresh?: boolean;
 }): string {
   const units = pickedUnits(pr.comments, picked);
   const parts = [`Pull request #${pr.number} "${pr.title}" — ${pr.url}\nBranch ${pr.headRefName} into ${pr.baseRefName}.`];
 
-  if (fresh) {
-    parts.push(
-      `This tree is on ${pr.headRefName}, the pull request's own branch. Push to it to update the pull request; do not open another. \`gh pr view ${pr.number} --comments\` has the rest of its conversation.`,
-    );
-  }
+  parts.push(`\`gh pr view ${pr.number} --comments\` has the rest of its conversation.`);
   if (units.length) {
     parts.push(
       [

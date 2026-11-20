@@ -194,7 +194,7 @@ export default function PullsView({
                 <PullRow
                   key={row.mark.url}
                   row={row}
-                  session={sessionsFor(row).find((s) => !s.archived) ?? null}
+                  session={sessionsFor(row)[0] ?? null}
                   botOf={botOf}
                   onOpenSession={onOpenSession}
                   showRepo={!repoShown && repos.length > 1}
@@ -222,8 +222,8 @@ function PullRow({
   onPick,
 }: {
   row: InboxRow;
-  /// The live session behind it, if any — named on the row so a PR nobody is
-  /// working on stands out, and opened from there.
+  /// Its latest task, live or settled — named on the row so a PR nobody has
+  /// worked on stands out, and opened from there.
   session: SessionIndexItem | null;
   botOf: (item: SessionIndexItem) => Bot | undefined;
   onOpenSession: (item: SessionIndexItem) => void;

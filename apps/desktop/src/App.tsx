@@ -1697,9 +1697,9 @@ function App() {
       pickTaskTab(bot.id, item.sessionId);
     });
   };
-  /// Start session on a PR with no live session, right from the page: a new
-  /// worktree on the PR's own branch, the reader's own session or `bot`'s task.
-  /// The reader stays on the page, where the PR now names its session.
+  /// Start Task from the page: a new worktree on the PR's own branch, the
+  /// reader's own task or `bot`'s, whatever tasks the PR already has — the new
+  /// one leads its list. The reader stays on the page.
   const startPrSession = async (
     row: InboxRow,
     prompt: string,
@@ -1708,22 +1708,6 @@ function App() {
   ): Promise<{ started: SessionIndexItem } | { error: string }> => {
     const plan = prCheckoutPlan(row);
     const server = prServer(plan);
-    // With the archived view up, the live side is the page's own read, which a
-    // session started since is missing from: ask again before making a second.
-    if (indexSide !== false) {
-      const live = (
-        await Promise.all(
-          [LOCAL, ...(serverIds ? serverIds.split("\n") : [])].map((s) =>
-            invoke<SessionIndexItem[]>("list_session_index_items", { archived: false }, s).catch(() => []),
-          ),
-        )
-      ).flat();
-      const working = sessionsForPr(row, live, prMarks.repoOf).find((s) => !s.archived);
-      if (working) {
-        setOtherIndexSide(live);
-        return { error: `"${working.title}" is already working on this pull request. Send to it instead.` };
-      }
-    }
     // Attached or cloned only now, at the start, so opening a PR changes
     // nothing on disk; done before the duplicate check above could not see a
     // checkout it had to make.

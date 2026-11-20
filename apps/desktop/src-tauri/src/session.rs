@@ -1194,7 +1194,7 @@ impl SessionManager {
             // getting the error.
             let owned_worktree = match (pr_head, base_ref, &worktree_name) {
                 (Some(head), _, Some(name)) => {
-                    git::create_worktree_on_branch(cwd, name, &head.branch, &head.repo).await?;
+                    git::create_worktree_on_branch(cwd, name, head).await?;
                     true
                 }
                 (Some(_), _, None) => bail!("a pull request's branch needs a worktree to check it out into"),
