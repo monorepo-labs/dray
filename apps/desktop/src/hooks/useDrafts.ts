@@ -18,8 +18,8 @@ export type Draft = {
   permissionMode: ApprovalPolicy;
   fast: boolean;
   useWorktree: boolean;
-  /// Where the worktree starts, from `dray draft new --base`. The composer
-  /// never sets one, and carries it through to the send.
+  /// Where the worktree starts: the worktree branch picker's pick, or
+  /// `dray draft new --base`'s, carried through to the send.
   base?: string | null;
   created: string;
 };

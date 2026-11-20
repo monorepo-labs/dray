@@ -490,6 +490,22 @@ impl StatusTracker {
     }
 }
 
+/// What a tree left detached at `branch` tells its agent, as
+/// `start_pr_session`'s line does for a pull request's head: another tree
+/// has the branch, so commits go up by `HEAD:<branch>`.
+async fn detached_push_line(project_path: &str, branch: &str) -> String {
+    match git::branch_remote(project_path, branch).await {
+        Some(remote) => format!(
+            "Another tree has {branch} checked out, so this one is detached at its tip. Commit here and push with \
+             `git push {remote} HEAD:refs/heads/{branch}`. If the push is refused, fetch and rebase onto {remote}/{branch} first."
+        ),
+        None => format!(
+            "Another tree has {branch} checked out, so this one is detached at its tip. Commit here; this repository \
+             has no remote to push to."
+        ),
+    }
+}
+
 /// Deletes the worktree an index entry names, if it names one.
 ///
 /// A session that never had a worktree is a no-op rather than an error: this
@@ -1006,11 +1022,12 @@ impl SessionManager {
         branch: Option<&str>,
         use_worktree: bool,
         worktree_name: Option<&str>,
-        // Where the worktree starts from, already resolved to a git ref by the
-        // caller — the orchestration socket turns a session id into one, and
-        // nothing below here knows sessions. `None` is the ordinary case and
-        // hands the tree to `claude -w`, which forks it from `origin/<default>`.
-        base_ref: Option<&str>,
+        // Where the worktree starts from, already resolved by the caller — the
+        // orchestration socket turns a session id into a branch, and nothing
+        // below here knows sessions. `None`, or the default branch picked, is
+        // the ordinary case and hands the tree to `claude -w`, which forks it
+        // from `origin/<default>`.
+        base: Option<&git::Base>,
         is_new_session: bool,
         // Set only for a session created over the orchestration socket. The
         // composer never has one, and it is recorded rather than acted on —
@@ -1143,13 +1160,20 @@ impl SessionManager {
             // sidebar row pointing at a directory that never existed and can
             // never start. `HEAD` where there is no remote, matching what the
             // CLI itself falls back to when the fetch fails.
-            let resolved_base = match (harness.caps().creates_own_worktree, use_worktree, base_ref) {
-                (false, true, None) => {
-                    Some(git::default_base(cwd).await.unwrap_or_else(|| "HEAD".into()))
-                }
+            //
+            // The default branch picked by name is no base at all: it starts
+            // from `origin/<default>` as an unpicked one does.
+            let base = match base {
+                Some(git::Base::Branch(b)) if git::is_default_branch(cwd, b).await => None,
+                other => other,
+            };
+            let resolved_base = match (harness.caps().creates_own_worktree, use_worktree, base) {
+                (false, true, None) => Some(git::Base::Fork(
+                    git::default_base(cwd).await.unwrap_or_else(|| "HEAD".into()),
+                )),
                 _ => None,
             };
-            let base_ref = base_ref.or(resolved_base.as_deref());
+            let base = base.or(resolved_base.as_ref());
 
             let worktree_name = if use_worktree {
                 Some(resolve_unclaimed_worktree_name(cwd, worktree_name).await?)
@@ -1187,14 +1211,30 @@ impl SessionManager {
             // Ahead of the index write, unlike the spawn below: a base git
             // cannot resolve has left nothing behind at all and the caller is
             // getting the error.
-            let owned_worktree = match (base_ref, &worktree_name) {
-                (Some(base), Some(name)) => {
-                    git::create_worktree(cwd, name, base).await?;
-                    true
+            // The branch a tree on an existing branch is on, and for one left
+            // detached, the line telling its agent how to push.
+            let tree = match (base, &worktree_name) {
+                (Some(git::Base::Pr(head)), Some(name)) => {
+                    // `start_pr_session` already put the push line in the prompt.
+                    git::create_worktree_on_branch(cwd, name, head).await?;
+                    Some((Some(head.branch.clone()), None))
                 }
-                (Some(_), None) => bail!("a base ref needs a worktree to check it out into"),
-                (None, _) => false,
+                (Some(git::Base::Branch(branch)), Some(name)) => {
+                    let made = git::create_worktree_from_branch(cwd, name, branch).await?;
+                    let push = match made {
+                        git::PrTree::Detached => Some(detached_push_line(cwd, branch).await),
+                        git::PrTree::OnBranch => None,
+                    };
+                    Some((Some(branch.clone()), push))
+                }
+                (Some(git::Base::Fork(base)), Some(name)) => {
+                    git::create_worktree(cwd, name, base).await?;
+                    Some((None, None))
+                }
+                (Some(_), None) => bail!("a base needs a worktree to check it out into"),
+                (None, _) => None,
             };
+            let owned_worktree = tree.is_some();
 
             // Indexed before the process spawns, so a session that fails to
             // start is still visible rather than vanishing without a trace.
@@ -1212,6 +1252,18 @@ impl SessionManager {
                 fast,
                 parent_session_id,
             );
+            // A tree on an existing branch is on that branch, not
+            // `worktree-<name>`, even detached, and the record is what every
+            // reader of a session's branch goes by.
+            let push_line = match tree {
+                Some((on_branch, push)) => {
+                    if on_branch.is_some() {
+                        item.branch = on_branch;
+                    }
+                    push
+                }
+                None => None,
+            };
             // Written with the entry rather than linked after it: the row
             // appears before the child spawns, and a tab that arrived a beat
             // later would be one more thing moving while the first turn starts.
@@ -1239,9 +1291,11 @@ impl SessionManager {
                 if owned_worktree {
                     // Logged, not propagated: the caller has to see what
                     // actually failed, not how the tidy-up went.
-                    if let Err(undo) =
-                        git::remove_worktree(cwd, &session_cwd, item.branch.as_deref()).await
-                    {
+                    // `worktree-<name>`, as settling names it, never the
+                    // record: a tree on a PR's head leaves that branch to
+                    // the reader either way, since it may be theirs.
+                    let made = worktree_name.as_deref().map(git::worktree_branch);
+                    if let Err(undo) = git::remove_worktree(cwd, &session_cwd, made.as_deref()).await {
                         eprintln!("could not roll back {session_cwd}: {undo}");
                     }
                 }
@@ -1312,8 +1366,14 @@ impl SessionManager {
                 app,
             )
             .await?;
+            // After the title and the index's first-prompt reading, which
+            // describe the reader's words, not how the tree pushes.
+            let sent = match &push_line {
+                Some(line) => format!("{prompt}\n\n{line}"),
+                None => prompt.to_string(),
+            };
             if let Err(error) = session
-                .send_msg(prompt, attachment_paths, issues, baseline, from, app)
+                .send_msg(&sent, attachment_paths, issues, baseline, from, app)
                 .await
             {
                 // Nothing has this session yet — it is inserted below — so
@@ -3681,6 +3741,17 @@ static POSTED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<St
 static REACTED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
     std::sync::LazyLock::new(Default::default);
 
+/// Bot chats whose turn a silent tool (`react`, `no_reply_needed`) closed,
+/// with the ids of those calls not refused: one batch can hold both, and a
+/// refused `react` beside a `no_reply_needed` leaves the turn closed. Anything the agent writes after it is filler: a CLI
+/// that ignores `claude/endTurn`, or a batch holding an errored result, gives
+/// the model one more call, and it narrated the close ("(Turn ended without a
+/// reply.)"). Closed on the call itself, not on Dray's answer to it: the CLI
+/// runs the tool while the response is still streaming, and a stray token the
+/// model wrote after the call ("ↀ") could reach the pipe before the call did.
+static CLOSED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, std::collections::HashSet<String>>>> =
+    std::sync::LazyLock::new(Default::default);
+
 /// Drops what `session_id`'s turn noted for its close, for a turn that closes
 /// without a `TurnCompleted` reaching `ingest_event`: kept, it would count
 /// against the next turn.
@@ -3688,6 +3759,7 @@ fn forget_turn(session_id: &str) {
     LAST_REPLY.lock().unwrap().remove(session_id);
     POSTED.lock().unwrap().remove(session_id);
     REACTED.lock().unwrap().remove(session_id);
+    CLOSED.lock().unwrap().remove(session_id);
 }
 
 /// Records a reaction landing in `session_id`, for [`REACTED`].
@@ -3697,20 +3769,46 @@ fn note_reaction(session_id: &str, payload: &AgentEventPayload) {
     }
 }
 
-/// Whether a main-thread event in `session_id` only repeats the reaction placed
-/// this turn and must be dropped. A turn's close forgets the reaction, and
-/// takes the echo out of its `final_text` so the turn still counts as silent.
+/// Whether a main-thread event in `session_id` must be dropped: text after a
+/// silent tool closed the turn, its stream included so no preview flashes, or
+/// a reply only repeating this turn's reaction. A turn's close forgets both,
+/// and takes what they dropped out of its `final_text` so the turn still counts
+/// as silent.
 fn drops_echo(session_id: &str, payload: &mut AgentEventPayload) -> bool {
-    use crate::bots::react::echoes;
+    use crate::{bots::react::echoes, harness::claude_code::no_reply};
     note_reaction(session_id, payload);
+    // A new turn opens on its own `init`, so a mark a dead child left behind
+    // — replaced before its cleanup ran `forget_turn` — never reaches it.
+    if matches!(payload, AgentEventPayload::TurnStarted(_)) {
+        CLOSED.lock().unwrap().remove(session_id);
+    }
+    let closed = CLOSED.lock().unwrap().contains_key(session_id);
     let mut reacted = REACTED.lock().unwrap();
     match payload {
-        AgentEventPayload::AssistantText { text, .. } => reacted.get(session_id).is_some_and(|e| echoes(text, e)),
-        AgentEventPayload::TurnCompleted { final_text, .. } => {
-            if let (Some(emoji), Some(text)) = (reacted.remove(session_id), final_text.as_deref()) {
-                if echoes(text, &emoji) {
-                    *final_text = None;
+        AgentEventPayload::ToolCallStarted { call_id, name, .. } if no_reply::is_silent(name) => {
+            CLOSED.lock().unwrap().entry(session_id.to_string()).or_default().insert(call_id.clone());
+            false
+        }
+        // A refused `react` carries no `endTurn`, and the bot must answer it.
+        AgentEventPayload::ToolCallCompleted { call_id, result } if result.is_error => {
+            let mut closed = CLOSED.lock().unwrap();
+            if let Some(calls) = closed.get_mut(session_id) {
+                calls.remove(call_id.as_str());
+                if calls.is_empty() {
+                    closed.remove(session_id);
                 }
+            }
+            false
+        }
+        AgentEventPayload::Delta(_) => closed,
+        AgentEventPayload::AssistantText { text, .. } => {
+            closed || reacted.get(session_id).is_some_and(|e| echoes(text, e))
+        }
+        AgentEventPayload::TurnCompleted { final_text, .. } => {
+            let emoji = reacted.remove(session_id);
+            let echoed = matches!((&emoji, final_text.as_deref()), (Some(e), Some(t)) if echoes(t, e));
+            if CLOSED.lock().unwrap().remove(session_id).is_some() || echoed {
+                *final_text = None;
             }
             false
         }
@@ -4620,7 +4718,7 @@ pub async fn strand_queue_on_exit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::claude_code::{mapper::Mapper, parser};
+    use crate::harness::claude_code::{mapper::Mapper, no_reply, parser};
 
     #[test]
     fn a_lead_in_never_hides_a_leading_slash() {
@@ -4652,6 +4750,81 @@ mod tests {
         let mut closing = close("❤️");
         drops_echo(session, &mut closing);
         assert!(matches!(closing, AgentEventPayload::TurnCompleted { final_text: Some(_), .. }));
+    }
+
+    #[test]
+    fn nothing_written_after_a_silent_tool_closed_the_turn_is_drawn() {
+        let session = "closed-test";
+        let text = |t: &str| AgentEventPayload::AssistantText { block: None, text: t.into() };
+        let close = |t: &str| -> AgentEventPayload {
+            serde_json::from_value(serde_json::json!({"type": "turn_completed", "status": "success", "finalText": t}))
+                .unwrap()
+        };
+        let delta = || {
+            AgentEventPayload::Delta(crate::events::DeltaEvent::TextDelta {
+                block: crate::events::BlockRef { message_id: "m".into(), index: 0 },
+                text: "(Turn".into(),
+            })
+        };
+
+        assert!(!drops_echo(session, &mut text("Checking.")), "the turn is still open");
+        assert!(!drops_echo(session, &mut delta()));
+        assert!(!drops_echo(session, &mut call("c1", "Bash")), "an ordinary tool closes nothing");
+        assert!(!drops_echo(session, &mut text("Ran it.")));
+        assert!(!drops_echo(session, &mut call("c2", no_reply::TOOL_NAME)), "the call itself is drawn");
+        // Before Dray has even answered the call: the CLI runs it mid-stream.
+        assert!(drops_echo(session, &mut delta()));
+        assert!(drops_echo(session, &mut text("ↀ")));
+        assert!(drops_echo(session, &mut text("(Turn ended without a reply.)")));
+        let mut closing = close("ↀ");
+        assert!(!drops_echo(session, &mut closing));
+        assert!(matches!(closing, AgentEventPayload::TurnCompleted { final_text: None, .. }));
+
+        assert!(!drops_echo(session, &mut text("Hi again.")), "the next turn is open");
+        drops_echo(session, &mut call("c3", no_reply::REACT_NAME));
+        forget_turn(session);
+        assert!(!drops_echo(session, &mut text("Resumed.")), "a dead child's close is forgotten");
+
+        drops_echo(session, &mut call("c4", no_reply::TOOL_NAME));
+        let mut opening = AgentEventPayload::TurnStarted(Default::default());
+        assert!(!drops_echo(session, &mut opening));
+        assert!(!drops_echo(session, &mut text("Answer.")), "a replacement child's turn opens clear");
+    }
+
+    #[test]
+    fn a_refused_reaction_leaves_the_turn_open_for_an_answer() {
+        let session = "refused-react";
+        let text = |t: &str| AgentEventPayload::AssistantText { block: None, text: t.into() };
+        drops_echo(session, &mut call("r1", no_reply::REACT_NAME));
+        assert!(!drops_echo(session, &mut result("other", true)), "another call's error reopens nothing");
+        assert!(drops_echo(session, &mut text("ↀ")));
+        assert!(!drops_echo(session, &mut result("r1", true)));
+        assert!(!drops_echo(session, &mut text("Noted, thanks.")), "the bot answers the refusal");
+
+        drops_echo(session, &mut call("r2", no_reply::REACT_NAME));
+        drops_echo(session, &mut result("r2", false));
+        assert!(drops_echo(session, &mut text("👍")), "a reaction that landed keeps the turn closed");
+        forget_turn(session);
+
+        drops_echo(session, &mut call("n1", no_reply::TOOL_NAME));
+        drops_echo(session, &mut call("r3", no_reply::REACT_NAME));
+        drops_echo(session, &mut result("r3", true));
+        assert!(drops_echo(session, &mut text("ↀ")), "the batch's no_reply_needed still closes it");
+        forget_turn(session);
+    }
+
+    fn call(id: &str, name: &str) -> AgentEventPayload {
+        serde_json::from_value(serde_json::json!({
+            "type": "tool_call_started", "callId": id, "name": name, "toolType": "mcp", "input": {},
+        }))
+        .unwrap()
+    }
+
+    fn result(id: &str, is_error: bool) -> AgentEventPayload {
+        serde_json::from_value(serde_json::json!({
+            "type": "tool_call_completed", "callId": id, "result": {"text": "", "isError": is_error},
+        }))
+        .unwrap()
     }
 
     #[test]

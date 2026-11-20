@@ -50,7 +50,7 @@ actor Highlighter {
 
     /// Runs `hljs` and flattens its nested `<span>`s into lines of `[text, scope]`:
     /// a span may cross a newline, as a block comment does, so the scope stack
-    /// carries over. A span highlight.js nests for a sublanguage names no scope and
+    /// carries over, and a CRLF line's CR is dropped, since drawn it breaks the line. A span highlight.js nests for a sublanguage names no scope and
     /// takes its parent's. A guess leaves out stylesheets, which took short Swift for
     /// CSS, and JSON is caught by parsing, since its guesses score low.
     private static let shim = #"""
@@ -75,8 +75,9 @@ actor Highlighter {
       while ((m = re.exec(r.value))) {
         if (m[1] !== undefined) stack.push(m[1].indexOf("hljs-") === 0 ? m[1].slice(5) : stack[stack.length - 1]);
         else if (m[0] === "</span>") stack.pop();
-        else unescape(m[0]).split("\n").forEach(function (part, i) {
+        else unescape(m[0]).split("\n").forEach(function (part, i, parts) {
           if (i > 0) lines.push([]);
+          if (i < parts.length - 1) part = part.replace(/\r$/, "");
           if (part) lines[lines.length - 1].push([part, stack[stack.length - 1]]);
         });
       }

@@ -28,6 +28,8 @@ final class HighlightTests: XCTestCase {
         XCTAssertEqual(lines[0].runs.first?.foregroundColor, comment)
         XCTAssertEqual(lines[1].runs.first?.foregroundColor, comment)
         XCTAssertTrue(lines[2].runs.contains { $0.foregroundColor == Color(hex: 0xFF678D) }, "const is a keyword")
+        let crlf = await Highlighter.shared.lines("let a = 1\r\nlet b = 2\r\n", lang: "swift")
+        XCTAssertEqual(try XCTUnwrap(crlf).map { String($0.characters) }, ["let a = 1", "let b = 2", ""])
         let nothing = await Highlighter.shared.lines(code, lang: "brainfreeze")
         XCTAssertNil(nothing)
     }

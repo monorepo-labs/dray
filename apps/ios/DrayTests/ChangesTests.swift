@@ -27,6 +27,22 @@ final class ChangesTests: XCTestCase {
         XCTAssertEqual(unifiedDiff(old: "a", new: "a"), [])
     }
 
+    /// Windows line endings split per line and keep their CR, so CRLF to LF is a change too.
+    func testCRLFSplitsPerLine() {
+        let old = "a\r\nb\r\nc\r\n"
+        XCTAssertEqual(unifiedDiff(old: old, new: "a\r\nB\r\nc\r\n"), [
+            .line(sign: " ", number: 1, text: "a\r"), .line(sign: "-", number: 2, text: "b\r"),
+            .line(sign: "+", number: 2, text: "B\r"), .line(sign: " ", number: 3, text: "c\r"),
+        ])
+        XCTAssertEqual(unifiedDiff(old: old, new: "a\r\nb\r\nc"), [
+            .line(sign: " ", number: 1, text: "a\r"), .line(sign: " ", number: 2, text: "b\r"),
+            .line(sign: "-", number: 3, text: "c\r"), .line(sign: "+", number: 3, text: "c"), .noNewline,
+        ])
+        XCTAssertEqual(unifiedDiff(old: old, new: "a\nb\r\nc\r\n").filter { if case .line(let s, _, _) = $0 { s != " " } else { false } }, [
+            .line(sign: "-", number: 1, text: "a\r"), .line(sign: "+", number: 1, text: "a"),
+        ])
+    }
+
     /// The desktop's picks for the same paths, each an asset the catalog holds.
     func testFileIconsMatchTheDesktop() {
         let cases = [("src/main.ts", false, "fi-typescript"), ("package.json", false, "fi-nodejs"),

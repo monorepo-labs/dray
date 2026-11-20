@@ -40,6 +40,12 @@ fn end_turn() -> Value {
     json!({"claude/endTurn": true})
 }
 
+/// Whether `name`, a tool call's name, is one of [`TOOL_NAMES`]: a call that
+/// closes the turn, so the agent has said its last word.
+pub fn is_silent(name: &str) -> bool {
+    name == TOOL_NAME || name == REACT_NAME
+}
+
 /// `--mcp-config` declaring the in-process server.
 pub fn mcp_config() -> String {
     json!({"mcpServers": {SERVER: {"type": "sdk", "name": SERVER}}}).to_string()
@@ -154,6 +160,7 @@ mod tests {
         assert_eq!(call["id"], 2);
         assert_eq!(call["result"]["content"][0]["type"], "text");
         assert_eq!(call["result"]["_meta"]["claude/endTurn"], true);
+        assert!(is_silent(TOOL_NAME) && is_silent(REACT_NAME) && !is_silent(TOOL));
     }
 
     #[test]

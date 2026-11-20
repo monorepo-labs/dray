@@ -67,8 +67,10 @@ private let noEOL: Character = "\u{1}"
 func unifiedDiff(old: String?, new: String?, context: Int = 3) -> [DiffRow] {
     func lines(_ s: String?) -> [String] {
         guard let s, !s.isEmpty else { return [] }
-        var all = s.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        if s.hasSuffix("\n") { all.removeLast() } else { all[all.count - 1].append(noEOL) }
+        // By scalar: Swift reads "\r\n" as one Character, so a CRLF file never split on "\n".
+        let scalars = s.unicodeScalars
+        var all = scalars.split(separator: "\n", omittingEmptySubsequences: false).map { String(String.UnicodeScalarView($0)) }
+        if scalars.last == "\n" { all.removeLast() } else { all[all.count - 1].append(noEOL) }
         return all
     }
     let a = lines(old), b = lines(new)
@@ -738,7 +740,9 @@ private struct DiffLine: View {
                 }
                 .foregroundStyle(Theme.tertiary)
                 Text(String(sign)).foregroundStyle(sign == " " ? Theme.tertiary : tint)
-                Text(text.isEmpty ? AttributedString(" ") : colored ?? AttributedString(text))
+                // A CRLF line keeps its CR to diff against LF, but drawn it breaks the line.
+                let shown = text.unicodeScalars.last == "\r" ? String(text.dropLast()) : text
+                Text(shown.isEmpty ? AttributedString(" ") : colored ?? AttributedString(shown))
                     .foregroundStyle(Theme.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }

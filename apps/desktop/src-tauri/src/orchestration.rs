@@ -16,6 +16,7 @@
 use crate::{
     bots,
     events::{ApprovalPolicy, MessageSender},
+    git::Base,
     issues::{self, IssueRef, IssueTracker},
     models::{default_model_for, id_for_arg, models_for, runs_on, Effort, ModelId},
     session::{manager, Harness},
@@ -673,12 +674,29 @@ pub async fn answer_forward(forward: Forward, app: Sink) -> Response {
         }
         localize(&mut request, forward.origin.as_deref()).await?;
         // A session `--base` from the Mac arrives as its branch, which this
-        // checkout may hold only as the copy pushed to `origin`. A session id
-        // this index holds is left for `resolve_base`.
+        // checkout may hold only as the copy pushed to `origin`. Pinned to its
+        // commit so it forks: taken by name, the new task would commit onto the
+        // author's work. A branch the caller named is left for `resolve_base`'s
+        // rules, as is a session id this index holds.
         match &mut request {
-            Request::CreateSession(CreateSession { base: Some(base), project_path: Some(project), .. })
-            | Request::CreateDraft(CreateDraft { base: Some(base), project_path: Some(project), .. })
-                if store::get_session_index_item(base).await?.is_none() =>
+            Request::CreateSession(CreateSession {
+                base: Some(base), project_path: Some(project), base_as_branch: false, ..
+            })
+            | Request::CreateDraft(CreateDraft {
+                base: Some(base), project_path: Some(project), base_as_branch: false, ..
+            }) if store::get_session_index_item(base).await?.is_none() => {
+                let pushed = crate::git::pushed_branch(project, base).await?;
+                *base = crate::git::resolve_commit(project, &pushed).await.unwrap_or(pushed);
+            }
+            // A named tag or commit this checkout has yet to fetch; a branch is
+            // fetched by its own rules once it starts.
+            Request::CreateSession(CreateSession {
+                base: Some(base), project_path: Some(project), base_as_branch: true, ..
+            })
+            | Request::CreateDraft(CreateDraft {
+                base: Some(base), project_path: Some(project), base_as_branch: true, ..
+            }) if store::get_session_index_item(base).await?.is_none()
+                && !crate::git::is_branch(project, base).await =>
             {
                 *base = crate::git::pushed_branch(project, base).await?;
             }
@@ -930,14 +948,14 @@ pub(crate) mod elsewhere {
                 if let Some(project) = &project {
                     refuse_bot_folder(project).await?;
                 }
-                create.base = branch_of(create.base.take(), project.as_deref()).await?;
+                (create.base, create.base_as_branch) = branch_of(create.base.take(), project.as_deref()).await?;
             }
             Request::CreateDraft(create) => {
                 let parent = parent_of(create.parent_session_id.as_deref()).await?;
                 forward.caller = caller(parent.as_ref()).await?;
                 create.project_path = project_from(create.project_path.as_deref(), parent.as_ref());
                 project = create.project_path.clone();
-                create.base = branch_of(create.base.take(), project.as_deref()).await?;
+                (create.base, create.base_as_branch) = branch_of(create.base.take(), project.as_deref()).await?;
             }
             Request::StartDraft(start) => {
                 forward.caller = caller(parent_of(start.parent_session_id.as_deref()).await?.as_ref()).await?;
@@ -974,13 +992,17 @@ pub(crate) mod elsewhere {
     }
 
     /// A `--base` naming a session here means its branch there, which the far
-    /// side can only find if that branch was pushed. A ref passes as written.
-    async fn branch_of(base: Option<String>, project: Option<&str>) -> Result<Option<String>> {
+    /// side can only find if that branch was pushed, and forks. A ref passes as
+    /// written, marked as one the far side may work on by name.
+    async fn branch_of(base: Option<String>, project: Option<&str>) -> Result<(Option<String>, bool)> {
         match (base, project) {
             (Some(base), Some(project)) if store::get_session_index_item(&base).await?.is_some() => {
-                Ok(Some(resolve_base(&base, project).await?))
+                Ok((Some(resolve_base(&base, project).await?.name().to_string()), false))
             }
-            (base, _) => Ok(base),
+            (base, _) => {
+                let named = base.is_some();
+                Ok((base, named))
+            }
         }
     }
 
@@ -2047,7 +2069,7 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
     // Resolved before anything is written, so a `--base` naming a session or a
     // ref that cannot be found costs an error rather than a session sitting in
     // the sidebar on the wrong base.
-    let base_ref = match create.base.as_deref() {
+    let base = match create.base.as_deref() {
         Some(from) => Some(resolve_base(from, &project_path).await?),
         None => None,
     };
@@ -2093,7 +2115,7 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
             // one, and a name that collides is a create that fails for a field
             // nobody wanted. `None` lets the app generate a readable one.
             None,
-            base_ref.as_deref(),
+            base.as_ref(),
             true,
             create.parent_session_id.as_deref(),
             hidden,
@@ -2117,7 +2139,7 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
 
     Ok(Response::Created {
         session: summarize(item),
-        base_ref,
+        base_ref: base.map(|b| b.name().to_string()),
         warning,
     })
 }
@@ -2233,7 +2255,7 @@ async fn start_session(
 ) -> Result<Response> {
     // Read again at the start rather than trusted from the save: the branch a
     // session id names, or the ref itself, may have moved or gone since.
-    let base_ref = match draft.base.as_deref() {
+    let base = match draft.base.as_deref() {
         Some(base) => Some(resolve_base(base, &draft.project_path).await?),
         None => None,
     };
@@ -2258,7 +2280,7 @@ async fn start_session(
             None,
             draft.use_worktree,
             None,
-            base_ref.as_deref(),
+            base.as_ref(),
             true,
             parent,
             hidden,
@@ -2274,17 +2296,22 @@ async fn start_session(
         .context("the session was created but returned no index entry")?;
 
     app.emit(SESSION_CREATED, &item).ok();
-    Ok(Response::Created { session: summarize(item), base_ref, warning: None })
+    Ok(Response::Created { session: summarize(item), base_ref: base.map(|b| b.name().to_string()), warning: None })
 }
 
-/// What `--from` starts the new worktree at: a session id, a branch, or any
+/// What `--base` starts the new worktree at: a session id, a branch, or any
 /// other ref.
 ///
 /// A session id is tried first, because it is the address everywhere else in
 /// `dray` — `ls` prints it, `send` takes it — and an agent holding one should
 /// not have to learn how Dray names branches to point at that session's work.
 /// A ref that happens to look like a session id is the only ambiguity, and a
-/// v7 UUID is not a branch name anybody types.
+/// v7 UUID is not a branch name anybody types. A session's work is forked onto
+/// a branch of the new tree's own, so a reviewer never commits onto it.
+///
+/// A branch — here, or only on the remote — is worked on by its own name, by
+/// the same rules as the new-task composer's branch picker
+/// ([`crate::git::create_worktree_from_branch`]). Any other ref is forked.
 ///
 /// The session's branch comes from [`store::session_branch`], the one reading
 /// of that question, so this cannot start a reviewer on one branch while the
@@ -2295,8 +2322,15 @@ async fn start_session(
 /// their editor. Usually right for a review, and said plainly in the skill,
 /// because the failure is an agent reporting confidently on a tree that is
 /// missing the very change the user is looking at.
-pub(crate) async fn resolve_base(from: &str, project_path: &str) -> Result<String> {
+pub(crate) async fn resolve_base(from: &str, project_path: &str) -> Result<Base> {
     if let Some(item) = store::get_session_index_item(from).await? {
+        // A session in a detached tree has its work on that tree's HEAD, ahead
+        // of the branch it pushes to.
+        if item.worktree_name.is_some() && !item.worktree_removed && crate::git::current_branch(&item.cwd).await.is_none() {
+            if let Some(head) = crate::git::resolve_commit(&item.cwd, "HEAD").await {
+                return Ok(Base::Fork(head));
+            }
+        }
         // Read where the session actually runs, which is its worktree for a
         // worktree session — `session_branch` outranks it for a relocated one,
         // whose `cwd` is the shared project root.
@@ -2319,14 +2353,17 @@ pub(crate) async fn resolve_base(from: &str, project_path: &str) -> Result<Strin
             );
         }
 
-        return Ok(branch);
+        return Ok(Base::Fork(branch));
     }
 
+    if crate::git::is_branch(project_path, from).await {
+        return Ok(Base::Branch(from.to_string()));
+    }
     if crate::git::resolve_commit(project_path, from).await.is_some() {
-        return Ok(from.to_string());
+        return Ok(Base::Fork(from.to_string()));
     }
 
-    bail!("{from} is neither a session id nor a branch, tag or commit in {project_path}")
+    bail!("{from} is neither a session id nor a branch, tag or commit in {project_path} or on its remote")
 }
 
 async fn list_sessions(list: ListSessions) -> Result<Response> {

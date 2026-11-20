@@ -1,6 +1,6 @@
-import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
-import { invoke, listen, LOCAL, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
+import { invoke, listen, LOCAL, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { CircleDashed, Plus } from "lucide-react";
 import PrStateIcon from "@/components/PrStateIcon";
@@ -32,6 +32,8 @@ const DocsPanel = lazy(() => import("@/components/DocsPanel"));
 const SettingsPage = lazy(() => import("@/components/SettingsPage"));
 const IssuePanel = lazy(() => import("@/components/IssuePanel"));
 const IssuesView = lazy(() => import("@/components/IssuesView"));
+const PullsView = lazy(() => import("@/components/PullsView"));
+const PullDetail = lazy(() => import("@/components/PullDetail"));
 const PrPanel = lazy(() => import("@/components/PrPanel"));
 const BrowserPane = lazy(() => import("@/components/browser/BrowserPane"));
 import {
@@ -50,12 +52,12 @@ import {
   setPickHandler,
   useBrowserTabs,
 } from "@/lib/browser";
-import { setLinkOpener } from "@/lib/openLink";
+import { openLink, setLinkOpener } from "@/lib/openLink";
 import { repoChanged } from "@/lib/prSync";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useChanges } from "@/hooks/useChanges";
 import { setTranscriptPrefetch } from "@/hooks/useHoverPrefetch";
-import { keptPrMark, usePrMarks } from "@/hooks/usePrMarks";
+import { keptPrMark, readPrMentionKey, subscribePrMentionKey, usePrMarks } from "@/hooks/usePrMarks";
 import { usePrReady } from "@/hooks/usePrReady";
 import { useAutoMergeCards } from "@/hooks/useAutoMergeCards";
 import { useWorkStatus } from "@/hooks/useWorkStatus";
@@ -184,7 +186,7 @@ import { boatAsleep, restoreHeld } from "@/lib/boat";
 import { onCloud, setCloudFailure, useCloud, useCloudFailure, usePlacing } from "@/lib/cloud";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout, nextCheckout } from "@/lib/projectGroups";
-import { serverConnected, serverName, shownOffline, useServers } from "@/lib/servers";
+import { cloudServer, serverConnected, serverName, shownOffline, useServers } from "@/lib/servers";
 import { canTagFrom } from "@/lib/sessionTag";
 import { useReachableSessions } from "@/hooks/useReachableSessions";
 import AgentUpdateLine from "@/components/composer/AgentUpdateLine";
@@ -192,7 +194,7 @@ import { useAgentUpdates, useAutoUpdateAgents } from "@/hooks/useAgentUpdates";
 import { overwritesInPlace, turnRunningOn } from "@/lib/agentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import AutoContinueNotice from "@/components/composer/AutoContinueNotice";
-import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, PrMark, SessionIndexItem, SessionSnapshot, WorktreeDisposition } from "@/types/events";
+import type { Attachment, Bot, BotPreview, CloneProgress, Harness, IssueRef, MergeMethod, PrMark, Project, SessionIndexItem, SessionSnapshot, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -206,11 +208,15 @@ import { changeRange, lastToolResult, writingTurns } from "@/lib/changes";
 import { useOlderWrites } from "@/hooks/useOlderWrites";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
-import { prBadgeCount, prRepoSlug, sessionBranch, slugKey } from "@/lib/pr";
+import { marksRepo, prBadgeCount, prRepoSlug, sessionBranch, slugKey, slugOf } from "@/lib/pr";
+import { usePrSearch } from "@/hooks/usePrSearch";
+import { inboxRows, sessionsForPr, type InboxRow, type PrCheckout, type PrMachines, type PrPicks } from "@/lib/prInbox";
+import type { PullsScope } from "@/components/PullsView";
+import type { PeopleFilter } from "@/lib/prInbox";
 import { holdSettle } from "@/lib/heldFlags";
 import { confirmMerge, mergeBlock, readLogin, useMergeAccess } from "@/lib/mergeAccess";
 import { keptRepo } from "@/lib/serverCache";
-import { botAt, botBrowser, botChat, botEntries, botSession, greetingOf, inBotTree, listenForBots, readPreviews, refreshBots, serverOfBot, useBots } from "@/lib/bots";
+import { botAt, botBrowser, botChat, botEntries, botOf, botSession, greetingOf, inBotTree, listenForBots, readPreviews, refreshBots, serverOfBot, useBots } from "@/lib/bots";
 import NewBotDialog from "@/components/NewBotDialog";
 import AgentIcon from "@/components/AgentIcon";
 import ModelSelector from "@/components/composer/ModelSelector";
@@ -307,6 +313,9 @@ function App() {
     branches,
     branch,
     useWorktree,
+    worktreeBranch,
+    setWorktreeBranch,
+    refreshBranches,
     busy,
     backgroundTasks,
     liveTaskIds,
@@ -435,8 +444,9 @@ function App() {
       fast,
       useWorktree,
       projectPath,
+      base: worktreeBranch,
     });
-  }, [openDraftId, harness, modelId, effort, permissionMode, fast, useWorktree, projectPath, updateDraft]);
+  }, [openDraftId, harness, modelId, effort, permissionMode, fast, useWorktree, projectPath, worktreeBranch, updateDraft]);
 
   // A draft emptied and then left says nothing, so it goes rather than sitting
   // in the list as an empty row. Every way out lands here, since each one
@@ -547,6 +557,7 @@ function App() {
       permissionMode,
       fast,
       useWorktree: source ? !!source.worktreeName || source.worktreeRemoved : useWorktree,
+      base: !source && useWorktree ? worktreeBranch : null,
       created: new Date().toISOString(),
     });
     if (!saved) return;
@@ -734,7 +745,13 @@ function App() {
   // and not a per-session tab, so it is neither in `viewTabs` nor in the
   // selection: it is a place the reader goes and comes back from, and the
   // session they were in is still there when they do.
-  const [issuesOpen, setIssuesOpen] = useState(false);
+  // Which page covers the column in place of a session, if any. Most of `App`
+  // asks only whether one does (`pageOpen`); the few places that draw a page's
+  // own pane ask which.
+  const [page, setPage] = useState<"issues" | "pulls" | null>(null);
+  const issuesOpen = page === "issues";
+  const pullsOpen = page === "pulls";
+  const pageOpen = page !== null;
 
   /// The issues page's own refresh, so ⌘R can reach it. A ref rather than
   /// state: the page owns the read and hands its handle up, and re-rendering
@@ -751,6 +768,19 @@ function App() {
   /// carries one of those and nothing more, and every field this holds for is
   /// on it.
   const [pickedIssue, setPickedIssue] = useState<IssueRef | null>(null);
+  // The pull requests page's own state, beside the issues page's: the PR its
+  // pane shows, and whether it lists this space or every one.
+  const [pickedPr, setPickedPr] = useState<InboxRow | null>(null);
+  // Who the page lists, and which workspace's projects: two filters that
+  // compose, the first choosing where rows come from.
+  const [pullsPeople, setPullsPeople] = useState<PeopleFilter>("involving");
+  const [pullsScope, setPullsScope] = useState<PullsScope>("space");
+  // Every people filter but All lists from one GitHub search across every
+  // repo; All lists the projects added to Dray, through their marks.
+  const pullsSearch = pullsPeople !== "all";
+  const pullsFilter = pullsPeople === "mine" ? "author" : pullsPeople === "review" ? "review_requested" : "involves";
+  // The owner the "involving me" search is narrowed to, or every one.
+  const [pullsOwner, setPullsOwner] = useState<string | null>(null);
 
   const storedViewTab: ViewTab = selectedSessionId ? viewTabs[selectedSessionId] ?? "chat" : "chat";
   const selectedBotId = botAt(bots, sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.cwd ?? "")?.id;
@@ -1168,7 +1198,7 @@ function App() {
   /// request, its issue — with nothing on screen to say whose they were. The
   /// preference is kept, so coming back restores the pane exactly as it was;
   /// everything that draws or reads reads this instead.
-  const panelShown = panelOpen && !issuesOpen;
+  const panelShown = panelOpen && !pageOpen;
 
   const selectedBot = useMemo(() => {
     // The held transcript answers too: a session an agent switch just started
@@ -1200,7 +1230,7 @@ function App() {
   const crewAsks = useMemo(() => crew.filter((r) => r.asking), [crew]);
   // A split has no crew column: it is already several conversations side by
   // side, with nowhere for one to go. Its children's cards raise notices.
-  const crewAvailable = crew.length > 0 && !activeGroup && !issuesOpen && viewTab === "chat";
+  const crewAvailable = crew.length > 0 && !activeGroup && !pageOpen && viewTab === "chat";
   const crewDrawn = crewAvailable && crewAsks.length > 0;
   // **Beside the chat only where it fits, judged on minimums alone.** The
   // column never gives width back, so on a narrow window it crushed the
@@ -1359,7 +1389,7 @@ function App() {
   const launchNav = useRef<number | null>(navGen.current);
   useEffect(() => {
     if (launchNav.current === null) return;
-    if (navGen.current !== launchNav.current || selectedSessionId || settingsOpen || issuesOpen) {
+    if (navGen.current !== launchNav.current || selectedSessionId || settingsOpen || pageOpen) {
       launchNav.current = null;
       return;
     }
@@ -1371,7 +1401,7 @@ function App() {
     openBot(first);
     // `openBot` is rebuilt every render; the bots and each index landing are what this waits on.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bots, indexSide, sessionIndexItems, selectedSessionId, settingsOpen, issuesOpen]);
+  }, [bots, indexSide, sessionIndexItems, selectedSessionId, settingsOpen, pageOpen]);
 
   // After a delete, the first bot left, else the new-task page (#1076). Run
   // once the list without it has landed, so the bot opened is one still here.
@@ -1454,6 +1484,29 @@ function App() {
     });
     return [...new Set([...tasks.map((i) => i.projectPath), ...offline])].join("\n");
   }, [sessionIndexItems, offlineRepo]);
+  // The pull requests page's repos, read only while it is up: the projects in
+  // scope first, so a PR two keys share is read through a checkout here, then
+  // every bot task's repo, which the space check spares as the sidebar does
+  // (`inBotTree`).
+  const pullsKeys = useMemo(
+    () =>
+      // "Involving me" lists from one GitHub search and reads no repo here.
+      pullsOpen && !pullsSearch
+        ? [
+            ...new Set([
+              ...(pullsScope === "all" ? projects : spaceProjects).map((p) => p.path),
+              ...(botRepoKey ? botRepoKey.split("\n") : []),
+            ]),
+          ]
+        : [],
+    [pullsOpen, pullsSearch, pullsScope, projects, spaceProjects, botRepoKey],
+  );
+  // The repo the composer's `#` menu is listing pull requests from, while it is.
+  const prMentionKey = useSyncExternalStore(subscribePrMentionKey, readPrMentionKey);
+  const listedKeys = useMemo(
+    () => (prMentionKey && !pullsKeys.includes(prMentionKey) ? [...pullsKeys, prMentionKey] : pullsKeys),
+    [pullsKeys, prMentionKey],
+  );
   // Whichever sidebar list is up: a card on screen is still being read.
   const repoPaths = useMemo(
     () => [
@@ -1461,12 +1514,13 @@ function App() {
         ...(archivedShown ? [] : [...visibleSessions, ...crew.map((r) => r.item)].map((i) => i.projectPath)),
         ...(cardRepoKey ? cardRepoKey.split("\n") : []),
         ...(botRepoKey ? botRepoKey.split("\n") : []),
+        ...listedKeys,
       ]),
     ],
-    [archivedShown, visibleSessions, crew, cardRepoKey, botRepoKey],
+    [archivedShown, visibleSessions, crew, cardRepoKey, botRepoKey, listedKeys],
   );
   const botRepos = useMemo(() => (botRepoKey ? botRepoKey.split("\n") : []), [botRepoKey]);
-  const prMarks = usePrMarks(repoPaths, botRepos);
+  const prMarks = usePrMarks(repoPaths, botRepos, listedKeys);
 
   // "This can land now" — raised off the sidebar's marks rather than the
   // panel's own read, which is the only way it can be noticed at all: the
@@ -1564,6 +1618,315 @@ function App() {
     // what is visible then. See the hook.
     () => prMarks.refreshAfterWrite(),
   );
+  // The pull requests page. Its rows come off the marks above; the picked one
+  // is re-found among them on every read, so its pane follows the latest mark.
+  // One that has left the list stays only while its repo is still one the page
+  // reads — a PR merged from the pane keeps its pane — and goes with a space
+  // or scope switch that takes its repo away, the spaces rule for the screen.
+  const prSearch = usePrSearch(pullsOpen && pullsSearch, pullsOwner, pullsFilter);
+  // Each searched repo's checkout among This Mac's projects, matched on their
+  // git remotes, so a row reads and starts through the checkout where there is
+  // one and through its `github:` slug, cloning on start, where there is none.
+  const [searchCheckouts, setSearchCheckouts] = useState<Record<string, string>>({});
+  // Which searched repos a project of this space checks out, matched the same
+  // way: by any remote, through an SSH host alias, not `origin`'s spelling.
+  const [spaceCheckouts, setSpaceCheckouts] = useState<string[]>([]);
+  const searchRepoKey = [...new Set((prSearch.answer?.prs ?? []).map((p) => marksRepo([p.mark]) ?? ""))].filter(Boolean).sort().join("\n");
+  const localProjectKey = projects.filter((p) => serverOfPath(p.path) === LOCAL).map((p) => p.path).join("\n");
+  useEffect(() => {
+    if (!searchRepoKey || !localProjectKey) return;
+    let gone = false;
+    invoke<Record<string, string>>("repo_checkouts", { paths: localProjectKey.split("\n"), repos: searchRepoKey.split("\n") }, LOCAL)
+      .then((found) => !gone && setSearchCheckouts(found))
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
+  }, [searchRepoKey, localProjectKey]);
+  const localSpaceKey = spaceProjects.filter((p) => serverOfPath(p.path) === LOCAL).map((p) => p.path).join("\n");
+  useEffect(() => {
+    if (!searchRepoKey || !localSpaceKey) return setSpaceCheckouts([]);
+    let gone = false;
+    invoke<Record<string, string>>("repo_checkouts", { paths: localSpaceKey.split("\n"), repos: searchRepoKey.split("\n") }, LOCAL)
+      .then((found) => !gone && setSpaceCheckouts(Object.keys(found)))
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
+  }, [searchRepoKey, localSpaceKey]);
+  // Who "Involving me" narrows to: the reader, every owner a search has turned
+  // up — a personal repo of someone else's included — then the reader's orgs.
+  // Gathered, never dropped, so narrowing to one keeps the others on offer.
+  const [pullsOwners, setPullsOwners] = useState<string[]>([]);
+  useEffect(() => {
+    const found = prSearch.answer;
+    if (!found) return;
+    const seen = [found.viewer, ...found.prs.map((p) => p.repo.split("/")[0]), ...found.orgs].filter(Boolean);
+    setPullsOwners((prev) => {
+      const next = [...new Set([...prev, ...seen])];
+      return next.length === prev.length ? prev : next;
+    });
+  }, [prSearch.answer]);
+  // The repos "This space" holds, as the search spells them: the space's
+  // projects by their remote, and every bot task's repo, which the space
+  // check spares as the sidebar does.
+  const spaceRepoKey = [
+    ...new Set(
+      [
+        ...spaceCheckouts,
+        // Another machine's checkout is known by its recorded remote alone.
+        ...spaceProjects.map((p) => p.remote),
+        ...(botRepoKey ? botRepoKey.split("\n") : []).map((key) => {
+          const slug = slugOf(key);
+          return slug ? `github.com/${slug}` : (projects.find((p) => p.path === key)?.remote ?? prMarks.repoOf(key));
+        }),
+      ].filter((r): r is string => !!r),
+    ),
+  ].join("\n");
+  const pullRows = useMemo(() => {
+    if (!pullsSearch) return inboxRows(pullsKeys, prMarks.marksIn);
+    const inSpace = new Set(spaceRepoKey ? spaceRepoKey.split("\n") : []);
+    return (prSearch.answer?.prs ?? []).flatMap(({ repo, mark }) => {
+      const key = marksRepo([mark]);
+      if (!key || !mark.listing) return [];
+      // All spaces is the whole search, repos with no project here included.
+      if (pullsScope === "space" && !inSpace.has(key)) return [];
+      return [{ key: searchCheckouts[key] ?? slugKey(repo), repo: key, mark, listing: mark.listing }];
+    });
+  }, [pullsSearch, pullsScope, spaceRepoKey, pullsKeys, prMarks.marksIn, prSearch.answer, searchCheckouts]);
+  const pickedRow =
+    (pickedPr && pullRows.find((r) => r.mark.url === pickedPr.mark.url)) ??
+    (pickedPr &&
+    (pullsSearch
+      ? pullsScope === "all" || spaceRepoKey.split("\n").includes(pickedPr.repo)
+      : pullsKeys.includes(pickedPr.key))
+      ? pickedPr
+      : null);
+  const pickedPrData = usePullRequest(
+    pickedRow?.key ?? "",
+    pickedRow?.mark.headRefName ?? null,
+    pullsOpen && !!pickedRow,
+    () => {
+      prMarks.refreshAfterWrite();
+      if (pullsSearch) void prSearch.refresh();
+    },
+  );
+  // Matching a PR to its session needs both sides of the index — a settled
+  // session is what a new one takes its picks from, and a live one must never
+  // be missed for the archived view being up — so the side the sidebar is not
+  // holding is read while the page is open, from every server.
+  // Re-read when a PR is picked too, since that is when the answer is acted
+  // on, and keyed on the servers' ids rather than the list, which changes on
+  // every status a server reports.
+  const [otherIndexSide, setOtherIndexSide] = useState<SessionIndexItem[]>([]);
+  const serverIds = allServers.map((s) => s.id).join("\n");
+  const pickedUrl = pickedPr?.mark.url;
+  useEffect(() => {
+    if (!pullsOpen || indexSide === null) return;
+    let gone = false;
+    void Promise.all(
+      [LOCAL, ...(serverIds ? serverIds.split("\n") : [])].map((server) =>
+        invoke<SessionIndexItem[]>("list_session_index_items", { archived: !indexSide }, server).catch(() => []),
+      ),
+    ).then((lists) => !gone && setOtherIndexSide(lists.flat()));
+    return () => {
+      gone = true;
+    };
+  }, [pullsOpen, indexSide, serverIds, pickedUrl]);
+  // By branch once, so each row asks about its own head rather than every
+  // session on both sides of the index.
+  const sessionsByBranch = useMemo(() => {
+    const by = new Map<string, SessionIndexItem[]>();
+    for (const item of [...sessionIndexItems, ...otherIndexSide]) {
+      const branch = sessionBranch(item);
+      if (branch) by.set(branch, [...(by.get(branch) ?? []), item]);
+    }
+    return by;
+  }, [sessionIndexItems, otherIndexSide]);
+  const sessionsForRow = useCallback(
+    (row: InboxRow) => sessionsForPr(row, sessionsByBranch.get(row.mark.headRefName) ?? [], prMarks.repoOf),
+    [sessionsByBranch, prMarks.repoOf],
+  );
+  const pullsMissing = useMemo(() => {
+    if (pullRows.length > 0) return null;
+    const searchError = pullsSearch ? prSearch.error : null;
+    if (searchError?.kind === "no_cli" || searchError?.kind === "not_authenticated") {
+      return { kind: searchError.kind, cwd: "" };
+    }
+    for (const key of pullsKeys) {
+      const error = prMarks.errorFor(key);
+      if (error?.kind === "no_cli" || error?.kind === "not_authenticated") return { kind: error.kind, cwd: key };
+    }
+    return null;
+  }, [pullRows, pullsKeys, prMarks.errorFor, pullsSearch, prSearch.error]);
+  const pullsErrors = pullsSearch
+    ? prSearch.error?.kind === "other" ? [{ name: "GitHub search", error: prSearch.error }] : []
+    : pullsKeys.flatMap((key) => {
+    const error = prMarks.errorFor(key);
+    return error?.kind === "other" ? [{ name: projects.find((p) => p.path === key)?.name ?? key, error }] : [];
+  });
+  const pullsLoaded =
+    pullsSearch
+      ? !!prSearch.answer || !!prSearch.error
+      : pullsKeys.some((key) => prMarks.marksIn(key) !== undefined || prMarks.errorFor(key));
+  const [pullsReading, setPullsReading] = useState(false);
+  /// The checkout a PR's new session is made in: the one the PR was read
+  /// through, else any attached checkout of its repo — never a `github:` key,
+  /// which has no checkout to make a tree in.
+  const prCheckout = (row: InboxRow) =>
+    projects.find((p) => p.path === row.key)?.path ??
+    projects.find((p) => prMarks.repoOf(p.path) === row.repo)?.path;
+  /// What Start Task does about a checkout first. A key that is a checkout on
+  /// disk — a bot task's, read for the page though nobody attached it — is
+  /// attached; a `github:` key with no checkout anywhere is cloned into
+  /// `~/dray`, on This Mac, the attach dialog's own clone.
+  const prCheckoutPlan = (row: InboxRow): PrCheckout => {
+    const here = prCheckout(row);
+    if (here) return { kind: "here", path: here };
+    const slug = slugOf(row.key);
+    return slug ? { kind: "clone", slug } : { kind: "attach", path: row.key };
+  };
+  /// Where a PR's task runs: its checkout's server, This Mac for a clone.
+  const prServer = (plan: PrCheckout) => (plan.kind === "clone" ? (plan.server ?? LOCAL) : serverOfPath(plan.path));
+  /// The machines Start Task offers for a plain task: every checkout of the
+  /// PR's repo (its `remote`, git's own spelling of the repo), then a stand-in
+  /// on each connected machine with none, never a Dray Cloud one. The pick
+  /// starts on the checkout the PR would use anyway.
+  const prMachines = (row: InboxRow): PrMachines => {
+    const name = row.repo.split("/").pop() ?? row.repo;
+    const plan = prCheckoutPlan(row);
+    const real = projects.filter(
+      (p) => !cloudServer(serverOfPath(p.path)) && (p.remote === row.repo || p.path === row.key || (plan.kind !== "clone" && p.path === plan.path)),
+    );
+    const servers = [LOCAL, ...allServers.map((s) => s.id).filter((id) => id !== LOCAL && serverConnected(id) && !cloudServer(id))];
+    const clones = servers
+      .filter((server) => !real.some((p) => serverOfPath(p.path) === server))
+      .map((server): Project => ({ path: qualify(`/~/dray/${name}`, server), name, space: null, remote: row.repo, lastSelected: "" }));
+    const initial = plan.kind === "clone" ? (clones[0]?.path ?? "") : plan.path;
+    return { projects: [...real, ...clones], clones: clones.map((c) => c.path), initial };
+  };
+  /// The bots a PR can go to: those on the server its task runs on, the only
+  /// ones whose task can be made in that checkout.
+  const botsForRow = (row: InboxRow) => {
+    const server = prServer(prCheckoutPlan(row));
+    return bots.filter((b) => serverOfBot(b) === server);
+  };
+  /// Which bot a PR's session is a task of, to name the bot beside it.
+  const botOfPrSession = (item: SessionIndexItem) =>
+    item.parentSessionId ? botOf(bots, [...sessionIndexItems, ...otherIndexSide], item.sessionId) : undefined;
+  /// Opens a PR's session from the page: a bot's task as a tab in its bot's
+  /// row, the way its Tasks list opens one, anything else on its own.
+  const openPrSession = (item: SessionIndexItem) => {
+    const bot = botOfPrSession(item);
+    goToSession(() => {
+      if (!bot) return void handleSelectSessionIndexItem(item.sessionId);
+      setTaskTabs((prev) => openTaskTab(prev, bot.id, { sessionId: item.sessionId, title: item.title }));
+      pickTaskTab(bot.id, item.sessionId);
+    });
+  };
+  /// Start Task from the page: a new worktree on the PR's own branch, the
+  /// reader's own task or `bot`'s, whatever tasks the PR already has — the new
+  /// one leads its list. The reader stays on the page.
+  const startPrSession = async (
+    row: InboxRow,
+    prompt: string,
+    picks: PrPicks,
+    bot: Bot | null,
+    onCloning: (line: string | null) => void,
+    machine: string | null,
+  ): Promise<{ started: SessionIndexItem } | { error: string }> => {
+    // A plain task runs on the picked machine: its checkout, or a clone there.
+    const picked = machine ? prMachines(row) : null;
+    const slug = slugOf(row.key) ?? prRepoSlug(row.mark.url);
+    const plan: PrCheckout =
+      picked && machine && picked.clones.includes(machine) && slug
+        ? { kind: "clone", slug, server: serverOfPath(machine) }
+        : picked && machine && picked.projects.some((p) => p.path === machine)
+          ? { kind: "here", path: machine }
+          : prCheckoutPlan(row);
+    const server = prServer(plan);
+    // git's own progress lines, while a clone runs, for the pane to show.
+    const listening =
+      plan.kind === "clone"
+        ? listen<CloneProgress>("clone_progress", ({ payload, server: from }) => {
+            // git's "Cloning into '<staging path>'" names a folder the reader never sees.
+            if (from === server && payload.slug === plan.slug && !payload.line.startsWith("Cloning into")) {
+              onCloning(payload.line);
+            }
+          })
+        : null;
+    if (plan.kind === "clone") onCloning("");
+    // Attached or cloned only now, at the start, so opening a PR changes
+    // nothing on disk; done before the duplicate check above could not see a
+    // checkout it had to make.
+    let projectPath: string;
+    try {
+      if (plan.kind === "here") projectPath = plan.path;
+      else {
+        const list = await invoke<Project[]>(
+          plan.kind === "clone" ? "clone_github_repo" : "add_project",
+          plan.kind === "clone" ? { slug: plan.slug } : { path: plan.path },
+          server,
+        );
+        handleAttachProject(server, list);
+        // By full path, never by folder name: the list is every project on
+        // that server, and two checkouts can share a name. An attach names its
+        // path; a clone is the one entry that server did not list before,
+        // else the one whose remote is the PR's repo.
+        const before = new Set(projects.filter((p) => serverOfPath(p.path) === server).map((p) => p.path));
+        const made =
+          plan.kind === "attach"
+            ? list.find((p) => p.path === plan.path)
+            : (list.find((p) => !before.has(p.path) && p.remote === row.repo) ??
+              list.find((p) => p.remote === row.repo));
+        if (!made) return { error: "The checkout was made but is not in the project list." };
+        projectPath = made.path;
+        void prMarks.refreshRepos([projectPath]);
+      }
+    } catch (e) {
+      const said = e instanceof Error ? e.message : String(e);
+      onCloning(null);
+      void listening?.then((unlisten) => unlisten());
+      return {
+        error:
+          plan.kind === "clone"
+            ? `Could not clone ${plan.slug} into ~/dray: ${said}`
+            : `Could not attach ${plan.path}: ${said}`,
+      };
+    }
+    onCloning(null);
+    void listening?.then((unlisten) => unlisten());
+    try {
+      const started = await invoke<SessionIndexItem>(
+        "start_pr_session",
+        {
+          sessionId: crypto.randomUUID(),
+          prompt,
+          ...picks,
+          cwd: projectPath,
+          prHead: { branch: row.mark.headRefName, repo: row.repo },
+          prNumber: row.mark.number,
+          bot: bot?.id ?? null,
+        },
+        server,
+      );
+      // Ahead of `session_created`, so the pane names it the moment it answers.
+      setOtherIndexSide((prev) => (prev.some((i) => i.sessionId === started.sessionId) ? prev : [...prev, started]));
+      return { started };
+    } catch (e) {
+      const said = e instanceof Error ? e.message : String(e);
+      // Asked before anything is made, so nothing is left to tidy up.
+      if (said.includes("unknown command")) {
+        return { error: "This server is older than the pull requests page. Update it, then start the task again." };
+      }
+      return { error: said };
+    }
+  };
+  const refreshPulls = () => {
+    if (pullsSearch) return void prSearch.refresh();
+    setPullsReading(true);
+    void prMarks.refreshRepos(pullsKeys).finally(() => setPullsReading(false));
+  };
   // A draft counts: GitHub reports one as `OPEN` with `isDraft` set, and a
   // draft is still the point at which the work stops being about this turn.
   const openPrsHere = pullRequests.prs.filter((pr) => pr.state === "OPEN");
@@ -1678,7 +2041,7 @@ function App() {
   // on it closes the pane, whatever tab the pane was on: the reader came for
   // the full width. ⌘E brings it back beside the page, and leaving gives back
   // a pane the arrival took — the sidebar's rule, under its own switch.
-  const fullBrowserOpen = !issuesOpen && viewTab === "browser";
+  const fullBrowserOpen = !pageOpen && viewTab === "browser";
   const lastViewTab = useRef(viewTab);
   // The pane's claims, one per pane key, since the pane is per session — see
   // [panelMove](./lib/sidebarAuto.ts) for why one claim was not enough.
@@ -1799,7 +2162,7 @@ function App() {
   const [pickAsked, setPickAsked] = useState<SessionIndexItem | null>(null);
   const [pickTick, setPickTick] = useState(0);
   const litPickBusy =
-    litPick?.kind === "changes" && statusBySession[litPick.target] === "in_progress" && !issuesOpen;
+    litPick?.kind === "changes" && statusBySession[litPick.target] === "in_progress" && !pageOpen;
   useEffect(() => {
     if (!litPickBusy) return;
     const t = setInterval(() => setPickTick((n) => n + 1), 15_000);
@@ -1889,7 +2252,7 @@ function App() {
   const stepTab = (delta: number) => {
     // A shut pane opens on its first tab, so the chord alone gets the reader
     // moving; ⌘E is what shuts it again.
-    if (!panelShown) return issuesOpen || !shownSession ? undefined : showPanel(tabs[0]);
+    if (!panelShown) return pageOpen || !shownSession ? undefined : showPanel(tabs[0]);
     const from = tabs.indexOf(activeTab);
     setPanelTab(tabs[(from + delta + tabs.length) % tabs.length]);
   };
@@ -2004,7 +2367,7 @@ function App() {
     lastTurn.current = { sessionId: selectedSessionId, busy };
     if (prev.sessionId !== selectedSessionId || !prev.busy || busy) return;
     pullRequests.refresh();
-    prMarks.refresh();
+    void prMarks.refresh();
     setTurnsEnded((n) => n + 1);
   }, [selectedSessionId, busy, pullRequests.refresh, prMarks.refresh]);
 
@@ -2388,7 +2751,7 @@ function App() {
   useEffect(() => {
     if (filesOpened === lastFileOpened.current) return;
     lastFileOpened.current = filesOpened;
-    if (!issuesOpen) setViewTab("files");
+    if (!pageOpen) setViewTab("files");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filesOpened]);
 
@@ -2399,8 +2762,10 @@ function App() {
   // back.
   useEffect(() => {
     setIssueOpener((issue) => {
+      // A pull request tagged from the `#` menu is no issue to open here.
+      if (prRepoSlug(issue.url)) return openLink(issue.url);
       setPickedIssue(issue);
-      setIssuesOpen(true);
+      setPage("issues");
     });
     return () => setIssueOpener(null);
   }, []);
@@ -2473,7 +2838,7 @@ function App() {
   // back with it — so this is a navigation, not a dismissal. Settings cover the
   // whole window, so they close too.
   const goToSession = (go: () => void) => {
-    setIssuesOpen(false);
+    setPage(null);
     closeSettings();
     setOpenDraftId(null);
     go();
@@ -2932,7 +3297,7 @@ function App() {
       // The chord steps exactly what the picker draws, which under a space is
       // that space's projects — a chord landing on one the menu never offered
       // is a session started somewhere the reader cannot see.
-      enabled: !selectedSessionId && !issuesOpen && groupProjects(spaceProjects).length > 1,
+      enabled: !selectedSessionId && !pageOpen && groupProjects(spaceProjects).length > 1,
     },
   );
   // The machine picker's twin of the above: same gate, same wrap, stepping the
@@ -2944,7 +3309,7 @@ function App() {
     () => {
       if (nextServerCheckout) handleSelectProject(nextServerCheckout.path);
     },
-    { enabled: !selectedSessionId && !issuesOpen && nextServerCheckout !== null },
+    { enabled: !selectedSessionId && !pageOpen && nextServerCheckout !== null },
   );
   // Steps the sidebar's project filter, All Projects included, in the order the
   // filter itself draws. Wraps, for the same reason the picker's own tap does:
@@ -2976,7 +3341,7 @@ function App() {
   // grid is *on screen*: with none ⌘⌥1 has nothing to point at and must not eat the key,
   // and under the Diff tab or the issues page ⌘W would close a pane the
   // reader cannot see.
-  const gridShown = !!mainGroup && !issuesOpen && viewTab === "chat";
+  const gridShown = !!mainGroup && !pageOpen && viewTab === "chat";
   const paneIds = mainGroup ? paneOrder(mainGroup) : [];
   // Keyboard focus moves with the pane. A click moves it by itself, but a
   // chord left it on whatever the old pane held — a link, a subagent control
@@ -3007,16 +3372,16 @@ function App() {
   // reader who opened Issues from the Files view still has `activeFile`
   // naming a tab in a view nobody can see — and ⌘W there closed it silently.
   // Every other arm already carries the guard: `fullBrowserOpen` and
-  // `gridShown` both hold `!issuesOpen`, and `panelShown` is the pane the
+  // `gridShown` both hold `!pageOpen`, and `panelShown` is the pane the
   // page hides.
-  const fileShown = !issuesOpen && viewTab === "files" && !!activeFile;
+  const fileShown = !pageOpen && viewTab === "files" && !!activeFile;
   const litPickFile = (() => {
-    if (issuesOpen || litPick?.kind !== "files") return undefined;
+    if (pageOpen || litPick?.kind !== "files") return undefined;
     const { open, active } = openFilesFor(pickFilesKey(litPick));
     return open.find((f) => f.path === active);
   })();
   const rowTabOnScreen =
-    !issuesOpen &&
+    !pageOpen &&
     !!selectedSessionId &&
     (viewTab === "files" ||
       viewTab === "changes" ||
@@ -3049,7 +3414,7 @@ function App() {
   // wrong for a chord that draws nothing and so promises nothing. Off on the
   // issues page, whose own binding opens and shuts the
   // issue pane — only the list knows which row to put back.
-  useHotkey("panel.toggle", togglePanel, { enabled: !issuesOpen });
+  useHotkey("panel.toggle", togglePanel, { enabled: !pageOpen });
   // ⌘⌥E, the side beside ⌘E's visibility. Moves a hidden pane too: the pick
   // is a preference, and it lands wherever the pane next opens.
   useHotkey("panel.side", () => setPanelSide((s) => (s === "left" ? "right" : "left")));
@@ -3078,6 +3443,7 @@ function App() {
       if (pickedIssue) return pickedIssueData.refresh();
       return issuesRefreshRef.current?.();
     }
+    if (pullsOpen) return pickedRow ? pickedPrData.refresh() : refreshPulls();
     if (fullBrowserOpen && browserSession) {
       if (!pendingBrowserTab && browserTabs?.some((tab) => tab.active)) {
         void navigate(browserSession, "reload");
@@ -3109,7 +3475,7 @@ function App() {
   // The same ⌘S on any composer, wherever the docs tab is not the one taking it.
   // Off Chat the composer is hidden, so there is nothing on screen to save.
   useHotkey("composer.draft", () => void saveAsDraft(), {
-    enabled: !issuesOpen && viewTab === "chat" && !(panelShown && activeTab === "docs"),
+    enabled: !pageOpen && viewTab === "chat" && !(panelShown && activeTab === "docs"),
   });
   // ⌘1–⌘9 live in `ViewTabs`, which is drawn only where there is a row to
   // switch, so the issues page and a new task need no guard of their own.
@@ -3129,7 +3495,7 @@ function App() {
   // rather than no-ops there. `useHotkey` claims every chord it matches, and
   // ⌘⇧T is reopen-closed-tab in a webview: left bound on a session that cannot
   // use it, it would eat the key and do nothing.
-  const composingNewSession = !selectedSessionId && !issuesOpen;
+  const composingNewSession = !selectedSessionId && !pageOpen;
   // Steps the picker's own row in its own order, rather than toggling between
   // two — a toggle written when there were two silently never reached pi.
   const enabledAgents = useEnabledAgents();
@@ -3190,7 +3556,7 @@ function App() {
     () => setFast(!fast),
     {
       enabled:
-        !issuesOpen &&
+        !pageOpen &&
         !lockedMidTurn(harness, "fast", busy) &&
         offersFast(harness, models.find((m) => m.id === modelId)),
     },
@@ -3200,7 +3566,8 @@ function App() {
   // nothing on that page opens the pane either (⌘E closes only there), and a
   // chord that closed it would have to pick somewhere to land, which is the
   // guess `goToSession` exists so nothing has to make.
-  useHotkey("issues.open", () => setIssuesOpen(true));
+  useHotkey("issues.open", () => setPage("issues"));
+  useHotkey("pulls.open", () => setPage("pulls"));
   const fullscreen = useFullscreen();
   useGlass(fullscreen);
   // Only a windowed Mac has traffic lights over the strip to clear.
@@ -3222,9 +3589,9 @@ function App() {
   const rowSession = stripOwner ?? shownSession;
   // The lit group's panes beside the main view. A task's transcript in one
   // is on screen the way a grid pane's is.
-  const rowSplits = useSplitPanes(issuesOpen ? null : (rowSession?.sessionId ?? null));
-  const rowGroups = useSplitGroups(issuesOpen ? null : (rowSession?.sessionId ?? null));
-  const litGroup = useLitGroup(issuesOpen ? null : (rowSession?.sessionId ?? null));
+  const rowSplits = useSplitPanes(pageOpen ? null : (rowSession?.sessionId ?? null));
+  const rowGroups = useSplitGroups(pageOpen ? null : (rowSession?.sessionId ?? null));
+  const litGroup = useLitGroup(pageOpen ? null : (rowSession?.sessionId ?? null));
   const mainGrow = useSplitWeight(rowSession?.sessionId ?? null, litGroup?.lead ?? null);
   const splitTasks = rowSplits.filter((k) => k.startsWith("task:")).map((k) => k.slice("task:".length));
   // A pane whose tab went — a page the agent closed, a task or pick shut —
@@ -3441,7 +3808,7 @@ function App() {
       rereadQueued.current = true;
       queueMicrotask(() => {
         rereadQueued.current = false;
-        prMarks.refresh();
+        void prMarks.refresh();
       });
     },
     titleOf: (id) => sessionIndexItems.find((i) => i.sessionId === id)?.title,
@@ -3530,7 +3897,7 @@ function App() {
       <ChangesView
         key={key}
         cwd={item.cwd}
-        active={!issuesOpen && shown}
+        active={!pageOpen && shown}
         revision={revision}
         writeRevision={writeRevision}
         busy={status === "in_progress"}
@@ -3541,7 +3908,7 @@ function App() {
         key={key}
         sessionId={pickFilesKey(tab)}
         cwd={item.cwd}
-        active={!issuesOpen && shown}
+        active={!pageOpen && shown}
         revision={revision}
         picker={picker}
         watchScope={watchScope}
@@ -3560,7 +3927,7 @@ function App() {
           tasks={tasksIn(rowSession.sessionId)}
           own={indexItemOf(browserOf(rowSession.sessionId))}
           tab={Number(key.slice("page:".length))}
-          active={!issuesOpen && shown}
+          active={!pageOpen && shown}
           onClose={() => removeSplit(rowSession.sessionId, key)}
         />
       );
@@ -3569,7 +3936,7 @@ function App() {
       return (
         <ChangesView
           cwd={rowSession.cwd}
-          active={!issuesOpen && shown}
+          active={!pageOpen && shown}
           revision={turnRevision}
           writeRevision={writeRevision}
           busy={busy}
@@ -3589,7 +3956,7 @@ function App() {
   };
 
   // Pages with no tabs for the strip: the sheet reaches up behind the header.
-  const tallSheet = issuesOpen || !shownSession;
+  const tallSheet = pageOpen || !shownSession;
 
   return (
     <TooltipProvider>
@@ -3604,11 +3971,11 @@ function App() {
       tall={tallSheet}
       // The issues page fills the column, so the centred empty-composer state
       // is wrong there even with no session selected.
-      centered={!shownSession && !issuesOpen && !welcomeBot}
+      centered={!shownSession && !pageOpen && !welcomeBot}
       panelLeft={panelSide === "left"}
-      panelOpen={issuesOpen ? !!pickedIssue : !!shownSession && panelShown}
+      panelOpen={issuesOpen ? !!pickedIssue : pullsOpen ? !!pickedRow : !!shownSession && panelShown}
       overlay={singleDrop && <DropZone region={singleDrop.region} label={singleDrop.label} />}
-      beside={<SplitPanes sessionId={issuesOpen ? null : (rowSession?.sessionId ?? null)} body={splitBody} />}
+      beside={<SplitPanes sessionId={pageOpen ? null : (rowSession?.sessionId ?? null)} body={splitBody} />}
       mainCard={
         litGroup && {
           key: litGroup.lead,
@@ -3637,7 +4004,7 @@ function App() {
         <Sidebar
           items={searchedSessions}
           bots={botList}
-          newBotId={issuesOpen ? undefined : newBot?.id}
+          newBotId={pageOpen ? undefined : newBot?.id}
           onOpenBot={openBot}
           // The new-task composer first: the dialog shares its picker, which on
           // an open chat would change that chat's model instead.
@@ -3674,7 +4041,7 @@ function App() {
           // selection itself is kept, which is what makes coming back free.
           // A task lit in a bot's row keeps the bot's row marked: the task
           // has none, and the bot's chat is one tab away.
-          selectedSessionId={issuesOpen ? null : strip?.owner ?? selectedSessionId}
+          selectedSessionId={pageOpen ? null : strip?.owner ?? selectedSessionId}
           collapsed={collapsed}
           onSelect={(sessionId) => goToSession(() => void handleSelectSessionIndexItem(sessionId))}
           groups={spaceGroups}
@@ -3687,10 +4054,12 @@ function App() {
               handleNewSession();
             })
           }
-          onOpenIssues={() => setIssuesOpen(true)}
+          onOpenIssues={() => setPage("issues")}
           issuesOpen={issuesOpen}
+          onOpenPulls={() => setPage("pulls")}
+          pullsOpen={pullsOpen}
           drafts={sidebarDrafts}
-          openDraftId={issuesOpen ? null : openDraftId}
+          openDraftId={pageOpen ? null : openDraftId}
           onOpenDraft={openDraft}
           onDeleteDraft={(id) => {
             writeDraft(draftKey(id), "");
@@ -3757,7 +4126,7 @@ function App() {
               and on a hidden session, whose way back to its parent runs
               through this same strip. ⌘, still opens settings there. The rail's
               end sits under the traffic lights, so it draws its own gear. */}
-          {sidebarDrawn > SIDEBAR_RAIL && !(!issuesOpen && shownSession && crumb) && (
+          {sidebarDrawn > SIDEBAR_RAIL && !(!pageOpen && shownSession && crumb) && (
           <div
             className="absolute top-1/2 flex shrink-0 -translate-y-1/2 items-center gap-1"
             style={{ right: `calc(100% - ${sidebarDrawn}px + 0.5rem)` }}
@@ -3784,7 +4153,7 @@ function App() {
               not a session — the issues page, a new task. */}
           {/* A hidden session has no sidebar row, so this is the way back to
               the session that started it. */}
-          {!issuesOpen && shownSession && crumb && (
+          {!pageOpen && shownSession && crumb && (
             <button
               type="button"
               onClick={() =>
@@ -3795,7 +4164,7 @@ function App() {
               {crumb.title} /
             </button>
           )}
-          {!issuesOpen && shownSession && rowSession && (
+          {!pageOpen && shownSession && rowSession && (
             <ViewTabs
               // With a task tab lit, still the bot's row: its chat, pages and
               // files, the task tabs after them.
@@ -3924,7 +4293,7 @@ function App() {
             />
           )}
           {/* Keeps the far end at the far end on pages with no tab row. */}
-          {(issuesOpen || !shownSession) && <div className="min-w-0 flex-1" />}
+          {(pageOpen || !shownSession) && <div className="min-w-0 flex-1" />}
 
 
           {issuesOpen
@@ -3934,6 +4303,8 @@ function App() {
               pickedIssue && (
                 <PanelToggle onToggle={() => setPickedIssue(null)} />
               )
+            : pullsOpen
+              ? pickedRow && <PanelToggle onToggle={() => setPickedPr(null)} />
             : shownSession && (
                 <>
                   <PanelActions
@@ -4024,6 +4395,40 @@ function App() {
               />
               </MountOnce>
             </TabBody>
+          </RightPanel>
+        ) : pullsOpen ? (
+          <RightPanel
+            side={panelSide}
+            open={!!pickedRow}
+            heading="Details"
+            tab="pr"
+            onTabChange={() => {}}
+            refresh={{ onRefresh: pickedPrData.refresh, loading: pickedPrData.loading }}
+          >
+            {pickedRow && (
+              // `MountOnce` is the Suspense boundary the lazy pane loads behind;
+              // without one its first open suspends the whole window.
+              <TabBody active>
+                <MountOnce when>
+                  <PullDetail
+                    // One mount per PR, so picked comments never carry across.
+                    key={pickedRow.mark.url}
+                    row={pickedRow}
+                    data={pickedPrData}
+                    sessions={sessionsForRow(pickedRow)}
+                    bots={botsForRow(pickedRow)}
+                    botOf={botOfPrSession}
+                    server={prServer(prCheckoutPlan(pickedRow))}
+                    checkout={prCheckoutPlan(pickedRow)}
+                    onOpenSession={openPrSession}
+                    machines={prMachines(pickedRow)}
+                    onStart={(prompt, picks, bot, onCloning, machine) =>
+                      startPrSession(pickedRow, prompt, picks, bot, onCloning, machine)
+                    }
+                  />
+                </MountOnce>
+              </TabBody>
+            )}
           </RightPanel>
         ) : // Mounted whenever a session is, open or not — closing or switching
         // tabs only hides, so reopening shows what was already there instead of
@@ -4159,7 +4564,7 @@ function App() {
         // `shownSession`, like the rest of the layout: gated on the snapshot,
         // the composer came up under Files or Diff for as long as a transcript
         // took to load.
-        issuesOpen || (shownSession && viewTab !== "chat") ? null : (
+        pageOpen || (shownSession && viewTab !== "chat") ? null : (
         <ChatInput
           onSend={(message, attachments) => void sendFromComposer(message, attachments)}
           commands={slashCommands}
@@ -4330,6 +4735,9 @@ function App() {
               onCancelBranchSwitch={() => setPendingBranch(null)}
               useWorktree={useWorktree}
               onToggleWorktree={() => setUseWorktree((v) => !v)}
+              worktreeBranch={worktreeBranch}
+              onSelectWorktreeBranch={(branch) => setWorktreeBranch(branch)}
+              onOpenWorktreeBranches={refreshBranches}
               onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
               contextUsage={contextUsage}
               tasks={selectedBot ? { counts: taskCount, onOpen: () => showPanel("tasks") } : undefined}
@@ -4363,10 +4771,45 @@ function App() {
         </MountOnce>
       </TabBody>
 
+      <TabBody active={pullsOpen}>
+        <MountOnce when={pullsOpen}>
+          <PullsView
+            rows={pullRows}
+            loaded={pullsLoaded}
+            hasRepos={pullsSearch || pullsKeys.length > 0}
+            missing={pullsMissing}
+            errors={pullsErrors}
+            people={pullsPeople}
+            onPeople={(people) => {
+              setPullsPeople(people);
+              setPickedPr(null);
+            }}
+            scope={pullsScope}
+            onScope={(scope) => {
+              setPullsScope(scope);
+              setPickedPr(null);
+            }}
+            owners={pullsOwners}
+            owner={pullsOwner}
+            onOwner={(owner) => {
+              setPullsOwner(owner);
+              setPickedPr(null);
+            }}
+            sessionsFor={sessionsForRow}
+            botOf={botOfPrSession}
+            onOpenSession={openPrSession}
+            picked={pickedRow}
+            onPick={setPickedPr}
+            loading={pullsSearch ? prSearch.loading : pullsReading}
+            onRefresh={refreshPulls}
+          />
+        </MountOnce>
+      </TabBody>
+
       {/* Hidden rather than unmounted, the same bargain the right panel's tabs
           make: the transcript keeps its scroll position and its highlighted
           diffs, and the repo view keeps its selection and its reads. */}
-      <TabBody active={!issuesOpen && viewTab === "chat"}>
+      <TabBody active={!pageOpen && viewTab === "chat"}>
       {mainGroup ? (
         <SplitView
           columns={paneColumns}
@@ -4376,7 +4819,7 @@ function App() {
           onFocus={(id) => void handleSelectSessionIndexItem(id)}
           onClose={closeSessionPane}
           onDrop={dropSession}
-          active={!issuesOpen && viewTab === "chat"}
+          active={!pageOpen && viewTab === "chat"}
           chat={paneChat}
         />
       ) : (
@@ -4415,7 +4858,7 @@ function App() {
             }
             unread={!!selectedSessionId && openedUnread === selectedSessionId}
             // Its own chords only while the chat tab is on screen.
-            active={!issuesOpen && viewTab === "chat"}
+            active={!pageOpen && viewTab === "chat"}
           />
         )}
       </div>
@@ -4428,12 +4871,12 @@ function App() {
         // Keyed by session so the selection, the sub-tab and the commit box
         // reset with it. Cheap to remount: the reads behind it are cached by
         // tree id at module level and survive the unmount.
-        <TabBody active={!issuesOpen && viewTab === "changes"}>
-          <MountOnce when={!issuesOpen && viewTab === "changes"}>
+        <TabBody active={!pageOpen && viewTab === "changes"}>
+          <MountOnce when={!pageOpen && viewTab === "changes"}>
           <ChangesView
             key={selectedSession.sessionId}
             cwd={selectedSession.cwd}
-            active={!issuesOpen && viewTab === "changes"}
+            active={!pageOpen && viewTab === "changes"}
             revision={turnRevision}
             writeRevision={writeRevision}
             busy={busy}
@@ -4443,7 +4886,7 @@ function App() {
       )}
 
       {selectedSession && (
-        <TabBody active={!issuesOpen && viewTab === "browser"}>
+        <TabBody active={!pageOpen && viewTab === "browser"}>
           <MountOnce when={fullBrowserOpen}>
           <BrowserPane
             sessionId={browserSession ?? selectedSession.sessionId}
@@ -4459,20 +4902,20 @@ function App() {
         // Keyed by session so the expanded tree resets with it. The tab strip
         // does not: its store is per session and outlives the remount, so what
         // comes back is that session's own files.
-        <TabBody active={!issuesOpen && viewTab === "files"}>
-          <MountOnce when={!issuesOpen && viewTab === "files"}>
+        <TabBody active={!pageOpen && viewTab === "files"}>
+          <MountOnce when={!pageOpen && viewTab === "files"}>
           <FilesView
             key={selectedSession.sessionId}
             sessionId={selectedSession.sessionId}
             cwd={selectedSession.cwd}
-            active={!issuesOpen && viewTab === "files"}
+            active={!pageOpen && viewTab === "files"}
             revision={turnRevision}
           />
           </MountOnce>
         </TabBody>
       )}
       {litSubagent && selectedSession && (
-        <TabBody active={!issuesOpen && viewTab === "subagent"}>
+        <TabBody active={!pageOpen && viewTab === "subagent"}>
           {(() => {
             const run = subagents.find((r) => r.id === litSubagent.id);
             return run ? (
@@ -4488,7 +4931,7 @@ function App() {
         </TabBody>
       )}
       {litPick && selectedBotId && (
-        <TabBody active={!issuesOpen}>
+        <TabBody active={!pageOpen}>
           <MountOnce when>{pickBody(litPick, selectedBotId)}</MountOnce>
         </TabBody>
       )}

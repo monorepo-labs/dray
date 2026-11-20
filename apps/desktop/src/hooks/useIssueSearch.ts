@@ -80,6 +80,34 @@ async function repoFor(cwd: string): Promise<string | null> {
   return repo;
 }
 
+/// `owner/repo` for `cwd`: `null` where it has no GitHub remote, `undefined`
+/// while that is still being asked — the two draw differently, and the second
+/// must never be mistaken for either. Asked only while `active`.
+///
+/// The answer is held **with the directory it was asked about** and read apart
+/// during render. Held as a bare slug it went on naming the *previous*
+/// session's repository for as long as the new lookup took, and a `#` typed in
+/// that window listed session A's issues into session B's prompt.
+export function useGithubRepo(cwd: string | null, active = true): string | null | undefined {
+  const [resolved, setResolved] = useState<{ cwd: string; repo: string | null } | null>(null);
+
+  // Asked once per directory and cached across mounts, so the answer is usually
+  // already in hand by the time a `#` is typed.
+  useEffect(() => {
+    if (!active || !cwd) return;
+
+    let live = true;
+    void repoFor(cwd).then((next) => live && setResolved({ cwd, repo: next }));
+
+    return () => {
+      live = false;
+    };
+  }, [active, cwd]);
+
+  if (!cwd) return null;
+  return resolved?.cwd === cwd ? resolved.repo : undefined;
+}
+
 /// Issues matching `query`, best first, and whether a read is in flight — or an
 /// empty list while the picker is closed.
 ///
@@ -101,55 +129,37 @@ export function useIssueSearch(
   query: string | null,
   tracker: IssueTracker = "linear",
   cwd: string | null = null,
+  /// The repository to read in place of `cwd`'s — a bot's pick, its folder
+  /// having no remote — shaped like `useGithubRepo`'s answer. Absent reads
+  /// `cwd`'s own.
+  picked?: { repo: string | null | undefined },
 ): { issues: Issue[]; loading: boolean; emptyNote?: string } {
   const [issues, setIssues] = useState<Issue[]>([]);
   const [loading, setLoading] = useState(false);
-  /// The session's own repository under GitHub, once it has been asked for.
-  /// `undefined` while it has not been — which is distinct from `null`, the
-  /// answer that there is no GitHub remote here, and the two draw differently.
-  /// The answer, **with the directory it was asked about**. Kept together and
-  /// read apart during render, the reading `useSessionIssues` takes: held as a
-  /// bare slug it went on naming the *previous* session's repository for as
-  /// long as the new lookup took, and a `#` typed in that window listed session
-  /// A's issues into session B's prompt — one composer, one module cache, and
-  /// nothing tying the value to the question it answered.
-  const [resolved, setResolved] = useState<{ cwd: string; repo: string | null } | null>(null);
   /// Whether anything is on screen to protect. A first read has nothing to wait
   /// for, so it skips the debounce and the picker never opens blank.
   const showing = useRef(false);
 
   const github = tracker === "github";
+  const own = useGithubRepo(cwd, github && !picked);
 
   /// `null` where there is nothing to resolve, `undefined` while this
-  /// directory's answer is still out, and the slug once it lands. The three
-  /// draw differently and the middle one must never be mistaken for either.
-  const repo = !github || !cwd ? null : resolved?.cwd === cwd ? resolved.repo : undefined;
+  /// directory's answer is still out, and the slug once it lands.
+  const repo = !github ? null : picked ? picked.repo : own;
 
   /// Which tracker the rows below came from — the issues page's own guard, and
   /// the same reason for it. Rows outlive a keystroke on purpose, so the list
   /// does not blank under somebody mid-word; they must not outlive a *tracker*
   /// switch, where they are another workspace's issues sitting under the chips
-  /// that just moved.
-  const [shownTracker, setShownTracker] = useState(tracker);
+  /// that just moved. Nor a bot's repository pick, for the same reason.
+  const source = `${tracker}\n${repo ?? ""}`;
+  const [shownSource, setShownSource] = useState(source);
 
-  if (shownTracker !== tracker) {
-    setShownTracker(tracker);
+  if (shownSource !== source) {
+    setShownSource(source);
     setIssues([]);
     showing.current = false;
   }
-
-  // Asked once per directory and cached across mounts, so the answer is usually
-  // already in hand by the time a `#` is typed.
-  useEffect(() => {
-    if (!github || !cwd) return;
-
-    let live = true;
-    void repoFor(cwd).then((next) => live && setResolved({ cwd, repo: next }));
-
-    return () => {
-      live = false;
-    };
-  }, [github, cwd]);
 
   useEffect(() => {
     if (query === null) {

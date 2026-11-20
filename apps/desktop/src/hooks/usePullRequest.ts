@@ -4,7 +4,7 @@ import { invoke } from "@/lib/transport";
 
 import { noteMergeForStar } from "@/hooks/useStarPrompt";
 import { useWindowFocused } from "@/lib/focus";
-import { isSettling } from "@/lib/pr";
+import { asUnavailable, isSettling } from "@/lib/pr";
 import { branchChanged, inRepo, panelRead } from "@/lib/prSync";
 import type { MergeMethod, PrUnavailable, PullRequest } from "@/types/events";
 
@@ -75,16 +75,6 @@ branchChanged.subscribe(({ repo, branch }) => {
 });
 
 const isOpen = (pr: PullRequest) => pr.state === "OPEN";
-
-/// What `invoke` rejected with, as the backend meant it.
-///
-/// Tauri hands the serialized `Err` back, so this is already the right shape —
-/// except when the bridge itself failed, which arrives as a string and has no
-/// kind of its own.
-function asUnavailable(e: unknown): PrUnavailable {
-  if (e && typeof e === "object" && "kind" in e) return e as PrUnavailable;
-  return { kind: "other", detail: String(e) };
-}
 
 /// Whether the tab should exist at all for this session.
 ///

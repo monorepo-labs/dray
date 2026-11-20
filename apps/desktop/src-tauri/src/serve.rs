@@ -1967,6 +1967,14 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             permission_mode, fast, &cwd, branch.as_deref(), use_worktree,
             worktree_name.as_deref(), base_ref.as_deref(), is_new_session, sink,
         ).await;
+        start_pr_session(
+            session_id: String, prompt: String, harness: Harness, model: ModelId,
+            effort: Option<Effort>, permission_mode: ApprovalPolicy, fast: bool, cwd: String,
+            pr_head: crate::git::PrHead, pr_number: u64, bot: Option<String>,
+        ) => crate::start_pr_session(
+            session_id, prompt, harness, model, effort, permission_mode, fast, cwd,
+            pr_head, pr_number, bot, sink,
+        ).await;
         // The reader's own stop, settle and delete are noted for the task's bot
         // here, on the client wire: `dray` is how the bot does each itself.
         interrupt_session(session_id: String) => crate::bots::reader_did(
@@ -2149,7 +2157,10 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
 
         // GitHub and issues.
         prs_for_branch(cwd: String, branch: String) => github::prs_for_branch(cwd, branch).await;
-        pr_marks(cwd: String) => github::pr_marks(cwd).await;
+        pr_marks(cwd: String, listing: Option<bool>) => github::pr_marks(cwd, listing).await;
+        pr_search(owner: Option<String>, org: Option<bool>, filter: Option<github::PrSearchFilter>) =>
+            github::pr_search(owner, org, filter).await;
+        repo_checkouts(paths: Vec<String>, repos: Vec<String>) => crate::git::repo_checkouts(paths, repos).await;
         merge_pr(cwd: String, number: u64, method: MergeMethod, settle: Option<String>) =>
             github::merge_pr(cwd, number, method, settle, sink).await;
         delete_branch(cwd: String, number: u64) => github::delete_branch(cwd, number).await;

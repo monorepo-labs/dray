@@ -676,6 +676,12 @@ export type BranchList = {
  */
 current: string | null, branches: Array<string>, 
 /**
+ * Branches a remote has and this checkout holds no local copy of, by
+ * their own name (`feature/x`, not `origin/feature/x`). Only the worktree
+ * picker offers them: a tree can start on one, a checkout cannot.
+ */
+remoteBranches: Array<string>, 
+/**
  * What a `-w` worktree forks from, resolved the way the CLI resolves it.
  * Shown in place of the branch picker in worktree mode, where the picked
  * branch has no effect. `None` when the repo has no remote.
@@ -1654,7 +1660,13 @@ avatar: string | null, };
  */
 export type PrChecksState = "RUNNING" | "FAILING" | "CLEAR";
 
-export type PrComment = { author: string, 
+export type PrComment = { 
+/**
+ * GitHub's node id, unique across comments, reviews and review comments.
+ * What the pull requests page picks rows by: a review's `url` was the
+ * PR's own until reviews asked for theirs. Absent from an older server.
+ */
+id: string, author: string, 
 /**
  * The commenter's picture. `None` for an account that has none, which the
  * panel draws as their initial rather than as a gap.
@@ -1677,6 +1689,32 @@ resolved: boolean,
  * review thread or it is a new comment.
  */
 replies: Array<PrComment>, };
+
+/**
+ * A pull request's head as the pull requests page names it, for a session
+ * started on it: the branch, and the repository as [`repo_key`] spells it.
+ */
+export type PrHead = { branch: string, repo: string, };
+
+/**
+ * A pull request as the pull requests page lists it, beside its [`PrMark`].
+ */
+export type PrListing = { title: string, author: string, authorAvatar: string | null, updatedAt: string, additions: number, deletions: number, 
+/**
+ * Conversation comments plus inline threads, the two lists the panel
+ * draws as one timeline.
+ */
+commentCount: number, 
+/**
+ * The head branch lives in someone else's fork, so a session here can
+ * neither match it by name nor push to it.
+ */
+isCrossRepository: boolean, viewerDidAuthor: boolean, 
+/**
+ * A review is asked of the viewer and not yet given. Requests to a team
+ * the viewer is in are not counted.
+ */
+reviewRequested: boolean, };
 
 /**
  * One pull request, cut down to what a sidebar row can draw.
@@ -1721,7 +1759,12 @@ mergeable: string | null, mergeStateStatus: string | null,
  * `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; `None` where the
  * repo asks for no review, and on the merged half.
  */
-reviewDecision: string | null, };
+reviewDecision: string | null, 
+/**
+ * What the pull requests page draws on the row, on the open half alone.
+ * Absent from a server older than the page.
+ */
+listing?: PrListing, };
 
 /**
  * Which of the two connections a mark came from.
@@ -1732,6 +1775,20 @@ reviewDecision: string | null, };
  * closed-without-merging is not asked for.
  */
 export type PrMarkState = "OPEN" | "MERGED";
+
+/**
+ * What the pull requests page lists: the reader's open pull requests across
+ * GitHub, and the owners they can narrow it to.
+ */
+export type PrSearch = { 
+/**
+ * The reader's own login, first among the owners.
+ */
+viewer: string, 
+/**
+ * The organizations the reader belongs to, as GitHub lists them.
+ */
+orgs: Array<string>, prs: Array<SearchedPr>, };
 
 /**
  * Why there is nothing to show, when the reason is not "this branch has no PR".
@@ -1960,6 +2017,20 @@ export type SaveOutcome = "saved" | "stale";
  * kind a later build adds cannot fail an older build's read of the file.
  */
 export type Schedule = { everyMinutes?: number, at?: string, days: Array<number>, };
+
+/**
+ * One pull request the search found, with the repo it lives in.
+ */
+export type SearchedPr = { 
+/**
+ * `owner/name`, the slug `github:` keys and `gh --repo` take.
+ */
+repo: string, 
+/**
+ * The repo's owner is an organization, not a person: what the Owner menu
+ * searches it by (`org:` or `user:`), membership or not.
+ */
+ownerIsOrg: boolean, mark: PrMark, };
 
 /**
  * What a send did. The two fields are mutually exclusive in practice — a
