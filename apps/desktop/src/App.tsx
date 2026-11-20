@@ -4674,7 +4674,7 @@ function App() {
               useWorktree={useWorktree}
               onToggleWorktree={() => setUseWorktree((v) => !v)}
               worktreeBranch={worktreeBranch}
-              onSelectWorktreeBranch={setWorktreeBranch}
+              onSelectWorktreeBranch={(branch) => setWorktreeBranch(branch)}
               onOpenWorktreeBranches={refreshBranches}
               onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
               contextUsage={contextUsage}

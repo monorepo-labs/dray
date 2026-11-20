@@ -600,6 +600,7 @@ fn new(args: New) -> Result<(), String> {
         harness: args.harness,
         parent_session_id: parent_session_id(),
         base: args.base,
+        base_as_branch: false,
         title: args.title,
         issues: args.issues,
         // Absent rather than `false`, so leaving the flag off inherits the

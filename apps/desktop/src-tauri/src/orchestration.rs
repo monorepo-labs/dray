@@ -673,17 +673,18 @@ pub async fn answer_forward(forward: Forward, app: Sink) -> Response {
         }
         localize(&mut request, forward.origin.as_deref()).await?;
         // A session `--base` from the Mac arrives as its branch, which this
-        // checkout may hold only as the copy pushed to `origin`. A session id
-        // this index holds is left for `resolve_base`.
+        // checkout may hold only as the copy pushed to `origin`. Pinned to its
+        // commit so it forks: taken by name, the new task would commit onto the
+        // author's work. A branch the caller named is left for `resolve_base`'s
+        // rules, as is a session id this index holds.
         match &mut request {
-            Request::CreateSession(CreateSession { base: Some(base), project_path: Some(project), .. })
-            | Request::CreateDraft(CreateDraft { base: Some(base), project_path: Some(project), .. })
-                if store::get_session_index_item(base).await?.is_none() =>
-            {
+            Request::CreateSession(CreateSession {
+                base: Some(base), project_path: Some(project), base_as_branch: false, ..
+            })
+            | Request::CreateDraft(CreateDraft {
+                base: Some(base), project_path: Some(project), base_as_branch: false, ..
+            }) if store::get_session_index_item(base).await?.is_none() => {
                 let pushed = crate::git::pushed_branch(project, base).await?;
-                // Pinned to its commit, so it forks as it always has. A session's
-                // branch sent from the Mac reads here like any branch, and taken
-                // by name the new task would commit onto the author's work.
                 *base = crate::git::resolve_commit(project, &pushed).await.unwrap_or(pushed);
             }
             _ => {}
@@ -934,14 +935,14 @@ pub(crate) mod elsewhere {
                 if let Some(project) = &project {
                     refuse_bot_folder(project).await?;
                 }
-                create.base = branch_of(create.base.take(), project.as_deref()).await?;
+                (create.base, create.base_as_branch) = branch_of(create.base.take(), project.as_deref()).await?;
             }
             Request::CreateDraft(create) => {
                 let parent = parent_of(create.parent_session_id.as_deref()).await?;
                 forward.caller = caller(parent.as_ref()).await?;
                 create.project_path = project_from(create.project_path.as_deref(), parent.as_ref());
                 project = create.project_path.clone();
-                create.base = branch_of(create.base.take(), project.as_deref()).await?;
+                (create.base, create.base_as_branch) = branch_of(create.base.take(), project.as_deref()).await?;
             }
             Request::StartDraft(start) => {
                 forward.caller = caller(parent_of(start.parent_session_id.as_deref()).await?.as_ref()).await?;
@@ -978,13 +979,17 @@ pub(crate) mod elsewhere {
     }
 
     /// A `--base` naming a session here means its branch there, which the far
-    /// side can only find if that branch was pushed. A ref passes as written.
-    async fn branch_of(base: Option<String>, project: Option<&str>) -> Result<Option<String>> {
+    /// side can only find if that branch was pushed, and forks. A ref passes as
+    /// written, marked as one the far side may work on by name.
+    async fn branch_of(base: Option<String>, project: Option<&str>) -> Result<(Option<String>, bool)> {
         match (base, project) {
             (Some(base), Some(project)) if store::get_session_index_item(&base).await?.is_some() => {
-                Ok(Some(resolve_base(&base, project).await?.name().to_string()))
+                Ok((Some(resolve_base(&base, project).await?.name().to_string()), false))
             }
-            (base, _) => Ok(base),
+            (base, _) => {
+                let named = base.is_some();
+                Ok((base, named))
+            }
         }
     }
 

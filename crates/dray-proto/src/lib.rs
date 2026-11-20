@@ -632,6 +632,13 @@ pub struct CreateDraft {
     /// resolved when the draft starts rather than now.
     #[serde(default)]
     pub base: Option<String>,
+    /// Set by an app forwarding this to another machine where the caller named
+    /// a branch or ref rather than a session, so the far side may work on that
+    /// branch by name. Absent — an older app, or a session's branch — the far
+    /// side forks it, as every forward did before, since a session's branch
+    /// checked out by name would take commits onto the author's work.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub base_as_branch: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -888,6 +895,13 @@ pub struct CreateSession {
     /// `from` is its name before v10, still read from an older CLI.
     #[serde(default, alias = "from")]
     pub base: Option<String>,
+    /// Set by an app forwarding this to another machine where the caller named
+    /// a branch or ref rather than a session, so the far side may work on that
+    /// branch by name. Absent — an older app, or a session's branch — the far
+    /// side forks it, as every forward did before, since a session's branch
+    /// checked out by name would take commits onto the author's work.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub base_as_branch: bool,
     /// The session's title, set and locked at creation, so none is generated.
     /// An older app ignores it and generates one, which the caller can see.
     #[serde(default)]
@@ -1490,6 +1504,19 @@ mod tests {
         let Request::OnMachine(on) = back.request else { panic!("wrong variant") };
         assert_eq!(on.machine, "vps");
         assert!(matches!(*on.request, Request::SendMessage(ref s) if s.prompt == "hi"));
+    }
+
+    /// A forward that says nothing about how its base was named forks it, so an
+    /// older app's line reads as it always did, and only `true` goes on the wire.
+    #[test]
+    fn a_base_is_a_fork_unless_marked_a_branch() {
+        let old: CreateSession = serde_json::from_str(r#"{"prompt":"p","base":"feature"}"#).unwrap();
+        assert!(!old.base_as_branch);
+        let line = serde_json::to_string(&old).unwrap();
+        assert!(!line.contains("base_as_branch"), "{line}");
+        let named = CreateDraft { base: Some("feature".into()), base_as_branch: true, ..Default::default() };
+        let back: CreateDraft = serde_json::from_str(&serde_json::to_string(&named).unwrap()).unwrap();
+        assert!(back.base_as_branch);
     }
 
     #[test]

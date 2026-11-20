@@ -367,11 +367,18 @@ export function useSessions() {
     // has uncommitted changes. Null when nothing is pending.
     const [pendingBranch, setPendingBranch] = useState<string | null>(null);
     const [useWorktree, setUseWorktreeState] = useState(() => prefs.useWorktree);
-    // The branch a new worktree starts on, null for the default branch. Per
-    // project and never persisted, like `branch`.
-    const [worktreeBranch, setWorktreeBranch] = useState<string | null>(null);
+    // The branch a new worktree starts on, null for the default branch. Held
+    // with the project it was picked in, so a pick never follows the reader to
+    // another project however that project became the current one.
+    const [worktreePick, setWorktreePick] = useState<{ project: string | null; branch: string | null }>({
+      project: null,
+      branch: null,
+    });
     const projectPathRef = useRef(projectPath);
     projectPathRef.current = projectPath;
+    const worktreeBranch = worktreePick.project === projectPath ? worktreePick.branch : null;
+    const setWorktreeBranch = (branch: string | null, project: string | null = projectPathRef.current) =>
+      setWorktreePick({ project, branch });
     // The server New bot makes its bot on, while the dialog is open. It shares
     // the composer's picker, so the models offered must be that server's.
     const [botServer, setBotServer] = useState<ServerId | null>(null);
@@ -694,8 +701,6 @@ const retagSpace = async (from: string, to: string | null) => {
 // reachable, since a stale pick still sends: the picker draws "Attach project"
 // while `send_msg` runs happily in the project the reader just walked away from.
 const handleSelectProject = (path: string | null) => {
-  // A branch belongs to the project it was picked in.
-  if (path !== projectPathRef.current) setWorktreeBranch(null);
   setProjectPath(path);
   if (path === null) return;
   // Held here too, since this stamp is what picks a project's machine next time
@@ -1489,9 +1494,9 @@ const restoreDraftControls = (draft: Draft) => {
   restoreSessionControls({ ...draft, sessionId: draft.id });
   setUseWorktreeState(draft.useWorktree);
   handleSelectProject(draft.projectPath);
-  // After the project, whose switch clears it. A `dray draft new --base`
-  // session id shows here too: it is what the draft starts from.
-  setWorktreeBranch(draft.base ?? null);
+  // A `dray draft new --base` session id shows here too: it is what the
+  // draft starts from.
+  setWorktreeBranch(draft.base ?? null, draft.projectPath);
 };
 
 /// Answers whether the reader ended up on the session they asked for, which is
