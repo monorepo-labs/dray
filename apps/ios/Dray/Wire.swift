@@ -390,6 +390,26 @@ struct AgentEvent: Decodable, Identifiable {
     /// Set on a subagent's own events, which the chat does not draw.
     let subagent: JSON?
     let payload: Payload
+    /// A prompt's `baseline` or a turn's closing `head`: the snapshots the Changes screen diffs.
+    let tree: String?
+}
+
+extension AgentEvent {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Key.self)
+        id = try c.decode(String.self, forKey: "id")
+        sessionId = try c.decode(String.self, forKey: "sessionId")
+        ts = try c.decodeIfPresent(String.self, forKey: "ts")
+        harness = try c.decodeIfPresent(String.self, forKey: "harness")
+        subagent = try c.decodeIfPresent(JSON.self, forKey: "subagent")
+        payload = try c.decode(Payload.self, forKey: "payload")
+        let p = try? c.nestedContainer(keyedBy: Key.self, forKey: "payload")
+        tree = switch payload {
+        case .userMessage: try? p?.decodeIfPresent(String.self, forKey: "baseline")
+        case .turnCompleted: try? p?.decodeIfPresent(String.self, forKey: "head")
+        default: nil
+        }
+    }
 }
 
 struct PermissionOption: Decodable, Hashable {

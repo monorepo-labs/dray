@@ -67,6 +67,13 @@ phone reads and drives it over the same WebSocket the desktop uses
   it lands; it stays shut while checks run or fail. Mark ready, reopen.
   Hidden when the branch has none. Reads and merges only: no comment, reply
   or close.
+- **Changes** (#1326), a button in the session's top bar pushing its own
+  screen: the last turn that wrote (the desktop's `changeRange`, over the
+  turns held), uncommitted work against HEAD, the whole branch from the
+  parent of its oldest own commit (`log_branch_commits`) to its tip, and the
+  history, a commit opening its own files. Every file opens a unified diff
+  built on the phone from `file_change`'s two sides, lines wrapping. Only
+  calls `dray-serve` has had from the start. Reads only, like the repo view.
 - **Dictation**, transcribed on the Mac or on the phone: the phone records a
   16kHz mono WAV, then either uploads it through `POST /upload` and calls
   `transcribe_upload` — only the Mac's server has that command, and its

@@ -176,6 +176,7 @@ struct TranscriptView: View {
         .modifier(LocalServersButton(key: key, shown: bot == nil))
         .task { await open() }
         .onChange(of: chatMark) { settleUnread() }
+        .changesButton(key, shown: bot == nil)
         .prPanel(key)
         .sheet(isPresented: $showingTasks) {
             BotTasksSheet(server: key.server, tasks: botTasks, runs: runKeys(bot)) { openTask?($0) }
