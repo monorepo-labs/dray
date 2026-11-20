@@ -14,6 +14,17 @@ final class ChangesTests: XCTestCase {
         XCTAssertEqual(unifiedDiff(old: "same", new: "same"), [])
     }
 
+    /// The desktop's picks for the same paths, each an asset the catalog holds.
+    func testFileIconsMatchTheDesktop() {
+        let cases = [("src/main.ts", false, "fi-typescript"), ("package.json", false, "fi-nodejs"),
+                     ("README.md", false, "fi-readme"), ("a/b.swift", false, "fi-swift"), ("x.unknownext", false, "fi-file"),
+                     ("apps/src", true, "fi-folder-src"), ("Dray", true, "fi-folder")]
+        for (path, folder, want) in cases {
+            XCTAssertEqual(FileIcons.name(path, folder: folder), want, path)
+            XCTAssertNotNil(UIImage(named: want), want)
+        }
+    }
+
     private func event(_ id: String, _ payload: String) throws -> AgentEvent {
         try JSONDecoder().decode(AgentEvent.self, from: Data(#"{"id":"\#(id)","sessionId":"s","payload":\#(payload)}"#.utf8))
     }

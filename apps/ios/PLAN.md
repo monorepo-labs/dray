@@ -71,7 +71,9 @@ phone reads and drives it over the same WebSocket the desktop uses
   screen: the last turn that wrote (the desktop's `changeRange`, over the
   turns held), uncommitted work against HEAD, the whole branch from the
   parent of its oldest own commit (`log_branch_commits`) to its tip, and the
-  history, a commit opening its own files. Every file opens a unified diff
+  history, a commit opening its own files. Files group under their folder,
+  each with the desktop's Material glyph (`scripts/file_icons.py` copies the
+  set and its lookup from `apps/desktop`). Every file opens a unified diff
   built on the phone from `file_change`'s two sides, lines wrapping. Only
   calls `dray-serve` has had from the start. Reads only, like the repo view.
 - **Dictation**, transcribed on the Mac or on the phone: the phone records a

@@ -281,27 +281,34 @@ private struct ChangeList: View {
         .refreshable { await load() }
     }
 
+    /// One group per folder, the folder's glyph and path over its files: root files first, then folders by path.
     private func files(_ set: ChangeSet) -> some View {
-        List {
-            Section {
-                ForEach(set.files, id: \.self) { file in
-                    NavigationLink {
-                        DiffScreen(key: key, base: set.base, head: set.head, file: file)
-                    } label: {
-                        FileRow(file: file)
+        var byDir: [String: [ChangedFile]] = [:]
+        for f in set.files { byDir[splitPath(f.path).dir, default: []].append(f) }
+        let dirs = byDir.keys.sorted { $0.isEmpty != $1.isEmpty ? $0.isEmpty : $0 < $1 }
+        return List {
+            ForEach(Array(dirs.enumerated()), id: \.element) { i, dir in
+                Section {
+                    ForEach(byDir[dir] ?? [], id: \.self) { file in
+                        NavigationLink {
+                            DiffScreen(key: key, base: set.base, head: set.head, file: file)
+                        } label: {
+                            FileRow(file: file)
+                        }
+                        .listRowBackground(Theme.card)
                     }
-                    .listRowBackground(Theme.card)
-                }
-            } header: {
-                VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    if let note {
-                        Text(note).font(Theme.Font.subhead).foregroundStyle(Theme.text).textCase(nil)
+                } header: {
+                    VStack(alignment: .leading, spacing: Theme.Space.m) {
+                        if i == 0 { summary(set) }
+                        if !dir.isEmpty {
+                            HStack(spacing: Theme.Space.s) {
+                                FileIcon(path: dir, folder: true)
+                                Text(dir).lineLimit(1).truncationMode(.head)
+                            }
+                            .font(Theme.Font.footnote)
+                            .foregroundStyle(Theme.secondary)
+                        }
                     }
-                    HStack(spacing: 6) {
-                        Text("\(set.files.count) \(set.files.count == 1 ? "file" : "files")").foregroundStyle(Theme.secondary)
-                        Counts(added: set.added, removed: set.removed)
-                    }
-                    .font(Theme.Font.footnote)
                     .textCase(nil)
                 }
             }
@@ -309,6 +316,19 @@ private struct ChangeList: View {
         .listStyle(.insetGrouped)
         .themedList()
         .refreshable { await load() }
+    }
+
+    private func summary(_ set: ChangeSet) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            if let note {
+                Text(note).font(Theme.Font.subhead).foregroundStyle(Theme.text)
+            }
+            HStack(spacing: 6) {
+                Text("\(set.files.count) \(set.files.count == 1 ? "file" : "files")").foregroundStyle(Theme.secondary)
+                Counts(added: set.added, removed: set.removed)
+            }
+            .font(Theme.Font.footnote)
+        }
     }
 }
 
@@ -325,23 +345,22 @@ private struct Counts: View {
     }
 }
 
-/// A file's name at full contrast, its folder receding, its counts at the end.
+/// A file's type glyph and name, its counts at the end. Its folder is the group's header.
 private struct FileRow: View {
     let file: ChangedFile
 
     var body: some View {
-        let (dir, name) = splitPath(file.path)
         HStack(spacing: Theme.Space.m) {
+            FileIcon(path: file.path)
             VStack(alignment: .leading, spacing: 2) {
-                Text(name)
+                Text(splitPath(file.path).name)
                     .font(Theme.Font.body)
                     .foregroundStyle(file.status == "deleted" ? Theme.secondary : Theme.text)
                     .strikethrough(file.status == "deleted")
                     .lineLimit(1)
                     .truncationMode(.middle)
-                let place = file.oldPath.map { "from \($0)" } ?? dir
-                if !place.isEmpty {
-                    Text(place).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
+                if let old = file.oldPath {
+                    Text("from \(old)").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                         .lineLimit(1).truncationMode(.head)
                 }
             }
@@ -358,6 +377,45 @@ private struct FileRow: View {
             .font(Theme.Font.footnote)
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// The desktop's `FileIcon`: the Material glyph for a file's type or a folder's
+/// name, full colour, from the set `scripts/file_icons.py` copies in.
+struct FileIcon: View {
+    let path: String
+    var folder = false
+
+    var body: some View {
+        Image(FileIcons.name(path, folder: folder)).resizable().scaledToFit().frame(width: 16, height: 16)
+            .accessibilityHidden(true)
+    }
+}
+
+/// `vscode-material-icons`' lookup, over its map as `file-icons.json` holds it.
+enum FileIcons {
+    private struct Map: Decodable {
+        let fileNames: [String: String]
+        let fileExtensions: [String: String]
+        let folderNames: [String: String]
+    }
+
+    private static let map: Map? = Bundle.main.url(forResource: "file-icons", withExtension: "json")
+        .flatMap { try? JSONDecoder().decode(Map.self, from: Data(contentsOf: $0)) }
+
+    /// The asset's name. Matched as the package matches: whole name, then
+    /// lowercased, then everything after the first dot, then after the last,
+    /// then the three it names by hand, since the map leaves them to VS Code's language ids.
+    static func name(_ path: String, folder: Bool = false) -> String {
+        let base = path.split(separator: "/").last.map(String.init) ?? path
+        guard let map else { return folder ? "fi-folder" : "fi-file" }
+        if folder { return "fi-" + (map.folderNames[base] ?? map.folderNames[base.lowercased()] ?? "folder") }
+        let suffix = base.firstIndex(of: ".").map { String(base[base.index(after: $0)...]) } ?? base
+        let ext = base.lastIndex(of: ".").map { String(base[base.index(after: $0)...]) } ?? base
+        let byHand = base.hasSuffix(".html") ? "html" : base.hasSuffix(".ts") ? "typescript"
+            : base.hasSuffix(".js") ? "javascript" : nil
+        return "fi-" + (map.fileNames[base] ?? map.fileNames[base.lowercased()] ?? map.fileExtensions[suffix]
+            ?? map.fileExtensions[ext] ?? byHand ?? "file")
     }
 }
 
@@ -543,9 +601,12 @@ private struct DiffScreen: View {
         let digits = String(rows.reduce(0) { if case .line(_, let n, _) = $1 { max($0, n) } else { $0 } }).count
         return ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text(file.oldPath.map { "\($0) → \(file.path)" } ?? file.path)
-                    .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
-                    .padding(.horizontal, Theme.Space.l).padding(.bottom, Theme.Space.m)
+                HStack(spacing: Theme.Space.s) {
+                    FileIcon(path: file.path)
+                    Text(file.oldPath.map { "\($0) → \(file.path)" } ?? file.path)
+                        .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
+                }
+                .padding(.horizontal, Theme.Space.l).padding(.bottom, Theme.Space.m)
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(rows.indices, id: \.self) { DiffLine(row: rows[$0], digits: digits) }
                 }

@@ -1,0 +1,12 @@
+{
+  "images": [
+    {
+      "filename": "vue.svg",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  }
+}

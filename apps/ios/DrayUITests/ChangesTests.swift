@@ -25,6 +25,10 @@ final class ChangesTests: XCTestCase {
         row.tap()
         let button = app.buttons["Changes"]
         XCTAssertTrue(button.waitForExistence(timeout: 20), "no Changes button")
+        // Under `pr_fixture_proxy.py`, a `pr-ready` repo has a PR, so the bar holds every button.
+        if env["DRAY_PR"] != nil {
+            XCTAssertTrue(app.buttons["Pull request"].waitForExistence(timeout: 20), "no PR button")
+        }
         sleep(3)
         snap(app, "01-top-bar")
         button.tap()
