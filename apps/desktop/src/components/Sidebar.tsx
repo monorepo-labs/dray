@@ -2459,6 +2459,7 @@ export function RowMenu({
   onSetAside,
   onDelete,
   onDetach,
+  detachLabel = "Detach from parent",
   onMarkUnread,
   onSettle,
   pin,
@@ -2476,6 +2477,8 @@ export function RowMenu({
   /// a disabled item on every row in the list would be noise rather than a
   /// promise of something coming.
   onDetach?: () => void;
+  /// What the parent is called, where "parent" undersells it: a bot.
+  detachLabel?: string;
   /// Absent where the mark would say nothing: a settled session is a history
   /// row with no Completed run to rejoin, and one already unread or mid-turn
   /// has nothing to take back.
@@ -2621,7 +2624,7 @@ export function RowMenu({
             {onDetach && (
               <ContextMenuItem className="text-ui" onSelect={onDetach}>
                 <Unlink />
-                Detach from parent
+                {detachLabel}
               </ContextMenuItem>
             )}
 

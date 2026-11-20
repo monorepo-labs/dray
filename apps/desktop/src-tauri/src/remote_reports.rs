@@ -110,6 +110,17 @@ pub async fn owed_tasks() -> Vec<String> {
     outbox.owed
 }
 
+/// Stops `child` reporting to its bot, for a detach: its waiting reports and
+/// acts go, and the bot's server, finding it no longer owed, stops collecting.
+pub async fn disown(child: &str) -> anyhow::Result<()> {
+    let _guard = OUTBOX.lock().await;
+    let mut outbox: Outbox = store::read_json(&outbox_path().await?).await?;
+    if outbox.disown(child) {
+        save_outbox(&outbox).await?;
+    }
+    Ok(())
+}
+
 /// How long a report waits for collecting. A bot's server that removed this
 /// machine, or never came back, says nothing, so nothing else clears its share.
 const KEEP_FOR: u64 = 7 * 24 * 60 * 60;
@@ -208,6 +219,15 @@ impl Outbox {
         self.pending.retain(|r| !gone.contains(&r.child));
         let reports = self.pending.iter().filter(|r| children.contains(&r.child)).cloned().collect();
         Taken { reports, gone, facts: None, acts }
+    }
+
+    /// Answers whether anything went.
+    fn disown(&mut self, child: &str) -> bool {
+        let before = (self.owed.len(), self.pending.len(), self.acts.len());
+        self.owed.retain(|c| c != child);
+        self.pending.retain(|r| r.child != child);
+        self.acts.retain(|a| a.child != child);
+        (self.owed.len(), self.pending.len(), self.acts.len()) != before
     }
 
     /// Drops reports older than [`KEEP_FOR`], read off their v7 ids.
@@ -664,6 +684,20 @@ mod tests {
         assert_eq!(ids(&taken), ["2"]);
         assert_eq!(outbox.owed, ["b"]);
         assert_eq!(outbox.pending, [report("2", "b")]);
+    }
+
+    /// A detached task is the reader's: what it had waiting goes, and the next
+    /// collect calls it gone so the bot's server stops asking.
+    #[test]
+    fn a_detached_task_is_gone_with_its_reports_and_acts() {
+        let act = KeptAct { id: "3".into(), child: "a".into(), task: "a".into(), title: "Task".into(), text: "settled".into(), merged: None };
+        let mut outbox = Outbox { owed: vec!["a".into(), "b".into()], pending: vec![report("1", "a"), report("2", "b")], acts: vec![act] };
+        assert!(outbox.disown("a"));
+        assert!(!outbox.disown("a"));
+        let taken = outbox.take(&["a".into(), "b".into()], &[], &[], &["a".into(), "b".into()]);
+        assert_eq!(taken.gone, ["a"]);
+        assert_eq!(ids(&taken), ["2"]);
+        assert!(taken.acts.is_empty());
     }
 
     /// The bot's chat was settled: the task owes nothing more and its waiting
