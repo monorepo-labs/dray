@@ -1572,14 +1572,16 @@ pub async fn pushed_branch(cwd: &str, branch: &str) -> Result<String> {
     if resolve_commit(cwd, &remote).await.is_some() {
         return Ok(remote);
     }
-    // A tag, which a fetch brings in under its own name only when its commit
-    // was new here; otherwise it is in FETCH_HEAD alone, so its commit is used.
-    match resolve_commit(cwd, branch).await {
-        Some(_) => Ok(branch.to_string()),
-        None => resolve_commit(cwd, "FETCH_HEAD")
-            .await
-            .with_context(|| format!("fetched {branch} from origin, but it names no commit")),
+    if resolve_commit(cwd, branch).await.is_some() {
+        return Ok(branch.to_string());
     }
+    // A tag on a commit already here is left in FETCH_HEAD alone, which any
+    // other fetch in this repo can overwrite, so it is fetched under its name.
+    let refspec = format!("+refs/tags/{branch}:refs/tags/{branch}");
+    exec(cwd, &[], &["fetch", "-q", "--no-tags", "origin", &refspec])
+        .await
+        .with_context(|| format!("fetched {branch} from origin, but it names no commit"))?;
+    Ok(branch.to_string())
 }
 
 /// The commit `base` names, or `None` when it names nothing in this repo.
@@ -3367,11 +3369,11 @@ mod tests {
         run(at, &["push", "-q", "origin", "v-elsewhere"]).await.unwrap();
         run(at, &["tag", "-d", "v-elsewhere"]).await.unwrap();
         // A tag only the remote has is no branch. Its commit is already here,
-        // so the fetch leaves it in FETCH_HEAD alone, and that commit forks.
+        // which a plain fetch would leave in FETCH_HEAD alone; it lands by name.
         assert!(!is_branch(at, "v-elsewhere").await);
-        let fetched = pushed_branch(at, "v-elsewhere").await.unwrap();
-        assert_eq!(resolve_commit(at, &fetched).await, resolve_commit(at, "HEAD").await);
-        assert!(!is_branch(at, &fetched).await);
+        assert_eq!(pushed_branch(at, "v-elsewhere").await.unwrap(), "v-elsewhere");
+        assert_eq!(resolve_commit(at, "v-elsewhere").await, resolve_commit(at, "HEAD").await);
+        assert!(!is_branch(at, "v-elsewhere").await, "a tag forks");
         let here = current_branch(at).await.unwrap();
         assert_eq!(pushed_branch(at, &here).await.unwrap(), here);
 
