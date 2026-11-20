@@ -1470,9 +1470,15 @@ pub async fn worktree_disposition(worktree_path: &str, project_path: &str) -> Wo
         )
         .await
         .unwrap_or(0),
-        // A detached HEAD has no branch to exclude, and nothing here can be
-        // deleted along with it either.
-        None => 0,
+        // A detached HEAD — a second task on a PR's branch — has no branch to
+        // exclude, and its commits are on no ref at all: deleting the tree is
+        // what would lose them.
+        None => git_count(
+            worktree_path,
+            &["rev-list", "--count", "HEAD", "--not", "--branches", "--remotes", "--tags", "--"],
+        )
+        .await
+        .unwrap_or(0),
     };
 
     WorktreeDisposition {
@@ -1697,6 +1703,12 @@ pub async fn create_worktree_on_branch(project_path: &str, name: &str, head: &Pr
     let local = format!("refs/heads/{branch}");
     let has_local = resolve_commit(project_path, &local).await.is_some();
     let ahead = has_local && git(project_path, &["merge-base", "--is-ancestor", &local, &tracking]).await.is_none();
+    // Strictly ahead: the PR's current head is under the local branch. A
+    // rebased or force-pushed PR leaves the two diverged, and carrying the
+    // old local on would put the agent on commits the PR no longer has.
+    let carry = ahead
+        && head.ours
+        && git(project_path, &["merge-base", "--is-ancestor", &tracking, &local]).await.is_some();
 
     // One branch, one tree: git checks a branch out in a single place. A tree
     // already holding it — another task's, live or settled with its tree kept
@@ -1704,14 +1716,14 @@ pub async fn create_worktree_on_branch(project_path: &str, name: &str, head: &Pr
     // `HEAD:<branch>`. Its tip is the local branch where an earlier task of
     // ours left work there the remote has not seen.
     if branch_checked_out(project_path, branch).await {
-        let tip = if ahead && head.ours { local.as_str() } else { tracking.as_str() };
+        let tip = if carry { local.as_str() } else { tracking.as_str() };
         exec(project_path, &[], &["worktree", "add", "--detach", "--end-of-options", &path, tip]).await?;
         return Ok(PrTree::Detached);
     }
 
     if ahead {
         // An earlier task's unpushed work: carried on from, by name.
-        if head.ours {
+        if carry {
             exec(project_path, &[], &["worktree", "add", "--end-of-options", &path, branch]).await?;
             let _ = git(project_path, &["branch", "--set-upstream-to", &tracking, "--end-of-options", branch]).await;
             return Ok(PrTree::OnBranch);
@@ -3253,6 +3265,13 @@ mod tests {
         assert_eq!(made, PrTree::Detached);
         assert_eq!(current_branch(&second).await, None);
         assert_eq!(git_line(&second, &["rev-parse", "HEAD"]).await, git_line(at, &["rev-parse", "upstream/feature/pr"]).await);
+        // A commit made on the detached tree is on no ref, so deleting the tree
+        // must warn about it.
+        assert_eq!(worktree_disposition(&second, at).await.unpushed_commits, 0);
+        fs::write(Path::new(&second).join("detached.txt"), "x\n").await.unwrap();
+        run(&second, &["add", "detached.txt"]).await.unwrap();
+        run(&second, &["commit", "-qm", "detached"]).await.unwrap();
+        assert_eq!(worktree_disposition(&second, at).await.unpushed_commits, 1);
         run(at, &["worktree", "remove", "--force", &second]).await.unwrap();
 
         // An earlier task's unpushed commit, its tree gone.
@@ -3277,7 +3296,21 @@ mod tests {
             Some("upstream/feature/pr")
         );
 
-        run(at, &["worktree", "remove", "--force", &resumed]).await.ok();
+        run(at, &["worktree", "remove", "--force", &resumed]).await.unwrap();
+
+        // The PR rebased under it: local and remote diverged, so even a branch
+        // of ours is refused rather than carried on from stale commits.
+        let other = std::env::temp_dir().join(format!("dray-rebase-{}", Uuid::now_v7()));
+        run(at, &["worktree", "add", "-q", "--detach", other.to_str().unwrap(), "upstream/feature/pr"]).await.unwrap();
+        let o = other.to_str().unwrap();
+        fs::write(other.join("rebased.txt"), "y\n").await.unwrap();
+        run(o, &["add", "rebased.txt"]).await.unwrap();
+        run(o, &["commit", "-qm", "rebased"]).await.unwrap();
+        run(o, &["push", "-q", "-f", "upstream", "HEAD:refs/heads/feature/pr"]).await.unwrap();
+        run(at, &["worktree", "remove", "--force", o]).await.unwrap();
+        let err = create_worktree_on_branch(at, "pr-5", &head(&upstream_key, true)).await.unwrap_err();
+        assert!(err.to_string().contains("has commits"), "{err}");
+
         fs::remove_dir_all(&dir).await.ok();
         fs::remove_dir_all(&bare).await.ok();
     }

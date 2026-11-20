@@ -13,6 +13,11 @@ const POLL_MS = 60_000;
 /// to an owner draws at once and reads again only past the poll interval.
 const cache = new Map<string, { answer: PrSearch; at: number }>();
 
+/// Whether `who` is one of the reader's orgs, as any answer so far named
+/// them, so a pick searches `org:` for an org and `user:` for a person.
+const orgOf = (who: string | null) =>
+  !!who && [...cache.values()].some(({ answer }) => answer.orgs.some((o) => o.toLowerCase() === who.toLowerCase()));
+
 /// The pull requests page's list across GitHub: one `pr_search` per read,
 /// through This Mac's `gh`, narrowed to `owner` when one is picked. Reads only
 /// while `active`, and polls only while the window has focus.
@@ -30,7 +35,7 @@ export function usePrSearch(active: boolean, owner: string | null) {
       if (!force && kept && Date.now() - kept.at < POLL_MS) return;
       setLoading(true);
       try {
-        const found = await invoke<PrSearch>("pr_search", { owner }, LOCAL);
+        const found = await invoke<PrSearch>("pr_search", { owner, org: orgOf(owner) }, LOCAL);
         cache.set(key, { answer: found, at: Date.now() });
         setAnswer(found);
         setError(null);

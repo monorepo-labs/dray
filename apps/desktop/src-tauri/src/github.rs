@@ -1429,25 +1429,29 @@ struct RawNamed {
 }
 
 /// The reader's open pull requests across GitHub; `owner` narrows them to one
-/// organization (`org:`) or to the reader's own account (`user:`).
+/// organization (`org:`) or to a person's account (`user:`). `org` says which
+/// the owner is — the caller knows the reader's orgs from an earlier answer;
+/// GitHub's search drops every PR when the qualifier names the wrong kind.
+/// Without it, only the reader's own login reads as a person.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn pr_search(owner: Option<String>) -> Result<PrSearch, PrUnavailable> {
-    pr_search_inner(owner.as_deref()).await.map_err(unavailable)
+pub async fn pr_search(owner: Option<String>, org: Option<bool>) -> Result<PrSearch, PrUnavailable> {
+    pr_search_inner(owner.as_deref(), org).await.map_err(unavailable)
 }
 
-async fn pr_search_inner(owner: Option<&str>) -> Result<PrSearch, String> {
+async fn pr_search_inner(owner: Option<&str>, org: Option<bool>) -> Result<PrSearch, String> {
     let home = std::env::home_dir().ok_or("no home directory")?;
     let home = home.to_str().ok_or("home directory is not UTF-8")?;
     // A login is letters, digits and dashes; anything else is no owner GitHub
     // has, and would be search syntax smuggled into the query.
     let owner = owner.filter(|o| !o.is_empty() && o.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
-    let viewer = match owner {
-        Some(_) => gh(home, &["api", "user", "--jq", ".login"]).await?.trim().to_string(),
-        None => String::new(),
+    let is_org = match (owner, org) {
+        (Some(_), Some(org)) => org,
+        (Some(o), None) => !gh(home, &["api", "user", "--jq", ".login"]).await?.trim().eq_ignore_ascii_case(o),
+        (None, _) => false,
     };
     let scope = match owner {
-        Some(o) if o.eq_ignore_ascii_case(&viewer) => format!(" user:{o}"),
-        Some(o) => format!(" org:{o}"),
+        Some(o) if is_org => format!(" org:{o}"),
+        Some(o) => format!(" user:{o}"),
         None => String::new(),
     };
     let q = format!("q=is:pr is:open involves:@me archived:false sort:updated-desc{scope}");

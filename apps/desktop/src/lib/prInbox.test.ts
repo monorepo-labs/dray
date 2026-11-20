@@ -274,6 +274,11 @@ describe("plainComment", () => {
     expect(out).not.toMatch(/\n{3,}/);
   });
 
+  it("keeps code, and prose that only looks like a tag, as written", () => {
+    const body = "Use `Array<T>` here.\n\n```ts\nif (x < y && z > 0) return <b>;\n```\nOr Map<K, V> and a < b > c.";
+    expect(plainComment(body)).toBe(body);
+  });
+
   it("leaves a plain human comment as it was", () => {
     expect(plainComment("Use a `Set` here.\n\n> quoted")).toBe("Use a `Set` here.\n\n> quoted");
   });

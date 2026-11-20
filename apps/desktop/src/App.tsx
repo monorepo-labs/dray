@@ -1812,8 +1812,16 @@ function App() {
           server,
         );
         handleAttachProject(server, list);
-        const name = plan.kind === "clone" ? plan.slug.split("/").pop() : basename(plan.path);
-        const made = list.find((p) => basename(p.path) === name);
+        // By full path, never by folder name: the list is every project on
+        // that server, and two checkouts can share a name. An attach names its
+        // path; a clone is the one entry that server did not list before,
+        // else the one whose remote is the PR's repo.
+        const before = new Set(projects.filter((p) => serverOfPath(p.path) === server).map((p) => p.path));
+        const made =
+          plan.kind === "attach"
+            ? list.find((p) => p.path === plan.path)
+            : (list.find((p) => !before.has(p.path) && p.remote === row.repo) ??
+              list.find((p) => p.remote === row.repo));
         if (!made) return { error: "The checkout was made but is not in the project list." };
         projectPath = made.path;
         void prMarks.refreshRepos([projectPath]);

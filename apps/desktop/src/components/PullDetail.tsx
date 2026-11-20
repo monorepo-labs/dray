@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChevronDown, ChevronRight, GitBranch } from "lucide-react";
 
@@ -108,7 +108,7 @@ export default function PullDetail({
   const writable = !row.listing.isCrossRepository;
   // Starting needs no words: the PR and its comments are a task on their own.
   const canStart = !!pr && writable && !starting;
-  const [picks, setPicks] = useStartPicks(sessions[0]);
+  const [picks, setPicks, repairPicks] = useStartPicks(sessions[0]);
 
   const start = async (bot: Bot | null) => {
     if (!canStart || !pr) return;
@@ -166,6 +166,7 @@ export default function PullDetail({
                 onMachine={setMachine}
                 picks={picks}
                 onPicks={setPicks}
+                onRepairPicks={repairPicks}
                 disabled={!canStart}
                 starting={starting}
                 cloning={cloning !== null}
@@ -305,6 +306,7 @@ function StartBox({
   onMachine,
   picks,
   onPicks,
+  onRepairPicks,
   disabled,
   starting,
   cloning,
@@ -318,6 +320,8 @@ function StartBox({
   onMachine: (path: string) => void;
   picks: PrPicks;
   onPicks: (picks: PrPicks) => void;
+  /// The picker's own repair of a stale pick, which is not the reader choosing.
+  onRepairPicks: (picks: PrPicks) => void;
   disabled: boolean;
   starting: boolean;
   cloning: boolean;
@@ -336,7 +340,7 @@ function StartBox({
   };
 
   return (
-    <div className="rounded-2xl border border-edge-surface bg-composer shadow-[var(--shadow-composer,var(--shadow-surface))]">
+    <div className="rounded-2xl bg-composer">
       {children(start)}
       {/* One row, never two: the pickers shrink and truncate rather than push
           the arrow onto a line of its own. */}
@@ -369,7 +373,7 @@ function StartBox({
         {/* The reused pickers keep their look; only their labels may shorten. */}
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden [&_button]:min-w-0 [&_button>span]:min-w-0 [&_button>span]:truncate">
           {toBot && bots.length > 1 && <BotMenu bots={bots} bot={bot} onPick={setBotId} />}
-          {!toBot && <TaskModelPicker server={server} picks={picks} onChange={onPicks} />}
+          {!toBot && <TaskModelPicker server={server} picks={picks} onChange={onPicks} onRepair={onRepairPicks} />}
           {/* The New Task page's own picker, over this repo's checkouts and a
               stand-in on each machine without one. */}
           {!toBot && <MachineSelector projects={machines} value={machine} onSelect={onMachine} />}
@@ -419,12 +423,17 @@ function BotMenu({ bots, bot, onPick }: { bots: Bot[]; bot: Bot; onPick: (id: st
 /// ones — never the selected session's, which the main composer mirrors.
 /// Always Auto: the pane offers no stance, and a stance carried over from a
 /// settled session or the composer is one the reader never saw here.
+///
+/// The index side holding that task can land after the pane mounts, so its
+/// picks are taken when it arrives — unless the reader has already picked,
+/// whose choice wins.
 function useStartPicks(latest: SessionIndexItem | undefined) {
-  return useState<PrPicks>(() => {
-    if (latest) {
-      const { harness, model, effort, fast } = latest;
-      return { harness, model, effort, permissionMode: "auto", fast };
-    }
+  const of = (item: SessionIndexItem): PrPicks => {
+    const { harness, model, effort, fast } = item;
+    return { harness, model, effort, permissionMode: "auto", fast };
+  };
+  const [picks, setPicks] = useState<PrPicks>(() => {
+    if (latest) return of(latest);
     const stored = readComposerPrefs();
     const model = rememberedModel(stored.modelByHarness, stored.harness);
     return {
@@ -435,6 +444,18 @@ function useStartPicks(latest: SessionIndexItem | undefined) {
       fast: stored.fast,
     };
   });
+  const [touched, setTouched] = useState(false);
+  const seededFrom = useRef(latest?.sessionId ?? null);
+  useEffect(() => {
+    if (!latest || touched || seededFrom.current === latest.sessionId) return;
+    seededFrom.current = latest.sessionId;
+    setPicks(of(latest));
+  }, [latest, touched]);
+  const pick = useCallback((next: PrPicks) => {
+    setTouched(true);
+    setPicks(next);
+  }, []);
+  return [picks, pick, setPicks] as const;
 }
 
 /// The New Task composer's own model picker, on the page's picks: the agent
@@ -444,10 +465,12 @@ function TaskModelPicker({
   server,
   picks,
   onChange,
+  onRepair,
 }: {
   server: ServerId;
   picks: PrPicks;
   onChange: (picks: PrPicks) => void;
+  onRepair: (picks: PrPicks) => void;
 }) {
   const [models, setModels] = useState<Model[]>([]);
   const [loading, setLoading] = useState(false);
@@ -472,8 +495,8 @@ function TaskModelPicker({
     const runs = models.find((m) => m.id === usableModel(models, picks.model, picks.harness));
     if (!runs) return;
     const effort = usableEffort(runs, picks.effort, "high");
-    if (runs.id !== picks.model || effort !== picks.effort) onChange({ ...picks, model: runs.id, effort });
-  }, [models, picks, onChange]);
+    if (runs.id !== picks.model || effort !== picks.effort) onRepair({ ...picks, model: runs.id, effort });
+  }, [models, picks, onRepair]);
 
   return (
     <ModelSelector
