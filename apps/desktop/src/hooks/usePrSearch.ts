@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useWindowFocused } from "@/lib/focus";
 import { asUnavailable } from "@/lib/pr";
@@ -36,6 +36,10 @@ export function usePrSearch(active: boolean, owner: string | null, filter: PrSea
   const [error, setError] = useState<PrUnavailable | null>(null);
   const [loading, setLoading] = useState(false);
   const focused = useWindowFocused();
+  // The search on screen now: an answer for an earlier filter or owner that
+  // lands late is cached under its own key and never drawn here.
+  const current = useRef(key);
+  current.current = key;
 
   const read = useCallback(
     async (force: boolean) => {
@@ -46,12 +50,13 @@ export function usePrSearch(active: boolean, owner: string | null, filter: PrSea
       try {
         const found = await invoke<PrSearch>("pr_search", { owner, org: orgOf(owner), filter }, LOCAL);
         cache.set(key, { answer: found, at: Date.now() });
+        if (current.current !== key) return;
         setAnswer(found);
         setError(null);
       } catch (e) {
-        setError(asUnavailable(e));
+        if (current.current === key) setError(asUnavailable(e));
       } finally {
-        setLoading(false);
+        if (current.current === key) setLoading(false);
       }
     },
     [key, owner, filter],

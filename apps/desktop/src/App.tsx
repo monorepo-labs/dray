@@ -1617,6 +1617,9 @@ function App() {
   // git remotes, so a row reads and starts through the checkout where there is
   // one and through its `github:` slug, cloning on start, where there is none.
   const [searchCheckouts, setSearchCheckouts] = useState<Record<string, string>>({});
+  // Which searched repos a project of this space checks out, matched the same
+  // way: by any remote, through an SSH host alias, not `origin`'s spelling.
+  const [spaceCheckouts, setSpaceCheckouts] = useState<string[]>([]);
   const searchRepoKey = [...new Set((prSearch.answer?.prs ?? []).map((p) => marksRepo([p.mark]) ?? ""))].filter(Boolean).sort().join("\n");
   const localProjectKey = projects.filter((p) => serverOfPath(p.path) === LOCAL).map((p) => p.path).join("\n");
   useEffect(() => {
@@ -1629,6 +1632,17 @@ function App() {
       gone = true;
     };
   }, [searchRepoKey, localProjectKey]);
+  const localSpaceKey = spaceProjects.filter((p) => serverOfPath(p.path) === LOCAL).map((p) => p.path).join("\n");
+  useEffect(() => {
+    if (!searchRepoKey || !localSpaceKey) return setSpaceCheckouts([]);
+    let gone = false;
+    invoke<Record<string, string>>("repo_checkouts", { paths: localSpaceKey.split("\n"), repos: searchRepoKey.split("\n") }, LOCAL)
+      .then((found) => !gone && setSpaceCheckouts(Object.keys(found)))
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
+  }, [searchRepoKey, localSpaceKey]);
   // Who "Involving me" narrows to: the reader, every owner a search has turned
   // up — a personal repo of someone else's included — then the reader's orgs.
   // Gathered, never dropped, so narrowing to one keeps the others on offer.
@@ -1648,6 +1662,8 @@ function App() {
   const spaceRepoKey = [
     ...new Set(
       [
+        ...spaceCheckouts,
+        // Another machine's checkout is known by its recorded remote alone.
         ...spaceProjects.map((p) => p.remote),
         ...(botRepoKey ? botRepoKey.split("\n") : []).map((key) => {
           const slug = slugOf(key);
@@ -1669,7 +1685,12 @@ function App() {
   }, [pullsSearch, pullsScope, spaceRepoKey, pullsKeys, prMarks.marksIn, prSearch.answer, searchCheckouts]);
   const pickedRow =
     (pickedPr && pullRows.find((r) => r.mark.url === pickedPr.mark.url)) ??
-    (pickedPr && (pullsSearch || pullsKeys.includes(pickedPr.key)) ? pickedPr : null);
+    (pickedPr &&
+    (pullsSearch
+      ? pullsScope === "all" || spaceRepoKey.split("\n").includes(pickedPr.repo)
+      : pullsKeys.includes(pickedPr.key))
+      ? pickedPr
+      : null);
   const pickedPrData = usePullRequest(
     pickedRow?.key ?? "",
     pickedRow?.mark.headRefName ?? null,
