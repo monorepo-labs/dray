@@ -2,7 +2,8 @@
 /// session each belongs to, and what a message to that session says. Pure, so
 /// every one of them is tested; the page and `App` only draw and wire them.
 import { marksRepo, mergeVerdict, prRepoSlug, sessionBranch, stripBotMarkers } from "@/lib/pr";
-import type { ApprovalPolicy, Effort, Harness, ModelId, PrComment, PrListing, PrMark, PullRequest, SessionIndexItem } from "@/types/events";
+import type { ServerId } from "@/lib/transport";
+import type { ApprovalPolicy, Effort, Harness, ModelId, Project, PrComment, PrListing, PrMark, PullRequest, SessionIndexItem } from "@/types/events";
 
 /// One open pull request on the page. `key` is the marks key it was read
 /// through — a checkout's path, or `github:owner/name` — which is also where the
@@ -237,4 +238,9 @@ export type PrPicks = {
 export type PrCheckout =
   | { kind: "here"; path: string }
   | { kind: "attach"; path: string }
-  | { kind: "clone"; slug: string };
+  | { kind: "clone"; slug: string; server?: ServerId };
+
+/// Where Start Task can run a PR's task, for the machine picker: the repo's
+/// checkouts, and a stand-in at `~/dray/<name>` on each connected machine
+/// holding none, which a start there clones first. `initial` is the pick.
+export type PrMachines = { projects: Project[]; clones: string[]; initial: string };

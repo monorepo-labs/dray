@@ -1,6 +1,6 @@
 import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { invoke, listen, LOCAL, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
+import { invoke, listen, LOCAL, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { CircleDashed, Plus } from "lucide-react";
 import PrStateIcon from "@/components/PrStateIcon";
@@ -186,7 +186,7 @@ import { boatAsleep, restoreHeld } from "@/lib/boat";
 import { onCloud, setCloudFailure, useCloud, useCloudFailure, usePlacing } from "@/lib/cloud";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout, nextCheckout } from "@/lib/projectGroups";
-import { serverConnected, serverName, shownOffline, useServers } from "@/lib/servers";
+import { cloudServer, serverConnected, serverName, shownOffline, useServers } from "@/lib/servers";
 import { canTagFrom } from "@/lib/sessionTag";
 import { useReachableSessions } from "@/hooks/useReachableSessions";
 import AgentUpdateLine from "@/components/composer/AgentUpdateLine";
@@ -194,7 +194,7 @@ import { useAgentUpdates, useAutoUpdateAgents } from "@/hooks/useAgentUpdates";
 import { overwritesInPlace, turnRunningOn } from "@/lib/agentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import AutoContinueNotice from "@/components/composer/AutoContinueNotice";
-import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, PrMark, Project, SessionIndexItem, SessionSnapshot, WorktreeDisposition } from "@/types/events";
+import type { Attachment, Bot, BotPreview, CloneProgress, Harness, IssueRef, MergeMethod, PrMark, Project, SessionIndexItem, SessionSnapshot, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -210,7 +210,7 @@ import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { marksRepo, prBadgeCount, prRepoSlug, sessionBranch, slugKey, slugOf } from "@/lib/pr";
 import { usePrSearch } from "@/hooks/usePrSearch";
-import { inboxRows, sessionsForPr, type InboxRow, type PrCheckout, type PrPicks } from "@/lib/prInbox";
+import { inboxRows, sessionsForPr, type InboxRow, type PrCheckout, type PrMachines, type PrPicks } from "@/lib/prInbox";
 import type { PullsScope } from "@/components/PullsView";
 import { holdSettle } from "@/lib/heldFlags";
 import { confirmMerge, mergeBlock, readLogin, useMergeAccess } from "@/lib/mergeAccess";
@@ -1730,7 +1730,24 @@ function App() {
     return slug ? { kind: "clone", slug } : { kind: "attach", path: row.key };
   };
   /// Where a PR's task runs: its checkout's server, This Mac for a clone.
-  const prServer = (plan: PrCheckout) => (plan.kind === "clone" ? LOCAL : serverOfPath(plan.path));
+  const prServer = (plan: PrCheckout) => (plan.kind === "clone" ? (plan.server ?? LOCAL) : serverOfPath(plan.path));
+  /// The machines Start Task offers for a plain task: every checkout of the
+  /// PR's repo (its `remote`, git's own spelling of the repo), then a stand-in
+  /// on each connected machine with none, never a Dray Cloud one. The pick
+  /// starts on the checkout the PR would use anyway.
+  const prMachines = (row: InboxRow): PrMachines => {
+    const name = row.repo.split("/").pop() ?? row.repo;
+    const plan = prCheckoutPlan(row);
+    const real = projects.filter(
+      (p) => !cloudServer(serverOfPath(p.path)) && (p.remote === row.repo || p.path === row.key || (plan.kind !== "clone" && p.path === plan.path)),
+    );
+    const servers = [LOCAL, ...allServers.map((s) => s.id).filter((id) => id !== LOCAL && serverConnected(id) && !cloudServer(id))];
+    const clones = servers
+      .filter((server) => !real.some((p) => serverOfPath(p.path) === server))
+      .map((server): Project => ({ path: qualify(`/~/dray/${name}`, server), name, space: null, remote: row.repo, lastSelected: "" }));
+    const initial = plan.kind === "clone" ? (clones[0]?.path ?? "") : plan.path;
+    return { projects: [...real, ...clones], clones: clones.map((c) => c.path), initial };
+  };
   /// The bots a PR can go to: those on the server its task runs on, the only
   /// ones whose task can be made in that checkout.
   const botsForRow = (row: InboxRow) => {
@@ -1758,9 +1775,30 @@ function App() {
     prompt: string,
     picks: PrPicks,
     bot: Bot | null,
+    onCloning: (line: string | null) => void,
+    machine: string | null,
   ): Promise<{ started: SessionIndexItem } | { error: string }> => {
-    const plan = prCheckoutPlan(row);
+    // A plain task runs on the picked machine: its checkout, or a clone there.
+    const picked = machine ? prMachines(row) : null;
+    const slug = slugOf(row.key) ?? prRepoSlug(row.mark.url);
+    const plan: PrCheckout =
+      picked && machine && picked.clones.includes(machine) && slug
+        ? { kind: "clone", slug, server: serverOfPath(machine) }
+        : picked && machine && picked.projects.some((p) => p.path === machine)
+          ? { kind: "here", path: machine }
+          : prCheckoutPlan(row);
     const server = prServer(plan);
+    // git's own progress lines, while a clone runs, for the pane to show.
+    const listening =
+      plan.kind === "clone"
+        ? listen<CloneProgress>("clone_progress", ({ payload, server: from }) => {
+            // git's "Cloning into '<staging path>'" names a folder the reader never sees.
+            if (from === server && payload.slug === plan.slug && !payload.line.startsWith("Cloning into")) {
+              onCloning(payload.line);
+            }
+          })
+        : null;
+    if (plan.kind === "clone") onCloning("");
     // Attached or cloned only now, at the start, so opening a PR changes
     // nothing on disk; done before the duplicate check above could not see a
     // checkout it had to make.
@@ -1782,6 +1820,8 @@ function App() {
       }
     } catch (e) {
       const said = e instanceof Error ? e.message : String(e);
+      onCloning(null);
+      void listening?.then((unlisten) => unlisten());
       return {
         error:
           plan.kind === "clone"
@@ -1789,6 +1829,8 @@ function App() {
             : `Could not attach ${plan.path}: ${said}`,
       };
     }
+    onCloning(null);
+    void listening?.then((unlisten) => unlisten());
     try {
       const started = await invoke<SessionIndexItem>(
         "start_pr_session",
@@ -4312,7 +4354,10 @@ function App() {
                     server={prServer(prCheckoutPlan(pickedRow))}
                     checkout={prCheckoutPlan(pickedRow)}
                     onOpenSession={openPrSession}
-                    onStart={(prompt, picks, bot) => startPrSession(pickedRow, prompt, picks, bot)}
+                    machines={prMachines(pickedRow)}
+                    onStart={(prompt, picks, bot, onCloning, machine) =>
+                      startPrSession(pickedRow, prompt, picks, bot, onCloning, machine)
+                    }
                   />
                 </MountOnce>
               </TabBody>

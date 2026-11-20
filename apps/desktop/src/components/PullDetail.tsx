@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, GitBranch } from "lucide-react";
 import BotAvatar from "@/components/BotAvatar";
 import PrPanel, { CommentPickContext } from "@/components/PrPanel";
 import Segmented from "@/components/Segmented";
+import MachineSelector from "@/components/composer/MachineSelector";
 import ModelSelector from "@/components/composer/ModelSelector";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,10 +23,10 @@ import { useDraft } from "@/hooks/useDraft";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import type { usePullRequest } from "@/hooks/usePullRequest";
 import { rememberedModel, usableEffort, usableModel } from "@/lib/model";
-import { prPrompt, unresolvedKeys, type InboxRow, type PrCheckout, type PrPicks } from "@/lib/prInbox";
-import { invoke, type ServerId } from "@/lib/transport";
+import { prPrompt, unresolvedKeys, type InboxRow, type PrCheckout, type PrMachines, type PrPicks } from "@/lib/prInbox";
+import { invoke, serverOfPath, type ServerId } from "@/lib/transport";
 import { cn } from "@/lib/utils";
-import type { Bot, Model, SessionIndexItem } from "@/types/events";
+import type { Bot, Model, Project, SessionIndexItem } from "@/types/events";
 
 /// The picked pull request on the pull requests page: the PR panel's own rows,
 /// with a box on each comment, every task the PR has had, newest first, and
@@ -41,6 +42,7 @@ export default function PullDetail({
   botOf,
   server,
   checkout,
+  machines,
   onOpenSession,
   onStart,
 }: {
@@ -57,11 +59,18 @@ export default function PullDetail({
   /// What Start Task does about a checkout first, said under the box: nothing,
   /// attach a checkout already on disk, or clone the repo into `~/dray`.
   checkout: PrCheckout;
+  /// Where a plain task can run, for the machine picker.
+  machines: PrMachines;
   onOpenSession: (item: SessionIndexItem) => void;
+  /// `onCloning` hears a clone's progress while the PR's repo is being cloned
+  /// first: `""` as it begins, git's own lines after, `null` once it is done.
   onStart: (
     prompt: string,
     picks: PrPicks,
     bot: Bot | null,
+    onCloning: (line: string | null) => void,
+    /// The picked machine's checkout, or its clone stand-in; `null` for a bot.
+    machine: string | null,
   ) => Promise<{ started: SessionIndexItem } | { error: string }>;
 }) {
   // The panel's read answers every PR on the head branch; this pane is one.
@@ -83,6 +92,10 @@ export default function PullDetail({
 
   const [text, setText] = useDraft(`pr:${row.mark.url}`);
   const [starting, setStarting] = useState(false);
+  // Set only while a clone runs; there is no standing note before one.
+  const [cloning, setCloning] = useState<string | null>(null);
+  const [machine, setMachine] = useState(machines.initial);
+  const machinePick = machines.projects.some((p) => p.path === machine) ? machine : machines.initial;
   const [error, setError] = useState<string | null>(null);
   const writable = !row.listing.isCrossRepository;
   // Starting needs no words: the PR and its comments are a task on their own.
@@ -94,12 +107,13 @@ export default function PullDetail({
     setStarting(true);
     setError(null);
     try {
-      const answer = await onStart(prPrompt({ pr, picked, text }), picks, bot);
+      const answer = await onStart(prPrompt({ pr, picked, text }), picks, bot, setCloning, bot ? null : machinePick);
       if ("error" in answer) return setError(answer.error);
       setText("");
       setPicked(new Set());
     } finally {
       setStarting(false);
+      setCloning(null);
     }
   };
 
@@ -165,18 +179,28 @@ export default function PullDetail({
               </div>
               <StartControls
                 bots={bots}
-                server={server}
+                server={machinePick ? serverOfPath(machinePick) : server}
+                machines={machines.projects}
+                machine={machinePick}
+                onMachine={setMachine}
                 picks={picks}
                 onPicks={setPicks}
                 disabled={!canStart}
                 starting={starting}
+                cloning={cloning !== null}
                 onStart={(bot) => void start(bot)}
               />
-              {checkout.kind !== "here" && (
+              {/* A clone goes unsaid: where the copy comes from is not the
+                  reader's concern here, only that the task starts. */}
+              {cloning !== null && (
+                <p className="truncate text-ui text-muted-foreground tabular-nums">
+                  Cloning {row.repo.split("/").slice(-2).join("/")}
+                  {cloning ? ` · ${cloning}` : "…"}
+                </p>
+              )}
+              {checkout.kind === "attach" && (
                 <p className="text-ui text-muted-foreground">
-                  {checkout.kind === "attach"
-                    ? `Attaches ${checkout.path} first, the checkout a task of this repo already uses.`
-                    : `No copy of ${checkout.slug} here, so Start Task clones it into ~/dray first.`}
+                  Attaches {checkout.path} first, the checkout a task of this repo already uses.
                 </p>
               )}
             </>
@@ -281,14 +305,22 @@ function StartControls({
   onPicks,
   disabled,
   starting,
+  cloning,
+  machines,
+  machine,
+  onMachine,
   onStart,
 }: {
   bots: Bot[];
   server: ServerId;
+  machines: Project[];
+  machine: string;
+  onMachine: (path: string) => void;
   picks: PrPicks;
   onPicks: (picks: PrPicks) => void;
   disabled: boolean;
   starting: boolean;
+  cloning: boolean;
   onStart: (bot: Bot | null) => void;
 }) {
   const [botId, setBotId] = useLocalStorage<string | null>(LAST_BOT_KEY, null);
@@ -328,8 +360,12 @@ function StartControls({
       )}
       {toBot && bots.length > 1 && <BotMenu bots={bots} bot={bot} onPick={setBotId} />}
       {!toBot && <TaskModelPicker server={server} picks={picks} onChange={onPicks} />}
+      {/* The New Task page's own picker, over this repo's checkouts and a
+          stand-in on each machine without one; a bot's task runs where the
+          bot is, so it shows for a plain task alone. */}
+      {!toBot && <MachineSelector projects={machines} value={machine} onSelect={onMachine} />}
       <Button size="xs" className="ml-auto" disabled={disabled} onClick={start}>
-        {starting ? "Starting…" : toBot ? `Start task in ${bot.name}` : "Start Task"}
+        {cloning ? "Cloning…" : starting ? "Starting…" : toBot ? `Start task in ${bot.name}` : "Start Task"}
       </Button>
     </div>
   );
