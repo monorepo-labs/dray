@@ -26,6 +26,8 @@ struct SessionList: View {
     @Environment(NewTask.self) private var task
     @Binding var selection: SessionKey?
     @Binding var sheet: RootSheet?
+    /// The list is a split view's sidebar, beside an open chat, rather than the whole screen.
+    var sidebar = false
     @State private var project: String?
     @State private var mode = ListMode.live
     @State private var drafts: [(server: UUID, draft: DraftItem)] = []
@@ -145,6 +147,8 @@ struct SessionList: View {
                 }
             }
             .listStyle(.plain)
+            // With a hardware keyboard a tap focused the row, and its focus ring drew a white box round it.
+            .focusable(false)
             .contentMargins(.top, Theme.Space.m, for: .scrollContent)
             // The resting dock's height, so the last row scrolls clear of the orb.
             .contentMargins(.bottom, dock ? 160 : 0, for: .scrollContent)
@@ -163,7 +167,7 @@ struct SessionList: View {
         .overlay(alignment: .bottom) {
             if dock {
                 // Dim while nothing is connected: the screen above says why.
-                VoiceDock(task: task, started: { selection = $0 }, engaged: { autoOpen = false }).opacity(blank && !anyConnected ? 0.3 : 1)
+                VoiceDock(task: task, started: { selection = $0 }, engaged: { autoOpen = false }, slim: sidebar).opacity(blank && !anyConnected ? 0.3 : 1)
             }
         }
         // A new view or filter starts on its first page.
