@@ -69,15 +69,16 @@ describe("prRepoSlug", () => {
 });
 
 describe("sessionBranch", () => {
-  it("names a worktree session's branch the way the CLI does", () => {
-    expect(sessionBranch({ branch: "main", worktreeName: "calm-owl" })).toBe(
-      "worktree-calm-owl",
-    );
+  it("names a worktree session with no record yet the way the CLI does", () => {
+    expect(sessionBranch({ branch: null, worktreeName: "calm-owl" })).toBe("worktree-calm-owl");
   });
 
-  it("reads a tree made on a PR's own branch off the record", () => {
-    expect(sessionBranch({ branch: "fix/thing", worktreeName: "pr-7", ownBranch: true })).toBe("fix/thing");
-    expect(sessionBranch({ branch: "fix/thing", worktreeName: "pr-7", ownBranch: true }, "other")).toBe("other");
+  // The index records the tree's branch, which for a tree made on a pull
+  // request's head is not `worktree-<name>`.
+  it("reads a worktree session's branch off the record", () => {
+    expect(sessionBranch({ branch: "worktree-calm-owl", worktreeName: "calm-owl" })).toBe("worktree-calm-owl");
+    expect(sessionBranch({ branch: "fix/thing", worktreeName: "pr-7" })).toBe("fix/thing");
+    expect(sessionBranch({ branch: "fix/thing", worktreeName: "pr-7" }, "other")).toBe("other");
   });
 
   it("uses the checked-out branch otherwise", () => {
@@ -99,7 +100,7 @@ describe("sessionBranch", () => {
   // session is no longer on, and the PR tab hid itself over it.
   it("lets git's own reading of HEAD outrank the guess", () => {
     expect(
-      sessionBranch({ branch: "main", worktreeName: "calm-owl" }, "fix/thing"),
+      sessionBranch({ branch: "worktree-calm-owl", worktreeName: "calm-owl" }, "fix/thing"),
     ).toBe("fix/thing");
     expect(sessionBranch({ branch: "feature", worktreeName: null }, "fix/thing")).toBe(
       "fix/thing",
@@ -121,9 +122,10 @@ describe("sessionBranch", () => {
   // The read is per-session and lands a frame late, and a non-repo has no
   // branch at all — so both fall back rather than drawing nothing.
   it("falls back while there is no reading to use", () => {
-    expect(sessionBranch({ branch: "main", worktreeName: "calm-owl" }, null)).toBe(
+    expect(sessionBranch({ branch: "worktree-calm-owl", worktreeName: "calm-owl" }, null)).toBe(
       "worktree-calm-owl",
     );
+    expect(sessionBranch({ branch: null, worktreeName: "calm-owl" }, null)).toBe("worktree-calm-owl");
     expect(sessionBranch({ branch: "feature", worktreeName: null }, undefined)).toBe(
       "feature",
     );

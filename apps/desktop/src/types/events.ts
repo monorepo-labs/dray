@@ -2109,15 +2109,7 @@ worktreeName: string | null,
  * keeps `branch` above authoritative: the shared checkout's HEAD describes
  * whatever else is going on in it, not this session's work.
  */
-worktreeRemoved: boolean, 
-/**
- * The tree was made on `branch` itself — a pull request's head — rather
- * than on `worktree-<name>`. The frontend rebuilds a worktree session's
- * branch from its name, since an entry from before the name was recorded
- * holds the root's branch there; this says the record is the one to read.
- * Written only when set, so no other entry changes on disk.
- */
-ownBranch?: boolean, title: string, 
+worktreeRemoved: boolean, title: string, 
 /**
  * The reader renamed this session, so no generated title may replace it —
  * neither `title.rs`'s nor one a harness sends of its own (grok's
@@ -2313,15 +2305,7 @@ worktreeName: string | null,
  * keeps `branch` above authoritative: the shared checkout's HEAD describes
  * whatever else is going on in it, not this session's work.
  */
-worktreeRemoved: boolean, 
-/**
- * The tree was made on `branch` itself — a pull request's head — rather
- * than on `worktree-<name>`. The frontend rebuilds a worktree session's
- * branch from its name, since an entry from before the name was recorded
- * holds the root's branch there; this says the record is the one to read.
- * Written only when set, so no other entry changes on disk.
- */
-ownBranch?: boolean, title: string, 
+worktreeRemoved: boolean, title: string, 
 /**
  * The reader renamed this session, so no generated title may replace it —
  * neither `title.rs`'s nor one a harness sends of its own (grok's

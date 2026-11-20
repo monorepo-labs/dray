@@ -1649,7 +1649,8 @@ pub struct PrHead {
 /// `repo` is the PR's repository as [`repo_key`] spells it, which picks the
 /// remote to fetch: in a fork's checkout `origin` is the fork and the PR's
 /// branch lives on another remote. Matched exactly, else on `owner/name` alone
-/// (an SSH host alias), else `origin`.
+/// (an SSH host alias). No match is refused rather than read off `origin`,
+/// which in a fork is a copy of the branch the PR never sees.
 ///
 /// Fetched first, since a PR opened elsewhere has no local ref here. A local
 /// branch of that name is reset onto the remote only where that loses nothing
@@ -1657,7 +1658,9 @@ pub struct PrHead {
 pub async fn create_worktree_on_branch(project_path: &str, name: &str, branch: &str, repo: &str) -> Result<String> {
     let path = worktrees_dir(Path::new(project_path)).join(name);
     let path = path.to_string_lossy().into_owned();
-    let remote = remote_for(project_path, repo).await.unwrap_or_else(|| "origin".into());
+    let Some(remote) = remote_for(project_path, repo).await else {
+        bail!("no remote in {project_path} points at {repo} — add one (git remote add upstream <its url>), then start the session again");
+    };
     let tracking = format!("{remote}/{branch}");
 
     exec(
@@ -1672,7 +1675,12 @@ pub async fn create_worktree_on_branch(project_path: &str, name: &str, branch: &
     if resolve_commit(project_path, &local).await.is_some()
         && git(project_path, &["merge-base", "--is-ancestor", &local, &tracking]).await.is_none()
     {
-        bail!("your local {branch} has commits {tracking} does not — push or move them, then start the session again");
+        // Not "push": after a rebase or force-push these are the PR's old
+        // commits, and pushing them would overwrite it.
+        bail!(
+            "your local {branch} has commits {tracking} does not — likely an older copy of the pull request. \
+             Rename it (git branch -m {branch} {branch}-old) or delete it, then start the session again"
+        );
     }
 
     exec(
@@ -3160,6 +3168,8 @@ mod tests {
         assert_eq!(remote_for(at, &upstream_key).await.as_deref(), Some("upstream"));
         assert_eq!(remote_for(at, "github.com/me/fork").await.as_deref(), Some("origin"));
         assert_eq!(remote_for(at, "github-alias/me/fork").await.as_deref(), Some("origin"));
+        let err = create_worktree_on_branch(at, "pr-0", "feature/pr", "github.com/someone/else").await.unwrap_err();
+        assert!(err.to_string().contains("no remote"), "{err}");
 
         let tree = create_worktree_on_branch(at, "pr-1", "feature/pr", &upstream_key).await.unwrap();
         assert_eq!(current_branch(&tree).await.as_deref(), Some("feature/pr"));
@@ -3177,7 +3187,7 @@ mod tests {
         let ahead = git_line(at, &["rev-parse", "HEAD"]).await;
         run(at, &["checkout", "-q", "-"]).await.unwrap();
         let err = create_worktree_on_branch(at, "pr-2", "feature/pr", &upstream_key).await.unwrap_err();
-        assert!(err.to_string().contains("has commits"), "{err}");
+        assert!(err.to_string().contains("has commits") && !err.to_string().contains("push"), "{err}");
         assert_eq!(git_line(at, &["rev-parse", "feature/pr"]).await, ahead);
 
         // Pushed, the local branch is level, and a second tree on it is refused

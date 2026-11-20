@@ -26,9 +26,10 @@ import type { PrCheck, PrChecksState, PrMark, PrUnavailable, PullRequest } from 
 /// The recorded `branch` survives the removal for this, and the sidebar's mark
 /// kept working throughout because it never had an `observed` to be misled by.
 ///
-/// `ownBranch` is a tree made on `branch` itself — a pull request's head,
-/// started from the pull requests page — so the record names it and the
-/// worktree name does not.
+/// The record outranks the name. Every index entry since the first release
+/// records a worktree session's branch at creation — `worktree-<name>`, or the
+/// pull request's head a tree from the pull requests page was made on — so the
+/// name is rebuilt only for an object with no record yet.
 ///
 /// One function because the header and the PR lookup have to agree about which
 /// branch the session is on; two rebuilding it apart is how they come to
@@ -38,14 +39,12 @@ export function sessionBranch(
     branch: string | null;
     worktreeName: string | null;
     worktreeRemoved?: boolean;
-    ownBranch?: boolean;
   },
   observed?: string | null,
 ): string | null {
   if (session.worktreeRemoved) return session.branch;
   if (observed) return observed;
-  if (session.ownBranch) return session.branch;
-  return session.worktreeName ? `worktree-${session.worktreeName}` : session.branch;
+  return session.branch ?? (session.worktreeName ? `worktree-${session.worktreeName}` : null);
 }
 
 /// Which pull request a sidebar row draws, out of every one on its branch.

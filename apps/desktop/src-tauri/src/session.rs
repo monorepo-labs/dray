@@ -1226,7 +1226,6 @@ impl SessionManager {
             // record is what every reader of a session's branch goes by.
             if let Some(head) = pr_head {
                 item.branch = Some(head.branch.clone());
-                item.own_branch = true;
             }
             // Written with the entry rather than linked after it: the row
             // appears before the child spawns, and a tab that arrived a beat

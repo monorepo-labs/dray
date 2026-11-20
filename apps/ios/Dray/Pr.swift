@@ -85,11 +85,12 @@ struct WorkStatus: Decodable {
 /// The branch a session's work lands on; `sessionBranch` in `pr.ts`, whose
 /// comment carries the why. HEAD wins while the session has a checkout of its
 /// own, a relocated session's shared checkout never answers, and the rest is
-/// the guess made at creation.
+/// the branch recorded at creation — a pull request's head for a tree made on
+/// one — with `worktree-<name>` only where nothing was recorded.
 func sessionBranch(branch: String?, worktreeName: String?, worktreeRemoved: Bool, observed: String?) -> String? {
     if worktreeRemoved { return branch }
     if let observed, !observed.isEmpty { return observed }
-    return worktreeName.map { "worktree-\($0)" } ?? branch
+    return branch ?? worktreeName.map { "worktree-\($0)" }
 }
 
 enum MergeVerdict: Equatable {

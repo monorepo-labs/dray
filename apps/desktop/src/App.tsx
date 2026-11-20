@@ -127,7 +127,8 @@ import WindowControls from "@/components/layout/WindowControls";
 import { offersFast } from "@/lib/fastMode";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { nextEffort } from "@/components/composer/ModelSelector";
-import { AGENT_LABELS, HARNESS_ORDER, nextHarness } from "@/lib/model";
+import { AGENT_LABELS, HARNESS_ORDER, nextHarness, rememberedModel } from "@/lib/model";
+import { readComposerPrefs } from "@/hooks/useComposerPrefs";
 import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { closeActiveTab, ItemTab, type ViewTab } from "@/components/layout/ViewTabs";
 import ShortcutKeys from "@/components/ShortcutKeys";
@@ -486,7 +487,10 @@ function App() {
     }
     const prompt = getDraft(id)?.prompt ?? message;
     const base = getDraft(id)?.base ?? null;
-    const prHead = getDraft(id)?.prHead ?? null;
+    // Only while the composer is still on the draft's project: moved to another
+    // repo, the PR's branch is no branch of it.
+    const draft = getDraft(id);
+    const prHead = draft?.prHead && draft.projectPath === projectPath ? draft.prHead : null;
     openDraftRef.current = null;
     // A send is not leaving: an attachment-only prompt has no text, and the
     // empty-draft sweep would delete a draft whose send may yet fail.
@@ -1671,6 +1675,25 @@ function App() {
       projects.find((p) => p.path === row.key)?.path ??
       projects.find((p) => prMarks.repoOf(p.path) === row.repo)?.path;
     if (!projectPath) return "No checkout of this repository is attached here, so there is nowhere to start a session.";
+    // With the archived view up, the live side is the page's own read, which a
+    // session started since is missing from: ask again before making a second.
+    if (indexSide !== false) {
+      const live = (
+        await Promise.all(
+          [LOCAL, ...(serverIds ? serverIds.split("\n") : [])].map((server) =>
+            invoke<SessionIndexItem[]>("list_session_index_items", { archived: false }, server).catch(() => []),
+          ),
+        )
+      ).flat();
+      const working = sessionsForPr(row, live, prMarks.repoOf).find((s) => !s.archived);
+      if (working) {
+        setOtherIndexSide(live);
+        return `"${working.title}" is already working on this pull request. Send to it instead.`;
+      }
+    }
+    // A new task's picks, not the selected session's the composer mirrors.
+    const stored = readComposerPrefs();
+    const model = rememberedModel(stored.modelByHarness, stored.harness);
     const id = crypto.randomUUID();
     const draft = prDraft({
       id,
@@ -1678,7 +1701,13 @@ function App() {
       row,
       prompt,
       settled: sessionsForRow(row).find((s) => s.archived),
-      picks: { harness, model: modelId, effort, permissionMode, fast },
+      picks: {
+        harness: stored.harness,
+        model,
+        effort: stored.effortByModel[model] ?? null,
+        permissionMode: stored.permissionMode,
+        fast: stored.fast,
+      },
       created: new Date().toISOString(),
     });
     if (!(await saveDraft(draft))) return "Could not save the draft for this session.";
