@@ -19,6 +19,30 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.32.0 · 2026-11-21 · notify
+
+### New
+
+- **Pull requests page.** Every open PR involving you across GitHub,
+  filtered by owner and repository. Start a task right from a PR, and
+  see every task it has had.
+- **Mention PRs with `#`.** The composer's `#` menu lists pull requests
+  beside issues; ⇧⇥ switches between them. In a bot's chat, pick which
+  repo it lists.
+- **Start a worktree on any branch.** With Worktree on, the new-task
+  composer picks the branch the task starts from.
+  `dray session new --base <branch>` does the same.
+- **Bots can hand you a task.** `dray session detach` moves a bot's task
+  out of its Tasks and into your sidebar. In a bot's Tasks list the menu
+  item reads Detach from bot.
+
+### Improved
+
+- The sign-in page marks the method you used last.
+- Hovering a tab or a bot row starts loading its chat before you click.
+- Bots stay quiet when there is nothing to say: no stray text after a
+  reaction, no status filler, no announcing tasks or AI review progress.
+
 ## 0.31.0 · 2026-11-20 · notify
 
 ### New
