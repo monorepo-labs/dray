@@ -169,6 +169,7 @@ pub async fn init(
     }
     if bot {
         command.env(no_reply::TERMINAL_TOOLS_ENV, no_reply::TOOL_NAMES);
+        command.env(no_reply::SILENT_TURN_REMINDER_ENV, "0");
     }
 
     let mut child = command
