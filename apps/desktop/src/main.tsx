@@ -8,6 +8,7 @@ import { trackActiveDay } from "@/lib/analytics";
 import { onFocusChange } from "@/lib/focus";
 import { cancelsWindow, runUnhandledEscape } from "@/lib/escape";
 import { applyIsland } from "@/lib/island";
+import { gatesSignIn } from "@/lib/signInGate";
 import { startSurveys } from "@/lib/surveys";
 import { startAgentUpdateChecks } from "@/hooks/useAgentUpdates";
 import { applyZoom } from "@/lib/zoom";
@@ -41,9 +42,13 @@ window.addEventListener("keydown", (e) => {
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <CrashScreen>
-      <AccountGate>
+      {gatesSignIn(import.meta.env) ? (
+        <AccountGate>
+          <App />
+        </AccountGate>
+      ) : (
         <App />
-      </AccountGate>
+      )}
     </CrashScreen>
   </React.StrictMode>,
 );

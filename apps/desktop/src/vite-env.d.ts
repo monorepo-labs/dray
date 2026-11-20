@@ -5,3 +5,8 @@
 /// that reads it costs a production bundle nothing. `null` outside a repository
 /// and on a detached HEAD.
 declare const __DEV_BRANCH__: string | null;
+
+interface ImportMetaEnv {
+  /// `1` puts the sign-in gate back in a dev build; see `gatesSignIn`.
+  readonly VITE_DRAY_SIGN_IN?: string;
+}
