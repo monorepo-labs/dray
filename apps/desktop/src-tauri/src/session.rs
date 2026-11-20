@@ -497,7 +497,7 @@ async fn detached_push_line(project_path: &str, branch: &str) -> String {
     match git::branch_remote(project_path, branch).await {
         Some(remote) => format!(
             "Another tree has {branch} checked out, so this one is detached at its tip. Commit here and push with \
-             `git push {remote} HEAD:{branch}`. If the push is refused, fetch and rebase onto {remote}/{branch} first."
+             `git push {remote} HEAD:refs/heads/{branch}`. If the push is refused, fetch and rebase onto {remote}/{branch} first."
         ),
         None => format!(
             "Another tree has {branch} checked out, so this one is detached at its tip. Commit here; this repository \

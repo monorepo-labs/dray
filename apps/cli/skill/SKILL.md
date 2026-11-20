@@ -228,7 +228,7 @@ branch picker does it, so the new session's commits land on that branch:
   holding commits the remote lacks, it is used as it is, so none are lost.
 - A branch already checked out in another tree — the main checkout or another
   session — gets a tree detached at its tip, and the agent is told to push
-  with `git push <remote> HEAD:<branch>`.
+  with `git push <remote> HEAD:refs/heads/<branch>`.
 
 This is what makes review possible. Spawn a session with a different model or a
 different harness, point it at yours with `--base`, and it gets its own checkout
