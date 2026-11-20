@@ -1007,11 +1007,12 @@ impl SessionManager {
         branch: Option<&str>,
         use_worktree: bool,
         worktree_name: Option<&str>,
-        // Where the worktree starts from, already resolved to a git ref by the
-        // caller — the orchestration socket turns a session id into one, and
-        // nothing below here knows sessions. `None` is the ordinary case and
-        // hands the tree to `claude -w`, which forks it from `origin/<default>`.
-        base_ref: Option<&str>,
+        // Where the worktree starts from, already resolved by the caller — the
+        // orchestration socket turns a session id into a branch, and nothing
+        // below here knows sessions. `None`, or the default branch picked, is
+        // the ordinary case and hands the tree to `claude -w`, which forks it
+        // from `origin/<default>`.
+        base: Option<&git::Base>,
         is_new_session: bool,
         // Set only for a session created over the orchestration socket. The
         // composer never has one, and it is recorded rather than acted on —
@@ -1033,10 +1034,6 @@ impl SessionManager {
         // holds while it drops the schedule, so whichever goes first wins and
         // a prompt of theirs is never followed by a stale `continue`.
         claim_continue: Option<&str>,
-        // A pull request's head, checked out by its own name in a tree Dray
-        // makes so the agent's push lands on that PR. Only the pull requests
-        // page sets one, through `start_pr_session`.
-        pr_head: Option<&git::PrHead>,
         app: &Sink,
     ) -> Result<SendOutcome> {
         let _counted = Sending::enter().await;
@@ -1148,13 +1145,20 @@ impl SessionManager {
             // sidebar row pointing at a directory that never existed and can
             // never start. `HEAD` where there is no remote, matching what the
             // CLI itself falls back to when the fetch fails.
-            let resolved_base = match (harness.caps().creates_own_worktree, use_worktree, base_ref) {
-                (false, true, None) => {
-                    Some(git::default_base(cwd).await.unwrap_or_else(|| "HEAD".into()))
-                }
+            //
+            // The default branch picked by name is no base at all: it starts
+            // from `origin/<default>` as an unpicked one does.
+            let base = match base {
+                Some(git::Base::Branch(b)) if git::is_default_branch(cwd, b).await => None,
+                other => other,
+            };
+            let resolved_base = match (harness.caps().creates_own_worktree, use_worktree, base) {
+                (false, true, None) => Some(git::Base::Fork(
+                    git::default_base(cwd).await.unwrap_or_else(|| "HEAD".into()),
+                )),
                 _ => None,
             };
-            let base_ref = base_ref.or(resolved_base.as_deref());
+            let base = base.or(resolved_base.as_ref());
 
             let worktree_name = if use_worktree {
                 Some(resolve_unclaimed_worktree_name(cwd, worktree_name).await?)
@@ -1192,19 +1196,23 @@ impl SessionManager {
             // Ahead of the index write, unlike the spawn below: a base git
             // cannot resolve has left nothing behind at all and the caller is
             // getting the error.
-            let owned_worktree = match (pr_head, base_ref, &worktree_name) {
-                (Some(head), _, Some(name)) => {
-                    git::create_worktree_on_branch(cwd, name, &head.branch, &head.repo).await?;
-                    true
+            let tree = match (base, &worktree_name) {
+                (Some(git::Base::Pr(head)), Some(name)) => {
+                    let made = git::create_worktree_on_branch(cwd, name, &head.branch, &head.repo).await?;
+                    Some((Some(head.branch.clone()), made.detached))
                 }
-                (Some(_), _, None) => bail!("a pull request's branch needs a worktree to check it out into"),
-                (None, Some(base), Some(name)) => {
+                (Some(git::Base::Branch(branch)), Some(name)) => {
+                    let made = git::create_worktree_from_branch(cwd, name, branch).await?;
+                    Some((Some(branch.clone()), made.detached))
+                }
+                (Some(git::Base::Fork(base)), Some(name)) => {
                     git::create_worktree(cwd, name, base).await?;
-                    true
+                    Some((None, None))
                 }
-                (None, Some(_), None) => bail!("a base ref needs a worktree to check it out into"),
-                (None, None, _) => false,
+                (Some(_), None) => bail!("a base needs a worktree to check it out into"),
+                (None, _) => None,
             };
+            let owned_worktree = tree.is_some();
 
             // Indexed before the process spawns, so a session that fails to
             // start is still visible rather than vanishing without a trace.
@@ -1222,10 +1230,14 @@ impl SessionManager {
                 fast,
                 parent_session_id,
             );
-            // The tree is on the PR's own branch, not `worktree-<name>`, and the
-            // record is what every reader of a session's branch goes by.
-            if let Some(head) = pr_head {
-                item.branch = Some(head.branch.clone());
+            // A tree on an existing branch is on that branch, not
+            // `worktree-<name>`, even detached, and the record is what every
+            // reader of a session's branch goes by.
+            if let Some((on_branch, detached)) = tree {
+                if on_branch.is_some() {
+                    item.branch = on_branch;
+                }
+                item.detached_on = detached;
             }
             // Written with the entry rather than linked after it: the row
             // appears before the child spawns, and a tab that arrived a beat

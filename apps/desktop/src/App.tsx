@@ -311,6 +311,9 @@ function App() {
     branches,
     branch,
     useWorktree,
+    worktreeBranch,
+    setWorktreeBranch,
+    refreshBranches,
     busy,
     backgroundTasks,
     liveTaskIds,
@@ -4548,6 +4551,9 @@ function App() {
               onCancelBranchSwitch={() => setPendingBranch(null)}
               useWorktree={useWorktree}
               onToggleWorktree={() => setUseWorktree((v) => !v)}
+              worktreeBranch={worktreeBranch}
+              onSelectWorktreeBranch={setWorktreeBranch}
+              onOpenWorktreeBranches={refreshBranches}
               onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
               contextUsage={contextUsage}
               tasks={selectedBot ? { counts: taskCount, onOpen: () => showPanel("tasks") } : undefined}

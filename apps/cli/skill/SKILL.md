@@ -218,6 +218,18 @@ dray session new --base feature/login "Write tests for the login flow on this br
 `dray session send` takes — or a branch, tag or commit. Naming a session is the usual case: you have
 its id already, and you do not have to know how Dray names its branches.
 
+**A branch name is worked on by that name**, the same way the app's new-task
+branch picker does it, so the new session's commits land on that branch:
+
+- The default branch (`main`) starts from `origin/main`, as with no `--base`.
+- A branch only on the remote is fetched, and a local branch tracking it made.
+- A branch only here is used as it is.
+- A branch in both places is fetched first. Behind its remote, it is moved up;
+  holding commits the remote lacks, it is used as it is, so none are lost.
+- A branch already checked out in another tree — the main checkout or another
+  session — gets a tree detached at its tip, and the agent is told to push
+  with `git push <remote> HEAD:<branch>`.
+
 This is what makes review possible. Spawn a session with a different model or a
 different harness, point it at yours with `--base`, and it gets its own checkout
 of the same commits — so it collides with nobody while it reads.
@@ -233,15 +245,16 @@ Three things to know:
   for a review of work in progress, commit it first — or say plainly in your
   prompt what is missing, or the reviewer will report on a tree that lacks the
   very change the user is looking at.
-- **A new branch, not a shared one.** The session gets its own
-  `worktree-<name>` branch starting at that commit. It never checks out the
-  branch you named, so it cannot commit onto your work or move it.
+- **A session's work gets a new branch, not a shared one.** Named by session
+  id, a tag or a commit, the session gets its own `worktree-<name>` branch
+  starting there. It never checks out that session's branch, so it cannot
+  commit onto its work or move it.
 - **Not a shared checkout.** `--base` never runs two sessions in one
   directory. Two agents writing to one checkout overwrite
   each other, and the changes panel cannot tell them apart.
 
 The line `dray session new` prints says what it resolved: `Started "…" in worktree
-calm-owl, based on worktree-brisk-jade`. Worth reading back when you passed a
+calm-owl, based on worktree-brisk-jade`, or `on branch feature/login` for a branch. Worth reading back when you passed a
 session id, since the branch that id resolved to is something only the app knew.
 
 ### Hidden sessions

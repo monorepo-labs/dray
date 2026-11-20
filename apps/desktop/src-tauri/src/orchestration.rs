@@ -16,6 +16,7 @@
 use crate::{
     bots,
     events::{ApprovalPolicy, MessageSender},
+    git::Base,
     issues::{self, IssueRef, IssueTracker},
     models::{default_model_for, id_for_arg, models_for, runs_on, Effort, ModelId},
     session::{manager, Harness},
@@ -977,7 +978,7 @@ pub(crate) mod elsewhere {
     async fn branch_of(base: Option<String>, project: Option<&str>) -> Result<Option<String>> {
         match (base, project) {
             (Some(base), Some(project)) if store::get_session_index_item(&base).await?.is_some() => {
-                Ok(Some(resolve_base(&base, project).await?))
+                Ok(Some(resolve_base(&base, project).await?.name().to_string()))
             }
             (base, _) => Ok(base),
         }
@@ -2032,7 +2033,7 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
     // Resolved before anything is written, so a `--base` naming a session or a
     // ref that cannot be found costs an error rather than a session sitting in
     // the sidebar on the wrong base.
-    let base_ref = match create.base.as_deref() {
+    let base = match create.base.as_deref() {
         Some(from) => Some(resolve_base(from, &project_path).await?),
         None => None,
     };
@@ -2078,7 +2079,7 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
             // one, and a name that collides is a create that fails for a field
             // nobody wanted. `None` lets the app generate a readable one.
             None,
-            base_ref.as_deref(),
+            base.as_ref(),
             true,
             create.parent_session_id.as_deref(),
             hidden,
@@ -2086,7 +2087,6 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
             // The creating session is this one's *parent*, which the sidebar
             // already draws by nesting the row. Its opening prompt is the brief,
             // not a message relayed into a conversation already under way.
-            None,
             None,
             None,
             app,
@@ -2103,7 +2103,7 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
 
     Ok(Response::Created {
         session: summarize(item),
-        base_ref,
+        base_ref: base.map(|b| b.name().to_string()),
         warning,
     })
 }
@@ -2219,7 +2219,7 @@ async fn start_session(
 ) -> Result<Response> {
     // Read again at the start rather than trusted from the save: the branch a
     // session id names, or the ref itself, may have moved or gone since.
-    let base_ref = match draft.base.as_deref() {
+    let base = match draft.base.as_deref() {
         Some(base) => Some(resolve_base(base, &draft.project_path).await?),
         None => None,
     };
@@ -2244,11 +2244,10 @@ async fn start_session(
             None,
             draft.use_worktree,
             None,
-            base_ref.as_deref(),
+            base.as_ref(),
             true,
             parent,
             hidden,
-            None,
             None,
             None,
             None,
@@ -2261,17 +2260,22 @@ async fn start_session(
         .context("the session was created but returned no index entry")?;
 
     app.emit(SESSION_CREATED, &item).ok();
-    Ok(Response::Created { session: summarize(item), base_ref, warning: None })
+    Ok(Response::Created { session: summarize(item), base_ref: base.map(|b| b.name().to_string()), warning: None })
 }
 
-/// What `--from` starts the new worktree at: a session id, a branch, or any
+/// What `--base` starts the new worktree at: a session id, a branch, or any
 /// other ref.
 ///
 /// A session id is tried first, because it is the address everywhere else in
 /// `dray` — `ls` prints it, `send` takes it — and an agent holding one should
 /// not have to learn how Dray names branches to point at that session's work.
 /// A ref that happens to look like a session id is the only ambiguity, and a
-/// v7 UUID is not a branch name anybody types.
+/// v7 UUID is not a branch name anybody types. A session's work is forked onto
+/// a branch of the new tree's own, so a reviewer never commits onto it.
+///
+/// A branch — here, or only on the remote — is worked on by its own name, by
+/// the same rules as the new-task composer's branch picker
+/// ([`crate::git::create_worktree_from_branch`]). Any other ref is forked.
 ///
 /// The session's branch comes from [`store::session_branch`], the one reading
 /// of that question, so this cannot start a reviewer on one branch while the
@@ -2282,8 +2286,15 @@ async fn start_session(
 /// their editor. Usually right for a review, and said plainly in the skill,
 /// because the failure is an agent reporting confidently on a tree that is
 /// missing the very change the user is looking at.
-pub(crate) async fn resolve_base(from: &str, project_path: &str) -> Result<String> {
+pub(crate) async fn resolve_base(from: &str, project_path: &str) -> Result<Base> {
     if let Some(item) = store::get_session_index_item(from).await? {
+        // A detached session's work is its tree's HEAD, ahead of the branch it
+        // pushes to.
+        if item.detached_on.is_some() && !item.worktree_removed {
+            if let Some(head) = crate::git::resolve_commit(&item.cwd, "HEAD").await {
+                return Ok(Base::Fork(head));
+            }
+        }
         // Read where the session actually runs, which is its worktree for a
         // worktree session — `session_branch` outranks it for a relocated one,
         // whose `cwd` is the shared project root.
@@ -2306,14 +2317,17 @@ pub(crate) async fn resolve_base(from: &str, project_path: &str) -> Result<Strin
             );
         }
 
-        return Ok(branch);
+        return Ok(Base::Fork(branch));
     }
 
+    if crate::git::is_branch(project_path, from).await {
+        return Ok(Base::Branch(from.to_string()));
+    }
     if crate::git::resolve_commit(project_path, from).await.is_some() {
-        return Ok(from.to_string());
+        return Ok(Base::Fork(from.to_string()));
     }
 
-    bail!("{from} is neither a session id nor a branch, tag or commit in {project_path}")
+    bail!("{from} is neither a session id nor a branch, tag or commit in {project_path} or on its remote")
 }
 
 async fn list_sessions(list: ListSessions) -> Result<Response> {
@@ -2534,7 +2548,6 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
             None,
             from,
             None,
-            None,
             app,
         )
         .await?;
@@ -2612,7 +2625,7 @@ async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
     let outcome = manager()
         .send_msg(
             &session_id, &prompt, &[], &[], harness, model, effort, permission_mode, fast, &bot.path, None, false,
-            None, None, true, None, false, Some(&bot.name), from, None, None, app,
+            None, None, true, None, false, Some(&bot.name), from, None, app,
         )
         .await?;
     let item = outcome.snapshot.map(|s| s.index_item).context("the bot's chat started but returned no index entry")?;
@@ -2952,7 +2965,6 @@ pub async fn start_routine_run(
             Some(&chat.session_id),
             true,
             Some(title),
-            None,
             None,
             None,
             app,

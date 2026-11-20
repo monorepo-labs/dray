@@ -367,6 +367,9 @@ export function useSessions() {
     // has uncommitted changes. Null when nothing is pending.
     const [pendingBranch, setPendingBranch] = useState<string | null>(null);
     const [useWorktree, setUseWorktreeState] = useState(() => prefs.useWorktree);
+    // The branch a new worktree starts on, null for the default branch. Per
+    // project and never persisted, like `branch`.
+    const [worktreeBranch, setWorktreeBranch] = useState<string | null>(null);
     // The server New bot makes its bot on, while the dialog is open. It shares
     // the composer's picker, so the models offered must be that server's.
     const [botServer, setBotServer] = useState<ServerId | null>(null);
@@ -721,6 +724,15 @@ const runCheckout = async (target: string, stash: boolean) => {
   }
 };
 
+// Read again each time the worktree picker opens: a task started since may have
+// made a remote-only branch local, or the reader fetched.
+const refreshBranches = () => {
+  if (!projectPath) return;
+  invoke<BranchList>("list_branches", { cwd: projectPath })
+    .then(setBranches)
+    .catch(() => {});
+};
+
 // A clean tree switches silently; a dirty one routes through the dialog, whose
 // buttons call back into `runCheckout` with the user's choice.
 //
@@ -877,7 +889,7 @@ const handleSendMsg = async (
   // time. The wire still takes paths alone.
   attachments: Attachment[] = [],
   // Where a new session's worktree starts, from a draft `dray draft new
-  // --base` saved. Nothing in the composer sets one.
+  // --base` saved. Without one, the worktree branch picker's.
   baseRef: string | null = null,
 ): Promise<boolean> => {
   const attachmentPaths = attachments.map((a) => a.path);
@@ -1125,7 +1137,8 @@ const handleSendMsg = async (
       branch: isNewSession && !worktree && !placed ? branch : null,
       useWorktree: isNewSession && worktree,
       worktreeName: null,
-      baseRef: isNewSession && worktree ? baseRef : null,
+      // Placed sessions are a server's own picks, never this picker's.
+      baseRef: isNewSession && worktree ? (baseRef ?? (placed ? null : worktreeBranch)) : null,
       isNewSession,
     });
     if (heldAtSend) {
@@ -1418,6 +1431,7 @@ const handleNewSession = () => {
   setFastState(prefs.fast);
   setUseWorktreeState(prefs.useWorktree);
   setBranch(branches?.current ?? null);
+  setWorktreeBranch(null);
 };
 
 // Puts the composer's controls back to what the session was started with. Every
@@ -2383,6 +2397,7 @@ useEffect(() => {
 // The guard matters because switching projects quickly would otherwise let a
 // slower repo's response land on top of the faster one's.
 useEffect(() => {
+  setWorktreeBranch(null);
   if (!projectPath) {
     setBranches(null);
     setBranch(null);
@@ -3914,6 +3929,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems: shownIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, servingBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, prefetchTranscript, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems: shownIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, worktreeBranch, setWorktreeBranch, refreshBranches, busy, backgroundTasks, liveTaskIds, tasksBySession, servingBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, prefetchTranscript, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
 
 }

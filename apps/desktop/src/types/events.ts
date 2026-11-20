@@ -676,6 +676,12 @@ export type BranchList = {
  */
 current: string | null, branches: Array<string>, 
 /**
+ * Branches a remote has and this checkout holds no local copy of, by
+ * their own name (`feature/x`, not `origin/feature/x`). Only the worktree
+ * picker offers them: a tree can start on one, a checkout cannot.
+ */
+remoteBranches: Array<string>, 
+/**
  * What a `-w` worktree forks from, resolved the way the CLI resolves it.
  * Shown in place of the branch picker in worktree mode, where the picked
  * branch has no effect. `None` when the repo has no remote.
@@ -793,6 +799,17 @@ export type ContextWindow = { usedTokens: number, maxTokens: number, };
  * `type` tag. Two tags of the same name serialize but never deserialize.
  */
 export type DeltaEvent = { "delta": "block_start", block: BlockRef, blockType: BlockType, } | { "delta": "text_delta", block: BlockRef, text: string, } | { "delta": "input_delta", block: BlockRef, partialJson: string, } | { "delta": "block_stop", block: BlockRef, };
+
+/**
+ * A branch checked out in another tree, which a session's own tree therefore
+ * sits detached at the tip of. Recorded on the session so every spawn of it,
+ * resumes included, tells the agent where its commits go.
+ */
+export type DetachedOn = { branch: string, 
+/**
+ * `None` in a repo with no remote, where the commits stay on this tree.
+ */
+remote: string | null, };
 
 /**
  * One row in the Files view's tree.
@@ -2109,7 +2126,12 @@ worktreeName: string | null,
  * keeps `branch` above authoritative: the shared checkout's HEAD describes
  * whatever else is going on in it, not this session's work.
  */
-worktreeRemoved: boolean, title: string, 
+worktreeRemoved: boolean, 
+/**
+ * The tree sits detached at `branch`'s tip, that branch being checked out
+ * elsewhere when the session started; its agent is told to push there.
+ */
+detachedOn?: DetachedOn, title: string, 
 /**
  * The reader renamed this session, so no generated title may replace it —
  * neither `title.rs`'s nor one a harness sends of its own (grok's
@@ -2305,7 +2327,12 @@ worktreeName: string | null,
  * keeps `branch` above authoritative: the shared checkout's HEAD describes
  * whatever else is going on in it, not this session's work.
  */
-worktreeRemoved: boolean, title: string, 
+worktreeRemoved: boolean, 
+/**
+ * The tree sits detached at `branch`'s tip, that branch being checked out
+ * elsewhere when the session started; its agent is told to push there.
+ */
+detachedOn?: DetachedOn, title: string, 
 /**
  * The reader renamed this session, so no generated title may replace it —
  * neither `title.rs`'s nor one a harness sends of its own (grok's
