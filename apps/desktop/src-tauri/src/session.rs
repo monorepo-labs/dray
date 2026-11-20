@@ -696,8 +696,7 @@ pub async fn settle_dead_child(
     // This close never passes through `ingest_event`, where a bot's child
     // reports; without this the bot would wait on a turn that is over.
     if died_mid_turn {
-        LAST_REPLY.lock().unwrap().remove(session_id);
-        POSTED.lock().unwrap().remove(session_id);
+        forget_turn(session_id);
         report(session_id, format!("(the session's process exited mid-turn: {why})"), app);
         crate::routines::turn_ended(session_id, None, false, app).await;
     }
@@ -3682,6 +3681,15 @@ static POSTED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<St
 static REACTED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
     std::sync::LazyLock::new(Default::default);
 
+/// Drops what `session_id`'s turn noted for its close, for a turn that closes
+/// without a `TurnCompleted` reaching `ingest_event`: kept, it would count
+/// against the next turn.
+fn forget_turn(session_id: &str) {
+    LAST_REPLY.lock().unwrap().remove(session_id);
+    POSTED.lock().unwrap().remove(session_id);
+    REACTED.lock().unwrap().remove(session_id);
+}
+
 /// Records a reaction landing in `session_id`, for [`REACTED`].
 fn note_reaction(session_id: &str, payload: &AgentEventPayload) {
     if let AgentEventPayload::Reaction { emoji, .. } = payload {
@@ -4644,6 +4652,16 @@ mod tests {
         let mut closing = close("❤️");
         drops_echo(session, &mut closing);
         assert!(matches!(closing, AgentEventPayload::TurnCompleted { final_text: Some(_), .. }));
+    }
+
+    #[test]
+    fn a_turn_its_child_died_in_forgets_its_reaction() {
+        let session = "echo-dead-child";
+        let reaction = AgentEventPayload::Reaction { message_id: "m".into(), emoji: "👍".into() };
+        assert!(!drops_echo(session, &mut reaction.clone()));
+        forget_turn(session);
+        let mut reply = AgentEventPayload::AssistantText { block: None, text: "👍".into() };
+        assert!(!drops_echo(session, &mut reply), "the resumed turn never reacted");
     }
 
     #[test]
