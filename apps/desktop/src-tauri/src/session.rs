@@ -3682,13 +3682,14 @@ static REACTED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
     std::sync::LazyLock::new(Default::default);
 
 /// Bot chats whose turn a silent tool (`react`, `no_reply_needed`) closed,
-/// with that call's id. Anything the agent writes after it is filler: a CLI
+/// with the ids of those calls not refused: one batch can hold both, and a
+/// refused `react` beside a `no_reply_needed` leaves the turn closed. Anything the agent writes after it is filler: a CLI
 /// that ignores `claude/endTurn`, or a batch holding an errored result, gives
 /// the model one more call, and it narrated the close ("(Turn ended without a
 /// reply.)"). Closed on the call itself, not on Dray's answer to it: the CLI
 /// runs the tool while the response is still streaming, and a stray token the
 /// model wrote after the call ("ↀ") could reach the pipe before the call did.
-static CLOSED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
+static CLOSED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, std::collections::HashSet<String>>>> =
     std::sync::LazyLock::new(Default::default);
 
 /// Drops what `session_id`'s turn noted for its close, for a turn that closes
@@ -3725,14 +3726,17 @@ fn drops_echo(session_id: &str, payload: &mut AgentEventPayload) -> bool {
     let mut reacted = REACTED.lock().unwrap();
     match payload {
         AgentEventPayload::ToolCallStarted { call_id, name, .. } if no_reply::is_silent(name) => {
-            CLOSED.lock().unwrap().insert(session_id.to_string(), call_id.clone());
+            CLOSED.lock().unwrap().entry(session_id.to_string()).or_default().insert(call_id.clone());
             false
         }
         // A refused `react` carries no `endTurn`, and the bot must answer it.
         AgentEventPayload::ToolCallCompleted { call_id, result } if result.is_error => {
             let mut closed = CLOSED.lock().unwrap();
-            if closed.get(session_id) == Some(call_id) {
-                closed.remove(session_id);
+            if let Some(calls) = closed.get_mut(session_id) {
+                calls.remove(call_id.as_str());
+                if calls.is_empty() {
+                    closed.remove(session_id);
+                }
             }
             false
         }
@@ -4740,6 +4744,12 @@ mod tests {
         drops_echo(session, &mut call("r2", no_reply::REACT_NAME));
         drops_echo(session, &mut result("r2", false));
         assert!(drops_echo(session, &mut text("👍")), "a reaction that landed keeps the turn closed");
+        forget_turn(session);
+
+        drops_echo(session, &mut call("n1", no_reply::TOOL_NAME));
+        drops_echo(session, &mut call("r3", no_reply::REACT_NAME));
+        drops_echo(session, &mut result("r3", true));
+        assert!(drops_echo(session, &mut text("ↀ")), "the batch's no_reply_needed still closes it");
         forget_turn(session);
     }
 
