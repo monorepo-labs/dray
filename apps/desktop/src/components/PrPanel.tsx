@@ -1,10 +1,11 @@
-import { useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 
 import { invoke, LOCAL, serverOfPath } from "@/lib/transport";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Check,
   ChevronDown,
+  Minus,
   ChevronRight,
   CircleDashed,
   CircleSlash,
@@ -39,6 +40,8 @@ import {
   threadLabel,
   type Tone,
 } from "@/lib/pr";
+import { commentKey } from "@/lib/prInbox";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type {
   MergeMethod,
@@ -789,6 +792,47 @@ function CheckRow({ check }: { check: PrCheck }) {
   );
 }
 
+/// Which comments the reader has picked to send to an agent, on the pull
+/// requests page. Absent everywhere else, so the session's PR tab draws no
+/// boxes.
+export type CommentPick = { picked: ReadonlySet<string>; toggle: (key: string) => void };
+export const CommentPickContext = createContext<CommentPick | null>(null);
+
+/// The box that picks one comment, beside its row. A button wearing a checkbox's
+/// role rather than an input: the row next to it is a button too, and the app
+/// has no checkbox of its own to match.
+function PickBox({ comment }: { comment: PrComment }) {
+  const pick = useContext(CommentPickContext);
+  if (!pick) return null;
+  const key = commentKey(comment);
+  const on = pick.picked.has(key);
+  // A review whose thread is picked says so while it is folded shut.
+  const partly = !on && comment.replies.some((r) => r.path && pick.picked.has(commentKey(r)));
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={on}
+          aria-label={on ? "Unpick for the agent" : "Pick for the agent"}
+          onClick={() => pick.toggle(key)}
+          className={cn(
+            "flex size-3.5 shrink-0 items-center justify-center rounded-sm border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+            on || partly
+              ? "border-transparent bg-primary text-primary-foreground"
+              : "border-border hover:border-muted-foreground",
+          )}
+        >
+          {on && <Check className="size-2.5" strokeWidth={3} />}
+          {partly && <Minus className="size-2.5" strokeWidth={3} />}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{on ? "Picked for the agent" : "Pick for the agent"}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 /// What a review's verdict is called, in the words GitHub uses. A plain comment
 /// gets none — "commented" beside a comment is the row saying its own type.
 const VERDICT: Record<PrComment["kind"], { word?: string; tone?: string }> = {
@@ -820,17 +864,21 @@ function CommentCard({ comment }: { comment: PrComment }) {
   const replies = comment.replies;
 
   const [open, setOpen] = useState(false);
+  // The body stays under the author's name, a box's width further in.
+  const picking = useContext(CommentPickContext) !== null;
   const expandable = Boolean(body) || replies.length > 0;
   const preview = !open && Boolean(body);
   const count = !open && replies.length > 0;
 
   return (
     <article className="px-3">
+      <div className="flex items-center gap-1.5">
+      <PickBox comment={comment} />
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         disabled={!expandable}
-        className="flex w-full cursor-pointer items-center gap-1.5 py-0.5 text-left text-ui disabled:cursor-default"
+        className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-0.5 text-left text-ui disabled:cursor-default"
       >
         <ChevronRight
           className={cn(
@@ -872,9 +920,10 @@ function CommentCard({ comment }: { comment: PrComment }) {
           {relativeTime(comment.createdAt)}
         </span>
       </button>
+      </div>
 
       {open && (
-        <div className="mb-1 mt-1 flex flex-col gap-2 pl-6">
+        <div className={cn("mb-1 mt-1 flex flex-col gap-2", picking ? "pl-11" : "pl-6")}>
           {/* Bot comments carry tables, badges and preview links, so this is
               real markdown rather than text — a Vercel comment rendered flat is
               a wall of pipe characters. */}
@@ -921,6 +970,8 @@ function Nested({ comment }: { comment: PrComment }) {
   return (
     <div className="flex flex-col gap-0.5">
       <div className="flex items-center gap-1.5 text-ui">
+        {/* A thread is the one unit inside a review worth sending on its own. */}
+        {comment.path && <PickBox comment={comment} />}
         {comment.path && (
           <span className="min-w-0 truncate font-mono text-sidebar-foreground" title={comment.path}>
             {threadLabel(comment.path)}

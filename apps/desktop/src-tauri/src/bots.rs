@@ -1610,7 +1610,7 @@ pub async fn start_bot(
     let sent = manager()
         .send_msg(
             &session_id, &prompt, &[], &[], harness, model, effort, permission_mode, fast,
-            &bot.path, None, false, None, None, true, None, false, Some(&bot.name), None, None, &sink,
+            &bot.path, None, false, None, None, true, None, false, Some(&bot.name), None, None, None, &sink,
         )
         .await;
     // A send that failed before logging the prompt left the mark behind.

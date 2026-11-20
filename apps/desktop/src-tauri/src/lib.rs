@@ -294,6 +294,7 @@ async fn send_msg(
             None,
             None,
             None,
+            None,
             &sink,
         )
         .await?;
@@ -304,6 +305,90 @@ async fn send_msg(
         sink.emit(orchestration::SESSION_CREATED, &snap.index_item).ok();
     }
     Ok(outcome)
+}
+
+/// Starts a session on a pull request's own branch, from the pull requests
+/// page, in a tree Dray checks out on the head so the agent's push updates that
+/// PR. With `bot`, it is that bot's task instead: hidden under its chat, on
+/// the chat's own agent and picks, reporting back like a task the bot started,
+/// and the bot is told the reader started it.
+///
+/// Its own command rather than a field on `send_msg`, so a server older than
+/// the page answers `unknown command` before anything is made, instead of
+/// ignoring the head and forking from the default branch.
+#[cfg_attr(feature = "desktop", tauri::command)]
+#[allow(clippy::too_many_arguments)]
+async fn start_pr_session(
+    session_id: String,
+    prompt: String,
+    harness: Harness,
+    model: ModelId,
+    effort: Option<Effort>,
+    permission_mode: ApprovalPolicy,
+    fast: bool,
+    cwd: String,
+    pr_head: git::PrHead,
+    pr_number: u64,
+    bot: Option<String>,
+    sink: Sink,
+) -> Result<store::SessionIndexItem, Fail> {
+    if !harness.names_a_cli() {
+        fail!("invalid harness");
+    }
+    if !analytics::client_counts() {
+        analytics::track_active_day();
+    }
+
+    let (parent, harness, model, effort, permission_mode, fast) = match bot.as_deref() {
+        Some(key) => {
+            let bot = bots::find_bot(key).await?;
+            let Some(chat) = bots::chat_of(&bot).await else {
+                fail!("{} has no chat yet. Write to it once, then send it the pull request.", bot.name);
+            };
+            // A task inherits its bot's agent and picks, as one the bot starts
+            // with `dray session new` does.
+            (Some(chat.session_id), chat.harness, chat.model, chat.effort, chat.permission_mode, chat.fast)
+        }
+        None => (None, harness, model, effort, permission_mode, fast),
+    };
+
+    let outcome = manager()
+        .send_msg(
+            &session_id,
+            &prompt,
+            &[],
+            &[],
+            harness,
+            model,
+            effort,
+            permission_mode,
+            fast,
+            &cwd,
+            None,
+            true,
+            None,
+            None,
+            true,
+            parent.as_deref(),
+            parent.is_some(),
+            None,
+            None,
+            None,
+            Some(&pr_head),
+            &sink,
+        )
+        .await?;
+    let Some(item) = outcome.snapshot.map(|s| s.index_item) else {
+        fail!("the session started but returned no index entry");
+    };
+    sink.emit(orchestration::SESSION_CREATED, &item).ok();
+    if parent.is_some() {
+        // No branch name or PR title: the note is a list the bot trusts, and
+        // both are the PR author's words.
+        bots::note_since(&item, format!("the user started it on PR #{pr_number} from the pull requests page"), None, &sink)
+            .await;
+    }
+    Ok(item)
 }
 
 /// Which agents can actually be run on this machine, and what to say about
