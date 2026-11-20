@@ -236,6 +236,7 @@ function Demo() {
   const [, setTick] = useState(0);
   onSent = () => setTick((n) => n + 1);
 
+  const [owner, setOwner] = useState<string | null>(null);
   const keys = scope === "space" ? [DRAY] : [DRAY, SITE];
   const rows = useMemo(() => inboxRows(keys, (key) => MARKS[key]), [scope]); // eslint-disable-line react-hooks/exhaustive-deps
   const sessionsFor = (row: InboxRow) => sessionsForPr(row, SESSIONS, () => undefined);
@@ -251,8 +252,11 @@ function Demo() {
               loaded
               hasRepos
               missing={null}
-              errors={scope === "all" ? [{ name: "site", error: { kind: "other", detail: "API rate limit exceeded" } }] : []}
+              errors={scope === "mine" ? [{ name: "site", error: { kind: "other", detail: "API rate limit exceeded" } }] : []}
               scope={scope}
+              owners={["ada", "acme"]}
+              owner={owner}
+              onOwner={setOwner}
               onScope={setScope}
               sessionsFor={sessionsFor}
               botOf={() => undefined}
@@ -272,7 +276,9 @@ function Demo() {
                 sessions={sessionsFor(picked)}
                 bots={[]}
                 botOf={() => undefined}
-                server={null}
+                server="local"
+                checkout={{ kind: "here", path: "/demo" }}
+                machines={{ projects: [], clones: [], initial: "" }}
                 onOpenSession={(item) => alert(`Would open ${item.title}`)}
                 onStart={async (prompt) => {
                   sent.unshift({ sessionId: `new session on ${picked.mark.headRefName}`, prompt });

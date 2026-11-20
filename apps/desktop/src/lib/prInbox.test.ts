@@ -146,14 +146,14 @@ describe("sessionsForPr", () => {
     expect(sessionsForPr(row(), [item()], none).map((i) => i.sessionId)).toEqual(["s1"]);
   });
 
-  it("ranks live over hidden over settled, then newest", () => {
+  it("lists every task the PR has had, settled ones too, newest first", () => {
     const items = [
-      item({ sessionId: "settled", archived: true, modified: "9" }),
-      item({ sessionId: "hidden", hidden: true, modified: "9" }),
-      item({ sessionId: "old", modified: "1" }),
-      item({ sessionId: "new", modified: "2" }),
+      item({ sessionId: "settled", archived: true, created: "3" }),
+      item({ sessionId: "hidden", hidden: true, created: "2" }),
+      item({ sessionId: "old", created: "1" }),
+      item({ sessionId: "new", created: "4" }),
     ];
-    expect(sessionsForPr(row(), items, none).map((i) => i.sessionId)).toEqual(["new", "old", "hidden", "settled"]);
+    expect(sessionsForPr(row(), items, none).map((i) => i.sessionId)).toEqual(["new", "settled", "hidden", "old"]);
   });
 
   it("matches nothing for a fork's PR, another branch, or another repo", () => {
@@ -220,7 +220,7 @@ describe("prPrompt", () => {
   it("names the PR and puts the reader's text last", () => {
     const text = prPrompt({ pr, picked: new Set(), text: "  Please look again.  " });
     expect(text).toBe(
-      'Pull request #7 "Fix it" — https://github.com/o/r/pull/7\nBranch feature into main.\n\nPlease look again.',
+      'Pull request #7 "Fix it" — https://github.com/o/r/pull/7\nBranch feature into main.\n\n`gh pr view 7 --comments` has the rest of its conversation.\n\nPlease look again.',
     );
   });
 
@@ -247,11 +247,10 @@ describe("prPrompt", () => {
     expect(text).toContain("greptile[bot], on src/a.ts:4");
   });
 
-  it("tells a fresh session where it is and where its push goes", () => {
-    expect(prPrompt({ pr, picked: new Set(), text: "", fresh: true })).toContain(
-      "This tree is on feature, the pull request's own branch. Push to it",
-    );
-    expect(prPrompt({ pr, picked: new Set(), text: "" })).not.toContain("Push to it");
+  it("points at the rest of the conversation and leaves the push to the server", () => {
+    const prompt = prPrompt({ pr, picked: new Set(), text: "" });
+    expect(prompt).toContain("`gh pr view 7 --comments` has the rest of its conversation.");
+    expect(prompt).not.toContain("Push to it");
   });
 });
 

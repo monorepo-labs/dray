@@ -89,6 +89,7 @@ export function RepoMenu({
   onPick,
   placeholder,
   anyLabel,
+  heading = "Repository",
 }: {
   repo: string | null;
   repos: readonly { id: string; name: string }[];
@@ -98,6 +99,8 @@ export function RepoMenu({
   /// A first row that picks nothing — every repository — where the list can
   /// draw that.
   anyLabel?: string;
+  /// The menu's label, for a list of something other than repositories.
+  heading?: string;
 }) {
   // Nothing to choose between, and the empty state below already says what to
   // do about that — a trigger reading "Choose a repository" that opens onto
@@ -125,7 +128,7 @@ export function RepoMenu({
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="start" className="w-64">
-        <DropdownMenuLabel>Repository</DropdownMenuLabel>
+        <DropdownMenuLabel>{heading}</DropdownMenuLabel>
         {anyLabel && (
           <>
             <DropdownMenuCheckboxItem checked={!repo} onCheckedChange={() => onPick(null)}>

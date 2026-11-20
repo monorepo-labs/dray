@@ -2288,9 +2288,9 @@ async fn start_session(
 /// missing the very change the user is looking at.
 pub(crate) async fn resolve_base(from: &str, project_path: &str) -> Result<Base> {
     if let Some(item) = store::get_session_index_item(from).await? {
-        // A detached session's work is its tree's HEAD, ahead of the branch it
-        // pushes to.
-        if item.detached_on.is_some() && !item.worktree_removed {
+        // A session in a detached tree has its work on that tree's HEAD, ahead
+        // of the branch it pushes to.
+        if item.worktree_name.is_some() && !item.worktree_removed && crate::git::current_branch(&item.cwd).await.is_none() {
             if let Some(head) = crate::git::resolve_commit(&item.cwd, "HEAD").await {
                 return Ok(Base::Fork(head));
             }

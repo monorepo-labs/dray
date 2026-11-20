@@ -801,17 +801,6 @@ export type ContextWindow = { usedTokens: number, maxTokens: number, };
 export type DeltaEvent = { "delta": "block_start", block: BlockRef, blockType: BlockType, } | { "delta": "text_delta", block: BlockRef, text: string, } | { "delta": "input_delta", block: BlockRef, partialJson: string, } | { "delta": "block_stop", block: BlockRef, };
 
 /**
- * A branch checked out in another tree, which a session's own tree therefore
- * sits detached at the tip of. Recorded on the session so every spawn of it,
- * resumes included, tells the agent where its commits go.
- */
-export type DetachedOn = { branch: string, 
-/**
- * `None` in a repo with no remote, where the commits stay on this tree.
- */
-remote: string | null, };
-
-/**
  * One row in the Files view's tree.
  */
 export type DirEntry = { name: string, 
@@ -1788,6 +1777,20 @@ listing?: PrListing, };
 export type PrMarkState = "OPEN" | "MERGED";
 
 /**
+ * What the pull requests page lists: the reader's open pull requests across
+ * GitHub, and the owners they can narrow it to.
+ */
+export type PrSearch = { 
+/**
+ * The reader's own login, first among the owners.
+ */
+viewer: string, 
+/**
+ * The organizations the reader belongs to, as GitHub lists them.
+ */
+orgs: Array<string>, prs: Array<SearchedPr>, };
+
+/**
  * Why there is nothing to show, when the reason is not "this branch has no PR".
  *
  * Typed rather than a string because the frontend acts differently on each:
@@ -2016,6 +2019,15 @@ export type SaveOutcome = "saved" | "stale";
 export type Schedule = { everyMinutes?: number, at?: string, days: Array<number>, };
 
 /**
+ * One pull request the search found, with the repo it lives in.
+ */
+export type SearchedPr = { 
+/**
+ * `owner/name`, the slug `github:` keys and `gh --repo` take.
+ */
+repo: string, mark: PrMark, };
+
+/**
  * What a send did. The two fields are mutually exclusive in practice — a
  * session being created cannot already be running a turn — but they answer
  * different questions and the frontend acts on each separately.
@@ -2126,12 +2138,7 @@ worktreeName: string | null,
  * keeps `branch` above authoritative: the shared checkout's HEAD describes
  * whatever else is going on in it, not this session's work.
  */
-worktreeRemoved: boolean, 
-/**
- * The tree sits detached at `branch`'s tip, that branch being checked out
- * elsewhere when the session started; its agent is told to push there.
- */
-detachedOn?: DetachedOn, title: string, 
+worktreeRemoved: boolean, title: string, 
 /**
  * The reader renamed this session, so no generated title may replace it —
  * neither `title.rs`'s nor one a harness sends of its own (grok's
@@ -2327,12 +2334,7 @@ worktreeName: string | null,
  * keeps `branch` above authoritative: the shared checkout's HEAD describes
  * whatever else is going on in it, not this session's work.
  */
-worktreeRemoved: boolean, 
-/**
- * The tree sits detached at `branch`'s tip, that branch being checked out
- * elsewhere when the session started; its agent is told to push there.
- */
-detachedOn?: DetachedOn, title: string, 
+worktreeRemoved: boolean, title: string, 
 /**
  * The reader renamed this session, so no generated title may replace it —
  * neither `title.rs`'s nor one a harness sends of its own (grok's

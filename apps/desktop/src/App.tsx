@@ -1,6 +1,6 @@
 import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { invoke, listen, LOCAL, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
+import { invoke, listen, LOCAL, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { CircleDashed, Plus } from "lucide-react";
 import PrStateIcon from "@/components/PrStateIcon";
@@ -186,7 +186,7 @@ import { boatAsleep, restoreHeld } from "@/lib/boat";
 import { onCloud, setCloudFailure, useCloud, useCloudFailure, usePlacing } from "@/lib/cloud";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout, nextCheckout } from "@/lib/projectGroups";
-import { serverConnected, serverName, shownOffline, useServers } from "@/lib/servers";
+import { cloudServer, serverConnected, serverName, shownOffline, useServers } from "@/lib/servers";
 import { canTagFrom } from "@/lib/sessionTag";
 import { useReachableSessions } from "@/hooks/useReachableSessions";
 import AgentUpdateLine from "@/components/composer/AgentUpdateLine";
@@ -194,7 +194,7 @@ import { useAgentUpdates, useAutoUpdateAgents } from "@/hooks/useAgentUpdates";
 import { overwritesInPlace, turnRunningOn } from "@/lib/agentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import AutoContinueNotice from "@/components/composer/AutoContinueNotice";
-import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, PrMark, SessionIndexItem, SessionSnapshot, WorktreeDisposition } from "@/types/events";
+import type { Attachment, Bot, BotPreview, CloneProgress, Harness, IssueRef, MergeMethod, PrMark, Project, SessionIndexItem, SessionSnapshot, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -208,8 +208,9 @@ import { changeRange, lastToolResult, writingTurns } from "@/lib/changes";
 import { useOlderWrites } from "@/hooks/useOlderWrites";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
-import { prBadgeCount, prRepoSlug, sessionBranch, slugKey } from "@/lib/pr";
-import { inboxRows, sessionsForPr, type InboxRow, type PrPicks } from "@/lib/prInbox";
+import { marksRepo, prBadgeCount, prRepoSlug, sessionBranch, slugKey, slugOf } from "@/lib/pr";
+import { usePrSearch } from "@/hooks/usePrSearch";
+import { inboxRows, sessionsForPr, type InboxRow, type PrCheckout, type PrMachines, type PrPicks } from "@/lib/prInbox";
 import type { PullsScope } from "@/components/PullsView";
 import { holdSettle } from "@/lib/heldFlags";
 import { confirmMerge, mergeBlock, readLogin, useMergeAccess } from "@/lib/mergeAccess";
@@ -767,7 +768,9 @@ function App() {
   // The pull requests page's own state, beside the issues page's: the PR its
   // pane shows, and whether it lists this space or every one.
   const [pickedPr, setPickedPr] = useState<InboxRow | null>(null);
-  const [pullsScope, setPullsScope] = useState<PullsScope>("space");
+  const [pullsScope, setPullsScope] = useState<PullsScope>("mine");
+  // The owner the "involving me" search is narrowed to, or every one.
+  const [pullsOwner, setPullsOwner] = useState<string | null>(null);
 
   const storedViewTab: ViewTab = selectedSessionId ? viewTabs[selectedSessionId] ?? "chat" : "chat";
   const selectedBotId = botAt(bots, sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.cwd ?? "")?.id;
@@ -1477,10 +1480,11 @@ function App() {
   // (`inBotTree`).
   const pullsKeys = useMemo(
     () =>
-      pullsOpen
+      // "Involving me" lists from one GitHub search and reads no repo here.
+      pullsOpen && pullsScope === "space"
         ? [
             ...new Set([
-              ...(pullsScope === "all" ? projects : spaceProjects).map((p) => p.path),
+              ...spaceProjects.map((p) => p.path),
               ...(botRepoKey ? botRepoKey.split("\n") : []),
             ]),
           ]
@@ -1603,15 +1607,55 @@ function App() {
   // One that has left the list stays only while its repo is still one the page
   // reads — a PR merged from the pane keeps its pane — and goes with a space
   // or scope switch that takes its repo away, the spaces rule for the screen.
-  const pullRows = useMemo(() => inboxRows(pullsKeys, prMarks.marksIn), [pullsKeys, prMarks.marksIn]);
+  const prSearch = usePrSearch(pullsOpen && pullsScope === "mine", pullsOwner);
+  // Each searched repo's checkout among This Mac's projects, matched on their
+  // git remotes, so a row reads and starts through the checkout where there is
+  // one and through its `github:` slug, cloning on start, where there is none.
+  const [searchCheckouts, setSearchCheckouts] = useState<Record<string, string>>({});
+  const searchRepoKey = [...new Set((prSearch.answer?.prs ?? []).map((p) => marksRepo([p.mark]) ?? ""))].filter(Boolean).sort().join("\n");
+  const localProjectKey = projects.filter((p) => serverOfPath(p.path) === LOCAL).map((p) => p.path).join("\n");
+  useEffect(() => {
+    if (!searchRepoKey || !localProjectKey) return;
+    let gone = false;
+    invoke<Record<string, string>>("repo_checkouts", { paths: localProjectKey.split("\n"), repos: searchRepoKey.split("\n") }, LOCAL)
+      .then((found) => !gone && setSearchCheckouts(found))
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
+  }, [searchRepoKey, localProjectKey]);
+  // Who "Involving me" narrows to: the reader, every owner a search has turned
+  // up — a personal repo of someone else's included — then the reader's orgs.
+  // Gathered, never dropped, so narrowing to one keeps the others on offer.
+  const [pullsOwners, setPullsOwners] = useState<string[]>([]);
+  useEffect(() => {
+    const found = prSearch.answer;
+    if (!found) return;
+    const seen = [found.viewer, ...found.prs.map((p) => p.repo.split("/")[0]), ...found.orgs].filter(Boolean);
+    setPullsOwners((prev) => {
+      const next = [...new Set([...prev, ...seen])];
+      return next.length === prev.length ? prev : next;
+    });
+  }, [prSearch.answer]);
+  const pullRows = useMemo(() => {
+    if (pullsScope === "space") return inboxRows(pullsKeys, prMarks.marksIn);
+    return (prSearch.answer?.prs ?? []).flatMap(({ repo, mark }) => {
+      const key = marksRepo([mark]);
+      if (!key || !mark.listing) return [];
+      return [{ key: searchCheckouts[key] ?? slugKey(repo), repo: key, mark, listing: mark.listing }];
+    });
+  }, [pullsScope, pullsKeys, prMarks.marksIn, prSearch.answer, searchCheckouts]);
   const pickedRow =
     (pickedPr && pullRows.find((r) => r.mark.url === pickedPr.mark.url)) ??
-    (pickedPr && pullsKeys.includes(pickedPr.key) ? pickedPr : null);
+    (pickedPr && (pullsScope === "mine" || pullsKeys.includes(pickedPr.key)) ? pickedPr : null);
   const pickedPrData = usePullRequest(
     pickedRow?.key ?? "",
     pickedRow?.mark.headRefName ?? null,
     pullsOpen && !!pickedRow,
-    () => prMarks.refreshAfterWrite(),
+    () => {
+      prMarks.refreshAfterWrite();
+      if (pullsScope === "mine") void prSearch.refresh();
+    },
   );
   // Matching a PR to its session needs both sides of the index — a settled
   // session is what a new one takes its picks from, and a live one must never
@@ -1651,17 +1695,26 @@ function App() {
   );
   const pullsMissing = useMemo(() => {
     if (pullRows.length > 0) return null;
+    const searchError = pullsScope === "mine" ? prSearch.error : null;
+    if (searchError?.kind === "no_cli" || searchError?.kind === "not_authenticated") {
+      return { kind: searchError.kind, cwd: "" };
+    }
     for (const key of pullsKeys) {
       const error = prMarks.errorFor(key);
       if (error?.kind === "no_cli" || error?.kind === "not_authenticated") return { kind: error.kind, cwd: key };
     }
     return null;
-  }, [pullRows, pullsKeys, prMarks.errorFor]);
-  const pullsErrors = pullsKeys.flatMap((key) => {
+  }, [pullRows, pullsKeys, prMarks.errorFor, pullsScope, prSearch.error]);
+  const pullsErrors = pullsScope === "mine"
+    ? prSearch.error?.kind === "other" ? [{ name: "GitHub search", error: prSearch.error }] : []
+    : pullsKeys.flatMap((key) => {
     const error = prMarks.errorFor(key);
     return error?.kind === "other" ? [{ name: projects.find((p) => p.path === key)?.name ?? key, error }] : [];
   });
-  const pullsLoaded = pullsKeys.some((key) => prMarks.marksIn(key) !== undefined || prMarks.errorFor(key));
+  const pullsLoaded =
+    pullsScope === "mine"
+      ? !!prSearch.answer || !!prSearch.error
+      : pullsKeys.some((key) => prMarks.marksIn(key) !== undefined || prMarks.errorFor(key));
   const [pullsReading, setPullsReading] = useState(false);
   /// The checkout a PR's new session is made in: the one the PR was read
   /// through, else any attached checkout of its repo — never a `github:` key,
@@ -1669,11 +1722,40 @@ function App() {
   const prCheckout = (row: InboxRow) =>
     projects.find((p) => p.path === row.key)?.path ??
     projects.find((p) => prMarks.repoOf(p.path) === row.repo)?.path;
-  /// The bots a PR can go to: those on its checkout's server, the only ones
-  /// whose task can be made in that checkout.
+  /// What Start Task does about a checkout first. A key that is a checkout on
+  /// disk — a bot task's, read for the page though nobody attached it — is
+  /// attached; a `github:` key with no checkout anywhere is cloned into
+  /// `~/dray`, on This Mac, the attach dialog's own clone.
+  const prCheckoutPlan = (row: InboxRow): PrCheckout => {
+    const here = prCheckout(row);
+    if (here) return { kind: "here", path: here };
+    const slug = slugOf(row.key);
+    return slug ? { kind: "clone", slug } : { kind: "attach", path: row.key };
+  };
+  /// Where a PR's task runs: its checkout's server, This Mac for a clone.
+  const prServer = (plan: PrCheckout) => (plan.kind === "clone" ? (plan.server ?? LOCAL) : serverOfPath(plan.path));
+  /// The machines Start Task offers for a plain task: every checkout of the
+  /// PR's repo (its `remote`, git's own spelling of the repo), then a stand-in
+  /// on each connected machine with none, never a Dray Cloud one. The pick
+  /// starts on the checkout the PR would use anyway.
+  const prMachines = (row: InboxRow): PrMachines => {
+    const name = row.repo.split("/").pop() ?? row.repo;
+    const plan = prCheckoutPlan(row);
+    const real = projects.filter(
+      (p) => !cloudServer(serverOfPath(p.path)) && (p.remote === row.repo || p.path === row.key || (plan.kind !== "clone" && p.path === plan.path)),
+    );
+    const servers = [LOCAL, ...allServers.map((s) => s.id).filter((id) => id !== LOCAL && serverConnected(id) && !cloudServer(id))];
+    const clones = servers
+      .filter((server) => !real.some((p) => serverOfPath(p.path) === server))
+      .map((server): Project => ({ path: qualify(`/~/dray/${name}`, server), name, space: null, remote: row.repo, lastSelected: "" }));
+    const initial = plan.kind === "clone" ? (clones[0]?.path ?? "") : plan.path;
+    return { projects: [...real, ...clones], clones: clones.map((c) => c.path), initial };
+  };
+  /// The bots a PR can go to: those on the server its task runs on, the only
+  /// ones whose task can be made in that checkout.
   const botsForRow = (row: InboxRow) => {
-    const checkout = prCheckout(row);
-    return checkout ? bots.filter((b) => serverOfBot(b) === serverOfPath(checkout)) : [];
+    const server = prServer(prCheckoutPlan(row));
+    return bots.filter((b) => serverOfBot(b) === server);
   };
   /// Which bot a PR's session is a task of, to name the bot beside it.
   const botOfPrSession = (item: SessionIndexItem) =>
@@ -1688,34 +1770,70 @@ function App() {
       pickTaskTab(bot.id, item.sessionId);
     });
   };
-  /// Start session on a PR with no live session, right from the page: a new
-  /// worktree on the PR's own branch, the reader's own session or `bot`'s task.
-  /// The reader stays on the page, where the PR now names its session.
+  /// Start Task from the page: a new worktree on the PR's own branch, the
+  /// reader's own task or `bot`'s, whatever tasks the PR already has — the new
+  /// one leads its list. The reader stays on the page.
   const startPrSession = async (
     row: InboxRow,
     prompt: string,
     picks: PrPicks,
     bot: Bot | null,
+    onCloning: (line: string | null) => void,
+    machine: string | null,
   ): Promise<{ started: SessionIndexItem } | { error: string }> => {
-    const projectPath = prCheckout(row);
-    if (!projectPath) return { error: "No checkout of this repository is attached here, so there is nowhere to start a session." };
-    const server = serverOfPath(projectPath);
-    // With the archived view up, the live side is the page's own read, which a
-    // session started since is missing from: ask again before making a second.
-    if (indexSide !== false) {
-      const live = (
-        await Promise.all(
-          [LOCAL, ...(serverIds ? serverIds.split("\n") : [])].map((s) =>
-            invoke<SessionIndexItem[]>("list_session_index_items", { archived: false }, s).catch(() => []),
-          ),
-        )
-      ).flat();
-      const working = sessionsForPr(row, live, prMarks.repoOf).find((s) => !s.archived);
-      if (working) {
-        setOtherIndexSide(live);
-        return { error: `"${working.title}" is already working on this pull request. Send to it instead.` };
+    // A plain task runs on the picked machine: its checkout, or a clone there.
+    const picked = machine ? prMachines(row) : null;
+    const slug = slugOf(row.key) ?? prRepoSlug(row.mark.url);
+    const plan: PrCheckout =
+      picked && machine && picked.clones.includes(machine) && slug
+        ? { kind: "clone", slug, server: serverOfPath(machine) }
+        : picked && machine && picked.projects.some((p) => p.path === machine)
+          ? { kind: "here", path: machine }
+          : prCheckoutPlan(row);
+    const server = prServer(plan);
+    // git's own progress lines, while a clone runs, for the pane to show.
+    const listening =
+      plan.kind === "clone"
+        ? listen<CloneProgress>("clone_progress", ({ payload, server: from }) => {
+            // git's "Cloning into '<staging path>'" names a folder the reader never sees.
+            if (from === server && payload.slug === plan.slug && !payload.line.startsWith("Cloning into")) {
+              onCloning(payload.line);
+            }
+          })
+        : null;
+    if (plan.kind === "clone") onCloning("");
+    // Attached or cloned only now, at the start, so opening a PR changes
+    // nothing on disk; done before the duplicate check above could not see a
+    // checkout it had to make.
+    let projectPath: string;
+    try {
+      if (plan.kind === "here") projectPath = plan.path;
+      else {
+        const list = await invoke<Project[]>(
+          plan.kind === "clone" ? "clone_github_repo" : "add_project",
+          plan.kind === "clone" ? { slug: plan.slug } : { path: plan.path },
+          server,
+        );
+        handleAttachProject(server, list);
+        const name = plan.kind === "clone" ? plan.slug.split("/").pop() : basename(plan.path);
+        const made = list.find((p) => basename(p.path) === name);
+        if (!made) return { error: "The checkout was made but is not in the project list." };
+        projectPath = made.path;
+        void prMarks.refreshRepos([projectPath]);
       }
+    } catch (e) {
+      const said = e instanceof Error ? e.message : String(e);
+      onCloning(null);
+      void listening?.then((unlisten) => unlisten());
+      return {
+        error:
+          plan.kind === "clone"
+            ? `Could not clone ${plan.slug} into ~/dray: ${said}`
+            : `Could not attach ${plan.path}: ${said}`,
+      };
     }
+    onCloning(null);
+    void listening?.then((unlisten) => unlisten());
     try {
       const started = await invoke<SessionIndexItem>(
         "start_pr_session",
@@ -1737,12 +1855,13 @@ function App() {
       const said = e instanceof Error ? e.message : String(e);
       // Asked before anything is made, so nothing is left to tidy up.
       if (said.includes("unknown command")) {
-        return { error: "This server is older than the pull requests page. Update it, then start the session again." };
+        return { error: "This server is older than the pull requests page. Update it, then start the task again." };
       }
       return { error: said };
     }
   };
   const refreshPulls = () => {
+    if (pullsScope === "mine") return void prSearch.refresh();
     setPullsReading(true);
     void prMarks.refreshRepos(pullsKeys).finally(() => setPullsReading(false));
   };
@@ -4235,12 +4354,13 @@ function App() {
                     sessions={sessionsForRow(pickedRow)}
                     bots={botsForRow(pickedRow)}
                     botOf={botOfPrSession}
-                    server={(() => {
-                      const checkout = prCheckout(pickedRow);
-                      return checkout ? serverOfPath(checkout) : null;
-                    })()}
+                    server={prServer(prCheckoutPlan(pickedRow))}
+                    checkout={prCheckoutPlan(pickedRow)}
                     onOpenSession={openPrSession}
-                    onStart={(prompt, picks, bot) => startPrSession(pickedRow, prompt, picks, bot)}
+                    machines={prMachines(pickedRow)}
+                    onStart={(prompt, picks, bot, onCloning, machine) =>
+                      startPrSession(pickedRow, prompt, picks, bot, onCloning, machine)
+                    }
                   />
                 </MountOnce>
               </TabBody>
@@ -4592,17 +4712,26 @@ function App() {
           <PullsView
             rows={pullRows}
             loaded={pullsLoaded}
-            hasRepos={pullsKeys.length > 0}
+            hasRepos={pullsScope === "mine" || pullsKeys.length > 0}
             missing={pullsMissing}
             errors={pullsErrors}
             scope={pullsScope}
-            onScope={setPullsScope}
+            onScope={(scope) => {
+              setPullsScope(scope);
+              setPickedPr(null);
+            }}
+            owners={pullsOwners}
+            owner={pullsOwner}
+            onOwner={(owner) => {
+              setPullsOwner(owner);
+              setPickedPr(null);
+            }}
             sessionsFor={sessionsForRow}
             botOf={botOfPrSession}
             onOpenSession={openPrSession}
             picked={pickedRow}
             onPick={setPickedPr}
-            loading={pullsReading}
+            loading={pullsScope === "mine" ? prSearch.loading : pullsReading}
             onRefresh={refreshPulls}
           />
         </MountOnce>

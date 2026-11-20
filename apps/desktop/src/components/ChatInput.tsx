@@ -8,7 +8,8 @@ import {
   type ReactNode,
 } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ArrowUp, CornerDownLeft, Paperclip, Square, X } from "lucide-react";
+import { CornerDownLeft, Paperclip, X } from "lucide-react";
+import SendButton from "@/components/composer/SendButton";
 
 import AttachmentTray from "@/components/composer/AttachmentTray";
 import BotMentionMenu from "@/components/composer/BotMentionMenu";
@@ -754,47 +755,12 @@ export default function ChatInput({
           const stopping = busy && !canSend;
 
           return (
-            <Button
-              type={stopping ? "button" : "submit"}
-              size="icon-sm"
+            <SendButton
+              stopping={stopping}
               disabled={stopping ? !onStop : !canSend}
               onClick={stopping ? onStop : undefined}
               title={stopping ? "Stop" : held ? held : busy ? "Send — queued onto this turn" : "Send"}
-              // The one filled button that keeps `--primary`. Everywhere but
-              // Default light the two tokens are the same value, so this says
-              // nothing there; on that palette it is what makes Send the
-              // branded control and leaves every other filled button dark.
-              className="rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none disabled:opacity-100"
-            >
-              {/* Both icons are mounted and stacked in one grid cell, so the
-                  swap is a transition rather than a remount — React would
-                  otherwise tear one out and put the other in with nothing to
-                  animate between them.
-
-                  Both directions run the same length. Shortening the return to
-                  Send was tried and read as a flinch — the two icons are one
-                  control changing its mind, and a swap that goes out slower
-                  than it comes back stops looking like one movement. */}
-              <span className="grid size-4 place-items-center">
-                <ArrowUp
-                  strokeWidth={2}
-                  className={cn(
-                    "col-start-1 row-start-1 transition-all duration-200 ease-out motion-reduce:transition-none",
-                    stopping
-                      ? "scale-50 rotate-90 opacity-0"
-                      : "scale-100 rotate-0 opacity-100",
-                  )}
-                />
-                <Square
-                  className={cn(
-                    "col-start-1 row-start-1 fill-current transition-all duration-200 ease-out motion-reduce:transition-none",
-                    stopping
-                      ? "scale-100 rotate-0 opacity-100"
-                      : "scale-50 -rotate-90 opacity-0",
-                  )}
-                />
-              </span>
-            </Button>
+            />
           );
         })()}
     </div>

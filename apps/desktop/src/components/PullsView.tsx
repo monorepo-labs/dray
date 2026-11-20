@@ -25,7 +25,9 @@ import {
 import { cn } from "@/lib/utils";
 import type { Bot, PrUnavailable, SessionIndexItem } from "@/types/events";
 
-export type PullsScope = "space" | "all";
+/// Every open PR involving the reader across GitHub, from one search, or
+/// every open PR in this space's projects, from the sidebar's marks.
+export type PullsScope = "mine" | "space";
 
 const PEOPLE: readonly { value: PeopleFilter; label: string }[] = [
   { value: "all", label: "All" },
@@ -34,8 +36,8 @@ const PEOPLE: readonly { value: PeopleFilter; label: string }[] = [
 ];
 
 const SCOPES = [
+  { value: "mine", label: "Involving me" },
   { value: "space", label: "This space" },
-  { value: "all", label: "All spaces" },
 ] as const;
 
 /// Every open pull request in the projects on screen, filed by what it wants
@@ -53,6 +55,9 @@ export default function PullsView({
   errors,
   scope,
   onScope,
+  owners,
+  owner,
+  onOwner,
   sessionsFor,
   botOf,
   onOpenSession,
@@ -74,6 +79,10 @@ export default function PullsView({
   errors: { name: string; error: PrUnavailable }[];
   scope: PullsScope;
   onScope: (scope: PullsScope) => void;
+  /// Who "Involving me" can be narrowed to: the reader, then their orgs.
+  owners: string[];
+  owner: string | null;
+  onOwner: (owner: string | null) => void;
   sessionsFor: (row: InboxRow) => SessionIndexItem[];
   /// The bot a session is a task of, to name it on the row.
   botOf: (item: SessionIndexItem) => Bot | undefined;
@@ -137,7 +146,17 @@ export default function PullsView({
         <div className="flex-1" aria-hidden />
 
         <div className="flex shrink-0 items-center gap-1.5">
-          {repos.length > 1 && (
+          {scope === "mine" && (
+            <RepoMenu
+              repo={owner}
+              repos={(owner && !owners.includes(owner) ? [owner, ...owners] : owners).map((name) => ({ id: name, name }))}
+              onPick={onOwner}
+              placeholder="All owners"
+              anyLabel="All owners"
+              heading="Owner"
+            />
+          )}
+          {repos.length > 0 && (
             <RepoMenu
               repo={repoShown}
               repos={repos.map((name) => ({ id: name, name }))}
@@ -185,7 +204,7 @@ export default function PullsView({
               ? "No pull request matches these filters."
               : scope === "space"
                 ? "No open pull requests in this space."
-                : "No open pull requests."}
+                : "No open pull requests involving you."}
           </p>
         ) : (
           sections.map((section) => (
@@ -194,7 +213,7 @@ export default function PullsView({
                 <PullRow
                   key={row.mark.url}
                   row={row}
-                  session={sessionsFor(row).find((s) => !s.archived) ?? null}
+                  session={sessionsFor(row)[0] ?? null}
                   botOf={botOf}
                   onOpenSession={onOpenSession}
                   showRepo={!repoShown && repos.length > 1}
@@ -222,8 +241,8 @@ function PullRow({
   onPick,
 }: {
   row: InboxRow;
-  /// The live session behind it, if any — named on the row so a PR nobody is
-  /// working on stands out, and opened from there.
+  /// Its latest task, live or settled — named on the row so a PR nobody has
+  /// worked on stands out, and opened from there.
   session: SessionIndexItem | null;
   botOf: (item: SessionIndexItem) => Bot | undefined;
   onOpenSession: (item: SessionIndexItem) => void;
@@ -278,7 +297,7 @@ function PullRow({
         />
       ) : (
         <span className="hidden w-20 shrink-0 truncate text-muted-foreground/50 @md:inline">
-          {listing.isCrossRepository ? "Read only" : "No session"}
+          {listing.isCrossRepository ? "Read only" : "No task"}
         </span>
       )}
       <Avatar src={listing.authorAvatar} name={listing.author} />

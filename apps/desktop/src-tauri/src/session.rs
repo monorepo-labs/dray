@@ -490,6 +490,22 @@ impl StatusTracker {
     }
 }
 
+/// What a tree left detached at `branch` tells its agent, as
+/// `start_pr_session`'s line does for a pull request's head: another tree
+/// has the branch, so commits go up by `HEAD:<branch>`.
+async fn detached_push_line(project_path: &str, branch: &str) -> String {
+    match git::branch_remote(project_path, branch).await {
+        Some(remote) => format!(
+            "Another tree has {branch} checked out, so this one is detached at its tip. Commit here and push with \
+             `git push {remote} HEAD:{branch}`. If the push is refused, fetch and rebase onto {remote}/{branch} first."
+        ),
+        None => format!(
+            "Another tree has {branch} checked out, so this one is detached at its tip. Commit here; this repository \
+             has no remote to push to."
+        ),
+    }
+}
+
 /// Deletes the worktree an index entry names, if it names one.
 ///
 /// A session that never had a worktree is a no-op rather than an error: this
@@ -1196,14 +1212,21 @@ impl SessionManager {
             // Ahead of the index write, unlike the spawn below: a base git
             // cannot resolve has left nothing behind at all and the caller is
             // getting the error.
+            // The branch a tree on an existing branch is on, and for one left
+            // detached, the line telling its agent how to push.
             let tree = match (base, &worktree_name) {
                 (Some(git::Base::Pr(head)), Some(name)) => {
-                    let made = git::create_worktree_on_branch(cwd, name, &head.branch, &head.repo).await?;
-                    Some((Some(head.branch.clone()), made.detached))
+                    // `start_pr_session` already put the push line in the prompt.
+                    git::create_worktree_on_branch(cwd, name, head).await?;
+                    Some((Some(head.branch.clone()), None))
                 }
                 (Some(git::Base::Branch(branch)), Some(name)) => {
                     let made = git::create_worktree_from_branch(cwd, name, branch).await?;
-                    Some((Some(branch.clone()), made.detached))
+                    let push = match made {
+                        git::PrTree::Detached => Some(detached_push_line(cwd, branch).await),
+                        git::PrTree::OnBranch => None,
+                    };
+                    Some((Some(branch.clone()), push))
                 }
                 (Some(git::Base::Fork(base)), Some(name)) => {
                     git::create_worktree(cwd, name, base).await?;
@@ -1233,12 +1256,15 @@ impl SessionManager {
             // A tree on an existing branch is on that branch, not
             // `worktree-<name>`, even detached, and the record is what every
             // reader of a session's branch goes by.
-            if let Some((on_branch, detached)) = tree {
-                if on_branch.is_some() {
-                    item.branch = on_branch;
+            let push_line = match tree {
+                Some((on_branch, push)) => {
+                    if on_branch.is_some() {
+                        item.branch = on_branch;
+                    }
+                    push
                 }
-                item.detached_on = detached;
-            }
+                None => None,
+            };
             // Written with the entry rather than linked after it: the row
             // appears before the child spawns, and a tab that arrived a beat
             // later would be one more thing moving while the first turn starts.
@@ -1341,8 +1367,14 @@ impl SessionManager {
                 app,
             )
             .await?;
+            // After the title and the index's first-prompt reading, which
+            // describe the reader's words, not how the tree pushes.
+            let sent = match &push_line {
+                Some(line) => format!("{prompt}\n\n{line}"),
+                None => prompt.to_string(),
+            };
             if let Err(error) = session
-                .send_msg(prompt, attachment_paths, issues, baseline, from, app)
+                .send_msg(&sent, attachment_paths, issues, baseline, from, app)
                 .await
             {
                 // Nothing has this session yet — it is inserted below — so

@@ -54,11 +54,6 @@ pub struct SessionIndexItem {
     /// whatever else is going on in it, not this session's work.
     #[serde(default)]
     pub worktree_removed: bool,
-    /// The tree sits detached at `branch`'s tip, that branch being checked out
-    /// elsewhere when the session started; its agent is told to push there.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub detached_on: Option<crate::git::DetachedOn>,
     pub title: String,
     /// The reader renamed this session, so no generated title may replace it —
     /// neither `title.rs`'s nor one a harness sends of its own (grok's
@@ -725,7 +720,6 @@ impl SessionIndexItem {
             },
             worktree_name: worktree_name.map(str::to_string),
             worktree_removed: false,
-            detached_on: None,
             title: title_from_prompt(first_prompt),
             title_locked: false,
             model,
@@ -799,9 +793,6 @@ impl SessionIndexItem {
             // same reason the parent carries the flag. A fork into a new tree
             // has one of its own and reads HEAD straight.
             worktree_removed: worktree_name.is_none() && self.worktree_removed,
-            // A fork in place shares the detached tree; one into a new tree
-            // is on a branch of its own.
-            detached_on: worktree_name.is_none().then(|| self.detached_on.clone()).flatten(),
             title: fork_title(&self.title),
             // Inherited: a name the reader gave the conversation still names it.
             title_locked: self.title_locked,

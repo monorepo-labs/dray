@@ -1765,20 +1765,6 @@ pub async fn keeps_children(item: &SessionIndexItem) -> bool {
 /// The instructions are not in it: the agent loads `AGENTS.md` itself, and
 /// injecting them too would put them in its context twice.
 pub async fn system_prompt(base: &str, session_id: &str, cwd: &str, harness: Harness) -> String {
-    // Every harness's rules pass through here, so a detached tree's push
-    // target rides each spawn of it, resumes included.
-    let detached = match crate::store::get_session_index_item(session_id).await {
-        Ok(Some(item)) => item.detached_on.filter(|_| !item.worktree_removed),
-        _ => None,
-    };
-    let with_note;
-    let base = match detached {
-        Some(on) => {
-            with_note = format!("{base}\n\n{}", on.note());
-            with_note.as_str()
-        }
-        None => base,
-    };
     let bots = read_list().await.unwrap_or_default();
     let Some(bot) = bots.iter().find(|b| same_dir(&b.path, cwd)) else {
         return if reports_to_parent(session_id).await {
