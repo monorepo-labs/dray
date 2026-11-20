@@ -28,6 +28,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useDragReorder } from "@/hooks/useDragReorder";
+import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
 import { serverName, useServers } from "@/lib/servers";
 import { LOCAL, type ServerId } from "@/lib/transport";
 import { useDigitHotkey, useHotkey } from "@/hooks/useHotkey";
@@ -234,6 +235,8 @@ type Item = {
   keepsView?: boolean;
   /// The remote server the tab's session runs on; absent for This Mac.
   machine?: string;
+  /// A task's or a bot chat's session, its transcript read on hover.
+  prefetch?: string;
   /// A split group, drawn as one tab: its members, lead first.
   group?: Member[];
 };
@@ -342,6 +345,8 @@ export default function ViewTabs({
       active: own === "chat",
       pick: () => onChange("chat"),
       rename,
+      // A bot's chat, out of view while one of its tasks is lit.
+      prefetch: tasks ? sessionId : undefined,
     },
     ...(shown.changes
       ? [
@@ -485,6 +490,7 @@ export default function ViewTabs({
       ),
       label: task.title,
       active: tasks?.lit === task.sessionId,
+      prefetch: task.sessionId,
       pick: () => tasks?.onPick(task.sessionId),
       close: () => {
         pushClosedTab(sessionId, { key: `task:${task.sessionId}` });
@@ -872,6 +878,7 @@ export default function ViewTabs({
           onPick={item.pick}
           rename={item.rename}
           machine={item.machine}
+          prefetch={item.prefetch}
           onClose={item.close && (() => closeAt(i))}
           onDuplicate={item.duplicate}
           onPointerDown={(e) => drag.start(e, i)}
@@ -1079,10 +1086,13 @@ export function ItemTab({
   rename,
   overlay,
   machine,
+  prefetch,
 }: {
   icon: React.ReactNode;
   /// The remote server the tab's session runs on; absent for This Mac.
   machine?: string;
+  /// The session whose transcript a resting pointer reads ahead of the click.
+  prefetch?: string;
   /// Drawn over the whole tab, out of the row's flow: the agent's beam.
   overlay?: React.ReactNode;
   label: string;
@@ -1109,6 +1119,7 @@ export function ItemTab({
   rename?: Rename;
 }) {
   const pick = onPick;
+  const hover = useHoverPrefetch(prefetch);
   const [renaming, setRenaming] = useState(false);
   const lastClick = useRef(-Infinity);
   // Closed by the tab going inactive, not only by blur: the drag hook cancels
@@ -1146,7 +1157,12 @@ export function ItemTab({
         e.preventDefault();
         onClose();
       }}
-      onPointerDown={onPointerDown}
+      onPointerEnter={hover.onPointerEnter}
+      onPointerLeave={hover.onPointerLeave}
+      onPointerDown={(e) => {
+        hover.onPointerDown();
+        onPointerDown?.(e);
+      }}
       style={{ transform }}
       className={cn(
         "group relative flex cursor-default items-center gap-1.5 h-7 rounded-md pl-2 text-ui select-none",

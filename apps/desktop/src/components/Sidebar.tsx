@@ -1948,7 +1948,7 @@ function BotRow({
   iconOnly?: boolean;
   /// The chat's last reply and the replies since the reader last wrote.
   preview?: BotPreview;
-  /// Its chat, for the jump digit; absent before the first message.
+  /// Its chat, for the jump digit and the hover read; absent before the first message.
   sessionId?: string;
   modified?: string;
   status: SessionStatus;
@@ -1968,6 +1968,7 @@ function BotRow({
   const last = preview?.text || (!sessionId && greetingOf(bot).at(-1));
   const glimpse = last && previewLine(last);
   const offline = offlineLine(serverOfPath(bot.path));
+  const prefetch = useHoverPrefetch(offline ? null : sessionId);
 
   // StalledTasks' row layout, so a bot and its stalled tasks read alike.
   // The tooltip's root sits outside the menu and its trigger inside, since
@@ -1980,8 +1981,15 @@ function BotRow({
         <button
           type="button"
           onClick={onOpen}
-          onPointerEnter={() => setHovered(true)}
-          onPointerLeave={() => setHovered(false)}
+          onPointerEnter={(e) => {
+            setHovered(true);
+            prefetch.onPointerEnter(e);
+          }}
+          onPointerLeave={() => {
+            setHovered(false);
+            prefetch.onPointerLeave();
+          }}
+          onPointerDown={prefetch.onPointerDown}
           aria-label={iconOnly ? bot.name : undefined}
           className={cn(
             "group relative flex w-full cursor-pointer items-center gap-2 rounded-md text-left",
