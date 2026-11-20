@@ -53,6 +53,8 @@ enum RootSheet: Identifiable {
 struct RootView: View {
     @Environment(Store.self) private var store
     @Environment(\.scenePhase) private var phase
+    /// Read outside the split view: a column inside one reports compact even beside the detail.
+    @Environment(\.horizontalSizeClass) private var width
     @State private var selection: SessionKey?
     @State private var sheet: RootSheet?
     /// Tasks opened over a bot's chat, so Back walks back to the bot.
@@ -60,7 +62,7 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView {
-            SessionList(selection: $selection, sheet: $sheet)
+            SessionList(selection: $selection, sheet: $sheet, sidebar: width == .regular)
         } detail: {
             if let selection {
                 NavigationStack(path: $opened) {
