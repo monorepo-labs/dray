@@ -29,11 +29,14 @@ final class SidebarPicksTests: XCTestCase {
         let row = app.staticTexts[bot]
         if !row.waitForExistence(timeout: 15) { openSidebar() }
         XCTAssertTrue(row.waitForExistence(timeout: 10), "no bot row")
-        row.tap()
-        sleep(2)
-        if sidebar && !row.isHittable { openSidebar() }
-        // The tap focused the row and drew the system's white focus ring round it. It shows only
-        // with DeviceHub closed, which otherwise takes the simulator's hardware keyboard.
+        // Only beside a chat: on a phone the tap opens it over the list, and its own dock is not this one.
+        if sidebar {
+            // The tap focused the row and drew the system's white focus ring round it. It shows only
+            // with DeviceHub closed, which otherwise takes the simulator's hardware keyboard.
+            row.tap()
+            sleep(2)
+            if !row.isHittable { openSidebar() }
+        }
         snap(app, "1-sidebar")
         // The open chat beside the sidebar has a dock of its own; only the list's, leftmost, counts.
         let edge = app.windows.firstMatch.frame.width / 2
