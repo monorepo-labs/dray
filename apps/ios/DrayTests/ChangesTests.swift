@@ -10,8 +10,21 @@ final class ChangesTests: XCTestCase {
         XCTAssertTrue(rows.contains(.line(sign: "-", number: 10, text: "l10")))
         XCTAssertTrue(rows.contains(.line(sign: "+", number: 10, text: "ten")))
         XCTAssertEqual(rows.last, .line(sign: "+", number: 21, text: "l21"))
-        XCTAssertEqual(unifiedDiff(old: nil, new: "a\nb"), [.line(sign: "+", number: 1, text: "a"), .line(sign: "+", number: 2, text: "b")])
+        XCTAssertEqual(unifiedDiff(old: nil, new: "a\nb"), [.line(sign: "+", number: 1, text: "a"), .line(sign: "+", number: 2, text: "b"), .noNewline])
         XCTAssertEqual(unifiedDiff(old: "same", new: "same"), [])
+    }
+
+    /// Adding or dropping the final newline is a change, said the way git says it.
+    func testFinalNewlineIsAChange() {
+        XCTAssertEqual(unifiedDiff(old: "a\nb\n", new: "a\nb"), [
+            .line(sign: " ", number: 1, text: "a"), .line(sign: "-", number: 2, text: "b"),
+            .line(sign: "+", number: 2, text: "b"), .noNewline,
+        ])
+        XCTAssertEqual(unifiedDiff(old: "a\nb", new: "a\nb\n"), [
+            .line(sign: " ", number: 1, text: "a"), .line(sign: "-", number: 2, text: "b"), .noNewline,
+            .line(sign: "+", number: 2, text: "b"),
+        ])
+        XCTAssertEqual(unifiedDiff(old: "a", new: "a"), [])
     }
 
     /// The desktop's picks for the same paths, each an asset the catalog holds.

@@ -54,7 +54,13 @@ enum DiffRow: Hashable {
     case line(sign: Character, number: Int, text: String)
     /// Unchanged lines folded out between hunks.
     case gap(Int)
+    /// The line above ends its file with no newline, git's `\ No newline at end of file`.
+    case noNewline
 }
+
+/// Carried on a file's last line when no newline follows it, so adding or
+/// dropping that newline differs like any other edit. Never shown.
+private let noEOL: Character = "\u{1}"
 
 /// A unified diff with `context` lines around each change, from the
 /// standard library's own Myers difference.
@@ -62,7 +68,7 @@ func unifiedDiff(old: String?, new: String?, context: Int = 3) -> [DiffRow] {
     func lines(_ s: String?) -> [String] {
         guard let s, !s.isEmpty else { return [] }
         var all = s.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        if s.hasSuffix("\n") { all.removeLast() }
+        if s.hasSuffix("\n") { all.removeLast() } else { all[all.count - 1].append(noEOL) }
         return all
     }
     let a = lines(old), b = lines(new)
@@ -75,14 +81,18 @@ func unifiedDiff(old: String?, new: String?, context: Int = 3) -> [DiffRow] {
     }
     // Lines neither side touched pair up one to one, in order.
     var all: [DiffRow] = []
+    func add(_ sign: Character, _ number: Int, _ text: String) {
+        all.append(.line(sign: sign, number: number, text: text.last == noEOL ? String(text.dropLast()) : text))
+        if text.last == noEOL { all.append(.noNewline) }
+    }
     var i = 0, j = 0
     while i < a.count || j < b.count {
         if i < a.count, removed.contains(i) {
-            all.append(.line(sign: "-", number: i + 1, text: a[i])); i += 1
+            add("-", i + 1, a[i]); i += 1
         } else if j < b.count, inserted.contains(j) {
-            all.append(.line(sign: "+", number: j + 1, text: b[j])); j += 1
+            add("+", j + 1, b[j]); j += 1
         } else {
-            all.append(.line(sign: " ", number: j + 1, text: b[j])); i += 1; j += 1
+            add(" ", j + 1, b[j]); i += 1; j += 1
         }
     }
     var keep = [Bool](repeating: false, count: all.count)
@@ -90,6 +100,8 @@ func unifiedDiff(old: String?, new: String?, context: Int = 3) -> [DiffRow] {
         guard case .line(let sign, _, _) = row, sign != " " else { continue }
         for n in max(0, k - context)...min(all.count - 1, k + context) { keep[n] = true }
     }
+    // The note goes wherever its line goes.
+    for (k, row) in all.enumerated() where row == .noNewline && k > 0 { keep[k] = keep[k - 1] }
     var out: [DiffRow] = []
     var folded = 0
     for (k, row) in all.enumerated() {
@@ -141,12 +153,13 @@ struct ChangesScreen: View {
     let key: SessionKey
     @State private var tab = ChangesTab.branch
     @State private var dirty = false
-    /// `work_status` has answered once. Until then no list reads, so the screen
+    /// `work_status` has been asked once. Until then no list reads, so the screen
     /// never draws Branch's files only to jump to Uncommitted.
     @State private var known = false
 
     var body: some View {
         let busy = store.items[key]?.busy ?? false
+        let connected = store.serverState[key.server] == .connected
         VStack(spacing: 0) {
             Picker("Show", selection: $tab) {
                 ForEach((dirty ? [.uncommitted] : []) + [ChangesTab.branch, .commits], id: \.self) { Text($0.rawValue) }
@@ -159,23 +172,26 @@ struct ChangesScreen: View {
         .page()
         .navigationTitle("Changes")
         .navigationBarTitleDisplayMode(.inline)
-        // Re-asked as each turn starts and ends, since a turn is what dirties or commits the tree.
-        .task(id: busy) { await readDirty() }
+        // Re-asked as each turn starts and ends, since a turn is what dirties or commits the
+        // tree, and on reconnect, since a read that failed with the socket down said nothing.
+        .task(id: "\(busy)|\(connected)") { await readDirty() }
     }
 
     /// Whether the tree holds uncommitted work: Uncommitted shows, and leads, only then.
+    /// A failed read changes nothing, so a dropped socket never hides edits.
     private func readDirty() async {
         guard let cwd = store.items[key]?.cwd else { return }
-        let status: WorkStatus? = try? await store.call(key.server, "work_status", ["cwd": .string(cwd)])
-        dirty = (status?.dirty ?? 0) > 0
-        if !known, dirty { tab = .uncommitted } else if tab == .uncommitted, !dirty { tab = .branch }
+        if let status: WorkStatus = try? await store.call(key.server, "work_status", ["cwd": .string(cwd)]) {
+            dirty = (status.dirty ?? 0) > 0
+            if !known, dirty { tab = .uncommitted } else if tab == .uncommitted, !dirty { tab = .branch }
+        }
         known = true
     }
 
     @ViewBuilder private func list(_ tab: ChangesTab, busy: Bool) -> some View {
         switch tab {
         case .uncommitted:
-            ChangeList(key: key, reload: "work|\(busy)",
+            ChangeList(key: key, reload: "work|\(busy)", refreshed: readDirty,
                        nothing: ("Not a repository", "This folder isn't tracked by git."),
                        clean: ("Nothing uncommitted", "The working tree matches the last commit.")) { store, cwd in
                 let tree: String? = try await store.call(key.server, "head_tree", ["cwd": .string(cwd)])
@@ -184,7 +200,7 @@ struct ChangesScreen: View {
                                             ["cwd": .string(cwd), "baseline": .string(tree), "head": nil])
             }
         case .branch:
-            ChangeList(key: key, reload: "branch|\(busy)",
+            ChangeList(key: key, reload: "branch|\(busy)", refreshed: readDirty,
                        nothing: ("No commits on this branch", "Committed work since the branch forked shows here."),
                        clean: ("No changes", "This branch's commits add up to no change.")) { store, cwd in
                 let commits = try await branchCommits(store, cwd)
@@ -193,7 +209,7 @@ struct ChangesScreen: View {
                                             ["cwd": .string(cwd), "baseline": .string(oldest.base), "head": .string(newest.sha)])
             }
         case .commits:
-            CommitList(key: key, reload: "\(busy)")
+            CommitList(key: key, reload: "\(busy)", refreshed: readDirty)
         }
     }
 
@@ -216,6 +232,8 @@ private struct ChangeList: View {
     let key: SessionKey
     /// Changes when the answer may have: a turn ending, the reader switching tabs.
     let reload: String
+    /// Run beside a pull-to-refresh: the screen's own status check.
+    var refreshed: () async -> Void = {}
     let nothing: (title: String, message: String)
     let clean: (title: String, message: String)
     var note: String? = nil
@@ -225,6 +243,9 @@ private struct ChangeList: View {
     @State private var none = false
     @State private var error: String?
     @State private var loaded = false
+    /// Only the newest read may land: a cancelled task's call still answers, and a
+    /// mid-turn read finishing after the turn's last one would put stale files back.
+    @State private var generation = 0
 
     var body: some View {
         Group {
@@ -249,23 +270,35 @@ private struct ChangeList: View {
 
     private func load() async {
         guard let cwd = store.items[key]?.cwd else { return }
+        generation += 1
+        let mine = generation
         do {
             let next = try await read(store, cwd)
+            guard mine == generation else { return }
             (changes, none, error) = (next, next == nil, nil)
         } catch {
+            guard mine == generation else { return }
             self.error = error.localizedDescription
         }
         loaded = true
     }
 
+    private func refresh() async {
+        await refreshed()
+        await load()
+    }
+
     private func empty(_ text: (title: String, message: String)) -> some View {
         ScrollView {
-            EmptyState(title: text.title, message: text.message) {
-                Image(systemName: "plus.forwardslash.minus").font(.system(size: 32)).foregroundStyle(Theme.tertiary)
+            VStack(spacing: 0) {
+                if let error { RefreshFailed(error: error) { await refresh() }.padding(Theme.Space.l) }
+                EmptyState(title: text.title, message: text.message) {
+                    Image(systemName: "plus.forwardslash.minus").font(.system(size: 32)).foregroundStyle(Theme.tertiary)
+                }
             }
             .containerRelativeFrame(.vertical)
         }
-        .refreshable { await load() }
+        .refreshable { await refresh() }
     }
 
     /// One group per folder, the folder's glyph and path over its files: root files first, then folders by path.
@@ -274,6 +307,17 @@ private struct ChangeList: View {
         for f in set.files { byDir[splitPath(f.path).dir, default: []].append(f) }
         let dirs = byDir.keys.sorted { $0.isEmpty != $1.isEmpty ? $0.isEmpty : $0 < $1 }
         return List {
+            if let error {
+                RefreshFailed(error: error) { await refresh() }.listRowBackground(Color.clear)
+            }
+            // A commit that changed no files still says what it was.
+            if dirs.isEmpty {
+                Section {
+                    Text("No file changes").font(Theme.Font.body).foregroundStyle(Theme.tertiary).listRowBackground(Theme.card)
+                } header: {
+                    summary(set).textCase(nil)
+                }
+            }
             ForEach(Array(dirs.enumerated()), id: \.element) { i, dir in
                 Section {
                     ForEach(byDir[dir] ?? [], id: \.self) { file in
@@ -302,7 +346,7 @@ private struct ChangeList: View {
         }
         .listStyle(.insetGrouped)
         .themedList()
-        .refreshable { await load() }
+        .refreshable { await refresh() }
     }
 
     private func summary(_ set: ChangeSet) -> some View {
@@ -315,6 +359,24 @@ private struct ChangeList: View {
                 Counts(added: set.added, removed: set.removed)
             }
             .font(Theme.Font.footnote)
+        }
+    }
+}
+
+/// A refresh that failed over rows already shown: they stay, and this says they may be old.
+private struct RefreshFailed: View {
+    let error: String
+    let retry: () async -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
+            Text("Couldn't refresh: \(sentence(error))")
+                .font(Theme.Font.footnote)
+                .foregroundStyle(Theme.destructive)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Try again") { Task { await retry() } }
+                .font(Theme.Font.footnoteStrong)
+                .foregroundStyle(Theme.text)
         }
     }
 }
@@ -416,12 +478,15 @@ private struct CommitList: View {
     @Environment(Store.self) private var store
     let key: SessionKey
     let reload: String
+    var refreshed: () async -> Void = {}
 
     @State private var commits: [Commit] = []
     @State private var more = false
     @State private var error: String?
     @State private var loaded = false
     @State private var paging = false
+    /// A refresh asked for while a read was out, run once it lands.
+    @State private var resetQueued = false
     private let page = 50
 
     var body: some View {
@@ -440,6 +505,9 @@ private struct CommitList: View {
                 }
             } else {
                 List {
+                    if let error {
+                        RefreshFailed(error: error) { await load(reset: true) }.listRowBackground(Color.clear)
+                    }
                     ForEach(commits) { commit in
                         NavigationLink {
                             CommitScreen(key: key, commit: commit)
@@ -459,31 +527,47 @@ private struct CommitList: View {
                 }
                 .listStyle(.insetGrouped)
                 .themedList()
-                .refreshable { await load(reset: true) }
+                .refreshable {
+                    await refreshed()
+                    await load(reset: true)
+                }
             }
         }
         .task(id: reload) { await load(reset: true) }
     }
 
     private func load(reset: Bool) async {
-        guard let cwd = store.items[key]?.cwd, !paging else { return }
+        guard let cwd = store.items[key]?.cwd else { return }
+        // One read at a time. A refresh arriving meanwhile waits its turn rather than
+        // being dropped: a commit landing during Load more would otherwise never show.
+        if paging {
+            if reset { resetQueued = true }
+            return
+        }
         paging = true
-        defer { paging = false }
         do {
             let next: [Commit] = try await store.call(key.server, "log_commits",
                                                       ["cwd": .string(cwd), "limit": JSON(page), "skip": JSON(reset ? 0 : commits.count)])
-            // A refresh keeps the pages read below an unchanged tip, as `reconcileLog` does.
-            if reset {
-                if commits.first?.sha != next.first?.sha { (commits, more) = (next, next.count == page) }
-            } else {
-                commits += next
-                more = next.count == page
+            // A page read against the old tip may overlap the new one; the queued refresh replaces it.
+            if !resetQueued {
+                // A refresh keeps the pages read below an unchanged tip, as `reconcileLog` does.
+                if reset {
+                    if commits.first?.sha != next.first?.sha { (commits, more) = (next, next.count == page) }
+                } else {
+                    commits += next
+                    more = next.count == page
+                }
+                error = nil
             }
-            error = nil
         } catch {
             self.error = error.localizedDescription
         }
         loaded = true
+        paging = false
+        if resetQueued {
+            resetQueued = false
+            await load(reset: true)
+        }
     }
 }
 
@@ -621,6 +705,13 @@ private struct DiffLine: View {
                 .padding(.horizontal, Theme.Space.m)
                 .padding(.vertical, 6)
                 .background(Theme.card)
+        case .noNewline:
+            Text("No newline at end of file")
+                .font(Theme.Font.footnote)
+                .foregroundStyle(Theme.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, Theme.Space.m)
+                .padding(.vertical, 2)
         case .line(let sign, let number, let text):
             let tint = sign == "+" ? Theme.add : sign == "-" ? Theme.destructive : Color.clear
             HStack(alignment: .firstTextBaseline, spacing: 6) {
