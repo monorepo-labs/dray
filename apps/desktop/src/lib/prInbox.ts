@@ -69,13 +69,10 @@ export function inboxSection(mark: PrMark): InboxSection {
   return "waiting";
 }
 
-export type PeopleFilter = "all" | "mine" | "review";
-
-export function matchesPeople(row: InboxRow, filter: PeopleFilter): boolean {
-  if (filter === "mine") return row.listing.viewerDidAuthor;
-  if (filter === "review") return row.listing.reviewRequested;
-  return true;
-}
+/// Who a PR is about. All lists the projects added to Dray, through their
+/// marks; each of the others is one GitHub search across every repo
+/// (`involves:@me`, `author:@me`, `review-requested:@me`).
+export type PeopleFilter = "all" | "involving" | "mine" | "review";
 
 /// Every task a PR has had, newest first: same repo and `sessionBranch` naming
 /// the PR's head — the reading the sidebar's mark uses, so the two never
@@ -150,19 +147,33 @@ function pickedUnits(comments: readonly PrComment[], picked: ReadonlySet<string>
 /// markdown images go; a link keeps its text and keeps its URL only on
 /// github.com, where it names code or a thread. Pure, so it is tested.
 export function plainComment(body: string): string {
+  // Code is kept byte for byte: a fenced block or an inline span is what the
+  // reviewer meant literally, and `Array<T>` or `x < y` there is no markup.
   return stripBotMarkers(body)
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-    .replace(/\[([^\]]*)\]\(([^)\s]*)[^)]*\)/g, (_, text: string, url: string) =>
-      /^https:\/\/github\.com\//.test(url) && !text.includes(url) ? `${text} (${url})` : text,
-    )
-    .replace(/<\/?(?:p|div|br|h[1-6]|li|tr|details|summary|table)\b[^>]*>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&(amp|lt|gt|quot|#39|nbsp);/g, (_, e: string) => ENTITIES[e] ?? "")
+    .split(/(```[\s\S]*?```|`[^`\n]+`)/)
+    .map((part, i) => (i % 2 ? part : plainText(part)))
+    .join("")
     .split("\n")
     .map((line) => line.trimEnd())
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/// HTML elements bot comments are built from. Only these are taken for tags,
+/// so prose like `Array<T>` or `a < b > c` outside code survives too.
+const TAG = "a|b|i|em|strong|code|pre|p|div|span|br|hr|h[1-6]|ul|ol|li|table|thead|tbody|tr|td|th|details|summary|img|picture|source|sub|sup|blockquote|kbd";
+
+/// One stretch of prose, outside any code.
+function plainText(text: string): string {
+  return text
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]*)\]\(([^)\s]*)[^)]*\)/g, (_, label: string, url: string) =>
+      /^https:\/\/github\.com\//.test(url) && !label.includes(url) ? `${label} (${url})` : label,
+    )
+    .replace(new RegExp(`<\\/?(?:p|div|br|h[1-6]|li|tr|details|summary|table)\\b[^>]*>`, "gi"), "\n")
+    .replace(new RegExp(`<\\/?(?:${TAG})\\b[^>]*>`, "gi"), "")
+    .replace(/&(amp|lt|gt|quot|#39|nbsp);/g, (_, e: string) => ENTITIES[e] ?? "");
 }
 
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", nbsp: " " };

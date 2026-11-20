@@ -4,7 +4,6 @@ import {
   commentKey,
   inboxRows,
   inboxSection,
-  matchesPeople,
   pickableKeys,
   plainComment,
   prPrompt,
@@ -126,16 +125,6 @@ describe("inboxSection", () => {
 
   it("does not file changes asked of someone else's PR as the reader's", () => {
     expect(inboxSection(mark({ reviewDecision: "CHANGES_REQUESTED" }))).toBe("waiting");
-  });
-});
-
-describe("matchesPeople", () => {
-  it("narrows to the reader's own and to reviews asked of them", () => {
-    const mine = row({ listing: listing({ viewerDidAuthor: true }) });
-    const asked = row({ listing: listing({ reviewRequested: true }) });
-    expect([matchesPeople(mine, "mine"), matchesPeople(asked, "mine")]).toEqual([true, false]);
-    expect([matchesPeople(mine, "review"), matchesPeople(asked, "review")]).toEqual([false, true]);
-    expect(matchesPeople(mine, "all")).toBe(true);
   });
 });
 
@@ -272,6 +261,11 @@ describe("plainComment", () => {
     expect(out).toContain("Fixes the settle path & its test.");
     expect(out).toContain("See the thread (https://github.com/o/r/pull/7#discussion_r1) and docs.");
     expect(out).not.toMatch(/\n{3,}/);
+  });
+
+  it("keeps code, and prose that only looks like a tag, as written", () => {
+    const body = "Use `Array<T>` here.\n\n```ts\nif (x < y && z > 0) return <b>;\n```\nOr Map<K, V> and a < b > c.";
+    expect(plainComment(body)).toBe(body);
   });
 
   it("leaves a plain human comment as it was", () => {

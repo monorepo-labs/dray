@@ -2158,7 +2158,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         // GitHub and issues.
         prs_for_branch(cwd: String, branch: String) => github::prs_for_branch(cwd, branch).await;
         pr_marks(cwd: String, listing: Option<bool>) => github::pr_marks(cwd, listing).await;
-        pr_search(owner: Option<String>) => github::pr_search(owner).await;
+        pr_search(owner: Option<String>, org: Option<bool>, filter: Option<github::PrSearchFilter>) =>
+            github::pr_search(owner, org, filter).await;
         repo_checkouts(paths: Vec<String>, repos: Vec<String>) => crate::git::repo_checkouts(paths, repos).await;
         merge_pr(cwd: String, number: u64, method: MergeMethod, settle: Option<String>) =>
             github::merge_pr(cwd, number, method, settle, sink).await;
