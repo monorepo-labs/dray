@@ -98,6 +98,7 @@ fun NewTaskDock(started: (SessionKey) -> Unit, modifier: Modifier = Modifier) {
         modifier = modifier.alpha(if (server == null) 0.3f else 1f),
         saveDraft = { scope.launch { task.saveDraft() } },
         draft = NEW_SESSION,
+        discarded = task::forgetDraft,
     )
 
     if (picking) RunWithSheet(task) { picking = false }

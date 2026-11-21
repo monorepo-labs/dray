@@ -112,6 +112,8 @@ fun VoiceDock(
     covers: Boolean = true,
     /** Lines over the orb: a reply's agent switch, for one. */
     header: (@Composable () -> Unit)? = null,
+    /** The words were discarded, not sent: what they came from lets go of them. */
+    discarded: () -> Unit = {},
 ) {
     val store = LocalStore.current
     val haptics = LocalHapticFeedback.current
@@ -207,7 +209,7 @@ fun VoiceDock(
                     onConfirm = { confirming = it },
                     onStart = start,
                     onDiscard = {
-                        if (phase == DockPhase.Ready) { store.drafts.remove(draft); clearFailure() } else Dictations.cancel(draft)
+                        if (phase == DockPhase.Ready) { store.drafts.remove(draft); clearFailure(); discarded() } else Dictations.cancel(draft)
                         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     },
                     saveDraft = saveDraft,

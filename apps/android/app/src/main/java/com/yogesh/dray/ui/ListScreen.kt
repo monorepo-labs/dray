@@ -114,14 +114,20 @@ fun ListScreen(
     // Every connected server's drafts, newest first. A server whose read fails keeps what it last said,
     // so a dropped reply never reads as no drafts.
     var draftRows by remember { mutableStateOf(listOf<Pair<String, DraftItem>>()) }
+    var draftsError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(drafts, connected, store.draftsRevision) {
         var all = listOf<Pair<String, DraftItem>>()
+        var failed: String? = null
         for (s in store.live.filter { store.serverState[it.id] == ConnState.Connected }) {
-            val list = runCatching { decodeList<DraftItem>(store.call(s.id, "list_drafts")) }.getOrNull()
-            all = all + (list?.map { s.id to it } ?: draftRows.filter { it.first == s.id })
+            val read = runCatching { decodeList<DraftItem>(store.call(s.id, "list_drafts")) }
+            read.exceptionOrNull()?.let { failed = it.message ?: "The server didn't answer." }
+            all = all + (read.getOrNull()?.map { s.id to it } ?: draftRows.filter { it.first == s.id })
         }
         draftRows = all.sortedByDescending { it.second.created.orEmpty() }
+        draftsError = failed
     }
+    // Hide sessions has no drafts or settled view to leave by, so it closes them.
+    LaunchedEffect(hide) { if (hide) { drafts = false; settled = false } }
 
     Column(Modifier.fillMaxSize().background(Dray.page).statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -160,6 +166,7 @@ fun ListScreen(
                 scope.launch {
                     store.refresh()
                     if (settled) store.loadSettled()
+                    store.draftsRevision++
                     refreshing = false
                 }
             },
@@ -190,7 +197,15 @@ fun ListScreen(
                 } else if (bots.isNotEmpty() && rows.isNotEmpty()) item("bots-gap") { Spacer(Modifier.height(16.dp)) }
                 if (drafts) {
                     val shownDrafts = draftRows.filter { filter == null || it.second.project == filter }
-                    if (shownDrafts.isEmpty()) item("no-drafts") {
+                    draftsError?.let { err ->
+                        item("drafts-error") {
+                            Row(Modifier.padding(horizontal = 20.dp).height(44.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Couldn't load drafts. ${sentence(err)}", Modifier.weight(1f), style = Dray.Font.subhead.copy(color = Dray.secondary), maxLines = 2)
+                                Text("Retry", Modifier.clickable { store.draftsRevision++ }.padding(8.dp), style = Dray.Font.pill)
+                            }
+                        }
+                    }
+                    if (shownDrafts.isEmpty() && draftsError == null) item("no-drafts") {
                         Text("No drafts.", Modifier.padding(start = 20.dp).height(44.dp), style = Dray.Font.subhead.copy(color = Dray.tertiary))
                     }
                     shownDrafts.forEach { (server, d) ->

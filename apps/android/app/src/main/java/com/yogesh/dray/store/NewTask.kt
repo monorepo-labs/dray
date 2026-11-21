@@ -107,6 +107,8 @@ class NewTask(private val store: Store, context: Context) {
     val cwd: String?
         get() {
             bot?.let { return it.second.path }
+            // An open draft starts where it was saved, never in another repo that happens to share its name.
+            if (draftId != null) draftFolder?.let { return it }
             val named = held.filter { it.name == project }
             return named.firstOrNull { it.path == projectPath }?.path ?: named.firstOrNull()?.path
         }
@@ -142,6 +144,16 @@ class NewTask(private val store: Store, context: Context) {
     /** The saved draft the dock holds, by server and id: dropped once its text goes somewhere else. */
     var draftId by mutableStateOf<Pair<String, String>?>(null)
         private set
+    /** The open draft's own folder and `--base`, kept exactly until another pick moves them. */
+    private var draftFolder by mutableStateOf<String?>(null)
+    private var draftBase by mutableStateOf<String?>(null)
+
+    /** The dock's words were discarded: the draft they came from stays saved, and nothing here drops it later. */
+    fun forgetDraft() {
+        draftId = null
+        draftFolder = null
+        draftBase = null
+    }
 
     /** Fills the dock from a saved draft, on its own picks. iOS's `NewTask.open`. */
     fun open(draft: DraftItem, on: String) {
@@ -150,6 +162,8 @@ class NewTask(private val store: Store, context: Context) {
         draftId = on to draft.id
         draft.project?.let { projectName = it }
         projectPath = draft.projectPath
+        draftFolder = draft.projectPath
+        draftBase = draft.base
         pickedServer = on
         draft.harness?.let { harness = it }
         draft.model?.let { m ->
@@ -167,19 +181,21 @@ class NewTask(private val store: Store, context: Context) {
      */
     private suspend fun dropDraft(d: Pair<String, String>?) {
         d ?: return
-        if (draftId == d) draftId = null
+        if (draftId == d) forgetDraft()
         runCatching { store.call(d.first, "delete_draft", jsonOf("id" to d.second)) }
         store.draftsRevision++
     }
 
     fun pickServer(id: String?) {
         bot = null
+        draftFolder = null
         pickedServer = id
         projectPath = null
         prefs.edit().putString("server", id).apply()
     }
 
     fun pick(choice: ProjectChoice) {
+        draftFolder = null
         // The menu lists the bot's machine's projects, so leaving the bot stays on that machine.
         bot?.let { pickServer(it.first) }
         bot = null
@@ -190,6 +206,7 @@ class NewTask(private val store: Store, context: Context) {
 
     /** After an attach, the project just added is the pick. */
     fun pickProject(name: String?) {
+        draftFolder = null
         projectName = name
         projectPath = null
         prefs.edit().putString("project", name).apply()
@@ -260,7 +277,8 @@ class NewTask(private val store: Store, context: Context) {
                 "branch" to null,
                 "useWorktree" to (worktree && bot == null),
                 "worktreeName" to null,
-                "baseRef" to null,
+                // A draft's `--base`, resolved by the server as `dray session new --base` does.
+                "baseRef" to (if (worktree && bot == null) draftBase else null),
                 "isNewSession" to true,
             ))
             decodeOrNull<SessionItem>(reply["snapshot"])?.let { store.created(server, it) }
@@ -301,6 +319,7 @@ class NewTask(private val store: Store, context: Context) {
                 "permissionMode" to Picks.stanceFor(harness, stance),
                 "fast" to (fast && Picks.offersFast(harness, model)),
                 "useWorktree" to worktree,
+                "base" to draftBase,
             )))
             dropDraft(opened)
             store.draftsRevision++
@@ -336,6 +355,8 @@ data class DraftItem(
     val permissionMode: String? = null,
     val fast: Boolean? = null,
     val useWorktree: Boolean? = null,
+    /** Where the worktree starts: `dray draft new --base`'s branch or ref. */
+    val base: String? = null,
 ) {
     val title: String get() = prompt.lineSequence().firstOrNull { it.isNotBlank() } ?: prompt
     val project: String? get() = projectPath?.trimEnd('/')?.substringAfterLast('/')
