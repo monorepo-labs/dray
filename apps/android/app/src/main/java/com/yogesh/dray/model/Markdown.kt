@@ -170,7 +170,8 @@ fun hiding(paths: List<String>, text: String): String {
         if (out.none { it.isLetterOrDigit() }) return@mapNotNull null
         // Indent is left alone: a list item's nesting reads off it.
         out.replace(Regex(""" +([.,;:!?])"""), "$1")
-            .replace(Regex("""([:,;])[.,;:]+"""), "$1")
+            // `[:` opens a POSIX class to Android's ICU, which throws; the escape keeps it a colon.
+            .replace(Regex("""([\:,;])[.,;:]+"""), "$1")
             .replace(Regex("""(\S) {2,}"""), "$1 ")
             .replace(Regex(""" +$"""), "")
     }.joinToString("\n")
