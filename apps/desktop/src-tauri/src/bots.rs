@@ -80,6 +80,9 @@ const POINTER_TEXT: &str = "@AGENTS.md\n";
 /// A folder, one `YYYY-MM-DD-title.md` per memory. Never put in the prompt:
 /// the bot lists and greps it when it needs to, so it costs nothing to keep.
 pub const MEMORY: &str = "memory";
+/// Documents the bot makes for the user to open later, sorted into category
+/// folders by the bot. Made empty so the prompt's path is real from the start.
+pub const DOCS: &str = "docs";
 
 /// Past this the bot is told to ask the user what to cut. The agent loads the
 /// file whole, so one let grow without bound crowds out the conversation.
@@ -1342,6 +1345,7 @@ async fn make_bot(name: String, avatar: Option<BotAvatar>, welcome: Option<Strin
     // Before the first commit, so the ignore rule is in it and the pointer never is.
     write_pointer(&dir).await;
     tokio::fs::create_dir_all(dir.join(MEMORY)).await.context("could not make the bot's memory folder")?;
+    tokio::fs::create_dir_all(dir.join(DOCS)).await.ok();
 
     let bot = Bot {
         id,
@@ -1827,6 +1831,7 @@ async fn prepare_folder(bot: &Bot) {
     // A bot made before memory was a folder has none, and the prompt sends it
     // straight to one. Its old `MEMORY.md` is left alone: bots had no users yet.
     tokio::fs::create_dir_all(dir.join(MEMORY)).await.ok();
+    tokio::fs::create_dir_all(dir.join(DOCS)).await.ok();
     learn::ensure_skills(dir).await;
     if let Err(e) = write_user_file(bot).await {
         eprintln!("[user name] {e:#}");
@@ -2284,6 +2289,7 @@ mod tests {
         assert!(block.contains("/h/bots/b"));
         assert!(block.contains(&format!("`{MEMORY}/`")));
         assert!(block.contains("YYYY-MM-DD-short-title.md"));
+        assert!(block.contains(&format!("`{DOCS}/personal/`")));
         assert!(block.contains("never ask it to report back"));
         assert!(block.contains("dray session settle <id> --delete-worktree"));
         assert!(block.contains("- \"Research\": Reads papers."));
