@@ -76,7 +76,11 @@ final class SidebarPicksTests: XCTestCase {
         sleep(1)
         snap(app, "3-ready")
         app.buttons["Start task"].tap()
-        XCTAssertTrue(app.staticTexts["HELLO"].waitForExistence(timeout: 120), "reply never landed")
+        // In the chat, right of the sidebar: earlier runs leave tasks titled HELLO in it.
+        let replied = { app.staticTexts.matching(identifier: "HELLO").allElementsBoundByIndex.contains { $0.frame.minX > edge } }
+        let deadline = Date.now.addingTimeInterval(120)
+        while !replied() && Date.now < deadline { sleep(2) }
+        XCTAssertTrue(replied(), "reply never landed")
         snap(app, "4-reply")
     }
 
