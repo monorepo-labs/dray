@@ -146,6 +146,9 @@ class Store(private val context: Context) {
     var callErrors by mutableStateOf(mapOf<SessionKey, Set<String>>())
         private set
 
+    /** Bot chats' previews, stall cards and pending agent picks: StoreBots.kt. */
+    val botState = BotState()
+
     private val connections = mutableMapOf<String, Connection>()
     private val statuses = mutableMapOf<SessionKey, StatusEvent>()
     private val marksAt = mutableMapOf<ProjectKey, Long>()
@@ -410,6 +413,9 @@ class Store(private val context: Context) {
         keepList()
     }
 
+    /** A session this phone made, listed before the server's `session_created` lands. */
+    fun created(server: String, item: SessionItem) = setItem(SessionKey(server, item.sessionId), item)
+
     private fun setItem(key: SessionKey, item: SessionItem?) {
         putItems(if (item == null) items - key else items + (key to item))
     }
@@ -429,13 +435,14 @@ class Store(private val context: Context) {
         loadMarks(server, force = false)
     }
 
-    private suspend fun loadBots(server: String) {
+    internal suspend fun loadBots(server: String) {
         // A server from before bots answers `unknown command`, and holds none.
         val list = runCatching { decodeList<Bot>(call(server, "list_bots")) }.getOrNull()
         botsRead = botsRead + server
         if (list != null) {
             bots = bots + (server to list)
             keepList()
+            loadPreviews(server)
         }
     }
 
@@ -458,7 +465,7 @@ class Store(private val context: Context) {
         items.filter { it.key.server == server && it.value.hidden != true && it.value.archived != true }.values.map { it.projectPath }.toSet()
 
     /** One `pr_marks` per repo, fresh for two minutes unless forced. A failed read leaves the last good marks. */
-    private suspend fun loadMarks(server: String, force: Boolean, only: Set<String>? = null) {
+    internal suspend fun loadMarks(server: String, force: Boolean, only: Set<String>? = null) {
         if (connections[server] == null) return
         for (path in only ?: repos(server)) {
             val key = ProjectKey(server, path)
@@ -773,6 +780,7 @@ class Store(private val context: Context) {
 
     private fun handle(server: String, name: String, frame: JsonObject) {
         val payload = frame["payload"]
+        botFrame(server, name, payload)
         when (name) {
             "agent_event" -> AgentEvent.decode(payload)?.let { apply(SessionKey(server, it.sessionId), it) }
             "live_state" -> {
