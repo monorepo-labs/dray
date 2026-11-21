@@ -84,17 +84,24 @@ struct BotAttachments: View {
     @State private var cursors: [String: Int] = [:]
     /// Sessions read to their start.
     @State private var done: Set<String> = []
+    /// How many rows show: a page holds whole turns, so a read can bring more than asked.
+    @State private var count = attachmentsPage
     @State private var loading = false
     @State private var failed = false
+    /// The first page is in, so a new message reads only the newest one again.
+    @State private var loaded = false
     @State private var filter: Bool?
     @State private var gallery: Gallery?
 
     var body: some View {
         let mixed = items.contains(where: \.byYou) && items.contains { !$0.byYou }
-        let shown = items.filter { !mixed || filter == nil || $0.byYou == filter }
-        let more = chat.contains { !done.contains($0.id) }
+        let filtered = matching(items)
+        let shown = Array(filtered.prefix(count))
+        let more = filtered.count > count || chat.contains { !done.contains($0.id) }
+        let up = server.map { store.serverState[$0.serverId] == .connected } ?? false
+        let newest = chat.first.flatMap { store.transcripts[$0]?.events.last?.id } ?? ""
         VStack(alignment: .leading, spacing: 0) {
-            if !items.isEmpty {
+            if !items.isEmpty || failed {
                 HStack(spacing: Theme.Space.m) {
                     Text("Attachments").frame(maxWidth: .infinity, alignment: .leading)
                     if mixed {
@@ -107,11 +114,19 @@ struct BotAttachments: View {
                 }
                 .sectionHeading()
                 ForEach(shown) { row($0, in: shown) }
-                if more { loadMore }
+                if more || failed { loadMore }
             }
         }
-        .task(id: chat.first) { await load() }
+        // Again on each new event in the chat, and on a reconnect: a first read that failed
+        // is tried again, and one that worked picks up what the bot sent since.
+        .task(id: "\(chat.first?.id ?? "")|\(newest)|\(up)") { if loaded { await readNewest() } else { await fill() } }
         .imageViewer($gallery)
+    }
+
+    /// The list under the picked filter; the filters show only where both sides are there.
+    private func matching(_ list: [Attachment]) -> [Attachment] {
+        let mixed = list.contains(where: \.byYou) && list.contains { !$0.byYou }
+        return list.filter { !mixed || filter == nil || $0.byYou == filter }
     }
 
     private func row(_ item: Attachment, in shown: [Attachment]) -> some View {
@@ -147,13 +162,17 @@ struct BotAttachments: View {
 
     /// The runs list's Load more, in the marks' column.
     private var loadMore: some View {
-        Button { Task { await load() } } label: {
+        Button {
+            // A retry reads the page that failed rather than asking for one more.
+            if !failed { count += attachmentsPage }
+            Task { await fill() }
+        } label: {
             HStack(spacing: 10) {
                 Group {
                     if loading { ProgressView().controlSize(.small) } else { Image(systemName: "plus") }
                 }
                 .frame(width: 36, height: 22)
-                Text(loading ? "Loading…" : failed ? "Couldn't load more. Try again" : "Load more")
+                Text(loading ? "Loading…" : failed ? "Couldn't load \(items.isEmpty ? "attachments" : "more"). Try again" : "Load more")
                 Spacer(minLength: 0)
             }
             .font(Theme.Font.subhead)
@@ -176,33 +195,50 @@ struct BotAttachments: View {
         instantly { gallery = Gallery(shots: shots, start: start) }
     }
 
-    /// The next page's worth, newest session first, read back until it is found or every log is read.
-    private func load() async {
-        guard !loading, let first = chat.first else { return }
+    /// Reads back, newest session first, until `count` rows match the filter or every log is read.
+    private func fill() async {
+        guard !loading, !chat.isEmpty else { return }
         loading = true
         failed = false
         defer { loading = false }
-        let held = chat.flatMap { store.transcripts[$0]?.events ?? [] }
         var seen = Set(items.map(\.id))
-        var want = attachmentsPage
         do {
             for key in chat where !done.contains(key.id) {
-                while want > 0, !done.contains(key.id) {
-                    // Under 1e15, which `JSON` still sends as an integer: the server reads up to the file's end.
-                    let page: Snapshot = try await store.call(first.server, "list_attachments", [
-                        "sessionId": .string(key.id), "before": JSON(cursors[key.id] ?? 999_999_999_999_999), "limit": JSON(want),
-                    ])
-                    let named = held + (await calls(of: page.events, in: key))
-                    let fresh = attachments(page.events, named: named).filter { seen.insert($0.id).inserted }
-                    items += fresh
-                    want -= fresh.count
+                while matching(items).count < count, !done.contains(key.id) {
+                    let page = try await page(key, before: cursors[key.id])
+                    items += try await read(page, in: key).filter { seen.insert($0.id).inserted }
                     if let next = page.olderBefore { cursors[key.id] = next } else { done.insert(key.id) }
                 }
-                if want <= 0 { break }
+                if matching(items).count >= count { break }
             }
+            loaded = true
         } catch {
             failed = true
         }
+    }
+
+    /// The newest page of the newest session, ahead of the rest: what arrived since the list was read.
+    private func readNewest() async {
+        guard !loading, let key = chat.first,
+              let page = try? await page(key, before: nil),
+              let read = try? await read(page, in: key) else { return }
+        let seen = Set(items.map(\.id))
+        let fresh = read.filter { !seen.contains($0.id) }
+        items.insert(contentsOf: fresh, at: 0)
+        count += fresh.count
+    }
+
+    /// The media lines written before `before`, or from the end of the log.
+    private func page(_ key: SessionKey, before: Int?) async throws -> Snapshot {
+        // Under 1e15, which `JSON` still sends as an integer: the server reads up to the file's end.
+        try await store.call(key.server, "list_attachments", [
+            "sessionId": .string(key.id), "before": JSON(before ?? 999_999_999_999_999), "limit": JSON(attachmentsPage),
+        ])
+    }
+
+    private func read(_ page: Snapshot, in key: SessionKey) async throws -> [Attachment] {
+        let held = chat.flatMap { store.transcripts[$0]?.events ?? [] }
+        return attachments(page.events, named: held + (await calls(of: page.events, in: key)))
     }
 
     /// The calls that handed back a picture: a bot chat is read without its tool calls
@@ -324,8 +360,14 @@ struct BotRoutines: View {
                 }
             }
         }
-        // Again on every `routines_changed` the server sends.
-        .task(id: store.routinesRevision) { await read() }
+        // On every `routines_changed`, on a reconnect, which may have missed one, and once
+        // a minute as the desktop does, so a read that failed is tried again.
+        .task(id: "\(store.routinesRevision)|\(store.serverState[server] == .connected)") {
+            while !Task.isCancelled {
+                await read()
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
     }
 
     private func row(_ r: Routine, now: Date) -> some View {
@@ -365,26 +407,33 @@ struct BotRoutines: View {
         routines = list
     }
 
+    /// The switch moves at once and goes back where the server refused, or never answered.
     private func setPaused(_ r: Routine, _ paused: Bool) async {
-        if let i = routines.firstIndex(where: { $0.id == r.id }) { routines[i].paused = paused }
-        await act("set_routine_paused", ["id": .string(r.id), "paused": .bool(paused)], paused ? "Couldn't pause it" : "Couldn't resume it")
+        let set = { (to: Bool) in if let i = routines.firstIndex(where: { $0.id == r.id }) { routines[i].paused = to } }
+        set(paused)
+        let ok = await act("set_routine_paused", ["id": .string(r.id), "paused": .bool(paused)], paused ? "Couldn't pause it" : "Couldn't resume it")
+        if !ok { set(r.paused) }
     }
 
     private func remove(_ r: Routine) async {
-        await act("delete_routine", ["id": .string(r.id)], "Couldn't delete it")
+        _ = await act("delete_routine", ["id": .string(r.id)], "Couldn't delete it")
     }
 
     /// One that fails leaves its reason until the next succeeds; the list is read again either way.
-    private func act(_ cmd: String, _ args: [String: JSON], _ failed: String) async {
+    @discardableResult
+    private func act(_ cmd: String, _ args: [String: JSON], _ failed: String) async -> Bool {
         do {
             let _: JSON = try await store.call(server, cmd, args)
             error = nil
             Haptic.tap()
+            await read()
+            return true
         } catch {
             self.error = "\(failed): \(sentence(error.localizedDescription))"
             Haptic.error()
+            await read()
+            return false
         }
-        await read()
     }
 }
 
