@@ -1505,7 +1505,13 @@ export default function Sidebar({
             onChange={onProjectFilterChange}
           />
         </div>}
-        <div className="scrollbar-none flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 pt-1 pb-3">
+        {/* The list's own ref and scroll handler, so the settled window opens
+            as the rail scrolls just as it does in the list. */}
+        <div
+          ref={listRef}
+          onScroll={more ? openMore : undefined}
+          className="scrollbar-none flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 pt-1 pb-3"
+        >
           {runs.flatMap((group, index) => [
             index > 0 && <div key={`gap ${groupKeys[index]}`} aria-hidden className="h-4 shrink-0" />,
             ...(group.kind === "drafts"
@@ -1520,15 +1526,18 @@ export default function Sidebar({
               : group.rows.map(({ item }) => {
                   const status = statusBySession[item.sessionId] ?? item.status;
                   const aside = !archivedShown && ((group.kind === "stage" && group.state === "aside") || item.aside);
+                  const gone = offline(item.cwd);
                   return (
                     <RailTask
                       key={item.sessionId}
                       sessionId={item.sessionId}
                       label={item.title}
-                      status={status}
+                      // Its last status is all a dropped server left, so the
+                      // dot claims no work, as the row's orb does not.
+                      status={gone && status === "in_progress" ? "idle" : status}
                       asking={askingSessions.has(item.sessionId)}
                       active={item.sessionId === selectedSessionId}
-                      dim={aside ? "opacity-30" : ((archivedShown && !isToday(item.modified)) || offline(item.cwd)) ? "opacity-50" : undefined}
+                      dim={aside ? "opacity-30" : ((archivedShown && !isToday(item.modified)) || gone) ? "opacity-50" : undefined}
                       onOpen={() => void onSelect(item.sessionId)}
                     />
                   );

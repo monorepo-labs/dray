@@ -1454,18 +1454,9 @@
     color: transparent;
   }
 
-  /* Motion is decoration here — the label's tense already carries the state,
-     and the text stays legible without the animation. */
-  @media (prefers-reduced-motion: reduce) {
-    .shimmer-text,
-    .shimmer-mask {
-      animation: none;
-    }
-  }
-
-  /* `shimmer-text`'s band for an icon, which `background-clip: text` cannot
-     reach: laid over a muted copy of the glyph, this foreground copy shows only
-     where the travelling mask lets it through. */
+  /* `shimmer-text`'s band for a shape, which `background-clip: text` cannot
+     reach: laid over a muted copy, this foreground copy shows only where the
+     travelling mask lets it through. */
   .shimmer-mask {
     animation: shimmer-mask 2s linear infinite;
     will-change: transform;
@@ -1479,6 +1470,16 @@
     }
     to {
       mask-position: -200% 0;
+    }
+  }
+
+  /* Motion is decoration here — the label's tense already carries the state,
+     and the text stays legible without the animation. After both rules it
+     stills, since it matches them at equal specificity and must win on order. */
+  @media (prefers-reduced-motion: reduce) {
+    .shimmer-text,
+    .shimmer-mask {
+      animation: none;
     }
   }
 
