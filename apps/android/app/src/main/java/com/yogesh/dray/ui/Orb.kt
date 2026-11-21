@@ -1,7 +1,7 @@
 package com.yogesh.dray.ui
 
+import android.provider.Settings
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -9,73 +9,91 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import kotlin.math.PI
-import kotlin.math.cos
-import kotlin.math.sin
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
- * The one place app states map to an orb: working, delegating, background, reconnecting,
- * loading. The iOS app draws these with its Thinking Orbs package; this is a light stand-in
- * in the same spirit — dots on an orbit, each state its own motion.
+ * What the app is waiting on wherever an orb is drawn. Each maps to the orb the desktop draws for
+ * the same wait, the iOS app's `Activity`.
  */
-enum class OrbKind { Working, Delegating, Background, Reconnecting, Loading }
+enum class OrbKind {
+    /** A turn running: the row's slot, the transcript's working line. */
+    Working,
+    /** A subagent or delegated run. */
+    Delegating,
+    /** Background tasks outliving the turn. */
+    Background,
+    /** A server being reached again. */
+    Reconnecting,
+    /** Reading something in: a transcript, a list. No desktop twin; searching is the nearest. */
+    Loading,
+}
 
+/** The orb for an activity, in the page's ink, at the package's tuned 20dp unless asked. The iOS app's `Orb(activity)`. */
 @Composable
-fun Orb(kind: OrbKind, size: Dp = 16.dp, modifier: Modifier = Modifier) {
-    val t = rememberInfiniteTransition(label = "orb")
-    val period = when (kind) {
-        OrbKind.Reconnecting -> 700
-        OrbKind.Delegating -> 1600
-        OrbKind.Background -> 2400
-        else -> 1200
+fun Orb(kind: OrbKind, size: Dp = 20.dp, modifier: Modifier = Modifier, label: String? = null) {
+    when (kind) {
+        OrbKind.Working -> ThinkingOrb(OrbState.Working, size = size, modifier = modifier, label = label)
+        OrbKind.Delegating -> ThinkingOrb(OrbState.Working, OrbVariant.Gyro, size, modifier = modifier, label = label)
+        OrbKind.Background -> ThinkingOrb(OrbState.Background, OrbVariant.Spiral, size, modifier = modifier, label = label)
+        OrbKind.Reconnecting -> ThinkingOrb(OrbState.Searching, OrbVariant.Lighthouse, size, speed = 3.0, modifier = modifier, label = label)
+        OrbKind.Loading -> ThinkingOrb(OrbState.Searching, size = size, modifier = modifier, label = label)
     }
-    val phase by t.animateFloat(0f, 1f, infiniteRepeatable(tween(period, easing = LinearEasing)), label = "phase")
-    val pulse by t.animateFloat(0.55f, 1f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "pulse")
-    Canvas(modifier.size(size)) {
-        val r = this.size.minDimension / 2
-        val c = center
-        when (kind) {
-            OrbKind.Working, OrbKind.Loading -> {
-                val n = 3
-                for (i in 0 until n) {
-                    val a = 2 * PI * (phase + i.toFloat() / n)
-                    val p = Offset(c.x + (r * 0.55f) * cos(a).toFloat(), c.y + (r * 0.55f) * sin(a).toFloat())
-                    drawCircle(Dray.text.copy(alpha = 0.35f + 0.65f * ((i + 1f) / n) * pulse), r * 0.22f, p)
-                }
-            }
-            OrbKind.Delegating -> {
-                rotate(phase * 360f) {
-                    drawOval(Dray.text.copy(alpha = 0.8f), topLeft = Offset(c.x - r * 0.85f, c.y - r * 0.35f),
-                        size = androidx.compose.ui.geometry.Size(r * 1.7f, r * 0.7f), style = Stroke(r * 0.14f))
-                }
-                rotate(-phase * 360f + 60f) {
-                    drawOval(Dray.secondary.copy(alpha = 0.7f), topLeft = Offset(c.x - r * 0.85f, c.y - r * 0.35f),
-                        size = androidx.compose.ui.geometry.Size(r * 1.7f, r * 0.7f), style = Stroke(r * 0.14f))
-                }
-                drawCircle(Dray.text, r * 0.18f, c)
-            }
-            OrbKind.Background -> {
-                for (i in 0 until 6) {
-                    val f = i / 6f
-                    val a = 2 * PI * (phase - f * 0.5)
-                    val rr = r * (0.25f + 0.6f * f)
-                    drawCircle(Dray.secondary.copy(alpha = 1f - f * 0.8f), r * 0.14f,
-                        Offset(c.x + rr * cos(a).toFloat(), c.y + rr * sin(a).toFloat()))
-                }
-            }
-            OrbKind.Reconnecting -> {
-                drawCircle(Dray.text.copy(alpha = 0.25f), r * 0.85f, c, style = Stroke(r * 0.14f))
-                drawArc(Dray.text, phase * 360f, 70f, false, topLeft = Offset(c.x - r * 0.85f, c.y - r * 0.85f),
-                    size = androidx.compose.ui.geometry.Size(r * 1.7f, r * 1.7f), style = Stroke(r * 0.18f))
-            }
+}
+
+/**
+ * The Thinking Orbs package's `Orb`: a sphere of dots in the page's ink, every look tuned to read at
+ * 20dp. One frame clock drives it, read in the draw phase alone, so a turning orb never recomposes its
+ * row. With animations off in the system's settings it holds still, as iOS does under Reduce Motion.
+ */
+@Composable
+fun ThinkingOrb(
+    state: OrbState = OrbState.Idle,
+    variant: OrbVariant = OrbVariant.Default,
+    size: Dp = 20.dp,
+    speed: Double = 1.0,
+    paused: Boolean = false,
+    tint: Color = Dray.text,
+    modifier: Modifier = Modifier,
+    label: String? = null,
+) {
+    val config = OrbConfig(Look.of(state, variant), size.value.toDouble())
+    val engine = remember(config) { OrbEngine(config) }
+    val context = LocalContext.current
+    val still = remember {
+        Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+    }
+    var now by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(paused, still) {
+        if (paused || still) return@LaunchedEffect
+        while (true) withFrameMillis { now = it }
+    }
+    val clock = "${config.look.key}@$speed"
+    Canvas(modifier.size(size).then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier)) {
+        val t = if (still) 0.0 else tick(clock, now.toDouble(), speed)
+        val k = this.size.width / config.size.toFloat()
+        engine.draw(t) { x, y, r, a ->
+            // Opacity to two places like the web's; no dot drops below 0.45pt, or it renders as a grey haze.
+            val o = min(100, (a * 100).roundToInt())
+            if (o > 0) drawCircle(tint, (max(0.45, r) * k).toFloat(), Offset((x * k).toFloat(), (y * k).toFloat()), alpha = o / 100f)
         }
     }
 }

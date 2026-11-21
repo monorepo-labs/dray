@@ -213,7 +213,7 @@ fun ToolRow(call: ToolCall, showLabel: Boolean = true) {
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (pending && call.toolType == "subagent_spawn") Orb(OrbKind.Delegating, 14.dp)
+            if (pending && call.toolType == "subagent_spawn") Orb(OrbKind.Delegating)
             if (showLabel || summary == null || alarming) {
                 Text(
                     toolLabel(call.name, pending),
@@ -312,7 +312,7 @@ fun WorkingLine() {
 @Composable
 fun OrbLine(kind: OrbKind, label: String, modifier: Modifier = Modifier) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Orb(kind, 18.dp)
+        Orb(kind)
         Text(label, Modifier.shimmer(), style = Dray.Font.subhead.copy(color = Dray.secondary), maxLines = 1)
     }
 }

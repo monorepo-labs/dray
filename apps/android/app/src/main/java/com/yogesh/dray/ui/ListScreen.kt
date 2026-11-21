@@ -274,7 +274,7 @@ private fun SessionRow(rows: List<ListRow>, i: Int, onClick: () -> Unit) {
             when {
                 row.key.server in store.lost -> Icon(Icons.Outlined.WifiOff, "Server offline", Modifier.size(15.dp), tint = Dray.tertiary)
                 mark?.state == "OPEN" && mark.checksState == "RUNNING" -> ChecksSpinner()
-                item.busy -> Orb(OrbKind.Working, 16.dp)
+                item.busy -> Orb(OrbKind.Working, label = "Working")
                 else -> parseDate(item.modified)?.let { Text(shortAge(it), style = Dray.Font.footnote.copy(color = Dray.tertiary)) }
             }
         }

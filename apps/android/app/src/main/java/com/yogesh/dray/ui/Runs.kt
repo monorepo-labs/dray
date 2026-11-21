@@ -261,7 +261,7 @@ private fun RunRow(run: AgentRun, open: Boolean, at: String?, stoppable: Boolean
                     when {
                         run.shell -> Icon(Icons.Outlined.Terminal, null, Modifier.size(17.dp), tint = Dray.secondary)
                         run.done -> Icon(Icons.Filled.Check, null, Modifier.size(16.dp), tint = Dray.tertiary)
-                        else -> Orb(OrbKind.Delegating, 18.dp)
+                        else -> Orb(OrbKind.Delegating)
                     }
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {

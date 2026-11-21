@@ -776,8 +776,8 @@ private fun TaskRow(server: String, key: SessionKey, onClick: () -> Unit) {
     ) {
         Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
             when {
-                item.busy && !asking -> Orb(OrbKind.Working, 16.dp)
-                store.inBackground(key) && !asking -> Orb(OrbKind.Background, 16.dp)
+                item.busy && !asking -> Orb(OrbKind.Working)
+                store.inBackground(key) && !asking -> Orb(OrbKind.Background)
                 else -> BotFace(key.id, size = 22.dp)
             }
         }
