@@ -1,6 +1,7 @@
 import { Plus } from "lucide-react";
 
 import BranchSelector from "@/components/composer/BranchSelector";
+import WorktreeBranchSelector from "@/components/composer/WorktreeBranchSelector";
 import BranchSwitchDialog from "@/components/composer/BranchSwitchDialog";
 import ContextMeter from "@/components/composer/ContextMeter";
 import MachineSelector from "@/components/composer/MachineSelector";
@@ -72,6 +73,10 @@ type ComposerToolbarProps = {
 
   useWorktree: boolean;
   onToggleWorktree: () => void;
+  /// The branch a worktree starts on; null is the default branch.
+  worktreeBranch: string | null;
+  onSelectWorktreeBranch: (branch: string | null) => void;
+  onOpenWorktreeBranches: () => void;
 
   /// Opens the file picker. The attachments themselves are held in a
   /// module-level store keyed by session, not passed through here — this row is
@@ -134,6 +139,9 @@ export default function ComposerToolbar({
   onConfirmBranchSwitch,
   onCancelBranchSwitch,
   useWorktree,
+  worktreeBranch,
+  onSelectWorktreeBranch,
+  onOpenWorktreeBranches,
   onToggleWorktree,
   onAttach,
   contextUsage,
@@ -207,15 +215,21 @@ export default function ComposerToolbar({
               {/* A cloud task always runs in a worktree, so there is nothing to toggle. */}
               {!cloud && <WorktreeToggle on={useWorktree} onToggle={onToggleWorktree} />}
 
-              {/* A worktree forks from the remote's default branch no matter
-                  what is checked out, so offering a branch here would promise
-                  something the CLI doesn't honour. State the real base instead. */}
-              {useWorktree || cloud ? (
+              {/* A cloud machine clones the repo fresh, so a branch only this
+                  checkout holds means nothing there: it states the real base. */}
+              {cloud ? (
                 branches?.defaultBase && (
                   <span className="truncate px-1.5 text-ui text-muted-foreground/60">
                     from {branches.defaultBase}
                   </span>
                 )
+              ) : useWorktree ? (
+                <WorktreeBranchSelector
+                  branches={branches}
+                  value={worktreeBranch}
+                  onSelect={onSelectWorktreeBranch}
+                  onOpen={onOpenWorktreeBranches}
+                />
               ) : (
                 // Relative, so the switch popover anchors to the picker rather
                 // than to the window.

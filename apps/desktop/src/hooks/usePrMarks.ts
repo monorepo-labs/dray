@@ -621,3 +621,46 @@ export function usePrMarks(
     }, [load]),
   };
 }
+
+/// The repo key the composer's `#` menu is listing pull requests from, or
+/// `null`. `App`'s one `usePrMarks` reads and lists it beside the page's keys,
+/// so the menu shares the page's cache, poll and `gh` budget rather than
+/// running a reader of its own.
+let mentionKey: string | null = null;
+const mentionKeyChanged = channel<void>();
+
+export const readPrMentionKey = () => mentionKey;
+export const subscribePrMentionKey = mentionKeyChanged.subscribe;
+
+/// Open pull requests in one repo for the `#` menu, newest activity first, and
+/// whether they are still coming. Keeps `key` listed while `active`.
+export function usePrMentions(
+  key: string | null,
+  active: boolean,
+): { prs: PrMark[]; loading: boolean; error?: PrUnavailable } {
+  useEffect(() => {
+    if (!active || !key) return;
+    mentionKey = key;
+    mentionKeyChanged.emit();
+    return () => {
+      if (mentionKey !== key) return;
+      mentionKey = null;
+      mentionKeyChanged.emit();
+    };
+  }, [key, active]);
+
+  const [, redraw] = useState(0);
+  useEffect(() => prMarksChanged.subscribe(() => redraw((n) => n + 1)), []);
+
+  if (!active || !key) return { prs: [], loading: false };
+  const marks = numbered.get(key);
+  const error = lastError.get(key);
+  const open = [...(marks?.values() ?? [])].filter((pr) => pr.state === "OPEN");
+  // A read made before the menu asked carries no titles, so it is no answer yet.
+  if (!marks || open.some((pr) => !pr.listing)) return { prs: [], loading: !error, error };
+  return {
+    prs: open.sort((a, b) => (b.listing?.updatedAt ?? "").localeCompare(a.listing?.updatedAt ?? "")),
+    loading: false,
+    error,
+  };
+}

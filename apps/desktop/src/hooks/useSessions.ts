@@ -367,6 +367,18 @@ export function useSessions() {
     // has uncommitted changes. Null when nothing is pending.
     const [pendingBranch, setPendingBranch] = useState<string | null>(null);
     const [useWorktree, setUseWorktreeState] = useState(() => prefs.useWorktree);
+    // The branch a new worktree starts on, null for the default branch. Held
+    // with the project it was picked in, so a pick never follows the reader to
+    // another project however that project became the current one.
+    const [worktreePick, setWorktreePick] = useState<{ project: string | null; branch: string | null }>({
+      project: null,
+      branch: null,
+    });
+    const projectPathRef = useRef(projectPath);
+    projectPathRef.current = projectPath;
+    const worktreeBranch = worktreePick.project === projectPath ? worktreePick.branch : null;
+    const setWorktreeBranch = (branch: string | null, project: string | null = projectPathRef.current) =>
+      setWorktreePick({ project, branch });
     // The server New bot makes its bot on, while the dialog is open. It shares
     // the composer's picker, so the models offered must be that server's.
     const [botServer, setBotServer] = useState<ServerId | null>(null);
@@ -721,6 +733,18 @@ const runCheckout = async (target: string, stash: boolean) => {
   }
 };
 
+// Read again each time the worktree picker opens: a task started since may have
+// made a remote-only branch local, or the reader fetched.
+const refreshBranches = () => {
+  const asked = projectPath;
+  if (!asked) return;
+  invoke<BranchList>("list_branches", { cwd: asked })
+    .then((list) => {
+      if (projectPathRef.current === asked) setBranches(list);
+    })
+    .catch(() => {});
+};
+
 // A clean tree switches silently; a dirty one routes through the dialog, whose
 // buttons call back into `runCheckout` with the user's choice.
 //
@@ -877,7 +901,7 @@ const handleSendMsg = async (
   // time. The wire still takes paths alone.
   attachments: Attachment[] = [],
   // Where a new session's worktree starts, from a draft `dray draft new
-  // --base` saved. Nothing in the composer sets one.
+  // --base` saved. Without one, the worktree branch picker's.
   baseRef: string | null = null,
 ): Promise<boolean> => {
   const attachmentPaths = attachments.map((a) => a.path);
@@ -1125,7 +1149,8 @@ const handleSendMsg = async (
       branch: isNewSession && !worktree && !placed ? branch : null,
       useWorktree: isNewSession && worktree,
       worktreeName: null,
-      baseRef: isNewSession && worktree ? baseRef : null,
+      // Placed sessions are a server's own picks, never this picker's.
+      baseRef: isNewSession && worktree ? (baseRef ?? (placed ? null : worktreeBranch)) : null,
       isNewSession,
     });
     if (heldAtSend) {
@@ -1418,6 +1443,7 @@ const handleNewSession = () => {
   setFastState(prefs.fast);
   setUseWorktreeState(prefs.useWorktree);
   setBranch(branches?.current ?? null);
+  setWorktreeBranch(null);
 };
 
 // Puts the composer's controls back to what the session was started with. Every
@@ -1468,6 +1494,9 @@ const restoreDraftControls = (draft: Draft) => {
   restoreSessionControls({ ...draft, sessionId: draft.id });
   setUseWorktreeState(draft.useWorktree);
   handleSelectProject(draft.projectPath);
+  // A `dray draft new --base` session id shows here too: it is what the
+  // draft starts from.
+  setWorktreeBranch(draft.base ?? null, draft.projectPath);
 };
 
 /// Answers whether the reader ended up on the session they asked for, which is
@@ -3914,6 +3943,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems: shownIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, servingBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, prefetchTranscript, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems: shownIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, worktreeBranch, setWorktreeBranch, refreshBranches, busy, backgroundTasks, liveTaskIds, tasksBySession, servingBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, prefetchTranscript, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
 
 }

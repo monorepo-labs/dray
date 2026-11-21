@@ -74,6 +74,7 @@ pub fn run(command: DraftCommand) -> Result<(), String> {
                 parent_session_id: parent_session_id(),
                 fast: args.fast.then_some(true),
                 base: args.base,
+                base_as_branch: false,
             });
             match send(request)? {
                 Response::Draft { draft } => {

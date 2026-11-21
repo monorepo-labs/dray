@@ -1,4 +1,4 @@
-import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { invoke, listen, LOCAL, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -52,12 +52,12 @@ import {
   setPickHandler,
   useBrowserTabs,
 } from "@/lib/browser";
-import { setLinkOpener } from "@/lib/openLink";
+import { openLink, setLinkOpener } from "@/lib/openLink";
 import { repoChanged } from "@/lib/prSync";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useChanges } from "@/hooks/useChanges";
 import { setTranscriptPrefetch } from "@/hooks/useHoverPrefetch";
-import { keptPrMark, usePrMarks } from "@/hooks/usePrMarks";
+import { keptPrMark, readPrMentionKey, subscribePrMentionKey, usePrMarks } from "@/hooks/usePrMarks";
 import { usePrReady } from "@/hooks/usePrReady";
 import { useAutoMergeCards } from "@/hooks/useAutoMergeCards";
 import { useWorkStatus } from "@/hooks/useWorkStatus";
@@ -313,6 +313,9 @@ function App() {
     branches,
     branch,
     useWorktree,
+    worktreeBranch,
+    setWorktreeBranch,
+    refreshBranches,
     busy,
     backgroundTasks,
     liveTaskIds,
@@ -441,8 +444,9 @@ function App() {
       fast,
       useWorktree,
       projectPath,
+      base: worktreeBranch,
     });
-  }, [openDraftId, harness, modelId, effort, permissionMode, fast, useWorktree, projectPath, updateDraft]);
+  }, [openDraftId, harness, modelId, effort, permissionMode, fast, useWorktree, projectPath, worktreeBranch, updateDraft]);
 
   // A draft emptied and then left says nothing, so it goes rather than sitting
   // in the list as an empty row. Every way out lands here, since each one
@@ -553,6 +557,7 @@ function App() {
       permissionMode,
       fast,
       useWorktree: source ? !!source.worktreeName || source.worktreeRemoved : useWorktree,
+      base: !source && useWorktree ? worktreeBranch : null,
       created: new Date().toISOString(),
     });
     if (!saved) return;
@@ -1496,6 +1501,12 @@ function App() {
         : [],
     [pullsOpen, pullsSearch, pullsScope, projects, spaceProjects, botRepoKey],
   );
+  // The repo the composer's `#` menu is listing pull requests from, while it is.
+  const prMentionKey = useSyncExternalStore(subscribePrMentionKey, readPrMentionKey);
+  const listedKeys = useMemo(
+    () => (prMentionKey && !pullsKeys.includes(prMentionKey) ? [...pullsKeys, prMentionKey] : pullsKeys),
+    [pullsKeys, prMentionKey],
+  );
   // Whichever sidebar list is up: a card on screen is still being read.
   const repoPaths = useMemo(
     () => [
@@ -1503,13 +1514,13 @@ function App() {
         ...(archivedShown ? [] : [...visibleSessions, ...crew.map((r) => r.item)].map((i) => i.projectPath)),
         ...(cardRepoKey ? cardRepoKey.split("\n") : []),
         ...(botRepoKey ? botRepoKey.split("\n") : []),
-        ...pullsKeys,
+        ...listedKeys,
       ]),
     ],
-    [archivedShown, visibleSessions, crew, cardRepoKey, botRepoKey, pullsKeys],
+    [archivedShown, visibleSessions, crew, cardRepoKey, botRepoKey, listedKeys],
   );
   const botRepos = useMemo(() => (botRepoKey ? botRepoKey.split("\n") : []), [botRepoKey]);
-  const prMarks = usePrMarks(repoPaths, botRepos, pullsKeys);
+  const prMarks = usePrMarks(repoPaths, botRepos, listedKeys);
 
   // "This can land now" — raised off the sidebar's marks rather than the
   // panel's own read, which is the only way it can be noticed at all: the
@@ -2751,6 +2762,8 @@ function App() {
   // back.
   useEffect(() => {
     setIssueOpener((issue) => {
+      // A pull request tagged from the `#` menu is no issue to open here.
+      if (prRepoSlug(issue.url)) return openLink(issue.url);
       setPickedIssue(issue);
       setPage("issues");
     });
@@ -4722,6 +4735,9 @@ function App() {
               onCancelBranchSwitch={() => setPendingBranch(null)}
               useWorktree={useWorktree}
               onToggleWorktree={() => setUseWorktree((v) => !v)}
+              worktreeBranch={worktreeBranch}
+              onSelectWorktreeBranch={(branch) => setWorktreeBranch(branch)}
+              onOpenWorktreeBranches={refreshBranches}
               onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
               contextUsage={contextUsage}
               tasks={selectedBot ? { counts: taskCount, onOpen: () => showPanel("tasks") } : undefined}

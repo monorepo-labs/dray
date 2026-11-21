@@ -99,3 +99,31 @@ export function effectiveTracker(pick: IssueTracker, connected: Connected): Issu
 export function canSwitchTracker(connected: Connected): boolean {
   return connected.linear && connected.github;
 }
+
+/// What the composer's `#` menu lists: issues, or pull requests.
+export type MentionKind = "issues" | "prs";
+
+const KIND_KEY = "ade.mentionKind";
+
+/// The `#` menu's Issues / PRs pick, kept across launches like the tracker's.
+export function readMentionKind(): MentionKind {
+  return readLocalStorage<MentionKind>(KIND_KEY, "issues") === "prs" ? "prs" : "issues";
+}
+
+export function setMentionKind(kind: MentionKind): void {
+  writeLocalStorage(KIND_KEY, kind);
+  bumped.emit();
+}
+
+/// The repository each bot's `#` menu reads, by the bot's folder. A bot's
+/// folder holds its notes and has no remote, so the reader picks one.
+const BOT_REPO_KEY = "ade.botMentionRepo";
+
+export function readBotRepo(folder: string): string | null {
+  return readLocalStorage<Record<string, string>>(BOT_REPO_KEY, {})[folder] ?? null;
+}
+
+export function setBotRepo(folder: string, repo: string): void {
+  writeLocalStorage(BOT_REPO_KEY, { ...readLocalStorage<Record<string, string>>(BOT_REPO_KEY, {}), [folder]: repo });
+  bumped.emit();
+}
