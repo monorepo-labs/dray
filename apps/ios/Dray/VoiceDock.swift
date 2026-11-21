@@ -15,8 +15,6 @@ struct VoiceDock: View {
     let started: (SessionKey) -> Void
     /// The reader opened the keyboard, the picks or the orb.
     var engaged: () -> Void = {}
-    /// Drawn in a split view's sidebar: model and project alone, since either opens Run with and every pick in it.
-    var slim = false
     @State private var hint: String?
     @State private var confirming = false
     @State private var editing = false
@@ -248,15 +246,13 @@ struct VoiceDock: View {
             }
             .accessibilityLabel("Model")
             // Machine before project: the project is one the machine holds.
-            if !slim {
-                Button { picking = true } label: {
-                    HStack(spacing: 5) {
-                        ServerIcon().frame(width: 12, height: 12)
-                        Text(task.server.map(store.name(of:)) ?? "Machine").font(Theme.Font.footnote)
-                    }
+            Button { picking = true } label: {
+                HStack(spacing: 5) {
+                    ServerIcon().frame(width: 12, height: 12)
+                    Text(task.server.map(store.name(of:)) ?? "Machine").font(Theme.Font.footnote)
                 }
-                .accessibilityLabel("Machine")
             }
+            .accessibilityLabel("Machine")
             Button { picking = true } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "folder.fill").resizable().scaledToFit().frame(width: 12, height: 12)
@@ -264,12 +260,10 @@ struct VoiceDock: View {
                 }
             }
             .accessibilityLabel("Project")
-            if !slim {
-                Button { picking = true } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold)).frame(width: 24, height: 20)
-                }
-                .accessibilityLabel("More picks")
+            Button { picking = true } label: {
+                Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold)).frame(width: 24, height: 20)
             }
+            .accessibilityLabel("More picks")
             if !typing {
                 Button { edit() } label: {
                     Image(systemName: "keyboard").font(.system(size: 16)).frame(width: 24, height: 20)

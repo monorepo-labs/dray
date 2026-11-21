@@ -55,30 +55,54 @@ struct RootView: View {
     @Environment(\.scenePhase) private var phase
     /// Read outside the split view: a column inside one reports compact even beside the detail.
     @Environment(\.horizontalSizeClass) private var width
+    @Environment(NewTask.self) private var task
+    @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
     @State private var selection: SessionKey?
+    @State private var columns = NavigationSplitViewVisibility.automatic
+    /// The main pane as wide as the window: a sidebar up now is laid over it rather than beside it.
+    @State private var paneWidth: CGFloat = 0
+    @State private var windowWidth: CGFloat = 0
     @State private var sheet: RootSheet?
     /// Tasks opened over a bot's chat, so Back walks back to the bot.
     @State private var opened: [SessionKey] = []
 
     var body: some View {
-        NavigationSplitView {
-            SessionList(selection: $selection, sheet: $sheet, sidebar: width == .regular)
-        } detail: {
-            if let selection {
-                NavigationStack(path: $opened) {
-                    TranscriptView(key: selection)
-                        .id(selection)
-                        .navigationDestination(for: SessionKey.self) { TranscriptView(key: $0).id($0) }
-                }
-                .environment(\.openTask) { opened.append($0) }
-                .environment(\.openSession) { self.selection = $0 }
-            } else {
-                EmptyState(title: "No session open", message: "Pick one from the list.") {
-                    Orb(state: .idle, size: 40)
-                }
-                .page()
+        NavigationSplitView(columnVisibility: $columns) {
+            SessionList(selection: $selection, sheet: $sheet, sidebar: width == .regular) {
+                selection = nil
+                // As a row tap does: a sidebar over the page gets out of its way, one beside it stays.
+                if paneWidth >= windowWidth - 1 { columns = .detailOnly }
             }
+        } detail: {
+            Group {
+                if let selection {
+                    NavigationStack(path: $opened) {
+                        TranscriptView(key: selection)
+                            .id(selection)
+                            .navigationDestination(for: SessionKey.self) { TranscriptView(key: $0).id($0) }
+                    }
+                    .environment(\.openTask) { opened.append($0) }
+                    .environment(\.openSession) { self.selection = $0 }
+                } else if width == .regular && !store.live.isEmpty && !hideSessions {
+                    // The new task page: the phone's dock under its list, with the main pane to itself.
+                    Color.clear
+                        .overlay(alignment: .bottom) {
+                            VoiceDock(task: task, started: { selection = $0 })
+                                .opacity(store.live.contains { store.serverState[$0.id] == .connected } ? 1 : 0.3)
+                        }
+                        .page()
+                        .navigationTitle(task.bot?.bot.name ?? "New task")
+                        .navigationBarTitleDisplayMode(.inline)
+                } else {
+                    EmptyState(title: "No session open", message: "Pick one from the list.") {
+                        Orb(state: .idle, size: 40)
+                    }
+                    .page()
+                }
+            }
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { paneWidth = $0 }
         }
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { windowWidth = $0 }
         .sheet(item: $sheet) { s in
             switch s {
             case .settings(let server): SettingsView(focus: server)
