@@ -129,21 +129,28 @@ class PrModel(val key: SessionKey) {
         }
     }
 
-    suspend fun act(store: Store, cmd: String, number: Int, extra: Map<String, Any?> = emptyMap()) {
+    /**
+     * Runs on the store's scope, not a composable's: the button that asked leaves the screen the
+     * moment Working… replaces it, and its own scope would cancel the read-back mid-flight.
+     */
+    fun act(store: Store, cmd: String, number: Int, extra: Map<String, Any?> = emptyMap(), done: (Boolean) -> Unit = {}) {
         val item = store.items[key] ?: return
         acting = true
         actionError = null
-        try {
-            store.call(key.server, cmd, JsonObject(jsonOf("cwd" to item.cwd, "number" to number) + jsonOf(*extra.toList().toTypedArray())))
-        } catch (e: CancellationException) {
+        store.scope.launch {
+            try {
+                store.call(key.server, cmd, JsonObject(jsonOf("cwd" to item.cwd, "number" to number) + jsonOf(*extra.toList().toTypedArray())))
+            } catch (e: CancellationException) {
+                acting = false
+                throw e
+            } catch (e: Exception) {
+                actionError = e.message ?: "Failed"
+            }
+            load(store)
+            store.refreshMarks(key.server, item.projectPath)
             acting = false
-            throw e
-        } catch (e: Exception) {
-            actionError = e.message ?: "Failed"
+            done(actionError == null)
         }
-        load(store)
-        store.refreshMarks(key.server, item.projectPath)
-        acting = false
     }
 }
 
@@ -290,14 +297,13 @@ private fun tone(pr: PullRequest): Color {
 @Composable
 private fun Action(pr: PullRequest, model: PrModel) {
     val store = LocalStore.current
-    val scope = rememberCoroutineScope()
     when {
         model.acting -> Row(Modifier.heightIn(min = 44.dp), horizontalArrangement = Arrangement.spacedBy(Dray.Space.s), verticalAlignment = Alignment.CenterVertically) {
             Orb(OrbKind.Working)
             Text("Working…", Modifier.shimmer(), style = Dray.Font.subhead.copy(color = Dray.secondary))
         }
-        pr.state == "CLOSED" -> Pill("Reopen", Dray.tile, Dray.text) { scope.launch { model.act(store, "reopen_pr", pr.number) } }
-        pr.state == "OPEN" && pr.isDraft -> Pill("Ready for review", Dray.primary, Dray.onPrimary) { scope.launch { model.act(store, "mark_pr_ready", pr.number) } }
+        pr.state == "CLOSED" -> Pill("Reopen", Dray.tile, Dray.text) { model.act(store, "reopen_pr", pr.number) }
+        pr.state == "OPEN" && pr.isDraft -> Pill("Ready for review", Dray.primary, Dray.onPrimary) { model.act(store, "mark_pr_ready", pr.number) }
         pr.state == "OPEN" -> MergeButton(pr, model)
     }
 }
@@ -325,7 +331,6 @@ private fun MergeButton(pr: PullRequest, model: PrModel) {
     val store = LocalStore.current
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
-    val scope = rememberCoroutineScope()
     var method by remember { mutableStateOf(savedMethod(context)) }
     var confirming by remember { mutableStateOf(false) }
     var picking by remember { mutableStateOf(false) }
@@ -347,7 +352,7 @@ private fun MergeButton(pr: PullRequest, model: PrModel) {
             DropdownMenu(picking, { picking = false }, containerColor = Dray.raised) {
                 for (m in MergeMethod.entries) DropdownMenuItem(
                     text = {
-                        Column {
+                        Column(Modifier.padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(m.label, style = Dray.Font.body)
                             Text(m.detail, style = Dray.Font.footnote.copy(color = Dray.secondary))
                         }
@@ -359,6 +364,7 @@ private fun MergeButton(pr: PullRequest, model: PrModel) {
                         picking = false
                     },
                     colors = MenuDefaults.itemColors(textColor = Dray.text),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                 )
             }
         }
@@ -381,9 +387,8 @@ private fun MergeButton(pr: PullRequest, model: PrModel) {
                     confirming = false
                     // Read the model, not this composable's copy, which can trail a refresh by a frame.
                     if (model.prs.firstOrNull { it.number == pr.number }?.checksHold != false) return@TextButton
-                    scope.launch {
-                        model.act(store, "merge_pr", pr.number, mapOf("method" to method.wire))
-                        if (model.actionError == null) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    model.act(store, "merge_pr", pr.number, mapOf("method" to method.wire)) { ok ->
+                        if (ok) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     }
                 }) { Text(method.label, style = Dray.Font.pill.copy(color = Dray.add)) }
             },
@@ -432,9 +437,10 @@ private fun CommentCard(comment: PrComment) {
             Box(Modifier.size(20.dp).clip(CircleShape).background(Dray.tile)) {
                 comment.avatar?.let { RemoteImage(ImageRef(url = it), Modifier.size(20.dp), contentScale = ContentScale.Crop) }
             }
-            Text(comment.author, Modifier.weight(1f, fill = false), style = Dray.Font.subhead, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            verb(comment.kind)?.let { (v, c) -> Text(v, style = Dray.Font.subhead.copy(color = c), maxLines = 1) }
-            Spacer(Modifier.weight(1f))
+            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
+                Text(comment.author, Modifier.weight(1f, fill = false), style = Dray.Font.subhead, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                verb(comment.kind)?.let { (v, c) -> Text(v, style = Dray.Font.subhead.copy(color = c), maxLines = 1) }
+            }
             if (comment.resolved) Text("Resolved", style = Dray.Font.subhead.copy(color = Dray.tertiary))
             OutArrow()
         }

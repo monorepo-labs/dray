@@ -550,7 +550,8 @@ private fun CommitRow(commit: Commit, open: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(commit.author, Modifier.weight(1f, fill = false), style = meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 parseDate(commit.authoredAt)?.let { Text("· ${shortAge(it)}", style = meta, maxLines = 1) }
-                Text("· ${commit.sha.take(7)}", style = meta.copy(fontFamily = Dray.Font.code.fontFamily), maxLines = 1)
+                Text("·", style = meta)
+                Text(commit.sha.take(7), style = meta.copy(fontFamily = Dray.Font.code.fontFamily), maxLines = 1)
             }
         }
         Chevron(false)
@@ -696,6 +697,10 @@ private object FileIcons {
     }
 
     fun svg(context: Context, name: String): SVG? = parsed[name] ?: runCatching {
-        SVG.getFromAsset(context.assets, "file-icons/$name.svg")
+        // Some carry a fixed `width="24"`, which would draw at 24px rather than fill the box.
+        SVG.getFromAsset(context.assets, "file-icons/$name.svg").apply {
+            setDocumentWidth("100%")
+            setDocumentHeight("100%")
+        }
     }.getOrNull()?.also { parsed[name] = it }
 }
