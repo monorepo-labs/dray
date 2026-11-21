@@ -232,13 +232,25 @@ private fun CameraScanner(onScan: (PairLink) -> Unit) {
     val executor = remember { Executors.newSingleThreadExecutor() }
     val scanner = remember { BarcodeScanning.getClient(BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()) }
     var done by remember { mutableStateOf(false) }
-    DisposableEffect(Unit) { onDispose { executor.shutdown(); scanner.close() } }
+    // Bound to the activity's lifecycle, the camera outlives this screen unless let go here; `gone` stops a
+    // provider that answers after Cancel from binding it again.
+    var provider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    var gone by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        onDispose {
+            gone = true
+            provider?.unbindAll()
+            executor.shutdown()
+            scanner.close()
+        }
+    }
     AndroidView(
         factory = { ctx ->
             val view = PreviewView(ctx)
             val future = ProcessCameraProvider.getInstance(ctx)
             future.addListener({
-                val provider = future.get()
+                if (gone) return@addListener
+                val cameras = future.get().also { provider = it }
                 val preview = Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }
                 val analysis = ImageAnalysis.Builder().setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build()
                 analysis.setAnalyzer(executor) { proxy ->
@@ -248,15 +260,15 @@ private fun CameraScanner(onScan: (PairLink) -> Unit) {
                             val link = codes.firstNotNullOfOrNull { c -> c.rawValue?.let { PairLink.parse(it) } }
                             if (link != null && !done) {
                                 done = true
-                                provider.unbindAll()
+                                cameras.unbindAll()
                                 onScan(link)
                             }
                         }
                         .addOnCompleteListener { proxy.close() }
                 }
                 runCatching {
-                    provider.unbindAll()
-                    provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                    cameras.unbindAll()
+                    cameras.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
                 }
             }, ContextCompat.getMainExecutor(ctx))
             view

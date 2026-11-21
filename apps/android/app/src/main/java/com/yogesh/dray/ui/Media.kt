@@ -70,6 +70,7 @@ fun RecordingPlayer(path: String) {
                 prepare()
             }
     }
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onVideoSizeChanged(size: VideoSize) {
@@ -80,7 +81,13 @@ fun RecordingPlayer(path: String) {
             }
         }
         player.addListener(listener)
+        // Home leaves this screen composed, so the activity stopping is what pauses a recording; it stays where it was.
+        val stopped = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) player.pause()
+        }
+        lifecycle.addObserver(stopped)
         onDispose {
+            lifecycle.removeObserver(stopped)
             player.removeListener(listener)
             player.release()
         }

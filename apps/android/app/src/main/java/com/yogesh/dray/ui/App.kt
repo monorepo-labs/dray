@@ -16,7 +16,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -38,12 +41,47 @@ sealed interface Route {
     data class ServerSettings(val id: String) : Route
     data object Notifications : Route
     data object Dictation : Route
+
+    /** A route as strings, for the saved state a rotation restores the stack from. */
+    fun save(): kotlin.collections.List<String> = when (this) {
+        List -> listOf("list")
+        is Session -> listOf("session", key.server, key.id)
+        is Changes -> listOf("changes", key.server, key.id)
+        // The link's token is already in Add server's own saved fields; this restores the same screen over them.
+        is Add -> listOf("add", scan.toString(), nonce.toString(), link?.url.orEmpty(), link?.token.orEmpty(), link?.name.orEmpty())
+        Settings -> listOf("settings")
+        is BotStart -> listOf("bot-start", server, botId)
+        is ServerSettings -> listOf("server-settings", id)
+        Notifications -> listOf("notifications")
+        Dictation -> listOf("dictation")
+    }
+
+    companion object {
+        fun restore(s: kotlin.collections.List<String>): Route? = when (s.firstOrNull()) {
+            "list" -> List
+            "session" -> Session(SessionKey(s[1], s[2]))
+            "changes" -> Changes(SessionKey(s[1], s[2]))
+            "add" -> Add(s[3].takeIf { it.isNotEmpty() }?.let { PairLink(it, s[4], s[5].ifEmpty { null }) }, s[1].toBoolean(), s[2].toLong())
+            "settings" -> Settings
+            "bot-start" -> BotStart(s[1], s[2])
+            "server-settings" -> ServerSettings(s[1])
+            "notifications" -> Notifications
+            "dictation" -> Dictation
+            else -> null
+        }
+
+        /** The stack through a rotation or a process the system reclaimed: the reader comes back where they were. */
+        val stackSaver = listSaver<SnapshotStateList<Route>, ArrayList<String>>(
+            save = { stack -> stack.map { ArrayList(it.save()) } },
+            restore = { saved -> mutableStateListOf<Route>().apply { addAll(saved.mapNotNull { restore(it) }.ifEmpty { listOf(List) }) } },
+        )
+    }
 }
 
 /** The app's one navigation stack. A pairing link from outside pushes Add server, filled in. */
 @Composable
 fun App(incoming: PairLink?, consumed: () -> Unit) {
-    val stack = remember { mutableStateListOf<Route>(Route.List) }
+    val stack = rememberSaveable(saver = Route.stackSaver) { mutableStateListOf<Route>(Route.List) }
     val forward = remember { mutableStateOf(true) }
     fun push(r: Route) { forward.value = true; stack.add(r) }
     fun pop() { if (stack.size > 1) { forward.value = false; stack.removeAt(stack.lastIndex) } }

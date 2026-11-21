@@ -71,7 +71,12 @@ object ImageLoader {
     }
     private val inFlight = mutableMapOf<String, Deferred<ImageBitmap?>>()
 
-    fun key(server: String?, ref: ImageRef) = ref.path?.let { "$server|$it" } ?: ref.url ?: ""
+    /** A web or `data:` URL is the same picture everywhere; anything else is a file on one server, so the server is in its key. */
+    fun key(server: String?, ref: ImageRef): String {
+        val url = ref.url
+        if (ref.path == null && url != null && (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:"))) return url
+        return "$server|${ref.path ?: url ?: ""}"
+    }
 
     fun cached(server: String?, ref: ImageRef): ImageBitmap? = cache.get(key(server, ref))
 
@@ -92,7 +97,7 @@ object ImageLoader {
     private suspend fun fetch(store: Store, server: String?, ref: ImageRef): ImageBitmap? {
         val url = ref.url
         if (ref.path == null && url != null) {
-            if (url.startsWith("data:")) return withContext(Dispatchers.Default) { decode(Base64.decode(url.substringAfter(","), Base64.DEFAULT)) }
+            if (url.startsWith("data:")) return decodeBase64(url)
             if (url.startsWith("http://") || url.startsWith("https://")) return get(url, null)
         }
         val path = ref.path ?: url ?: return null
@@ -103,7 +108,12 @@ object ImageLoader {
         fileUrl?.let { u -> get(u, token)?.let { return it } }
         val read = runCatching { store.call(server, "read_file", jsonOf("path" to path.removePrefix("file://"))) }.getOrNull()
         val dataUrl = read["dataUrl"].str ?: return null
-        return withContext(Dispatchers.Default) { decode(Base64.decode(dataUrl.substringAfter(","), Base64.DEFAULT)) }
+        return decodeBase64(dataUrl)
+    }
+
+    /** A `data:` URL's picture. Its text comes from a transcript, so a malformed one is a picture that fails, never a crash. */
+    private suspend fun decodeBase64(dataUrl: String): ImageBitmap? = withContext(Dispatchers.Default) {
+        runCatching { decode(Base64.decode(dataUrl.substringAfter(","), Base64.DEFAULT)) }.getOrNull()
     }
 
     private suspend fun get(url: String, token: String?): ImageBitmap? = withContext(Dispatchers.IO) {

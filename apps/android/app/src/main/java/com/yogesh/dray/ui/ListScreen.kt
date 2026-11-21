@@ -163,7 +163,13 @@ fun ListScreen(
                 } else if (bots.isNotEmpty() && rows.isNotEmpty()) item("bots-gap") { Spacer(Modifier.height(16.dp)) }
                 if (settled && runs.isEmpty()) {
                     item("none") {
-                        Text("Nothing settled.", Modifier.padding(start = 20.dp).height(44.dp), style = Dray.Font.subhead.copy(color = Dray.tertiary))
+                        val err = store.settledError
+                        if (err == null) {
+                            Text("Nothing settled.", Modifier.padding(start = 20.dp).height(44.dp), style = Dray.Font.subhead.copy(color = Dray.tertiary))
+                        } else Row(Modifier.padding(horizontal = 20.dp).height(44.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("Couldn't load settled tasks. ${sentence(err)}", Modifier.weight(1f), style = Dray.Font.subhead.copy(color = Dray.secondary), maxLines = 2)
+                            Text("Retry", Modifier.clickable { scope.launch { store.loadSettled() } }.padding(8.dp), style = Dray.Font.pill)
+                        }
                     }
                 }
                 var left = shown

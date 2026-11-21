@@ -545,9 +545,14 @@ class Store(private val context: Context) {
 
     /** Settled sessions, read only when the settled view asks: the live read leaves them out. */
     suspend fun loadSettled() {
+        var failed: String? = null
         for (s in servers.filter { serverState[it.id] == ConnState.Connected }) {
             val held = items.filter { it.key.server == s.id && it.value.archived == true }.mapValues { it.value.modified }
-            val list = runCatching { decodeList<SessionItem>(call(s.id, "list_session_index_items", jsonOf("archived" to true))) }.getOrNull() ?: continue
+            val read = runCatching { decodeList<SessionItem>(call(s.id, "list_session_index_items", jsonOf("archived" to true))) }
+            val list = read.getOrNull() ?: run {
+                failed = read.exceptionOrNull()?.message ?: "The server didn't answer."
+                null
+            } ?: continue
             val listedIds = list.map { it.sessionId }.toSet()
             val next = items.toMutableMap()
             // A row the reply leaves out was deleted, unless an event moved it meanwhile.
@@ -558,7 +563,12 @@ class Store(private val context: Context) {
             for (item in list) next[SessionKey(s.id, item.sessionId)] = merged(SessionKey(s.id, item.sessionId), item)
             putItems(next)
         }
+        settledError = failed
     }
+
+    /** Why the last settled read failed on a server, so the settled view offers Retry rather than "Nothing settled." */
+    var settledError by mutableStateOf<String?>(null)
+        private set
 
     /** A status event that arrived while a read was out is newer than the read, so it wins. */
     private fun merged(key: SessionKey, read: SessionItem): SessionItem {
