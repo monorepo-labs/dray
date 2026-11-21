@@ -23,7 +23,7 @@ A worktree session runs in its own checkout of your repository, on its own branc
 
 Worktree is a choice at creation. An existing session cannot move into or out of one.
 
-Sessions an agent starts with the `dray` command line always get a worktree.
+Sessions an agent starts with the `dray` command line get a worktree, unless it passes `--no-worktree`. That runs in the folder as it is, repo or not, and is for work that changes no repo. See [Sessions](/cli/sessions#worktree).
 
 ## Where it lives
 
