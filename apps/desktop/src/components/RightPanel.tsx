@@ -1,5 +1,15 @@
 import { Suspense, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import {
+  CircleDot,
+  Ellipsis,
+  FileDiff,
+  FileText,
+  GitPullRequest,
+  Layers,
+  ListChecks,
+  RefreshCw,
+  type LucideIcon,
+} from "lucide-react";
 
 import OpenInButton from "@/components/OpenInButton";
 import TabButton from "@/components/TabButton";
@@ -78,6 +88,19 @@ export const PANEL_LABELS: Record<PanelTab, string> = {
   // Singular: a session is working to one plan, and putting up a second
   // replaces the first.
   plan: "Plan",
+};
+
+/// Each tab's glyph, for the icon switcher a bot's pane draws in place of the
+/// tab row. Tasks takes the sidebar's own stack, which is what a bot's tasks
+/// are; More takes the ellipsis, since it is named as a catch-all.
+export const PANEL_ICONS: Record<PanelTab, LucideIcon> = {
+  changes: FileDiff,
+  tasks: Layers,
+  more: Ellipsis,
+  pr: GitPullRequest,
+  issue: CircleDot,
+  docs: FileText,
+  plan: ListChecks,
 };
 
 /// Which tabs exist, and in what order.
@@ -181,6 +204,11 @@ type RightPanelProps = {
   /// strip is worse than either, since it reads as chrome that failed to load.
   /// So the row keeps its height, loses its controls, and says what the pane is.
   heading?: string;
+  /// Draws the tabs as a row of glyphs at the foot of the pane rather than as a
+  /// row of words at its top, which then names the open one. A bot's pane: its
+  /// views are few and stable, and words at the top read as a second tab row
+  /// over a chat that already has one.
+  switcher?: boolean;
   /// Which side of the chat column the pane stands on — the reader's pick in
   /// Settings › Appearance. The border and the drag strip face the chat.
   side?: PanelSide;
@@ -236,6 +264,7 @@ export default function RightPanel({
   cwd,
   actions,
   heading,
+  switcher = false,
   widthKey,
   side = "right",
   children,
@@ -278,14 +307,14 @@ export default function RightPanel({
           // Padded to sit where a tab's label would, so the pane's first line
           // lands on the same baseline whichever frame it is wearing.
           <span className="px-2 py-1 text-ui font-medium">{heading}</span>
-        ) : tabs.length === 1 && tabs[0] === "tasks" ? (
-          // A bot's pane with nothing beside its task list: the tab's words
-          // with nothing to switch to, so no fill and no weight over its count.
-          // Inset to the faces' drawn edge below rather than a tab's padding,
-          // so the label lines up with the list it heads.
+        ) : switcher || (tabs.length === 1 && tabs[0] === "tasks") ? (
+          // The open view's words with nothing to press, so no fill and no
+          // weight over its count: the switching is done at the foot. Inset to
+          // the faces' drawn edge below rather than a tab's padding, so the
+          // label lines up with the list it heads.
           <span className="py-1 pr-2 pl-1.5 text-ui text-muted-foreground">
-            {PANEL_LABELS.tasks}
-            <TabCount n={counts?.tasks} />
+            {PANEL_LABELS[tab]}
+            <TabCount n={counts?.[tab]} />
           </span>
         ) : (
           // A wrapping row clipped to one line, which sheds the keycaps when
@@ -355,7 +384,57 @@ export default function RightPanel({
       </div>
 
       {children}
+
+      {/* Not for one view, which a switcher would only offer back to itself. */}
+      {switcher && tabs.length > 1 && <PanelSwitcher tabs={tabs} tab={tab} onTabChange={onTabChange} />}
     </aside>
+  );
+}
+
+/// The foot of a bot's pane: one glyph per view, centred, names in tooltips
+/// alone — the way a space switcher sits under a sidebar. Ghost buttons with
+/// the tab row's selected fill on the open one, so it reads as the same
+/// control laid down rather than a new one.
+function PanelSwitcher({
+  tabs,
+  tab,
+  onTabChange,
+}: {
+  tabs: readonly PanelTab[];
+  tab: PanelTab;
+  onTabChange: (tab: PanelTab) => void;
+}) {
+  return (
+    <div role="tablist" aria-label="Panel views" className="flex shrink-0 items-center justify-center gap-1 px-2 py-2">
+      {tabs.map((value) => {
+        const Icon = PANEL_ICONS[value];
+        return (
+          <Tooltip key={value}>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === value}
+                aria-label={PANEL_LABELS[value]}
+                onClick={() => onTabChange(value)}
+                className={cn(
+                  "flex size-7 cursor-default items-center justify-center rounded-md transition-colors",
+                  tab === value
+                    ? "bg-[var(--fill-soft,var(--sidebar-accent))] text-sidebar-accent-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Icon className="size-4" strokeWidth={1.75} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              {PANEL_LABELS[value]}
+              <ShortcutKeys ids={["panel.tab.prev", "panel.tab.next"]} />
+            </TooltipContent>
+          </Tooltip>
+        );
+      })}
+    </div>
   );
 }
 
