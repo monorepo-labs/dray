@@ -32,8 +32,27 @@ struct Model: Decodable, Hashable {
 struct BranchList: Decodable {
     let current: String?
     let branches: [String]
+    /// On a remote with no local copy; absent from an older server's list.
+    var remoteBranches: [String]? = nil
     let defaultBase: String?
     let dirty: Int
+
+    /// `defaultBase` by its own name: `main`, not `origin/main`.
+    var defaultBranch: String? { defaultBase.flatMap { $0.split(separator: "/", maxSplits: 1).last.map(String.init) } }
+
+    /// A repo with no remote and one branch has nothing to pick a worktree's start from.
+    var offersWorktreeBase: Bool { defaultBase != nil || branches.count + (remoteBranches?.count ?? 0) > 1 }
+
+    /// `worktreeBranchOptions`: local and remote-only branches, the default pulled
+    /// out to sit first. A query keeps the names holding it, those starting with it first.
+    func worktreeOptions(_ query: String) -> (local: [String], remote: [String]) {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        func rank(_ names: [String]) -> [String] {
+            let kept = names.filter { $0 != defaultBranch && (q.isEmpty || $0.lowercased().contains(q)) }
+            return kept.filter { $0.lowercased().hasPrefix(q) } + kept.filter { !$0.lowercased().hasPrefix(q) }
+        }
+        return (rank(branches), rank(remoteBranches ?? []))
+    }
 }
 
 struct GithubRepo: Decodable, Hashable {
