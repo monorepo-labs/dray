@@ -130,11 +130,12 @@ type ChatInputProps = {
   /// node rather than the controls' own props, so this component keeps owning
   /// layout and measurement and nothing else.
   toolbar?: ReactNode;
-  /// The dictate button and, while recording, the level and its two buttons.
+  /// The voice orb, drawn at the text's left edge.
   ///
   /// A node like `toolbar`, and for the same reason: the recorder lives in
-  /// `App`, beside the settings page a first press has to open. It sits
-  /// immediately left of Send, since both act on the message being written.
+  /// `App`, beside the settings page a first press has to open.
+  voice?: ReactNode;
+  /// Dictation's controls beside Send: discard and stop while recording.
   dictation?: ReactNode;
   /// A recording or a transcription is under way, which **hides Send**.
   ///
@@ -262,6 +263,7 @@ export default function ChatInput({
   onCancelRecording,
   queuedCount = 0,
   toolbar,
+  voice,
   dictation,
   dictating = false,
   notice,
@@ -1086,7 +1088,14 @@ export default function ChatInput({
                 isNewTask ? "px-0" : "px-3",
               )}
             >
-              <div className={cn("relative min-w-0 flex-1", stacked && "basis-full")}>
+              {voice}
+              {/* Stacked, the orb keeps the text's line: 2rem is its 28px and the gap. */}
+              <div
+                className={cn(
+                  "relative min-w-0 flex-1",
+                  stacked && (voice ? "basis-[calc(100%-2rem)]" : "basis-full"),
+                )}
+              >
                 <RichInput
                   // **One editor per session, because the undo stack lives in
                   // the editor.** Kept across a session switch, ⌘Z in the
