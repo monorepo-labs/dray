@@ -2,7 +2,6 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   filterSessions,
-  initials,
   isNested,
   placeDrafts,
   sessionGroups,
@@ -1045,18 +1044,5 @@ describe("placeDrafts", () => {
         [project("/a"), project("/b"), project("/c")],
       ),
     ).toEqual(["/a", "drafts /b: d", "/c", "drafts /gone: x"]);
-  });
-});
-
-describe("initials", () => {
-  it("takes the first letters of the main words", () => {
-    expect(initials("Fix the login redirect", 2)).toBe("FL");
-    expect(initials("rate-limit the upload endpoint", 2)).toBe("RL");
-    expect(initials("web-app", 1)).toBe("W");
-  });
-
-  it("falls back to minor words, then to a question mark", () => {
-    expect(initials("To the", 2)).toBe("TT");
-    expect(initials("✨", 2)).toBe("?");
   });
 });

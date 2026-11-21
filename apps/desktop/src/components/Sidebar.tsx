@@ -2179,29 +2179,20 @@ function BotRow({
   );
 }
 
-/// Words an initial skips, or "Fix the login redirect" reads FT.
-const MINOR_WORDS = new Set(["a", "an", "the", "of", "to", "for", "and", "in", "on", "with", "at", "by", "from", "into"]);
-
-/// The first letters of a name's first `count` words, minor words skipped
-/// unless the name is nothing else.
-export function initials(name: string, count: number): string {
-  const words = name.match(/[\p{L}\p{N}]+/gu) ?? [];
-  const main = words.filter((w) => !MINOR_WORDS.has(w.toLowerCase()));
-  return (main.length ? main : words).slice(0, count).map((w) => w[0]).join("").toUpperCase() || "?";
-}
-
-/// A name on the rail, where it has no room: its initials knocked out of a
-/// filled square, a 16px glyph like the icons beside it, widening for two.
-function Initial({ name, letters = 1 }: { name: string; letters?: number }) {
+/// A filter's pick on the rail, where its name has no room: the first letter
+/// or digit knocked out of a filled square, a 16px glyph like the icons beside it.
+function Initial({ name }: { name: string }) {
   return (
-    <span className="flex h-4 min-w-4 items-center justify-center rounded-[4px] bg-current px-0.5">
-      <span className="text-[10px] leading-none font-semibold text-background">{initials(name, letters)}</span>
+    <span className="flex size-4 items-center justify-center rounded-[4px] bg-current">
+      <span className="text-[10px] leading-none font-semibold text-background">
+        {name.match(/[\p{L}\p{N}]/u)?.[0]?.toUpperCase() ?? "?"}
+      </span>
     </span>
   );
 }
 
-/// A task on the rail: its title's initials in a bot row's box, the title in
-/// the tooltip, and the full row's left mark for unread and asking.
+/// A task on the rail: a status dot in a bot row's box, the title in the
+/// tooltip.
 function RailTask({
   sessionId,
   label,
@@ -2247,33 +2238,25 @@ function RailTask({
             : cn("text-sidebar-foreground/80 hover:bg-sidebar-accent/50", dim && cn(dim, "hover:opacity-100")),
         )}
       >
-        {(asking || status === "completed") && (
-          <span
-            role="img"
-            aria-label={asking ? "Waiting for you" : "Unread"}
-            className={cn(
-              "absolute left-0 h-1.5 w-0.5 rounded-[1px]",
-              asking ? "bg-accent-command" : "bg-accent-add",
-            )}
-          />
-        )}
-        {/* Working is `shimmer-text`'s look: the initials muted, a foreground
-            copy over them showing through a travelling band. */}
+        {/* One dot that is the status: the full row's yellow and green for
+            asking and unread, muted otherwise, and `shimmer-text`'s band
+            passing over it while working. */}
         <span
-          aria-hidden
+          role="img"
+          aria-label={asking ? "Waiting for you" : status === "completed" ? "Unread" : working ? "Working" : undefined}
           className={cn(
-            // The project filter's strength: muted, lit under the cursor or when open.
-            "relative flex text-muted-foreground transition-colors",
-            !working && (active ? "text-foreground" : "group-hover/task:text-foreground"),
+            "relative size-2 overflow-hidden rounded-full transition-colors",
+            asking
+              ? "bg-accent-command"
+              : status === "completed"
+                ? "bg-accent-add"
+                : working || !active
+                  ? "bg-muted-foreground/60 group-hover/task:bg-muted-foreground"
+                  : "bg-foreground/70",
             digit && "invisible",
           )}
         >
-          <Initial name={label} letters={2} />
-          {working && (
-            <span className="shimmer-mask absolute inset-0 flex text-foreground">
-              <Initial name={label} letters={2} />
-            </span>
-          )}
+          {working && <span className="shimmer-mask absolute inset-0 bg-foreground" />}
         </span>
         {digit && <Kbd className="absolute top-1/2 left-1/2 -translate-1/2">{digit}</Kbd>}
       </button>
