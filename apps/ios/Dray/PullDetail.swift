@@ -317,13 +317,19 @@ private struct PrStartBox: View {
 
     private func loadModels() async {
         guard let server = machinePick?.server, !harness.isEmpty else { return }
-        agents = (try? await store.call(server, "agent_availability")) ?? []
+        let asked = harness
+        let current = { machinePick?.server == server && harness == asked }
+        let read: [AgentAvailability] = (try? await store.call(server, "agent_availability")) ?? []
+        guard current() else { return }
+        agents = read
         // A machine without this agent starts on one it has.
         if !agents.isEmpty, !agents.contains(where: { $0.harness == harness && $0.available }),
            let first = agents.first(where: \.available) {
             return pickHarness(first.harness)
         }
-        models = (try? await store.call(server, "list_models", ["harness": .string(harness)])) ?? []
+        let listed: [Model] = (try? await store.call(server, "list_models", ["harness": .string(harness)])) ?? []
+        guard current() else { return }
+        models = listed
         // A remembered model this agent no longer runs would reach the server as a pick nobody made.
         modelId = Picks.usableModel(models, modelId, harness)
         repairEffort()

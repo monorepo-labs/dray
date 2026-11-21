@@ -291,12 +291,13 @@ final class PullsModel {
         }
     }
 
-    func searchKey(_ filter: String, _ owner: String?) -> String { "\(filter):\(owner ?? "")" }
+    /// Per server too: two servers may run `gh` as different accounts.
+    func searchKey(_ server: UUID, _ filter: String, _ owner: String?) -> String { "\(server):\(filter):\(owner ?? "")" }
 
     /// One `pr_search`, fresh for a minute unless forced, then each repo's checkout on every server.
     func search(_ store: Store, filter: String, owner: String?, force: Bool) async {
         guard let server = store.trackerServer else { return }
-        let key = searchKey(filter, owner)
+        let key = searchKey(server, filter, owner)
         if !force, searches[key] != nil, Date().timeIntervalSince(readAt[key] ?? .distantPast) < 60 { return }
         loading = true
         defer { loading = false }
@@ -356,14 +357,16 @@ final class PullsModel {
 
     /// The search's PRs, each read through its checkout where there is one and its slug where not.
     func searchRows(_ filter: String, _ owner: String?, home: UUID) -> [PullRow] {
-        (searches[searchKey(filter, owner)]?.prs ?? []).compactMap { p in
+        (searches[searchKey(home, filter, owner)]?.prs ?? []).compactMap { p in
             guard let listing = p.mark.listing, let repo = marksRepo(p.mark.url) else { return nil }
             let at = checkouts[repo] ?? ProjectKey(server: home, path: "github:\(p.repo)")
             return PullRow(server: at.server, key: at.path, repo: repo, mark: p.mark, listing: listing)
         }
     }
 
-    func searched(_ filter: String, _ owner: String?) -> Bool { searches[searchKey(filter, owner)] != nil }
+    func searched(_ server: UUID?, _ filter: String, _ owner: String?) -> Bool {
+        server.map { searches[searchKey($0, filter, owner)] != nil } ?? false
+    }
 }
 
 // MARK: The page
@@ -541,7 +544,7 @@ struct PullsView: View {
     private var hasRepos: Bool { people.search != nil || !keys.isEmpty }
 
     private var loaded: Bool {
-        if let filter = people.search { return model.searched(filter, owner) || model.searchError != nil }
+        if let filter = people.search { return model.searched(store.trackerServer, filter, owner) || model.searchError != nil }
         return keys.contains { model.marks[$0] != nil || model.markErrors[$0] != nil }
     }
 

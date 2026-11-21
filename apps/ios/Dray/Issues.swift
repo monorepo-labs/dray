@@ -443,6 +443,7 @@ struct IssuesView: View {
         let key = "\(server)|\(tracker)|\(repo)"
         guard filtersFor != key else { return }
         filters = nil
+        filtersFor = nil
         if let read: IssueFilters = try? await store.call(server, "list_issue_filters",
                                                           ["tracker": .string(tracker), "repo": JSON(github && !repo.isEmpty ? repo : nil)]),
            key == "\(self.server.map { "\($0)" } ?? "")|\(tracker)|\(repo)" {
