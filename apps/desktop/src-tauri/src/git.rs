@@ -1955,15 +1955,15 @@ pub async fn is_default_branch(cwd: &str, branch: &str) -> bool {
 /// [`default_base`], fetched first: the ref a new task's tree starts from,
 /// picked or not, so it starts at the remote's newest commit rather than
 /// wherever this clone last fetched. A fetch that fails or outlasts
-/// [`FETCH_LIMIT`] still answers the ref as it stands, the CLI's own fallback
-/// when its `-w` fetch fails.
+/// [`DEFAULT_FETCH_LIMIT`] still answers the ref as it stands, the CLI's own
+/// fallback when its `-w` fetch fails.
 pub async fn fetched_default_base(cwd: &str) -> Option<String> {
     let base = default_base(cwd).await?;
     if let Some(branch) = base.strip_prefix("origin/") {
         let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
         let args = ["fetch", "-q", "--no-tags", "origin", &refspec];
         let fetch = exec(cwd, &[("GIT_TERMINAL_PROMPT", "0")], &args);
-        match tokio::time::timeout(FETCH_LIMIT, fetch).await {
+        match tokio::time::timeout(DEFAULT_FETCH_LIMIT, fetch).await {
             Ok(Ok(_)) => {}
             Ok(Err(e)) => eprintln!("[fetch] {base} in {cwd}, starting from it as last fetched: {e:#}"),
             Err(_) => eprintln!("[fetch] {base} in {cwd} timed out, starting from it as last fetched"),
@@ -1974,6 +1974,11 @@ pub async fn fetched_default_base(cwd: &str) -> Option<String> {
 
 /// How long [`create_worktree_on_branch`] waits on its fetch.
 const FETCH_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How long [`fetched_default_base`] waits on its fetch. Shorter, as it has a
+/// fallback and runs inside `send_msg`, which a client waits on for 60s: a
+/// hung remote taking all of that reads as a failed send whose task starts.
+const DEFAULT_FETCH_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// The remote whose URL names `repo` (`host/owner/name`), else one naming
 /// `owner/name` on any host.
