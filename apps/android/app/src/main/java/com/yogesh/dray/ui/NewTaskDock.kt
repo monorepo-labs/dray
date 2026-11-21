@@ -92,7 +92,8 @@ fun NewTaskDock(started: (SessionKey) -> Unit, modifier: Modifier = Modifier) {
         clearFailure = { task.failure = null },
         start = ::start,
         picks = { edit ->
-            Picks(task, server?.let { store.name(it) }, edit) { if (server != null) picking = true }
+            // Open while any machine is up: a draft pinned to one that went down still needs a way to move elsewhere.
+            Picks(task, server?.let { store.name(it) }, edit) { if (task.connected.isNotEmpty()) picking = true }
         },
         // Dim while nothing is connected: the screen above says why.
         modifier = modifier.alpha(if (server == null) 0.3f else 1f),
