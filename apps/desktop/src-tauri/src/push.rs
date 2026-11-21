@@ -73,14 +73,30 @@ fn at_the_computer() -> bool {
 }
 
 /// A turn's last words as one line an alert can hold: the first line with
-/// text, its markdown marks dropped.
+/// text, its markdown marks dropped and each link as its text alone.
 fn first_line(text: &str) -> String {
     let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-    let line = line.trim_start_matches(['#', '>', '-', '*', ' ']).replace("**", "").replace('`', "");
+    let line = link_text(line.trim_start_matches(['#', '>', '-', '*', ' '])).replace("**", "").replace('`', "");
     let mut out: String = line.chars().take(200).collect();
     if line.chars().count() > 200 {
         out.push('…');
     }
+    out
+}
+
+/// `[text](target)` as `text`: an alert draws no links, and a path in one is noise.
+fn link_text(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(open) = rest.find('[') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find("](") else { break };
+        let Some(end) = after[close + 2..].find(')') else { break };
+        out.push_str(&rest[..open]);
+        out.push_str(&after[..close]);
+        rest = &after[close + 2 + end + 1..];
+    }
+    out.push_str(rest);
     out
 }
 
@@ -225,6 +241,8 @@ mod tests {
         assert_eq!(first_line("\n\n## **Fixed** the `parser`\nmore"), "Fixed the parser");
         assert_eq!(first_line("- one\n- two"), "one");
         assert_eq!(first_line(&"x".repeat(300)).chars().count(), 201);
+        assert_eq!(first_line("I saved Medium to [size.txt](/tmp/p/size.txt)."), "I saved Medium to size.txt.");
+        assert_eq!(first_line("[a](x) and [b](y) but [not a link"), "a and b but [not a link");
     }
 
     #[test]

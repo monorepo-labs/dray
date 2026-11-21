@@ -1,0 +1,8 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.kotlin/
+# Firebase client config, kept out of git: see PLAN.md, Push setup.
+app/google-services.json

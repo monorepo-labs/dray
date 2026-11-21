@@ -1,0 +1,148 @@
+package com.yogesh.dray
+
+import com.yogesh.dray.model.Entry
+import com.yogesh.dray.model.Item
+import com.yogesh.dray.model.MdBlock
+import com.yogesh.dray.model.SessionKey
+import com.yogesh.dray.model.Stage
+import com.yogesh.dray.model.ToolState
+import com.yogesh.dray.model.buildTurns
+import com.yogesh.dray.model.groupLabel
+import com.yogesh.dray.model.hiding
+import com.yogesh.dray.model.imagePaths
+import com.yogesh.dray.model.markdownBlocks
+import com.yogesh.dray.model.stageRuns
+import com.yogesh.dray.model.stripSender
+import com.yogesh.dray.model.summaryLabel
+import com.yogesh.dray.net.parseConnectLine
+import com.yogesh.dray.wire.AgentEvent
+import com.yogesh.dray.wire.Payload
+import com.yogesh.dray.wire.SessionItem
+import com.yogesh.dray.wire.wireJson
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.time.Instant
+
+class LogicTest {
+    private fun event(id: String, payload: String, subagent: String? = null): AgentEvent =
+        AgentEvent.decode(wireJson.parseToJsonElement(
+            """{"id":"$id","sessionId":"s","payload":$payload${subagent?.let { ",\"subagent\":$it" } ?: ""}}""",
+        ))!!
+
+    private fun tool(id: String, call: String, name: String = "Read", path: String = "/a/b/$call.kt") =
+        event(id, """{"type":"tool_call_started","callId":"$call","name":"$name","toolType":"file_read","input":{"file_path":"$path"}}""")
+
+    private fun result(id: String, call: String, error: Boolean = false) =
+        event(id, """{"type":"tool_call_completed","callId":"$call","result":{"text":"ok","isError":$error}}""")
+
+    @Test
+    fun turnsGroupRunsOfOneToolAndLiftTheAnswer() {
+        val events = listOf(
+            event("1", """{"type":"user_message","text":"go"}"""),
+            tool("2", "c1"), result("3", "c1"),
+            tool("4", "c2"), result("5", "c2"),
+            event("6", """{"type":"tool_call_started","callId":"c3","name":"Bash","toolType":"shell","input":{"command":"ls"}}"""),
+            event("7", """{"type":"assistant_text","text":"Done."}"""),
+            event("8", """{"type":"turn_completed","status":"success"}"""),
+        )
+        val turns = buildTurns(events, busy = false)
+        assertEquals(1, turns.size)
+        val t = turns[0]
+        assertEquals("go", t.prompt?.text)
+        assertEquals("Done.", t.finalText)
+        assertTrue(t.finalLifted)
+        assertEquals(2, t.work.size)
+        val group = t.work[0] as Item.Group
+        assertEquals(2, group.calls.size)
+        assertEquals(2, group.targets)
+        // A call with no result in a session not busy is done, not pending forever.
+        assertEquals(ToolState.Done, (t.work[1] as Item.Tool).call.state)
+        assertEquals("3 tool calls", summaryLabel(t.work))
+    }
+
+    @Test
+    fun aPromptAbandonsOpenCallsAndSubagentEventsAreSkipped() {
+        val events = listOf(
+            event("1", """{"type":"user_message","text":"one"}"""),
+            tool("2", "c1"),
+            event("3", """{"type":"assistant_text","text":"inside"}""", subagent = """{"id":"x"}"""),
+            event("4", """{"type":"user_message","text":"two"}"""),
+            tool("5", "c2"),
+        )
+        val turns = buildTurns(events, busy = true)
+        assertEquals(2, turns.size)
+        assertEquals(ToolState.Done, (turns[0].work.single() as Item.Tool).call.state)
+        assertEquals(ToolState.Pending, (turns[1].work.single() as Item.Tool).call.state)
+    }
+
+    @Test
+    fun aFailedTurnSaysItOnceAndAStopIsNoFailure() {
+        val failed = buildTurns(listOf(
+            event("1", """{"type":"user_message","text":"go"}"""),
+            event("2", """{"type":"assistant_text","text":"Out of credit"}"""),
+            event("3", """{"type":"turn_completed","status":"error","finalText":"Out of credit"}"""),
+        ), busy = false).single()
+        assertEquals("Out of credit", failed.failure)
+        assertTrue(failed.work.isEmpty())
+        val stopped = buildTurns(listOf(
+            event("1", """{"type":"user_message","text":"go"}"""),
+            event("2", """{"type":"turn_completed","status":"error","stopReason":"aborted_by_user"}"""),
+        ), busy = false).single()
+        assertNull(stopped.failure)
+    }
+
+    @Test
+    fun anUnknownPayloadCostsOnlyItself() {
+        val e = event("1", """{"type":"tool_call_started","callId":5}""")
+        assertTrue(e.payload is Payload.Other)
+    }
+
+    @Test
+    fun relayedPromptsNameTheSenderInsteadOfTheHeader() {
+        val text = "[message from the Dray session \"Fix\" (abc) on mac]\n\nhello"
+        assertEquals("hello", stripSender(text, "Fix", "abc"))
+        assertEquals(text, stripSender(text, "Other", "abc"))
+    }
+
+    private fun item(id: String, modified: String, parent: String? = null, status: String = "idle") =
+        Entry(SessionKey("srv", id), SessionItem(id, modified = modified, parentSessionId = parent, status = status))
+
+    @Test
+    fun runsNestChildrenAndPutTheStrongestStageFirst() {
+        val now = Instant.parse("2026-11-21T12:00:00Z").toEpochMilli()
+        val list = listOf(
+            item("a", "2026-11-21T11:00:00Z"),
+            item("b", "2026-11-21T11:30:00Z", parent = "a", status = "completed"),
+            item("c", "2026-11-21T11:50:00Z"),
+            item("old", "2026-11-10T11:50:00Z"),
+        )
+        val runs = stageRuns(list, now) { if (it.item.status == "completed") Stage.Completed else Stage.Idle }
+        assertEquals(listOf(Stage.Completed, Stage.Idle, Stage.Aside), runs.map { it.stage })
+        assertEquals(listOf("a", "b"), runs[0].rows.map { it.key.id })
+        assertEquals(1, runs[0].rows[1].depth)
+        assertEquals(listOf("old"), runs[2].rows.map { it.key.id })
+    }
+
+    @Test
+    fun markdownTablesFencesAndPaths() {
+        val blocks = markdownBlocks("# Hi\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```\ncode | x\n```\n- one\n- two")
+        assertTrue(blocks[0] is MdBlock.Heading)
+        assertEquals(listOf(listOf("a", "b"), listOf("1", "2")), (blocks[1] as MdBlock.Table).rows)
+        assertEquals("code | x", (blocks[2] as MdBlock.Code).text)
+        assertEquals(2, (blocks[3] as MdBlock.Bullets).items.size)
+        val text = "Saved it to /tmp/shot.png for you.\n`/tmp/x.png`"
+        assertEquals(listOf("/tmp/shot.png", "/tmp/x.png"), imagePaths(text))
+        assertEquals("Saved it to for you.", hiding(listOf("/tmp/shot.png", "/tmp/x.png"), text))
+    }
+
+    @Test
+    fun labelsAndConnectLines() {
+        assertEquals("Read 3 files", groupLabel("Read", 3, pending = false))
+        assertEquals("Updating 2 todo lists", groupLabel("TodoWrite", 2, pending = true))
+        val token = "a".repeat(64)
+        assertEquals("wss://x.example" to token, parseConnectLine("wss://x.example $token"))
+        assertNull(parseConnectLine("wss://x.example short"))
+    }
+}

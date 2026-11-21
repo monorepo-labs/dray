@@ -54,7 +54,7 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 ## Repo layout
 
-pnpm workspace, three apps, no shared JS package yet — plus two native Swift apps, the Linux island, the `dray` CLI and one shared Rust crate outside the workspace.
+pnpm workspace, three apps, no shared JS package yet — plus two native Swift apps, the Android app, the Linux island, the `dray` CLI and one shared Rust crate outside the workspace.
 
 ```
 apps/desktop/       the Tauri app — everything below this section describe it
@@ -62,6 +62,7 @@ apps/gpui/          the GPUI rewrite (#856), a client of the serve wire — read
 apps/web/           marketing site: Next.js App Router, Tailwind 4, deploy Vercel
 apps/docs/          docs: Blume (Astro), own Vercel project, served at drayhq.com/docs
 apps/ios/           SwiftUI client of dray-serve, XcodeGen project — read apps/ios/PLAN.md
+apps/android/       Kotlin + Compose client of dray-serve, Gradle project — read apps/android/PLAN.md
 apps/island/        Dray Island, the Mac companion panel: SwiftUI, XcodeGen — read apps/island/PLAN.md
 apps/island-linux/  Dray Island on Linux: Rust + GPUI, own crate — read apps/island-linux/PLAN.md
 apps/cli/           the `dray` CLI: own crate, own `cli-v*` release tag
@@ -69,7 +70,7 @@ crates/dray-proto/  the CLI's socket protocol, compiled into the CLI and the app
 charts/             standalone benchmark chart pages, built by nothing
 ```
 
-**The iOS app speaks `dray-serve`'s wire with hand-written `Codable` types**, so a change to a command's arguments, an event's shape or the serve protocol is a change there too. Every decode is lenient by design; a renamed field shows up as a missing row, not an error. **Dray Island compiles a dozen of those same files by path** (`apps/island/project.yml`), so an edit to one is an edit to both apps.
+**The iOS and Android apps speak `dray-serve`'s wire with hand-written types** (`Codable`, and `apps/android`'s `wire/Wire.kt`), so a change to a command's arguments, an event's shape or the serve protocol is a change in both. Every decode is lenient by design; a renamed field shows up as a missing row, not an error. **Dray Island compiles a dozen of those same files by path** (`apps/island/project.yml`), so an edit to one is an edit to both apps.
 
 **Docs live at `drayhq.com/docs` through a rewrite in `apps/web/next.config.ts`** to `DOCS_ORIGIN`, the docs project's own URL. Blume builds with `base: "/docs"`, which puts `/docs` on every link but writes the files at the output root, so the rewrite strips it: `/docs/x` here is `/x` there. `blume dev` serves under the base, so the dev fallback origin carries `/docs`. Content folder is `content/`, not `docs/`, or every page lands at `/docs/docs/…`. Blume wants Node 22.19+. Copy describes what shipped, checked against the code — a docs page promising a feature is a bug report waiting to happen.
 
