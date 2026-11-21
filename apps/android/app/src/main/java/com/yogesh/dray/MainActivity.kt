@@ -10,7 +10,14 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.yogesh.dray.model.SessionKey
 import com.yogesh.dray.net.PairLink
+import com.yogesh.dray.push.Alerts
+import com.yogesh.dray.push.Push
+import com.yogesh.dray.push.PushAlert
+import com.yogesh.dray.wire.str
+import com.yogesh.dray.wire.wireJson
+import kotlinx.serialization.json.JsonObject
 import com.yogesh.dray.ui.App
 import com.yogesh.dray.ui.DrayTheme
 import com.yogesh.dray.ui.LocalStore
@@ -40,5 +47,27 @@ class MainActivity : ComponentActivity() {
 
     private fun take(intent: Intent?) {
         intent?.dataString?.let { PairLink.parse(it) }?.let { incoming = it }
+        // A tapped alert opens its chat.
+        if (intent?.action == Alerts.OPEN) {
+            val server = intent.getStringExtra(Alerts.EXTRA_SERVER)
+            val chat = intent.getStringExtra(Alerts.EXTRA_CHAT)
+            if (server != null && chat != null) Push.opening = SessionKey(server, chat)
+        }
+        if (BuildConfig.DEBUG) debugPush(intent)
+    }
+
+    /**
+     * A debug build's stand-ins for what FCM can't do here: `pushRelay` points sealing at a local
+     * relay, and `pushPayload` is an FCM message's `data` as the relay sent it, drawn in 3s as
+     * `PushService` would, so the app can be sent to the background first.
+     */
+    private fun debugPush(intent: Intent?) {
+        intent?.getStringExtra("pushRelay")?.let { Push.useRelay(it) }
+        val payload = intent?.getStringExtra("pushPayload") ?: return
+        val data = runCatching {
+            (wireJson.parseToJsonElement(payload) as JsonObject).mapValues { (_, v) -> v.str ?: v.toString() }
+        }.getOrNull() ?: return
+        val alert = PushAlert.parse(data) ?: return
+        android.os.Handler(mainLooper).postDelayed({ Alerts.show(applicationContext, alert) }, 3000)
     }
 }

@@ -37,6 +37,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Contrast
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -110,7 +112,7 @@ private sealed interface Page {
  * to Settings itself, as on iOS.
  */
 @Composable
-fun SettingsScreen(focus: String?, back: () -> Unit, add: () -> Unit) {
+fun SettingsScreen(focus: String?, back: () -> Unit, dictation: () -> Unit = {}, notifications: () -> Unit = {}, add: () -> Unit) {
     val pages = remember { mutableStateListOf<Page>(Page.Root).apply { if (focus != null) add(Page.Server(focus)) } }
     fun pop() = if (pages.size > 1) { pages.removeAt(pages.lastIndex); Unit } else back()
     BackHandler(onBack = ::pop)
@@ -122,6 +124,9 @@ fun SettingsScreen(focus: String?, back: () -> Unit, add: () -> Unit) {
             RowGroup {
                 SettingsRow("Appearance", icon = { Icon(Icons.Outlined.Contrast, null, Modifier.size(20.dp), tint = Dray.secondary) },
                     value = if (store.hideSessions) "Bots only" else null) { pages.add(Page.Appearance) }
+                SettingsRow("Dictation", icon = { Icon(Icons.Outlined.Mic, null, Modifier.size(20.dp), tint = Dray.secondary) }, onClick = dictation)
+                SettingsRow("Notifications", icon = { Icon(Icons.Outlined.Notifications, null, Modifier.size(20.dp), tint = Dray.secondary) },
+                    value = if (com.yogesh.dray.push.Push.enabled && com.yogesh.dray.push.Push.available) "On" else "Off", onClick = notifications)
             }
             About()
         }
