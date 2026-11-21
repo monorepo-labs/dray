@@ -2451,13 +2451,9 @@ function ProjectFilter({
   // put a chip on screen.
   const withHint = (trigger: React.ReactElement) =>
     iconOnly ? (
-      // The name too, the rail's face being an initial. Shut while the menu
+      // The name alone, the rail's face being an initial. Shut while the menu
       // is open, which lists the same thing where the tip would sit.
-      <RailTip
-        on={!menuOpen}
-        label={active.name}
-        keys={entries.length < 2 ? undefined : ["filter.prev", "filter.next"]}
-      >
+      <RailTip on={!menuOpen} label={active.name}>
         {trigger}
       </RailTip>
     ) : entries.length < 2 ? (
