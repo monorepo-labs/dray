@@ -56,7 +56,7 @@ import kotlinx.coroutines.delay
 
 /** One task's transcript, live, with the reply dock at its foot. */
 @Composable
-fun TranscriptScreen(key: SessionKey, back: () -> Unit, openSettings: (String) -> Unit) {
+fun TranscriptScreen(key: SessionKey, back: () -> Unit, openChanges: () -> Unit = {}, openSettings: (String) -> Unit) {
     val store = LocalStore.current
     val item = store.items[key]
     val transcript = store.transcripts[key]
@@ -100,7 +100,7 @@ fun TranscriptScreen(key: SessionKey, back: () -> Unit, openSettings: (String) -
     ) {
         Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().background(Dray.page).statusBarsPadding().navigationBarsPadding().imePadding()) {
-            TitleBar(key, back)
+            TitleBar(key, back, openChanges)
             Box(Modifier.weight(1f)) {
                 SelectionContainer {
                     LazyColumn(
@@ -204,10 +204,10 @@ private fun RefreshError(err: String, retry: () -> Unit) {
 
 /** The title, then the project and the machine it runs on — never the branch. */
 @Composable
-private fun TitleBar(key: SessionKey, back: () -> Unit) {
+private fun TitleBar(key: SessionKey, back: () -> Unit, openChanges: () -> Unit) {
     val store = LocalStore.current
     val item = store.items[key]
-    Row(Modifier.fillMaxWidth().height(56.dp).padding(end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().height(56.dp).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Dray.text) }
         Column(Modifier.weight(1f)) {
             Text(item?.title?.ifEmpty { "Untitled" } ?: "", style = Dray.Font.headline, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -220,6 +220,11 @@ private fun TitleBar(key: SessionKey, back: () -> Unit) {
                 Icon(Icons.Outlined.Dns, null, Modifier.size(11.dp), tint = Dray.tertiary)
                 Text(" ${store.name(key.server)}", style = Dray.Font.footnote.copy(color = Dray.tertiary), maxLines = 1)
             }
+        }
+        // A bot's folder holds notes, not work: no changes or PR there, as on the desktop.
+        if (store.bot(key) == null) {
+            ChangesButton(openChanges)
+            PrButton(key)
         }
     }
 }
