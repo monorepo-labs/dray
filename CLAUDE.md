@@ -21,7 +21,9 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 1. Do the work, then test it for real — run it, not just compile it. Tests = `pnpm test:affected`, never the whole of every suite. A UI change = drive the running app yourself, screenshot or record it, fix what you find ([Testing in the app](#testing-in-the-app)).
 2. Commit, push, open the PR as a **draft** (`gh pr create --draft`). Report: what changed, the proof (video, screenshots), and what was not tested. Then wait.
 3. Feedback → apply it, retest, commit **locally**, report again with proof. **Push nothing until he say final.**
-4. **He say final → push, `gh pr ready`, then run `/greploop`** until 5/5 or the loop's cap, then report the PR ready to merge. Marking it ready is what start Greptile's review. From here each round's push is pre-approved: fix, test, commit, push, wait for the next review. Retest a fix that touches UI the same way. Stop and wait instead when a fix changes something only a human can check (below), or when he says not to push. Never post `@greptile review` — Greptile reviews every push to a ready PR on its own, so skip the loop's trigger step.
+4. **He say final → push, `gh pr ready`, then run `/greploop`** until 5/5, then report the PR ready to merge. Loop's cap hit under 5/5 = report the score and what still stand, never "ready to merge". Marking it ready is what start Greptile's review. From here each round's push is pre-approved: fix, test, commit, push, wait for the next review. Retest a fix that touches UI the same way. Stop and wait instead when a fix changes something only a human can check (below), or when he says not to push. Never post `@greptile review` — Greptile reviews every push to a ready PR on its own, so skip the loop's trigger step.
+
+**A PR merge only with Greptile at 5/5 confidence.** Our PR rules require it. 4/5 or below = not ready, however green the rest. `no-review` PR = Greptile skip it, so no score to wait on.
 
 **Nothing for him to look at = no wait.** Backend or data fix, tooling, no UI change: open the PR ready and run `/greploop` right away.
 
