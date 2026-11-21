@@ -603,7 +603,7 @@ fun StalledCard(chat: SessionKey, botId: String, tasks: List<SessionKey>, openTa
         }
     }
     picked?.let { (s, text) ->
-        BotReplySheet(chat, s.task, s.item.title, text, close = { picked = null }) {
+        BotReplySheet(chat, s.task, s.item.title, text, s.item, close = { picked = null }) {
             picked = null
             all = false
             if (!s.offline) openTask(s.task)
@@ -665,18 +665,21 @@ fun CountTitle(title: String, count: Int, modifier: Modifier = Modifier) {
 /** What the bot said about a Waiting on you task, the desktop's `BotReply` in a sheet. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BotReplySheet(chat: SessionKey, task: SessionKey, title: String, text: String, close: () -> Unit, open: () -> Unit) {
+fun BotReplySheet(chat: SessionKey, task: SessionKey, title: String, text: String, row: SessionItem, close: () -> Unit, open: () -> Unit) {
     val store = LocalStore.current
-    val item = store.items[task]
-    val pr = item?.let { store.prMark(task, it) }
-    // A merge settles the task: nothing left to read or open.
-    LaunchedEffect(item == null || pr?.let { prStatus(it) } == "merged") { if (item == null || pr?.let { prStatus(it) } == "merged") close() }
+    // A task on a machine this phone holds no row for still has its reply in the bot's log: the card's own copy stands in.
+    val held = remember(task) { store.items[task] != null }
+    val item = store.items[task] ?: row
+    val pr = store.prMark(task, item)
+    // A merge, or a held task going away, settles it: nothing left to read or open.
+    val gone = (held && store.items[task] == null) || pr?.let { prStatus(it) } == "merged"
+    LaunchedEffect(gone) { if (gone) close() }
     ModalBottomSheet(close, containerColor = Dray.page) {
         androidx.compose.runtime.CompositionLocalProvider(LocalImageServer provides chat.server) {
             Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 32.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(title.ifEmpty { "Untitled" }, Modifier.weight(1f), style = Dray.Font.headline)
-                    if (item != null && pr != null && prStatus(pr) == "ready") MergeTaskButton(task.server, task.id, item.projectPath, pr.number, pr.headRefName)
+                    if (held && pr != null && prStatus(pr) == "ready") MergeTaskButton(task.server, task.id, item.projectPath, pr.number, pr.headRefName)
                 }
                 ReplyBubble(text)
                 Row(

@@ -139,6 +139,39 @@ class NewTask(private val store: Store, context: Context) {
 
     fun aim(at: Bot, on: String) { bot = on to at }
 
+    /** The saved draft the dock holds, by server and id: dropped once its text goes somewhere else. */
+    var draftId by mutableStateOf<Pair<String, String>?>(null)
+        private set
+
+    /** Fills the dock from a saved draft, on its own picks. iOS's `NewTask.open`. */
+    fun open(draft: DraftItem, on: String) {
+        bot = null
+        text = draft.prompt
+        draftId = on to draft.id
+        draft.project?.let { projectName = it }
+        projectPath = draft.projectPath
+        pickedServer = on
+        draft.harness?.let { harness = it }
+        draft.model?.let { m ->
+            pickModel(m)
+            draft.effort?.let { pickEffort(it) }
+        }
+        draft.permissionMode?.let { stance = it }
+        draft.fast?.let { fast = it }
+        draft.useWorktree?.let { worktree = it }
+    }
+
+    /**
+     * The draft a start or save began from goes once its text has gone somewhere else — that one,
+     * taken before the request, never whichever is open by the time it answers.
+     */
+    private suspend fun dropDraft(d: Pair<String, String>?) {
+        d ?: return
+        if (draftId == d) draftId = null
+        runCatching { store.call(d.first, "delete_draft", jsonOf("id" to d.second)) }
+        store.draftsRevision++
+    }
+
     fun pickServer(id: String?) {
         bot = null
         pickedServer = id
@@ -212,6 +245,7 @@ class NewTask(private val store: Store, context: Context) {
         failure = null
         val id = UUID.randomUUID().toString().lowercase()
         val sent = text
+        val opened = draftId
         return try {
             val reply = store.call(server, "send_msg", jsonOf(
                 "sessionId" to id,
@@ -231,6 +265,7 @@ class NewTask(private val store: Store, context: Context) {
             ))
             decodeOrNull<SessionItem>(reply["snapshot"])?.let { store.created(server, it) }
             bot = null
+            dropDraft(opened)
             // Words added while the start was out were never sent, so they stay.
             if (text == sent) text = ""
             SessionKey(server, id)
@@ -253,6 +288,7 @@ class NewTask(private val store: Store, context: Context) {
         }
         sending = true
         val saved = text
+        val opened = draftId
         return try {
             store.call(server, "create_draft", jsonOf("draft" to jsonOf(
                 "id" to UUID.randomUUID().toString().lowercase(),
@@ -266,6 +302,8 @@ class NewTask(private val store: Store, context: Context) {
                 "fast" to (fast && Picks.offersFast(harness, model)),
                 "useWorktree" to worktree,
             )))
+            dropDraft(opened)
+            store.draftsRevision++
             if (text == saved) text = ""
             true
         } catch (e: Exception) {
@@ -283,4 +321,22 @@ class NewTask(private val store: Store, context: Context) {
 
     private fun writeMap(key: String, value: Map<String, String>) =
         prefs.edit().putString(key, wireJson.encodeToString(mapSerializer, value)).apply()
+}
+
+/** A task saved for later, as `drafts.json` holds it: only what a row draws and the dock reopens. */
+@kotlinx.serialization.Serializable
+data class DraftItem(
+    val id: String,
+    val prompt: String = "",
+    val projectPath: String? = null,
+    val created: String? = null,
+    val harness: String? = null,
+    val model: String? = null,
+    val effort: String? = null,
+    val permissionMode: String? = null,
+    val fast: Boolean? = null,
+    val useWorktree: Boolean? = null,
+) {
+    val title: String get() = prompt.lineSequence().firstOrNull { it.isNotBlank() } ?: prompt
+    val project: String? get() = projectPath?.trimEnd('/')?.substringAfterLast('/')
 }

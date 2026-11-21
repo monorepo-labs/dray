@@ -73,6 +73,14 @@ fun BotStartScreen(server: String, bot: Bot, back: () -> Unit, started: (Session
     // A chat that opened meanwhile (another client wrote first) takes this page's place.
     val chat = store.botChat(server, bot).lastOrNull()
     LaunchedEffect(chat) { chat?.let(started) }
+    // Leaving mid-recording keeps what was said in this bot's draft, as the reply dock does; the mic never outlives its controls.
+    androidx.compose.runtime.DisposableEffect(draft) {
+        onDispose {
+            if (com.yogesh.dray.voice.Dictations.state(draft) == com.yogesh.dray.voice.Dictation.Recording) {
+                com.yogesh.dray.voice.Dictations.stop(store, draft)
+            }
+        }
+    }
 
     fun send() {
         val words = text.trim()
@@ -81,7 +89,11 @@ fun BotStartScreen(server: String, bot: Bot, back: () -> Unit, started: (Session
         failed = null
         scope.launch {
             try {
-                val harness = "claude_code"
+                // Claude Code where the machine has it, else the first agent it can run, as the new-task picks fall back.
+                val agents = runCatching {
+                    com.yogesh.dray.wire.decodeList<com.yogesh.dray.model.AgentAvailability>(store.call(server, "agent_availability"))
+                }.getOrDefault(emptyList()).filter { it.available }
+                val harness = agents.firstOrNull { it.harness == "claude_code" }?.harness ?: agents.firstOrNull()?.harness ?: "claude_code"
                 val models = store.models(server, harness)
                 val model = Picks.defaultModel[harness].orEmpty().let { want -> models.firstOrNull { it.id == want } ?: models.firstOrNull() }
                 val id = UUID.randomUUID().toString()

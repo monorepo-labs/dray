@@ -1,5 +1,8 @@
 package com.yogesh.dray.ui
 
+import androidx.compose.material.icons.outlined.Circle
+import com.yogesh.dray.wire.decodeList
+import com.yogesh.dray.store.DraftItem
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -88,6 +91,8 @@ fun ListScreen(
     val store = LocalStore.current
     val scope = rememberCoroutineScope()
     var settled by rememberSaveable { mutableStateOf(false) }
+    var drafts by rememberSaveable { mutableStateOf(false) }
+    val task = LocalNewTask.current
     var project by rememberSaveable { mutableStateOf<String?>(null) }
     var refreshing by remember { mutableStateOf(false) }
     var shown by remember(settled, project) { mutableIntStateOf(PAGE) }
@@ -97,7 +102,7 @@ fun ListScreen(
     // A picked project that leaves the list is ignored rather than showing nothing.
     val filter = project?.takeIf { it in names }
     val hide = store.hideSessions
-    val runs = if (hide) emptyList() else store.runs(filter, settled)
+    val runs = if (hide || drafts) emptyList() else store.runs(filter, settled)
     val hasSettled = store.items.values.any { it.archived == true && it.hidden != true }
     val connected = store.live.count { store.serverState[it.id] == ConnState.Connected }
 
@@ -106,15 +111,37 @@ fun ListScreen(
     // Read whatever the view, and again as servers come up: the Settled button shows only when there are some,
     // and an empty live list counts what was settled today.
     LaunchedEffect(settled, connected) { if (connected > 0) store.loadSettled() }
+    // Every connected server's drafts, newest first. A server whose read fails keeps what it last said,
+    // so a dropped reply never reads as no drafts.
+    var draftRows by remember { mutableStateOf(listOf<Pair<String, DraftItem>>()) }
+    LaunchedEffect(drafts, connected, store.draftsRevision) {
+        var all = listOf<Pair<String, DraftItem>>()
+        for (s in store.live.filter { store.serverState[it.id] == ConnState.Connected }) {
+            val list = runCatching { decodeList<DraftItem>(store.call(s.id, "list_drafts")) }.getOrNull()
+            all = all + (list?.map { s.id to it } ?: draftRows.filter { it.first == s.id })
+        }
+        draftRows = all.sortedByDescending { it.second.created.orEmpty() }
+    }
 
     Column(Modifier.fillMaxSize().background(Dray.page).statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton({ openSettings(null) }) { Icon(Icons.Outlined.Settings, "Settings", tint = Dray.text) }
             Spacer(Modifier.weight(1f))
+            if (!hide && (drafts || (anyConnected && draftRows.isNotEmpty()))) {
+                Row(
+                    Modifier.padding(end = 8.dp).clip(CircleShape).background(Dray.raised)
+                        .clickable { drafts = !drafts; settled = false }.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(Icons.Outlined.Circle, null, Modifier.size(16.dp), tint = if (drafts) Dray.text else Dray.secondary)
+                    Text("Drafts", style = Dray.Font.pill.copy(color = if (drafts) Dray.text else Dray.secondary))
+                }
+            }
             if (!hide && (settled || (anyConnected && hasSettled))) {
                 Row(
                     Modifier.padding(end = 8.dp).clip(CircleShape).background(Dray.raised)
-                        .clickable { settled = !settled }.padding(horizontal = 12.dp, vertical = 8.dp),
+                        .clickable { settled = !settled; drafts = false }.padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
@@ -139,7 +166,7 @@ fun ListScreen(
             modifier = Modifier.fillMaxSize(),
         ) {
             val rows = runs.flatMap { it.rows }
-            val empty = !settled && runs.isEmpty() && store.allBots.isEmpty()
+            val empty = !settled && !drafts && runs.isEmpty() && store.allBots.isEmpty()
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 12.dp, bottom = 120.dp)) {
                 for (s in store.live) {
                     val h = store.health(s.id) ?: continue
@@ -151,7 +178,7 @@ fun ListScreen(
                     }
                 }
                 // Bots lead the live list, as on the desktop: a bot belongs to no project, so no filter narrows them.
-                val bots = if (settled) emptyList() else store.allBots
+                val bots = if (settled || drafts) emptyList() else store.allBots
                 bots.forEach { (server, bot) ->
                     item("bot-$server-${bot.id}") {
                         val chat = store.botChat(server, bot).lastOrNull()
@@ -161,6 +188,18 @@ fun ListScreen(
                 if (!hide && names.size > 1 && (filter != null || rows.isNotEmpty())) {
                     item("projects") { ProjectStrip(names, filter) { project = it } }
                 } else if (bots.isNotEmpty() && rows.isNotEmpty()) item("bots-gap") { Spacer(Modifier.height(16.dp)) }
+                if (drafts) {
+                    val shownDrafts = draftRows.filter { filter == null || it.second.project == filter }
+                    if (shownDrafts.isEmpty()) item("no-drafts") {
+                        Text("No drafts.", Modifier.padding(start = 20.dp).height(44.dp), style = Dray.Font.subhead.copy(color = Dray.tertiary))
+                    }
+                    shownDrafts.forEach { (server, d) ->
+                        item("draft-$server-${d.id}") {
+                            // A draft opens in the dock, on its own picks, ready to start or edit.
+                            DraftRow(d) { task.open(d, server); drafts = false }
+                        }
+                    }
+                }
                 if (settled && runs.isEmpty()) {
                     item("none") {
                         val err = store.settledError
@@ -446,5 +485,19 @@ fun EmptyArt(kind: EmptyArtKind) {
             r(28f, 58f, 4f, 4f, Dray.text)
             r(118f, 58f, 4f, 4f, Dray.text)
         }
+    }
+}
+
+/** A saved draft: its first line and when it was saved, opening into the dock. */
+@Composable
+private fun DraftRow(d: DraftItem, open: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp).clip(RoundedCornerShape(Dray.Radius.md)).clickable(onClick = open)
+            .height(44.dp).padding(start = 14.dp, end = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(d.title.ifEmpty { "Untitled" }, Modifier.weight(1f), style = Dray.Font.body.copy(color = Dray.text.copy(alpha = 0.88f)),
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
+        parseDate(d.created)?.let { Text(shortAge(it), style = Dray.Font.footnote.copy(color = Dray.tertiary)) }
     }
 }

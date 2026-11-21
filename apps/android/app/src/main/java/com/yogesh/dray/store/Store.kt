@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -567,6 +568,9 @@ class Store(private val context: Context) {
     }
 
     /** Why the last settled read failed on a server, so the settled view offers Retry rather than "Nothing settled." */
+    /** Moves when any client saves a draft or this one drops one: the drafts view reads again. */
+    var draftsRevision by mutableIntStateOf(0)
+
     var settledError by mutableStateOf<String?>(null)
         private set
 
@@ -866,6 +870,8 @@ class Store(private val context: Context) {
                 items[key]?.let { setItem(key, it.copy(title = t.title)) }
             }
             "bots_changed" -> scope.launch { loadBots(server) }
+            // Any client saved or dropped a draft, the CLI included: the drafts view reads again.
+            "drafts_changed" -> draftsRevision++
             "clone_progress" -> decodeOrNull<com.yogesh.dray.model.CloneProgress>(payload)?.let { p ->
                 cloneProgress[server] = cloneProgress[server].orEmpty() + (p.slug to p.line)
             }
