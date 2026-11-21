@@ -89,7 +89,7 @@ export const SHORTCUTS = [
   { id: "tab.reopen", label: "Reopen closed tab", group: "Panels and views", chord: k("t", { shift: true }) },
   { id: "chat.bottom", label: "Scroll chat to bottom", group: "Panels and views", chord: k("ArrowDown") },
   { id: "issues.open", label: "Open issues", group: "Panels and views", chord: k("i") },
-  { id: "pulls.open", label: "Open pull requests", group: "Panels and views", chord: k("i", { shift: true }) },
+  { id: "pulls.open", label: "Open pull requests", group: "Panels and views", chord: k("p") },
   { id: "issues.search", label: "Search issues", group: "Panels and views", chord: k("f", { shift: true }) },
 
   { id: "dictate", label: "Dictate", group: "Composer", chord: k("d") },
@@ -140,6 +140,8 @@ export const PREVIOUS_DEFAULTS: Partial<Record<ShortcutId, Chord | null>> = {
   "mode.toggle": null,
   "agent.update": null,
   "server.next": null,
+  // Was ⌘⇧I; ⌘P was free in the app and the menu bar.
+  "pulls.open": k("i", { shift: true }),
 };
 
 export const SHORTCUT_GROUPS: ShortcutGroup[] = [
