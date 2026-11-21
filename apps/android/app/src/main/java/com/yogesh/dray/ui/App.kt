@@ -31,6 +31,8 @@ sealed interface Route {
     data class Changes(val key: SessionKey) : Route
     data class Add(val link: PairLink? = null, val scan: Boolean = false, val nonce: Long = System.nanoTime()) : Route
     data object Settings : Route
+    /** A bot with no chat yet: its greeting, and the first message that starts one. */
+    data class BotStart(val server: String, val botId: String) : Route
 }
 
 /** The app's one navigation stack. A pairing link from outside pushes Add server, filled in. */
@@ -70,9 +72,21 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
                     openSession = { push(Route.Session(it)) },
                     openSettings = { push(Route.Settings) },
                     addServer = { push(Route.Add(scan = it)) },
+                    startBot = { server, bot -> push(Route.BotStart(server, bot)) },
                 )
-                is Route.Session -> TranscriptScreen(route.key, ::pop, openChanges = { push(Route.Changes(route.key)) }) { push(Route.Settings) }
+                is Route.Session -> {
+                    val bot = store.bot(route.key)
+                    if (bot != null) BotChatScreen(route.key, bot, ::pop, openTask = { push(Route.Session(it)) },
+                        openSession = { push(Route.Session(it)) }) { push(Route.Settings) }
+                    else TranscriptScreen(route.key, ::pop, openChanges = { push(Route.Changes(route.key)) }) { push(Route.Settings) }
+                }
                 is Route.Changes -> ChangesScreen(route.key, ::pop)
+                is Route.BotStart -> store.bots[route.server]?.firstOrNull { it.id == route.botId }?.let { bot ->
+                    BotStartScreen(route.server, bot, ::pop) { key ->
+                        stack.removeAt(stack.lastIndex)
+                        push(Route.Session(key))
+                    }
+                } ?: LaunchedEffect(Unit) { pop() }
                 is Route.Add -> AddServerScreen(route.link, route.scan, ::pop)
                 Route.Settings -> ServersScreen(::pop, add = { push(Route.Add()) }) { s ->
                     push(Route.Add(PairLink(s.url, "", s.name)))

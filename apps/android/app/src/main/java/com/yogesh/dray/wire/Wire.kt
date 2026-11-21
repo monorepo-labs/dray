@@ -193,6 +193,14 @@ sealed interface Payload {
     data class PermissionDecided(val requestId: String) : Payload
     data class BackgroundTasks(val tasks: List<BackgroundTask>) : Payload
     data class Error(val message: String) : Payload
+    /** `dray session merge-card`'s card in a bot's chat. */
+    data class MergeCardPosted(val card: MergeCard) : Payload
+    /** A task a bot started, which the server logs in the bot's chat. */
+    data class TaskStarted(val taskId: String, val title: String?) : Payload
+    data class Learned(val commit: String, val files: List<Lesson>) : Payload
+    data class LearnedUndone(val commit: String, val path: String) : Payload
+    /** A bot's emoji on one of the reader's messages. */
+    data class Reaction(val messageId: String, val emoji: String) : Payload
     data class Other(val type: String) : Payload
 
     /** Superseded or running counters the server never logs either. */
@@ -245,6 +253,11 @@ sealed interface Payload {
             "permission_decided" -> PermissionDecided(o["requestId"].str ?: return null)
             "background_tasks_changed" -> BackgroundTasks(decodeList(o["tasks"]))
             "error" -> Error(o["message"].str ?: return null)
+            "merge_card" -> MergeCardPosted(wireJson.decodeFromJsonElement(MergeCard.serializer(), o))
+            "task_started" -> TaskStarted(o["taskId"].str ?: return null, o["title"].str)
+            "learned" -> Learned(o["commit"].str ?: return null, decodeList(o["files"]))
+            "learned_undone" -> LearnedUndone(o["commit"].str ?: return null, o["path"].str ?: return null)
+            "reaction" -> Reaction(o["messageId"].str ?: return null, o["emoji"].str ?: return null)
             else -> Other(type)
         } }
     }

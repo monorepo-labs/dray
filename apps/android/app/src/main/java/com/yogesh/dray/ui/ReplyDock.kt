@@ -58,6 +58,7 @@ import com.yogesh.dray.model.Model
 import com.yogesh.dray.model.Picks
 import com.yogesh.dray.model.SessionKey
 import com.yogesh.dray.net.ConnState
+import com.yogesh.dray.store.botSend
 import kotlinx.coroutines.launch
 
 /** What the reader moved for the next reply; null keeps the session's own. */
@@ -83,14 +84,18 @@ fun ReplyDock(key: SessionKey) {
     val connected = store.serverState[key.server] == ConnState.Connected
     val away = key.server in store.lost
     val draft = store.drafts[key].orEmpty()
+    // A bot chat's agent and model from its sheet, waiting for this reply; another agent moves the chat.
+    val pick = store.botState.unsent[key]
+    val moving = pick != null && pick.harness != item.harness
+    val harness = pick?.harness ?: item.harness
 
-    LaunchedEffect(key.server, item.harness, connected) {
-        if (connected) models = store.models(key.server, item.harness)
+    LaunchedEffect(key.server, harness, connected) {
+        if (connected) models = store.models(key.server, harness)
     }
 
-    val modelId = picks.model ?: item.model
+    val modelId = picks.model ?: pick?.model ?: item.model
     val model = models.firstOrNull { it.id == modelId }
-    val effort = picks.effort ?: item.effort
+    val effort = picks.effort ?: if (moving) null else item.effort
     val dictate = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         if (r.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
         val words = r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() ?: return@rememberLauncherForActivityResult
@@ -107,9 +112,13 @@ fun ReplyDock(key: SessionKey) {
         failed = null
         scope.launch {
             // Effort goes only where the reader moved it, coerced to a rung the model has.
-            val moved = picks.model != null || picks.effort != null
+            val moved = picks.model != null || picks.effort != null || pick != null
             val level = if (moved) model?.let { Picks.usableEffort(it, effort) } ?: effort else null
-            val ok = store.send(key, text, picks.model, level, picks.stance, picks.fast, effortMoved = moved)
+            val ok = if (store.bot(key) != null) {
+                store.botSend(key, text, pick?.harness, picks.model ?: pick?.model, level, picks.stance, picks.fast) != null
+            } else {
+                store.send(key, text, picks.model, level, picks.stance, picks.fast, effortMoved = moved)
+            }
             sending = false
             if (ok) {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -131,6 +140,10 @@ fun ReplyDock(key: SessionKey) {
             .alpha(if (away) 0.4f else 1f),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (moving) Text(
+            "Your next message moves this chat to ${Picks.agentLabels[harness] ?: harness}.",
+            style = Dray.Font.footnote.copy(color = Dray.tertiary),
+        )
         failed?.let {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Couldn't send. ${sentence(it)}", Modifier.weight(1f), style = Dray.Font.footnote.copy(color = Dray.destructive))
@@ -171,8 +184,8 @@ fun ReplyDock(key: SessionKey) {
         }
         Row(Modifier.height(28.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(Modifier.clickable { sheet = true }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                AgentMark(item.harness, 13.dp)
-                Text(model?.label ?: modelId.ifEmpty { Picks.agentLabels[item.harness] ?: item.harness }, style = Dray.Font.footnoteStrong)
+                AgentMark(harness, 13.dp)
+                Text(model?.label ?: modelId.ifEmpty { Picks.agentLabels[harness] ?: harness }, style = Dray.Font.footnoteStrong)
                 effort?.let { Text(Picks.effortLabels[it] ?: it, style = Dray.Font.footnote.copy(color = Dray.tertiary)) }
             }
             Text("···", Modifier.clickable { sheet = true }, style = Dray.Font.footnoteStrong.copy(color = Dray.secondary))
@@ -189,7 +202,7 @@ fun ReplyDock(key: SessionKey) {
         }
     }
 
-    if (sheet) ThisTaskSheet(item.harness, item.busy, models, modelId, effort, picks.stance ?: item.permissionMode,
+    if (sheet) ThisTaskSheet(harness, item.busy, models, modelId, effort, picks.stance ?: item.permissionMode,
         picks.fast ?: item.fast ?: false, onModel = { picks = picks.copy(model = it, effort = null) },
         onEffort = { picks = picks.copy(effort = it) }, onStance = { picks = picks.copy(stance = it) },
         onFast = { picks = picks.copy(fast = it) }) { sheet = false }
