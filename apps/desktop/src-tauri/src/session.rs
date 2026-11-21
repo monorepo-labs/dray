@@ -1163,14 +1163,21 @@ impl SessionManager {
             //
             // The default branch picked by name is no base at all: it starts
             // from `origin/<default>` as an unpicked one does.
+            //
+            // Fetched for `-w` too, though the CLI fetches again: the baseline
+            // below is read before the child starts, and read off a stale
+            // `origin/<default>` it counts every newer upstream commit as the
+            // first turn's work.
             let base = match base {
                 Some(git::Base::Branch(b)) if git::is_default_branch(cwd, b).await => None,
                 other => other,
             };
+            let default_base = match (use_worktree, base) {
+                (true, None) => git::fetched_default_base(cwd).await,
+                _ => None,
+            };
             let resolved_base = match (harness.caps().creates_own_worktree, use_worktree, base) {
-                (false, true, None) => Some(git::Base::Fork(
-                    git::default_base(cwd).await.unwrap_or_else(|| "HEAD".into()),
-                )),
+                (false, true, None) => Some(git::Base::Fork(default_base.unwrap_or_else(|| "HEAD".into()))),
                 _ => None,
             };
             let base = base.or(resolved_base.as_ref());
@@ -1332,8 +1339,8 @@ impl SessionManager {
             // inside its own baseline. A worktree the CLI has yet to create has
             // no directory to snapshot, so that case resolves the fork point the
             // tree will start from instead — slightly approximate, since the CLI
-            // fetches `origin/<default>` first and an upstream commit landing in
-            // between would read as this turn's work. A tree created above has
+            // fetches `origin/<default>` again and an upstream commit landing
+            // since the fetch above would read as this turn's work. A tree created above has
             // none of that: it is on disk and clean, so its snapshot is exact.
             let baseline = match (owned_worktree, worktree_name.is_some()) {
                 (false, true) => git::base_ref_tree(cwd).await,
@@ -1730,7 +1737,7 @@ impl SessionManager {
                 // in it yet to be surprised by.
                 if !tokio::fs::try_exists(&session_cwd).await.unwrap_or(false) {
                     let name = item.worktree_name.clone().expect("checked just above");
-                    let base = git::default_base(&item.project_path)
+                    let base = git::fetched_default_base(&item.project_path)
                         .await
                         .unwrap_or_else(|| "HEAD".into());
 
