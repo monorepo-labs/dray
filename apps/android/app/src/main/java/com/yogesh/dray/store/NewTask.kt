@@ -91,6 +91,8 @@ class NewTask(private val store: Store, context: Context) {
             val c = connected
             // A bot's folder is on its own machine: down, there is nowhere to send, never another machine.
             bot?.let { (s, _) -> return s.takeIf { id -> c.any { it.id == id } } }
+            // So is an open draft's folder: its path names a checkout on the machine it was saved on.
+            if (draftFolder != null) draftId?.let { (s, _) -> return s.takeIf { id -> c.any { it.id == id } } }
             return c.firstOrNull { it.id == pickedServer }?.id
                 ?: c.firstOrNull { s -> store.projects[s.id].orEmpty().any { it.name == projectName } }?.id
                 ?: c.firstOrNull()?.id
@@ -151,6 +153,11 @@ class NewTask(private val store: Store, context: Context) {
     /** The dock's words were discarded: the draft they came from stays saved, and nothing here drops it later. */
     fun forgetDraft() {
         draftId = null
+        leavePlace()
+    }
+
+    /** Another machine or project was picked: the draft's folder and its `--base` belong to where it was saved, not there. */
+    private fun leavePlace() {
         draftFolder = null
         draftBase = null
     }
@@ -188,14 +195,14 @@ class NewTask(private val store: Store, context: Context) {
 
     fun pickServer(id: String?) {
         bot = null
-        draftFolder = null
+        leavePlace()
         pickedServer = id
         projectPath = null
         prefs.edit().putString("server", id).apply()
     }
 
     fun pick(choice: ProjectChoice) {
-        draftFolder = null
+        leavePlace()
         // The menu lists the bot's machine's projects, so leaving the bot stays on that machine.
         bot?.let { pickServer(it.first) }
         bot = null
@@ -206,7 +213,7 @@ class NewTask(private val store: Store, context: Context) {
 
     /** After an attach, the project just added is the pick. */
     fun pickProject(name: String?) {
-        draftFolder = null
+        leavePlace()
         projectName = name
         projectPath = null
         prefs.edit().putString("project", name).apply()
