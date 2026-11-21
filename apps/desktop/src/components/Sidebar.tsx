@@ -956,8 +956,9 @@ export function SpaceSwitcher({
     </div>
   );
 
-  // Nothing to list before the first space; the click is New space then.
-  if (offersNew) return face;
+  // Nothing to list before the first space, where the click is New space, nor
+  // while a few clicks reach every one.
+  if (offersNew || spaces.length < SPACE_MENU_FROM) return face;
 
   // A click steps and resting opens the list, as the project filter does.
   return (
@@ -1927,6 +1928,9 @@ export const HINT_KEYS = "[&_kbd]:bg-muted/40 [&_kbd]:text-muted-foreground/60";
 /// through a long list is a scrub rather than a pick, and the dots stop being
 /// countable.
 const PROJECT_MENU_FROM = 3;
+/// The spaces' own threshold, one higher: there are fewer of them, and
+/// stepping through three is still a pick.
+const SPACE_MENU_FROM = 4;
 
 // Dot geometry, in px, kept here because the track's offset is computed from it
 // rather than measured: `size-1` plus `gap-1`.
@@ -2424,33 +2428,39 @@ function RailSpaces({
     onChange(entries[(activeIndex + 1) % entries.length]);
   };
   // The rail project filter's band: the glyph over its dot track.
+  const band = (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Space: ${label}`}
+      onClick={cycle}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          cycle();
+        }
+      }}
+      className="group/spaces flex w-10 cursor-pointer flex-col items-center gap-1 rounded-md pt-2 pb-1 text-muted-foreground transition-colors select-none hover:bg-sidebar-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none"
+    >
+      {space === null ? <Square3Stack3DIcon className="size-4" /> : <Initial name={space} />}
+      <DotTrack
+        count={entries.length}
+        activeIndex={activeIndex}
+        className={cn(
+          "transition-opacity duration-150 group-hover/spaces:opacity-100",
+          flashing ? "opacity-100" : "opacity-0",
+        )}
+      />
+    </div>
+  );
+
+  if (spaces.length < SPACE_MENU_FROM) return <RailTip on label={label}>{band}</RailTip>;
+
   return (
     <DropdownMenu {...menu.root}>
       <RailTip on={!menu.root.open} label={label}>
         <DropdownMenuTrigger asChild {...menu.trigger}>
-          <div
-            role="button"
-            tabIndex={0}
-            aria-label={`Space: ${label}`}
-            onClick={cycle}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                cycle();
-              }
-            }}
-            className="group/spaces flex w-10 cursor-pointer flex-col items-center gap-1 rounded-md pt-2 pb-1 text-muted-foreground transition-colors select-none hover:bg-sidebar-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none"
-          >
-            {space === null ? <Square3Stack3DIcon className="size-4" /> : <Initial name={space} />}
-            <DotTrack
-              count={entries.length}
-              activeIndex={activeIndex}
-              className={cn(
-                "transition-opacity duration-150 group-hover/spaces:opacity-100",
-                flashing ? "opacity-100" : "opacity-0",
-              )}
-            />
-          </div>
+          {band}
         </DropdownMenuTrigger>
       </RailTip>
       <DropdownMenuContent side="right" align="end" className="min-w-52" {...menu.content}>
