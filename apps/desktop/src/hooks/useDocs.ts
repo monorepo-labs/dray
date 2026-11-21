@@ -3,7 +3,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import { invoke, listen, qualify, serverOfSession } from "@/lib/transport";
 import { watchDocs } from "@/lib/servers";
 
-import { openInFiles } from "@/hooks/useOpenFiles";
+import { closeFile, guardCloses, openInFiles } from "@/hooks/useOpenFiles";
 import { channel } from "@/lib/channel";
 import { isMarkdownPath } from "@/lib/markdown";
 import type { SaveOutcome } from "@/types/events";
@@ -152,12 +152,89 @@ function write(sid: string, next: Partial<SessionDocs>) {
   emit();
 }
 
-/// Drops what a deleted session held, text and all. A read still out finds
-/// neither its entry nor its number, so it lands nowhere.
+/// Drops what a deleted session held, text and all, its Files view's drafts
+/// included. A read still out finds neither its entry nor its number, so it
+/// lands nowhere.
 export function forgetDocs(sid: string) {
-  if (!bySession.delete(sid)) return;
-  for (const key of seqByPath.keys()) if (key.startsWith(`${sid}\n`)) seqByPath.delete(key);
+  let gone = false;
+  for (const store of [sid, filesDocKey(sid)]) {
+    if (!bySession.delete(store)) continue;
+    gone = true;
+    for (const key of seqByPath.keys()) if (key.startsWith(`${store}\n`)) seqByPath.delete(key);
+  }
+  if (gone) emit();
+}
+
+/// The key the Files view keeps a session's markdown drafts under, beside the
+/// session's own. A separate entry, so a file being edited in Files draws no
+/// chip in the Docs panel, and every rule here — dirtiness, the stale strip,
+/// the compare-and-swap save — applies to it unchanged.
+export function filesDocKey(sid: string): string {
+  return `files\n${sid}`;
+}
+
+/// Hands a doc the text the Files view read for it. A new one starts rendered;
+/// an open one takes it by `withDiskText`'s rules, so a draft is never lost to
+/// a re-read. The Files view owns reading and watching here, and this store
+/// only the draft, since the two watch under different scopes.
+export function syncDoc(store: string, path: string, text: string) {
+  const doc = find(store, path);
+  if (!doc) {
+    write(store, {
+      docs: [
+        ...state(store).docs,
+        {
+          path,
+          mode: "view",
+          body: { status: "ready", base: text, draft: text, stale: false, saving: false, saveError: null },
+        },
+      ],
+    });
+    return;
+  }
+  // Mid-save the read is the save's own echo, or a write the save's
+  // compare-and-swap is about to answer for; `refreshDoc` skips it the same way.
+  if (doc.body.status !== "ready" || doc.body.saving) return;
+  const next = withDiskText(doc.body, text);
+  if (next !== doc.body) patchReady(store, path, () => next);
+}
+
+/// A Files tab whose close is waiting on the reader, it holding unsaved edits.
+let closing: { sid: string; path: string } | null = null;
+
+/// Every Files tab close comes through here first, from the cross, ⌘W and a
+/// split pane alike. A dirty draft holds the close and asks; a clean one is
+/// dropped with its tab. Held without a question mid-save, the Docs panel's
+/// rule: the write is already with the OS, so "discard" would be a lie.
+guardCloses((sid, path) => {
+  const store = filesDocKey(sid);
+  const doc = find(store, path);
+  if (!doc) return false;
+  if (!isDirty(doc)) {
+    closeDoc(store, path);
+    return false;
+  }
+  if (doc.body.status === "ready" && !doc.body.saving) {
+    closing = { sid, path };
+    emit();
+  }
+  return true;
+});
+
+/// The Files tab in `sid` waiting on "Close without saving?", if one is.
+export function useFileCloseQuestion(sid: string | null): string | null {
+  useSyncExternalStore(changed.subscribe, getVersion, getVersion);
+  return sid && closing?.sid === sid ? closing.path : null;
+}
+
+/// Settles that question: discarding drops the draft and closes the tab.
+export function answerFileClose(discard: boolean) {
+  const asked = closing;
+  closing = null;
   emit();
+  if (!asked || !discard) return;
+  closeDoc(filesDocKey(asked.sid), asked.path);
+  closeFile(asked.sid, asked.path);
 }
 
 type DocsSnapshot = SessionDocs & { opened: number };

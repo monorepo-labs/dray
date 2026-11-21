@@ -1,12 +1,20 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fileSrc, invoke, qualify, serverOfSession } from "@/lib/transport";
 import { getFiletypeFromFileName } from "@pierre/diffs";
 import { File, Virtualizer } from "@pierre/diffs/react";
 
 import Note from "@/components/changes/Note";
 import FileIcon from "@/components/FileIcon";
+import { DiscardConfirm, DocStaleStrip, DocTextarea } from "@/components/DocEditing";
 import MarkdownDoc from "@/components/MarkdownDoc";
 import { ChatSessionContext } from "@/hooks/useChatSession";
+import {
+  answerFileClose,
+  filesDocKey,
+  syncDoc,
+  useDocs,
+  useFileCloseQuestion,
+} from "@/hooks/useDocs";
 import { useCodeThemeWithMode } from "@/hooks/useCodeTheme";
 import { useFirstFrame } from "@/hooks/useFirstFrame";
 import { useHighlighter } from "@/hooks/useHighlighter";
@@ -273,7 +281,9 @@ function Video({ body }: { body: { path: string } }) {
   );
 }
 
-/// A markdown file, drawn the way markdown is everywhere else in the app.
+/// A markdown file, drawn the way markdown is everywhere else in the app, and
+/// editable the way the Docs panel edits one: the draft lives in that panel's
+/// store under `filesDocKey`, and the titlebar carries its Read/Edit and Save.
 ///
 /// Its relative links and images resolve against its own folder, which is what
 /// its author wrote them against, and a link opens here in Files — markdown
@@ -304,14 +314,46 @@ function MarkdownFile({
     [path, sessionId, onOpen],
   );
 
+  const store = sessionId ? filesDocKey(sessionId) : null;
+  const doc = useDocs(store).docs.find((d) => d.path === path);
+  // Every read of the file lands here, the first included; `syncDoc` keeps a
+  // draft through the ones that would otherwise throw it away.
+  useEffect(() => {
+    if (store) syncDoc(store, path, text);
+  }, [store, path, text]);
+
+  const shown = doc?.body.status === "ready" ? doc.body.draft : text;
+
   // Keyed on the path, so the next file starts at its own top rather than at
   // this one's scroll and section count.
   return (
-    <div key={path} className="min-h-0 flex-1 overflow-auto">
-      <ChatSessionContext.Provider value={context}>
-        <MarkdownDoc text={text} linkFilePaths="written" className="mx-auto max-w-3xl px-8 py-6" />
-      </ChatSessionContext.Provider>
+    <div key={path} className="flex min-h-0 flex-1 flex-col">
+      {doc && <DocStaleStrip store={store} doc={doc} />}
+      {doc?.mode === "edit" ? (
+        <div className="min-h-0 flex-1">
+          <DocTextarea store={store} doc={doc} className="px-8 py-6" />
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto">
+          <ChatSessionContext.Provider value={context}>
+            <MarkdownDoc text={shown} linkFilePaths="written" className="mx-auto max-w-3xl px-8 py-6" />
+          </ChatSessionContext.Provider>
+        </div>
+      )}
     </div>
+  );
+}
+
+/// "Close without saving?" for a Files tab holding unsaved edits, asked by
+/// the close guard in `useDocs` whichever way the tab was closed.
+export function FileCloseConfirm({ sessionId }: { sessionId: string }) {
+  const path = useFileCloseQuestion(sessionId);
+  return (
+    <DiscardConfirm
+      path={path}
+      onConfirm={() => answerFileClose(true)}
+      onClose={() => answerFileClose(false)}
+    />
   );
 }
 
