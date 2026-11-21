@@ -19,6 +19,22 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.32.1 · 2026-11-21 · notify
+
+### Improved
+
+- **A fuller sidebar rail.** With the sidebar folded, the rail shows
+  your tasks as status dots, plus the project and space switchers.
+  Hovering a switcher opens a list of projects or spaces to pick from, in the
+  full sidebar too.
+- **⌘P opens Pull requests**, and its sidebar icon is lighter.
+
+### Fixed
+
+- A new task on the default branch starts from the remote's newest
+  commit, not an out-of-date copy, so changes already upstream no longer
+  show up as the task's own work.
+
 ## 0.32.0 · 2026-11-21 · notify
 
 ### New
