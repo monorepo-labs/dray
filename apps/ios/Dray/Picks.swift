@@ -10,6 +10,8 @@ struct Project: Codable, Hashable {
     /// The repository this checkout is of; `nil` from a server too old to say,
     /// or where it has no shared remote.
     var remote: String? = nil
+    /// The space the reader filed it in, if any.
+    var space: String? = nil
 }
 
 struct AgentAvailability: Decodable, Hashable {

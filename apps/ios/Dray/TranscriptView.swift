@@ -14,6 +14,7 @@ struct TranscriptView: View {
     @State private var subagent: SubagentRoute?
     @State private var editingBot = false
     @Environment(\.openTask) private var openTask
+    @Environment(\.readOnly) private var readOnly
     /// The floating banner's height, kept clear above the first row so it never sits on "Load earlier".
     @State private var bannerHeight: CGFloat = 0
     /// Whether new rows scroll into view: dropped by the reader scrolling up (`FollowsBottom`).
@@ -134,7 +135,7 @@ struct TranscriptView: View {
         .environment(\.callSession, key)
         // A card arriving is the agent stopping to ask: felt, once per card.
         .onChange(of: asks.count + taskAsks.count) { old, new in if new > old { Haptic.warning() } }
-        .safeAreaInset(edge: .bottom, spacing: 0) { ReplyDock(key: key) }
+        .safeAreaInset(edge: .bottom, spacing: 0) { if !readOnly { ReplyDock(key: key) } }
         .overlay(alignment: .top) {
             // The bar draws no shade here, so rows fade out under the clock rather than sit on it.
             if bot != nil {

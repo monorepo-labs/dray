@@ -67,6 +67,8 @@ enum Theme {
     static let merge = Color(hex: 0x238636)
     /// `--accent-mention`: a link in prose, far from the yellow so it never reads as a mark.
     static let link = Color(hex: 0x5AD3FF)
+    /// Linear's urgent priority, its own orange.
+    static let urgent = Color(hex: 0xF2994A)
 
     /// `--radius` 10pt and its rungs: never a sharp rectangle. Pills are
     /// capsules, not a rung.

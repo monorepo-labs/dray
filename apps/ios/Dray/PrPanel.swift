@@ -5,7 +5,10 @@ import ThinkingOrbs
 /// view, so the toolbar button knows whether there is anything to open.
 @MainActor @Observable
 final class PrModel {
-    let key: SessionKey
+    let server: UUID
+    /// The session whose branch it reads; `nil` reads `cwd` and `branch` as given, the pull requests page's way.
+    let key: SessionKey?
+    var cwd: String?
     var prs: [PullRequest] = []
     var unavailable: PrUnavailable?
     var branch: String?
@@ -13,28 +16,41 @@ final class PrModel {
     var actionError: String?
     @ObservationIgnored private var generation = 0
 
-    init(key: SessionKey) { self.key = key }
+    init(key: SessionKey) {
+        server = key.server
+        self.key = key
+    }
+
+    init(server: UUID, cwd: String, branch: String) {
+        self.server = server
+        key = nil
+        self.cwd = cwd
+        self.branch = branch
+    }
 
     /// The button stays for the two states the reader can fix; every other
     /// error with no rows hides it, as the desktop's tab does.
     var visible: Bool { !prs.isEmpty || unavailable?.keepsButton == true }
 
     func load(_ store: Store) async {
-        guard let item = store.items[key] else { return }
         generation += 1
         let gen = generation
         do {
-            let status: WorkStatus = try await store.call(key.server, "work_status", ["cwd": .string(item.cwd)])
-            let branch = sessionBranch(branch: item.branch, worktreeName: item.worktreeName,
+            if let key {
+                guard let item = store.items[key] else { return }
+                let status: WorkStatus = try await store.call(server, "work_status", ["cwd": .string(item.cwd)])
+                cwd = item.cwd
+                branch = sessionBranch(branch: item.branch, worktreeName: item.worktreeName,
                                        worktreeRemoved: item.worktreeRemoved ?? false, observed: status.branch)
-            guard let branch else {
-                if gen == generation { (self.branch, prs, unavailable) = (nil, [], nil) }
+            }
+            guard let cwd, let branch else {
+                if gen == generation { (prs, unavailable) = ([], nil) }
                 return
             }
-            let prs: [PullRequest] = try await store.call(key.server, "prs_for_branch",
-                                                          ["cwd": .string(item.cwd), "branch": .string(branch)])
+            let prs: [PullRequest] = try await store.call(server, "prs_for_branch",
+                                                          ["cwd": .string(cwd), "branch": .string(branch)])
             guard gen == generation else { return }
-            (self.branch, self.prs, unavailable) = (branch, prs, nil)
+            (self.prs, unavailable) = (prs, nil)
         } catch {
             // Rows already on screen stay under the sentence, which says what failed to update.
             guard gen == generation else { return }
@@ -43,16 +59,16 @@ final class PrModel {
     }
 
     func act(_ store: Store, _ cmd: String, _ number: Int, _ extra: [String: JSON] = [:]) async {
-        guard let cwd = store.items[key]?.cwd else { return }
+        guard let cwd = key.flatMap({ store.items[$0]?.cwd }) ?? cwd else { return }
         acting = true
         actionError = nil
         do {
-            let _: JSON = try await store.call(key.server, cmd, ["cwd": .string(cwd), "number": JSON(number)].merging(extra) { $1 })
+            let _: JSON = try await store.call(server, cmd, ["cwd": .string(cwd), "number": JSON(number)].merging(extra) { $1 })
         } catch {
             actionError = error.localizedDescription
         }
         await load(store)
-        if let path = store.items[key]?.projectPath { await store.refreshMarks(key.server, path) }
+        if let path = key.flatMap({ store.items[$0]?.projectPath }) ?? self.cwd { await store.refreshMarks(server, path) }
         acting = false
     }
 }
@@ -78,18 +94,23 @@ private struct PrPanelModifier: ViewModifier {
     @State private var model: PrModel
     @State private var showing = false
 
-    init(key: SessionKey) { _model = State(initialValue: PrModel(key: key)) }
+    private let key: SessionKey
+
+    init(key: SessionKey) {
+        self.key = key
+        _model = State(initialValue: PrModel(key: key))
+    }
 
     func body(content: Content) -> some View {
-        let busy = store.items[model.key]?.busy ?? false
-        let connected = store.serverState[model.key.server] == .connected
+        let busy = store.items[key]?.busy ?? false
+        let connected = store.serverState[key.server] == .connected
         content
             // On arrival, on every turn edge, and on reconnect, where a read
             // that failed with the socket down would otherwise never retry.
             .task(id: "\(busy)|\(connected)") { if connected { await model.load(store) } }
             .toolbar {
                 // A bot's folder holds notes, not work: no PR lookup there, as on the desktop.
-                if model.visible && store.bot(model.key) == nil {
+                if model.visible && store.bot(key) == nil {
                     ToolbarItem(placement: .primaryAction) {
                         // The list row's own glyph, so the button says the PR's state before it is opened.
                         Button { showing = true } label: {
@@ -165,11 +186,14 @@ struct PrSheet: View {
 }
 
 /// One pull request: what it is, whether it can land and the one action that
-/// moves it, then its checks and what people said.
-private struct PrSection: View {
+/// moves it, then its checks and what people said. With `picked`, each comment
+/// and inline thread carries a box, the pull requests page's way of quoting
+/// them to the task it starts.
+struct PrSection: View {
     @Environment(Store.self) private var store
     let pr: PullRequest
     let model: PrModel
+    var picked: Binding<Set<String>>? = nil
 
     var body: some View {
         let ready = readiness(pr)
@@ -233,10 +257,35 @@ private struct PrSection: View {
             }
             if !pr.comments.isEmpty {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    GroupLabel("Comments")
-                    ForEach(pr.comments) { CommentCard(comment: $0) }
+                    HStack {
+                        GroupLabel("Comments")
+                        Spacer()
+                        if let picked { pickButton(picked) }
+                    }
+                    ForEach(pr.comments) { c in
+                        CommentCard(comment: c, picked: picked)
+                        // Picking reaches into a review: each inline thread is a unit of its own.
+                        if picked != nil {
+                            ForEach(c.threads) { CommentCard(comment: $0, picked: picked).padding(.leading, Theme.Space.xl) }
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    /// Select unresolved while nothing is picked, Clear once something is.
+    @ViewBuilder private func pickButton(_ picked: Binding<Set<String>>) -> some View {
+        let unresolved = unresolvedKeys(pr.comments)
+        if !picked.wrappedValue.isEmpty {
+            Button("Clear \(picked.wrappedValue.count)") { picked.wrappedValue = [] }
+                .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
+        } else if !unresolved.isEmpty {
+            Button("Select unresolved (\(unresolved.count))") {
+                Haptic.select()
+                picked.wrappedValue = Set(unresolved)
+            }
+            .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
         }
     }
 
@@ -427,6 +476,7 @@ private struct OutArrow: View {
 /// since the sheet reads and never replies.
 private struct CommentCard: View {
     let comment: PrComment
+    var picked: Binding<Set<String>>? = nil
 
     var body: some View {
         let card = VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -459,11 +509,30 @@ private struct CommentCard: View {
         .padding(14)
         .prGroup(padding: 0)
         .opacity(comment.resolved ? 0.6 : 1)
-        if let url = URL(string: comment.url) {
-            Link(destination: url) { card }.buttonStyle(RowButtonStyle())
-        } else {
-            card
+        HStack(alignment: .top, spacing: Theme.Space.s) {
+            if let picked { box(picked) }
+            if let url = URL(string: comment.url) {
+                Link(destination: url) { card }.buttonStyle(RowButtonStyle())
+            } else {
+                card
+            }
         }
+    }
+
+    private func box(_ picked: Binding<Set<String>>) -> some View {
+        let on = picked.wrappedValue.contains(comment.key)
+        return Button {
+            Haptic.select()
+            if on { picked.wrappedValue.remove(comment.key) } else { picked.wrappedValue.insert(comment.key) }
+        } label: {
+            Image(systemName: on ? "checkmark.square.fill" : "square")
+                .font(Theme.Font.title.font)
+                .foregroundStyle(on ? Theme.text : Theme.tertiary)
+                .frame(width: 28, height: 44)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Quote \(comment.author)'s comment")
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 
     private var verb: String? {
@@ -497,7 +566,7 @@ private struct MissingCli: View {
     var body: some View {
         let installing = kind == "no_cli"
         let command = installing ? "dray setup" : "gh auth login"
-        let server = store.name(of: model.key.server)
+        let server = store.name(of: model.server)
         PrNotice(title: installing ? "GitHub CLI isn't installed" : "GitHub CLI is logged out",
                  message: stillMissing ? "Still not found on \(server)." : "Run this on \(server), then check again.") {
             PrOutline(tone: Theme.accent)
@@ -538,7 +607,7 @@ private struct MissingCli: View {
         checking = true
         defer { checking = false }
         if installing {
-            let found = (try? await store.call(model.key.server, "recheck_gh", as: Bool.self)) ?? false
+            let found = (try? await store.call(model.server, "recheck_gh", as: Bool.self)) ?? false
             stillMissing = !found
             if !found { return }
         }

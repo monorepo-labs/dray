@@ -216,6 +216,23 @@ struct PrMark: Decodable, Hashable {
     var mergeable: String? = nil
     var mergeStateStatus: String? = nil
     var reviewDecision: String? = nil
+    /// What the pull requests page draws on the row, asked for with `listing: true`.
+    var listing: PrListing? = nil
+}
+
+/// An open pull request as the pull requests page lists it.
+struct PrListing: Decodable, Hashable {
+    let title: String
+    let author: String
+    let authorAvatar: String?
+    let updatedAt: String
+    let additions: Int
+    let deletions: Int
+    let commentCount: Int
+    /// The head lives in a fork: no task here can match it by name or push to it.
+    let isCrossRepository: Bool
+    let viewerDidAuthor: Bool
+    let reviewRequested: Bool
 }
 
 struct Snapshot: Decodable {
