@@ -88,9 +88,31 @@ phone reads and drives it over the same WebSocket the desktop uses
   analyzer offers no audio format, so a read there fails; test it on a phone.
   Where nothing can transcribe, every dock trades the orb for a text field
   and send. The Island's `VoiceOrb` draws it.
+- **Pull requests and Issues** (#1361), the desktop's two pages, each a
+  button beside Settings opening a sheet with its own stack. Pushed inside
+  the split view's sidebar instead, a page's own push looped the layout.
+  GitHub's search and the trackers are asked through `trackerServer`: the
+  Mac app's server where one is connected, else the first.
+  - Pull requests (`Pulls.swift`, `PullDetail.swift`, rules from
+    `prInbox.ts` restated and tested in `PullsTests`): All reads each
+    project's `pr_marks` with `listing`, plus bot tasks' repos; the other
+    three filters are one `pr_search`, each row read through a checkout
+    `repo_checkouts` finds, else its `github:` slug. Spaces, Owner and
+    Repository sit behind the filter button. The phone has no active space,
+    so Spaces starts on All. A PR opens the PR sheet's rows with a box on
+    each comment and inline thread, Select unresolved, its tasks newest
+    first (a settled one opens with no dock), and a start box: a bot's task
+    or the reader's own on a machine, agent, model, effort and fast mode,
+    always Auto. A checkout is attached or cloned (`clone_github_repo`) only
+    on Start, then `start_pr_session`.
+  - Issues (`Issues.swift`): GitHub and Linear, the desktop's scopes,
+    Open/Closed, search, repository, type and label or team and project;
+    Linear grouped by state with Done and Cancelled read on opening. An
+    issue moves its status and priority (`update_issue`), and Work on it
+    puts its tag in the new task's words. Linear connects by pasting a key.
 
 Left out: push, attachments, the Diff/Files/Browser views,
-forks, settle/pin, the settled list, spaces, issues.
+forks, settle/pin, the settled list, spaces.
 
 ## Stack
 

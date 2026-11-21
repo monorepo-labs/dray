@@ -4,6 +4,9 @@ import ThinkingOrbs
 /// Which sessions the list shows: the live ones, saved drafts, or settled ones.
 enum ListMode { case live, drafts, settled }
 
+/// A page opened over the list from its top bar.
+enum ListPage: Identifiable { case pulls, issues; var id: Self { self } }
+
 /// A task saved for later, as `drafts.json` holds it. Only what a row draws.
 struct DraftItem: Decodable, Identifiable {
     let id: String
@@ -39,6 +42,8 @@ struct SessionList: View {
     /// Settings › Appearance: the list is bots alone, with nothing that serves sessions.
     @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
     @State private var newBot = false
+    /// The pull requests or issues page, opened over the list.
+    @State private var listPage: ListPage?
     @Environment(\.scenePhase) private var phase
     /// This launch's one chance to open a lone bot's chat; anything the reader does first spends it.
     @State private var autoOpen = true
@@ -192,6 +197,21 @@ struct SessionList: View {
                 selection = key
             }
         }
+        // Its own stack in a sheet: pushed inside the split view's sidebar, a page's own pushes looped.
+        .sheet(item: $listPage) { p in
+            NavigationStack {
+                switch p {
+                case .pulls: PullsView()
+                case .issues:
+                    IssuesView { tag in
+                        // The tag lands in the dock's words, where project and agent are still to pick: the desktop's Work on.
+                        task.text = task.hasText ? "\(task.text) \(tag) " : "\(tag) "
+                        listPage = nil
+                    }
+                }
+            }
+            .presentationBackground(Theme.page)
+        }
         .sheet(isPresented: $newBot) { BotSheet(editing: nil) { selection = $0 } }
         .onChange(of: lone, initial: true) { open(lone) }
         // Every server and shared machine has answered and the list is more than one bot: the chance is gone.
@@ -203,6 +223,7 @@ struct SessionList: View {
         .onChange(of: "\(mode)\(project ?? "")") { autoOpen = false }
         .onChange(of: sheet?.id) { autoOpen = false }
         .onChange(of: newBot) { autoOpen = false }
+        .onChange(of: listPage) { autoOpen = false }
         .onChange(of: phase) { if phase == .background { autoOpen = false } }
         // ponytail: a server that takes longer than this to answer never opens its bot; a read-progress signal if that bites.
         .task { try? await Task.sleep(for: .seconds(10)); autoOpen = false }
@@ -218,9 +239,16 @@ struct SessionList: View {
     /// Settings on the left; the drafts and settled views sharing one glass pill
     /// on the right, then New bot. While one view is shown, the other dims, so the lit one reads as on.
     @ToolbarContentBuilder private var header: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
+        // The desktop's two pages beside Settings, each a push over the list.
+        ToolbarItemGroup(placement: .topBarLeading) {
             Button { sheet = .settings(server: nil) } label: { Image(systemName: "gearshape") }
                 .accessibilityLabel("Settings")
+            if anyConnected && !hideSessions {
+                Button { listPage = .pulls } label: { Image(systemName: "arrow.triangle.pull") }
+                    .accessibilityLabel("Pull requests")
+                Button { listPage = .issues } label: { Image(systemName: "smallcircle.circle") }
+                    .accessibilityLabel("Issues")
+            }
         }
         // Each only where it has something to show, or is the view up now so there is a way back.
         ToolbarItemGroup(placement: .topBarTrailing) {
