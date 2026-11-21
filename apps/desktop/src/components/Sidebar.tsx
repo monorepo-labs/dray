@@ -898,12 +898,14 @@ export function SpaceSwitcher({
   // Wraps: a click has no direction and no dot to slide, so a dead end at the
   // last space would just look broken. With nothing made yet there is only the
   // one place to go, and the dialog covers the strip once it opens.
+  const menu = useHoverMenu();
   const cycle = () => {
+    menu.clicked();
     if (offersNew) return onNew();
     onChange(entries[(activeIndex + 1) % entries.length]);
   };
 
-  return (
+  const face = (
     // No tooltip, unlike the two icon buttons beside it: this one draws its
     // answer in words, so one would only repeat the label. Unselectable because
     // the name is the target's face, not prose.
@@ -954,6 +956,44 @@ export function SpaceSwitcher({
         />
       </div>
     </div>
+  );
+
+  // Nothing to list before the first space; the click is New space then.
+  if (offersNew) return face;
+
+  // A click steps and resting opens the list, as the project filter does.
+  return (
+    <DropdownMenu {...menu.root}>
+      <DropdownMenuTrigger asChild {...menu.trigger}>
+        {face}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-52" {...menu.content}>
+        <SpaceList spaces={spaces} space={value} onChange={onChange} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/// The spaces as a picked-from list, All first, for both switchers' menus.
+function SpaceList({
+  spaces,
+  space,
+  onChange,
+}: {
+  spaces: string[];
+  space: string | null;
+  onChange: (space: string | null) => void;
+}) {
+  return (
+    // Radix radio values are strings, so All rides on the empty one, as in
+    // the project filter's list.
+    <DropdownMenuRadioGroup value={space ?? ""} onValueChange={(next) => onChange(next === "" ? null : next)}>
+      {spaceEntries(spaces).map((entry) => (
+        <DropdownMenuRadioItem key={entry ?? ""} value={entry ?? ""} className="text-ui">
+          <span className="truncate">{entry ?? "All Spaces"}</span>
+        </DropdownMenuRadioItem>
+      ))}
+    </DropdownMenuRadioGroup>
   );
 }
 
@@ -2383,15 +2423,7 @@ function RailSpaces({
         </DropdownMenuTrigger>
       </RailTip>
       <DropdownMenuContent side="right" align="end" className="min-w-52" {...menu.content}>
-        {/* Radix radio values are strings, so All rides on the empty one, as
-            in the project filter's list. */}
-        <DropdownMenuRadioGroup value={space ?? ""} onValueChange={(next) => onChange(next === "" ? null : next)}>
-          {spaceEntries(spaces).map((entry) => (
-            <DropdownMenuRadioItem key={entry ?? ""} value={entry ?? ""} className="text-ui">
-              <span className="truncate">{entry ?? "All Spaces"}</span>
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
+        <SpaceList spaces={spaces} space={space} onChange={onChange} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
