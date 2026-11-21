@@ -1,6 +1,6 @@
 ---
 title: Notifications
-description: How Dray tells you a session finished, needs permission or asked a question — a macOS banner, an in-app card, or nothing — plus the ready-to-merge card, ⌘G, the sidebar marks and the dock badge.
+description: How Dray tells you a session finished, needs permission or asked a question — a macOS banner, an in-app card, Dray Island, or nothing — plus the ready-to-merge card, ⌘G, the sidebar marks and the dock badge.
 sidebar:
   order: 5
 ---
@@ -72,6 +72,12 @@ Yellow wins when both apply. The Dray icon in the Dock shows a count of sessions
 ## Allow notifications in macOS
 
 macOS asks whether Dray may send notifications the first time it posts a banner. Choose **Allow**. If you declined, turn it back on in System Settings → Notifications → Dray. Cards, sounds, marks and the badge inside Dray work either way.
+
+## Dray Island
+
+On a Mac, while Dray Island is running, a bot's tasks that are waiting on you show there, and the macOS banner stays down. The pill reads "1 task waiting on you", or "3 tasks waiting on you" when several are waiting. Hover it and each task grows into a card: its title, pull request and what it needs from you. Click a card to open that task in Dray. A pull request that can merge has **Merge**. Click it and the card offers **Rebase**, **Merge** and **Squash**. Several bots share one pill, and the cards are grouped under each bot.
+
+The same tasks sit in a **Waiting on you** card at the foot of the bot's chat. See [Bots](/cli/orchestration#bots).
 
 ## Limits
 

@@ -26,8 +26,10 @@ These controls appear on a new task only. Once the session starts they are gone,
 |---|---|
 | Project (folder icon) | Picks the project. **Attach project…** at the bottom adds a folder. `⌘⇧P` steps to the next project. |
 | Server (server icon) | Shown when the project lives on a server. Picks which machine the task runs on. `⌘⇧S` steps to the next connected one. |
-| **Worktree** switch | Runs the session in its own copy of the repo. `⌘⇧T` flips it. See [Worktrees](/using-dray/worktrees). |
+| **Worktree** switch | Runs the session in its own copy of the repo. `⌘⇧T` flips it. Hidden when the task runs on Dray Cloud, which always uses a worktree. See [Worktrees](/using-dray/worktrees). |
 | Branch (branch icon) | Which branch the project is on. Hidden while Worktree is on, where the row says "from origin/main" (or your default branch) instead. |
+
+**Cloud.** With Dray Cloud on, a project that has a GitHub remote offers **Cloud** in that server menu. The task always runs in a worktree, so the Worktree switch is hidden and the row says "from origin/main" (or your default branch). Starting one says "Starting a cloud machine", then "Cloning onto its cloud machine". That can take a minute. If it fails, the reason shows under the composer, with **Retry** and **Dismiss**. Settling the task deletes its machine. Turn Cloud on in Settings → Servers. From a terminal, see [On Dray Cloud](/cli/sessions#on-dray-cloud).
 
 Picking a branch checks it out in the project for real. If the project has uncommitted files, Dray asks first:
 
@@ -119,7 +121,7 @@ You do not have to wait. Type and press `⏎` during a turn, and the prompt is q
 
 ## Stop a turn
 
-While a turn runs and the box is empty, the send button turns into a square **Stop** button. It stops the turn. Background tasks the agent started, such as a dev server, keep running. While any run, the transcript shows a count like "2 Background Tasks". Click it to open the list in the right panel's **More** tab, where the square button on a row stops that task and **Stop all** stops every one. Settling the session stops them all.
+While a turn runs and the box is empty, the send button turns into a square **Stop** button. It stops the turn. Background tasks the agent started, such as a dev server, keep running. While any run, the transcript shows a count like "2 Background Tasks". Click it to open the list in the right panel's **More** tab. The list shows tasks still running. One you have open stays until you leave it. The square button on a row stops that task, and **Stop all** stops every one. Settling the session stops them all.
 
 ## Escape
 
