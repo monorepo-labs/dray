@@ -3567,7 +3567,8 @@ function App() {
   // chord that closed it would have to pick somewhere to land, which is the
   // guess `goToSession` exists so nothing has to make.
   useHotkey("issues.open", () => setPage("issues"));
-  useHotkey("pulls.open", () => setPage("pulls"));
+  // ⌃P is previous-line in every Mac text field.
+  useHotkey("pulls.open", () => setPage("pulls"), { platformOnly: true });
   const fullscreen = useFullscreen();
   useGlass(fullscreen);
   // Only a windowed Mac has traffic lights over the strip to clear.
