@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -18,8 +19,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import com.yogesh.dray.model.SessionKey
 import com.yogesh.dray.net.PairLink
+import com.yogesh.dray.store.NewTask
 
 /** Where the app is: the list at the bottom of a stack, everything else pushed over it. */
 sealed interface Route {
@@ -47,8 +50,11 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
     }
     BackHandler(stack.size > 1) { pop() }
     val holder = rememberSaveableStateHolder()
+    val store = LocalStore.current
+    val context = LocalContext.current
+    val task = remember { NewTask(store, context.applicationContext) }
 
-    Box(Modifier.fillMaxSize()) {
+    CompositionLocalProvider(LocalNewTask provides task) { Box(Modifier.fillMaxSize()) {
         AnimatedContent(
             stack.last(),
             transitionSpec = {
@@ -72,5 +78,5 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
             } }
         }
         Box(Modifier.align(Alignment.TopCenter).statusBarsPadding()) { ErrorToast() }
-    }
+    } }
 }

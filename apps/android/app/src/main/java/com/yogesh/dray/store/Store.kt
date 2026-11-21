@@ -145,6 +145,8 @@ class Store(private val context: Context) {
     /** Calls whose last read failed: a cut row draws nothing of its own, so it says so instead. */
     var callErrors by mutableStateOf(mapOf<SessionKey, Set<String>>())
         private set
+    /** A clone's latest progress line per server and repo, while Attach project waits on it. */
+    val cloneProgress = mutableStateMapOf<String, Map<String, String>>()
 
     private val connections = mutableMapOf<String, Connection>()
     private val statuses = mutableMapOf<SessionKey, StatusEvent>()
@@ -412,6 +414,18 @@ class Store(private val context: Context) {
 
     private fun setItem(key: SessionKey, item: SessionItem?) {
         putItems(if (item == null) items - key else items + (key to item))
+    }
+
+    /** A session this phone started, put in the list before its `session_created` lands. */
+    fun created(server: String, item: SessionItem) {
+        setItem(SessionKey(server, item.sessionId), item)
+        scope.launch { loadMarks(server, force = false, only = setOf(item.projectPath)) }
+    }
+
+    /** The project list an attach or clone answered with. */
+    fun attached(server: String, list: List<Project>) {
+        projects = projects + (server to list)
+        keepList()
     }
 
     /** A fresh connection re-reads the index and the tail of every open transcript, so nothing missed while down is lost. */
@@ -821,6 +835,9 @@ class Store(private val context: Context) {
                 items[key]?.let { setItem(key, it.copy(title = t.title)) }
             }
             "bots_changed" -> scope.launch { loadBots(server) }
+            "clone_progress" -> decodeOrNull<com.yogesh.dray.model.CloneProgress>(payload)?.let { p ->
+                cloneProgress[server] = cloneProgress[server].orEmpty() + (p.slug to p.line)
+            }
             "machines_shared" -> decodeOrNull<Sharing>(payload)?.let { share(server, it.machines) }
             "session_created", "session_changed" -> decodeOrNull<SessionItem>(payload)?.let { item ->
                 setItem(SessionKey(server, item.sessionId), item)
