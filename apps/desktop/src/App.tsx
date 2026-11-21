@@ -120,7 +120,7 @@ import {
   type SplitGroup,
 } from "@/lib/groups";
 import ComposerToolbar from "@/components/composer/ComposerToolbar";
-import DictateControl from "@/components/composer/DictateControl";
+import DictateControl, { DictateOrb } from "@/components/composer/DictateControl";
 import { HAS_DICTATION, IS_MAC } from "@/lib/platform";
 import AppShell from "@/components/layout/AppShell";
 import WindowControls from "@/components/layout/WindowControls";
@@ -4585,12 +4585,18 @@ function App() {
             return true;
           }}
           dictating={recorder.state !== "idle"}
+          voice={
+            HAS_DICTATION && <DictateOrb
+              state={recorder.state}
+              level={recorder.level}
+              onStart={() => void recorder.start()}
+              onStop={() => void recorder.stop()}
+            />
+          }
           dictation={
             HAS_DICTATION && <DictateControl
               state={recorder.state}
-              level={recorder.level}
               savedAudio={recorder.savedAudio}
-              onStart={() => void recorder.start()}
               onStop={() => void recorder.stop()}
               onCancel={() => void recorder.cancel()}
               onRetry={() => void recorder.retry()}
