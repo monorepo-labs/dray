@@ -264,8 +264,7 @@ struct WorktreeBranchPicker: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        let (local, remote) = branches.worktreeOptions(query)
-        let fallback = branches.defaultBranch.flatMap { query.isEmpty || $0.lowercased().contains(query.lowercased()) ? $0 : nil }
+        let (fallback, local, remote) = branches.worktreeOptions(query)
         List {
             if let fallback {
                 Section { row(fallback, note: "latest") }

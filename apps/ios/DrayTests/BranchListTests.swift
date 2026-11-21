@@ -9,13 +9,16 @@ final class BranchListTests: XCTestCase {
     func testDefaultPulledOutAndPlacesKept() {
         XCTAssertEqual(list.defaultBranch, "main")
         let o = list.worktreeOptions("")
+        XCTAssertEqual(o.defaultBranch, "main")
         XCTAssertEqual(o.local, ["fix", "release/2", "prefix-match"])
         XCTAssertEqual(o.remote, ["feature/x", "main-old"])
     }
 
     func testQueryKeepsMatchesPrefixFirst() {
         let o = list.worktreeOptions(" FI ")
+        XCTAssertNil(o.defaultBranch)
         XCTAssertEqual(o.local, ["fix", "prefix-match"])
+        XCTAssertEqual(list.worktreeOptions(" Main ").defaultBranch, "main")
         XCTAssertEqual(o.remote, [])
     }
 

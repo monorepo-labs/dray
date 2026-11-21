@@ -148,8 +148,8 @@ final class NewTask {
         if let p = draft.permissionMode { stance = p }
         if let f = draft.fast { fast = f }
         if let w = draft.useWorktree { worktree = w }
-        // After the project, which is what the pick is held with.
-        worktreeBase = draft.base
+        // Held with the draft's own folder, not whatever `cwd` resolves to before the server's projects land.
+        basePick = draft.base.map { ("\(server.uuidString)|\(draft.projectPath ?? cwd ?? "")", $0) }
     }
 
     private var modelsKey: String { "\(server?.uuidString ?? "")|\(harness)" }
@@ -220,6 +220,7 @@ final class NewTask {
         let opened = draftId
         let id = UUID().uuidString.lowercased()
         let sent = text
+        let base = basePick
         do {
             let outcome: SendOutcome = try await store.call(server, "send_msg", [
                 "sessionId": .string(id),
@@ -240,7 +241,8 @@ final class NewTask {
             ])
             if let item = outcome.snapshot { store.created(server, item) }
             bot = nil
-            basePick = nil
+            // Only the pick this start used: another may have been made while it was out.
+            if basePick?.place == base?.place && basePick?.branch == base?.branch { basePick = nil }
             await dropDraft(opened)
             // Words added while the start was out were never sent, so they stay.
             if text == sent { text = "" }

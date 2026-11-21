@@ -43,15 +43,16 @@ struct BranchList: Decodable {
     /// A repo with no remote and one branch has nothing to pick a worktree's start from.
     var offersWorktreeBase: Bool { defaultBase != nil || branches.count + (remoteBranches?.count ?? 0) > 1 }
 
-    /// `worktreeBranchOptions`: local and remote-only branches, the default pulled
-    /// out to sit first. A query keeps the names holding it, those starting with it first.
-    func worktreeOptions(_ query: String) -> (local: [String], remote: [String]) {
+    /// `worktreeBranchOptions`: the default branch pulled out to sit first, then local and
+    /// remote-only branches. A query keeps the names holding it, those starting with it first.
+    func worktreeOptions(_ query: String) -> (defaultBranch: String?, local: [String], remote: [String]) {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        func keep(_ b: String) -> Bool { q.isEmpty || b.lowercased().contains(q) }
         func rank(_ names: [String]) -> [String] {
-            let kept = names.filter { $0 != defaultBranch && (q.isEmpty || $0.lowercased().contains(q)) }
+            let kept = names.filter { $0 != defaultBranch && keep($0) }
             return kept.filter { $0.lowercased().hasPrefix(q) } + kept.filter { !$0.lowercased().hasPrefix(q) }
         }
-        return (rank(branches), rank(remoteBranches ?? []))
+        return (defaultBranch.flatMap { keep($0) ? $0 : nil }, rank(branches), rank(remoteBranches ?? []))
     }
 }
 
