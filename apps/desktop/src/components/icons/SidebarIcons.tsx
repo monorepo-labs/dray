@@ -44,19 +44,24 @@ export function IssuesIcon({ className }: { className?: string }) {
   );
 }
 
-/// Pull requests: a branch reaching back into the line it came from.
+const line = (d: string) => (
+  <path d={d} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+);
+
+/// Pull requests: a branch reaching back into the line it came from. Lines are
+/// 1.5, the Issues pole's width, and the arrow stands clear of the left dot.
 export function PullsIcon({ className }: { className?: string }) {
   return (
     <Filled
       className={className}
       shape={
         <>
-          <circle cx="4.5" cy="3.5" r="2" />
-          <circle cx="4.5" cy="12.5" r="2" />
-          <circle cx="11.5" cy="12.5" r="2" />
-          <path d="M4.5 5.5v5" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M11.5 10.5V7a2.5 2.5 0 0 0-2.5-2.5H7.5" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M9 3 7.5 4.5 9 6" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
+          <circle cx="4" cy="3.5" r="1.75" />
+          <circle cx="4" cy="12.5" r="1.75" />
+          <circle cx="12" cy="12.5" r="1.75" />
+          {line("M4 5v6")}
+          {line("M12 11V6a2.5 2.5 0 0 0-2.5-2.5H8.25")}
+          {line("M9.75 2 8.25 3.5 9.75 5")}
         </>
       }
     />
