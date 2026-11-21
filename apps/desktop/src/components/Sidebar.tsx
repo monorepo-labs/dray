@@ -1,4 +1,4 @@
-import { Cog6ToothIcon, FolderIcon, SignalSlashIcon } from "@heroicons/react/16/solid";
+import { Cog6ToothIcon, FolderIcon, SignalSlashIcon, Square3Stack3DIcon } from "@heroicons/react/16/solid";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
@@ -13,7 +13,6 @@ import {
   Pin,
   Plus,
   Search,
-  Layers,
   Trash2,
   Undo2,
 } from "lucide-react";
@@ -1815,7 +1814,7 @@ export default function Sidebar({
                 }}
                 className="text-muted-foreground transition-colors hover:text-foreground"
               >
-                <Layers className="size-4" />
+                <Square3Stack3DIcon className="size-4" />
               </Button>
             </RailTip>
           )}
