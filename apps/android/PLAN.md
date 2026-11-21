@@ -61,14 +61,23 @@ background tasks running", Share in the image viewer.
 `app/google-services.json` the app builds, `FirebaseApp` never starts, and
 Settings → Notifications says push isn't set up. To light it up:
 
-1. A Firebase project with an Android app whose package is
-   `com.yogesh.dray.android`; its `google-services.json` goes at
-   `apps/android/app/google-services.json` (client config, safe to commit).
-2. That project's service account key (Project settings → Service accounts →
-   Generate new private key) as `FCM_SERVICE_ACCOUNT` on the site, the JSON
-   whole or base64 of it. FCM's HTTP v1 API, which a new project has on; the
+1. The Firebase project is `dray-hq`, its Android app `com.yogesh.dray.android`.
+   Its `google-services.json` goes at `apps/android/app/google-services.json`
+   and is **kept out of git** (gitignored). Download it from the Firebase
+   console (Project settings → Your apps). A release build gets it the same
+   way: by hand today, and from a CI secret written to that path before
+   `assembleRelease` once an Android release workflow exists.
+2. The project's service account key is `FCM_SERVICE_ACCOUNT` on the site
+   (Vercel production), base64 of the key file. FCM's HTTP v1 API; the
    legacy "server key" is retired and not used.
 3. `PUSH_HANDLE_SECRET` is the one iOS already uses.
+
+**FCM on a sandbox emulator**: Play services' FCM socket sits idle up to two
+minutes between heartbeats, and a boat sandbox's network drops it well before,
+so a message sent then is lost. Measured, a message sent onto a fresh
+connection lands in milliseconds; a test run there restarts Play services
+every few seconds (`am force-stop com.google.android.gms`) to keep it fresh.
+A phone on a real network needs none of this.
 
 **Testing without FCM**: a debug build takes `--es pushRelay <url>` (seal at a
 local relay) and `--es pushPayload '<data JSON>'` (an FCM message's `data`,

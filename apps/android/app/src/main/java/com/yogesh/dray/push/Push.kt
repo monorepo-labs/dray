@@ -84,6 +84,9 @@ object Push {
     /** drayhq.com, or a local relay a debug build was handed. */
     private val relay: String get() = prefs.getString("relay", null) ?: BuildConfig.PUSH_RELAY
 
+    /** The token sealed, or being sealed, this launch. */
+    private var sealing: String? = null
+
     private var handle: String?
         get() = prefs.getString("handle", null)
         set(v) = prefs.edit().putString("handle", v).apply()
@@ -168,7 +171,9 @@ object Push {
 
     /** FCM handed a token, at launch or on a new one: trade it for a handle and give it to every server up now. */
     suspend fun registered(token: String) {
-        if (!enabled) return
+        // A first launch hears the token twice, from `onNewToken` and from asking: one seal is enough.
+        if (!enabled || token == sealing) return
+        sealing = token
         val body = jsonOf("platform" to "android", "token" to token).toString()
             .toRequestBody("application/json".toMediaType())
         val sealed = withContext(Dispatchers.IO) {
@@ -178,7 +183,7 @@ object Push {
                     wireJson.parseToJsonElement(r.body?.string().orEmpty())["handle"].str
                 }
             }.onFailure { Log.e(TAG, "the relay at $relay sealed no handle: ${it.message}") }.getOrNull()
-        } ?: return
+        } ?: return run { sealing = null }
         Log.i(TAG, "sealed a handle; handing it to the servers up now")
         handle = sealed
         for (s in store.servers) if (store.serverState[s.id] == ConnState.Connected) give(sealed, s.id)
