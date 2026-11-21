@@ -5,8 +5,8 @@ import XCTest
 ///
 ///   TEST_RUNNER_DRAY_URL=ws://127.0.0.1:… TEST_RUNNER_DRAY_TOKEN=… xcodebuild test -only-testing:DrayUITests/PullsIssuesTests
 ///
-/// `testStartTask` starts a real task on the first PR of `TEST_RUNNER_DRAY_START_REPO`
-/// (a checkout under `/private/tmp`), told to answer and touch nothing.
+/// `testStartTask` starts two real tasks on the reader's PR titled `TEST_RUNNER_DRAY_PR_TITLE`,
+/// one plain and one in the bot `TEST_RUNNER_DRAY_BOT`, both told to read and change nothing.
 final class PullsIssuesTests: XCTestCase {
     private var env: [String: String] { ProcessInfo.processInfo.environment }
 
@@ -94,37 +94,52 @@ final class PullsIssuesTests: XCTestCase {
     }
 
     func testStartTask() throws {
-        guard let repo = env["DRAY_START_REPO"] else { throw XCTSkip("set TEST_RUNNER_DRAY_START_REPO") }
-        let app = try pair()
+        guard let title = env["DRAY_PR_TITLE"], let bot = env["DRAY_BOT"] else {
+            throw XCTSkip("set TEST_RUNNER_DRAY_PR_TITLE and TEST_RUNNER_DRAY_BOT")
+        }
+        // A new task's remembered picks, so the plain task starts on haiku at low effort.
+        let app = try pair(["-new.harness", "claude_code", "-new.models", "{claude_code = haiku;}",
+                            "-new.efforts", "{haiku = low;}", "-new.fast", "NO"])
         openPage(app, "Pull requests")
-        app.buttons["All"].firstMatch.tap()
-        app.buttons["Filters"].tap()
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Repository")).firstMatch.tap()
-        let pick = app.buttons[repo].firstMatch
-        XCTAssertTrue(pick.waitForExistence(timeout: 30), "no \(repo) in the repository menu")
+        app.buttons["Mine"].firstMatch.tap()
+        let pr = app.buttons.matching(identifier: "pull.row").matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
+        XCTAssertTrue(app.buttons["pull.row"].firstMatch.waitForExistence(timeout: 60))
+        // Rows are lazy: a draft at the foot exists only once scrolled to.
+        for _ in 0..<12 where !pr.isHittable { app.swipeUp(velocity: .slow) }
+        pr.tap()
+        sleep(10)
+        let words = "Summarise this pull request in three short lines. Read only: change nothing, write no files, commit and push nothing."
+        start(app, chip: "Task", button: "Start task", words: words, shot: "20-task-filled")
+        start(app, chip: bot, button: "Start in \(bot)", words: words, shot: "21-bot-filled")
+        for _ in 0..<8 { app.swipeDown(velocity: .fast) }
+        sleep(20)
+        screen("22-tasks-listed")
+        sleep(60)
+        screen("23-tasks-later")
+    }
+
+    private func start(_ app: XCUIApplication, chip: String, button: String, words: String, shot: String) {
+        // The bot's row in the task list behind the sheet carries its name too.
+        let pick = chip == "Task" ? app.buttons["Task"].firstMatch
+            : app.buttons.matching(NSPredicate(format: "identifier == 'bot.chip' AND label == %@", chip)).firstMatch
+        for _ in 0..<8 where !pick.isHittable { app.swipeUp(velocity: .slow) }
+        for _ in 0..<8 where !pick.isHittable { app.swipeDown(velocity: .slow) }
         pick.tap()
-        let row = app.buttons["pull.row"].firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 60))
-        row.tap()
-        XCTAssertTrue(labelled(app, "Checks").waitForExistence(timeout: 60))
-        let task = app.buttons["Task"].firstMatch
-        if task.exists { task.tap() }
-        let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
-        for _ in 0..<12 where !field.isHittable { app.swipeUp() }
-        field.tap()
-        field.typeText("Reply with the single word OK. Run no tools, edit nothing, commit and push nothing.")
-        app.swipeDown()
-        let start = app.buttons["Start task"]
-        for _ in 0..<6 where !start.isHittable { app.swipeUp() }
-        sleep(1)
-        snap(app, "20-start-filled")
-        start.tap()
-        let opened = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Pull request #")).firstMatch
-        for _ in 0..<12 where !labelled(app, "Task").exists { sleep(5) }
-        for _ in 0..<12 where !app.staticTexts["Task"].isHittable { app.swipeDown() }
         sleep(2)
-        snap(app, "21-started")
-        _ = opened
+        let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
+        for _ in 0..<6 where !field.isHittable { app.swipeUp(velocity: .slow) }
+        field.tap()
+        field.typeText(words)
+        let go = app.buttons[button]
+        for _ in 0..<6 where !go.isHittable { app.swipeUp(velocity: .slow) }
+        sleep(1)
+        screen(shot)
+        go.tap()
+        // Started once the box empties again.
+        for _ in 0..<90 where (field.value as? String ?? "").contains("Summarise") { sleep(2) }
+        sleep(2)
+        screen(shot.replacingOccurrences(of: "filled", with: "started"))
+        XCTAssertFalse((field.value as? String ?? "").contains("Summarise"), "\(button) started nothing")
     }
 
     // MARK: Helpers
@@ -139,12 +154,12 @@ final class PullsIssuesTests: XCTestCase {
         app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label)).firstMatch
     }
 
-    private func pair() throws -> XCUIApplication {
+    private func pair(_ arguments: [String] = []) throws -> XCUIApplication {
         guard let url = env["DRAY_URL"], let token = env["DRAY_TOKEN"] else {
             throw XCTSkip("set TEST_RUNNER_DRAY_URL and TEST_RUNNER_DRAY_TOKEN")
         }
         let app = XCUIApplication()
-        app.launchArguments = ["-servers", ""]
+        app.launchArguments = ["-servers", ""] + arguments
         app.launch()
         var link = URLComponents(string: "dray://connect")!
         link.queryItems = [.init(name: "url", value: url), .init(name: "token", value: token), .init(name: "name", value: "This Mac")]

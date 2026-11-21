@@ -422,6 +422,7 @@ private struct BotChip: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(bot.name)
+        .accessibilityIdentifier("bot.chip")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 }
