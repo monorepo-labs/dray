@@ -82,6 +82,8 @@ final class Store {
     var cloneProgress: [UUID: [String: String]] = [:]
     /// Moves when any client saves a draft (`drafts_changed`) or this one removes one: the list re-reads.
     var draftsRevision = 0
+    /// Bumped by `routines_changed`, which a bot's routines section re-reads on.
+    var routinesRevision = 0
     var lastError: String?
     /// False while the device has no network at all, which every server shares.
     private(set) var online = true
@@ -1156,6 +1158,8 @@ final class Store {
             Task { await loadBots(server) }
         case "drafts_changed":
             draftsRevision += 1
+        case "routines_changed":
+            routinesRevision += 1
         case "machines_shared":
             guard let sharing = try? decoder.decode(EventFrame<Sharing>.self, from: data).payload else { return }
             share(server, sharing.machines)
