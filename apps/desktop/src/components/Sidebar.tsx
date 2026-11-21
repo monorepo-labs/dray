@@ -2382,6 +2382,26 @@ function useHoverMenu() {
   };
 }
 
+/// Whether a filter's dots should be showing for a switch: true for a beat
+/// after `activeIndex` moves. The dots are the one thing on screen that says
+/// which entry of how many, which is exactly what a switch raises, and a chord
+/// or swipe moves the filter with the pointer nowhere near it. Skipped on
+/// mount, since arriving is not switching — and held as the index last flashed
+/// for rather than a "have we mounted" flag, or StrictMode replaying the mount
+/// effect over a ref that survives it reads the replay as a switch.
+function useFlash(activeIndex: number): boolean {
+  const [flashing, setFlashing] = useState(false);
+  const flashed = useRef(activeIndex);
+  useEffect(() => {
+    if (flashed.current === activeIndex) return;
+    flashed.current = activeIndex;
+    setFlashing(true);
+    const done = setTimeout(() => setFlashing(false), 1200);
+    return () => clearTimeout(done);
+  }, [activeIndex]);
+  return flashing;
+}
+
 /// The rail's space switcher: a click steps to the next space, as the
 /// titlebar's does, and resting on it opens the list, as the project filter's
 /// does. The space in force by its initial, the stack icon for All.
@@ -2396,24 +2416,41 @@ function RailSpaces({
 }) {
   const menu = useHoverMenu();
   const label = space ?? "All Spaces";
+  const entries = spaceEntries(spaces);
+  const activeIndex = Math.max(0, entries.indexOf(space));
+  const flashing = useFlash(activeIndex);
+  const cycle = () => {
+    menu.clicked();
+    onChange(entries[(activeIndex + 1) % entries.length]);
+  };
+  // The rail project filter's band: the glyph over its dot track.
   return (
     <DropdownMenu {...menu.root}>
       <RailTip on={!menu.root.open} label={label}>
         <DropdownMenuTrigger asChild {...menu.trigger}>
-          <Button
-            variant="ghost"
-            size="icon-sm"
+          <div
+            role="button"
+            tabIndex={0}
             aria-label={`Space: ${label}`}
-            onClick={() => {
-              menu.clicked();
-              const entries = spaceEntries(spaces);
-              const at = Math.max(0, entries.indexOf(space));
-              onChange(entries[(at + 1) % entries.length]);
+            onClick={cycle}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                cycle();
+              }
             }}
-            className="text-muted-foreground transition-colors hover:text-foreground"
+            className="group/spaces flex w-10 cursor-pointer flex-col items-center gap-1 rounded-md pt-2 pb-1 text-muted-foreground transition-colors select-none hover:bg-sidebar-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none"
           >
             {space === null ? <Square3Stack3DIcon className="size-4" /> : <Initial name={space} />}
-          </Button>
+            <DotTrack
+              count={entries.length}
+              activeIndex={activeIndex}
+              className={cn(
+                "transition-opacity duration-150 group-hover/spaces:opacity-100",
+                flashing ? "opacity-100" : "opacity-0",
+              )}
+            />
+          </div>
         </DropdownMenuTrigger>
       </RailTip>
       <DropdownMenuContent side="right" align="end" className="min-w-52" {...menu.content}>
@@ -2489,23 +2526,7 @@ function ProjectFilter({
     onChange(entries[next].path);
   };
 
-  // The dots are the one thing on screen that says which entry of how many,
-  // which is exactly what a switch raises — so a switch shows them for a beat
-  // whether or not the cursor is anywhere near. ⌘⌥←/→ moves this control with
-  // the pointer nowhere near it, and hover-only left that step invisible.
-  // Skipped on mount, since arriving is not switching — and held as the index
-  // last flashed for rather than as a "have we mounted" flag, or StrictMode
-  // replaying the mount effect over a ref that survives it reads the replay as
-  // a switch and flashes the dots on every open.
-  const [flashing, setFlashing] = useState(false);
-  const flashed = useRef(activeIndex);
-  useEffect(() => {
-    if (flashed.current === activeIndex) return;
-    flashed.current = activeIndex;
-    setFlashing(true);
-    const done = setTimeout(() => setFlashing(false), 1200);
-    return () => clearTimeout(done);
-  }, [activeIndex]);
+  const flashing = useFlash(activeIndex);
 
   // The band is the control, not the label: aiming at 20 characters of text
   // is what read as the tap working only sometimes. Nothing inside is a button
