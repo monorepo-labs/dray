@@ -168,7 +168,7 @@ private fun Field(label: String, value: String, prompt: String, type: KeyboardTy
 
 /** The camera, looking for a pairing QR. Answers the first one it reads; any other code is ignored. */
 @Composable
-private fun ScanScreen(onScan: (PairLink) -> Unit, cancel: () -> Unit) {
+fun ScanScreen(onScan: (PairLink) -> Unit, cancel: () -> Unit) {
     val context = LocalContext.current
     var allowed by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
@@ -176,6 +176,8 @@ private fun ScanScreen(onScan: (PairLink) -> Unit, cancel: () -> Unit) {
     var asked by remember { mutableStateOf(false) }
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed = it; asked = true }
     LaunchedEffect(Unit) { if (!allowed) ask.launch(Manifest.permission.CAMERA) }
+    // Back closes the scanner alone, not the screen it was opened over.
+    androidx.activity.compose.BackHandler(onBack = cancel)
     Box(Modifier.fillMaxSize().background(Dray.page)) {
         when {
             allowed -> {

@@ -116,18 +116,24 @@ private fun QuestionsCard(key: SessionKey, request: QuestionsRequest) {
     val typed = remember { mutableStateMapOf<Int, String>() }
     var busy by remember { mutableStateOf(false) }
 
+    val haptics = LocalHapticFeedback.current
+
     fun send() {
+        if (busy) return
         val answers = mutableMapOf<String, String>()
         request.questions.forEachIndexed { i, q ->
             val text = typed[i]?.trim().orEmpty()
-            val picked = picks[i].orEmpty()
-            val answer = if (q.multiSelect) {
-                (q.options.map { it.label }.filter { it in picked } + listOfNotNull(text.ifEmpty { null })).joinToString(", ")
-            } else text.ifEmpty { picked.firstOrNull() ?: "" }
-            if (answer.isNotEmpty()) answers[q.question] = answer
+            val typedAnswer = if (text.isNotEmpty() && q.freeText != false) listOf(text) else emptyList()
+            // In option order, so the answer reads the way the menu did; typed text last.
+            val picked = q.options.map { it.label }.filter { it in picks[i].orEmpty() }
+            val parts = if (q.multiSelect) picked + typedAnswer else typedAnswer.ifEmpty { picked }
+            if (parts.isNotEmpty()) answers[q.question] = parts.joinToString(", ")
         }
         busy = true
-        scope.launch { store.answer(key, request.requestId, answers); busy = false }
+        scope.launch {
+            if (store.answer(key, request.requestId, answers)) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            busy = false
+        }
     }
 
     if (request.questions.isEmpty()) {
@@ -151,13 +157,13 @@ private fun QuestionsCard(key: SessionKey, request: QuestionsRequest) {
                     .fillMaxWidth()
                     .clip(itemShape)
                     .background(itemFill(picked))
-                    .clickable {
+                    .clickable(enabled = !busy) {
                         val now = picks[index].orEmpty()
                         if (q.multiSelect) {
                             picks[index] = if (picked) now - option.label else now + option.label
                         } else {
-                            // A pick replaces the last one and clears what was typed.
-                            picks[index] = setOf(option.label)
+                            // A pick is the answer, which typed text would otherwise outrank unseen; a second tap lets it go.
+                            picks[index] = if (picked) emptySet() else setOf(option.label)
                             typed[index] = ""
                         }
                     }
@@ -185,9 +191,9 @@ private fun QuestionsCard(key: SessionKey, request: QuestionsRequest) {
             }
         }
         Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-            if (index > 0) Text("Back", Modifier.clickable { index-- }, style = Dray.Font.subhead.copy(color = Color.White.copy(alpha = 0.5f)))
+            if (index > 0) Text("Back", Modifier.clickable(enabled = !busy) { index-- }, style = Dray.Font.subhead.copy(color = Color.White.copy(alpha = 0.5f)))
             Spacer(Modifier.weight(1f))
-            Text("Skip", Modifier.clickable {
+            Text("Skip", Modifier.clickable(enabled = !busy) {
                 picks.remove(index); typed.remove(index)
                 if (last) send() else index++
             }, style = Dray.Font.subhead.copy(color = Color.White.copy(alpha = 0.5f)))

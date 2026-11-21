@@ -33,6 +33,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -68,6 +71,9 @@ fun ImageViewer(shots: List<Shot>, start: Int, close: () -> Unit) {
     val scope = rememberCoroutineScope()
     var zoomed by remember { mutableStateOf(false) }
     var pull by remember { mutableFloatStateOf(0f) }
+    val server = LocalImageServer.current
+    val context = LocalContext.current
+    val loaded = remember { mutableStateListOf<Int>().apply { addAll(shots.indices.filter { ImageLoader.cached(server, shots[it].ref) != null }) } }
     val settle by animateFloatAsState(pull, label = "pull")
     BackHandler(onBack = close)
     run {
@@ -84,7 +90,7 @@ fun ImageViewer(shots: List<Shot>, start: Int, close: () -> Unit) {
                 userScrollEnabled = !zoomed,
                 beyondViewportPageCount = 1,
             ) { page ->
-                ZoomableImage(shots[page], Modifier.graphicsLayer { translationY = settle }) { zoomed = it }
+                ZoomableImage(shots[page], Modifier.graphicsLayer { translationY = settle }, { if (page !in loaded) loaded += page }) { zoomed = it }
             }
             val chrome by animateFloatAsState(if (zoomed || pull != 0f) 0f else 1f, label = "chrome")
             Column(Modifier.fillMaxSize().alpha(chrome)) {
@@ -93,9 +99,16 @@ fun ImageViewer(shots: List<Shot>, start: Int, close: () -> Unit) {
                         Icon(Icons.Filled.Close, "Close", tint = Dray.text)
                     }
                     Spacer(Modifier.weight(1f))
-                    Text("${pager.currentPage + 1} of ${shots.size}", style = Dray.Font.subhead)
+                    if (shots.size > 1) Text("${pager.currentPage + 1} of ${shots.size}", style = Dray.Font.subhead)
                     Spacer(Modifier.weight(1f))
-                    Spacer(Modifier.size(44.dp))
+                    // Live off the loaded set: the cache itself is not observable, and a page loads after the bar draws.
+                    val shot = shots[pager.currentPage]
+                    val image = if (pager.currentPage in loaded) ImageLoader.cached(server, shot.ref) else null
+                    Box(
+                        Modifier.size(44.dp).alpha(if (image != null) 1f else 0.4f).clip(CircleShape).background(Dray.raised.copy(alpha = 0.8f))
+                            .clickable(enabled = image != null) { image?.let { scope.launch { shareImage(context, it, shot.target ?: shot.ref.path) } } },
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Icons.Outlined.Share, "Share", Modifier.size(20.dp), tint = Dray.text) }
                 }
                 Spacer(Modifier.weight(1f))
                 Column(Modifier.navigationBarsPadding().padding(bottom = 10.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -129,7 +142,7 @@ fun ImageViewer(shots: List<Shot>, start: Int, close: () -> Unit) {
 
 /** One page: pinch up to 4×, double-tap to 2.5× where tapped and back; panning only while zoomed. */
 @Composable
-private fun ZoomableImage(shot: Shot, modifier: Modifier, onZoom: (Boolean) -> Unit) {
+private fun ZoomableImage(shot: Shot, modifier: Modifier, onLoaded: () -> Unit, onZoom: (Boolean) -> Unit) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     Box(
@@ -163,6 +176,7 @@ private fun ZoomableImage(shot: Shot, modifier: Modifier, onZoom: (Boolean) -> U
         RemoteImage(
             shot.ref,
             Modifier.fillMaxSize().graphicsLayer { scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y },
+            onLoaded = { onLoaded() },
         )
     }
 }

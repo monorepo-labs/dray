@@ -27,6 +27,8 @@ sealed interface Route {
     data class Session(val key: SessionKey) : Route
     data class Add(val link: PairLink? = null, val scan: Boolean = false, val nonce: Long = System.nanoTime()) : Route
     data object Settings : Route
+    /** Settings opened on one server's page, as a banner's Fix does. */
+    data class ServerSettings(val id: String) : Route
 }
 
 /** The app's one navigation stack. A pairing link from outside pushes Add server, filled in. */
@@ -61,14 +63,13 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
             holder.SaveableStateProvider(route.toString()) { when (route) {
                 Route.List -> ListScreen(
                     openSession = { push(Route.Session(it)) },
-                    openSettings = { push(Route.Settings) },
+                    openSettings = { push(it?.let(Route::ServerSettings) ?: Route.Settings) },
                     addServer = { push(Route.Add(scan = it)) },
                 )
-                is Route.Session -> TranscriptScreen(route.key, ::pop) { push(Route.Settings) }
+                is Route.Session -> TranscriptScreen(route.key, ::pop) { push(Route.ServerSettings(it)) }
                 is Route.Add -> AddServerScreen(route.link, route.scan, ::pop)
-                Route.Settings -> ServersScreen(::pop, add = { push(Route.Add()) }) { s ->
-                    push(Route.Add(PairLink(s.url, "", s.name)))
-                }
+                Route.Settings -> SettingsScreen(null, ::pop) { push(Route.Add()) }
+                is Route.ServerSettings -> SettingsScreen(route.id, ::pop) { push(Route.Add()) }
             } }
         }
         Box(Modifier.align(Alignment.TopCenter).statusBarsPadding()) { ErrorToast() }

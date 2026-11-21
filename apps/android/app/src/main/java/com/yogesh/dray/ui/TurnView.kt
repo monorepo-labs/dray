@@ -116,7 +116,7 @@ private fun LiveWork(items: List<Item>, open: Boolean, toggle: () -> Unit) {
 }
 
 @Composable
-private fun ItemRow(item: Item) {
+fun ItemRow(item: Item) {
     when (item) {
         is Item.Text -> MarkdownText(item.text)
         is Item.Tool -> ToolRow(item.call)
@@ -201,9 +201,15 @@ fun ToolRow(call: ToolCall, showLabel: Boolean = true) {
     if (call.cut && session != null && call.callId != null && (open || call.toolType == "file_edit")) {
         LaunchedEffect(call.id, open) { store.completeCall(session, call.callId) }
     }
+    val openRun = LocalOpenRun.current
+    val spawn = call.toolType == "subagent_spawn" && call.callId != null && openRun != null
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
-            Modifier.fillMaxWidth().clickable(remember { MutableInteractionSource() }, null, enabled = expandable) { open = !open },
+            Modifier.fillMaxWidth().clickable(remember { MutableInteractionSource() }, null, enabled = expandable || spawn) {
+                // A subagent's row opens what it is doing, as the desktop's opens its panel.
+                if (spawn && openRun?.invoke(call.callId!!) == true) return@clickable
+                if (expandable) open = !open
+            },
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
