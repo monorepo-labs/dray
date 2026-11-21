@@ -475,6 +475,9 @@ class Store(private val context: Context) {
         }
     }
 
+    /** One repo's marks read again now, after an action moved its PR. */
+    suspend fun refreshMarks(server: String, path: String) = loadMarks(server, force = true, only = setOf(path))
+
     /** Re-reads every repo holding an open PR — the only mark that moves on its own. Every 30s while on screen. */
     suspend fun pollMarks() {
         for (s in servers.filter { serverState[it.id] == ConnState.Connected }) {

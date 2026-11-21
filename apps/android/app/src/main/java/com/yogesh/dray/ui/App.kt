@@ -25,6 +25,7 @@ import com.yogesh.dray.net.PairLink
 sealed interface Route {
     data object List : Route
     data class Session(val key: SessionKey) : Route
+    data class Changes(val key: SessionKey) : Route
     data class Add(val link: PairLink? = null, val scan: Boolean = false, val nonce: Long = System.nanoTime()) : Route
     data object Settings : Route
 }
@@ -64,7 +65,8 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
                     openSettings = { push(Route.Settings) },
                     addServer = { push(Route.Add(scan = it)) },
                 )
-                is Route.Session -> TranscriptScreen(route.key, ::pop) { push(Route.Settings) }
+                is Route.Session -> TranscriptScreen(route.key, ::pop, openChanges = { push(Route.Changes(route.key)) }) { push(Route.Settings) }
+                is Route.Changes -> ChangesScreen(route.key, ::pop)
                 is Route.Add -> AddServerScreen(route.link, route.scan, ::pop)
                 Route.Settings -> ServersScreen(::pop, add = { push(Route.Add()) }) { s ->
                     push(Route.Add(PairLink(s.url, "", s.name)))
