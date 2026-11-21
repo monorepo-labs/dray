@@ -1,0 +1,290 @@
+package com.yogesh.dray.ui
+
+import android.app.Activity
+import android.content.Intent
+import android.speech.RecognizerIntent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.unit.dp
+import com.yogesh.dray.model.Model
+import com.yogesh.dray.model.Picks
+import com.yogesh.dray.model.SessionKey
+import com.yogesh.dray.net.ConnState
+import kotlinx.coroutines.launch
+
+/** What the reader moved for the next reply; null keeps the session's own. */
+private data class ReplyPicks(val model: String? = null, val effort: String? = null, val stance: String? = null, val fast: Boolean? = null)
+
+/**
+ * The reply dock at a session's foot: a message field that sends, and under it the session's
+ * picks for the next reply, and Stop while a turn runs. The iOS dock is voice-first; here the
+ * field leads, as Android chat does, with the system's dictation one tap away.
+ */
+@Composable
+fun ReplyDock(key: SessionKey) {
+    val store = LocalStore.current
+    val item = store.items[key] ?: return
+    val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
+    val context = LocalContext.current
+    var picks by remember(key) { mutableStateOf(ReplyPicks()) }
+    var sending by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf<String?>(null) }
+    var sheet by remember { mutableStateOf(false) }
+    var models by remember { mutableStateOf(emptyList<Model>()) }
+    val connected = store.serverState[key.server] == ConnState.Connected
+    val away = key.server in store.lost
+    val draft = store.drafts[key].orEmpty()
+
+    LaunchedEffect(key.server, item.harness, connected) {
+        if (connected) models = store.models(key.server, item.harness)
+    }
+
+    val modelId = picks.model ?: item.model
+    val model = models.firstOrNull { it.id == modelId }
+    val effort = picks.effort ?: item.effort
+    val dictate = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        if (r.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
+        val words = r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() ?: return@rememberLauncherForActivityResult
+        store.drafts[key] = listOf(store.drafts[key].orEmpty().trim(), words).filter { it.isNotEmpty() }.joinToString(" ")
+    }
+    val canDictate = remember {
+        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).resolveActivity(context.packageManager) != null
+    }
+
+    fun send() {
+        val text = draft.trim()
+        if (text.isEmpty() || sending || !connected) return
+        sending = true
+        failed = null
+        scope.launch {
+            // Effort goes only where the reader moved it, coerced to a rung the model has.
+            val moved = picks.model != null || picks.effort != null
+            val level = if (moved) model?.let { Picks.usableEffort(it, effort) } ?: effort else null
+            val ok = store.send(key, text, picks.model, level, picks.stance, picks.fast, effortMoved = moved)
+            sending = false
+            if (ok) {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                // Words typed while the send was out stay.
+                if (store.drafts[key] == draft) store.drafts.remove(key)
+                picks = ReplyPicks()
+            } else {
+                failed = store.lastError ?: "The server didn't answer."
+                store.lastError = null
+            }
+        }
+    }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Dray.page)
+            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp)
+            .alpha(if (away) 0.4f else 1f),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        failed?.let {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Couldn't send. ${sentence(it)}", Modifier.weight(1f), style = Dray.Font.footnote.copy(color = Dray.destructive))
+                Text("Retry", Modifier.clickable { send() }, style = Dray.Font.footnoteStrong)
+            }
+        }
+        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .heightIn(min = 44.dp)
+                    .clip(RoundedCornerShape(Dray.Radius.xl))
+                    .background(Dray.card)
+                    .border(1.dp, Dray.hairline, RoundedCornerShape(Dray.Radius.xl))
+                    .padding(horizontal = 16.dp, vertical = 11.dp),
+            ) {
+                if (draft.isEmpty()) Text("Message", style = Dray.Font.body.copy(color = Dray.tertiary))
+                BasicTextField(
+                    draft,
+                    { if (it.isEmpty()) store.drafts.remove(key) else store.drafts[key] = it },
+                    Modifier.fillMaxWidth().heightIn(max = 160.dp),
+                    textStyle = Dray.Font.body,
+                    cursorBrush = SolidColor(Dray.text),
+                )
+            }
+            val ready = draft.isNotBlank() && !sending && connected
+            if (draft.isBlank() && canDictate) {
+                RoundButton(Dray.raised, "Dictate", onClick = {
+                    dictate.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                        .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM))
+                }) { Icon(Icons.Outlined.Mic, null, tint = Dray.text) }
+            } else {
+                RoundButton(if (ready) Dray.primary else Dray.raised, "Send", enabled = ready, onClick = ::send) {
+                    if (sending) CircularProgressIndicator(Modifier.size(18.dp), color = Dray.onPrimary, strokeWidth = 2.dp)
+                    else Icon(Icons.Filled.ArrowUpward, null, tint = if (ready) Dray.onPrimary else Dray.tertiary)
+                }
+            }
+        }
+        Row(Modifier.height(28.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(Modifier.clickable { sheet = true }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                AgentMark(item.harness, 13.dp)
+                Text(model?.label ?: modelId.ifEmpty { Picks.agentLabels[item.harness] ?: item.harness }, style = Dray.Font.footnoteStrong)
+                effort?.let { Text(Picks.effortLabels[it] ?: it, style = Dray.Font.footnote.copy(color = Dray.tertiary)) }
+            }
+            Text("···", Modifier.clickable { sheet = true }, style = Dray.Font.footnoteStrong.copy(color = Dray.secondary))
+            Spacer(Modifier.weight(1f))
+            if (item.busy) {
+                Box(
+                    Modifier.size(28.dp).clip(CircleShape).background(Dray.raised).clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        store.interrupt(key)
+                    },
+                    contentAlignment = Alignment.Center,
+                ) { Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(Dray.text)) }
+            }
+        }
+    }
+
+    if (sheet) ThisTaskSheet(item.harness, item.busy, models, modelId, effort, picks.stance ?: item.permissionMode,
+        picks.fast ?: item.fast ?: false, onModel = { picks = picks.copy(model = it, effort = null) },
+        onEffort = { picks = picks.copy(effort = it) }, onStance = { picks = picks.copy(stance = it) },
+        onFast = { picks = picks.copy(fast = it) }) { sheet = false }
+}
+
+@Composable
+private fun RoundButton(fill: androidx.compose.ui.graphics.Color, label: String, enabled: Boolean = true, onClick: () -> Unit, content: @Composable () -> Unit) {
+    Box(
+        Modifier.size(44.dp).clip(CircleShape).background(fill).clickable(enabled = enabled, onClickLabel = label, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { content() }
+}
+
+/**
+ * This task: the session's model, effort, fast mode and stance for the next reply, each locked
+ * mid-turn where the harness can't carry it onto a queued prompt. Nothing reaches the session
+ * until a reply goes out, since `send_msg` is what carries it.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ThisTaskSheet(
+    harness: String, busy: Boolean, models: List<Model>, model: String, effort: String?, stance: String, fast: Boolean,
+    onModel: (String) -> Unit, onEffort: (String) -> Unit, onStance: (String) -> Unit, onFast: (Boolean) -> Unit, dismiss: () -> Unit,
+) {
+    val picked = models.firstOrNull { it.id == model }
+    ModalBottomSheet(dismiss, containerColor = Dray.card) {
+        Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            Text("This task", style = Dray.Font.title)
+            val locked = { c: String -> Picks.lockedMidTurn(harness, c, busy) }
+            Section("Model", locked("model")) {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val shown = models.filter { it.secondary != true || it.id == model }
+                    for (m in shown) Chip(m.label, m.id == model) { onModel(m.id) }
+                    if (shown.isEmpty()) Chip(model.ifEmpty { "Default" }, true) {}
+                }
+            }
+            picked?.takeIf { it.efforts.isNotEmpty() }?.let { m ->
+                Section("Effort", locked("effort")) {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val current = Picks.usableEffort(m, effort)
+                        for (e in m.efforts) Chip(Picks.effortLabels[e] ?: e, e == current) { onEffort(e) }
+                    }
+                }
+            }
+            if (Picks.offersFast(harness, picked)) {
+                Row(Modifier.fillMaxWidth().alpha(if (locked("fast")) 0.35f else 1f), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Fast mode", Modifier.weight(1f), style = Dray.Font.body)
+                    Switch(fast, onFast, enabled = !locked("fast"), colors = SwitchDefaults.colors(
+                        checkedTrackColor = Dray.primary, checkedThumbColor = Dray.onPrimary, uncheckedTrackColor = Dray.off,
+                        uncheckedThumbColor = Dray.secondary, uncheckedBorderColor = Dray.off))
+                }
+            }
+            if (Picks.offersStances(harness)) {
+                Section("Permissions", locked("stance")) {
+                    Column(Modifier.clip(RoundedCornerShape(Dray.Radius.lg)).background(Dray.raised)) {
+                        for ((mode, label) in Picks.stances.filter { Picks.honours(harness, it.first) }) {
+                            Row(Modifier.fillMaxWidth().clickable { onStance(mode) }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(label, Modifier.weight(1f), style = Dray.Font.body)
+                                if (mode == Picks.stanceFor(harness, stance)) Icon(Icons.Filled.Check, null, Modifier.size(18.dp), tint = Dray.text)
+                            }
+                        }
+                    }
+                }
+            }
+            val lockedNames = listOf("model" to "Model", "effort" to "Effort", "fast" to "Fast mode", "stance" to "Permissions").filter { locked(it.first) }
+            if (busy && lockedNames.isNotEmpty()) {
+                Text(
+                    if (lockedNames.size == 4) "These can change once this turn ends."
+                    else "${lockedNames.joinToString(" and ") { it.second }} can change once this turn ends. The rest go with your next message.",
+                    style = Dray.Font.footnote.copy(color = Dray.tertiary),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun Section(title: String, locked: Boolean, content: @Composable () -> Unit) {
+    Column(Modifier.alpha(if (locked) 0.35f else 1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title, style = Dray.Font.footnote.copy(color = Dray.tertiary))
+        // Locked swallows every touch before the chips see it.
+        Box(if (!locked) Modifier else Modifier.pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
+            }
+        }) { content() }
+    }
+}
+
+@Composable
+private fun Chip(label: String, picked: Boolean, onClick: () -> Unit) {
+    Text(
+        label,
+        Modifier.clip(CircleShape).background(if (picked) Dray.primary else Dray.tile).clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        style = Dray.Font.pill.copy(color = if (picked) Dray.onPrimary else Dray.text),
+    )
+}
