@@ -113,6 +113,7 @@ fun ListScreen(
             }
         }
 
+        Box(Modifier.weight(1f)) {
         PullToRefreshBox(
             isRefreshing = refreshing,
             onRefresh = {
@@ -123,7 +124,7 @@ fun ListScreen(
                     refreshing = false
                 }
             },
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.fillMaxSize(),
         ) {
             val rows = runs.flatMap { it.rows }
             val empty = !settled && runs.isEmpty() && store.bots.values.all { it.isEmpty() }
@@ -173,6 +174,8 @@ fun ListScreen(
                 if (shown < rows.size) item("more") { LaunchedEffect(Unit) { shown += PAGE }; Spacer(Modifier.height(1.dp)) }
             }
             if (empty) EmptyList(filter, addServer, openSettings)
+        }
+        if (!settled) NewTaskDock(openSession, Modifier.align(Alignment.BottomCenter))
         }
     }
 }
@@ -290,8 +293,8 @@ private fun EmptyList(filter: String?, addServer: (Boolean) -> Unit, openSetting
             val today = store.items.values.count { it.archived == true && it.hidden != true && isToday(parseDate(it.modified)) }
             when {
                 today > 0 -> EmptyScreen(EmptyArtKind.Tasks, "All clear", "$today settled today.")
-                filter != null -> EmptyScreen(EmptyArtKind.Project, "Nothing in $filter", "Start one from Dray on your computer.")
-                else -> EmptyScreen(EmptyArtKind.Tasks, "No tasks yet", "Start one from Dray on your computer.")
+                filter != null -> EmptyScreen(EmptyArtKind.Project, "Nothing in $filter", "Write one below to start it.")
+                else -> EmptyScreen(EmptyArtKind.Tasks, "No tasks yet", "Write one below to start it.")
             }
         }
     }

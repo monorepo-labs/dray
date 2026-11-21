@@ -13,6 +13,18 @@ data class Model(
     val secondary: Boolean? = null,
 )
 
+@Serializable
+data class AgentAvailability(val harness: String, val available: Boolean = false, val label: String = harness, val reason: String = "")
+
+@Serializable
+data class BranchList(val current: String? = null, val branches: List<String> = emptyList(), val defaultBase: String? = null, val dirty: Int = 0)
+
+@Serializable
+data class GithubRepo(val slug: String, val description: String? = null, val path: String? = null)
+
+@Serializable
+data class CloneProgress(val slug: String, val line: String = "")
+
 /**
  * The desktop composer's rules, restated since neither side can call the other: `permission.ts`,
  * `fastMode.ts`, `model.ts` and `liveControls.ts`, as the iOS app's `Picks` restates them too.
@@ -61,6 +73,14 @@ object Picks {
     fun offersFast(harness: String, model: Model?): Boolean {
         if (harness !in setOf("claude_code", "codex", "fx", "grok")) return false
         return model?.supportsFast ?: (harness == "fx")
+    }
+
+    /** `usableModel`: a pick this list cannot run falls to the harness's default, never to the head of the list. */
+    fun usableModel(models: List<Model>, picked: String, harness: String): String {
+        if (models.isEmpty() || models.any { it.id == picked }) return picked
+        val fallback = defaultModel[harness].orEmpty()
+        if (fallback.isEmpty()) return ""
+        return if (models.any { it.id == fallback }) fallback else models[0].id
     }
 
     /** `usableEffort`: the pick, else the model's default, else the app's, else the top rung. */
