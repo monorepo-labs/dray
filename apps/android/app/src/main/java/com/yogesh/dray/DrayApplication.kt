@@ -4,7 +4,9 @@ import android.app.Application
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.yogesh.dray.push.Push
 import com.yogesh.dray.store.Store
+import com.yogesh.dray.voice.Dictations
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -16,6 +18,8 @@ class DrayApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         store = Store(this)
+        Push.start(this, store)
+        Dictations.start(this)
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             private var poll: Job? = null
 

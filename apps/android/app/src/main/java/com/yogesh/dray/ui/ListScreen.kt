@@ -173,6 +173,7 @@ fun ListScreen(
                 if (shown < rows.size) item("more") { LaunchedEffect(Unit) { shown += PAGE }; Spacer(Modifier.height(1.dp)) }
             }
             if (empty) EmptyList(filter, addServer, openSettings)
+            if (!settled) NewTaskDock(openSession, Modifier.align(Alignment.BottomCenter))
         }
     }
 }

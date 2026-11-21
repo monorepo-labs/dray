@@ -5,6 +5,10 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+// Push lights up once the Firebase project's `google-services.json` sits beside this file.
+// Without it the app still builds, and Settings → Notifications says push isn't set up.
+if (file("google-services.json").exists()) apply(plugin = "com.google.gms.google-services")
+
 android {
     namespace = "com.yogesh.dray"
     compileSdk = 35
@@ -15,6 +19,8 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+        // The push relay. A debug build can be pointed at a local one with the `pushRelay` intent extra.
+        buildConfigField("String", "PUSH_RELAY", "\"https://drayhq.com\"")
     }
 
     buildTypes {
@@ -57,6 +63,8 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.4.1")
     implementation("androidx.camera:camera-view:1.4.1")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-messaging")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")

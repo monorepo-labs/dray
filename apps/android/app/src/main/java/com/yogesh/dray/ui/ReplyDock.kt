@@ -1,10 +1,5 @@
 package com.yogesh.dray.ui
 
-import android.app.Activity
-import android.content.Intent
-import android.speech.RecognizerIntent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -37,6 +33,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,6 +55,11 @@ import com.yogesh.dray.model.Model
 import com.yogesh.dray.model.Picks
 import com.yogesh.dray.model.SessionKey
 import com.yogesh.dray.net.ConnState
+import com.yogesh.dray.voice.Dictation
+import com.yogesh.dray.voice.Dictations
+import com.yogesh.dray.voice.dictationEngine
+import com.yogesh.dray.voice.typesOnly
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** What the reader moved for the next reply; null keeps the session's own. */
@@ -66,7 +68,7 @@ private data class ReplyPicks(val model: String? = null, val effort: String? = n
 /**
  * The reply dock at a session's foot: a message field that sends, and under it the session's
  * picks for the next reply, and Stop while a turn runs. The iOS dock is voice-first; here the
- * field leads, as Android chat does, with the system's dictation one tap away.
+ * field leads, as Android chat does, with Dray's own dictation (`Dictations`) one tap away.
  */
 @Composable
 fun ReplyDock(key: SessionKey) {
@@ -74,7 +76,6 @@ fun ReplyDock(key: SessionKey) {
     val item = store.items[key] ?: return
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
-    val context = LocalContext.current
     var picks by remember(key) { mutableStateOf(ReplyPicks()) }
     var sending by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf<String?>(null) }
@@ -91,18 +92,34 @@ fun ReplyDock(key: SessionKey) {
     val modelId = picks.model ?: item.model
     val model = models.firstOrNull { it.id == modelId }
     val effort = picks.effort ?: item.effort
-    val dictate = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
-        if (r.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
-        val words = r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() ?: return@rememberLauncherForActivityResult
-        store.drafts[key] = listOf(store.drafts[key].orEmpty().trim(), words).filter { it.isNotEmpty() }.joinToString(" ")
-    }
-    val canDictate = remember {
-        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).resolveActivity(context.packageManager) != null
+    val dictation = Dictations.state(key)
+    val listening = dictation != Dictation.Idle
+    // Nothing on the phone or any server can transcribe: the mic goes, and the field is the dock.
+    val canDictate = !store.typesOnly
+    val withMic = rememberWithMic(key)
+    var hint by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(hint) { if (hint != null) { delay(2000); hint = null } }
+    // Leaving mid-recording sends what was said into this session's draft, the desktop's rule.
+    DisposableEffect(key) { onDispose { if (Dictations.state(key) == Dictation.Recording) Dictations.stop(store, key) } }
+
+    fun dictate() {
+        if (dictation == Dictation.Recording) return Dictations.stop(store, key)
+        if (listening) return
+        val engine = store.dictationEngine() ?: run { hint = "Nothing can transcribe right now. Type instead."; return }
+        // A kept recording is the only copy of what was said; it goes by Retry or Discard, never by a new tap.
+        if (Dictations.kept[key] != null) return
+        Dictations.dismiss(key)
+        failed = null
+        withMic {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            Dictations.start(store, engine, key)
+        }
     }
 
     fun send() {
         val text = draft.trim()
-        if (text.isEmpty() || sending || !connected) return
+        // Spoken words still on their way would land after this send, as a reply of their own.
+        if (text.isEmpty() || sending || !connected || listening) return
         sending = true
         failed = null
         scope.launch {
@@ -137,7 +154,8 @@ fun ReplyDock(key: SessionKey) {
                 Text("Retry", Modifier.clickable { send() }, style = Dray.Font.footnoteStrong)
             }
         }
-        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        (hint ?: Dictations.notes[key])?.let { KeptNote(it, key, Modifier.padding(horizontal = 4.dp)) }
+        if (listening) ListeningRow(key) else Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(
                 Modifier
                     .weight(1f)
@@ -151,17 +169,18 @@ fun ReplyDock(key: SessionKey) {
                 BasicTextField(
                     draft,
                     { if (it.isEmpty()) store.drafts.remove(key) else store.drafts[key] = it },
-                    Modifier.fillMaxWidth().heightIn(max = 160.dp),
+                    // Room on the right for the mic that adds to words already there.
+                    Modifier.fillMaxWidth().heightIn(max = 160.dp).padding(end = if (draft.isNotBlank() && canDictate) 28.dp else 0.dp),
                     textStyle = Dray.Font.body,
                     cursorBrush = SolidColor(Dray.text),
                 )
+                if (draft.isNotBlank() && canDictate) {
+                    Icon(Icons.Outlined.Mic, "Dictate", Modifier.align(Alignment.BottomEnd).size(22.dp).clickable(onClick = ::dictate), tint = Dray.secondary)
+                }
             }
             val ready = draft.isNotBlank() && !sending && connected
             if (draft.isBlank() && canDictate) {
-                RoundButton(Dray.raised, "Dictate", onClick = {
-                    dictate.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                        .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM))
-                }) { Icon(Icons.Outlined.Mic, null, tint = Dray.text) }
+                RoundButton(Dray.raised, "Dictate", onClick = ::dictate) { Icon(Icons.Outlined.Mic, null, tint = Dray.text) }
             } else {
                 RoundButton(if (ready) Dray.primary else Dray.raised, "Send", enabled = ready, onClick = ::send) {
                     if (sending) CircularProgressIndicator(Modifier.size(18.dp), color = Dray.onPrimary, strokeWidth = 2.dp)
@@ -193,6 +212,30 @@ fun ReplyDock(key: SessionKey) {
         picks.fast ?: item.fast ?: false, onModel = { picks = picks.copy(model = it, effort = null) },
         onEffort = { picks = picks.copy(effort = it) }, onStance = { picks = picks.copy(stance = it) },
         onFast = { picks = picks.copy(fast = it) }) { sheet = false }
+}
+
+/**
+ * The field's place while the microphone is open: Cancel, the orb with how long it has listened,
+ * and Done; then the orb curling while the words are read.
+ */
+@Composable
+private fun ListeningRow(key: SessionKey) {
+    val store = LocalStore.current
+    val dictation = Dictations.state(key)
+    Row(Modifier.fillMaxWidth().heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        RoundButton(Dray.raised, "Cancel", onClick = { Dictations.cancel(key) }) { Icon(Icons.Filled.Close, null, tint = Dray.text) }
+        DockOrb(key, 44.dp, tap = { if (dictation == Dictation.Recording) Dictations.stop(store, key) })
+        Text(
+            if (dictation == Dictation.Transcribing) "Transcribing…" else "Listening",
+            Modifier.weight(1f),
+            style = Dray.Font.subhead.copy(color = Dray.secondary),
+        )
+        if (dictation != Dictation.Transcribing) {
+            DockButton("Done", DockKind.Primary, enabled = dictation == Dictation.Recording, leading = {
+                Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(Dray.onPrimary))
+            }, trailing = { StopTimer(Dictations.since[key]) }) { Dictations.stop(store, key) }
+        }
+    }
 }
 
 @Composable

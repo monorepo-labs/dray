@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,6 +20,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.AlertDialog
@@ -39,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.yogesh.dray.net.ConnState
+import com.yogesh.dray.push.Push
 import com.yogesh.dray.store.Server
 
 /**
@@ -46,7 +51,7 @@ import com.yogesh.dray.store.Server
  * and removal. The rest of Settings lands on top of this.
  */
 @Composable
-fun ServersScreen(back: () -> Unit, add: () -> Unit, fix: (Server) -> Unit) {
+fun ServersScreen(back: () -> Unit, add: () -> Unit, dictation: () -> Unit = {}, notifications: () -> Unit = {}, fix: (Server) -> Unit) {
     val store = LocalStore.current
     var removing by remember { mutableStateOf<Server?>(null) }
     Column(Modifier.fillMaxSize().background(Dray.page).statusBarsPadding().navigationBarsPadding()) {
@@ -91,6 +96,12 @@ fun ServersScreen(back: () -> Unit, add: () -> Unit, fix: (Server) -> Unit) {
                     Text("Add server", Modifier.padding(start = 12.dp), style = Dray.Font.body)
                 }
             }
+            Spacer(Modifier.height(20.dp))
+            Column(Modifier.clip(RoundedCornerShape(Dray.Radius.lg)).background(Dray.card)) {
+                PageRow(Icons.Outlined.Mic, "Dictation", dictation)
+                HorizontalDivider(color = Dray.hairline, modifier = Modifier.padding(start = 48.dp))
+                PageRow(Icons.Outlined.Notifications, "Notifications", notifications, if (Push.enabled && Push.available) "On" else "Off")
+            }
         }
     }
     removing?.let { s ->
@@ -102,5 +113,16 @@ fun ServersScreen(back: () -> Unit, add: () -> Unit, fix: (Server) -> Unit) {
             dismissButton = { TextButton({ removing = null }) { Text("Keep", color = Dray.text) } },
             containerColor = Dray.card,
         )
+    }
+}
+
+/** A row opening a page of its own: Dictation, Notifications. */
+@Composable
+private fun PageRow(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, open: () -> Unit, value: String? = null) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = open).padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, Modifier.size(20.dp), tint = Dray.secondary)
+        Text(label, Modifier.weight(1f).padding(start = 12.dp), style = Dray.Font.body)
+        value?.let { Text(it, style = Dray.Font.body.copy(color = Dray.tertiary)) }
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(20.dp), tint = Dray.tertiary)
     }
 }

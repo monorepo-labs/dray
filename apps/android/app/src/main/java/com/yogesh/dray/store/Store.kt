@@ -146,6 +146,11 @@ class Store(private val context: Context) {
     var callErrors by mutableStateOf(mapOf<SessionKey, Set<String>>())
         private set
 
+    /** A server came up: push hands it this phone's handle. */
+    var onConnected: (String) -> Unit = {}
+    /** A server is about to be removed, while its token can still be read. */
+    var onRemoving: (Server) -> Unit = {}
+
     private val connections = mutableMapOf<String, Connection>()
     private val statuses = mutableMapOf<SessionKey, StatusEvent>()
     private val marksAt = mutableMapOf<ProjectKey, Long>()
@@ -221,6 +226,7 @@ class Store(private val context: Context) {
     }
 
     fun removeServer(s: Server) {
+        for (gone in listOf(s) + servers.filter { it.via?.parent == s.id }) onRemoving(gone)
         forget(s.id)
         secrets.delete(s.id)
         save()
@@ -418,6 +424,7 @@ class Store(private val context: Context) {
     private suspend fun connected(server: String) {
         scope.launch { loadBots(server) }
         scope.launch { loadShared(server) }
+        onConnected(server)
         // Heard on the old socket, so older than the read below; a read never moves `modified`, so a stale `completed` would win.
         statuses.keys.removeAll { it.server == server }
         loadIndex(server)

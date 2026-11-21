@@ -24,17 +24,57 @@ reads and drives it over the same WebSocket the desktop and iOS use
   reads with a call's body read whole on demand (`get_session_calls`);
   pictures inline and full screen (pager, pinch, double-tap, drag down);
   browser recordings play in place (Media3, token in `/file`'s query).
-- **Reply dock**: a message field (text first, as Android chat is, with the
-  system's dictation on the mic), the session's model and effort under it
+- **Reply dock**: a message field (text first, as Android chat is, with
+  Dray's own dictation on the mic), the session's model and effort under it
   opening **This task** (model, effort, fast mode, stance, each locked mid-turn
   per `Picks.lockedMidTurn`), and Stop while a turn runs.
 - **Permission and question cards**, answered in place, in the transcript and
   under the row in the list.
 - **Servers** in Settings: state, on/off, Fix, remove, add.
 
+- **Dictation** (`voice/`, Dictation.swift): per draft, outliving the screen
+  that started it. Two engines: Android's `SpeechRecognizer` on the phone
+  (on-device where it has one, AppleSpeech.swift's place), listening live and
+  restarting across pauses; or a server's model, a 16 kHz WAV through `/upload`
+  and `transcribe_upload`, kept for Retry where the server never answered.
+  Settings → Dictation picks one. **The voice orb** is VoiceOrb.metal's `prism`
+  as AGSL (Android 13+), the same math on the CPU below that, eased and clocked
+  as OrbDriver/OrbClock do. The list's foot is VoiceDock (orb, then Cancel and
+  Done, then the words and Start task); its picks and start are a stand-in
+  until New task lands (`NewTaskDock`). Debug builds carry `OrbDemoActivity`.
+- **Push** (`push/`, Push.swift on FCM): the FCM token is sealed by the relay
+  (`/api/push/register` with `platform: "android"`) into a handle each server
+  gets with `push_register`, exactly as iOS hands its APNs handle over; the
+  server needs no change. Alerts are FCM data messages drawn by the app: a
+  channel per kind, Allow and Deny, a question's options (three at most, or
+  none and the tap opens the app) and Reply, answered on the store's socket or
+  one of its own, with no app coming forward. A tap opens the chat (`open`
+  where a bot's task alerts). Settings → Notifications holds the switches.
+
 Left for the tasks building on this: New task (Run with), bots and bot chat,
-Changes, the rest of Settings, push (FCM), the PR sheet, the runs sheet
-behind "N background tasks running", Share in the image viewer.
+Changes, the rest of Settings, the PR sheet, the runs sheet behind "N
+background tasks running", Share in the image viewer.
+
+## Push setup
+
+**Push is off until the Firebase project's files are in.** Without
+`app/google-services.json` the app builds, `FirebaseApp` never starts, and
+Settings → Notifications says push isn't set up. To light it up:
+
+1. A Firebase project with an Android app whose package is
+   `com.yogesh.dray.android`; its `google-services.json` goes at
+   `apps/android/app/google-services.json` (client config, safe to commit).
+2. That project's service account key (Project settings → Service accounts →
+   Generate new private key) as `FCM_SERVICE_ACCOUNT` on the site, the JSON
+   whole or base64 of it. FCM's HTTP v1 API, which a new project has on; the
+   legacy "server key" is retired and not used.
+3. `PUSH_HANDLE_SECRET` is the one iOS already uses.
+
+**Testing without FCM**: a debug build takes `--es pushRelay <url>` (seal at a
+local relay) and `--es pushPayload '<data JSON>'` (an FCM message's `data`,
+drawn in 3s as `PushService` would). Run the site with `FCM_ORIGIN` pointing
+at a stand-in and `token_uri` in the key file at one too, and every message the
+relay sends lands there to replay into the app.
 
 ## Layout
 
@@ -42,6 +82,8 @@ behind "N background tasks running", Share in the image viewer.
 app/src/main/java/com/yogesh/dray/
   wire/    JSON helpers and the wire types (Wire.swift)
   net/     Connection: one OkHttp WebSocket per server, reconnecting (Connection.swift)
+  push/    FCM token, the relay's handle, alerts and their buttons (Push.swift)
+  voice/   dictation: the phone's recognizer, a server's model (Dictation.swift)
   model/   pure logic: buildTurns, stageRuns, tool labels, markdown blocks, Picks
   store/   Store (Store.swift) and the Keystore-sealed tokens
   ui/      Compose screens; Theme.kt holds every colour, size and font

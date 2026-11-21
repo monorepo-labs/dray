@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.yogesh.dray.model.SessionKey
 import com.yogesh.dray.net.PairLink
+import com.yogesh.dray.push.Push
 
 /** Where the app is: the list at the bottom of a stack, everything else pushed over it. */
 sealed interface Route {
@@ -27,6 +28,8 @@ sealed interface Route {
     data class Session(val key: SessionKey) : Route
     data class Add(val link: PairLink? = null, val scan: Boolean = false, val nonce: Long = System.nanoTime()) : Route
     data object Settings : Route
+    data object Notifications : Route
+    data object Dictation : Route
 }
 
 /** The app's one navigation stack. A pairing link from outside pushes Add server, filled in. */
@@ -46,6 +49,15 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
         }
     }
     BackHandler(stack.size > 1) { pop() }
+    // A tapped alert opens its chat over the list, wherever the reader was.
+    LaunchedEffect(Push.opening) {
+        val key = Push.opening ?: return@LaunchedEffect
+        Push.opening = null
+        stack.removeAll { it != Route.List }
+        push(Route.Session(key))
+    }
+    LaunchedEffect(stack.last()) { Push.viewing = (stack.last() as? Route.Session)?.key }
+    NotificationAsk()
     val holder = rememberSaveableStateHolder()
 
     Box(Modifier.fillMaxSize()) {
@@ -66,9 +78,12 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
                 )
                 is Route.Session -> TranscriptScreen(route.key, ::pop) { push(Route.Settings) }
                 is Route.Add -> AddServerScreen(route.link, route.scan, ::pop)
-                Route.Settings -> ServersScreen(::pop, add = { push(Route.Add()) }) { s ->
+                Route.Settings -> ServersScreen(::pop, add = { push(Route.Add()) },
+                    dictation = { push(Route.Dictation) }, notifications = { push(Route.Notifications) }) { s ->
                     push(Route.Add(PairLink(s.url, "", s.name)))
                 }
+                Route.Notifications -> NotificationSettings(::pop)
+                Route.Dictation -> DictationSettings(::pop)
             } }
         }
         Box(Modifier.align(Alignment.TopCenter).statusBarsPadding()) { ErrorToast() }
