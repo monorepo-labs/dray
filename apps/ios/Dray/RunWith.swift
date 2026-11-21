@@ -8,6 +8,7 @@ struct RunWithSheet: View {
     @Environment(Store.self) private var store
     @Bindable var task: NewTask
     @State private var attaching = false
+    @State private var pickingBase = false
     @State private var branches: BranchList?
     /// A branch picked while the checkout has uncommitted files: Bring or Stash decides.
     @State private var switching: String?
@@ -50,6 +51,16 @@ struct RunWithSheet: View {
                         store.attached(server, list)
                         task.projectName = list.max { $0.lastSelected < $1.lastSelected }?.name
                     }
+                }
+            }
+            // A sheet, not a push: popped mid-search, a page left its bar standing over this one.
+            .sheet(isPresented: $pickingBase) {
+                if let branches {
+                    NavigationStack { WorktreeBranchPicker(branches: branches, selection: $task.worktreeBase) }
+                        .presentationDetents([.large])
+                        .presentationDragIndicator(.visible)
+                        .presentationCornerRadius(38)
+                        .presentationBackground(Theme.card)
                 }
             }
         }
@@ -111,10 +122,19 @@ struct RunWithSheet: View {
                     Button("Attach project…", systemImage: "plus") { attaching = true }
                 }
                 PickDivider()
-                PickRow("Worktree", detail: task.worktree ? branches?.defaultBase.map { "from \($0)" } : nil) {
+                PickRow("Worktree") {
                     PickSwitch(label: "Worktree", isOn: $task.worktree)
                 }
-                if !task.worktree, let branches, let current = branches.current {
+                if task.worktree, let branches, branches.offersWorktreeBase {
+                    PickDivider()
+                    Button { pickingBase = true } label: {
+                        PickRow("Start from") {
+                            Text(task.worktreeBase ?? branches.defaultBranch ?? branches.current ?? "").foregroundStyle(Theme.secondary)
+                            Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.tertiary)
+                        }
+                    }
+                    .accessibilityIdentifier("row.Start from")
+                } else if !task.worktree, let branches, let current = branches.current {
                     PickDivider()
                     PickMenu("Branch", value: current) {
                         Picker("Branch", selection: Binding(get: { current }, set: pickBranch)) {
@@ -184,7 +204,7 @@ struct RunWithSheet: View {
     }
 
     /// The checkout the branch row speaks for; a reply for any other is dropped on landing.
-    private var place: String { "\(task.server?.uuidString ?? "")|\(task.cwd ?? "")" }
+    private var place: String { task.place }
 
     @discardableResult
     private func readBranches() async -> BranchList? {
@@ -229,6 +249,63 @@ struct RunWithSheet: View {
             branchError = error.localizedDescription
             Haptic.error()
         }
+    }
+}
+
+// MARK: Worktree branch
+
+/// Which branch a new task's worktree starts on: the desktop's `WorktreeBranchSelector`,
+/// a list rather than a menu since a repo can hold hundreds, its filter the search.
+/// `nil` is the default branch, fetched fresh; any other is worked on by its own name.
+struct WorktreeBranchPicker: View {
+    let branches: BranchList
+    @Binding var selection: String?
+    @State private var query = ""
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let (fallback, local, remote) = branches.worktreeOptions(query)
+        List {
+            if let fallback {
+                Section { row(fallback, note: "latest") }
+            }
+            if !local.isEmpty {
+                Section {
+                    ForEach(local, id: \.self) { row($0) }
+                } header: {
+                    if !remote.isEmpty { Text("Local") }
+                }
+            }
+            if !remote.isEmpty {
+                Section("On remote") { ForEach(remote, id: \.self) { row($0) } }
+            }
+            if fallback == nil && local.isEmpty && remote.isEmpty {
+                Text("No branch matches").foregroundStyle(Theme.secondary)
+            }
+        }
+        .themedList()
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Filter branches")
+        .navigationTitle("Start from")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+    }
+
+    private func row(_ name: String, note: String? = nil) -> some View {
+        let picked = (selection ?? branches.defaultBranch ?? branches.current) == name
+        return Button {
+            selection = name == branches.defaultBranch ? nil : name
+            Haptic.select()
+            dismiss()
+        } label: {
+            HStack {
+                Text(name).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                Spacer()
+                if let note { Text(note).foregroundStyle(Theme.tertiary) }
+                if picked { Image(systemName: "checkmark").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text) }
+            }
+            .font(Theme.Font.body)
+        }
+        .accessibilityAddTraits(picked ? .isSelected : [])
     }
 }
 

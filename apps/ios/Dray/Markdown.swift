@@ -5,7 +5,9 @@ import SwiftUI
 // and a table through `MarkdownTable`, which takes the font and ink around it.
 
 enum MarkdownBlock {
-    case prose(String), code(String), heading(Int, String), quote(String), rule
+    case prose(String), heading(Int, String), quote(String), rule
+    /// `lang` is the fence's tag, empty where it names none.
+    case code(String, lang: String)
     case list([(marker: String, text: String, indent: Int)])
     /// Cells by row, the first being the header.
     case table([[String]])
@@ -39,6 +41,7 @@ func markdownBlocks(_ text: String) -> [MarkdownBlock] {
     // Set once the header's delimiter is skipped, so a data row of dashes stays a row.
     var delimited = false
     var fenced = false
+    var lang = ""
     func flush() {
         let p = prose.joined(separator: "\n").trimmingCharacters(in: .newlines)
         if !p.isEmpty { out.append(.prose(p)) }
@@ -52,10 +55,11 @@ func markdownBlocks(_ text: String) -> [MarkdownBlock] {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         if trimmed.hasPrefix("```") {
             if fenced {
-                out.append(.code(code.joined(separator: "\n")))
+                out.append(.code(code.joined(separator: "\n"), lang: lang))
                 code = []
             } else {
                 flush()
+                lang = trimmed.dropFirst(3).split(separator: " ").first.map(String.init) ?? ""
             }
             fenced.toggle()
             continue
@@ -100,7 +104,7 @@ func markdownBlocks(_ text: String) -> [MarkdownBlock] {
         }
     }
     // An unclosed fence still shows what it holds.
-    if fenced, !code.isEmpty { out.append(.code(code.joined(separator: "\n"))) }
+    if fenced, !code.isEmpty { out.append(.code(code.joined(separator: "\n"), lang: lang)) }
     flush()
     return out
 }

@@ -864,9 +864,9 @@ struct MarkdownText: View {
                         .foregroundStyle(Theme.secondary)
                         .padding(.leading, Theme.Space.m)
                         .overlay(alignment: .leading) { Rectangle().fill(Theme.border).frame(width: 3) }
-                case .code(let s):
+                case .code(let s, let lang):
                     ScrollView(.horizontal) {
-                        Text(s).font(Theme.Font.footnote).foregroundStyle(Theme.text).padding(Theme.Space.m)
+                        CodeBlock(code: s, lang: lang).font(Theme.Font.footnote).foregroundStyle(Theme.text).padding(Theme.Space.m)
                     }
                     .well()
                 case .rule:

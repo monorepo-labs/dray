@@ -298,7 +298,7 @@ private struct MessageText: View {
                     Text(inlineMarkdown(s)).foregroundStyle(.white.opacity(0.55))
                         .padding(.leading, 10)
                         .overlay(alignment: .leading) { Rectangle().fill(.white.opacity(0.2)).frame(width: 2) }
-                case .code(let s):
+                case .code(let s, _):
                     ScrollView(.horizontal) {
                         Text(s).font(.system(size: 11).monospaced()).padding(8)
                     }

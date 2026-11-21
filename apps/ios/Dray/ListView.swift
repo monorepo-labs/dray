@@ -16,6 +16,8 @@ struct DraftItem: Decodable, Identifiable {
     let permissionMode: String?
     let fast: Bool?
     let useWorktree: Bool?
+    /// Where the worktree starts: a picked branch, or `dray draft new --base`'s.
+    let base: String?
 
     var title: String { prompt.split(whereSeparator: \.isNewline).first.map(String.init) ?? prompt }
     var project: String? { projectPath.map { ($0 as NSString).lastPathComponent } }
