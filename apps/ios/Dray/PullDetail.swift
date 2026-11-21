@@ -24,7 +24,8 @@ struct PullDetailView: View {
     var body: some View {
         // The read answers every PR on the head branch; this page is one.
         let pr = model.prs.first { $0.number == row.mark.number }
-        let tasks = sessionsForPr(row, store.items.map { (key: $0.key, item: $0.value) }, repoOf: store.repoOf)
+        let tasks = sessionsForPr(row, store.items.map { (key: $0.key, item: $0.value) }, repoOf: store.repoOf,
+                                  connected: { store.serverState[$0] == .connected })
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 if !tasks.isEmpty { taskList(tasks) }

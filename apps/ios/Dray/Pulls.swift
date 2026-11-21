@@ -99,19 +99,24 @@ enum PeopleFilter: String, CaseIterable {
 
 /// Every task a PR has had, newest first: same repo and `sessionBranch` naming its
 /// head. Settled ones stay; a fork's PR matches nothing. `sessionsForPr`.
+/// A task listed twice (paired directly and shared) keeps the copy whose server is up.
 func sessionsForPr(_ row: PullRow, _ items: [(key: SessionKey, item: SessionItem)],
-                   repoOf: (UUID, String) -> String?) -> [SessionKey] {
+                   repoOf: (UUID, String) -> String?, connected: (UUID) -> Bool) -> [SessionKey] {
     if row.listing.isCrossRepository { return [] }
-    var seen = Set<String>()
-    return items.filter { e in
-        guard seen.insert(e.item.sessionId).inserted else { return false }
+    let matches = items.filter { e in
         let branch = sessionBranch(branch: e.item.branch, worktreeName: e.item.worktreeName,
                                    worktreeRemoved: e.item.worktreeRemoved ?? false, observed: nil)
         return branch == row.mark.headRefName
             && ((e.key.server == row.server && e.item.projectPath == row.key) || repoOf(e.key.server, e.item.projectPath) == row.repo)
     }
-    .sorted { ($0.item.created ?? $0.item.modified) > ($1.item.created ?? $1.item.modified) }
-    .map(\.key)
+    var copies: [String: (key: SessionKey, item: SessionItem)] = [:]
+    for e in matches {
+        if let held = copies[e.item.sessionId], connected(held.key.server) || !connected(e.key.server) { continue }
+        copies[e.item.sessionId] = e
+    }
+    return copies.values
+        .sorted { ($0.item.created ?? $0.item.modified) > ($1.item.created ?? $1.item.modified) }
+        .map(\.key)
 }
 
 /// The unresolved threads, plus each thread-less review asking for changes: what Select unresolved picks.
@@ -318,6 +323,7 @@ final class PullsModel {
 
     /// The tracker's server first, so a repo checked out there and elsewhere reads through it.
     private func findCheckouts(_ store: Store, _ repos: Set<String>) async {
+        checkouts = checkouts.filter { store.serverState[$0.value.server] == .connected }
         let wanted = repos.subtracting(checkouts.keys)
         guard !wanted.isEmpty else { return }
         let servers = store.live.filter { store.serverState[$0.id] == .connected }.map(\.id)
@@ -556,7 +562,8 @@ struct PullsView: View {
     }
 
     private func tasks(_ row: PullRow) -> [SessionKey] {
-        sessionsForPr(row, store.items.map { (key: $0.key, item: $0.value) }, repoOf: store.repoOf)
+        sessionsForPr(row, store.items.map { (key: $0.key, item: $0.value) }, repoOf: store.repoOf,
+                      connected: { store.serverState[$0] == .connected })
     }
 }
 

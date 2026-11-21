@@ -31,6 +31,18 @@ final class PullsTests: XCTestCase {
         XCTAssertEqual(inboxSection(mark(status: "BLOCKED")), .waiting)
     }
 
+    func testTaskCopyOnConnectedServer() {
+        let item: SessionItem = decode("""
+        {"sessionId":"s1","harness":"claude_code","cwd":"/p/.claude/worktrees/w","projectPath":"/p","title":"t","model":"opus",
+         "permissionMode":"auto","status":"idle","modified":"2026-11-20T00:00:00Z","branch":"feature"}
+        """)
+        let (down, up) = (UUID(), UUID())
+        let row = PullRow(server: up, key: "/p", repo: "github.com/o/r", mark: mark(), listing: mark().listing!)
+        let items = [(key: SessionKey(server: down, id: "s1"), item: item), (key: SessionKey(server: up, id: "s1"), item: item)]
+        let found = sessionsForPr(row, items, repoOf: { _, _ in "github.com/o/r" }, connected: { $0 == up })
+        XCTAssertEqual(found, [SessionKey(server: up, id: "s1")])
+    }
+
     func testRepoSpellings() {
         XCTAssertEqual(marksRepo("https://github.com/Monorepo-Labs/Dray/pull/12"), "github.com/monorepo-labs/dray")
         XCTAssertEqual(prRepoSlug("https://github.com/Monorepo-Labs/Dray/pull/12"), "Monorepo-Labs/Dray")

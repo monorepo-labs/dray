@@ -56,6 +56,14 @@ final class PullsIssuesTests: XCTestCase {
         add(shot)
     }
 
+    /// Where the two pages are reached: the task list's top bar, beside Settings.
+    func testEntry() throws {
+        let app = try pair()
+        XCTAssertTrue(app.buttons["Issues"].waitForExistence(timeout: 30))
+        sleep(3)
+        screen("00-entry")
+    }
+
     func testIssues() throws {
         let app = try pair()
         openPage(app, "Issues")

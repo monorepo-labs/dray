@@ -196,7 +196,7 @@ struct IssuesView: View {
                 ConnectTracker(tracker: tracker, server: server!) { integrations = $0 }
                     .plainRow()
             } else if connected == nil {
-                if integrationsFailed { note("Could not read which trackers \(store.name(of: server!)) is connected to.") }
+                if integrationsFailed { note("Could not read which trackers \(store.name(of: server!)) is connected to. Pull down to try again.") }
             } else {
                 scopes.plainRow()
                 content
@@ -212,7 +212,10 @@ struct IssuesView: View {
             ToolbarItem(placement: .topBarLeading) { CloseButton() }
             ToolbarItem(placement: .primaryAction) { filterMenu }
         }
-        .refreshable { await list(force: true) }
+        .refreshable {
+            if integrations == nil { await readIntegrations() }
+            await list(force: true)
+        }
         .task(id: server) { await readIntegrations() }
         .task(id: "\(server?.uuidString ?? "")|\(tracker)|\(repo)|\(connected == true)") { await readFilters() }
         // Typing waits a beat, so a word is one read rather than one per letter.
@@ -223,9 +226,7 @@ struct IssuesView: View {
         }
         .navigationDestination(item: $picked) { issue in
             if let server {
-                IssueDetailView(issue: issue, server: server, workOn: workOn) { next in
-                    if let i = issues.firstIndex(where: { $0.id == next.id }) { issues[i] = next }
-                }
+                IssueDetailView(issue: issue, server: server, workOn: workOn, updated: edited)
             }
         }
     }
@@ -439,11 +440,12 @@ struct IssuesView: View {
 
     private func readFilters() async {
         guard let server, connected == true else { return }
-        let key = "\(tracker)|\(repo)"
+        let key = "\(server)|\(tracker)|\(repo)"
         guard filtersFor != key else { return }
         filters = nil
         if let read: IssueFilters = try? await store.call(server, "list_issue_filters",
-                                                          ["tracker": .string(tracker), "repo": JSON(github && !repo.isEmpty ? repo : nil)]) {
+                                                          ["tracker": .string(tracker), "repo": JSON(github && !repo.isEmpty ? repo : nil)]),
+           key == "\(self.server.map { "\($0)" } ?? "")|\(tracker)|\(repo)" {
             filters = read
             filtersFor = key
         }
@@ -471,9 +473,25 @@ struct IssuesView: View {
         }
     }
 
+    /// Puts an edited issue back where it now belongs: Linear's Done and Cancelled draw from `settled`.
+    private func edited(_ next: Issue) {
+        func put(_ list: inout [Issue]) {
+            if let i = list.firstIndex(where: { $0.id == next.id }) { list[i] = next } else { list.append(next) }
+        }
+        if !github && ["completed", "canceled"].contains(next.state.kind) {
+            issues.removeAll { $0.id == next.id }
+            if settled != nil { put(&settled!) }
+        } else {
+            settled?.removeAll { $0.id == next.id }
+            put(&issues)
+        }
+    }
+
     private func listSettled() async {
         guard let server else { return }
-        settled = (try? await store.call(server, "list_issues", ["query": query(settled: true), "limit": 100])) ?? []
+        let key = queryKey
+        let read: [Issue] = (try? await store.call(server, "list_issues", ["query": query(settled: true), "limit": 100])) ?? []
+        if key == queryKey { settled = read }
     }
 }
 
