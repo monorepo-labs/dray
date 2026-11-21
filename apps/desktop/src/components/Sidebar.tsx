@@ -2240,7 +2240,7 @@ function RailTask({
         onPointerDown={prefetch.onPointerDown}
         aria-label={label}
         className={cn(
-          "relative flex h-8 w-full shrink-0 cursor-pointer items-center justify-center rounded-md",
+          "group/task relative flex h-8 w-full shrink-0 cursor-pointer items-center justify-center rounded-md",
           "transition-[color,background-color,opacity] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
           active
             ? "bg-sidebar-accent text-sidebar-accent-foreground"
@@ -2259,7 +2259,15 @@ function RailTask({
         )}
         {/* Working is `shimmer-text`'s look: the initials muted, a foreground
             copy over them showing through a travelling band. */}
-        <span aria-hidden className={cn("relative flex", digit && "invisible", working && "text-muted-foreground")}>
+        <span
+          aria-hidden
+          className={cn(
+            // The project filter's strength: muted, lit under the cursor or when open.
+            "relative flex text-muted-foreground transition-colors",
+            !working && (active ? "text-foreground" : "group-hover/task:text-foreground"),
+            digit && "invisible",
+          )}
+        >
           <Initial name={label} letters={2} />
           {working && (
             <span className="shimmer-mask absolute inset-0 flex text-foreground">
