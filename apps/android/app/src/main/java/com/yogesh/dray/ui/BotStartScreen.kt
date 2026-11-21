@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material3.CircularProgressIndicator
@@ -55,14 +56,15 @@ import java.util.UUID
 
 /**
  * A bot before its first message: its greeting, and a field aimed at its folder. The send starts
- * the chat, which `started` opens in its place. iOS's `BotStartView`, with a plain field where iOS
- * borrows the new-task dock.
+ * the chat, which `started` opens in its place. iOS's `BotStartView`, under the same orb dock.
  */
 @Composable
 fun BotStartScreen(server: String, bot: Bot, back: () -> Unit, started: (SessionKey) -> Unit) {
     val store = LocalStore.current
     val scope = rememberCoroutineScope()
-    var text by remember { mutableStateOf("") }
+    // Its words live in the drafts like a reply's, so dictation lands in them the same way.
+    val draft = SessionKey(server, "bot-start-${bot.id}")
+    val text = store.drafts[draft].orEmpty()
     var sending by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf<String?>(null) }
     var editing by remember { mutableStateOf(false) }
@@ -90,7 +92,7 @@ fun BotStartScreen(server: String, bot: Bot, back: () -> Unit, started: (Session
                     "branch" to null, "useWorktree" to false, "worktreeName" to null, "baseRef" to null, "isNewSession" to true,
                 ))
                 decodeOrNull<SessionItem>(reply["snapshot"])?.let { store.created(server, it) }
-                text = ""
+                store.drafts.remove(draft)
                 started(SessionKey(server, id))
             } catch (e: Exception) {
                 failed = e.message ?: "The server didn't answer."
@@ -111,26 +113,19 @@ fun BotStartScreen(server: String, bot: Bot, back: () -> Unit, started: (Session
         ) {
             for (line in bot.greeting ?: listOfNotNull(bot.welcome)) ReplyBubble(line)
         }
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            failed?.let { Text("Couldn't send. ${sentence(it)}", style = Dray.Font.footnote.copy(color = Dray.destructive)) }
-            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(
-                    Modifier.weight(1f).heightIn(min = 44.dp).clip(RoundedCornerShape(Dray.Radius.xl)).background(Dray.card)
-                        .border(1.dp, Dray.hairline, RoundedCornerShape(Dray.Radius.xl)).padding(horizontal = 16.dp, vertical = 11.dp),
-                ) {
-                    if (text.isEmpty()) Text("Message ${bot.name}", style = Dray.Font.body.copy(color = Dray.tertiary))
-                    BasicTextField(text, { text = it }, Modifier.fillMaxWidth().heightIn(max = 160.dp), textStyle = Dray.Font.body, cursorBrush = SolidColor(Dray.text))
-                }
-                val ready = text.isNotBlank() && !sending && connected
-                Box(
-                    Modifier.size(44.dp).clip(CircleShape).background(if (ready) Dray.primary else Dray.raised).clickable(enabled = ready, onClickLabel = "Send") { send() },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (sending) CircularProgressIndicator(Modifier.size(18.dp), color = Dray.onPrimary, strokeWidth = 2.dp)
-                    else Icon(Icons.Filled.ArrowUpward, null, tint = if (ready) Dray.onPrimary else Dray.tertiary)
-                }
-            }
-        }
+        VoiceDock(
+            sending = sending,
+            ready = text.isNotBlank() && connected && !sending,
+            failure = failed?.let { "Couldn't send. ${sentence(it)}" },
+            clearFailure = { failed = null },
+            start = ::send,
+            picks = { edit ->
+                edit?.let { Icon(Icons.Outlined.Keyboard, "Type", Modifier.clip(CircleShape).clickable(onClick = it).padding(2.dp).size(20.dp), tint = Dray.secondary) }
+            },
+            draft = draft,
+            words = DockWords.Reply,
+            covers = false,
+        )
     }
     if (editing) BotSheet(editing = server to bot, close = { editing = false })
 }
