@@ -27,7 +27,7 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.outlined.Dns
-import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -52,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.yogesh.dray.model.Picks
 import com.yogesh.dray.model.SessionKey
+import com.yogesh.dray.store.NEW_SESSION
 import com.yogesh.dray.store.NewTask
 import kotlinx.coroutines.launch
 
@@ -59,10 +60,9 @@ import kotlinx.coroutines.launch
 val LocalNewTask = compositionLocalOf<NewTask> { error("No NewTask provided") }
 
 /**
- * The foot of the list: a field that starts a new task, and under it the picks it starts on —
- * model and effort, machine, project and "···" — each opening Run with. The iOS dock is
- * voice-first; here the field leads, as Android chat does, with the system's dictation beside it.
- * iOS's VoiceDock.swift.
+ * The foot of the list, as iOS has it: the voice orb, tapped to talk, and under it the picks a
+ * new task starts on — model and effort, machine, project and "···" — each opening Run with. The
+ * keyboard edits the words in a sheet, and a swipe up opens it. VoiceDock.swift.
  */
 @Composable
 fun NewTaskDock(started: (SessionKey) -> Unit, modifier: Modifier = Modifier) {
@@ -70,89 +70,42 @@ fun NewTaskDock(started: (SessionKey) -> Unit, modifier: Modifier = Modifier) {
     val task = LocalNewTask.current
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
-    val context = LocalContext.current
     var picking by remember { mutableStateOf(false) }
     val server = task.server
-    val text = task.text
 
     LaunchedEffect(server, task.harness) { task.load() }
 
-    val dictate = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
-        if (r.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
-        val words = r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() ?: return@rememberLauncherForActivityResult
-        task.text = listOf(task.text.trim(), words).filter { it.isNotEmpty() }.joinToString(" ")
-    }
-    val canDictate = remember {
-        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).resolveActivity(context.packageManager) != null
-    }
-
-    fun start() = scope.launch {
-        val key = task.start()
-        if (key != null) {
-            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-            started(key)
+    fun start() {
+        scope.launch {
+            val key = task.start()
+            if (key != null) {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                started(key)
+            }
         }
     }
 
-    Column(
-        modifier
-            .fillMaxWidth()
-            .background(Brush.verticalGradient(0f to Dray.page.copy(alpha = 0f), 0.22f to Dray.page))
-            .navigationBarsPadding()
-            .imePadding()
-            .padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = 8.dp)
-            // Dim while nothing is connected: the screen above says why.
-            .alpha(if (server == null) 0.3f else 1f),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        task.failure?.let {
-            Row(Modifier.padding(horizontal = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Couldn't start. ${sentence(it)}", Modifier.weight(1f), style = Dray.Font.footnote.copy(color = Dray.destructive))
-                Text("Dismiss", Modifier.clickable { task.failure = null }, style = Dray.Font.footnoteStrong.copy(color = Dray.secondary))
-            }
-        }
-        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(
-                Modifier
-                    .weight(1f)
-                    .heightIn(min = 44.dp)
-                    .clip(RoundedCornerShape(Dray.Radius.xl))
-                    .background(Dray.card)
-                    .border(1.dp, Dray.hairline, RoundedCornerShape(Dray.Radius.xl))
-                    .padding(horizontal = 16.dp, vertical = 11.dp),
-            ) {
-                if (text.isEmpty()) Text(task.bot?.let { "Message ${it.second.name}" } ?: "New task", style = Dray.Font.body.copy(color = Dray.tertiary))
-                BasicTextField(
-                    text,
-                    { task.text = it; task.failure = null },
-                    Modifier.fillMaxWidth().heightIn(max = 160.dp),
-                    enabled = server != null,
-                    textStyle = Dray.Font.body,
-                    cursorBrush = SolidColor(Dray.text),
-                )
-            }
-            if (text.isBlank() && canDictate) {
-                DockButton(Dray.raised, "Dictate", enabled = server != null, onClick = {
-                    dictate.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                        .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM))
-                }) { Icon(Icons.Outlined.Mic, null, tint = Dray.text) }
-            } else {
-                val ready = task.ready
-                DockButton(if (ready) Dray.primary else Dray.raised, "Start task", enabled = ready, onClick = { start() }) {
-                    if (task.sending) CircularProgressIndicator(Modifier.size(18.dp), color = Dray.onPrimary, strokeWidth = 2.dp)
-                    else Icon(Icons.Filled.ArrowUpward, null, tint = if (ready) Dray.onPrimary else Dray.tertiary)
-                }
-            }
-        }
-        Picks(task, server?.let { store.name(it) }) { if (server != null) picking = true }
-    }
+    VoiceDock(
+        sending = task.sending,
+        ready = task.ready,
+        failure = task.failure?.let { "Couldn't start. ${sentence(it)}" },
+        clearFailure = { task.failure = null },
+        start = ::start,
+        picks = { edit ->
+            Picks(task, server?.let { store.name(it) }, edit) { if (server != null) picking = true }
+        },
+        // Dim while nothing is connected: the screen above says why.
+        modifier = modifier.alpha(if (server == null) 0.3f else 1f),
+        saveDraft = { scope.launch { task.saveDraft() } },
+        draft = NEW_SESSION,
+    )
 
     if (picking) RunWithSheet(task) { picking = false }
 }
 
 /** Model and effort, machine, project and "···", each opening Run with. */
 @Composable
-private fun Picks(task: NewTask, machine: String?, open: () -> Unit) {
+private fun Picks(task: NewTask, machine: String?, edit: (() -> Unit)?, open: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().height(28.dp).padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -167,6 +120,7 @@ private fun Picks(task: NewTask, machine: String?, open: () -> Unit) {
         Pick(Icons.Outlined.Dns, machine ?: "Machine", Modifier.weight(1f, fill = false), open)
         Pick(Icons.Filled.Folder, task.project ?: "Project", Modifier.weight(1f, fill = false), open)
         Icon(Icons.Filled.MoreHoriz, "More picks", Modifier.clip(CircleShape).clickable(onClick = open).padding(2.dp).size(20.dp), tint = Dray.secondary)
+        edit?.let { Icon(Icons.Outlined.Keyboard, "Type", Modifier.clip(CircleShape).clickable(onClick = it).padding(2.dp).size(20.dp), tint = Dray.secondary) }
     }
 }
 

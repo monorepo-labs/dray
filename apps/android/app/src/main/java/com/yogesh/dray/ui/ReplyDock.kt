@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
@@ -67,9 +68,9 @@ import kotlinx.coroutines.launch
 private data class ReplyPicks(val model: String? = null, val effort: String? = null, val stance: String? = null, val fast: Boolean? = null)
 
 /**
- * The reply dock at a session's foot: a message field that sends, and under it the session's
- * picks for the next reply, and Stop while a turn runs. The iOS dock is voice-first; here the
- * field leads, as Android chat does, with Dray's own dictation (`Dictations`) one tap away.
+ * The reply dock at a session's foot, as iOS has it: the voice orb, tapped to talk, the words
+ * waiting as the bubble they will send as, and under it the session's picks for the next reply,
+ * the keyboard and Stop while a turn runs. ReplyDock.swift.
  */
 @Composable
 fun ReplyDock(key: SessionKey) {
@@ -100,31 +101,13 @@ fun ReplyDock(key: SessionKey) {
     val dictation = Dictations.state(key)
     val listening = dictation != Dictation.Idle
     // Nothing on the phone or any server can transcribe: the mic goes, and the field is the dock.
-    val canDictate = !store.typesOnly
-    val withMic = rememberWithMic(key)
-    var hint by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(hint) { if (hint != null) { delay(2000); hint = null } }
     // Leaving mid-recording sends what was said into this session's draft, the desktop's rule.
     DisposableEffect(key) { onDispose { if (Dictations.state(key) == Dictation.Recording) Dictations.stop(store, key) } }
-
-    fun dictate() {
-        if (dictation == Dictation.Recording) return Dictations.stop(store, key)
-        if (listening) return
-        val engine = store.dictationEngine() ?: run { hint = "Nothing can transcribe right now. Type instead."; return }
-        // A kept recording is the only copy of what was said; it goes by Retry or Discard, never by a new tap.
-        if (Dictations.kept[key] != null) return
-        Dictations.dismiss(key)
-        failed = null
-        withMic {
-            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-            Dictations.start(store, engine, key)
-        }
-    }
 
     fun send() {
         val text = draft.trim()
         // Spoken words still on their way would land after this send, as a reply of their own.
-        if (text.isEmpty() || sending || !connected || listening) return
+        if (text.isEmpty() || sending || !connected || Dictations.state(key) != Dictation.Idle) return
         sending = true
         failed = null
         scope.launch {
@@ -149,114 +132,49 @@ fun ReplyDock(key: SessionKey) {
         }
     }
 
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .background(Dray.page)
-            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp)
-            .alpha(if (away) 0.4f else 1f),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        if (moving) Text(
-            "Your next message moves this chat to ${Picks.agentLabels[harness] ?: harness}.",
-            style = Dray.Font.footnote.copy(color = Dray.tertiary),
-        )
-        failed?.let {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Couldn't send. ${sentence(it)}", Modifier.weight(1f), style = Dray.Font.footnote.copy(color = Dray.destructive))
-                Text("Retry", Modifier.clickable { send() }, style = Dray.Font.footnoteStrong)
-            }
-        }
-        (hint ?: Dictations.notes[key])?.let { KeptNote(it, key, Modifier.padding(horizontal = 4.dp)) }
-        if (listening) ListeningRow(key) else Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(
-                Modifier
-                    .weight(1f)
-                    .heightIn(min = 44.dp)
-                    .clip(RoundedCornerShape(Dray.Radius.xl))
-                    .background(Dray.card)
-                    .border(1.dp, Dray.hairline, RoundedCornerShape(Dray.Radius.xl))
-                    .padding(horizontal = 16.dp, vertical = 11.dp),
-            ) {
-                if (draft.isEmpty()) Text("Message", style = Dray.Font.body.copy(color = Dray.tertiary))
-                BasicTextField(
-                    draft,
-                    { if (it.isEmpty()) store.drafts.remove(key) else store.drafts[key] = it },
-                    // Room on the right for the mic that adds to words already there.
-                    Modifier.fillMaxWidth().heightIn(max = 160.dp).padding(end = if (draft.isNotBlank() && canDictate) 28.dp else 0.dp),
-                    textStyle = Dray.Font.body,
-                    cursorBrush = SolidColor(Dray.text),
-                )
-                if (draft.isNotBlank() && canDictate) {
-                    Icon(Icons.Outlined.Mic, "Dictate", Modifier.align(Alignment.BottomEnd).size(22.dp).clickable(onClick = ::dictate), tint = Dray.secondary)
+    VoiceDock(
+        sending = sending,
+        ready = draft.isNotBlank() && connected && !sending,
+        failure = failed?.let { "Couldn't send. ${sentence(it)}" },
+        clearFailure = { failed = null },
+        start = ::send,
+        picks = { edit ->
+            Row(Modifier.height(28.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(Modifier.clickable { sheet = true }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    AgentMark(harness, 13.dp)
+                    Text(model?.label ?: modelId.ifEmpty { Picks.agentLabels[harness] ?: harness }, style = Dray.Font.footnoteStrong)
+                    effort?.let { Text(Picks.effortLabels[it] ?: it, style = Dray.Font.footnote.copy(color = Dray.tertiary)) }
+                }
+                Text("···", Modifier.clickable { sheet = true }, style = Dray.Font.footnoteStrong.copy(color = Dray.secondary))
+                edit?.let { Icon(Icons.Outlined.Keyboard, "Type", Modifier.clip(CircleShape).clickable(onClick = it).padding(2.dp).size(20.dp), tint = Dray.secondary) }
+                if (item.busy) {
+                    Box(
+                        Modifier.size(28.dp).clip(CircleShape).background(Dray.raised).clickable {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            store.interrupt(key)
+                        },
+                        contentAlignment = Alignment.Center,
+                    ) { Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(Dray.text)) }
                 }
             }
-            val ready = draft.isNotBlank() && !sending && connected
-            if (draft.isBlank() && canDictate) {
-                RoundButton(Dray.raised, "Dictate", onClick = ::dictate) { Icon(Icons.Outlined.Mic, null, tint = Dray.text) }
-            } else {
-                RoundButton(if (ready) Dray.primary else Dray.raised, "Send", enabled = ready, onClick = ::send) {
-                    if (sending) CircularProgressIndicator(Modifier.size(18.dp), color = Dray.onPrimary, strokeWidth = 2.dp)
-                    else Icon(Icons.Filled.ArrowUpward, null, tint = if (ready) Dray.onPrimary else Dray.tertiary)
-                }
-            }
-        }
-        Row(Modifier.height(28.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Row(Modifier.clickable { sheet = true }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                AgentMark(harness, 13.dp)
-                Text(model?.label ?: modelId.ifEmpty { Picks.agentLabels[harness] ?: harness }, style = Dray.Font.footnoteStrong)
-                effort?.let { Text(Picks.effortLabels[it] ?: it, style = Dray.Font.footnote.copy(color = Dray.tertiary)) }
-            }
-            Text("···", Modifier.clickable { sheet = true }, style = Dray.Font.footnoteStrong.copy(color = Dray.secondary))
-            Spacer(Modifier.weight(1f))
-            if (item.busy) {
-                Box(
-                    Modifier.size(28.dp).clip(CircleShape).background(Dray.raised).clickable {
-                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                        store.interrupt(key)
-                    },
-                    contentAlignment = Alignment.Center,
-                ) { Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(Dray.text)) }
-            }
-        }
-    }
+        },
+        modifier = Modifier.alpha(if (away) 0.4f else 1f),
+        draft = key,
+        words = DockWords.Reply,
+        covers = false,
+        header = if (!moving) null else ({
+            Text(
+                "Your next message moves this chat to ${Picks.agentLabels[harness] ?: harness}.",
+                Modifier.padding(bottom = 8.dp),
+                style = Dray.Font.footnote.copy(color = Dray.tertiary),
+            )
+        }),
+    )
 
     if (sheet) ThisTaskSheet(harness, item.busy, models, modelId, effort, picks.stance ?: item.permissionMode,
         picks.fast ?: item.fast ?: false, onModel = { picks = picks.copy(model = it, effort = null) },
         onEffort = { picks = picks.copy(effort = it) }, onStance = { picks = picks.copy(stance = it) },
         onFast = { picks = picks.copy(fast = it) }) { sheet = false }
-}
-
-/**
- * The field's place while the microphone is open: Cancel, the orb with how long it has listened,
- * and Done; then the orb curling while the words are read.
- */
-@Composable
-private fun ListeningRow(key: SessionKey) {
-    val store = LocalStore.current
-    val dictation = Dictations.state(key)
-    Row(Modifier.fillMaxWidth().heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        RoundButton(Dray.raised, "Cancel", onClick = { Dictations.cancel(key) }) { Icon(Icons.Filled.Close, null, tint = Dray.text) }
-        DockOrb(key, 44.dp, tap = { if (dictation == Dictation.Recording) Dictations.stop(store, key) })
-        Text(
-            if (dictation == Dictation.Transcribing) "Transcribing…" else "Listening",
-            Modifier.weight(1f),
-            style = Dray.Font.subhead.copy(color = Dray.secondary),
-        )
-        if (dictation != Dictation.Transcribing) {
-            DockButton("Done", DockKind.Primary, enabled = dictation == Dictation.Recording, leading = {
-                Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(Dray.onPrimary))
-            }, trailing = { StopTimer(Dictations.since[key]) }) { Dictations.stop(store, key) }
-        }
-    }
-}
-
-@Composable
-private fun RoundButton(fill: androidx.compose.ui.graphics.Color, label: String, enabled: Boolean = true, onClick: () -> Unit, content: @Composable () -> Unit) {
-    Box(
-        Modifier.size(44.dp).clip(CircleShape).background(fill).clickable(enabled = enabled, onClickLabel = label, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) { content() }
 }
 
 /**

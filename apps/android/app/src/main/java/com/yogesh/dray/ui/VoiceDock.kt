@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -101,9 +102,18 @@ fun VoiceDock(
     picks: @Composable (edit: (() -> Unit)?) -> Unit,
     modifier: Modifier = Modifier,
     saveDraft: (() -> Unit)? = null,
+    /** Whose words: the new task's, or a session's reply. */
+    draft: SessionKey = NewTaskDraft,
+    words: DockWords = DockWords.Task,
+    /**
+     * Open, the list's dock covers the list. A session's dock stays at its foot instead, the words
+     * waiting as the bubble they will send as, since the transcript above is what they answer.
+     */
+    covers: Boolean = true,
+    /** Lines over the orb: a reply's agent switch, for one. */
+    header: (@Composable () -> Unit)? = null,
 ) {
     val store = LocalStore.current
-    val draft = NewTaskDraft
     val haptics = LocalHapticFeedback.current
     val dictation = Dictations.state(draft)
     val text = store.drafts[draft].orEmpty()
@@ -122,14 +132,14 @@ fun VoiceDock(
     var hint by remember { mutableStateOf<String?>(null) }
     var confirming by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
-    var sheetTitle by remember { mutableStateOf("New task") }
+    var sheetTitle by remember { mutableStateOf(words.blank) }
     val withMic = rememberWithMic(draft)
     val note = Dictations.notes[draft] ?: failure
     LaunchedEffect(phase) { confirming = false }
     LaunchedEffect(hint) { if (hint != null) { delay(2000); hint = null } }
 
     fun edit() {
-        sheetTitle = if (hasText) "Edit task" else "New task"
+        sheetTitle = if (hasText) words.edit else words.blank
         if (Dictations.kept[draft] == null) Dictations.notes.remove(draft)
         clearFailure()
         editing = true
@@ -151,28 +161,30 @@ fun VoiceDock(
     }
 
     // The page showing through at rest, and nearly closed over the list once open.
-    val backdrop = when (phase) {
-        DockPhase.Rest -> Brush.verticalGradient(0f to Dray.page.copy(alpha = 0f), 0.26f to Dray.page)
-        DockPhase.Ready -> Brush.verticalGradient(listOf(Dray.page.copy(alpha = 0.97f), Dray.page))
+    val backdrop = when {
+        !covers -> Brush.verticalGradient(0f to Dray.page.copy(alpha = 0f), 0.22f to Dray.page)
+        phase == DockPhase.Rest -> Brush.verticalGradient(0f to Dray.page.copy(alpha = 0f), 0.26f to Dray.page)
+        phase == DockPhase.Ready -> Brush.verticalGradient(listOf(Dray.page.copy(alpha = 0.97f), Dray.page))
         else -> Brush.verticalGradient(0f to Dray.page.copy(alpha = 0.6f), 0.45f to Dray.page.copy(alpha = 0.88f), 0.7f to Dray.page)
     }
 
     Column(
         modifier
             .fillMaxWidth()
-            .then(if (open) Modifier.fillMaxSize() else Modifier)
+            .then(if (open && covers) Modifier.fillMaxSize() else Modifier)
             .background(backdrop)
             // Open, the dock is the screen: a touch on it never reaches the list behind.
-            .then(if (open) Modifier.clickable(remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, null) {} else Modifier)
+            .then(if (open && covers) Modifier.clickable(remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, null) {} else Modifier)
             .navigationBarsPadding()
             .padding(horizontal = 20.dp)
-            .padding(top = if (open) 0.dp else 44.dp),
+            .padding(top = if (open && covers) 0.dp else if (covers) 44.dp else 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Bottom,
     ) {
+        header?.invoke()
         if (phase == DockPhase.Ready) {
-            SpokenText(text, Modifier.weight(1f)) { edit() }
-        } else if (open) {
+            if (covers) SpokenText(text, Modifier.weight(1f)) { edit() } else WaitingBubble(text) { edit() }
+        } else if (open && covers) {
             Spacer(Modifier.weight(1f))
         }
         if (!open) {
@@ -185,9 +197,9 @@ fun VoiceDock(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             if (typing) {
-                ChatField("New task", text, { store.drafts[draft] = it }, sending, sendable = ready && !sending, send = start)
+                ChatField(words.field, text, { store.drafts[draft] = it }, sending, sendable = ready && !sending, send = start)
             } else {
-                DockOrb(draft, if (open) 120.dp else 76.dp, ::tapped, Modifier.animateContentSize())
+                DockOrb(draft, if (open && phase != DockPhase.Ready) 120.dp else 76.dp, ::tapped, Modifier.animateContentSize())
             }
             AnimatedVisibility(open, enter = fadeIn(), exit = fadeOut()) {
                 DockActions(
@@ -200,6 +212,7 @@ fun VoiceDock(
                     },
                     saveDraft = saveDraft,
                     discardAsks = phase != DockPhase.Ready || hasText,
+                    words = words,
                     modifier = Modifier.padding(top = 24.dp),
                 )
             }
@@ -214,12 +227,12 @@ fun VoiceDock(
 private fun DockActions(
     draft: SessionKey, phase: DockPhase, confirming: Boolean, note: String?, sending: Boolean, ready: Boolean,
     onConfirm: (Boolean) -> Unit, onStart: () -> Unit, onDiscard: () -> Unit, saveDraft: (() -> Unit)?,
-    discardAsks: Boolean, modifier: Modifier = Modifier,
+    discardAsks: Boolean, words: DockWords, modifier: Modifier = Modifier,
 ) {
     val store = LocalStore.current
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (confirming) {
-            Text(if (phase == DockPhase.Ready) "Discard this task?" else "Discard this recording?", style = Dray.Font.subhead.copy(color = Dray.secondary))
+            Text(if (phase == DockPhase.Ready) words.discard else "Discard this recording?", style = Dray.Font.subhead.copy(color = Dray.secondary))
         } else if (note != null) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(note, Modifier.weight(1f, fill = false), style = Dray.Font.subhead.copy(color = Dray.secondary), textAlign = TextAlign.Center)
@@ -242,7 +255,7 @@ private fun DockActions(
                         Box(Modifier.size(12.dp).clip(RoundedCornerShape(3.dp)).background(Dray.onPrimary))
                     }, trailing = { StopTimer(Dictations.since[draft]) }) { Dictations.stop(store, draft) }
                 } else {
-                    DockButton(if (sending) "" else "Start task", DockKind.Primary, enabled = phase == DockPhase.Ready && ready && !sending,
+                    DockButton(if (sending) "" else words.start, DockKind.Primary, enabled = phase == DockPhase.Ready && ready && !sending,
                         leading = if (sending) ({ CircularProgressIndicator(Modifier.size(16.dp), color = Dray.onPrimary, strokeWidth = 2.dp) }) else null,
                         onClick = onStart)
                 }
@@ -390,3 +403,36 @@ internal fun rememberWithMic(draft: SessionKey): (() -> Unit) -> Unit {
     }
 }
 
+
+/** What a dock calls its words, iOS's titles for each dock. */
+enum class DockWords(val field: String, val blank: String, val edit: String, val start: String, val discard: String) {
+    Task("New task", "New task", "Edit task", "Start task", "Discard this task?"),
+    Reply("Message", "Reply", "Edit message", "Send", "Discard this reply?"),
+}
+
+/** A reply's words, waiting to send as the bubble they will be: the last of them, a tap from editing. */
+@Composable
+private fun WaitingBubble(text: String, edit: () -> Unit) {
+    Box(Modifier.fillMaxWidth().padding(bottom = 4.dp), contentAlignment = Alignment.CenterEnd) {
+        Text(
+            spokenTail(text),
+            Modifier
+                .widthIn(max = 290.dp)
+                .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 6.dp))
+                .background(Dray.sent)
+                .clickable(onClickLabel = "Edit", onClick = edit)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            style = Dray.Font.body.copy(color = Dray.onSent),
+            maxLines = 3,
+        )
+    }
+}
+
+/** The last hundred characters, cut at a word: what the bubble shows of a long reply. ReplyDock.swift's `spokenTail`. */
+fun spokenTail(text: String, limit: Int = 100): String {
+    val t = text.trim()
+    if (t.length <= limit) return t
+    val cut = t.takeLast(limit)
+    val space = cut.indexOf(' ')
+    return "…" + if (space in 0 until cut.length - 1) cut.substring(space + 1) else cut
+}
