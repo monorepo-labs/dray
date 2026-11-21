@@ -1,4 +1,4 @@
-import { Cog6ToothIcon, SignalSlashIcon } from "@heroicons/react/16/solid";
+import { Cog6ToothIcon, FolderIcon, SignalSlashIcon } from "@heroicons/react/16/solid";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
@@ -18,6 +18,7 @@ import {
   Undo2,
 } from "lucide-react";
 import Orb from "@/components/Orb";
+import AgentIcon from "@/components/AgentIcon";
 import BotAvatar from "@/components/BotAvatar";
 import { TypingDots } from "@/components/chat/BotTranscript";
 import { greetingOf, previewLine, type BotEntry } from "@/lib/bots";
@@ -72,6 +73,7 @@ import { cn } from "@/lib/utils";
 import type {
   Bot,
   BotPreview,
+  Harness,
   PrMark,
   Project,
   SessionIndexItem,
@@ -997,7 +999,7 @@ function DevBadge() {
 /// Narrower, the rows' timestamps and marks eat the titles beside them, so a
 /// drag under it goes to the rail instead.
 export const SIDEBAR_MIN = 240;
-/// The icon-only sidebar: the top buttons and the bots, no tasks.
+/// The icon-only sidebar: the top buttons, the bots and the tasks as icons.
 export const SIDEBAR_RAIL = 56;
 
 /// Names a control in the icon rail, where its label is gone; held shut in the
@@ -1454,9 +1456,50 @@ export default function Sidebar({
         })}
       </div>}
 
-      {/* The rail carries no tasks: the top strip and the bots are all it
-          holds, and this spacer keeps its foot at the bottom. */}
-      {iconOnly ? <div className="flex-1" /> : <>
+      {/* The rail draws the same runs as the list, one icon per row: no
+          headings and no lineage, the break between runs is the grouping. */}
+      {iconOnly ? <>
+        {filterShown && <div className="mt-4 flex justify-center px-2">
+          <ProjectFilter
+            iconOnly
+            projects={projects}
+            value={projectFilter}
+            onChange={onProjectFilterChange}
+          />
+        </div>}
+        <div className="scrollbar-none flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 pt-1 pb-3">
+          {runs.flatMap((group, index) => [
+            index > 0 && <div key={`gap ${groupKeys[index]}`} aria-hidden className="h-4 shrink-0" />,
+            ...(group.kind === "drafts"
+              ? group.drafts.map((draft) => (
+                  <RailTask
+                    key={draft.id}
+                    label={draftTitle(draft)}
+                    harness={draft.harness}
+                    active={draft.id === openDraftId}
+                    onOpen={() => onOpenDraft(draft.id)}
+                  />
+                ))
+              : group.rows.map(({ item }) => {
+                  const status = statusBySession[item.sessionId] ?? item.status;
+                  const aside = !archivedShown && ((group.kind === "stage" && group.state === "aside") || item.aside);
+                  return (
+                    <RailTask
+                      key={item.sessionId}
+                      sessionId={item.sessionId}
+                      label={item.title}
+                      harness={item.harness}
+                      status={status}
+                      asking={askingSessions.has(item.sessionId)}
+                      active={item.sessionId === selectedSessionId}
+                      dim={aside ? "opacity-30" : ((archivedShown && !isToday(item.modified)) || offline(item.cwd)) ? "opacity-50" : undefined}
+                      onOpen={() => void onSelect(item.sessionId)}
+                    />
+                  );
+                })),
+          ])}
+        </div>
+      </> : <>
       {filterShown && <div data-rail-hide className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
         <ProjectFilter
           projects={projects}
@@ -2119,6 +2162,81 @@ function BotRow({
   );
 }
 
+/// A task on the rail: its agent's mark in a bot row's box, the title in the
+/// tooltip, and the full row's left mark for unread and asking.
+function RailTask({
+  sessionId,
+  label,
+  harness,
+  status = "idle",
+  asking = false,
+  active,
+  dim,
+  onOpen,
+}: {
+  /// Absent on a draft, which has no transcript to warm or digit to answer.
+  sessionId?: string;
+  label: string;
+  harness: Harness;
+  status?: SessionStatus;
+  asking?: boolean;
+  active: boolean;
+  dim?: string;
+  onOpen: () => void;
+}) {
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (active) ref.current?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+  const prefetch = useHoverPrefetch(sessionId);
+  const digit = useJumpDigit(sessionId ?? "");
+  // An asking agent has stopped, so it keeps its yellow mark and no shimmer.
+  const working = status === "in_progress" && !asking;
+
+  return (
+    <RailTip on label={label}>
+      <button
+        ref={ref}
+        type="button"
+        onClick={onOpen}
+        onPointerEnter={prefetch.onPointerEnter}
+        onPointerLeave={prefetch.onPointerLeave}
+        onPointerDown={prefetch.onPointerDown}
+        aria-label={label}
+        className={cn(
+          "relative flex h-8 w-full shrink-0 cursor-pointer items-center justify-center rounded-md",
+          "transition-[color,background-color,opacity] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
+          active
+            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+            : cn("text-sidebar-foreground/80 hover:bg-sidebar-accent/50", dim && cn(dim, "hover:opacity-100")),
+        )}
+      >
+        {(asking || status === "completed") && (
+          <span
+            role="img"
+            aria-label={asking ? "Waiting for you" : "Unread"}
+            className={cn(
+              "absolute left-0 h-1.5 w-0.5 rounded-[1px]",
+              asking ? "bg-accent-command" : "bg-accent-add",
+            )}
+          />
+        )}
+        {/* Working is `shimmer-text`'s look: the mark muted, a foreground
+            copy over it showing through a travelling band. */}
+        <span className={cn("relative flex", digit && "invisible")}>
+          <AgentIcon harness={harness} className={cn("size-4", working && "text-muted-foreground")} />
+          {working && (
+            <span aria-hidden className="shimmer-mask absolute inset-0 text-foreground">
+              <AgentIcon harness={harness} className="size-4" />
+            </span>
+          )}
+        </span>
+        {digit && <Kbd className="absolute top-1/2 left-1/2 -translate-1/2">{digit}</Kbd>}
+      </button>
+    </RailTip>
+  );
+}
+
 function HeadingRow({
   onClick,
   label,
@@ -2186,10 +2304,14 @@ function ProjectFilter({
   projects,
   value,
   onChange,
+  iconOnly = false,
 }: {
   projects: Project[];
   value: string | null;
   onChange: (path: string | null) => void;
+  /// The rail's form: a folder for All, the project's initial otherwise, its
+  /// name in the tooltip.
+  iconOnly?: boolean;
 }) {
   // "All" is an entry rather than a special case, so the tap, the dots and
   // the menu all walk one list and can't disagree about what's next.
@@ -2279,7 +2401,13 @@ function ProjectFilter({
       // stray frame rather than as the label being focused. Unselectable
       // because the label is the target's face, not prose — a double-click
       // aimed at the band highlighting it is only ever an accident.
-      className="group/projects -my-1 flex min-w-0 flex-1 cursor-pointer flex-col items-start py-1 pl-1 select-none focus-visible:outline-none"
+      aria-label={iconOnly ? `Project: ${active.name}` : undefined}
+      className={cn(
+        "group/projects flex cursor-pointer flex-col select-none focus-visible:outline-none",
+        iconOnly
+          ? "w-full items-center rounded-md pt-2 pb-1 transition-colors hover:bg-sidebar-accent/50 focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          : "-my-1 min-w-0 flex-1 items-start py-1 pl-1",
+      )}
     >
       {/* Hugs its own contents, so the dots stay centred under the label rather
           than under the band. */}
@@ -2287,7 +2415,17 @@ function ProjectFilter({
         {/* Lit from the band's hover rather than its own, so reaching anywhere
             on the strip says the strip is what answers. */}
         <span className="flex items-center gap-1 text-ui text-muted-foreground transition-colors group-hover/projects:text-foreground">
-          <span className="max-w-40 truncate">{active.name}</span>
+          {!iconOnly ? (
+            <span className="max-w-40 truncate">{active.name}</span>
+          ) : active.path === null ? (
+            <FolderIcon className="size-4" />
+          ) : (
+            <span className="flex size-4 items-center justify-center rounded-[4px] bg-current">
+              <span className="text-[10px] leading-none font-semibold text-background">
+                {active.name.match(/[\p{L}\p{N}]/u)?.[0]?.toUpperCase() ?? "?"}
+              </span>
+            </span>
+          )}
         </span>
 
         <DotTrack
@@ -2311,8 +2449,18 @@ function ProjectFilter({
   // the only thing a bare icon has to say for itself, where this control names
   // itself on its face. Passing over it on the way to the list below should not
   // put a chip on screen.
-  const withHint = (trigger: React.ReactNode) =>
-    entries.length < 2 ? (
+  const withHint = (trigger: React.ReactElement) =>
+    iconOnly ? (
+      // The name too, the rail's face being an initial. Shut while the menu
+      // is open, which lists the same thing where the tip would sit.
+      <RailTip
+        on={!menuOpen}
+        label={active.name}
+        keys={entries.length < 2 ? undefined : ["filter.prev", "filter.next"]}
+      >
+        {trigger}
+      </RailTip>
+    ) : entries.length < 2 ? (
       trigger
     ) : (
       <Tooltip delayDuration={400}>
@@ -2354,6 +2502,21 @@ function ProjectFilter({
 
   if (!menuMode) return withHint(band);
 
+  const trigger = (
+    <DropdownMenuTrigger
+      asChild
+      onPointerEnter={() => hover(true)}
+      onPointerLeave={() => {
+        clicked.current = false;
+        hover(false);
+      }}
+      // Skips Radix's own toggle on press, so the click is the tap's alone.
+      onPointerDown={(e) => e.preventDefault()}
+    >
+      {band}
+    </DropdownMenuTrigger>
+  );
+
   // A tap steps, as below the threshold, and a hover opens the list; the
   // keyboard still opens it through the trigger. Not modal: a modal menu locks
   // pointer events on everything else, so leaving it could never close it.
@@ -2367,22 +2530,12 @@ function ProjectFilter({
       }}
       modal={false}
     >
-      <DropdownMenuTrigger
-        asChild
-        onPointerEnter={() => hover(true)}
-        onPointerLeave={() => {
-          clicked.current = false;
-          hover(false);
-        }}
-        // Skips Radix's own toggle on press, so the click is the tap's alone.
-        onPointerDown={(e) => e.preventDefault()}
-      >
-        {band}
-      </DropdownMenuTrigger>
+      {iconOnly ? withHint(trigger) : trigger}
       {/* Focus handed back to the band on close opened its tooltip, which then
           sat there until the pointer left and came back. */}
       <DropdownMenuContent
         align="start"
+        side={iconOnly ? "right" : undefined}
         className="min-w-52"
         onCloseAutoFocus={(e) => e.preventDefault()}
         // Untyped on purpose: Radix keeps `onOpenAutoFocus` off the public
