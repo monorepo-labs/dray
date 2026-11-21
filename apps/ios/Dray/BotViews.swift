@@ -986,6 +986,8 @@ struct BotTasksSheet: View {
     let tasks: [SessionKey]
     /// The bot's chat, newest session first, whose subagents and shells list under the tasks.
     var runs: [SessionKey] = []
+    /// The bot, whose routines list under its attachments.
+    var bot: Bot?
     let open: (SessionKey) -> Void
 
     var body: some View {
@@ -1010,7 +1012,11 @@ struct BotTasksSheet: View {
                         if i > 0 || !pinned.isEmpty { Color.clear.frame(height: 16) }
                         ForEach(run, id: \.self, content: draw)
                     }
-                    if !runs.isEmpty { RunsSections(keys: runs) }
+                    if !runs.isEmpty {
+                        RunsSections(keys: runs)
+                        BotAttachments(chat: runs)
+                    }
+                    if let bot { BotRoutines(server: server, botId: bot.id) }
                 }
                 .padding(.horizontal, Theme.Space.s)
                 .padding(.top, Theme.Space.l)
@@ -1026,6 +1032,8 @@ struct BotTasksSheet: View {
             }
             .background(Theme.card.ignoresSafeArea())
         }
+        // Attachments read from the bot's machine.
+        .environment(\.imageServer, store.connection(server))
         .presentationDetents([.medium, .large])
         .presentationBackground(Theme.card)
         // Tasks are hidden, so the list never reads their repos' marks, and the order rests on them.

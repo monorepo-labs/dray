@@ -182,7 +182,7 @@ struct TranscriptView: View {
         .changesButton(key, shown: bot == nil)
         .prPanel(key)
         .sheet(isPresented: $showingTasks) {
-            BotTasksSheet(server: key.server, tasks: botTasks, runs: runKeys(bot)) { openTask?($0) }
+            BotTasksSheet(server: key.server, tasks: botTasks, runs: runKeys(bot), bot: bot) { openTask?($0) }
         }
         .sheet(isPresented: $showingRuns) { RunsSheet(key: key, focus: runFocus) }
         .navigationDestination(item: $subagent) { SubagentChat(route: $0) }
