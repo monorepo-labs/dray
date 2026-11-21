@@ -1952,6 +1952,26 @@ pub async fn is_default_branch(cwd: &str, branch: &str) -> bool {
     default_base(cwd).await.is_some_and(|base| base.strip_prefix("origin/") == Some(branch))
 }
 
+/// [`default_base`], fetched first: the ref a new task's tree starts from,
+/// picked or not, so it starts at the remote's newest commit rather than
+/// wherever this clone last fetched. A fetch that fails or outlasts
+/// [`FETCH_LIMIT`] still answers the ref as it stands, the CLI's own fallback
+/// when its `-w` fetch fails.
+pub async fn fetched_default_base(cwd: &str) -> Option<String> {
+    let base = default_base(cwd).await?;
+    if let Some(branch) = base.strip_prefix("origin/") {
+        let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
+        let args = ["fetch", "-q", "--no-tags", "origin", &refspec];
+        let fetch = exec(cwd, &[("GIT_TERMINAL_PROMPT", "0")], &args);
+        match tokio::time::timeout(FETCH_LIMIT, fetch).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => eprintln!("[fetch] {base} in {cwd}, starting from it as last fetched: {e:#}"),
+            Err(_) => eprintln!("[fetch] {base} in {cwd} timed out, starting from it as last fetched"),
+        }
+    }
+    Some(base)
+}
+
 /// How long [`create_worktree_on_branch`] waits on its fetch.
 const FETCH_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -3498,6 +3518,42 @@ mod tests {
 
         fs::remove_dir_all(&dir).await.ok();
         fs::remove_dir_all(&bare).await.ok();
+    }
+
+    /// A clone whose `origin/main` is behind its remote starts a new task at
+    /// the remote's newest commit, and one that cannot reach its remote still
+    /// starts, from the ref as last fetched.
+    #[tokio::test]
+    async fn the_default_base_is_fetched_before_a_tree_starts_from_it() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+        let bare = std::env::temp_dir().join(format!("dray-origin-{}", Uuid::now_v7()));
+        fs::create_dir_all(&bare).await.unwrap();
+        run(bare.to_str().unwrap(), &["init", "-q", "--bare", "."]).await.unwrap();
+        run(at, &["remote", "add", "origin", bare.to_str().unwrap()]).await.unwrap();
+        run(at, &["push", "-q", "origin", "HEAD:refs/heads/main"]).await.unwrap();
+        run(at, &["fetch", "-q", "origin"]).await.unwrap();
+        run(at, &["remote", "set-head", "origin", "main"]).await.unwrap();
+        let stale = resolve_commit(at, "origin/main").await.unwrap();
+
+        // Pushed from elsewhere: moved onto the remote's main there, so this
+        // clone's `origin/main` never hears of it.
+        let tree = git_line(at, &["rev-parse", "HEAD^{tree}"]).await.unwrap();
+        let newer = git_line(at, &["commit-tree", &tree, "-p", &stale, "-m", "upstream"]).await.unwrap();
+        run(at, &["push", "-q", "origin", &format!("{newer}:refs/heads/elsewhere")]).await.unwrap();
+        run(bare.to_str().unwrap(), &["update-ref", "refs/heads/main", &newer]).await.unwrap();
+        assert_eq!(resolve_commit(at, "origin/main").await.as_deref(), Some(stale.as_str()));
+
+        assert_eq!(fetched_default_base(at).await.as_deref(), Some("origin/main"));
+        let path = create_worktree(at, "fresh", "origin/main").await.unwrap();
+        assert_eq!(resolve_commit(&path, "HEAD").await, Some(newer.clone()), "started at the remote's newest");
+
+        run(at, &["remote", "set-url", "origin", "/nonexistent/dray-origin"]).await.unwrap();
+        assert_eq!(fetched_default_base(at).await.as_deref(), Some("origin/main"), "a failed fetch is no refusal");
+        assert_eq!(resolve_commit(at, "origin/main").await, Some(newer));
+
+        fs::remove_dir_all(&bare).await.ok();
+        fs::remove_dir_all(&dir).await.ok();
     }
 
     /// The branch picker's rules, one branch per case: only on the remote,
