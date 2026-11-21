@@ -884,6 +884,7 @@ enum Note {
     Renamed,
     UserName,
     Moved,
+    Docs,
 }
 
 /// Tells the bot at `path` `note` ahead of its next prompt.
@@ -893,6 +894,7 @@ fn note_bot(path: &str, kind: Note, note: String) {
         Note::Renamed => "The user renamed you",
         Note::UserName => "The user asked to be called",
         Note::Moved => "Your instructions moved",
+        Note::Docs => "Your folder now has",
     };
     notes.retain(|(p, n)| !(same_dir(p, path) && n.starts_with(tag(&kind))));
     debug_assert!(note.starts_with(tag(&kind)));
@@ -1814,6 +1816,20 @@ pub async fn prepare(cwd: &str) {
     }
 }
 
+/// Makes `docs/` where it is missing. A missing one means a bot older than
+/// the rule, and a grok or fx chat resumes on the prompt it started with, so
+/// the bot is told once, whatever its agent.
+async fn ensure_docs(bot: &Bot) {
+    let dir = Path::new(&bot.path);
+    if !dir.join(DOCS).exists() && tokio::fs::create_dir_all(dir.join(DOCS)).await.is_ok() {
+        note_bot(
+            &bot.path,
+            Note::Docs,
+            format!("Your folder now has `{DOCS}/`. Put every document you make for the user to open later there, such as a guide, a summary, a plan or research notes, never on the Desktop, in `/tmp` or in a repo, and give the user its path. Sort them into a folder per category: `{DOCS}/personal/` for the user's personal things, and others you name as needed. Not for task scratch files or memory."),
+        );
+    }
+}
+
 /// What every spawn of a bot needs on disk before its agent reads the folder.
 async fn prepare_folder(bot: &Bot) {
     let dir = Path::new(&bot.path);
@@ -1831,7 +1847,7 @@ async fn prepare_folder(bot: &Bot) {
     // A bot made before memory was a folder has none, and the prompt sends it
     // straight to one. Its old `MEMORY.md` is left alone: bots had no users yet.
     tokio::fs::create_dir_all(dir.join(MEMORY)).await.ok();
-    tokio::fs::create_dir_all(dir.join(DOCS)).await.ok();
+    ensure_docs(bot).await;
     learn::ensure_skills(dir).await;
     if let Err(e) = write_user_file(bot).await {
         eprintln!("[user name] {e:#}");
@@ -2516,6 +2532,21 @@ mod tests {
         write_pointer(&dir).await;
         assert_eq!(tokio::fs::read_to_string(dir.join(".gitignore")).await.unwrap(), "/CLAUDE.md\n");
         assert_eq!(tokio::fs::read_to_string(dir.join(CLAUDE_POINTER)).await.unwrap(), "mine");
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn an_older_bot_is_told_of_docs_once() {
+        let dir = std::env::temp_dir().join(format!("dray-bot-{}", uuid::Uuid::now_v7()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let bot = Bot { path: dir.to_string_lossy().into_owned(), ..bot() };
+        let told = || NOTES.lock().unwrap().iter().filter(|(p, n)| p == &bot.path && n.contains("`docs/personal/`")).count();
+        ensure_docs(&bot).await;
+        assert!(dir.join(DOCS).is_dir());
+        assert_eq!(told(), 1);
+        NOTES.lock().unwrap().retain(|(p, _)| p != &bot.path);
+        ensure_docs(&bot).await;
+        assert_eq!(told(), 0);
         tokio::fs::remove_dir_all(&dir).await.ok();
     }
 
