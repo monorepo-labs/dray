@@ -1,32 +1,24 @@
 "use client";
 
 import { AppleGlyph } from "@/components/AppleGlyph";
-import { BetaTag } from "@/components/BetaTag";
-import { TESTFLIGHT } from "@/lib/links";
+import { APP_STORE } from "@/lib/links";
 import { posthog } from "@/lib/posthog";
 
-/// The iPhone app's TestFlight beta, beside the download buttons. Counted as
-/// `testflight_click`, keyed by where it sits, since it leaves for Apple's page.
-/// The closing band spells it out ("Download for iPhone" with a TestFlight
-/// tag); the hero, three buttons wide, says "iPhone (TestFlight)".
+/// The iPhone app on the App Store, beside the download buttons. Counted as
+/// `app_store_click`, keyed by where it sits, since it leaves for Apple's page.
+/// The closing band spells it out ("Download for iPhone"); the hero, three
+/// buttons wide, says "iPhone".
 export function IPhoneButton({ className, from }: { className: string; from: "hero" | "cta" }) {
   return (
     <a
-      href={TESTFLIGHT}
+      href={APP_STORE}
       target="_blank"
       rel="noopener noreferrer"
-      onClick={() => posthog.capture("testflight_click", { from }, { transport: "sendBeacon" })}
+      onClick={() => posthog.capture("app_store_click", { from }, { transport: "sendBeacon" })}
       className={className}
     >
       <AppleGlyph className="-mt-0.5 size-4" />
-      {from === "cta" ? (
-        <>
-          Download for iPhone
-          <BetaTag label="TestFlight" />
-        </>
-      ) : (
-        "iPhone (TestFlight)"
-      )}
+      {from === "cta" ? "Download for iPhone" : "iPhone"}
     </a>
   );
 }

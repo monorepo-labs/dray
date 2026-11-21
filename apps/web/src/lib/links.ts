@@ -10,8 +10,8 @@ export const DOWNLOAD = "https://downloads.drayhq.com/Dray_universal.dmg";
 /// itself, so this line never needs a version in it.
 export const INSTALL_LINE = "curl -fsSL https://www.drayhq.com/install.sh | sh";
 
-/// The iPhone app's public TestFlight beta.
-export const TESTFLIGHT = "https://testflight.apple.com/join/RdubHFbv";
+/// The iPhone app on the App Store.
+export const APP_STORE = "https://apps.apple.com/app/id6824145317";
 
 /// The person who builds it, on X — the nav's "Feedback" link and the
 /// footer's mark both. Most visitors arrive from a tweet, so this is the

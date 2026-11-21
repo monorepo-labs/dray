@@ -27,7 +27,7 @@
 
 - [Download for Mac](https://downloads.drayhq.com/Dray_universal.dmg)
 - [All downloads](https://www.drayhq.com/download): Mac, Linux (beta: .deb and AppImage, x64 and arm64) and the server.
-- [iPhone beta on TestFlight](https://testflight.apple.com/join/RdubHFbv)
+- [iPhone app on the App Store](https://apps.apple.com/app/id6824145317)
 - [Install on a server](https://www.drayhq.com/install.sh): `curl -fsSL https://www.drayhq.com/install.sh | sh`
 - [GitHub](https://github.com/monorepo-labs/dray)
 - [Docs](https://www.drayhq.com/docs)

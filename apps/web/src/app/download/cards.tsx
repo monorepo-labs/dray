@@ -8,7 +8,7 @@ import { LinuxMenu } from "@/components/LinuxMenu";
 import { PhoneGlyph } from "@/components/PhoneGlyph";
 import { ServerGlyph } from "@/components/ServerGlyph";
 import { TuxMark } from "@/components/TuxMark";
-import { INSTALL_LINE, TESTFLIGHT } from "@/lib/links";
+import { APP_STORE, INSTALL_LINE } from "@/lib/links";
 import { posthog } from "@/lib/posthog";
 
 import { DmgLink } from "./client";
@@ -93,15 +93,18 @@ export function DownloadCards() {
         <CopyCommand />
       </Card>
 
-      <Card art={<PhoneGlyph className={ART} />} name="iPhone" beta line="iOS 17 or later, through TestFlight.">
+      <Card art={<PhoneGlyph className={ART} />} name="iPhone" line="iOS 17 or later.">
         <a
-          href={TESTFLIGHT}
+          href={APP_STORE}
           target="_blank"
           rel="noopener noreferrer"
-          onClick={() => posthog.capture("testflight_click", { from: "downloads" }, { transport: "sendBeacon" })}
+          onClick={() => posthog.capture("app_store_click", { from: "downloads" }, { transport: "sendBeacon" })}
           className={BUTTON}
         >
-          Join on TestFlight
+          {/* The whole label is wider than a four-up card's button. */}
+          <span>
+            <span className="lg:hidden">Download on the </span>App Store
+          </span>
           <svg viewBox="0 0 16 16" aria-hidden className="size-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6">
             <path d="M4.5 11.5l7-7M5.5 4.5h6v6" />
           </svg>
