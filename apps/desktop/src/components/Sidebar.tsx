@@ -17,7 +17,6 @@ import {
   Undo2,
 } from "lucide-react";
 import Orb from "@/components/Orb";
-import AgentIcon from "@/components/AgentIcon";
 import BotAvatar from "@/components/BotAvatar";
 import { TypingDots } from "@/components/chat/BotTranscript";
 import { greetingOf, previewLine, type BotEntry } from "@/lib/bots";
@@ -72,7 +71,6 @@ import { cn } from "@/lib/utils";
 import type {
   Bot,
   BotPreview,
-  Harness,
   PrMark,
   Project,
   SessionIndexItem,
@@ -1514,7 +1512,6 @@ export default function Sidebar({
                   <RailTask
                     key={draft.id}
                     label={draftTitle(draft)}
-                    harness={draft.harness}
                     active={draft.id === openDraftId}
                     onOpen={() => onOpenDraft(draft.id)}
                   />
@@ -1527,7 +1524,6 @@ export default function Sidebar({
                       key={item.sessionId}
                       sessionId={item.sessionId}
                       label={item.title}
-                      harness={item.harness}
                       status={status}
                       asking={askingSessions.has(item.sessionId)}
                       active={item.sessionId === selectedSessionId}
@@ -2183,24 +2179,32 @@ function BotRow({
   );
 }
 
-/// A filter's pick on the rail, where its name has no room: the first letter
-/// or digit knocked out of a filled square, a 16px glyph like the icons beside it.
-function Initial({ name }: { name: string }) {
+/// Words an initial skips, or "Fix the login redirect" reads FT.
+const MINOR_WORDS = new Set(["a", "an", "the", "of", "to", "for", "and", "in", "on", "with", "at", "by", "from", "into"]);
+
+/// The first letters of a name's first `count` words, minor words skipped
+/// unless the name is nothing else.
+export function initials(name: string, count: number): string {
+  const words = name.match(/[\p{L}\p{N}]+/gu) ?? [];
+  const main = words.filter((w) => !MINOR_WORDS.has(w.toLowerCase()));
+  return (main.length ? main : words).slice(0, count).map((w) => w[0]).join("").toUpperCase() || "?";
+}
+
+/// A name on the rail, where it has no room: its initials knocked out of a
+/// filled square, a 16px glyph like the icons beside it, widening for two.
+function Initial({ name, letters = 1 }: { name: string; letters?: number }) {
   return (
-    <span className="flex size-4 items-center justify-center rounded-[4px] bg-current">
-      <span className="text-[10px] leading-none font-semibold text-background">
-        {name.match(/[\p{L}\p{N}]/u)?.[0]?.toUpperCase() ?? "?"}
-      </span>
+    <span className="flex h-4 min-w-4 items-center justify-center rounded-[4px] bg-current px-0.5">
+      <span className="text-[10px] leading-none font-semibold text-background">{initials(name, letters)}</span>
     </span>
   );
 }
 
-/// A task on the rail: its agent's mark in a bot row's box, the title in the
-/// tooltip, and the full row's left mark for unread and asking.
+/// A task on the rail: its title's initials in a bot row's box, the title in
+/// the tooltip, and the full row's left mark for unread and asking.
 function RailTask({
   sessionId,
   label,
-  harness,
   status = "idle",
   asking = false,
   active,
@@ -2210,7 +2214,6 @@ function RailTask({
   /// Absent on a draft, which has no transcript to warm or digit to answer.
   sessionId?: string;
   label: string;
-  harness: Harness;
   status?: SessionStatus;
   asking?: boolean;
   active: boolean;
@@ -2254,13 +2257,13 @@ function RailTask({
             )}
           />
         )}
-        {/* Working is `shimmer-text`'s look: the mark muted, a foreground
-            copy over it showing through a travelling band. */}
-        <span className={cn("relative flex", digit && "invisible")}>
-          <AgentIcon harness={harness} className={cn("size-4", working && "text-muted-foreground")} />
+        {/* Working is `shimmer-text`'s look: the initials muted, a foreground
+            copy over them showing through a travelling band. */}
+        <span aria-hidden className={cn("relative flex", digit && "invisible", working && "text-muted-foreground")}>
+          <Initial name={label} letters={2} />
           {working && (
-            <span aria-hidden className="shimmer-mask absolute inset-0 text-foreground">
-              <AgentIcon harness={harness} className="size-4" />
+            <span className="shimmer-mask absolute inset-0 flex text-foreground">
+              <Initial name={label} letters={2} />
             </span>
           )}
         </span>
