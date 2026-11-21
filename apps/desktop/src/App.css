@@ -1548,3 +1548,79 @@ body.session-drag,
 body.session-drag * {
   cursor: grabbing !important;
 }
+
+/* A tab in the titlebar strip, drawn the way a browser draws its own. At rest
+   it is flat on the frame, and hover lays the sidebar row's hover fill behind
+   it as a pill, inset off the strip's floor so it never reads as lit.
+
+   Lit, it is a piece of the sheet: the sheet's colour under a rounded top,
+   running down into the sheet below, with a concave flare at each foot. The
+   fill is opaque because the frame under it is a scrim, and nothing painted on
+   a scrim lifts it back off; `--background` under the sheet's veil is what the
+   sheet composites to wherever the body is opaque, so only a glass window's
+   wallpaper tint is missing. The hairline is the sheet's own ring carried round
+   the tab, and the tab covers the stretch of it under its foot so the two run
+   together. */
+.tab-strip {
+  --tab-r: 8px;
+  isolation: isolate;
+}
+
+.tab-strip::before {
+  content: "";
+  position: absolute;
+  inset: 2px 0 4px;
+  z-index: -1;
+  border-radius: 6px;
+  pointer-events: none;
+  transition: background-color 150ms ease-out;
+}
+
+.tab-strip:not([data-lit]):is(:hover, [data-held])::before {
+  background: color-mix(in oklab, var(--sidebar-accent) 50%, transparent);
+}
+
+/* A split group keeps the outline that says its members travel together. */
+.tab-strip[data-group]:not([data-lit])::before {
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+}
+
+.tab-strip[data-lit] {
+  z-index: 10;
+  border-radius: var(--tab-r) var(--tab-r) 0 0;
+  background: linear-gradient(var(--surface-sheet), var(--surface-sheet)), var(--background);
+  box-shadow: 0 0 0 1px var(--hairline);
+}
+
+/* The flares: a square outside each foot holding a quarter circle of frame,
+   edged in the hairline, the rest the tab's fill. Two layers, as the tab's own
+   fill is, so a translucent sheet still has its floor under it. */
+.tab-strip[data-lit]::before,
+.tab-strip[data-lit]::after {
+  content: "";
+  position: absolute;
+  inset: auto;
+  bottom: 0;
+  z-index: 0;
+  width: var(--tab-r);
+  height: var(--tab-r);
+  border-radius: 0;
+  pointer-events: none;
+  --edge: transparent calc(var(--tab-r) - 1.5px), var(--hairline) calc(var(--tab-r) - 1px),
+    var(--hairline) calc(var(--tab-r) - 0.5px), var(--surface-sheet) var(--tab-r);
+  --floor: transparent calc(var(--tab-r) - 0.5px), var(--background) var(--tab-r);
+}
+
+.tab-strip[data-lit]::before {
+  right: 100%;
+  background:
+    radial-gradient(circle at 0 0, var(--edge)),
+    radial-gradient(circle at 0 0, var(--floor));
+}
+
+.tab-strip[data-lit]::after {
+  left: 100%;
+  background:
+    radial-gradient(circle at 100% 0, var(--edge)),
+    radial-gradient(circle at 100% 0, var(--floor));
+}

@@ -6,7 +6,7 @@ import { useDriven } from "@/lib/browser";
 /// The glow along a tab's edge while the agent drives it, beside the orb its
 /// favicon turns into. Laid over the tab rather than wrapped round it: the
 /// package's wrapper clips its overflow and spends both pseudo-elements,
-/// which would take the panel tab's flared foot with it. Mounted for the
+/// which would take the strip tab's flared foot with it. Mounted for the
 /// tab's whole life, so `active` can fade it out.
 ///
 /// The style is inline because the package injects its own `position:
@@ -15,8 +15,8 @@ import { useDriven } from "@/lib/browser";
 ///
 /// The preset's glow is 60px tall and a tab 28px, so unmasked it lights the
 /// overlay's whole rounded outline; the mask keeps it to the one edge.
-/// `top` flips it onto the top edge for the panel strip, whose foot runs into
-/// the URL row — `line` has no top preset, and a vertical flip keeps the beam
+/// `top` flips it onto the top edge for the titlebar strip, whose lit tab runs
+/// into the sheet — `line` has no top preset, and a vertical flip keeps the beam
 /// travelling the same way. The mask is written pre-flip, so `to top`.
 export default function AgentBeam({ tab, top = false }: { tab: number; top?: boolean }) {
   const driven = useDriven(tab) !== null;
