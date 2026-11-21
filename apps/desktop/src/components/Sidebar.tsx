@@ -1799,27 +1799,7 @@ export default function Sidebar({
           {/* The floating cards land here: pinned bottom-left they would
               cover the chat, the rail being narrower than any of them. */}
           <div ref={iconOnly ? setRailSlot : undefined} className="flex flex-col items-center gap-0.5 empty:hidden" />
-          {/* The titlebar switcher's click, stepping to the next space, with
-              the one in force named in the tooltip. */}
-          {spaces.length > 0 && (
-            <RailTip on label={space ?? "All Spaces"}>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Space: ${space ?? "All Spaces"}`}
-                onClick={() => {
-                  const entries = spaceEntries(spaces);
-                  const at = Math.max(0, entries.indexOf(space));
-                  onSpaceChange(entries[(at + 1) % entries.length]);
-                }}
-                className="text-muted-foreground transition-colors hover:text-foreground"
-              >
-                {/* The space in force by its initial, as the project filter
-                    above says its project. */}
-                {space === null ? <Square3Stack3DIcon className="size-4" /> : <Initial name={space} />}
-              </Button>
-            </RailTip>
-          )}
+          {spaces.length > 0 && <RailSpaces spaces={spaces} space={space} onChange={onSpaceChange} />}
           <SettingsButton onOpen={onOpenSettings} />
         </div>
       )}
@@ -2305,6 +2285,118 @@ function HeadingRow({
   );
 }
 
+/// Hover-to-open for a filter's menu whose click does something else (steps to
+/// the next pick). Radix only opens on a press, and a pass-by must not open
+/// it, so both edges wait a beat. Spread `root` on the `DropdownMenu`,
+/// `trigger` on its trigger, `content` on its content; call `clicked` from the
+/// click.
+function useHoverMenu() {
+  const [open, setOpen] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // Somebody clicking through picks is not asking for the list, so a click
+  // holds hover-open off until the pointer leaves and comes back.
+  const clicked = useRef(false);
+  // A hover-opened list leaves focus where it was: taking it would pull the
+  // caret out of a draft the reader is mid-sentence in.
+  const byHover = useRef(false);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const hover = (next: boolean) => {
+    clearTimeout(timer.current);
+    if (next && clicked.current) return;
+    timer.current = setTimeout(() => {
+      if (next) byHover.current = true;
+      setOpen(next);
+    }, next ? 600 : 200);
+  };
+
+  return {
+    // Not modal: a modal menu locks pointer events on everything else, so
+    // leaving it could never close it.
+    root: {
+      open,
+      // Radix only opens it from the keyboard here, the press being ours.
+      onOpenChange: (next: boolean) => {
+        if (next) byHover.current = false;
+        setOpen(next);
+      },
+      modal: false,
+    },
+    trigger: {
+      onPointerEnter: () => hover(true),
+      onPointerLeave: () => {
+        clicked.current = false;
+        hover(false);
+      },
+      // Skips Radix's own toggle on press, so the click is the caller's alone.
+      onPointerDown: (e: React.PointerEvent) => e.preventDefault(),
+    },
+    content: {
+      // Focus handed back to the trigger on close opened its tooltip, which
+      // then sat there until the pointer left and came back.
+      onCloseAutoFocus: (e: Event) => e.preventDefault(),
+      // Untyped on purpose: Radix keeps `onOpenAutoFocus` off the public
+      // props but spreads it through to the focus scope all the same.
+      ...{ onOpenAutoFocus: (e: Event) => byHover.current && e.preventDefault() },
+      onPointerEnter: () => clearTimeout(timer.current),
+      onPointerLeave: () => hover(false),
+    },
+    clicked: () => {
+      clicked.current = true;
+      clearTimeout(timer.current);
+      setOpen(false);
+    },
+  };
+}
+
+/// The rail's space switcher: a click steps to the next space, as the
+/// titlebar's does, and resting on it opens the list, as the project filter's
+/// does. The space in force by its initial, the stack icon for All.
+function RailSpaces({
+  spaces,
+  space,
+  onChange,
+}: {
+  spaces: string[];
+  space: string | null;
+  onChange: (space: string | null) => void;
+}) {
+  const menu = useHoverMenu();
+  const label = space ?? "All Spaces";
+  return (
+    <DropdownMenu {...menu.root}>
+      <RailTip on={!menu.root.open} label={label}>
+        <DropdownMenuTrigger asChild {...menu.trigger}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Space: ${label}`}
+            onClick={() => {
+              menu.clicked();
+              const entries = spaceEntries(spaces);
+              const at = Math.max(0, entries.indexOf(space));
+              onChange(entries[(at + 1) % entries.length]);
+            }}
+            className="text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {space === null ? <Square3Stack3DIcon className="size-4" /> : <Initial name={space} />}
+          </Button>
+        </DropdownMenuTrigger>
+      </RailTip>
+      <DropdownMenuContent side="right" align="end" className="min-w-52" {...menu.content}>
+        {/* Radix radio values are strings, so All rides on the empty one, as
+            in the project filter's list. */}
+        <DropdownMenuRadioGroup value={space ?? ""} onValueChange={(next) => onChange(next === "" ? null : next)}>
+          {spaceEntries(spaces).map((entry) => (
+            <DropdownMenuRadioItem key={entry ?? ""} value={entry ?? ""} className="text-ui">
+              <span className="truncate">{entry ?? "All Spaces"}</span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /// The project filter. The label names the current scope and the dots under it
 /// are the map: one per entry, **the active one always in the middle**, so the
 /// row slides under a fixed centre rather than a marker travelling along a fixed
@@ -2477,77 +2569,33 @@ function ProjectFilter({
       </Tooltip>
     );
 
-  // Hover-open state lives here rather than in the menu: Radix only opens on a
-  // press, and a pass-by must not open it, so both edges wait a beat.
-  const [menuOpen, setMenuOpen] = useState(false);
-  const hoverTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  // Somebody clicking through projects is not asking for the list, so a click
-  // holds hover-open off until the pointer leaves and comes back.
-  const clicked = useRef(false);
-  // A hover-opened list leaves focus where it was: taking it would pull the
-  // caret out of a draft the reader is mid-sentence in.
-  const byHover = useRef(false);
-  useEffect(() => () => clearTimeout(hoverTimer.current), []);
-  const hover = (open: boolean) => {
-    clearTimeout(hoverTimer.current);
-    if (open && clicked.current) return;
-    hoverTimer.current = setTimeout(() => {
-      if (open) byHover.current = true;
-      setMenuOpen(open);
-    }, open ? 600 : 200);
-  };
+  const menu = useHoverMenu();
+  const menuOpen = menu.root.open;
 
   // Below the threshold there is no menu, and closing one does nothing.
   function tap() {
-    clicked.current = true;
-    clearTimeout(hoverTimer.current);
-    setMenuOpen(false);
+    menu.clicked();
     cycle();
   }
 
   if (!menuMode) return withHint(band);
 
   const trigger = (
-    <DropdownMenuTrigger
-      asChild
-      onPointerEnter={() => hover(true)}
-      onPointerLeave={() => {
-        clicked.current = false;
-        hover(false);
-      }}
-      // Skips Radix's own toggle on press, so the click is the tap's alone.
-      onPointerDown={(e) => e.preventDefault()}
-    >
+    <DropdownMenuTrigger asChild {...menu.trigger}>
       {band}
     </DropdownMenuTrigger>
   );
 
   // A tap steps, as below the threshold, and a hover opens the list; the
-  // keyboard still opens it through the trigger. Not modal: a modal menu locks
-  // pointer events on everything else, so leaving it could never close it.
+  // keyboard still opens it through the trigger.
   return (
-    <DropdownMenu
-      open={menuOpen}
-      onOpenChange={(open) => {
-        // Radix only opens it from the keyboard here, the press being ours.
-        if (open) byHover.current = false;
-        setMenuOpen(open);
-      }}
-      modal={false}
-    >
+    <DropdownMenu {...menu.root}>
       {iconOnly ? withHint(trigger) : trigger}
-      {/* Focus handed back to the band on close opened its tooltip, which then
-          sat there until the pointer left and came back. */}
       <DropdownMenuContent
         align="start"
         side={iconOnly ? "right" : undefined}
         className="min-w-52"
-        onCloseAutoFocus={(e) => e.preventDefault()}
-        // Untyped on purpose: Radix keeps `onOpenAutoFocus` off the public
-        // props but spreads it through to the focus scope all the same.
-        {...{ onOpenAutoFocus: (e: Event) => byHover.current && e.preventDefault() }}
-        onPointerEnter={() => clearTimeout(hoverTimer.current)}
-        onPointerLeave={() => hover(false)}
+        {...menu.content}
       >
         <DropdownMenuRadioGroup
           // Radix radio values are strings, so All rides on the empty one — no
