@@ -4119,7 +4119,13 @@ function App() {
         >
           {/* Always here, open or shut: the sidebar sits under this row now,
               so the toggle no longer has a strip of its own to live in. */}
-          <SidebarToggle onToggle={toggleSidebar} />
+          <SidebarToggle
+            onToggle={toggleSidebar}
+            // With no traffic lights it sits over the rail: 12px padding puts
+            // its centre at 26px, the rail's icons at 28. A nudge, not
+            // padding, so `--tabs-lead` still holds.
+            className={cn(!lights && sidebarDrawn === SIDEBAR_RAIL && "translate-x-0.5")}
+          />
 
           {/* Over the sidebar's right end, out of the flow so the tabs do not
               move. It belongs to the sidebar, so it goes when the sidebar does —

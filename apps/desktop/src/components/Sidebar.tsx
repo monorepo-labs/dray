@@ -784,7 +784,7 @@ export function isNested(item: SessionIndexItem, items: SessionIndexItem[]): boo
 /// Sidebar toggle. Lives outside `Sidebar` because a collapsed sidebar renders
 /// nothing at all — the button has to survive its own pane disappearing, so the
 /// app header owns it and its y position never moves.
-export function SidebarToggle({ onToggle }: { onToggle: () => void }) {
+export function SidebarToggle({ onToggle, className }: { onToggle: () => void; className?: string }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -797,7 +797,7 @@ export function SidebarToggle({ onToggle }: { onToggle: () => void }) {
           aria-label="Toggle sidebar"
           // The chat tab's mark colour, open or shut: the pane itself says
           // which, and a strength flip read backwards on a sidebar kept open.
-          className="text-muted-foreground transition-colors hover:text-foreground"
+          className={cn("text-muted-foreground transition-colors hover:text-foreground", className)}
         >
           <PanelLeftIcon className="size-4.5" />
         </Button>
