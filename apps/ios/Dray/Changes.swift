@@ -702,10 +702,17 @@ private struct DiffScreen: View {
 
     /// A removal's number counts the old side's lines, every other row's the new side's.
     private func coloredLine(_ row: DiffRow) -> AttributedString? {
-        guard case .line(let sign, let number, _) = row,
+        guard case .line(let sign, let number, let text) = row,
               let side = sign == "-" ? colored.old : colored.new, number <= side.count else { return nil }
-        return side[number - 1]
+        // A coloured line that drifted from the diff's own would hide an edit; plain text never does.
+        let line = side[number - 1]
+        return String(line.characters) == drawn(text) ? line : nil
     }
+}
+
+/// A row's text as drawn: a CRLF line keeps its CR to diff against LF, but drawn it breaks the line.
+private func drawn(_ text: String) -> String {
+    text.unicodeScalars.last == "\r" ? String(text.dropLast()) : text
 }
 
 private struct DiffLine: View {
@@ -740,8 +747,7 @@ private struct DiffLine: View {
                 }
                 .foregroundStyle(Theme.tertiary)
                 Text(String(sign)).foregroundStyle(sign == " " ? Theme.tertiary : tint)
-                // A CRLF line keeps its CR to diff against LF, but drawn it breaks the line.
-                let shown = text.unicodeScalars.last == "\r" ? String(text.dropLast()) : text
+                let shown = drawn(text)
                 Text(shown.isEmpty ? AttributedString(" ") : colored ?? AttributedString(shown))
                     .foregroundStyle(Theme.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
