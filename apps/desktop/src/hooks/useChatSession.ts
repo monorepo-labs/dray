@@ -20,6 +20,9 @@ import { qualify, serverOfSession } from "@/lib/transport";
 export const ChatSessionContext = createContext<{
   cwd: string | null;
   sessionId: string | null;
+  /// Where a file link opens instead of `openPath`'s usual split — a markdown
+  /// file read in the Files view keeps its links there, Markdown included.
+  open?: (path: string, line?: number) => void;
 }>({ cwd: null, sessionId: null });
 
 export function useChatSession() {

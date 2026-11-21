@@ -164,7 +164,7 @@ function Page() {
         </Timed>
         <Timed label={`Files view, ${lines.length} lines, line 1200`} pass={pass} done={done}>
           <div className="flex h-96 flex-col rounded-md border border-border/60">
-            <FileViewer file={OPEN} />
+            <FileViewer file={OPEN} sessionId={null} />
           </div>
         </Timed>
       </main>

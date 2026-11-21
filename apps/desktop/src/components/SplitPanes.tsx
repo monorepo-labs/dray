@@ -205,5 +205,5 @@ export function SplitFile({ sessionId, path }: { sessionId: string; path: string
   useEffect(() => {
     if (!file) removeSplit(sessionId, `file:${path}`);
   }, [file, sessionId, path]);
-  return <FileViewer file={file} />;
+  return <FileViewer file={file} sessionId={sessionId} />;
 }

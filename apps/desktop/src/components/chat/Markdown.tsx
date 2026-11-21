@@ -19,6 +19,7 @@ import {
   FILE_PATH_CLASS,
   LOCAL_IMAGE_CLASS,
   REHYPE_PLUGINS,
+  REHYPE_PLUGINS_WITH_FILE_LINKS,
   REHYPE_PLUGINS_WITH_FILE_PATHS,
 } from "@/lib/markdownPlugins";
 import { cn } from "@/lib/utils";
@@ -38,7 +39,11 @@ type MarkdownProps = {
   /// else this renders — an issue description, a PR review comment — the paths
   /// come from somebody else's checkout, so a link there would offer to open a
   /// file the reader has not got.
-  linkFilePaths?: boolean;
+  ///
+  /// `"written"` opens only the file links the author wrote and loads local
+  /// images, for a markdown file read on its own machine: its prose is the
+  /// author's, so a path in a sentence stays text.
+  linkFilePaths?: boolean | "written";
   className?: string;
 };
 
@@ -125,7 +130,11 @@ function MarkdownImpl({
     () => ({
       table: MarkdownTable,
       a: Anchor,
-      ...(linkFilePaths ? { span: FilePathSpan } : null),
+      ...(linkFilePaths === "written"
+        ? { span: DocPathSpan }
+        : linkFilePaths
+          ? { span: FilePathSpan }
+          : null),
       ...components,
     }),
     [linkFilePaths, components],
@@ -138,7 +147,13 @@ function MarkdownImpl({
       plugins={plugins}
       components={overrides}
       controls={CONTROLS}
-      rehypePlugins={linkFilePaths ? REHYPE_PLUGINS_WITH_FILE_PATHS : REHYPE_PLUGINS}
+      rehypePlugins={
+        linkFilePaths === "written"
+          ? REHYPE_PLUGINS_WITH_FILE_LINKS
+          : linkFilePaths
+            ? REHYPE_PLUGINS_WITH_FILE_PATHS
+            : REHYPE_PLUGINS
+      }
       shikiTheme={shikiTheme}
       lineNumbers={false}
       className={cn(
@@ -256,8 +271,15 @@ function FilePathSpan({
   children,
   "data-line": dataLine,
   "data-alt": dataAlt,
+  trusted = false,
   ...props
-}: React.ComponentProps<"span"> & { "data-line"?: string; "data-alt"?: string }) {
+}: React.ComponentProps<"span"> & {
+  "data-line"?: string;
+  "data-alt"?: string;
+  /// The span's path is a link a document's author wrote, so any shape opens:
+  /// `guide.md` and `docs/` name neighbours there, where in prose they are words.
+  trusted?: boolean;
+}) {
   // The path rides `title`, since a converted markdown link's text is its own
   // label rather than the path. Re-checked here rather than trusted: the class
   // is a plain attribute, and raw HTML in agent output can carry one.
@@ -274,7 +296,10 @@ function FilePathSpan({
       <ProofImage path={qualify(path, serverOfSession(sessionId))} alt={dataAlt} fallback={label} />
     );
   }
-  if (classes.includes(FILE_PATH_CLASS) && title && (isFilePath(title) || isRelativePath(title))) {
+  const opens = trusted
+    ? classes.includes(FILE_LINK_CLASS)
+    : isFilePath(title ?? "") || isRelativePath(title ?? "");
+  if (classes.includes(FILE_PATH_CLASS) && title && opens) {
     const path = absolutePath(title, cwd);
     const line = Number(dataLine);
     const written = classes.includes(FILE_LINK_CLASS);
@@ -331,6 +356,10 @@ function FilePathSpan({
       {children}
     </span>
   );
+}
+
+function DocPathSpan(props: React.ComponentProps<typeof FilePathSpan>) {
+  return <FilePathSpan {...props} trusted />;
 }
 
 /// The one text node a marked span holds, or `null` where it holds anything
