@@ -29,6 +29,7 @@ import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -66,6 +67,10 @@ fun TranscriptScreen(key: SessionKey, back: () -> Unit, openChanges: () -> Unit 
     val queued = store.queued[key].orEmpty()
     val tasks = store.tasks[key].orEmpty()
     var gallery by remember { mutableStateOf<Pair<List<com.yogesh.dray.model.Shot>, Int>?>(null) }
+    // The runs sheet, on the run a subagent row opened it on; a subagent's own chat over the transcript.
+    var runs by remember { mutableStateOf<String?>(null) }
+    var showingRuns by remember { mutableStateOf(false) }
+    var subagent by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(key) { store.open(key) }
 
@@ -93,6 +98,14 @@ fun TranscriptScreen(key: SessionKey, back: () -> Unit, openChanges: () -> Unit 
     CompositionLocalProvider(
         LocalImageServer provides key.server,
         LocalCallSession provides key,
+        LocalOpenRun provides { id: String ->
+            val run = store.runsOf(key).firstOrNull { it.id == id }
+            when {
+                run == null -> false
+                run.chat && !run.locked -> { subagent = id; true }
+                else -> { runs = id; showingRuns = true; true }
+            }
+        },
         LocalOpenImage provides { ref: ImageRef ->
             val shots = shotsOf(turns, ref) ?: listOf(com.yogesh.dray.model.Shot(ref, "Image", ref.path ?: ref.url))
             gallery = shots to shots.indexOfFirst { it.ref == ref }.coerceAtLeast(0)
@@ -116,7 +129,8 @@ fun TranscriptScreen(key: SessionKey, back: () -> Unit, openChanges: () -> Unit 
                             MaxWidth {
                                 when {
                                     busy -> WorkingLine()
-                                    tasks.isNotEmpty() -> OrbLine(OrbKind.Background, "${plural(tasks.size, "background task")} running")
+                                    tasks.isNotEmpty() -> OrbLine(OrbKind.Background, "${plural(tasks.size, "background task")} running",
+                                        Modifier.clickable { runs = null; showingRuns = true })
                                 }
                             }
                         }
@@ -133,7 +147,9 @@ fun TranscriptScreen(key: SessionKey, back: () -> Unit, openChanges: () -> Unit 
             }
             ReplyDock(key)
         }
+        subagent?.let { SubagentChat(key, it) { subagent = null } }
         gallery?.let { (shots, at) -> ImageViewer(shots, at) { gallery = null } }
+        if (showingRuns) RunsSheet(key, runs, openChat = { showingRuns = false; subagent = it }) { showingRuns = false }
         }
     }
 }
@@ -221,10 +237,13 @@ private fun TitleBar(key: SessionKey, back: () -> Unit, openChanges: () -> Unit)
                 Text(" ${store.name(key.server)}", style = Dray.Font.footnote.copy(color = Dray.tertiary), maxLines = 1)
             }
         }
-        // A bot's folder holds notes, not work: no changes or PR there, as on the desktop.
+        // A bot's folder holds notes, not work, and runs no dev server: none of these in its chat.
         if (store.bot(key) == null) {
             ChangesButton(openChanges)
             PrButton(key)
+            var servers by remember { mutableStateOf(false) }
+            IconButton({ servers = true }) { Icon(Icons.Outlined.Language, "Local servers", tint = Dray.text) }
+            if (servers) LocalServersSheet(key) { servers = false }
         }
     }
 }

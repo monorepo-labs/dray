@@ -41,7 +41,10 @@ data class Welcome(
     val version: String? = null,
     val release: String? = null,
     val dev: Boolean? = null,
-)
+) {
+    /** Dray on a Mac, whose server follows the app's own updates. */
+    val macApp: Boolean get() = dictation == true && release == null && dev != true
+}
 
 @Serializable
 data class Need(val text: String, val at: String)
@@ -192,6 +195,10 @@ sealed interface Payload {
     data class QuestionsAsked(val request: QuestionsRequest) : Payload
     data class PermissionDecided(val requestId: String) : Payload
     data class BackgroundTasks(val tasks: List<BackgroundTask>) : Payload
+    /** A subagent or backgrounded shell's lifecycle; which run is on the event's `subagent`. */
+    data class SubagentStarted(val agentId: String, val label: String?, val description: String?) : Payload
+    data class SubagentProgress(val agentId: String, val description: String?) : Payload
+    data class SubagentCompleted(val agentId: String) : Payload
     data class Error(val message: String) : Payload
     /** `dray session merge-card`'s card in a bot's chat. */
     data class MergeCardPosted(val card: MergeCard) : Payload
@@ -252,6 +259,9 @@ sealed interface Payload {
             "questions_asked" -> QuestionsAsked(wireJson.decodeFromJsonElement(QuestionsRequest.serializer(), o))
             "permission_decided" -> PermissionDecided(o["requestId"].str ?: return null)
             "background_tasks_changed" -> BackgroundTasks(decodeList(o["tasks"]))
+            "subagent_started" -> SubagentStarted(o["agentId"].str ?: "", o["label"].str, o["description"].str)
+            "subagent_progress" -> SubagentProgress(o["agentId"].str ?: "", o["description"].str)
+            "subagent_completed" -> SubagentCompleted(o["agentId"].str ?: "")
             "error" -> Error(o["message"].str ?: return null)
             "merge_card" -> MergeCardPosted(wireJson.decodeFromJsonElement(MergeCard.serializer(), o))
             "task_started" -> TaskStarted(o["taskId"].str ?: return null, o["title"].str)

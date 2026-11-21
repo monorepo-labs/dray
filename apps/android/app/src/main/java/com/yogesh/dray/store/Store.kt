@@ -163,6 +163,12 @@ class Store(private val context: Context) {
     private val callBatch = mutableMapOf<SessionKey, MutableSet<String>>()
     private var listSaving = false
 
+    /** Appearance's Hide sessions: home shows bots alone. */
+    var hideSessions: Boolean
+        get() = hideSessionsState
+        set(on) { hideSessionsState = on; prefs.edit().putBoolean("list.hideSessions", on).apply() }
+    private var hideSessionsState by mutableStateOf(prefs.getBoolean("list.hideSessions", false))
+
     fun read(id: String) = id in listed && id in botsRead
     fun known(id: String) = id in cached || read(id)
 

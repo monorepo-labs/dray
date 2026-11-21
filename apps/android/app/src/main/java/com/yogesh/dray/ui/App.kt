@@ -33,6 +33,8 @@ sealed interface Route {
     data object Settings : Route
     /** A bot with no chat yet: its greeting, and the first message that starts one. */
     data class BotStart(val server: String, val botId: String) : Route
+    /** Settings opened on one server's page, as a banner's Fix does. */
+    data class ServerSettings(val id: String) : Route
 }
 
 /** The app's one navigation stack. A pairing link from outside pushes Add server, filled in. */
@@ -70,15 +72,15 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
             holder.SaveableStateProvider(route.toString()) { when (route) {
                 Route.List -> ListScreen(
                     openSession = { push(Route.Session(it)) },
-                    openSettings = { push(Route.Settings) },
+                    openSettings = { push(it?.let(Route::ServerSettings) ?: Route.Settings) },
                     addServer = { push(Route.Add(scan = it)) },
                     startBot = { server, bot -> push(Route.BotStart(server, bot)) },
                 )
                 is Route.Session -> {
                     val bot = store.bot(route.key)
                     if (bot != null) BotChatScreen(route.key, bot, ::pop, openTask = { push(Route.Session(it)) },
-                        openSession = { push(Route.Session(it)) }) { push(Route.Settings) }
-                    else TranscriptScreen(route.key, ::pop, openChanges = { push(Route.Changes(route.key)) }) { push(Route.Settings) }
+                        openSession = { push(Route.Session(it)) }) { push(Route.ServerSettings(it)) }
+                    else TranscriptScreen(route.key, ::pop, openChanges = { push(Route.Changes(route.key)) }) { push(Route.ServerSettings(it)) }
                 }
                 is Route.Changes -> ChangesScreen(route.key, ::pop)
                 is Route.BotStart -> store.bots[route.server]?.firstOrNull { it.id == route.botId }?.let { bot ->
@@ -88,9 +90,8 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
                     }
                 } ?: LaunchedEffect(Unit) { pop() }
                 is Route.Add -> AddServerScreen(route.link, route.scan, ::pop)
-                Route.Settings -> ServersScreen(::pop, add = { push(Route.Add()) }) { s ->
-                    push(Route.Add(PairLink(s.url, "", s.name)))
-                }
+                Route.Settings -> SettingsScreen(null, ::pop) { push(Route.Add()) }
+                is Route.ServerSettings -> SettingsScreen(route.id, ::pop) { push(Route.Add()) }
             } }
         }
         Box(Modifier.align(Alignment.TopCenter).statusBarsPadding()) { ErrorToast() }

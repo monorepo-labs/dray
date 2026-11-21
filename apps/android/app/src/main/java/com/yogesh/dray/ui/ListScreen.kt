@@ -96,25 +96,29 @@ fun ListScreen(
     val names = store.live.flatMap { store.projects[it.id].orEmpty() }.map { it.name }.distinct().sorted()
     // A picked project that leaves the list is ignored rather than showing nothing.
     val filter = project?.takeIf { it in names }
-    val runs = store.runs(filter, settled)
+    val hide = store.hideSessions
+    val runs = if (hide) emptyList() else store.runs(filter, settled)
     val hasSettled = store.items.values.any { it.archived == true && it.hidden != true }
+    val connected = store.live.count { store.serverState[it.id] == ConnState.Connected }
 
-    LaunchedEffect(settled) { if (settled) store.loadSettled() }
     var newBot by remember { mutableStateOf(false) }
     LoneBot(settled, openSession, startBot)
+    // Read whatever the view, and again as servers come up: the Settled button shows only when there are some,
+    // and an empty live list counts what was settled today.
+    LaunchedEffect(settled, connected) { if (connected > 0) store.loadSettled() }
 
     Column(Modifier.fillMaxSize().background(Dray.page).statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton({ openSettings(null) }) { Icon(Icons.Outlined.Settings, "Settings", tint = Dray.text) }
             Spacer(Modifier.weight(1f))
-            if (settled || (anyConnected && hasSettled)) {
+            if (!hide && (settled || (anyConnected && hasSettled))) {
                 Row(
                     Modifier.padding(end = 8.dp).clip(CircleShape).background(Dray.raised)
                         .clickable { settled = !settled }.padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Icon(Icons.Outlined.DoneAll, null, Modifier.size(18.dp), tint = if (settled) Dray.text else Dray.secondary)
+                    CheckCheck(if (settled) Dray.text else Dray.secondary, 20.dp, 1.6f)
                     Text("Settled", style = Dray.Font.pill.copy(color = if (settled) Dray.text else Dray.secondary))
                 }
             }
@@ -154,7 +158,7 @@ fun ListScreen(
                         BotListRow(server, bot, chat) { if (chat != null) openSession(chat) else startBot(server, bot.id) }
                     }
                 }
-                if (names.size > 1 && (filter != null || rows.isNotEmpty())) {
+                if (!hide && names.size > 1 && (filter != null || rows.isNotEmpty())) {
                     item("projects") { ProjectStrip(names, filter) { project = it } }
                 } else if (bots.isNotEmpty() && rows.isNotEmpty()) item("bots-gap") { Spacer(Modifier.height(16.dp)) }
                 if (settled && runs.isEmpty()) {
@@ -189,7 +193,7 @@ fun ListScreen(
                 }
                 if (shown < rows.size) item("more") { LaunchedEffect(Unit) { shown += PAGE }; Spacer(Modifier.height(1.dp)) }
             }
-            if (empty) EmptyList(filter, addServer, openSettings)
+            if (empty || (hide && store.bots.values.all { it.isEmpty() })) EmptyList(filter, addServer, openSettings)
         }
         if (!settled) NewTaskDock(openSession, Modifier.align(Alignment.BottomCenter))
         }
@@ -328,9 +332,13 @@ private fun EmptyList(filter: String?, addServer: (Boolean) -> Unit, openSetting
             }
         }
         else -> {
-            val today = store.items.values.count { it.archived == true && it.hidden != true && isToday(parseDate(it.modified)) }
+            val today = store.runs(filter, settled = true).flatMap { it.rows }.mapNotNull { r -> parseDate(r.item.modified)?.let { r to it } }
+                .filter { isToday(it.second) }
+            val last = today.maxByOrNull { it.second }
             when {
-                today > 0 -> EmptyScreen(EmptyArtKind.Tasks, "All clear", "$today settled today.")
+                store.hideSessions -> EmptyScreen(EmptyArtKind.Tasks, "No bots yet", "Tap + to make one.")
+                last != null -> EmptyScreen({ SettledStack(last.first.item.title, shortAge(last.second)) }, "All clear",
+                    if (today.size == 1) "1 settled today." else "${today.size} settled today.")
                 filter != null -> EmptyScreen(EmptyArtKind.Project, "Nothing in $filter", "Write one below to start it.")
                 else -> EmptyScreen(EmptyArtKind.Tasks, "No tasks yet", "Write one below to start it.")
             }
@@ -363,13 +371,17 @@ fun CapsuleButton(label: String, light: Boolean = false, icon: (@Composable () -
 }
 
 @Composable
-fun EmptyScreen(art: EmptyArtKind, title: String, message: String, actions: (@Composable () -> Unit)? = null) {
+fun EmptyScreen(art: EmptyArtKind, title: String, message: String, actions: (@Composable () -> Unit)? = null) =
+    EmptyScreen({ EmptyArt(art) }, title, message, actions)
+
+@Composable
+fun EmptyScreen(art: @Composable () -> Unit, title: String, message: String, actions: (@Composable () -> Unit)? = null) {
     Column(
         Modifier.fillMaxSize().padding(horizontal = 40.dp).padding(bottom = 140.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        EmptyArt(art)
+        art()
         Spacer(Modifier.height(28.dp))
         Text(title, style = Dray.Font.title, textAlign = TextAlign.Center)
         Spacer(Modifier.height(8.dp))
