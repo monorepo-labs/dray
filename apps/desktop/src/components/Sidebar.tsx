@@ -1814,7 +1814,9 @@ export default function Sidebar({
                 }}
                 className="text-muted-foreground transition-colors hover:text-foreground"
               >
-                <Square3Stack3DIcon className="size-4" />
+                {/* The space in force by its initial, as the project filter
+                    above says its project. */}
+                {space === null ? <Square3Stack3DIcon className="size-4" /> : <Initial name={space} />}
               </Button>
             </RailTip>
           )}
@@ -2161,6 +2163,18 @@ function BotRow({
   );
 }
 
+/// A filter's pick on the rail, where its name has no room: the first letter
+/// or digit knocked out of a filled square, a 16px glyph like the icons beside it.
+function Initial({ name }: { name: string }) {
+  return (
+    <span className="flex size-4 items-center justify-center rounded-[4px] bg-current">
+      <span className="text-[10px] leading-none font-semibold text-background">
+        {name.match(/[\p{L}\p{N}]/u)?.[0]?.toUpperCase() ?? "?"}
+      </span>
+    </span>
+  );
+}
+
 /// A task on the rail: its agent's mark in a bot row's box, the title in the
 /// tooltip, and the full row's left mark for unread and asking.
 function RailTask({
@@ -2419,11 +2433,7 @@ function ProjectFilter({
           ) : active.path === null ? (
             <FolderIcon className="size-4" />
           ) : (
-            <span className="flex size-4 items-center justify-center rounded-[4px] bg-current">
-              <span className="text-[10px] leading-none font-semibold text-background">
-                {active.name.match(/[\p{L}\p{N}]/u)?.[0]?.toUpperCase() ?? "?"}
-              </span>
-            </span>
+            <Initial name={active.name} />
           )}
         </span>
 
