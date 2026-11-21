@@ -1,17 +1,21 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { fileSrc, invoke } from "@/lib/transport";
+import { fileSrc, invoke, qualify, serverOfSession } from "@/lib/transport";
 import { getFiletypeFromFileName } from "@pierre/diffs";
 import { File, Virtualizer } from "@pierre/diffs/react";
 
 import Note from "@/components/changes/Note";
 import FileIcon from "@/components/FileIcon";
+import MarkdownDoc from "@/components/MarkdownDoc";
+import { ChatSessionContext } from "@/hooks/useChatSession";
 import { useCodeThemeWithMode } from "@/hooks/useCodeTheme";
 import { useFirstFrame } from "@/hooks/useFirstFrame";
 import { useHighlighter } from "@/hooks/useHighlighter";
-import type { OpenFile } from "@/hooks/useOpenFiles";
+import { openInFiles, type OpenFile } from "@/hooks/useOpenFiles";
 import type { DirEntry, FileBody } from "@/types/events";
 import { diffSide } from "@/lib/diff";
+import { normalizePath } from "@/lib/filePath";
 import { basename } from "@/lib/format";
+import { isMarkdownPath } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
 
 /// The line a chat link named, painted where the row sits.
@@ -31,16 +35,20 @@ type VirtualizedInstance = {
   getEditorViewport?: () => HTMLElement | Document | undefined;
 };
 
-/// The active file, read and highlighted. Read-only throughout.
+/// The active file, read and highlighted, or rendered where it is markdown.
+/// Read-only throughout.
 export default function FileViewer({
   file,
+  sessionId,
   onOpen,
 }: {
   /// Null where nothing is open, which is the view's own empty state.
   file: OpenFile | null;
+  /// Whose file this is: a markdown file's links open among its files.
+  sessionId: string | null;
   /// Opens an entry of a folder on screen. Absent, the listing only reads —
   /// a split pane shows one file and has no strip to open another into.
-  onOpen?: (path: string) => void;
+  onOpen?: (path: string, line?: number) => void;
 }) {
   const { pair, resolvedMode } = useCodeThemeWithMode();
   const path = file?.path ?? "";
@@ -146,6 +154,10 @@ export default function FileViewer({
         Pick a file to read it.
       </div>
     );
+  }
+
+  if (text !== null && isMarkdownPath(file.path)) {
+    return <MarkdownFile path={file.path} text={text} sessionId={sessionId} onOpen={onOpen} />;
   }
 
   // No header row: the titlebar's tab already names the file, so a second line
@@ -257,6 +269,48 @@ function Video({ body }: { body: { path: string } }) {
         onLoadedMetadata={first.onLoadedMetadata}
         onError={onError}
       />
+    </div>
+  );
+}
+
+/// A markdown file, drawn the way markdown is everywhere else in the app.
+///
+/// Its relative links and images resolve against its own folder, which is what
+/// its author wrote them against, and a link opens here in Files — markdown
+/// included, where a chat link would send it to the Docs panel.
+function MarkdownFile({
+  path,
+  text,
+  sessionId,
+  onOpen,
+}: {
+  path: string;
+  text: string;
+  sessionId: string | null;
+  onOpen?: (path: string, line?: number) => void;
+}) {
+  const context = useMemo(
+    () => ({
+      cwd: path.slice(0, path.lastIndexOf("/")) || "/",
+      sessionId,
+      // A relative link arrives already qualified, being resolved against this
+      // file's own path; `qualify` leaves that alone and keys an absolute one.
+      open: (target: string, line?: number) => {
+        const qualified = qualify(normalizePath(target), serverOfSession(sessionId));
+        if (onOpen) onOpen(qualified, line);
+        else openInFiles(sessionId, qualified, line);
+      },
+    }),
+    [path, sessionId, onOpen],
+  );
+
+  // Keyed on the path, so the next file starts at its own top rather than at
+  // this one's scroll and section count.
+  return (
+    <div key={path} className="min-h-0 flex-1 overflow-auto">
+      <ChatSessionContext.Provider value={context}>
+        <MarkdownDoc text={text} linkFilePaths="written" className="mx-auto max-w-3xl px-8 py-6" />
+      </ChatSessionContext.Provider>
     </div>
   );
 }

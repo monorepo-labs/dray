@@ -10,6 +10,7 @@ import {
   LOCAL_IMAGE_CLASS,
   localImagePath,
   REHYPE_PLUGINS,
+  REHYPE_PLUGINS_WITH_FILE_LINKS,
   REHYPE_PLUGINS_WITH_FILE_PATHS,
   TABLE_CELL_CLASS,
   walk,
@@ -516,6 +517,34 @@ describe("local images", () => {
     const html = render("![web](https://example.com/a.png)");
     expect(marked(html)).toEqual([]);
     expect(html).toContain('src="https://example.com/a.png"');
+  });
+
+  it("loads relative images in a markdown file, and links only what was written", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        Streamdown,
+        { mode: "static", rehypePlugins: REHYPE_PLUGINS_WITH_FILE_LINKS },
+        [
+          "![shot](images/a.png) See [the plan](docs/PLAN.md#top), src/lib/foo.ts and [site](https://example.com).",
+          "[a](guide.md) [b](../README.md) [c](docs/) [d](/abs/x.ts#L4) [e](#heading) [f](mailto:a@b.c)",
+        ].join("\n\n"),
+      ),
+    );
+    expect(marked(html)).toEqual(["images/a.png"]);
+    const links = [...html.matchAll(/class="([^"]*)" title="([^"]*)"/g)].filter((m) =>
+      m[1].includes(FILE_PATH_CLASS),
+    );
+    expect(links.map((m) => m[2])).toEqual([
+      "./docs/PLAN.md",
+      "./guide.md",
+      "../README.md",
+      "./docs/",
+      "/abs/x.ts",
+    ]);
+    expect(html).toContain('data-line="4"');
+    expect(links[0][1]).toContain(FILE_LINK_CLASS);
+    expect(html).toContain("src/lib/foo.ts and");
+    expect(html).toContain('data-streamdown="link"');
   });
 
   it("reads which sources name a file", () => {

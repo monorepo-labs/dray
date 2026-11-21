@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import { Eye, Loader2, Pencil, X } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
 import IconToggle from "@/components/IconToggle";
-import { Markdown } from "@/components/chat/Markdown";
+import MarkdownDoc from "@/components/MarkdownDoc";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,11 +36,6 @@ import {
 } from "@/hooks/useDocs";
 import { useHotkey } from "@/hooks/useHotkey";
 import { splitPath } from "@/lib/changes";
-import {
-  FIRST_SECTIONS,
-  SECTION_STEP,
-  splitMarkdownSections,
-} from "@/lib/markdown";
 import { cn } from "@/lib/utils";
 
 /// A markdown file from the transcript, rendered and editable.
@@ -334,7 +329,7 @@ function Body({ sessionId, doc }: { sessionId: string | null; doc: Doc }) {
   if (doc.mode === "view") {
     // Keyed on the path so switching chips starts the next document at its own
     // top rather than inheriting how far the last one had mounted.
-    return <Rendered key={doc.path} text={doc.body.draft} />;
+    return <MarkdownDoc key={doc.path} text={doc.body.draft} />;
   }
 
   return (
@@ -350,48 +345,6 @@ function Body({ sessionId, doc }: { sessionId: string | null; doc: Doc }) {
       // out of this box, and markdown lists need no indent to be written.
       className="h-full w-full resize-none bg-transparent px-3 py-2 font-mono text-code outline-none"
     />
-  );
-}
-
-/// The document, mounted a few sections at a time.
-///
-/// One commit was what made a long file take seconds to open: 282KB of markdown
-/// measured at 930ms of parsing before any of the 608KB of HTML it produces
-/// reached the DOM, and the commit and layout of that tree after it. A reader
-/// opens a document at its top, so the top is what has to be on screen — the
-/// rest arrives behind it, which is the bargain the transcript's own backfill
-/// makes for a long session.
-///
-/// The total work is unchanged. What changes is that the main thread comes back
-/// between steps, so the panel is readable and scrollable throughout instead of
-/// frozen until the last section lands.
-function Rendered({ text }: { text: string }) {
-  const sections = useMemo(() => splitMarkdownSections(text), [text]);
-  const [mounted, setMounted] = useState(FIRST_SECTIONS);
-
-  useEffect(() => {
-    if (mounted >= sections.length) return;
-    // A macrotask rather than a frame: this is parse work, and yielding to the
-    // event loop is what keeps a click or a keystroke from queueing behind it.
-    const id = setTimeout(() => setMounted((n) => n + SECTION_STEP), 0);
-    return () => clearTimeout(id);
-  }, [mounted, sections.length]);
-
-  return (
-    <div className="px-3 py-2">
-      {sections.slice(0, mounted).map((section, i) => (
-        // `Markdown` strips its own first child's top margin, which is right for
-        // one message in a transcript and wrong for a section stacked under
-        // another — without this every heading after the first would sit flush
-        // against the paragraph above it.
-        <div key={i} className={i > 0 ? "mt-4" : undefined}>
-          {/* `linkFilePaths` stays off. It is on for the assistant's own
-              messages alone, and a doc's relative links are markdown the author
-              wrote — Streamdown's business, not this app's. */}
-          <Markdown>{section}</Markdown>
-        </div>
-      ))}
-    </div>
   );
 }
 
