@@ -1631,6 +1631,20 @@ const detachSession = async (sessionId: string) => {
   }
 };
 
+/// Hands a task to `botId`'s chat on the task's own server (#1395), detach's
+/// reverse. The row comes back hidden under the chat, which takes it out of the
+/// sidebar and into the bot's Tasks; what it started follows on `session_changed`.
+const attachSession = async (sessionId: string, botId: string) => {
+  const fail = failUnlessLeft();
+  try {
+    const updated = await invoke<SessionIndexItem | null>("attach_session", { sessionId, bot: botId });
+    if (!updated) return;
+    setSessionIndexItems((prev) => prev.map((i) => (i.sessionId === sessionId ? updated : i)));
+  } catch (e) {
+    fail(e);
+  }
+};
+
 /// Puts a session's index entry, as the store now holds it, into both copies.
 /// Shared by the sidebar's own writes and by `session_changed`, which carries
 /// the ones `dray session settle` and friends make.
@@ -3943,6 +3957,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems: shownIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, worktreeBranch, setWorktreeBranch, refreshBranches, busy, backgroundTasks, liveTaskIds, tasksBySession, servingBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, prefetchTranscript, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems: shownIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, worktreeBranch, setWorktreeBranch, refreshBranches, busy, backgroundTasks, liveTaskIds, tasksBySession, servingBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, attachSession, deleteSession, removeWorktree, ensureLoaded, prefetchTranscript, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
 
 }

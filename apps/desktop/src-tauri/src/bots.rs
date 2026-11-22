@@ -433,6 +433,17 @@ pub fn take_handover(session_id: &str) -> Option<String> {
     Some(handovers.remove(at).1)
 }
 
+/// Queues `text` ahead of `session_id`'s next prompt, after anything already
+/// waiting there. For a running task handed to a bot, whose child read its
+/// system prompt before it had a bot to report to.
+pub fn lead_in(session_id: &str, text: String) {
+    let mut handovers = HANDOVERS.lock().unwrap();
+    match handovers.iter_mut().find(|(id, _)| id == session_id) {
+        Some((_, waiting)) => waiting.push_str(&text),
+        None => handovers.push((session_id.to_string(), text)),
+    }
+}
+
 /// Queues a hand-over, or puts one back after a send that failed, so the
 /// retry still carries the conversation.
 pub fn restore_handover(session_id: &str, text: String) {

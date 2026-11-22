@@ -503,6 +503,8 @@ fn session_named(request: &Request) -> Option<&str> {
         Request::StopSession(r) => Some(&r.session_id),
         Request::SettleSession(r) => Some(&r.session_id),
         Request::DetachSession(r) => Some(&r.session_id),
+        // The bot must be on the task's machine too, which that machine checks.
+        Request::AttachSession(r) => Some(&r.session_id),
         Request::SetAside(r) => Some(&r.session_id),
         Request::Share(r) => Some(&r.session_id),
         Request::Browser(r) => Some(&r.session_id),
@@ -1116,6 +1118,10 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         }
         Request::SettleSession(settle) => settle_session(settle, app).await,
         Request::DetachSession(detach) => detach_session(&detach.session_id, app).await,
+        Request::AttachSession(attach) => {
+            let item = attach_to_bot(&attach.session_id, &attach.bot, app).await?;
+            Ok(Response::Session { session: summarize(item) })
+        }
         Request::CreateBot(create) => {
             let avatar = bots::face(create.shape.as_deref(), create.hue)?;
             let bot = bots::create_bot(create.name, Some(avatar)).await?;
@@ -1547,6 +1553,68 @@ async fn detach_session(id: &str, app: &Sink) -> Result<Response> {
     store::detach_session(id).await?.with_context(|| format!("no session {id}"))?;
     announce_change(&[id.to_string()], app).await;
     answer_session(id).await
+}
+
+/// Hands session `id` to the bot `bot` names (#1395), detach's reverse: it
+/// becomes that bot's task, hidden under its chat, reporting after each turn.
+/// The sidebar's Attach to bot, `dray session attach` and the iOS menu all
+/// come here, on the task's own machine. Only a bot there: the task's reports
+/// go out from there, and a bot elsewhere would need the outbox a
+/// cross-machine create sets up.
+pub async fn attach_to_bot(id: &str, bot: &str, app: &Sink) -> Result<SessionIndexItem> {
+    let item = store::get_session_index_item(id)
+        .await?
+        .with_context(|| format!("no session {id}"))?;
+    let bot = bots::find_bot(bot)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e:#} (a task attaches only to a bot on the machine it runs on)"))?;
+    if bots::bot_holding(&item.cwd).await.is_some() {
+        bail!("session {id} is a bot's own chat, not a task");
+    }
+    if bots::in_bot_tree(&item).await {
+        bail!("session {id} is already a bot's task — detach it first");
+    }
+    if item.archived {
+        bail!("session {id} is settled — unsettle it first");
+    }
+    let chat = bots::chat_of(&bot)
+        .await
+        .with_context(|| format!("{} has no chat yet. Write to it once, then attach the task.", bot.name))?;
+    let working = manager().turn_in_flight(id).await;
+    let idle = idle_since(&item.modified);
+    let changed = store::attach_session(id, &chat.session_id).await?.with_context(|| format!("no session {id}"))?;
+    announce_change(&changed, app).await;
+    // A running child read its system prompt with no bot to report to; a
+    // later spawn reads it with one (`bots::system_prompt`).
+    if manager().has_child(id).await {
+        bots::lead_in(
+            id,
+            format!(
+                "[Dray: the user handed this session to the bot \"{}\". Dray now sends your final message of each turn to it automatically, so end each turn with what it needs to know, and don't send that message yourself. It may message you with `dray session send`.]\n\n",
+                bot.name.replace(['\n', '\r', ']', '"'], " ")
+            ),
+        );
+    }
+    let place = match item.branch.as_deref() {
+        Some(branch) => format!("{} on branch {branch}", item.project_path),
+        None => item.project_path.clone(),
+    };
+    let state = if working {
+        "It is working on a turn now; its report comes when that turn ends.".to_string()
+    } else {
+        format!("It is idle, last active {idle} ago.")
+    };
+    let prompt = format!(
+        "Attached: the user handed you this task, started outside your chat. It is yours now like a task you started: its reports come to you after every turn, and you can message, settle and stop it. It runs in {place}. {state} Its last message:\n\n{}",
+        last_message_tail(id).await?
+    );
+    let send = SendMessage { session_id: chat.session_id, prompt, from_session_id: Some(id.to_string()) };
+    // The task is the bot's whether or not this lands; a failed note costs
+    // the bot its briefing, never the attach.
+    if let Err(e) = send_message(send, None, app).await {
+        eprintln!("[attach] could not brief {} on {id}: {e:#}", bot.name);
+    }
+    store::get_session_index_item(id).await?.with_context(|| format!("no session {id}"))
 }
 
 /// Settles task `id` once the reader merged its PR on `head`, here or on the
