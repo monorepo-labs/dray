@@ -979,14 +979,19 @@
   container-type: inline-size;
 }
 
-/* A reaction badge's fill: the palette's panel, opaque, so a bubble under it
-   never shows through on glass. Dray light alone takes white, which its
-   near-white panel otherwise misses by a shade the hairline then has to carry. */
+/* A reaction badge's fill and the ring cutting it out of the bubble it sits on:
+   the chat pane's own colour, which is the page with the sheet laid over it.
+   Opaque, so the bubble never shows through on glass. Only Dray lays a sheet,
+   and `color-mix` cannot composite a translucent one, so both are named; in
+   sRGB, where a veil composites. */
 :root {
-  --reaction: var(--surface-card);
+  --reaction: var(--background);
 }
 [data-theme="default"][data-mode="light"] {
-  --reaction: #fff;
+  --reaction: var(--surface-sheet);
+}
+[data-theme="default"][data-mode="dark"] {
+  --reaction: color-mix(in srgb, var(--background), white 6%);
 }
 
 [data-bot-chat] .sent-image {

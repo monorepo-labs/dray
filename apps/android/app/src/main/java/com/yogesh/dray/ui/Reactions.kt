@@ -29,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -60,14 +61,17 @@ private val reactionLabels = mapOf("👀" to "Seen", "✅" to "Done", "🎉" to 
 val reactionStyle = Dray.Font.body.copy(fontSize = 18.sp, lineHeight = 20.sp)
 
 /**
- * A reaction, as a messenger draws one: a round chip in the panel's colour, a hairline edge, the
- * emoji at about half its height and centred upright by its ink ([inkOf]), not by its text box.
+ * A reaction, as a messenger draws one: a round chip in the chat's own colour, a hairline edge and
+ * a ring of that colour again outside it, so it reads as cut out of the bubble under it; the emoji
+ * at about half its height and centred upright by its ink ([inkOf]), not by its text box.
  */
 @Composable
 fun ReactionBadge(emoji: String, mine: Boolean = false) {
     var nudge by remember(emoji) { mutableStateOf(0f) }
     Box(
-        Modifier.size(40.dp).clip(CircleShape).background(Dray.card).border(1.dp, Dray.border, CircleShape)
+        // The ring is drawn before the clip, so it spills past the badge without moving it.
+        Modifier.size(40.dp).drawBehind { drawCircle(Dray.page, radius = size.minDimension / 2 + 3.dp.toPx()) }
+            .clip(CircleShape).background(Dray.page).border(1.dp, Dray.border, CircleShape)
             .semantics { contentDescription = "${if (mine) "You" else "Bot"} reacted: ${reactionLabels[emoji] ?: emoji}" },
         contentAlignment = Alignment.Center,
     ) {

@@ -9,9 +9,10 @@ import { cn } from "@/lib/utils";
 import type { AgentEvent } from "@/types/events";
 
 /// A reaction, as iMessage draws a tapback: a round chip on a corner of the
-/// bubble, filled with `--reaction` (white on Dray light, the panel elsewhere)
-/// and edged by a hairline, the emoji at about half its height and centred
-/// upright by its ink (see [emojiInk]).
+/// bubble in the chat pane's own colour (`--reaction`), edged by a hairline and
+/// ringed in that colour again, so it reads as cut out of the bubble under it;
+/// the emoji at about half its height and centred upright by its ink (see
+/// [emojiInk]).
 export function ReactionBadge({ emoji, mine = false, className }: { emoji: string; mine?: boolean; className?: string }) {
   const glyph = useRef<HTMLSpanElement>(null);
   const baseline = useRef<HTMLSpanElement>(null);
@@ -31,7 +32,7 @@ export function ReactionBadge({ emoji, mine = false, className }: { emoji: strin
       role="img"
       aria-label={`${mine ? "You" : "Bot"} reacted: ${REACTION_LABELS[emoji] ?? emoji}`}
       className={cn(
-        "flex size-10 items-center justify-center rounded-full border border-border bg-(--reaction) text-[18px] leading-none select-none",
+        "flex size-10 items-center justify-center rounded-full border border-border bg-(--reaction) text-[18px] shadow-[0_0_0_3px_var(--reaction)] leading-none select-none",
         "motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:fade-in motion-safe:duration-200",
         className,
       )}

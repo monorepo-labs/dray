@@ -46,7 +46,7 @@ class ReactionDemoActivity : ComponentActivity() {
 @Composable
 private fun RawBadge(emoji: String) {
     Box(
-        Modifier.size(40.dp).clip(CircleShape).background(Dray.card).border(1.dp, Dray.border, CircleShape),
+        Modifier.size(40.dp).clip(CircleShape).background(Dray.page).border(1.dp, Dray.border, CircleShape),
         contentAlignment = Alignment.Center,
     ) { Text(emoji, style = reactionStyle) }
 }
