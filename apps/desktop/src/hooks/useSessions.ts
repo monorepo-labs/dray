@@ -914,7 +914,7 @@ const handleSendMsg = async (
   const moving = !!selected && harness !== selected.harness;
   const switching = moving && isBotPath(selected.cwd);
   if (moving && statusOf(selected.sessionId) === "in_progress") {
-    setError(`Wait for this turn to finish before moving to ${AGENT_LABELS[harness]}.`);
+    setError(`Wait for this turn to finish before switching to ${AGENT_LABELS[harness]}.`);
     return false;
   }
   if (switching) unsentPicks.current.delete(selected.sessionId);

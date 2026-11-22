@@ -4697,8 +4697,8 @@ function App() {
               <div className="mb-2 flex min-h-7 items-center gap-2 px-1">
                 <AgentIcon harness={harness} brand className="size-3.5 shrink-0" />
                 <p className="min-w-0 flex-1 truncate text-ui text-foreground">
-                  Moving to {AGENT_LABELS[harness]}
-                  <span className="text-muted-foreground"> · Your next message goes to it, with this conversation.</span>
+                  Switching to {AGENT_LABELS[harness]}
+                  <span className="text-muted-foreground"> · It picks up this chat from your next message.</span>
                 </p>
               </div>
             ) : selectedItem?.continueAt && (
