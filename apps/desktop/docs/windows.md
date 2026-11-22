@@ -12,19 +12,25 @@
 - **Git for Windows sets `core.autocrlf`.** Anything that reads back what git restored turns it off for its own calls, as the bots' folder does.
 - **Window chrome is Linux's**: undecorated, opaque, drawn controls, flat surfaces (`tauri.windows.conf.json`, `useGlass`).
 - **Agents run through Git Bash.** Claude Code finds it on its own; it has a PowerShell tool besides, which anything denying Bash must deny too (`title.rs`).
+- **The static CRT** (`+crt-static` in `.cargo/config.toml`, `CMAKE_MSVC_RUNTIME_LIBRARY` for transcribe's CMake). CEF's wrapper is built `/MT`, one binary cannot mix it with `/MD`, and the exe then needs no VC++ runtime.
+- **The browser is a child `HWND` per tab, libcef.dll delay-loaded**, and the headless Chromium's DevTools pipe rides two inherited handles named on its command line. See [browser.md](browser.md).
+- **Dictation runs on the CPU**; the mute is Core Audio's endpoint volume and sleep is the power manager's suspend notice. See [transcription.md](transcription.md).
+- **Open in finds apps at the paths installers write**, and starts console programs through `ShellExecuteExW`. See [file-opening.md](file-opening.md).
 
 ## Not on Windows yet
 
-- The in-app browser (CEF builds for Mac and Linux only) and `dray browser`'s headless Chromium, whose DevTools pipe rides fds 3 and 4.
-- Dictation (hidden: `HAS_DICTATION`), Dray Island, Open in (apps list is empty), the dock badge.
+- Dray Island, the dock badge.
+- **Nothing builds or ships Windows' Chromium side in a release yet**: the app needs `--features cef`, and dictation's ggml is tuned to the build machine's CPU (`GGML_NATIVE`), a crash waiting on an older one, unless the release build turns that off.
 - The CLI ships in no Windows bundle and nothing copies it onto `PATH`, so an agent in the release app has no `dray`. `dray server install|start` and `dray update` are systemd/launchd and `install.sh`.
 - `release.yml` has no Windows job, no code signing (SmartScreen warns) and no updater manifest entry.
 - A refused upload reads as a reset connection, not 401: the server answers before reading the body and Windows resets a socket closed with unread data.
 
 ## Building and testing on a VM
 
-- Toolchain: Git, rustup (MSVC), Visual Studio Build Tools with the C++ workload, Node, pnpm, CMake and LLVM (transcribe-cpp's ggml). WebView2 ships with Windows.
-- `pnpm tauri dev` works as everywhere. `pnpm tauri build` makes the MSI and NSIS installers; without the updater key, pass a `--config` file holding `{"bundle":{"createUpdaterArtifacts":false}}`.
+- Toolchain: Git, rustup (MSVC), Visual Studio Build Tools with the C++ workload, Node, pnpm, CMake and LLVM (transcribe-cpp's ggml). WebView2 ships with Windows. `--features cef` also wants Ninja on `PATH`: Visual Studio's is under `Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja`.
+- `pnpm tauri dev` works as everywhere, `pnpm tauri dev --features cef` for the browser. A debug build with CEF takes ~25 GB of `target/`; a full disk shows up as `LNK1108` or `LNK1318`.
+- **Two dev builds on one machine need their own WebView2 profile**: WebView2 refuses a second instance on one data folder with other browser arguments (`0x8007139F`). Set `WEBVIEW2_USER_DATA_FOLDER`, and `DRAY_HOME` for the server's home. `pnpm tauri build` makes the MSI and NSIS installers; without the updater key, pass a `--config` file holding `{"bundle":{"createUpdaterArtifacts":false}}`.
 - `cargo test --no-default-features --features serve --lib` passes on Windows; tests that spawn `sh`, `cat` or `sleep`, or build `/`-paths, are `#[cfg(unix)]`.
-- **A GUI started over SSH has no desktop.** Run it in the logged-in RDP session through a scheduled task with an interactive principal (`New-ScheduledTaskPrincipal -LogonType Interactive`), and screenshot the same way (`CopyFromScreen`).
+- **A GUI started over SSH has no desktop.** Run it in the logged-in RDP session through a scheduled task with an interactive principal (`New-ScheduledTaskPrincipal -LogonType Interactive`), and screenshot the same way (`CopyFromScreen`). Clicks and keys go the same way (`mouse_event`, `keybd_event`); a CEF tab is a native window, so DevTools on the webview cannot reach it. **Take a screenshot in the same task run as the click before it**: a new task's PowerShell takes the foreground for a moment, and that closes any open menu.
+- **An RDP session has no microphone** unless the client redirects one, so dictation's capture is untestable there; feed the engine a WAV instead (`retry_transcription` on a file in `<home>/recordings`, made with `System.Speech`).
 - **Driving the dev app**: Tauri's own WebView2 arguments override `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, so the dev shim passes that variable on; set it to `--remote-debugging-port=9222` and DevTools' protocol on that port clicks, types and screenshots the webview.
