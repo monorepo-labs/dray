@@ -825,8 +825,11 @@ jobs:
           V="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
           if [[ "$V" == *-* ]]; then echo "bundles=nsis" >> "$GITHUB_OUTPUT"; else echo "bundles=nsis,msi" >> "$GITHUB_OUTPUT"; fi
           if [ -n "$SIGN_COMMAND" ]; then
-            jq -n --arg c "$SIGN_COMMAND" '{bundle: {windows: {signCommand: $c}}}' > "$RUNNER_TEMP/sign.conf.json"
-            echo "sign=--config $RUNNER_TEMP/sign.conf.json" >> "$GITHUB_OUTPUT"
+            # Forward slashes: the path is pasted unquoted into the Build
+            # step's bash, which would eat D:\a\_temp's backslashes.
+            conf="$(cygpath -m "$RUNNER_TEMP")/sign.conf.json"
+            jq -n --arg c "$SIGN_COMMAND" '{bundle: {windows: {signCommand: $c}}}' > "$conf"
+            echo "sign=--config $conf" >> "$GITHUB_OUTPUT"
           else
             echo "::notice title=Unsigned::WINDOWS_SIGN_COMMAND is unset, so the Windows app ships without Authenticode."
           fi
@@ -843,6 +846,12 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
           POSTHOG_HOST: ${{ vars.POSTHOG_HOST }}
+          # Dictation's ggml tunes itself to the build machine's CPU unless
+          # told not to, and a runner's would crash an older one. Off, it
+          # takes ggml's x86 default: AVX2, FMA and F16C, every Windows 11 CPU.
+          # CMAKE_ARGS rather than TRANSCRIBE_CMAKE_ARGS, which
+          # .cargo/config.toml sets and the job would replace; both are read.
+          CMAKE_ARGS: -DGGML_NATIVE=OFF
         run: pnpm tauri build --bundles ${{ steps.plan.outputs.bundles }} --config src-tauri/tauri.windows-release.conf.json ${{ steps.plan.outputs.sign }}
 
       # What the app reads out of its own install: the CLI it copies to
@@ -890,6 +899,8 @@ jobs:
           & "$dir\dray-cli.exe" --version
           if ($LASTEXITCODE) { throw "installed dray-cli.exe --version failed" }
           $env:DRAY_HOME = "$env:RUNNER_TEMP\dray-home"
+          # The release carries PostHog's key; a runner is not an install.
+          $env:DRAY_NO_ANALYTICS = "1"
           $app = Start-Process "$dir\dray-app.exe" -PassThru
           Start-Sleep 20
           if ($app.HasExited) { throw "the app exited with $($app.ExitCode)" }
