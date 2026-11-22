@@ -14,13 +14,13 @@
 - **Agents run through Git Bash.** Claude Code finds it on its own; it has a PowerShell tool besides, which anything denying Bash must deny too (`title.rs`).
 - **The static CRT** (`+crt-static` in `.cargo/config.toml`, `CMAKE_MSVC_RUNTIME_LIBRARY` for transcribe's CMake). CEF's wrapper is built `/MT`, one binary cannot mix it with `/MD`, and the exe then needs no VC++ runtime.
 - **The browser is a child `HWND` per tab, libcef.dll delay-loaded**, and the headless Chromium's DevTools pipe rides two inherited handles named on its command line. See [browser.md](browser.md).
-- **Dictation runs on the CPU**; the mute is Core Audio's endpoint volume and sleep is the power manager's suspend notice. See [transcription.md](transcription.md).
+- **Dictation runs on the CPU, at an x86-64-v3 floor** set by `pnpm tauri` (`TRANSCRIBE_CMAKE_ARGS` in [tauri.mjs](../scripts/tauri.mjs)), never the build machine's CPU; the mute is Core Audio's endpoint volume and sleep is the power manager's suspend notice. See [transcription.md](transcription.md).
 - **Open in finds apps at the paths installers write**, and starts console programs through `ShellExecuteExW`. See [file-opening.md](file-opening.md).
 
 ## Not on Windows yet
 
 - Dray Island, the dock badge.
-- **Nothing builds or ships Windows' Chromium side in a release yet**: the app needs `--features cef`, and dictation's ggml is tuned to the build machine's CPU (`GGML_NATIVE`), a crash waiting on an older one, unless the release build turns that off.
+- **Nothing builds Windows' Chromium side in a release yet**: the app needs `--features cef`.
 - The CLI ships in no Windows bundle and nothing copies it onto `PATH`, so an agent in the release app has no `dray`. `dray server install|start` and `dray update` are systemd/launchd and `install.sh`.
 - `release.yml` has no Windows job, no code signing (SmartScreen warns) and no updater manifest entry.
 - A refused upload reads as a reset connection, not 401: the server answers before reading the body and Windows resets a socket closed with unread data.
