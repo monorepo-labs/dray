@@ -786,6 +786,12 @@ class Store(private val context: Context) {
         }
     }
 
+    /** The reader's emoji on a bot's message `messageId`. The badge and the bot's answer come back as events. */
+    fun react(key: SessionKey, messageId: String, emoji: String) = scope.launch {
+        runCatching { call(key.server, "react_to_message", jsonOf("sessionId" to key.id, "messageId" to messageId, "emoji" to emoji)) }
+            .onFailure { lastError = it.message }
+    }
+
     fun interrupt(key: SessionKey) = scope.launch {
         runCatching { call(key.server, "interrupt_session", jsonOf("sessionId" to key.id)) }.onFailure { lastError = it.message }
     }

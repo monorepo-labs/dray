@@ -6,6 +6,7 @@ import SessionAvatar from "@/components/SessionAvatar";
 import ClampedBody from "@/components/chat/ClampedBody";
 import FileLink from "@/components/chat/FileLink";
 import ImageRow from "@/components/chat/ImageRow";
+import { ReactionBadge } from "@/components/chat/Reactions";
 import { InlineButton, InlineLink, inlineMark } from "@/components/chat/InlineMark";
 import { useChatSession } from "@/hooks/useChatSession";
 import { absolutePath } from "@/lib/filePath";
@@ -163,7 +164,7 @@ export default function UserMessage({
         <div
           className={cn(
             "user-bubble max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground shadow-(--shadow-card)",
-            reaction && "relative mt-3",
+            reaction && "relative mt-5",
           )}
           // The colour rides in and App.css paints it — a palette that fills
           // this bubble has to answer differently to one that doesn't, and only
@@ -365,7 +366,7 @@ export default function UserMessage({
               );
             })}
           </ClampedBody>
-          {reaction && <ReactionBadge emoji={reaction} className="absolute -top-4 -left-3" />}
+          {reaction && <ReactionBadge emoji={reaction} className="absolute -top-6 -left-4" />}
         </div>
       )}
 
@@ -384,35 +385,5 @@ export default function UserMessage({
         </span>
       )}
     </div>
-  );
-}
-
-const REACTION_LABELS: Record<string, string> = {
-  "👀": "Seen",
-  "✅": "Done",
-  "🎉": "Celebrating",
-  "👍": "Like",
-  "❤️": "Love",
-  "😂": "Laughing",
-  "😢": "Sad",
-};
-
-/// A bot's reaction, as iMessage draws a tapback: a round chip on the bubble's top
-/// corner on the bot's side, a step lighter than the chat's page colour and
-/// edged by a hairline. Mixed off `--background` rather than `--muted`, which
-/// turns into a translucent veil on glass and let the bubble show through.
-function ReactionBadge({ emoji, className }: { emoji: string; className?: string }) {
-  return (
-    <span
-      role="img"
-      aria-label={`Bot reacted: ${REACTION_LABELS[emoji] ?? emoji}`}
-      className={cn(
-        "flex size-7 items-center justify-center rounded-full border-[0.5px] border-border bg-[color-mix(in_oklab,var(--background),white_7%)] text-[15px] leading-none select-none",
-        "motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:fade-in motion-safe:duration-200",
-        className,
-      )}
-    >
-      {emoji}
-    </span>
   );
 }

@@ -208,8 +208,8 @@ sealed interface Payload {
     data class TaskStarted(val taskId: String, val title: String?) : Payload
     data class Learned(val commit: String, val files: List<Lesson>) : Payload
     data class LearnedUndone(val commit: String, val path: String) : Payload
-    /** A bot's emoji on one of the reader's messages. */
-    data class Reaction(val messageId: String, val emoji: String) : Payload
+    /** An emoji on a message: a bot's on the reader's, or with `byUser` the reader's on the agent's. */
+    data class Reaction(val messageId: String, val emoji: String, val byUser: Boolean = false) : Payload
     data class Other(val type: String) : Payload
 
     /** Superseded or running counters the server never logs either. */
@@ -269,7 +269,7 @@ sealed interface Payload {
             "task_started" -> TaskStarted(o["taskId"].str ?: return null, o["title"].str)
             "learned" -> Learned(o["commit"].str ?: return null, decodeList(o["files"]))
             "learned_undone" -> LearnedUndone(o["commit"].str ?: return null, o["path"].str ?: return null)
-            "reaction" -> Reaction(o["messageId"].str ?: return null, o["emoji"].str ?: return null)
+            "reaction" -> Reaction(o["messageId"].str ?: return null, o["emoji"].str ?: return null, o["byUser"].bool ?: false)
             else -> Other(type)
         } }
     }
