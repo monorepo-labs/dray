@@ -791,7 +791,7 @@ final class Store {
                 // The index lands before the bots, and a bot's chat would draw as a task row until they do.
                 && (settled || known(key.server))
         }.map { (key: $0.key, item: $0.value) }
-        return stageRuns(list) { stage($0.key, $0.item) }
+        return stageRuns(list, pins: !settled) { stage($0.key, $0.item) }
     }
 
     /// The desktop's `sessionState`: a merged PR holds its session whatever
@@ -820,6 +820,62 @@ final class Store {
             items[key]?.status = "idle"
             _ = try? await connections[key.server]?.call("mark_session_read", ["sessionId": .string(key.id), "read": true], as: JSON.self)
         }
+    }
+
+    // MARK: Row menu — the desktop sidebar's `RowMenu`, through the same commands
+
+    /// Writes a row's flags. The answer replaces the row here; `session_changed` carries it to other clients.
+    func setFlags(_ key: SessionKey, _ flags: [String: JSON]) async {
+        do {
+            let item = try await call(key.server, "set_session_flags", flags.merging(["sessionId": .string(key.id)]) { $1 },
+                                      as: SessionItem?.self)
+            if let item { items[key] = merged(key, item) }
+        } catch { lastError = error.localizedDescription }
+    }
+
+    /// Takes a read, finished session's unread mark back. Not echoed by the server, so set here too.
+    func markUnread(_ key: SessionKey) async {
+        items[key]?.status = "completed"
+        _ = try? await call(key.server, "mark_session_read", ["sessionId": .string(key.id), "read": false], as: JSON.self)
+    }
+
+    /// Copies a session onto a new id, `worktree` giving the copy a tree of its own.
+    /// Answers the fork's key; nothing spawns until its first send.
+    func fork(_ key: SessionKey, worktree: Bool) async -> SessionKey? {
+        do {
+            // The app picks the id and the CLI adopts it, as for a new session.
+            let item: SessionItem = try await call(key.server, "fork_session", [
+                "sessionId": .string(key.id), "forkId": .string(UUID().uuidString.lowercased()), "worktree": .bool(worktree),
+            ], timeout: .seconds(120))
+            created(key.server, item)
+            return SessionKey(server: key.server, id: item.sessionId)
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// Cuts a spawned session loose from its parent, so the list stops nesting it.
+    func detach(_ key: SessionKey) async {
+        do {
+            if let item = try await call(key.server, "detach_session", ["sessionId": .string(key.id)], as: SessionItem?.self) {
+                items[key] = merged(key, item)
+            }
+        } catch { lastError = error.localizedDescription }
+    }
+
+    /// Deletes a session for good, its hidden children with it; false where the server refused.
+    /// No event says so to other clients, so the row goes here once the server agrees.
+    func delete(_ key: SessionKey) async -> Bool {
+        do {
+            _ = try await call(key.server, "delete_session", ["sessionId": .string(key.id)], as: JSON.self)
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+        items[key] = nil
+        asks[key] = nil
+        return true
     }
 
     /// Lets go of every transcript held but `kept`'s. The Island's close: held, each
