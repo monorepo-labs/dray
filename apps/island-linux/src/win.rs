@@ -34,10 +34,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, GetWindowRect,
     GetWindowLongPtrW, GetWindowThreadProcessId, HC_ACTION, HWND_TOPMOST, KBDLLHOOKSTRUCT, LWA_ALPHA, MSG, SM_CXSCREEN,
     SM_CYSCREEN, SPI_GETCLIENTAREAANIMATION, SPI_GETWORKAREA, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_ASYNCWINDOWPOS, SWP_NOSIZE, SWP_NOZORDER, SET_WINDOW_POS_FLAGS, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetForegroundWindow, SetLayeredWindowAttributes,
+    SWP_FRAMECHANGED, SWP_NOSIZE, SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetForegroundWindow, SetLayeredWindowAttributes,
     SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, ShowWindowAsync, SystemParametersInfoW, TranslateMessage,
     WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_XBUTTONDOWN, WM_XBUTTONUP, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
+    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_XBUTTONDOWN, WM_XBUTTONUP, WS_CAPTION, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME, GWL_STYLE,
 };
 
 /// A window of ours as Windows names it: its `HWND`, as the integer a raw
@@ -51,9 +52,12 @@ pub fn window_id(window: &gpui::Window) -> Option<Wid> {
     }
 }
 
-/// Makes a GPUI window the island's: no border or rounded corners from
-/// Windows 11, which would frame the card's own shape, and, where it must
-/// never take the keyboard, never activated by a click either.
+/// Makes a GPUI window the island's. GPUI's `PopUp` is an overlapped window
+/// with its caption hidden, which still keeps a frame on three sides and a
+/// 1px line along the top of the screen; a plain `WS_POPUP` has neither, so
+/// the client is the window and the card's ears stay clear. Windows 11's
+/// rounding and border would frame the card's own shape, so they go too.
+/// Where it must never take the keyboard, a click never activates it either.
 pub fn adopt(window: Wid, takes_keys: bool) {
     let h = hwnd(window);
     unsafe {
@@ -61,47 +65,74 @@ pub fn adopt(window: Wid, takes_keys: bool) {
         let _ = DwmSetWindowAttribute(h, DWMWA_WINDOW_CORNER_PREFERENCE, (&raw const square).cast(), std::mem::size_of_val(&square) as u32);
         let none = DWMWA_COLOR_NONE;
         let _ = DwmSetWindowAttribute(h, DWMWA_BORDER_COLOR, (&raw const none).cast(), std::mem::size_of_val(&none) as u32);
-        if !takes_keys {
-            let style = GetWindowLongPtrW(h, GWL_EXSTYLE);
-            SetWindowLongPtrW(h, GWL_EXSTYLE, style | WS_EX_NOACTIVATE.0 as isize);
-        }
-        // GPUI places a window as if its frame were split evenly between
-        // opposite sides, but one with no title bar has none at the top, so
-        // the client lands half the bottom frame too high: the screenshot's
-        // still sat 4px above the screen it froze.
-        let (left, top, right, bottom) = frame(h);
-        let (dx, dy) = ((left + right) / 2 - left, (top + bottom) / 2 - top);
-        let mut outer = RECT::default();
-        if (dx, dy) != (0, 0) && GetWindowRect(h, &mut outer).is_ok() {
-            set_pos(window, outer.left + dx, outer.top + dy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-        }
     }
+    post_move(Move::Adopt { window, takes_keys });
 }
 
-/// Moves a window from a thread of our own, posted to GPUI's message loop.
-/// `SetWindowPos` from GPUI's own thread delivers `WM_SIZE` and `WM_MOVE`
-/// at once, inside the update that asked, where GPUI cannot borrow the app
-/// and drops them: the window grew and GPUI went on laying out at the old
-/// size. X11's configure never had this, its events arriving later.
-fn set_pos(window: Wid, x: i32, y: i32, width: i32, height: i32, flags: SET_WINDOW_POS_FLAGS) {
-    static MOVES: OnceLock<Mutex<std::sync::mpsc::Sender<(Wid, i32, i32, i32, i32, u32)>>> = OnceLock::new();
+/// What the moves thread does to a window.
+enum Move {
+    Adopt { window: Wid, takes_keys: bool },
+    /// The client rect, in device pixels.
+    Place { window: Wid, x: i32, y: i32, width: i32, height: i32 },
+    Raise { window: Wid },
+}
+
+/// Hands a move to a thread of our own. Called from GPUI's thread,
+/// `SetWindowPos` delivers `WM_SIZE` and `WM_MOVE` at once, inside the update
+/// that asked, where GPUI cannot borrow the app and drops them: the done pill
+/// grew and GPUI went on drawing at its first width. From another thread the
+/// same messages wait for GPUI's message loop. X11's configure never had
+/// this, its events arriving later. In order, so a window is adopted before
+/// it is placed.
+fn post_move(job: Move) {
+    static MOVES: OnceLock<Mutex<std::sync::mpsc::Sender<Move>>> = OnceLock::new();
     let moves = MOVES.get_or_init(|| {
-        let (tx, rx) = std::sync::mpsc::channel::<(Wid, i32, i32, i32, i32, u32)>();
+        let (tx, rx) = std::sync::mpsc::channel::<Move>();
         std::thread::Builder::new()
             .name("island-moves".into())
-            .spawn(move || {
-                for (window, x, y, width, height, flags) in rx {
-                    let flags = SET_WINDOW_POS_FLAGS(flags) | SWP_ASYNCWINDOWPOS;
-                    let after = if flags.contains(SWP_NOZORDER) { None } else { Some(HWND_TOPMOST) };
-                    unsafe {
-                        let _ = SetWindowPos(hwnd(window), after, x, y, width, height, flags);
-                    }
-                }
-            })
+            .spawn(move || rx.into_iter().for_each(run))
             .expect("moves thread");
         Mutex::new(tx)
     });
-    let _ = moves.lock().unwrap_or_else(|e| e.into_inner()).send((window, x, y, width, height, flags.0));
+    let _ = moves.lock().unwrap_or_else(|e| e.into_inner()).send(job);
+}
+
+fn run(job: Move) {
+    let quiet = SWP_NOZORDER | SWP_NOACTIVATE;
+    unsafe {
+        match job {
+            Move::Adopt { window, takes_keys } => {
+                let h = hwnd(window);
+                // Where GPUI meant the client to be: it placed the window as
+                // if the frame were split evenly between opposite sides.
+                let (left, top, right, bottom) = frame(h);
+                let mut outer = RECT::default();
+                if GetWindowRect(h, &mut outer).is_err() {
+                    return;
+                }
+                let x = outer.left + (left + right) / 2;
+                let y = outer.top + (top + bottom) / 2;
+                let width = outer.right - outer.left - left - right;
+                let height = outer.bottom - outer.top - top - bottom;
+                let style = GetWindowLongPtrW(h, GWL_STYLE) as u32;
+                let framed = (WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX).0;
+                SetWindowLongPtrW(h, GWL_STYLE, ((style & !framed) | WS_POPUP.0) as isize);
+                if !takes_keys {
+                    let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+                    SetWindowLongPtrW(h, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE.0 as isize);
+                }
+                let _ = SetWindowPos(h, None, x, y, width.max(1), height.max(1), quiet | SWP_FRAMECHANGED);
+            }
+            Move::Place { window, x, y, width, height } => {
+                let h = hwnd(window);
+                let (left, top, right, bottom) = frame(h);
+                let _ = SetWindowPos(h, None, x - left, y - top, width.max(1) + left + right, height.max(1) + top + bottom, quiet);
+            }
+            Move::Raise { window } => {
+                let _ = SetWindowPos(hwnd(window), Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+        }
+    }
 }
 
 fn hwnd(id: Wid) -> HWND {
@@ -475,25 +506,15 @@ pub fn shift_alone() -> bool {
 /// Puts `window` over every other window of ours: the panel over a capture's
 /// overlay, so dictation stays in sight and in reach.
 pub fn raise(window: Wid) {
-    set_pos(window, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    post_move(Move::Raise { window });
 }
 
 /// Moves and sizes a window of ours in device pixels. GPUI reads the
-/// `WM_MOVE` and `WM_SIZE` this causes as its new bounds.
-///
-/// The rect is the client's, as GPUI's bounds are: a window with no title
-/// bar keeps Windows' frame on its other three sides, so the window itself
-/// is that much larger, or each fit would shrink it by the frame.
+/// `WM_MOVE` and `WM_SIZE` this causes as its new bounds. The rect is the
+/// client's, as GPUI's bounds are; an adopted window has no frame, but one
+/// is allowed for.
 pub fn configure(window: Wid, x: i32, y: i32, width: i32, height: i32) {
-    let (left, top, right, bottom) = frame(hwnd(window));
-    set_pos(
-        window,
-        x - left,
-        y - top,
-        width.max(1) + left + right,
-        height.max(1) + top + bottom,
-        SWP_NOZORDER | SWP_NOACTIVATE,
-    );
+    post_move(Move::Place { window, x, y, width, height });
 }
 
 /// The frame around the client, per side, in device pixels.
