@@ -470,16 +470,18 @@ struct IndexStamp {
 }
 
 impl IndexStamp {
-    fn of(meta: &std::fs::Metadata) -> Option<Self> {
+    async fn at(path: &Path) -> Option<Self> {
+        let meta = fs::metadata(path).await.ok()?;
         #[cfg(unix)]
         let (dev, ino) = {
             use std::os::unix::fs::MetadataExt;
             (meta.dev(), meta.ino())
         };
-        // Std has no stable file id on Windows; NTFS's 100ns mtime and the
-        // length carry the stamp alone there.
-        #[cfg(not(unix))]
-        let (dev, ino) = (0, 0);
+        // NTFS's file id, as std gives none there. Not mtime alone: its clock
+        // ticks every ~15.6ms, so two writes can share one, and not creation
+        // time, which NTFS carries onto a file renamed over another.
+        #[cfg(windows)]
+        let (dev, ino) = crate::platform::file_id(path)?;
         Some(Self { dev, ino, mtime: meta.modified().ok()?, len: meta.len() })
     }
 }
@@ -503,7 +505,7 @@ async fn cached_index() -> Result<Arc<Vec<SessionIndexItem>>> {
 async fn cached_index_at(path: &Path) -> Result<Arc<Vec<SessionIndexItem>>> {
     // Stamped before the read, so a file replaced between the two is cached
     // under the older stamp — which costs a re-read, never a stale answer.
-    let stamp = fs::metadata(path).await.ok().and_then(|m| IndexStamp::of(&m));
+    let stamp = IndexStamp::at(path).await;
     if let Some(stamp) = stamp {
         if let Some((cached, items)) = &*INDEX_CACHE.lock().unwrap() {
             if *cached == stamp {
@@ -604,7 +606,7 @@ async fn write_atomic_stamped(path: &Path, contents: impl AsRef<[u8]>) -> Result
     fs::write(&tmp, contents)
         .await
         .with_context(|| format!("could not write {}", tmp.display()))?;
-    let stamp = fs::metadata(&tmp).await.ok().and_then(|m| IndexStamp::of(&m));
+    let stamp = IndexStamp::at(&tmp).await;
 
     if let Err(e) = fs::rename(&tmp, path).await {
         // Or the next write inherits a stale temp file it never wrote.

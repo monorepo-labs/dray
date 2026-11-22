@@ -553,11 +553,15 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     let answers = std::os::unix::net::UnixStream::connect(&socket).is_ok();
     // Opening a pipe instance is connecting to it, as a client would.
     #[cfg(windows)]
-    let answers = std::fs::OpenOptions::new()
+    // Every instance busy is a server just as surely as one answering.
+    let answers = match std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(dray_proto::pipe_name(&socket.to_string_lossy()))
-        .is_ok();
+    {
+        Ok(_) => true,
+        Err(e) => e.raw_os_error() == Some(231), // ERROR_PIPE_BUSY
+    };
     if answers {
         anyhow::bail!(
             "a Dray is already running on {} ({} answers). Quit it, or start \

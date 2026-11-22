@@ -42,6 +42,7 @@ pub struct OwnerOnly(windows_sys::Win32::Security::PSECURITY_DESCRIPTOR);
 
 #[cfg(windows)]
 impl OwnerOnly {
+    /// Reads this process's user off its token and grants that SID alone.
     pub fn new() -> std::io::Result<Self> {
         use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
         use windows_sys::Win32::Security::Authorization::{
@@ -121,6 +122,50 @@ impl Drop for OwnerOnly {
 /// git or a reader writes. `dunce::canonicalize` is the same for sync code.
 pub async fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<std::path::PathBuf> {
     tokio::fs::canonicalize(path).await.map(|real| dunce::simplified(&real).to_path_buf())
+}
+
+/// The executable `pid` runs, where this user may ask.
+#[cfg(windows)]
+pub fn image_of(pid: u32) -> Option<std::path::PathBuf> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: the handle is checked and closed; `len` is the buffer's size.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) != 0;
+        CloseHandle(handle);
+        ok.then(|| String::from_utf16_lossy(&buf[..len as usize]).into())
+    }
+}
+
+/// `(volume, file index)`: NTFS's own name for a file, which a rename keeps
+/// and a different file never shares. Std has no stable one on Windows.
+#[cfg(windows)]
+pub fn file_id(path: &Path) -> Option<(u64, u64)> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+
+    // No access asked and every sharing mode granted: a stamp must never
+    // refuse, or be refused by, the writer.
+    let file = std::fs::OpenOptions::new().access_mode(0).share_mode(7).open(path).ok()?;
+    // SAFETY: the handle lives as long as `file`; the out struct is a local.
+    unsafe {
+        let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+        (GetFileInformationByHandle(file.as_raw_handle(), &mut info) != 0).then(|| {
+            (
+                u64::from(info.dwVolumeSerialNumber),
+                (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+            )
+        })
+    }
 }
 
 /// Sets Unix permission bits. A no-op on Windows, where a file under the

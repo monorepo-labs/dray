@@ -242,8 +242,17 @@ pub async fn stop() -> Result<()> {
         // No SIGTERM to send, so the server never kills its agents itself:
         // they go with it, or a stopped server's Claude kept running and the
         // next launch resumed the same conversation beside it.
+        //
+        // Only where that pid still runs this binary: `serve-port` outlives a
+        // server that died, and its pid can be some other app's by now.
         #[cfg(windows)]
-        let _ = tokio::task::spawn_blocking(move || crate::platform::kill_tree(pid as u32)).await;
+        {
+            let ours = crate::serve::executable().and_then(|exe| dunce::canonicalize(exe).ok());
+            let theirs = crate::platform::image_of(pid as u32).and_then(|exe| dunce::canonicalize(exe).ok());
+            if ours.is_some() && ours == theirs {
+                let _ = tokio::task::spawn_blocking(move || crate::platform::kill_tree(pid as u32)).await;
+            }
+        }
         return Ok(());
     }
     launchctl(&["bootout", &target()]).await?;

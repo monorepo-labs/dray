@@ -199,19 +199,39 @@ pub async fn serve(app: Sink) -> Result<()> {
         if let Err(e) = server.connect().await {
             eprintln!("[orchestration accept err] {e}");
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            server = create(false)?;
+            server = next_instance(&create).await;
             continue;
         }
         let connected = server;
         // The next instance before this one is served, or a caller arriving
         // meanwhile finds no pipe and reads Dray as closed.
-        server = create(false)?;
+        server = next_instance(&create).await;
         let app = app.clone();
         tokio::spawn(async move {
             if let Err(e) = handle(connected, &app).await {
                 eprintln!("[orchestration conn err] {e:#}");
             }
         });
+    }
+}
+
+/// A pipe instance, retried until one is made: a failed create ends nothing,
+/// as a failed accept ends nothing on Unix. Logged once per failing run.
+#[cfg(windows)]
+async fn next_instance(
+    create: &impl Fn(bool) -> Result<tokio::net::windows::named_pipe::NamedPipeServer>,
+) -> tokio::net::windows::named_pipe::NamedPipeServer {
+    let mut logged = false;
+    loop {
+        match create(false) {
+            Ok(server) => return server,
+            Err(e) if !logged => {
+                eprintln!("[orchestration] {e:#}; retrying");
+                logged = true;
+            }
+            Err(_) => {}
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
 }
 
