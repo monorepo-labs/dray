@@ -53,9 +53,6 @@ const FALLBACK: Partial<Record<Harness, (mode: ApprovalPolicy) => ApprovalPolicy
   // session inherits its parent's stance, so a `plan` parent landing on
   // `bypassPermissions` would come out ungated by inheriting a narrower one.
   grok: (mode) => (mode === "plan" ? "manual" : "bypassPermissions"),
-  // pi.rs still runs `plan` read-only (`tools_for`), so it records as itself:
-  // a task moved onto pi from a `plan` one must not come out able to write.
-  pi: (mode) => (mode === "plan" ? "plan" : "bypassPermissions"),
 };
 
 /// Whether this harness honours this stance.
@@ -73,12 +70,23 @@ export function honoursMode(harness: Harness, mode: ApprovalPolicy): boolean {
 /// for a pi session running ungated is a lie a later build could read back and
 /// believe.
 ///
-/// pi falls to the most permissive stance rather than the most restrictive,
-/// because that is what its CLI will do — except `plan`, which pi.rs passes as
-/// `--tools` and so really is read-only.
+/// A harness with no entry in `FALLBACK` falls to the most permissive stance
+/// rather than the most restrictive, because for pi — the one left — that is
+/// what the CLI will do. A session recorded `plan` that is not passed `--tools`
+/// would be the same lie pointed the other way, and the more alarming direction
+/// to be wrong in.
 export function stanceFor(harness: Harness, mode: ApprovalPolicy): ApprovalPolicy {
   if (honoursMode(harness, mode)) return mode;
   return FALLBACK[harness]?.(mode) ?? "bypassPermissions";
+}
+
+/// [`stanceFor`] for a send to a task that already exists. A pi task recorded
+/// `plan` keeps it: pi.rs runs it read-only, and it got there by moving from a
+/// `plan` task, which must not come out able to write. A new pi task never
+/// takes `plan` from the saved default, since pi draws no stance control to
+/// leave it by.
+export function taskStance(harness: Harness, mode: ApprovalPolicy): ApprovalPolicy {
+  return harness === "pi" && mode === "plan" ? "plan" : stanceFor(harness, mode);
 }
 
 /// The stance a bot chat runs on: always Auto, so the reader never picks one

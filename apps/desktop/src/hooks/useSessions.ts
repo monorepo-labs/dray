@@ -38,7 +38,7 @@ import { islandOn } from "@/lib/island";
 import { notifyOS } from "@/lib/notify";
 import { setCallReader, setOlderDropper, setOlderLoader } from "@/lib/olderPages";
 import { EMPTY_TASKS } from "@/lib/transcript";
-import { botStance, stanceFor } from "@/lib/permission";
+import { botStance, stanceFor, taskStance } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
 import { appendLive, mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
@@ -911,7 +911,11 @@ const handleSendMsg = async (
   // resumes only its own sessions, so this one cannot carry on.
   // A task moves in place instead (#1414): the backend stops its agent and
   // hands the next one the conversation.
-  const moving = !!selected && harness !== selected.harness;
+  // Judged against the index row, which `session_changed` keeps current,
+  // before the loaded transcript's copy: a move made by `dray session model`
+  // must still read as one when the reader picks the agent back.
+  const recorded = sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.harness ?? selected?.harness;
+  const moving = !!selected && harness !== recorded;
   const switching = moving && isBotPath(selected.cwd);
   if (moving && statusOf(selected.sessionId) === "in_progress") {
     setError(`Wait for this turn to finish before switching to ${AGENT_LABELS[harness]}.`);
@@ -980,7 +984,9 @@ const handleSendMsg = async (
   // A bot's folder is no project, and its chat runs in the folder itself. A
   // cloud task always gets a worktree, whatever the saved toggle says.
   const worktree = (useWorktree || placed !== null) && !isBotPath(cwd);
-  const stance = isBotPath(cwd) ? botStance(harness, permissionMode) : stanceFor(harness, permissionMode);
+  const stance = isBotPath(cwd)
+    ? botStance(harness, permissionMode)
+    : (isNewSession ? stanceFor : taskStance)(harness, permissionMode);
   if (!sessionId) {
     sessionId = crypto.randomUUID();
     // Before the selection moves, so the composer reads this server's models
@@ -1200,14 +1206,16 @@ const handleSendMsg = async (
         if (sentPick?.efforts) unsentPicks.current.set(sessionId, { efforts: sentPick.efforts });
         else unsentPicks.current.delete(sessionId);
       }
+      // Only onto the agent the row already names: the agent itself moves on
+      // the server's word (`session_changed`, `agent_switched`), never on this
+      // send's, which the server may have answered on another agent.
       setSessionIndexItems((prev) =>
         prev.map((i) =>
-          i.sessionId === sessionId
-            ? { ...i, harness, model: modelId, effort, permissionMode: stance, fast, aside: false, modified: new Date().toISOString() }
+          i.sessionId === sessionId && i.harness === harness
+            ? { ...i, model: modelId, effort, permissionMode: stance, fast, aside: false, modified: new Date().toISOString() }
             : i,
         ),
       );
-      setSessions((prev) => prev.map((s) => (s.sessionId === sessionId && s.harness !== harness ? { ...s, harness } : s)));
     }
 
     if (outcome.queued) {
@@ -2480,6 +2488,17 @@ useEffect(() => {
         if (agentEvent.payload.type === "repo_changed") {
           repoChanged.emit({ sessionId: agentEvent.sessionId, pullRequest: agentEvent.payload.pullRequest });
           return;
+        }
+
+        // A move made anywhere (`dray session model`, another window) lands
+        // here even where its `session_changed` was missed: logged, so a
+        // reconnect's catch-up carries it too.
+        if (agentEvent.payload.type === "agent_switched") {
+          const { to } = agentEvent.payload;
+          const moved = <T extends { sessionId: string; harness: Harness }>(s: T): T =>
+            s.sessionId === agentEvent.sessionId && s.harness !== to ? { ...s, harness: to } : s;
+          setSessions((prev) => prev.map(moved));
+          setSessionIndexItems((prev) => prev.map(moved));
         }
 
         if (agentEvent.payload.type != "delta") {

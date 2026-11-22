@@ -2337,13 +2337,21 @@ impl SessionManager {
     /// `dray session model` naming another agent's model.
     pub async fn switch_agent(
         &self,
-        item: SessionIndexItem,
+        session_id: &str,
         to: Harness,
         pick: crate::store::AgentPick,
         app: &Sink,
     ) -> Result<SessionIndexItem> {
-        let slot = self.slot(&item.session_id).await;
+        let slot = self.slot(session_id).await;
         let mut guard = slot.lock().await;
+        // Read under the lock: two switches racing for it would each have
+        // read the agent before either moved it, and logged the move twice.
+        let item = get_session_index_item(session_id)
+            .await?
+            .with_context(|| format!("unknown session {session_id}"))?;
+        if item.harness == to {
+            return Ok(item);
+        }
         move_agent(&mut guard, item, to, pick, app).await
     }
 

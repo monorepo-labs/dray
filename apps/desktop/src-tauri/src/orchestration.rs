@@ -1754,7 +1754,7 @@ async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
             // and the stance narrows to one the agent honours.
             let permission_mode = stance_on(harness, item.permission_mode);
             let pick = store::AgentPick { model: model.clone(), effort, permission_mode, fast: false };
-            manager().switch_agent(item, harness, pick, app).await?
+            manager().switch_agent(&item.session_id, harness, pick, app).await?
         }
         false => item,
     };

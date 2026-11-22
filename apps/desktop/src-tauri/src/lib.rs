@@ -899,7 +899,7 @@ async fn switch_agent(
     if item.harness != harness {
         session::runnable_model_spec(harness, &model).await?;
         let pick = store::AgentPick { model, effort, permission_mode, fast };
-        manager().switch_agent(item, harness, pick, &sink).await?;
+        manager().switch_agent(&item.session_id, harness, pick, &sink).await?;
     }
     Ok(())
 }
