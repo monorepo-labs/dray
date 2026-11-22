@@ -18,6 +18,11 @@ pub fn kill(pid: u32) {
     imp::kill(pid)
 }
 
+/// Keeps a console child from opening a console window of its own, which every
+/// one does under a GUI app with no console to inherit.
+#[cfg(windows)]
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// Kills `pid` and every process under it, which Unix gets from a process
 /// group and Windows has to ask `taskkill` for.
 #[cfg(windows)]

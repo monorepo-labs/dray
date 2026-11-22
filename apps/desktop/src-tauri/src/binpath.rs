@@ -330,11 +330,50 @@ async fn resolve(bin: &str) -> Option<PathBuf> {
 fn search_path(bin: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
-        .map(|dir| dir.join(bin))
+        .flat_map(|dir| spellings(dir.join(bin)))
         .find(|candidate| is_executable(candidate))
 }
 
+/// The files a bare name can be: itself, or on Windows `claude.exe` and the
+/// `.cmd` shim npm writes. Never the bare name there, since npm leaves a `sh`
+/// script of that name beside the shim, which Windows cannot run.
+#[cfg(unix)]
+fn spellings(path: PathBuf) -> [PathBuf; 1] {
+    [path]
+}
+
+#[cfg(windows)]
+fn spellings(path: PathBuf) -> [PathBuf; 2] {
+    [path.with_extension("exe"), path.with_extension("cmd")]
+}
+
 /// Where a user-installed CLI tends to land.
+#[cfg(windows)]
+fn known_dirs() -> Vec<PathBuf> {
+    let Some(home) = std::env::home_dir() else {
+        return Vec::new();
+    };
+    let appdata = std::env::var_os("APPDATA").map(PathBuf::from);
+    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    [
+        // Claude Code's native installer, and `dray`'s own.
+        Some(home.join(".local").join("bin")),
+        // `npm install -g` lands its shims here.
+        appdata.map(|a| a.join("npm")),
+        local.as_ref().map(|l| l.join("pnpm")),
+        Some(home.join(".bun").join("bin")),
+        local.map(|l| l.join("Microsoft").join("WinGet").join("Links")),
+        std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("nodejs")),
+        std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("Git").join("cmd")),
+        std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("GitHub CLI")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// Where a user-installed CLI tends to land.
+#[cfg(unix)]
 fn known_dirs() -> Vec<PathBuf> {
     let Some(home) = std::env::home_dir() else {
         return Vec::new();
@@ -447,7 +486,7 @@ fn search_known_dirs(bin: &str) -> Option<PathBuf> {
 
     if let Some(found) = candidates
         .iter()
-        .map(|dir| dir.join(bin))
+        .flat_map(|dir| spellings(dir.join(bin)))
         .find(|candidate| is_executable(candidate))
     {
         return Some(found);
@@ -507,7 +546,7 @@ fn find_versioned(root: &Path, depth: usize, layouts: &[&str], bin: &str) -> Opt
     dirs.into_iter().rev().find_map(|version| {
         layouts
             .iter()
-            .map(|layout| version.join(layout).join(bin))
+            .flat_map(|layout| spellings(version.join(layout).join(bin)))
             .find(|candidate| is_executable(candidate))
     })
 }
@@ -525,7 +564,7 @@ async fn login_shell_which(bin: &str) -> Option<PathBuf> {
     }
     let path = slot.as_ref()?.as_ref()?;
     std::env::split_paths(path)
-        .map(|dir| dir.join(bin))
+        .flat_map(|dir| spellings(dir.join(bin)))
         .find(|candidate| is_executable(candidate))
 }
 
@@ -537,9 +576,32 @@ static LOGIN_PATH: tokio::sync::Mutex<Option<Option<OsString>>> =
 /// reader's rc files is only found by reading the `PATH` again.
 static LOGIN_PATH_STALE: AtomicBool = AtomicBool::new(false);
 
+/// Windows keeps no `PATH` in rc files: the machine's and the user's live in
+/// the registry, and an installer that ran after Explorer started is only
+/// there, not in what this process inherited.
+#[cfg(windows)]
+async fn login_shell_path() -> Option<OsString> {
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Environment]::GetEnvironmentVariable('Path','Machine') + ';' + \
+             [Environment]::GetEnvironmentVariable('Path','User')",
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(crate::platform::CREATE_NO_WINDOW)
+        .output()
+        .await
+        .ok()?;
+    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().into())
+}
+
 /// `-l` matters more than it looks: without it zsh reads `.zshrc` only, and a
 /// `PATH` exported from `.zprofile` — where the installers write it — stays
 /// invisible.
+#[cfg(unix)]
 async fn login_shell_path() -> Option<OsString> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
 
