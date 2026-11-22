@@ -1,6 +1,6 @@
 # Opening the working directory
 
-**A split button in the right panel's tab row** ([OpenInButton](../src/components/OpenInButton.tsx)) hands the session's `cwd` to an installed app; the left half opens in the app picked last, the chevron changes it. Detection is [apps.rs](../src-tauri/src/apps.rs) on macOS and [apps/linux.rs](../src-tauri/src/apps/linux.rs) on Linux, both from one `KNOWN` table — anything else answers an empty list. It sits in the tab row because the directory belongs to the *session*, not to one tab's answer about it.
+**A split button in the right panel's tab row** ([OpenInButton](../src/components/OpenInButton.tsx)) hands the session's `cwd` to an installed app; the left half opens in the app picked last, the chevron changes it. Detection is [apps.rs](../src-tauri/src/apps.rs) on macOS, [apps/linux.rs](../src-tauri/src/apps/linux.rs) on Linux and [apps/windows.rs](../src-tauri/src/apps/windows.rs) on Windows, all from one `KNOWN` table — anything else answers an empty list. It sits in the tab row because the directory belongs to the *session*, not to one tab's answer about it.
 
 - **Detection is `read_dir` over known dirs, matched on bundle file name exactly.** `/Applications`, `/Applications/Utilities`, `/Applications/Setapp`, `/System/Applications`, `/System/Applications/Utilities`, `~/Applications`; first dir wins, so a machine-wide install outranks a user's copy. **Exact, never substring** — `Cloudflare WARP.app` is not `Warp.app`, and a contains-check lists it as a terminal that then ignores the directory handed to it. `resolve` is split from `detect` so order is testable with nothing spawned.
 - **The table is the guarantee, not `CFBundleDocumentTypes`.** `open -a` names the app outright rather than asking Launch Services to rank a handler, so it reaches apps declaring nothing — MacVim declares no folder type and opens one fine.
@@ -16,6 +16,15 @@
 - **Icons go through the icon theme**: GTK's `settings.ini`, then GNOME's `icon-theme` setting, its `Inherits`, then hicolor, then pixmaps. Scored on each directory's `Size` against 64, not the spec's `MinSize`/`MaxSize` match — hicolor calls its 256px PNGs scalable down to 64. PNG and SVG both go as `data:` URLs.
 - **The login terminal is the reader's own**: `$TERMINAL`, then `x-terminal-emulator`, then the table's terminals in order. The command goes through a throwaway `.sh`, so each terminal gets one path rather than its own quoting, and the window waits for Enter — Terminal.app keeps a finished window, a Linux terminal closes it with the login's last words on it.
 - **Every launch is detached and clean**: own process group, no stdio, AppImage environment undone (`appimage_env_undo`). It waits 1.5s so a program refusing its arguments is an error the button shows. No line numbers yet — `lineUrl` keys on Mac bundle names, so a file opens at its top.
+
+## Windows
+
+- **Found at the paths installers write**, from each `KNOWN` row's `windows` column: `%LOCALAPPDATA%\Programs` for per-user installs, then `%ProgramFiles%`. A `*` stands for one directory level and the newest name wins, which is how a versioned JetBrains folder is found. The registry's uninstall entries were the alternative, and name an icon rather than a program for half of these.
+- **The address is the `.exe`**, and `open_in_app` launches only what the last scan listed, as on Linux.
+- **A terminal is started at the directory**: Windows Terminal with `-d`, PowerShell 7 with `-WorkingDirectory`, Git Bash with `--cd=`, `cmd` and Windows PowerShell through their cwd. **A console program gets a console of its own** (`CREATE_NEW_CONSOLE`): the app's is hidden (`platform::hidden_console`), and one inherited from it never shows. Everything else starts detached.
+- **File Explorer is the Finder**, and its exit code says nothing: it answers 1 whenever it hands the window to the running Explorer, which is every time.
+- **Icons come out of each `.exe`** (`PrivateExtractIconsW` at 64px, read back through GDI, encoded as PNG). `wt.exe` is an app-execution alias with no icon of its own, so Windows Terminal draws the glyph.
+- **The login terminal is Git Bash**, in a console of its own: the lines `run_in_terminal` runs are `/bin/sh`, and Claude Code needs Git Bash on Windows anyway.
 
 ## File links
 

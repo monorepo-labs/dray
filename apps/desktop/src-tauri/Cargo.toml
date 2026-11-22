@@ -157,6 +157,12 @@ transcribe-cpp = { version = "0.4", default-features = false, features = [
 [target.'cfg(not(any(target_os = "macos", target_os = "linux")))'.dependencies]
 transcribe-cpp = { version = "0.4", default-features = false, optional = true }
 
+# Open in's app icons, read out of each `.exe` and handed over as PNG. The
+# version tauri's menus already build. Not behind `desktop`: `dray-serve`
+# answers the apps list too. See apps/windows.rs.
+[target.'cfg(windows)'.dependencies.png]
+version = "0.18"
+
 # The speakers' mute while dictating, through Core Audio's endpoint volume: a
 # COM interface, which `windows-sys` does not carry. The version cpal and cef
 # already build, so this adds one feature and no crate.
