@@ -59,6 +59,14 @@ pub async fn notify_session(
 
         #[cfg(target_os = "macos")]
         notification.sound_name(sound_for(&kind));
+        // Toasts are filed under an app id, PowerShell's unless told. The
+        // installer gives the Start menu shortcut the bundle identifier as its
+        // id; a dev build has no shortcut, so it keeps PowerShell's, as
+        // Tauri's own notification plugin does.
+        #[cfg(windows)]
+        if !crate::is_dev() {
+            notification.app_id(&app.config().identifier);
+        }
 
         let handle = match notification.show() {
             Ok(handle) => handle,
