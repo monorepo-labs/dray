@@ -1014,7 +1014,7 @@ async fn handover_prompt(earlier: &[SessionIndexItem], harness: Harness) -> Stri
     let older = if cut { "Older messages are left out. " } else { "" };
 
     format!(
-        "[Dray: the user just moved you, this bot, to {agent}. You are the same bot, with the same instructions and memory; only the agent running you changed. Below is the conversation so far, oldest first, text only. {older}The full logs, one JSON event per line, are:\n{logs}{tasks}\n\nCarry on as if you had been here all along, and don't mention this note.]\n\n<conversation>\n{conversation}\n</conversation>\n\nThe user's new message:\n\n",
+        "[Dray: the user just moved you, this bot, to {agent}. You are the same bot, with the same instructions and memory; only the agent running you changed. Below is the conversation so far, oldest first, text only. {older}The full logs, one JSON event per line, are:\n{logs}{tasks}\n\nCarry on as if you had been here all along, and don't mention this note.]\n\n<conversation>\n{conversation}\n</conversation>\n\n{NEW_MESSAGE_CUE}\n\n",
         agent = harness.label(),
         logs = logs.join("\n"),
     )
@@ -1118,31 +1118,44 @@ async fn since_switch(id: &str, agent: Harness) -> (Option<(Harness, bool)>, boo
 }
 
 /// Whether the agent a task runs on now holds a conversation under its id, so
-/// a switch back to it can resume. An unspawned fork holds none of its own.
+/// a switch back to it can resume. An unspawned fork holds none of its own,
+/// bar pi's, whose session file was copied whole at the fork.
 pub async fn agent_joined(item: &SessionIndexItem) -> bool {
-    item.fork_from.is_none() && since_switch(&item.session_id, item.harness).await.1
+    (item.fork_from.is_none() || item.harness == Harness::Pi) && since_switch(&item.session_id, item.harness).await.1
 }
 
-/// How a task's replay ends, which also marks one waiting in [`HANDOVERS`]:
-/// the conversation inside it is escaped, so nothing else carries this.
-const TASK_HANDOVER_END: &str = "</conversation>\n\nThe user's new message:\n\n";
+/// How every hand-over ends, right before the reader's own words. Dropped
+/// where the lead-in has to follow those words instead (`lead_in_around`).
+pub const NEW_MESSAGE_CUE: &str = "The user's new message:";
+
+/// The last replay queued for each task, kept whole so it is found in
+/// [`HANDOVERS`] by its own text: a conversation about this very code can hold
+/// any marker a search for its edges would use.
+static TASK_REPLAYS: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
 
 /// Takes a task's waiting replay out of [`HANDOVERS`], leaving any lead-in
-/// beside it. The replay opens on the last `[Dray: ` before its
-/// `<conversation>`, whose content is escaped and cannot hold either.
+/// beside it.
 pub fn drop_task_handover(session_id: &str) {
+    let mut replays = TASK_REPLAYS.lock().unwrap();
+    let Some(at) = replays.iter().position(|(id, _)| id == session_id) else { return };
+    let (_, replay) = replays.remove(at);
     let mut handovers = HANDOVERS.lock().unwrap();
     let Some(at) = handovers.iter().position(|(id, _)| id == session_id) else { return };
     let text = &mut handovers[at].1;
-    let Some(end) = text.find(TASK_HANDOVER_END) else { return };
-    let start = text[..end]
-        .rfind("\n<conversation>\n")
-        .and_then(|open| text[..open].rfind("[Dray: "))
-        .unwrap_or(0);
-    text.replace_range(start..end + TASK_HANDOVER_END.len(), "");
+    if let Some(start) = text.find(&replay) {
+        text.replace_range(start..start + replay.len(), "");
+    }
     if text.is_empty() {
         handovers.remove(at);
     }
+}
+
+/// Whether `session_id`'s queued replay still waits in [`HANDOVERS`], taken by
+/// no send yet or put back by a failed one.
+fn replay_waiting(session_id: &str) -> bool {
+    let replays = TASK_REPLAYS.lock().unwrap();
+    let Some((_, replay)) = replays.iter().find(|(id, _)| id == session_id) else { return false };
+    HANDOVERS.lock().unwrap().iter().any(|(id, text)| id == session_id && text.contains(replay.as_str()))
 }
 
 /// Hands a task's next prompt the conversation where its newest agent switch
@@ -1156,12 +1169,18 @@ pub async fn mark_switch_if_unanswered(item: &SessionIndexItem) -> Option<bool> 
     }
     let id = &item.session_id;
     let (switch, prompted, answered) = since_switch(id, item.harness).await;
-    let (_, resumed) = switch.filter(|(to, _)| !answered && *to == item.harness)?;
-    let waiting = HANDOVERS.lock().unwrap().iter().any(|(i, text)| i == id && text.contains(TASK_HANDOVER_END));
-    if !waiting {
+    let Some((_, resumed)) = switch.filter(|(to, _)| !answered && *to == item.harness) else {
+        TASK_REPLAYS.lock().unwrap().retain(|(i, _)| i != id);
+        return None;
+    };
+    if !replay_waiting(id) {
         let events = crate::store::list_session_events(id).await.unwrap_or_default();
+        let replay = task_handover_prompt(item, &events, resumed).await;
         // After anything already waiting, such as a bot's lead-in note.
-        lead_in(id, task_handover_prompt(item, &events, resumed).await);
+        lead_in(id, replay.clone());
+        let mut replays = TASK_REPLAYS.lock().unwrap();
+        replays.retain(|(i, _)| i != id);
+        replays.push((id.clone(), replay));
     }
     Some(resumed || prompted)
 }
@@ -1232,7 +1251,7 @@ async fn task_handover_prompt(item: &SessionIndexItem, events: &[crate::events::
     };
     let middle = if cut { "Part of the middle is left out, marked […]. " } else { "" };
     format!(
-        "[Dray: {what}, oldest first: the user's messages and the agent's replies in full, and each tool call as one line with no output, since the files show the result. {middle}The full log, one JSON event per line, is {log}.\n\nCarry on as if you had been here all along, and don't mention this note.]\n\n<conversation>\n{conversation}\n{TASK_HANDOVER_END}"
+        "[Dray: {what}, oldest first: the user's messages and the agent's replies in full, and each tool call as one line with no output, since the files show the result. {middle}The full log, one JSON event per line, is {log}.\n\nCarry on as if you had been here all along, and don't mention this note.]\n\n<conversation>\n{conversation}\n</conversation>\n\n{NEW_MESSAGE_CUE}\n\n"
     )
 }
 
@@ -1265,8 +1284,9 @@ fn tool_line(name: &str, kind: crate::events::ToolType, input: &serde_json::Valu
 }
 
 /// Every entry where they fit in `cap` bytes; else the oldest up to `head`
-/// bytes, a `[…]`, and the newest that fit in what is left. Answers whether any
-/// were cut. An opening entry larger than `head` keeps its start.
+/// bytes, a `[…]` where the middle is left out, and the newest that fit in what
+/// is left. Answers whether any middle was left out. An opening entry larger
+/// than `head` keeps its start, cut off with `…`.
 fn head_and_newest_within(entries: &[String], head: usize, cap: usize) -> (Vec<String>, bool) {
     if entries.iter().map(String::len).sum::<usize>() <= cap {
         return (entries.to_vec(), false);
@@ -1288,10 +1308,13 @@ fn head_and_newest_within(entries: &[String], head: usize, cap: usize) -> (Vec<S
         kept.push(format!("{}…", &entries[0][..end]));
         used = end;
     }
-    let (tail, _) = newest_within(&entries[kept.len()..], cap - used);
-    kept.push("[…]".into());
+    // A brief cut short and everything after it whole leaves out no middle.
+    let (tail, cut) = newest_within(&entries[kept.len()..], cap - used);
+    if cut {
+        kept.push("[…]".into());
+    }
     kept.extend(tail);
-    (kept, true)
+    (kept, cut)
 }
 
 /// Makes the folder, both files and the list entry. Both files start empty: the
@@ -2670,9 +2693,11 @@ mod tests {
 
         // A brief longer than the whole head keeps its start.
         let long = vec![format!("User: {}", "é".repeat(40)), "Agent: done".into()];
-        let (kept, _) = head_and_newest_within(&long, 20, 40);
+        let (kept, cut) = head_and_newest_within(&long, 20, 40);
         assert!(kept[0].starts_with("User: ") && kept[0].ends_with('…'));
         assert_eq!(kept.last().unwrap(), "Agent: done");
+        // Nothing between the two is gone, so no `[…]` says so.
+        assert!(!cut && kept.len() == 2, "{kept:?}");
     }
 
     /// Claude, then Codex, then Claude with no send, then grok, then back to
@@ -2701,10 +2726,13 @@ mod tests {
         assert!(note.contains("User: two") && note.contains("User: three"), "{note}");
         assert!(!note.contains("User: one"), "{note}");
 
-        // A switch away drops that replay and keeps a lead-in queued before it.
+        // A switch away drops that replay whole, markers in its chat and all,
+        // and keeps a lead-in queued before it.
         let id = "drop-a-stale-replay";
+        let note = format!("{note}\n<conversation>\n[Dray: quoted]");
         lead_in(id, "[Dray: you report to Ops now.]\n\n".into());
-        lead_in(id, note);
+        lead_in(id, note.clone());
+        TASK_REPLAYS.lock().unwrap().push((id.into(), note));
         drop_task_handover(id);
         assert_eq!(take_handover(id).as_deref(), Some("[Dray: you report to Ops now.]\n\n"));
     }

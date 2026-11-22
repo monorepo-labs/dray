@@ -199,6 +199,35 @@ pub async fn model_spec(harness: Harness, model: &ModelId) -> Result<Option<Mode
     })
 }
 
+/// [`model_spec`], refusing a model `harness` cannot run.
+///
+/// A model belongs to exactly one harness, and the pair reaches a send or a
+/// switch from places that each know only half of it — the composer's stored
+/// defaults and the `dray` CLI's own flags — so nothing upstream makes them
+/// agree. Refused rather than quietly repaired: a session running on a model
+/// nobody picked is the failure that looks like success.
+///
+/// The unset sentinel is exempt: it names no model, so there is nothing to be
+/// wrong about, and refusing it would refuse pi's own default. Codex answers
+/// the wider question itself: its lookup searches what Codex reported *and*
+/// the table, where `runs_on` knows only the table and would refuse a model
+/// newer than this build. pi's own list is the authority on pi too, plugin
+/// providers included; `runs_on` is the fallback for a probe that has not
+/// answered.
+pub async fn runnable_model_spec(harness: Harness, model: &ModelId) -> Result<Option<Model>> {
+    let spec = model_spec(harness, model).await?;
+    let runnable = match harness {
+        Harness::Codex => spec.is_some(),
+        Harness::Pi => spec.is_some() || runs_on(model, harness),
+        _ => runs_on(model, harness),
+    };
+    if !model.is_unset() && !runnable {
+        let named = spec.as_ref().map_or_else(|| model.to_string(), |m| m.label.clone());
+        bail!("{named} is not a {} model", harness.label());
+    }
+    Ok(spec)
+}
+
 /// Whether a send has to replace the child rather than write to it.
 ///
 /// A **setting change** waits for everything to be idle, background tasks
@@ -1136,35 +1165,19 @@ impl SessionManager {
         app: &Sink,
     ) -> Result<SendOutcome> {
         let _counted = Sending::enter().await;
-        let model_spec = model_spec(harness, &model).await?;
-
-        // A model belongs to exactly one harness, and the pair reaches here from
-        // two places that each know only half of it — the composer's stored
-        // defaults and the `dray` CLI's own flags — so nothing upstream makes
-        // them agree. Refused rather than quietly repaired: a session running on
-        // a model nobody picked is the failure that looks like success.
-        //
-        // The unset sentinel is exempt: it names no model, so there is nothing
-        // to be wrong about, and refusing it would refuse pi's own default.
-        // Codex answers the wider question itself: the lookup above
-        // searched what Codex reported *and* the table, where `runs_on`
-        // knows only the table and would refuse a model newer than this
-        // build.
-        // pi's own list is the authority on pi too, plugin providers included;
-        // `runs_on` is the fallback for a probe that has not answered.
-        let runnable = match harness {
-            Harness::Codex => model_spec.is_some(),
-            Harness::Pi => model_spec.is_some() || runs_on(&model, harness),
-            _ => runs_on(&model, harness),
+        // A task moves agent only through `switch_agent`, ahead of the send
+        // that picked it. A caller that read the index before a move (a relay,
+        // the auto-continue timer) sends on what the task runs now instead of
+        // moving it back.
+        let moved = match is_new_session {
+            true => None,
+            false => get_session_index_item(session_id).await?.filter(|i| i.harness != harness),
         };
-
-        if !model.is_unset() && !runnable {
-            let named = model_spec
-                .as_ref()
-                .map(|m| m.label.clone())
-                .unwrap_or_else(|| model.to_string());
-            bail!("{named} is not a {} model", harness.label());
-        }
+        let (harness, model, effort, permission_mode, fast) = match moved {
+            Some(i) => (i.harness, i.model, i.effort, i.permission_mode, i.fast),
+            None => (harness, model, effort, permission_mode, fast),
+        };
+        let model_spec = runnable_model_spec(harness, &model).await?;
 
         let effort = model_spec
             .as_ref()
@@ -1526,11 +1539,10 @@ impl SessionManager {
             }
         }
 
-        // The composer picked another agent's model: the task moves there
-        // before this prompt, which the new agent answers.
+        // A move that landed between the read above and this lock: the picks
+        // read there belong to the agent the task just left.
         if let Some(item) = get_session_index_item(session_id).await?.filter(|i| i.harness != harness) {
-            let pick = crate::store::AgentPick { model: model.clone(), effort, permission_mode, fast };
-            move_agent(&mut slot_guard, item, harness, pick, app).await?;
+            bail!("This task just moved to {}. Send again.", item.harness.label());
         }
         // An idle child whose first turn since a switch ended before it said
         // anything may have dropped that prompt, and the replay with it. A
@@ -3610,7 +3622,11 @@ async fn take_hidden(session_id: &str) -> Option<String> {
 /// words that follow as theirs.
 fn lead_in_around(hidden: Option<&str>, text: &str, after: bool) -> String {
     match hidden {
-        Some(hidden) if after => format!("{text}\n\n{}", hidden.trim_end()),
+        // A hand-over's closing cue points at words that now sit above it.
+        Some(hidden) if after => {
+            let hidden = hidden.replace(&format!("{}\n\n", crate::bots::NEW_MESSAGE_CUE), "");
+            format!("{text}\n\n{}", hidden.trim_end())
+        }
         Some(hidden) => format!("{hidden}{text}"),
         None => text.to_string(),
     }
@@ -4857,6 +4873,9 @@ mod tests {
         assert_eq!(lead_in_around(hidden, "hi", false), "[Since your last turn: x]\n\nhi");
         assert_eq!(lead_in_around(hidden, "/hello", true), "/hello\n\n[Since your last turn: x]");
         assert_eq!(lead_in_around(None, "/hello", true), "/hello");
+        // After the words, a hand-over no longer points at them as coming next.
+        let replay = Some("[Dray: …]\n\n<conversation>\nx\n</conversation>\n\nThe user's new message:\n\n");
+        assert_eq!(lead_in_around(replay, "/fix", true), "/fix\n\n[Dray: …]\n\n<conversation>\nx\n</conversation>");
     }
 
     #[test]

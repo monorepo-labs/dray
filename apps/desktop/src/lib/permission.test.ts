@@ -62,11 +62,12 @@ describe("stanceFor", () => {
   });
 
   /// pi honours nothing, so every stance records as the ungated one it will
-  /// actually run at — `plan` included, now that the picker no longer offers it.
-  it("records pi as ungated whatever it inherits", () => {
-    for (const mode of ["plan", "manual", "auto", "bypassPermissions"] as const) {
+  /// actually run at — bar `plan`, which pi.rs still runs read-only.
+  it("records pi as ungated whatever it inherits, bar plan", () => {
+    for (const mode of ["manual", "auto", "bypassPermissions"] as const) {
       expect(stanceFor("pi", mode)).toBe("bypassPermissions");
     }
+    expect(stanceFor("pi", "plan")).toBe("plan");
   });
 
   /// A session can arrive on a stance its harness never offered — a spawned one

@@ -1708,8 +1708,11 @@ async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
                 Err(_) => false,
             };
             // Another agent's model moves the task there (#1414). pi, grok and
-            // fx take any name, so one only another agent lists is that agent's.
-            match listed {
+            // fx take any name, so one only another agent lists is that agent's
+            // — once this agent has said what it lists: a probe not answered
+            // yet lists nothing, and a move would kill the task's dev server
+            // over a name it does serve.
+            match listed || !lists_models(harness).await {
                 true => here?,
                 false => match other_agent_model(alias, harness).await {
                     Some((other, model)) => {
@@ -1781,11 +1784,26 @@ async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
 fn stance_on(harness: Harness, mode: ApprovalPolicy) -> ApprovalPolicy {
     use ApprovalPolicy as A;
     match (harness, mode) {
+        // pi.rs still runs a `plan` session read-only.
+        (Harness::Pi, A::Plan) => A::Plan,
         (Harness::Pi, _) => A::BypassPermissions,
         (Harness::Codex | Harness::Fx | Harness::Grok, A::Plan) => A::Manual,
         (Harness::Codex | Harness::Fx, A::DontAsk) => A::Auto,
         (Harness::Grok, A::DontAsk) => A::BypassPermissions,
         _ => mode,
+    }
+}
+
+/// Whether `harness` has said which models it serves: Claude Code's are a
+/// table, the rest a probe that lists nothing until it answers.
+async fn lists_models(harness: Harness) -> bool {
+    use crate::harness::{codex, fx, grok, pi};
+    match harness {
+        Harness::Pi => !pi::models::list().await.is_empty(),
+        Harness::Fx => !fx::models::list().await.is_empty(),
+        Harness::Grok => !grok::models::list().await.is_empty(),
+        Harness::Codex => !codex::models::list().await.is_empty(),
+        _ => true,
     }
 }
 
