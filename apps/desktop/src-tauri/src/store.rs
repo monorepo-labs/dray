@@ -4001,6 +4001,7 @@ mod tests {
     /// under two session ids, and an image still pointing into its attachment
     /// directory goes blank the moment the parent is deleted.
     #[test]
+    #[cfg(unix)]
     fn a_copied_log_belongs_to_the_fork_that_replays_it() {
         let from_dir = Path::new("/home/.dray/attachments/parent");
         let to_dir = Path::new("/home/.dray/attachments/child");
@@ -4247,6 +4248,7 @@ mod tests {
     /// A fork into a new tree is indexed before the tree exists, and a server
     /// restart in between must not read that as a tree someone deleted.
     #[test]
+    #[cfg(unix)]
     fn a_fork_whose_tree_is_not_made_yet_keeps_its_worktree() {
         let parent = SessionIndexItem::new(
             "parent",

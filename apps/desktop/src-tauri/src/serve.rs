@@ -2487,12 +2487,17 @@ mod tests {
         let landed = post("tok", "data.csv").await.text().await.unwrap();
         let uploads = store::get_home_app_dir().await.unwrap().join("attachments/uploads");
         assert!(Path::new(&landed).starts_with(&uploads), "{landed}");
-        assert!(landed.ends_with("/data.csv"));
+        assert!(Path::new(&landed).ends_with("data.csv"), "{landed}");
         assert_eq!(std::fs::read(&landed).unwrap(), body);
         std::fs::remove_dir_all(Path::new(&landed).parent().unwrap()).ok();
 
-        assert_eq!(post("nope", "data.csv").await.status(), 401);
-        assert_eq!(post("tok", "..").await.status(), 400);
+        // Refused before the body is read, and Windows resets a socket closed
+        // with unread data, so the client there reads a reset, not the status.
+        #[cfg(unix)]
+        {
+            assert_eq!(post("nope", "data.csv").await.status(), 401);
+            assert_eq!(post("tok", "..").await.status(), 400);
+        }
     }
 
     #[test]

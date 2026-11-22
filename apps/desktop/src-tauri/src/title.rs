@@ -898,6 +898,7 @@ mod command_tests {
     /// abandonment rather than a stop. Pinned with `sleep` rather than a CLI,
     /// since the behaviour being relied on is the runtime's.
     #[tokio::test]
+    #[cfg(unix)]
     async fn timing_out_kills_the_child_rather_than_abandoning_it() {
         let child = Command::new("/bin/sleep")
             .arg("30")

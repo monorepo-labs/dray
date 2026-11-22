@@ -677,6 +677,7 @@ mod tests {
     /// The marker is what separates the `PATH` from anything an rc file
     /// prints, so a parse that lost it would find nothing through this path.
     #[tokio::test]
+    #[cfg(unix)]
     async fn the_login_shell_path_finds_a_binary() {
         assert!(login_shell_which("sh").await.is_some_and(|p| p.is_absolute()));
     }
@@ -684,6 +685,7 @@ mod tests {
     /// mise's nesting is the layout that went missing: `installs/<tool>/<v>/`
     /// with the binary one level further in under the tool's own name.
     #[test]
+    #[cfg(unix)]
     fn finds_a_binary_nested_under_a_version_dir() {
         let root = std::env::temp_dir().join("dray-binpath-versioned-test");
         let _ = std::fs::remove_dir_all(&root);
@@ -716,6 +718,7 @@ mod tests {
     /// finds nothing — and ahead of the fixed list, or a `node` shim there
     /// wins over the sibling the CLI was installed against. Each dir once.
     #[test]
+    #[cfg(unix)]
     fn a_resolved_bin_dir_comes_after_inherited_and_before_known() {
         let launchd = std::ffi::OsStr::new("/usr/bin:/bin:/usr/sbin:/sbin");
         let nvm_bin = PathBuf::from("/home/u/.nvm/versions/node/v25.2.1/bin");

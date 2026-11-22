@@ -3360,9 +3360,9 @@ mod tests {
     /// A forwarded `'~'` is the home of the machine that runs the task.
     #[test]
     fn a_leading_tilde_is_this_machines_home() {
-        let home = std::env::home_dir().unwrap().to_string_lossy().into_owned();
-        assert_eq!(expand_home("~"), home);
-        assert_eq!(expand_home("~/work"), format!("{home}/work"));
+        let home = std::env::home_dir().unwrap();
+        assert_eq!(expand_home("~"), home.to_string_lossy());
+        assert_eq!(expand_home("~/work"), home.join("work").to_string_lossy());
         assert_eq!(expand_home("~bob"), "~bob");
         assert_eq!(expand_home("/srv/x"), "/srv/x");
     }
