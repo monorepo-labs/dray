@@ -191,8 +191,10 @@ function Demo() {
         <ReactionsContext value={context}>
           <div
             ref={chat}
-            className="mx-auto flex w-full flex-col gap-4 rounded-xl border border-border px-6 py-6"
-            style={{ maxWidth: width }}
+            className="mx-auto flex shrink-0 flex-col gap-4 rounded-xl border border-border px-6 py-6"
+            // The width itself, never a cap: capped, a narrow window tested a
+            // narrower column under the wider one's name.
+            style={{ width }}
             data-bot-chat
           >
             <BotTranscript
