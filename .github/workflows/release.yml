@@ -857,7 +857,8 @@ jobs:
           $nsis = Get-ChildItem "$bundle/nsis/*-setup.exe"
           $msi = Get-ChildItem "$bundle/msi/*.msi" -ErrorAction SilentlyContinue
           foreach ($f in @($nsis) + @($msi)) { if (-not (Test-Path "$($f.FullName).sig")) { throw "$($f.Name) has no .sig" } }
-          $root = "$env:RUNNER_TEMP/unpacked"
+          # Backslashes: msiexec reads a `/` in TARGETDIR as nothing to extract to.
+          $root = Join-Path $env:RUNNER_TEMP unpacked
           & 7z x -y "-o$root/nsis" $nsis.FullName | Out-Null
           $cli = Get-ChildItem -Recurse "$root/nsis" -Filter dray-cli.exe | Select-Object -First 1
           $app = Get-ChildItem -Recurse "$root/nsis" -Filter dray-app.exe | Select-Object -First 1
@@ -865,9 +866,9 @@ jobs:
           & $cli.FullName --version
           if ($LASTEXITCODE) { throw "dray-cli.exe --version failed" }
           if ($msi) {
-            Start-Process msiexec -Wait -ArgumentList '/a', "`"$($msi.FullName)`"", '/qn', "TARGETDIR=`"$root\msi`""
-            $cli = Get-ChildItem -Recurse "$root/msi" -Filter dray-cli.exe | Select-Object -First 1
-            if (-not $cli) { throw "the MSI carries no dray-cli.exe" }
+            $p = Start-Process msiexec -Wait -PassThru -ArgumentList '/a', "`"$($msi.FullName)`"", '/qn', "TARGETDIR=`"$root\msi`""
+            if ($p.ExitCode) { throw "msiexec /a failed with $($p.ExitCode)" }
+            if (-not (Get-ChildItem -Recurse "$root/msi" -Filter dray-cli.exe)) { throw "the MSI carries no dray-cli.exe" }
           }
           $signed = @($nsis) + @($msi) + @($app, $cli)
           foreach ($f in $signed) {
