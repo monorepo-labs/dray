@@ -65,6 +65,16 @@ pub fn adopt(window: Wid, takes_keys: bool) {
             let style = GetWindowLongPtrW(h, GWL_EXSTYLE);
             SetWindowLongPtrW(h, GWL_EXSTYLE, style | WS_EX_NOACTIVATE.0 as isize);
         }
+        // GPUI places a window as if its frame were split evenly between
+        // opposite sides, but one with no title bar has none at the top, so
+        // the client lands half the bottom frame too high: the screenshot's
+        // still sat 4px above the screen it froze.
+        let (left, top, right, bottom) = frame(h);
+        let (dx, dy) = ((left + right) / 2 - left, (top + bottom) / 2 - top);
+        let mut outer = RECT::default();
+        if (dx, dy) != (0, 0) && GetWindowRect(h, &mut outer).is_ok() {
+            let _ = SetWindowPos(h, None, outer.left + dx, outer.top + dy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
     }
 }
 
