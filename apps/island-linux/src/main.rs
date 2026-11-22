@@ -57,6 +57,13 @@ const GAP: f32 = 8.;
 const DWELL: Duration = Duration::from_millis(150);
 /// How long the last answer's word stays before the panel closes.
 const FLASH: Duration = Duration::from_millis(900);
+/// What a dictation with no model says. Dray on Windows hides its
+/// Transcription tab (#1425), so there is no Settings to send the reader to.
+const NEEDS_MODEL: &str = if cfg!(windows) {
+    "Dictation isn't in Dray on Windows yet."
+} else {
+    "Pick a dictation model in Dray → Settings → Transcription."
+};
 /// How long news lights the pill's edge.
 const GLOW: Duration = Duration::from_secs(2);
 
@@ -711,7 +718,7 @@ pub fn start_dictation(island: &Entity<Island>, cx: &mut App) {
             let refusal = match &answer {
                 Ok(serde_json::Value::Null) => None,
                 Ok(v) => Some(match v.get("kind").and_then(|k| k.as_str()) {
-                    Some("needsModel") => "Pick a dictation model in Dray → Settings → Transcription.".to_string(),
+                    Some("needsModel") => NEEDS_MODEL.to_string(),
                     _ => "Dray needs the microphone.".to_string(),
                 }),
                 Err(why) => Some(why.clone()),
@@ -919,7 +926,7 @@ fn place_words(island: &mut Island, answer: server::Reply, cx: &mut App) -> (boo
             (None, true)
         }
         Some("empty") => (Some("No words heard.".to_string()), true),
-        Some("needsModel") => (Some("Pick a dictation model in Dray → Settings → Transcription.".to_string()), false),
+        Some("needsModel") => (Some(NEEDS_MODEL.to_string()), false),
         Some("noAudio") => (Some("Dray heard nothing. Check the microphone.".to_string()), false),
         _ => (Some(value.get("message").and_then(|m| m.as_str()).unwrap_or("Dictation failed.").to_string()), false),
     };
@@ -1012,12 +1019,16 @@ pub fn open(island: &Entity<Island>, cx: &mut App) {
 /// With nothing picked, or a pick gone from the index: the session last
 /// used, else the newest, else a new task.
 fn settle_target(island: &Entity<Island>, cx: &mut App) {
+    // A project attached in Dray while the draft sat on a new task would
+    // otherwise never reach the bar: its lists are read again at each open.
+    if island.read(cx).draft().target == Some(Target::New) {
+        return load_picks(island, cx);
+    }
     let target = {
         let i = island.read(cx);
         let ok = match &i.draft().target {
             Some(Target::Session(id)) => i.session(id).is_some(),
-            Some(Target::New) => true,
-            None => false,
+            Some(Target::New) | None => false,
         };
         if ok {
             return;
