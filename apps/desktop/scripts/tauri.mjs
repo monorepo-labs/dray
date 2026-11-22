@@ -7,6 +7,7 @@
 // one and only this side can choose it before either starts.
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { createServer } from "node:net";
 
 /// A port nothing holds, from the OS: `listen(0)` hands out one no socket on
@@ -46,12 +47,23 @@ if (args[0] === "dev" && !args.some((a) => a === "-c" || a === "--config")) {
   // transparency and the system's bar.
   if (process.platform === "linux" || process.platform === "win32") {
     const { app } = JSON.parse(readFileSync("src-tauri/tauri.dev.conf.json", "utf8"));
-    const windows = app.windows.map((w) => ({ ...w, transparent: false, decorations: false }));
+    // Tauri hands WebView2 browser args of its own, which win over the
+    // `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` that would otherwise turn on
+    // DevTools' port for driving the app in a test. Passed on beside Tauri's.
+    const extra = process.platform === "win32" && env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
+    const browserArgs = extra
+      ? { additionalBrowserArgs: `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection ${extra}` }
+      : {};
+    const windows = app.windows.map((w) => ({ ...w, transparent: false, decorations: false, ...browserArgs }));
     args.push("--config", JSON.stringify({ app: { windows } }));
   }
 }
 
-const child = spawn("tauri", args, { stdio: "inherit", env });
+// The CLI's own script under this node, not the `tauri` bin: on Windows that
+// is a `.cmd` shim, which node spawns only through a shell, and cmd.exe would
+// then have to quote the JSON configs above.
+const cli = createRequire(import.meta.url).resolve("@tauri-apps/cli/tauri.js");
+const child = spawn(process.execPath, [cli, ...args], { stdio: "inherit", env });
 child.on("exit", (code, signal) => {
   if (signal) process.kill(process.pid, signal);
   process.exit(code ?? 1);
