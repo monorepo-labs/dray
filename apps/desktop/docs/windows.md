@@ -11,12 +11,13 @@
 - **Paths.** `canonicalize` goes through `dunce`, since std's answers `\\?\C:\…` and matches nothing git or the reader writes. Binaries resolve as `name.exe`, then npm's `name.cmd`, never the bare name: npm leaves a `sh` script of that name beside the shim. `PATH` is re-read from the registry where a login shell would be asked.
 - **Git for Windows sets `core.autocrlf`.** Anything that reads back what git restored turns it off for its own calls, as the bots' folder does.
 - **Window chrome is Linux's**: undecorated, opaque, drawn controls, flat surfaces (`tauri.windows.conf.json`, `useGlass`).
+- **Dray Island is the Linux island's binary**, `apps/island-linux` with `win.rs` in place of `x11.rs`, the app's child as on Linux (`island.rs`). Its Windows rules are in that crate's PLAN.md. A dev app finds it in the crate's `target\debug`; no bundle carries it yet.
 - **Agents run through Git Bash.** Claude Code finds it on its own; it has a PowerShell tool besides, which anything denying Bash must deny too (`title.rs`).
 
 ## Not on Windows yet
 
 - The in-app browser (CEF builds for Mac and Linux only) and `dray browser`'s headless Chromium, whose DevTools pipe rides fds 3 and 4.
-- Dictation (hidden: `HAS_DICTATION`), Dray Island, Open in (apps list is empty), the dock badge.
+- Dictation (hidden: `HAS_DICTATION`), Open in (apps list is empty), the dock badge.
 - The CLI ships in no Windows bundle and nothing copies it onto `PATH`, so an agent in the release app has no `dray`. `dray server install|start` and `dray update` are systemd/launchd and `install.sh`.
 - `release.yml` has no Windows job, no code signing (SmartScreen warns) and no updater manifest entry.
 - A refused upload reads as a reset connection, not 401: the server answers before reading the body and Windows resets a socket closed with unread data.

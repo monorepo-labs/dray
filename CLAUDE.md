@@ -66,7 +66,7 @@ apps/docs/          docs: Blume (Astro), own Vercel project, served at drayhq.co
 apps/ios/           SwiftUI client of dray-serve, XcodeGen project — read apps/ios/PLAN.md
 apps/android/       Kotlin + Compose client of dray-serve, Gradle project — read apps/android/PLAN.md
 apps/island/        Dray Island, the Mac companion panel: SwiftUI, XcodeGen — read apps/island/PLAN.md
-apps/island-linux/  Dray Island on Linux: Rust + GPUI, own crate — read apps/island-linux/PLAN.md
+apps/island-linux/  Dray Island on Linux and Windows: Rust + GPUI, own crate — read apps/island-linux/PLAN.md
 apps/cli/           the `dray` CLI: own crate, own `cli-v*` release tag
 crates/dray-proto/  the CLI's socket protocol, compiled into the CLI and the app
 charts/             standalone benchmark chart pages, built by nothing
