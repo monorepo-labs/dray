@@ -68,8 +68,9 @@ export function inkOf(text: string, font: string): Box | null {
 /// How far below its ink's centre an emoji must sit to look centred, in ems.
 /// The heart's point leaves the middle of its box well above its mass, so
 /// centred by box it reads high; judged by eye on Apple's font at the badge's
-/// 18px, where 2.5px down looked centred, and Android's heart has the same shape.
-export const OPTICAL_DROP: Record<string, number> = { "❤️": 0.14 };
+/// 18px, where 1px down (2px with its ink centring) looked centred, and
+/// Android's heart has the same shape.
+export const OPTICAL_DROP: Record<string, number> = { "❤️": 0.056 };
 
 /// How far to move a text box `width` by `height`, its baseline `baseline` from
 /// its top, so `ink` (from [inkOf]) sits at the box's centre, then `drop` pixels

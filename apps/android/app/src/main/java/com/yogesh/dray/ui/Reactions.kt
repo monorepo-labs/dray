@@ -85,7 +85,7 @@ fun ReactionBadge(emoji: String, mine: Boolean = false) {
  * How far below its ink's centre an emoji must sit to look centred, in ems: the desktop's
  * `OPTICAL_DROP`. The heart's point leaves the middle of its box well above its mass.
  */
-private val opticalDrop = mapOf("❤️" to 0.14f)
+private val opticalDrop = mapOf("❤️" to 0.056f)
 
 /** How far to move `emoji`'s laid-out text so its ink sits at the text box's centre, by eye. */
 fun centring(emoji: String, layout: TextLayoutResult): Offset {
