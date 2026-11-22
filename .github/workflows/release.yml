@@ -794,6 +794,9 @@ jobs:
   windows:
     if: (github.event_name == 'workflow_dispatch' && !inputs.dry_run && inputs.linux_tag == '') || (github.event_name == 'push' && vars.RELEASE_WINDOWS == 'true')
     runs-on: windows-2025
+    # `manifest` waits for this job, and release-cli's publish gate waits 45
+    # minutes for `manifest`. A cold build is ~20.
+    timeout-minutes: 35
     defaults:
       run:
         shell: bash
@@ -847,11 +850,12 @@ jobs:
           POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
           POSTHOG_HOST: ${{ vars.POSTHOG_HOST }}
           # Dictation's ggml tunes itself to the build machine's CPU unless
-          # told not to, and a runner's would crash an older one. Off, it
-          # takes ggml's x86 default: AVX2, FMA and F16C, every Windows 11 CPU.
-          # CMAKE_ARGS rather than TRANSCRIBE_CMAKE_ARGS, which
-          # .cargo/config.toml sets and the job would replace; both are read.
-          CMAKE_ARGS: -DGGML_NATIVE=OFF
+          # told not to, and with that only off it still assumes AVX2, which
+          # Windows 11's Celerons and Pentiums lack. Conservative turns every
+          # x86 tier off: SSE2, slower, never a crash. CMAKE_ARGS rather than
+          # TRANSCRIBE_CMAKE_ARGS, which .cargo/config.toml sets and the job
+          # would replace; both are read.
+          CMAKE_ARGS: -DTRANSCRIBE_X86_CONSERVATIVE=ON
         run: pnpm tauri build --bundles ${{ steps.plan.outputs.bundles }} --config src-tauri/tauri.windows-release.conf.json ${{ steps.plan.outputs.sign }}
 
       # What the app reads out of its own install: the CLI it copies to
@@ -1051,7 +1055,10 @@ jobs:
           pattern: linux-*
           path: ${{ runner.temp }}/linux
 
+      # Never fatal: a missing artifact leaves no file, and the Windows lines
+      # below then leave Windows out.
       - if: needs.windows.result == 'success'
+        continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: windows-x86_64
@@ -1101,10 +1108,21 @@ jobs:
             "$L" files "$LINUX" | xargs gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber
             "$L" entries manifest.json "$LINUX" "${DOWNLOADS_URL%/}/${GITHUB_REF_NAME}"
           fi
-          # Windows the same way (windows-release.sh).
+          # Windows the same way (windows-release.sh), except that nothing
+          # here may stop the Mac's manifest: a failure leaves Windows out
+          # with a warning, its entries written to a copy first so a half
+          # run adds none.
+          WIN_OK=false
           if [ "$HAS_WINDOWS" = true ]; then
-            "$W" files "$WINDOWS" | xargs gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber
-            "$W" entries manifest.json "$WINDOWS" "${DOWNLOADS_URL%/}/${GITHUB_REF_NAME}"
+            cp manifest.json windows.json
+            if "$W" files "$WINDOWS" | xargs gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
+              && "$W" entries windows.json "$WINDOWS" "${DOWNLOADS_URL%/}/${GITHUB_REF_NAME}"; then
+              mv windows.json manifest.json
+              WIN_OK=true
+            else
+              rm -f windows.json
+              echo "::warning title=Windows left out::Its files or manifest entries failed; Mac and Linux are published without it."
+            fi
           fi
 
           # Writes the release over a channel manifest unless that would move
@@ -1167,7 +1185,8 @@ jobs:
             if [ "$HAS_LINUX" = true ]; then
               "$L" latest "$LINUX" "${GITHUB_REF_NAME}"
             fi
-            if [ "$HAS_WINDOWS" = true ]; then
-              "$W" latest "$WINDOWS" "${GITHUB_REF_NAME}"
+            if [ "$WIN_OK" = true ]; then
+              "$W" latest "$WINDOWS" "${GITHUB_REF_NAME}" \
+                || echo "::warning title=Windows downloads not moved::Dray_x64-setup.exe and Dray_x64.msi still name the previous release."
             fi
           fi
