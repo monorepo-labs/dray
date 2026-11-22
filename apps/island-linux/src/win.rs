@@ -21,16 +21,16 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
-    AttachThreadInput, GetCurrentThreadId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     QueryFullProcessImageNameW,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY,
+    GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, MOUSEINPUT, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY,
     VK_CONTROL, VK_ESCAPE, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RETURN, VK_RMENU, VK_RSHIFT,
     VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, CallNextHookEx, DispatchMessageW, GWL_EXSTYLE, GetClientRect, GetForegroundWindow, GetMessageW,
+    CallNextHookEx, DispatchMessageW, GWL_EXSTYLE, GetClientRect, GetForegroundWindow, GetMessageW,
     GetSystemMetrics, GetWindowRect,
     GetWindowLongPtrW, GetWindowThreadProcessId, HC_ACTION, HWND_TOPMOST, KBDLLHOOKSTRUCT, LWA_ALPHA, MSG, SM_CXSCREEN,
     SM_CYSCREEN, SPI_GETCLIENTAREAANIMATION, SPI_GETWORKAREA, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE,
@@ -514,26 +514,25 @@ pub fn focus() -> Option<Wid> {
     (!window.is_invalid()).then_some(window.0 as Wid)
 }
 
-/// Gives `window` the keyboard and answers whoever had it. Windows lets only
-/// the foreground app hand the foreground on, so the island borrows its
-/// input queue for the moment it takes it.
+/// Gives `window` the keyboard and answers whoever had it.
 pub fn take_focus(window: Wid) -> Option<Wid> {
     let before = focus().unwrap_or(0);
     foreground(hwnd(window));
     Some(before)
 }
 
+/// Windows hands the foreground only to the process that sent the last
+/// input, so the island sends an empty one first, as PowerToys does.
+/// Attaching to the front app's input queue instead can hang the island on
+/// an app that is not pumping messages.
 fn foreground(window: HWND) {
+    let nothing = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 { mi: MOUSEINPUT { dwExtraInfo: OURS, ..Default::default() } },
+    };
     unsafe {
-        let front = GetForegroundWindow();
-        let theirs = if front.is_invalid() { 0 } else { GetWindowThreadProcessId(front, None) };
-        let ours = GetCurrentThreadId();
-        let attached = theirs != 0 && theirs != ours && AttachThreadInput(ours, theirs, true).as_bool();
-        let _ = BringWindowToTop(window);
+        SendInput(&[nothing], std::mem::size_of::<INPUT>() as i32);
         let _ = SetForegroundWindow(window);
-        if attached {
-            let _ = AttachThreadInput(ours, theirs, false);
-        }
     }
 }
 
