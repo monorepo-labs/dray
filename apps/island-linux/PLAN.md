@@ -1,9 +1,10 @@
-# Dray Island on Linux
+# Dray Island on Linux and Windows
 
 The Mac island's behaviour, rewritten in Rust with GPUI for the panel (#833).
 [apps/island/PLAN.md](../island/PLAN.md) is the spec for what it does; this
 one matches its behaviour, not its code. Nothing from the React app or the
-Swift island carries over.
+Swift island carries over. The crate keeps its name; Windows is the same
+binary with `win.rs` where Linux has `x11.rs` (see [Windows](#windows)).
 
 ## Decided
 
@@ -203,7 +204,7 @@ Each its own PR.
 
 The ones the Mac doesn't share are tracked in #868.
 
-- **X11 only.** Native Wayland is #839: a global key watch and screenshots go
+- **X11 only on Linux.** Native Wayland is #839: a global key watch and screenshots go
   through portals there, and GNOME has no layer-shell. The app forces X11 too.
 - **Square, opaque edges without a compositor**, by design: see above.
 - **This computer's sessions alone.** Other machines' (`island_links`) are not
@@ -227,6 +228,50 @@ The ones the Mac doesn't share are tracked in #868.
 - **One display.** The panel opens on GPUI's primary display; the Mac's
   "the screen with the notch" has no counterpart.
 
+## Windows
+
+The same island, the same panel at the top centre of the primary display,
+as on a Mac with no notch. Everything above holds unless said here.
+
+- **One crate, two platform files.** `main.rs` names `sys`, which is
+  `x11.rs` on Linux and `win.rs` on Windows, with the same functions; the
+  tap and the pen's Shift are decided once, in `tap.rs`, off the key codes
+  each hands over. GPUI draws through DirectX 11 there, and on a machine
+  with no GPU through WARP, the Basic Render Driver DXGI lists last.
+- **The keys come from low-level hooks** (`WH_KEYBOARD_LL`, `WH_MOUSE_LL`)
+  on a thread of their own, which see every key and click whoever has
+  focus, as XI2's raw events do. Unlike X11's they can swallow a key, which
+  is how the screenshot key (Win+Shift+2) and the done pill's Esc and Win+⏎
+  are taken from the app in front: no grab exists to do it.
+- **A tapped Alt or Win is masked.** Alone, Alt wakes a window's menu bar
+  and Win opens Start. The hook holds the tap's release back and sends it
+  again behind an unassigned key (`0xE8`, AutoHotkey's mask key), so
+  Windows reads a chord. The island's own keys carry a mark the hook
+  passes by.
+- **A topmost tool window** (GPUI's `PopUp` there): off the taskbar and
+  Alt+Tab, over every other window. Windows hands the foreground only to
+  the app that has it, so the island attaches to that app's input queue
+  for the moment it takes the keyboard, and gives it back on close the
+  same way.
+- **DWM always composes**, so the card always has its Mac shape and shadow.
+- **The screen is read with GDI** (`BitBlt` off the screen's DC), our windows
+  hidden first, as on X11. The ink overlay lets the mouse through by being
+  layered and transparent to clicks until Shift is held.
+- **Sounds play from memory** with `PlaySound`, one at a time.
+- **Reduce Motion is Windows' "Animation effects"** switch.
+- **Prefs are `~/.config/dray/island.json`** on Windows too, the path both
+  sides already agree on; screenshots go in `%TEMP%\dray-island`, which is
+  the account's own.
+- **The key picker says Win** where Linux says Super; the Mac's stored
+  names are unchanged.
+- **A release is a GUI binary** (`windows_subsystem`), and the app starts a
+  dev one with `CREATE_NO_WINDOW`, so neither opens a console.
+
+Not on Windows yet: a bundle carrying it (`release.yml` has no Windows job,
+#1425), and dictation, which the island asks of the app and the app hides on
+Windows (#1425): a tap on the open panel answers what the app does, which
+on a machine with no model is a notice.
+
 ## Build
 
 ```bash
@@ -234,4 +279,6 @@ cd apps/island-linux && cargo build          # what a dev app finds
 DRAY_HOME=~/.dray-dev ./target/debug/dray-island   # by hand, against a dev server
 ```
 
-Needs `libxkbcommon-x11-dev` besides what the app needs.
+Needs `libxkbcommon-x11-dev` besides what the app needs. On Windows, the
+MSVC toolchain the app already needs; `cargo build` there is what
+`tauri dev` finds, `target\debug\dray-island.exe`.
