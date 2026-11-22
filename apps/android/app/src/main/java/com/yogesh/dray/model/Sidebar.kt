@@ -17,19 +17,24 @@ data class ListRow(val key: SessionKey, val item: SessionItem, val depth: Int)
 /**
  * What a run of rows is waiting on, strongest first, which is also the order the runs are drawn
  * in — the desktop's `SESSION_STATES`. Mid-turn is not a stage: the row's orb says it.
+ * Pinned is no stage anything reaches by state: the reader's own picks, led out first.
  */
-enum class Stage { Asking, Completed, Idle, UnreadPr, Pr, Checks, Merged, Aside }
+enum class Stage { Pinned, Asking, Completed, Idle, UnreadPr, Pr, Checks, Merged, Aside }
 
 data class Run(val stage: Stage, val rows: List<ListRow>)
 
 /**
  * The desktop sidebar's live list (`sessionGroups` in Sidebar.tsx): one run per stage,
- * workspace-wide, drawn under no heading. A nest stays whole under its root and takes the
- * strongest stage anything in it holds.
+ * workspace-wide, drawn under no heading but Pinned's. A nest stays whole under its root and
+ * takes the strongest stage anything in it holds. `pins` off for the settled list, a history
+ * where a pin says nothing.
  */
-fun stageRuns(list: List<Entry>, now: Long = System.currentTimeMillis(), stage: (Entry) -> Stage): List<Run> {
-    val (aside, active) = splitAside(list, now)
+fun stageRuns(list: List<Entry>, now: Long = System.currentTimeMillis(), pins: Boolean = true, stage: (Entry) -> Stage): List<Run> {
+    val (pinned, unpinned) = if (pins) splitPinned(list) else emptyList<Entry>() to list
+    val (aside, active) = splitAside(unpinned, now)
     val runs = mutableMapOf<Stage, MutableList<ListRow>>()
+    val pinnedRows = nests(pinned).flatten()
+    if (pinnedRows.isNotEmpty()) runs[Stage.Pinned] = pinnedRows.toMutableList()
     val held = nests(active)
     val flat = held.flatten()
     fun strongest(rows: List<ListRow>) = rows.minOf { stage(Entry(it.key, it.item)) }
@@ -81,6 +86,27 @@ private fun nests(list: List<Entry>): List<List<ListRow>> {
         walk(e, 0)
     }
     return out
+}
+
+/**
+ * Pinned, or under a pinned ancestor and not set aside itself — the desktop's `splitPinned`.
+ * A nest follows its pin whole, so neither half splits one.
+ */
+private fun splitPinned(list: List<Entry>): Pair<List<Entry>, List<Entry>> {
+    val byKey = list.associateBy { it.key }
+    fun underPin(e: Entry): Boolean {
+        if (e.item.aside == true) return false
+        // Guarded, so a cycle in the index costs an odd grouping, never a hang.
+        val seen = mutableSetOf<SessionKey>()
+        var at: Entry? = e
+        while (at != null && seen.add(at.key)) {
+            val cur: Entry = at
+            if (cur.item.pinned == true) return true
+            at = cur.item.parentSessionId?.let { byKey[SessionKey(cur.key.server, it)] }
+        }
+        return false
+    }
+    return list.partition(::underPin)
 }
 
 /** Set aside by the reader, or untouched three days with nothing below still moving — the desktop's `splitAside`. */

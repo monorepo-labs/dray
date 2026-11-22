@@ -126,6 +126,36 @@ class LogicTest {
     }
 
     @Test
+    fun aPinLeadsWithItsNestAndSetAsideBeatsAnInheritedPin() {
+        val now = Instant.parse("2026-11-21T12:00:00Z").toEpochMilli()
+        fun e(id: String, parent: String? = null, pinned: Boolean? = null, aside: Boolean? = null) =
+            Entry(SessionKey("srv", id), SessionItem(id, modified = "2026-11-21T11:00:00Z", parentSessionId = parent, pinned = pinned, aside = aside))
+        val list = listOf(
+            e("p", pinned = true), e("kid", parent = "p"), e("away", parent = "p", aside = true),
+            e("x"), e("y"), e("z"),
+            // A stale pinned row still leads: a pin beats the three-day fade.
+            Entry(SessionKey("srv", "old"), SessionItem("old", modified = "2026-11-01T11:00:00Z", pinned = true)),
+        )
+        val runs = stageRuns(list, now) { Stage.Idle }
+        assertEquals(listOf(Stage.Pinned, Stage.Idle, Stage.Aside), runs.map { it.stage })
+        assertEquals(setOf("p", "kid", "old"), runs[0].rows.map { it.key.id }.toSet())
+        assertEquals(1, runs[0].rows.first { it.key.id == "kid" }.depth)
+        assertEquals(listOf("away"), runs[2].rows.map { it.key.id })
+        // The settled list draws no Pinned run.
+        assertTrue(stageRuns(list, now, pins = false) { Stage.Idle }.none { it.stage == Stage.Pinned })
+    }
+
+    @Test
+    fun aParentCycleStillSplitsPins() {
+        val list = listOf(
+            Entry(SessionKey("srv", "a"), SessionItem("a", modified = "2026-11-21T11:00:00Z", parentSessionId = "b")),
+            Entry(SessionKey("srv", "b"), SessionItem("b", modified = "2026-11-21T11:00:00Z", parentSessionId = "a")),
+        )
+        val now = Instant.parse("2026-11-21T12:00:00Z").toEpochMilli()
+        assertTrue(stageRuns(list, now) { Stage.Idle }.none { it.stage == Stage.Pinned })
+    }
+
+    @Test
     fun markdownTablesFencesAndPaths() {
         val blocks = markdownBlocks("# Hi\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```\ncode | x\n```\n- one\n- two")
         assertTrue(blocks[0] is MdBlock.Heading)

@@ -428,7 +428,7 @@ class Store(private val context: Context) {
         keepList()
     }
 
-    private fun setItem(key: SessionKey, item: SessionItem?) {
+    internal fun setItem(key: SessionKey, item: SessionItem?) {
         putItems(if (item == null) items - key else items + (key to item))
     }
 
@@ -575,7 +575,7 @@ class Store(private val context: Context) {
         private set
 
     /** A status event that arrived while a read was out is newer than the read, so it wins. */
-    private fun merged(key: SessionKey, read: SessionItem): SessionItem {
+    internal fun merged(key: SessionKey, read: SessionItem): SessionItem {
         val s = statuses[key] ?: return read
         val m = s.modified ?: return read
         return if (m >= read.modified) read.copy(status = s.status, modified = m) else read
@@ -597,7 +597,7 @@ class Store(private val context: Context) {
                 // The index lands before the bots, and a bot's chat would draw as a task row until they do.
                 (settled || known(key.server))
         }.map { Entry(it.key, it.value) }
-        return stageRuns(list) { stage(it.key, it.item) }
+        return stageRuns(list, pins = !settled) { stage(it.key, it.item) }
     }
 
     /** The desktop's `sessionState`: a merged PR holds its session whatever the turn says. */
