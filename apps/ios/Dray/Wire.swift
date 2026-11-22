@@ -199,7 +199,7 @@ struct Bot: Codable, Hashable {
     var greeting: [String]? = nil
 }
 
-/// `bot_previews`' answer per chat: its newest reply and how many came since the reader last wrote.
+/// `bot_previews`' answer per chat: its row's line, worded by the server ("You: …", "Reacted 👍 to …", or the newest reply), and how many replies came since the reader last wrote.
 struct BotPreview: Codable, Hashable {
     let text: String?
     let replies: Int

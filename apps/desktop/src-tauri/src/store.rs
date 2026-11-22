@@ -2034,6 +2034,84 @@ pub async fn last_reply(session_id: &str) -> Result<(Option<String>, u32)> {
     Ok((last, since))
 }
 
+/// A bot chat's inbox row, read off the end of its log: the line it shows and
+/// the replies since the reader last wrote, counted as [`last_reply`] counts them.
+pub async fn inbox_line(session_id: &str) -> Result<(Option<String>, u32)> {
+    let page = read_session_page(session_id, None, 20).await?;
+    Ok(inbox_line_of(&page.events))
+}
+
+/// How much of the reader's message a reaction's line quotes: cut any later
+/// and the row's own truncation takes the closing quote mark.
+const INBOX_QUOTE: usize = 40;
+
+/// The newest of the reader's own message (`You: …`), the bot's reaction to
+/// it, or the bot's reply. Hidden notes — a review's turn, a kickoff, a task's
+/// report — are no one's line; the reader's reaction to the bot is a badge and
+/// is read past, like the hidden note telling the bot of it.
+fn inbox_line_of(events: &[AgentEvent]) -> (Option<String>, u32) {
+    let review = crate::bots::learn::in_review(events);
+    let mut line = None;
+    let mut since = 0;
+    let mut counting = true;
+    for (event, review) in events.iter().zip(review).rev() {
+        if event.subagent.is_some() || review {
+            continue;
+        }
+        match &event.payload {
+            AgentEventPayload::AssistantText { text, .. } if crate::events::has_text(text) => {
+                since += u32::from(counting);
+                line.get_or_insert_with(|| text.clone());
+            }
+            AgentEventPayload::Reaction { message_id, emoji, by_user: false } if line.is_none() => {
+                let reacted = events.iter().find(|e| &e.id == message_id).and_then(|e| match &e.payload {
+                    AgentEventPayload::UserMessage { text, images, .. } => Some(said(text, images.len(), INBOX_QUOTE)),
+                    _ => None,
+                });
+                line = Some(match reacted {
+                    Some(Said::Text(quote)) => format!("Reacted {emoji} to \"{quote}\""),
+                    Some(Said::Images(1)) => format!("Reacted {emoji} to an image"),
+                    Some(Said::Images(n)) => format!("Reacted {emoji} to {n} images"),
+                    // Its message is older than the page read.
+                    None => format!("Reacted {emoji} to your message"),
+                });
+            }
+            AgentEventPayload::UserMessage { from: None, kickoff: false, text, images, .. } => {
+                counting = false;
+                line.get_or_insert_with(|| match said(text, images.len(), usize::MAX) {
+                    Said::Text(text) => format!("You: {text}"),
+                    Said::Images(1) => "You: Image".into(),
+                    Said::Images(n) => format!("You: {n} images"),
+                });
+            }
+            _ => {}
+        }
+        if !counting && line.is_some() {
+            break;
+        }
+    }
+    (line, since)
+}
+
+enum Said {
+    Text(String),
+    Images(usize),
+}
+
+/// A message of the reader's on one line, cut to `cap` characters; its images
+/// where it holds no words.
+fn said(text: &str, images: usize, cap: usize) -> Said {
+    if !crate::events::has_text(text) && images > 0 {
+        return Said::Images(images);
+    }
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    Said::Text(match flat.char_indices().nth(cap) {
+        // At the last word break inside the cap, where there is one.
+        Some((at, _)) => format!("{}…", flat[..at].rsplit_once(' ').map_or(&flat[..at], |(head, _)| head)),
+        None => flat,
+    })
+}
+
 /// What `find` picks out of a session's log, read back from the end a few
 /// turns at a time, so a long log is parsed only as far back as the answer.
 pub async fn find_newest<T>(session_id: &str, find: impl Fn(&[AgentEvent]) -> Option<T>) -> Result<Option<T>> {
@@ -4565,5 +4643,112 @@ mod page_tests {
         let held = HashSet::from(["e3".to_string()]);
         let since = read_back("s", &mut file, log.len() as u64, 7, |buf, top| after_held(buf, top, &held)).await;
         assert_eq!(seqs(&since.unwrap().unwrap().0), [4, 6, 7]);
+    }
+}
+
+#[cfg(test)]
+mod inbox_tests {
+    use super::*;
+    use crate::events::ImageRef;
+    use crate::harness::Harness;
+
+    fn event(payload: AgentEventPayload) -> AgentEvent {
+        AgentEvent::mint("s".into(), Harness::ClaudeCode, 0, None, None, payload)
+    }
+
+    fn typed(text: &str) -> AgentEvent {
+        user(text, None, false, 0)
+    }
+
+    fn user(text: &str, from: Option<&str>, kickoff: bool, images: usize) -> AgentEvent {
+        event(AgentEventPayload::UserMessage {
+            text: text.into(),
+            images: vec![ImageRef { path: Some("/a.png".into()), url: None, mime_type: None }; images],
+            issues: vec![],
+            baseline: None,
+            queued: false,
+            from: from.map(|title| serde_json::from_value(serde_json::json!({"sessionId": "t", "title": title})).unwrap()),
+            cwd: None,
+            kickoff,
+        })
+    }
+
+    fn reply(text: &str) -> AgentEvent {
+        event(AgentEventPayload::AssistantText { block: None, text: text.into() })
+    }
+
+    fn reaction(on: &AgentEvent, emoji: &str, by_user: bool) -> AgentEvent {
+        event(AgentEventPayload::Reaction { message_id: on.id.clone(), emoji: emoji.into(), by_user })
+    }
+
+    #[test]
+    fn the_readers_own_message_is_the_line_once_it_is_newest() {
+        let events = [reply("Hello"), typed("fix the\n  build   please")];
+        assert_eq!(inbox_line_of(&events), (Some("You: fix the build please".into()), 0));
+    }
+
+    #[test]
+    fn the_bots_reply_is_the_line_once_it_answers() {
+        let events = [typed("hi"), reply("one"), reply("two")];
+        assert_eq!(inbox_line_of(&events), (Some("two".into()), 2));
+    }
+
+    #[test]
+    fn a_reaction_in_place_of_a_reply_quotes_the_message_it_is_on() {
+        let asked = typed("thanks, that looks great to me and I will merge it after lunch today");
+        let events = [reply("Done"), asked.clone(), reaction(&asked, "👍", false)];
+        assert_eq!(
+            inbox_line_of(&events),
+            (Some("Reacted 👍 to \"thanks, that looks great to me and I…\"".into()), 0)
+        );
+    }
+
+    #[test]
+    fn a_reply_after_the_reaction_wins() {
+        let asked = typed("ok");
+        let events = [asked.clone(), reaction(&asked, "👀", false), reply("On it")];
+        assert_eq!(inbox_line_of(&events), (Some("On it".into()), 1));
+    }
+
+    #[test]
+    fn a_reaction_on_a_message_out_of_the_page_still_says_what_it_is() {
+        let gone = typed("old");
+        let events = [reaction(&gone, "✅", false)];
+        assert_eq!(inbox_line_of(&events).0.as_deref(), Some("Reacted ✅ to your message"));
+    }
+
+    #[test]
+    fn images_alone_are_named() {
+        let pic = user("", None, false, 1);
+        assert_eq!(inbox_line_of(&[pic.clone()]).0.as_deref(), Some("You: Image"));
+        let reacted = [pic.clone(), reaction(&pic, "❤️", false)];
+        assert_eq!(inbox_line_of(&reacted).0.as_deref(), Some("Reacted ❤️ to an image"));
+        assert_eq!(inbox_line_of(&[user(" ", None, false, 3)]).0.as_deref(), Some("You: 3 images"));
+    }
+
+    /// A kickoff (the note telling the bot of the reader's reaction, Dray's
+    /// own prompts), a task's report and the reader's own reaction are no one's line.
+    #[test]
+    fn hidden_notes_are_read_past() {
+        let said = reply("Here is the plan");
+        let events = [
+            typed("plan it"),
+            said.clone(),
+            reaction(&said, "❤️", true),
+            user("The user reacted ❤️ (love) to your message", None, true, 0),
+            user("Task finished", Some("fix-build"), false, 0),
+        ];
+        assert_eq!(inbox_line_of(&events), (Some("Here is the plan".into()), 1));
+    }
+
+    #[test]
+    fn a_reviews_turn_is_read_past() {
+        let events = [
+            typed("hi"),
+            reply("Hello"),
+            user(&format!("{} look back", crate::bots::learn::REVIEW), None, true, 0),
+            reply("I learned nothing"),
+        ];
+        assert_eq!(inbox_line_of(&events), (Some("Hello".into()), 1));
     }
 }

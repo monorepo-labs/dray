@@ -2066,7 +2066,8 @@ function BotRow({
   bot: Bot;
   /// The rail: the face alone, the name in a tooltip.
   iconOnly?: boolean;
-  /// The chat's last reply and the replies since the reader last wrote.
+  /// The chat's newest line — the reader's own, the bot's reaction, or its
+  /// reply — and the replies since the reader last wrote.
   preview?: BotPreview;
   /// Its chat, for the jump digit and the hover read; absent before the first message.
   sessionId?: string;

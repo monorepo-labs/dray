@@ -1345,7 +1345,7 @@ function App() {
     () => botEntries(bots, archivedShown ? [] : sessionIndexItems).flatMap((b) => (b.session ? [b.session] : [])),
     [archivedShown, bots, sessionIndexItems],
   );
-  // Each chat's last reply, read off the end of its log rather than loading the
+  // Each chat's inbox line, read off the end of its log rather than loading the
   // transcript. Read again whenever a chat's status or last activity moves.
   const [botPreviews, setBotPreviews] = useState<Record<string, BotPreview>>({});
   const previewKey = botChats

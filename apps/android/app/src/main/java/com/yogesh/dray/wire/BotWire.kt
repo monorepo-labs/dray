@@ -10,7 +10,7 @@ data class BotAvatar(val shape: String, val hue: Double)
 /** The bot's own face pick; absent for a bot made before there was one, which draws the face its id seeds. */
 val Bot.face: BotAvatar? get() = decodeOrNull<BotAvatar>(avatar)
 
-/** `bot_previews`' answer per chat: its newest reply and how many came since the reader last wrote. */
+/** `bot_previews`' answer per chat: its row's line, worded by the server ("You: …", "Reacted 👍 to …", or the newest reply), and how many replies came since the reader last wrote. */
 @Serializable
 data class BotPreview(val text: String? = null, val replies: Int = 0)
 
