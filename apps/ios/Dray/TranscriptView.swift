@@ -19,6 +19,8 @@ struct TranscriptView: View {
     @State private var bannerHeight: CGFloat = 0
     /// Whether new rows scroll into view: dropped by the reader scrolling up (`FollowsBottom`).
     @State private var following = true
+    /// "Load earlier" is laying a page in above the reader (`HoldsPlace`).
+    @State private var holding = false
     /// A bot chat opened unread, its read done.
     @State private var openedUnread = false
     /// The last item it held once read, bounding the NEW divider.
@@ -118,6 +120,7 @@ struct TranscriptView: View {
             // to its end by estimate, and when the read replaced what the cache drew with
             // less, the view sat past the new end, blank until the reader swiped.
             .defaultScrollAnchor(.bottom)
+            .modifier(HoldsPlace(holding: holding))
             .modifier(FollowsBottom(following: $following) { proxy.scrollTo("bottom", anchor: .bottom) })
             // Before iOS 18 nothing reads the content's size, so the newest row is the cue.
             // The row, not the count, or loading earlier turns would jump to the end.
@@ -335,12 +338,16 @@ struct TranscriptView: View {
     /// Reads what sits above the top: the page above, or past the top session's start, the
     /// session before it, held once read, which is what draws it (`segments`).
     private func loadEarlier(_ bot: Bot?, _ segments: [SessionKey]) async {
+        holding = true
         let top = segments[0]
         if store.transcripts[top]?.olderBefore != nil {
             await store.loadOlder(top)
         } else if let before = hidden(bot, segments) {
             await store.load(before)
         }
+        // Past the layout the page lands in; any longer and a row arriving below would move the reader up.
+        try? await Task.sleep(for: .seconds(0.5))
+        holding = false
     }
 
     /// Earlier turns are paged in by asking, so the screen never jumps under a reader mid-sentence:
@@ -973,6 +980,35 @@ struct FollowsBottom: ViewModifier {
                 }
         } else {
             content
+        }
+    }
+}
+
+/// Keeps what the reader sees still while "Load earlier" lays a page in above it. A scroll view
+/// holds its offset from the top, so the page pushed everything under it down and the reader was
+/// left at the page's top (#1422); `defaultScrollAnchor(.bottom, for: .sizeChanges)` holds only a
+/// view at the end. So while `holding`, each growth is scrolled away by its own height.
+/// iOS 17 reads no scroll geometry, so there the page still lands on the reader.
+struct HoldsPlace: ViewModifier {
+    let holding: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) { content.modifier(Held(holding: holding)) } else { content }
+    }
+
+    @available(iOS 18, *)
+    private struct Held: ViewModifier {
+        let holding: Bool
+        @State private var position = ScrollPosition()
+
+        func body(content: Content) -> some View {
+            content
+                .scrollPosition($position)
+                // `scrollTo(y:)` measures from the content's top, where `contentOffset` counts the inset above it too.
+                .onScrollGeometryChange(for: [CGFloat].self) { [$0.contentSize.height, $0.contentOffset.y + $0.contentInsets.top] } action: { old, new in
+                    guard holding, new[0] != old[0] else { return }
+                    position.scrollTo(y: new[1] + new[0] - old[0])
+                }
         }
     }
 }
