@@ -1036,6 +1036,7 @@ export default function ChatInput({
             ))}
 
           <div
+            data-tour="composer"
             className={cn(
               "relative rounded-2xl transition-colors",
               // `--edge-surface` and `--shadow-surface` are one pair, and exactly

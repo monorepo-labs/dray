@@ -476,6 +476,7 @@ export default function ModelSelector({
               type="button"
               variant="ghost"
               size="sm"
+              data-tour="agent"
               // `aria-disabled`, never `disabled`: a disabled button opens no
               // tooltip, and the tooltip is where the reason lives.
               aria-disabled={modelLocked}

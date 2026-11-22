@@ -2111,6 +2111,7 @@ function BotRow({
           }}
           onPointerDown={prefetch.onPointerDown}
           aria-label={iconOnly ? bot.name : undefined}
+          data-tour="bot"
           className={cn(
             "group relative flex w-full cursor-pointer items-center gap-2 rounded-md text-left",
             // One height both ways, so a snap never moves the rows under it.
