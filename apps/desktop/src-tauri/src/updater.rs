@@ -158,8 +158,13 @@ pub async fn check_update(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
-        return Ok(());
+    // A manifest without this install's entry — an MSI install on beta,
+    // which ships NSIS alone, or a release whose Windows build failed — has
+    // nothing for it, which is no update rather than a failed check.
+    let update = match updater.check().await {
+        Ok(Some(update)) => update,
+        Ok(None) | Err(tauri_plugin_updater::Error::TargetsNotFound(_)) => return Ok(()),
+        Err(e) => return Err(e.to_string()),
     };
 
     let version = update.version.clone();
