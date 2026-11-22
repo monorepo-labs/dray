@@ -66,6 +66,31 @@ class BotTest {
     }
 
     @Test
+    fun theReadersReactionSitsOnTheReplyAndItsNoteDrawsNothing() {
+        val items = botItems(listOf(
+            user("u1", "Fix the login"),
+            said("a1", "Fixed."),
+            ev("r1", """{"type":"reaction","messageId":"a1","emoji":"👍","byUser":true}"""),
+            ev("r2", """{"type":"reaction","messageId":"a1","emoji":"❤️","byUser":true}"""),
+            user("u2", "The user reacted ❤️ (love) to your message", kickoff = true),
+            said("a2", "Glad it works!"),
+        ))
+        assertEquals(listOf("u1", "a1", "a2"), items.map { it.id })
+        assertNull((items[0] as BotItem.User).reaction)
+        assertEquals("❤️", (items[1] as BotItem.Assistant).reaction)
+        assertEquals("s", (items[1] as BotItem.Assistant).sessionId)
+
+        val turns = com.yogesh.dray.model.buildTurns(listOf(
+            user("u1", "Fix the login"), said("a1", "Fixed."), ev("c1", """{"type":"turn_completed","status":"success"}"""),
+            ev("r1", """{"type":"reaction","messageId":"a1","emoji":"👍","byUser":true}"""),
+            user("u2", "The user reacted 👍 (like) to your message", kickoff = true), said("a2", "Thanks!"),
+        ), busy = false)
+        assertEquals(2, turns.size)
+        assertEquals("👍", turns[0].finalMessage?.reaction)
+        assertNull(turns[1].prompt)
+    }
+
+    @Test
     fun aFailedTurnDrawsItsSentenceOnce() {
         val items = botItems(listOf(
             user("u1", "Go"),

@@ -64,6 +64,20 @@ import androidx.compose.runtime.staticCompositionLocalOf
 /** The session a tool row's whole body is read from. */
 val LocalCallSession = staticCompositionLocalOf<SessionKey?> { null }
 
+/** The session whose messages a long press reacts to: a task's own transcript, never a subagent's. */
+val LocalReactSession = staticCompositionLocalOf<SessionKey?> { null }
+
+/** The agent's words, with the reader's reaction under them; a long press picks one. */
+@Composable
+private fun AgentText(item: Item.Text) {
+    Reactable(LocalReactSession.current, item.id, item.text, item.reaction) { press ->
+        Column(press, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            MarkdownText(item.text)
+            item.reaction?.let { ReactionBadge(it, mine = true) }
+        }
+    }
+}
+
 /** How many of a running turn's newest rows stay on screen: the rest fold behind a summary. */
 private const val LIVE_ROWS = 5
 
@@ -101,7 +115,7 @@ fun TurnView(turn: Turn) {
         } else {
             turn.work.forEach { ItemRow(it) }
         }
-        if (finalShown) turn.finalText?.let { MarkdownText(it) }
+        if (finalShown) turn.finalText?.let { text -> turn.finalMessage?.let { AgentText(it.copy(text = text)) } ?: MarkdownText(text) }
         turn.failure?.let { FailureRow(it) }
     }
 }
@@ -118,7 +132,7 @@ private fun LiveWork(items: List<Item>, open: Boolean, toggle: () -> Unit) {
 @Composable
 fun ItemRow(item: Item) {
     when (item) {
-        is Item.Text -> MarkdownText(item.text)
+        is Item.Text -> AgentText(item)
         is Item.Tool -> ToolRow(item.call)
         is Item.Group -> GroupRow(item)
         is Item.Prompt -> UserBubble(TurnPrompt(item.text, item.from, item.images))

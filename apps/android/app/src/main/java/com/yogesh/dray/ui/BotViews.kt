@@ -225,11 +225,17 @@ fun BotChatRow(key: SessionKey, rows: List<BotRow>, i: Int, items: List<BotItem>
     }
 }
 
-/** An agent's reply as a bot chat draws it: a card-filled bubble short of the trailing edge. */
+/**
+ * An agent's reply as a bot chat draws it: a card-filled bubble short of the trailing edge, the
+ * reader's reaction on its far corner as the bot's sits on theirs. `modifier` is the bubble's own.
+ */
 @Composable
-fun ReplyBubble(text: String) {
-    Box(Modifier.padding(end = 32.dp).clip(RoundedCornerShape(Dray.Radius.xl)).background(Dray.card).padding(horizontal = 12.dp, vertical = 10.dp)) {
-        MarkdownText(text)
+fun ReplyBubble(text: String, reaction: String? = null, modifier: Modifier = Modifier) {
+    Box(Modifier.padding(end = 32.dp).padding(top = if (reaction == null) 0.dp else 12.dp)) {
+        Box(modifier.clip(RoundedCornerShape(Dray.Radius.xl)).background(Dray.card).padding(horizontal = 12.dp, vertical = 10.dp)) {
+            MarkdownText(text)
+        }
+        reaction?.let { Box(Modifier.align(Alignment.TopEnd).offset(x = 12.dp, y = (-16).dp)) { ReactionBadge(it, mine = true) } }
     }
 }
 
@@ -241,18 +247,6 @@ fun NewDivider() {
         Text("NEW", style = Dray.Font.footnote.copy(fontSize = 11.sp, letterSpacing = 0.3.sp, color = Dray.secondary))
         Box(Modifier.weight(1f).height(1.dp).background(Dray.border))
     }
-}
-
-private val reactionLabels = mapOf("👀" to "Seen", "✅" to "Done", "🎉" to "Celebrating", "👍" to "Like", "❤️" to "Love", "😂" to "Laughing", "😢" to "Sad")
-
-/** A bot's reaction, as a messenger draws one: a round chip a step lighter than the page, with a hairline edge. */
-@Composable
-fun ReactionBadge(emoji: String) {
-    Box(
-        Modifier.size(28.dp).clip(CircleShape).background(Dray.lifted).border(0.5.dp, Dray.border, CircleShape)
-            .semantics { contentDescription = "Bot reacted: ${reactionLabels[emoji] ?: emoji}" },
-        contentAlignment = Alignment.Center,
-    ) { Text(emoji, style = Dray.Font.subhead) }
 }
 
 /** The reader's own words in a bot's chat: the sent bubble, the bot's reaction on its corner. */
@@ -335,7 +329,9 @@ private fun BotRowView(key: SessionKey, row: BotRow, late: Boolean, openTask: (S
         }
         is BotRow.One -> when (val item = row.item) {
             is BotItem.User -> BotUserBubble(item.text, item.images, item.reaction)
-            is BotItem.Assistant -> ReplyBubble(item.text)
+            is BotItem.Assistant -> Reactable(SessionKey(key.server, item.sessionId ?: key.id), item.id, item.text, item.reaction) {
+                ReplyBubble(item.text, item.reaction, it)
+            }
             is BotItem.Notice -> FailureRow(item.text)
             is BotItem.Card -> MergeCardView(key.server, item.card, late, openTask)
             is BotItem.Task -> line("Started a new task") { taskChip(item.sessionId, item.title) }

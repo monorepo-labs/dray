@@ -138,7 +138,7 @@ fun TranscriptScreen(key: SessionKey, back: () -> Unit, openChanges: () -> Unit 
                             item("refresh-error") { MaxWidth { RefreshError(err) { store.retryLoad(key) } } }
                         }
                         queued.reversed().forEach { q -> item("queued-${q.id}") { MaxWidth { UserBubble(TurnPrompt(q.text, null, emptyList()), queued = true) } } }
-                        turns.reversed().forEach { t -> item(t.id) { MaxWidth { TurnView(t) } } }
+                        turns.reversed().forEach { t -> item(t.id) { CompositionLocalProvider(LocalReactSession provides key) { MaxWidth { TurnView(t) } } } }
                         placeholder(key, transcript == null, turns.isEmpty() && !busy && queued.isEmpty())
                         if (transcript?.olderBefore != null) item("older") { MaxWidth { Older(key) } }
                     }

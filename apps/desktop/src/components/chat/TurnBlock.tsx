@@ -4,6 +4,7 @@ import { ChevronRight } from "lucide-react";
 import AssistantMessage from "@/components/chat/AssistantMessage";
 import EventRow from "@/components/chat/EventRow";
 import MediaRow from "@/components/chat/MediaRow";
+import { Reactable } from "@/components/chat/Reactions";
 import SubagentRow from "@/components/chat/SubagentRow";
 import ToolGroupRow from "@/components/chat/ToolGroupRow";
 import UserMessage from "@/components/chat/UserMessage";
@@ -196,7 +197,7 @@ export default memo(function TurnBlock({
           duplicate. */}
       {cardsBefore(Infinity)}
 
-      {!lastOpen && collapsible && turn.finalText && <AssistantMessage text={turn.finalText} />}
+      {!lastOpen && collapsible && turn.finalText && <FinalText turn={turn} text={turn.finalText} />}
 
       {footer}
 
@@ -210,6 +211,13 @@ export default memo(function TurnBlock({
     </div>
   );
 }, drawsTheSame);
+
+/// A collapsed turn's last message, reactable as the message it stands in for.
+function FinalText({ turn, text }: { turn: Turn; text: string }) {
+  const last = [...turn.work].reverse().find((item) => !isToolGroup(item) && item.payload.type === "assistant_text");
+  const message = <AssistantMessage text={text} />;
+  return last && !isToolGroup(last) ? <Reactable event={last}>{message}</Reactable> : message;
+}
 
 function SummaryToggle({
   label,

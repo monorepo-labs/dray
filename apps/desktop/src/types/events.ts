@@ -383,9 +383,15 @@ machine?: string,
  */
 repo?: string, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "reaction", 
 /**
- * The `user_message` event reacted to, always in this same session.
+ * The event reacted to, always in this same session: a `user_message`,
+ * or with `by_user` an `assistant_text`.
  */
-messageId: string, emoji: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
+messageId: string, emoji: string, 
+/**
+ * The user reacted, not the agent. A build from before this reads the
+ * line as a bot's reaction on a message it never finds, and draws none.
+ */
+byUser?: boolean, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
 /**
  * HTTP status, where the harness knew one. 529 (overloaded) and 500
  * are the only two observed.

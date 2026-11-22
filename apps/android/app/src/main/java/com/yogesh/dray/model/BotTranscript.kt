@@ -28,7 +28,8 @@ sealed interface BotItem {
 
     /** `reaction`: the bot's emoji on it, the newest where it reacted twice. */
     data class User(override val id: String, val text: String, val images: List<ImageRef>, val reaction: String?, override val ts: String?) : BotItem
-    data class Assistant(override val id: String, val text: String, override val ts: String?) : BotItem
+    /** `reaction`: the reader's emoji on it. */
+    data class Assistant(override val id: String, val text: String, override val ts: String?, val reaction: String? = null, val sessionId: String? = null) : BotItem
     /** A failed turn's sentence, or an error the harness raised. */
     data class Notice(override val id: String, val text: String, override val ts: String?) : BotItem
     data class Card(override val id: String, val card: MergeCard, override val ts: String?) : BotItem
@@ -63,11 +64,12 @@ fun botItems(events: List<AgentEvent>): List<BotItem> {
     val undone = mutableSetOf<String>()
     // Read whole first, since a reaction lands after its message; the newest wins.
     val reactions = mutableMapOf<String, String>()
+    val mine = mutableMapOf<String, String>()
     // Tasks the server logged; a bot's call is read only for an id none names, as a log from before that event holds.
     val announced = mutableSetOf<String>()
     for (e in main) when (val p = e.payload) {
         is Payload.LearnedUndone -> undone += "${p.commit}\u0000${p.path}"
-        is Payload.Reaction -> reactions[p.messageId] = p.emoji
+        is Payload.Reaction -> if (p.byUser) mine[p.messageId] = p.emoji else reactions[p.messageId] = p.emoji
         is Payload.TaskStarted -> announced += p.taskId.lowercase()
         else -> {}
     }
@@ -88,7 +90,7 @@ fun botItems(events: List<AgentEvent>): List<BotItem> {
                     !p.kickoff -> items += BotItem.User(e.id, p.text, p.images, reactions[e.id], e.ts)
                 }
             }
-            is Payload.AssistantText -> if (p.text.isNotBlank() && !review) items += BotItem.Assistant(e.id, p.text, e.ts)
+            is Payload.AssistantText -> if (p.text.isNotBlank() && !review) items += BotItem.Assistant(e.id, p.text, e.ts, mine[e.id], e.sessionId)
             is Payload.Error -> items += BotItem.Notice(e.id, p.message, e.ts)
             is Payload.MergeCardPosted -> items += BotItem.Card(e.id, p.card, e.ts)
             is Payload.TaskStarted -> items += BotItem.Task(e.id, p.taskId.lowercase(), p.title, e.ts)

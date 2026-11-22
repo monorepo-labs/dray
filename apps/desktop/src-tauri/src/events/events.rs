@@ -462,13 +462,19 @@ pub enum AgentEventPayload {
         path: String,
     },
 
-    /// A bot's emoji on a message the user typed, in place of a reply. Drawn
-    /// as a badge on that message's bubble; a later one on the same message
-    /// replaces it, so 👀 can turn into ✅ once the work is done.
+    /// A bot's emoji on a message the user typed, in place of a reply, or with
+    /// `by_user` the user's on the agent's. Drawn as a badge on that message's
+    /// bubble; a later one from the same side replaces it, so 👀 can turn into
+    /// ✅ once the work is done.
     Reaction {
-        /// The `user_message` event reacted to, always in this same session.
+        /// The event reacted to, always in this same session: a `user_message`,
+        /// or with `by_user` an `assistant_text`.
         message_id: String,
         emoji: String,
+        /// The user reacted, not the agent. A build from before this reads the
+        /// line as a bot's reaction on a message it never finds, and draws none.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        by_user: bool,
     },
 
     /// The agent moved the checkout's git state or a pull request mid-turn —

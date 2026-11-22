@@ -9,6 +9,7 @@ import ApiRetryIndicator from "@/components/chat/ApiRetryIndicator";
 import PermissionRequest from "@/components/chat/PermissionRequest";
 import QueuedMessages from "@/components/chat/QueuedMessages";
 import QuestionRequest from "@/components/chat/QuestionRequest";
+import { ReactionsContext, type Reactions } from "@/components/chat/Reactions";
 import Reasoning from "@/components/chat/Reasoning";
 import WorkingIndicator, { OrbLine } from "@/components/chat/WorkingIndicator";
 import StreamingToolCall from "@/components/chat/StreamingToolCall";
@@ -32,6 +33,8 @@ import { drawnSegments, earlierTurns, lastTurns } from "@/lib/botTranscript";
 import { readerMessagesAfter } from "@/lib/mergeCard";
 import { isProvisional } from "@/lib/provisional";
 import { dropOlder, loadOlder } from "@/lib/olderPages";
+import { readerReactions } from "@/lib/reactions";
+import { invoke } from "@/lib/transport";
 import type { Bot, SessionSnapshot } from "@/types/events";
 
 type ChatProps = {
@@ -719,6 +722,23 @@ export default function Chat({
     [segments, bot],
   );
 
+  // Kept while its contents hold, so a new event re-renders no message the
+  // reader has not reacted to anew.
+  const reactionKey = [...readerReactions(segments.flatMap((s) => s.events))].join();
+  const archived = !!session?.archived;
+  const reactions = useMemo<Reactions>(
+    () => ({
+      mine: readerReactions(segments.flatMap((s) => s.events)),
+      react: archived
+        ? null
+        : (event, emoji) =>
+            void invoke("react_to_message", { sessionId: event.sessionId, messageId: event.id, emoji }).catch((e) =>
+              console.error("[react]", e),
+            ),
+    }),
+    [reactionKey, archived],
+  );
+
   if (!session) return null;
 
   // fx alone: it takes one prompt per turn, so a held message waits out the
@@ -743,6 +763,7 @@ export default function Chat({
     // `@mention` and a file link, several components down. See `useChatSession`.
     <ChatSessionContext value={chatSession}>
       <MergeCardChatContext value={cardChat}>
+      <ReactionsContext value={reactions}>
       <div className="relative h-full">
         <div
           ref={scrollRef}
@@ -897,6 +918,7 @@ export default function Chat({
         )}
 
       </div>
+      </ReactionsContext>
       </MergeCardChatContext>
     </ChatSessionContext>
   );

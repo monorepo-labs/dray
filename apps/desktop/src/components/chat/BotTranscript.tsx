@@ -2,8 +2,10 @@ import { Undo2 } from "lucide-react";
 import { memo, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
+import AssistantMessage from "@/components/chat/AssistantMessage";
 import DiffView from "@/components/chat/DiffView";
 import EventRow from "@/components/chat/EventRow";
+import { Reactable } from "@/components/chat/Reactions";
 import { Button } from "@/components/ui/button";
 import UserMessage from "@/components/chat/UserMessage";
 import { OrbLine } from "@/components/chat/WorkingIndicator";
@@ -273,10 +275,12 @@ const ChatRow = memo(function ChatRow({ item, time, tight, isNew, bots, taskOf, 
           onOpenSession={onOpenSession}
           onOpenBot={onOpenBot}
         />
-      ) : item.kind === "assistant" ? (
-        <BotBubble tight={tight}>
-          <EventRow event={item.event} resultByCallId={NO_RESULTS} onOpenSession={onOpenSession} onOpenBot={onOpenBot} />
-        </BotBubble>
+      ) : item.kind === "assistant" && item.event.payload.type === "assistant_text" ? (
+        <Reactable event={item.event} bubble className={tight ? "-mt-2.5" : undefined}>
+          <BotBubble className="max-w-full">
+            <AssistantMessage text={item.event.payload.text} />
+          </BotBubble>
+        </Reactable>
       ) : (
         <EventRow event={item.event} resultByCallId={NO_RESULTS} onOpenSession={onOpenSession} onOpenBot={onOpenBot} />
       )}
@@ -445,12 +449,21 @@ function TimeLabel({ at }: { at: string }) {
 
 /// A bot's reply as a messenger draws the other side: a bubble on the left,
 /// quieter than the reader's own card.
-export function BotBubble({ tight = false, children }: { tight?: boolean; children: ReactNode }) {
+export function BotBubble({
+  tight = false,
+  className,
+  children,
+}: {
+  tight?: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
   return (
     <div
       className={cn(
         "bot-bubble max-w-[85%] self-start rounded-xl bg-muted/50 px-3 py-2",
         tight && "-mt-2.5",
+        className,
       )}
     >
       {children}

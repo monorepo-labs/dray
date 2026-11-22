@@ -1,4 +1,5 @@
 import AssistantMessage from "@/components/chat/AssistantMessage";
+import { Reactable } from "@/components/chat/Reactions";
 import Reasoning from "@/components/chat/Reasoning";
 import ToolCall from "@/components/chat/ToolCall";
 import UserMessage from "@/components/chat/UserMessage";
@@ -83,7 +84,11 @@ export default function EventRow({
       );
 
     case "assistant_text":
-      return <AssistantMessage text={payload.text} />;
+      return (
+        <Reactable event={event}>
+          <AssistantMessage text={payload.text} />
+        </Reactable>
+      );
 
     case "reasoning":
       return <Reasoning text={payload.text} encrypted={payload.encrypted} />;

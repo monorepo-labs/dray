@@ -3771,7 +3771,7 @@ fn forget_turn(session_id: &str) {
 
 /// Records a reaction landing in `session_id`, for [`REACTED`].
 fn note_reaction(session_id: &str, payload: &AgentEventPayload) {
-    if let AgentEventPayload::Reaction { emoji, .. } = payload {
+    if let AgentEventPayload::Reaction { emoji, by_user: false, .. } = payload {
         REACTED.lock().unwrap().insert(session_id.to_string(), emoji.clone());
     }
 }
@@ -4743,7 +4743,7 @@ mod tests {
             serde_json::from_value(serde_json::json!({"type": "turn_completed", "status": "success", "finalText": t}))
                 .unwrap()
         };
-        let reaction = AgentEventPayload::Reaction { message_id: "m".into(), emoji: "❤️".into() };
+        let reaction = AgentEventPayload::Reaction { message_id: "m".into(), emoji: "❤️".into(), by_user: false };
 
         assert!(!drops_echo(session, &mut text("❤️")), "no reaction yet");
         assert!(!drops_echo(session, &mut reaction.clone()));
@@ -4837,7 +4837,7 @@ mod tests {
     #[test]
     fn a_turn_its_child_died_in_forgets_its_reaction() {
         let session = "echo-dead-child";
-        let reaction = AgentEventPayload::Reaction { message_id: "m".into(), emoji: "👍".into() };
+        let reaction = AgentEventPayload::Reaction { message_id: "m".into(), emoji: "👍".into(), by_user: false };
         assert!(!drops_echo(session, &mut reaction.clone()));
         forget_turn(session);
         let mut reply = AgentEventPayload::AssistantText { block: None, text: "👍".into() };
