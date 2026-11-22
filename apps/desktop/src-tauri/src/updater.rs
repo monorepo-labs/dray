@@ -144,6 +144,17 @@ pub async fn check_update(
         .version_comparator(move |running, release| {
             release.version > version_to_beat(running, pending.as_deref())
         })
+        // Windows only: the plugin runs the installer and exits inside
+        // `install`, so the save in `install` below is never reached there.
+        // The installer relaunches the app itself.
+        .on_before_exit({
+            let app = app.clone();
+            move || {
+                if let Err(e) = app.save_window_state(StateFlags::all()) {
+                    eprintln!("[window state save err] {e}");
+                }
+            }
+        })
         .build()
         .map_err(|e| e.to_string())?;
 
