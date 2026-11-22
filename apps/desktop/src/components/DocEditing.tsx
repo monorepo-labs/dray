@@ -22,7 +22,9 @@ import {
   type Doc,
   type DocMode,
 } from "@/hooks/useDocs";
+import { useChord } from "@/hooks/useShortcuts";
 import { splitPath } from "@/lib/changes";
+import { chordFromKey, sameChord } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 
 // The pieces of editing a markdown file, shared by the Docs panel and the Files
@@ -151,6 +153,7 @@ export function DocTextarea({
   doc: Doc;
   className?: string;
 }) {
+  const save = useChord("doc.save");
   if (doc.body.status !== "ready") return null;
   return (
     <textarea
@@ -159,6 +162,16 @@ export function DocTextarea({
       key={doc.path}
       value={doc.body.draft}
       onChange={(e) => setDocDraft(store, doc.path, e.target.value)}
+      // Save the file the caret is in, whatever else holds the chord: a split
+      // pane has no titlebar binding, and with Chat beside it ⌘S would save
+      // the composer. Stopped here so the document listeners never see it.
+      onKeyDown={(e) => {
+        const pressed = chordFromKey(e.nativeEvent);
+        if (!save || !pressed || !sameChord(pressed, save)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (isDirty(doc)) void saveDoc(store, doc.path);
+      }}
       spellCheck={false}
       // Tab is deliberately left alone: stealing it takes the keyboard's way
       // out of this box, and markdown lists need no indent to be written.

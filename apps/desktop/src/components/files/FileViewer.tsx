@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fileSrc, invoke, qualify, serverOfSession } from "@/lib/transport";
+import { fileSrc, invoke, qualify, serverOfPath } from "@/lib/transport";
 import { getFiletypeFromFileName } from "@pierre/diffs";
 import { File, Virtualizer } from "@pierre/diffs/react";
 
@@ -34,6 +34,9 @@ import { cn } from "@/lib/utils";
 /// than a `--diffs-*` token, since the library has none for "the line somebody
 /// was sent to".
 const TARGET_CSS = `[data-target] { background: color-mix(in oklab, var(--primary) 18%, transparent); }`;
+
+/// `MAX_DOC` in docs.rs: the most `read_doc` and `save_doc` take.
+const MAX_DOC_BYTES = 1 << 20;
 
 /// What `onPostRender` hands back once `File` runs under a `Virtualizer`: a
 /// `VirtualizedFile`, which can say where a line sits without drawing it. Both
@@ -299,22 +302,28 @@ function MarkdownFile({
   sessionId: string | null;
   onOpen?: (path: string, line?: number) => void;
 }) {
-  const context = useMemo(
-    () => ({
+  const context = useMemo(() => {
+    // Off the file's own path, not the store key: a Files pick's key is no
+    // session, so asking it for a server answers This Mac for a remote file.
+    const server = serverOfPath(path);
+    return {
       cwd: path.slice(0, path.lastIndexOf("/")) || "/",
       sessionId,
+      server,
       // A relative link arrives already qualified, being resolved against this
       // file's own path; `qualify` leaves that alone and keys an absolute one.
       open: (target: string, line?: number) => {
-        const qualified = qualify(normalizePath(target), serverOfSession(sessionId));
+        const qualified = qualify(normalizePath(target), server);
         if (onOpen) onOpen(qualified, line);
         else openInFiles(sessionId, qualified, line);
       },
-    }),
-    [path, sessionId, onOpen],
-  );
+    };
+  }, [path, sessionId, onOpen]);
 
-  const store = sessionId ? filesDocKey(sessionId) : null;
+  // `read_doc` and `save_doc` refuse past 1 MiB where Files reads up to 4, so a
+  // larger file stays read-only rather than offering a Save that always fails.
+  const editable = useMemo(() => new Blob([text]).size <= MAX_DOC_BYTES, [text]);
+  const store = sessionId && editable ? filesDocKey(sessionId) : null;
   const doc = useDocs(store).docs.find((d) => d.path === path);
   // Every read of the file lands here, the first included; `syncDoc` keeps a
   // draft through the ones that would otherwise throw it away.

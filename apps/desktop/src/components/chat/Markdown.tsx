@@ -1,4 +1,4 @@
-import { fileSrc, qualify, serverOfSession } from "@/lib/transport";
+import { fileSrc, qualify } from "@/lib/transport";
 import { memo, useMemo } from "react";
 import { Streamdown, type Components, type ThemeInput } from "streamdown";
 
@@ -9,7 +9,7 @@ import VideoPlayer from "@/components/chat/VideoPlayer";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { createSharedCodePlugin, streamingCodePlugin } from "@/lib/codePlugin";
 import type { CodeThemePair } from "@/lib/codeTheme";
-import { useChatSession } from "@/hooks/useChatSession";
+import { pathServer, useChatSession } from "@/hooks/useChatSession";
 import { absolutePath, isFilePath, isRelativePath } from "@/lib/filePath";
 import { basename } from "@/lib/format";
 import { SEGMENT_COLOR } from "@/lib/highlight";
@@ -287,13 +287,15 @@ function FilePathSpan({
   // A relative path resolves against the session's own working directory, the
   // one thing the prose does not carry; inert without one, since a path
   // resolved against wherever the app happens to run opens the wrong file.
-  const { cwd, sessionId } = useChatSession();
+  const session = useChatSession();
+  const { cwd } = session;
+  const server = pathServer(session);
   if (classes.includes(LOCAL_IMAGE_CLASS) && title) {
     const path = absolutePath(title, cwd);
     const label = <span className="text-muted-foreground">{dataAlt || title}</span>;
     if (!path) return label;
     return (
-      <ProofImage path={qualify(path, serverOfSession(sessionId))} alt={dataAlt} fallback={label} />
+      <ProofImage path={qualify(path, server)} alt={dataAlt} fallback={label} />
     );
   }
   const opens = trusted
@@ -329,7 +331,7 @@ function FilePathSpan({
         {body}
       </FileLink>
     );
-    const qualified = qualify(path, serverOfSession(sessionId));
+    const qualified = qualify(path, server);
     // A recording plays and a screenshot shows where the agent names it, so
     // checking its work is looking, not finding a file.
     if (RECORDING.test(path)) {

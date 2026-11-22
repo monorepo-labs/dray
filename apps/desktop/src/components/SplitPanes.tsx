@@ -2,6 +2,8 @@ import { X } from "lucide-react";
 import { lazy, Suspense, useEffect } from "react";
 
 import { Button } from "@/components/ui/button";
+import { DocControls } from "@/components/DocEditing";
+import { filesDocKey } from "@/hooks/useDocs";
 import { setDropping } from "@/lib/browser";
 import { useOpenFiles, useOpenFilesWatcher } from "@/hooks/useOpenFiles";
 import { Sheet } from "@/components/layout/AppShell";
@@ -188,6 +190,13 @@ function PaneHeader({ sessionId, paneKey, onClose }: { sessionId: string; paneKe
     <div className="flex h-8 shrink-0 items-center gap-2 border-b border-hairline px-3 text-ui text-muted-foreground">
       {head?.icon}
       <span className="min-w-0 truncate">{head?.label ?? ""}</span>
+      {/* A markdown file's Read/Edit and Save, which the titlebar draws only
+          for the file in the main view. Nothing for any other pane. */}
+      {paneKey.startsWith("file:") && (
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          <DocControls store={filesDocKey(sessionId)} path={paneKey.slice("file:".length)} />
+        </div>
+      )}
       <Button variant="ghost" size="icon-xs" className="ml-auto shrink-0" aria-label="Close pane" onClick={onClose}>
         <X />
       </Button>
