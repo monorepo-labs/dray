@@ -248,16 +248,28 @@ as on a Mac with no notch. Everything above holds unless said here.
   again behind an unassigned key (`0xE8`, AutoHotkey's mask key), so
   Windows reads a chord. The island's own keys carry a mark the hook
   passes by.
-- **A topmost tool window** (GPUI's `PopUp` there): off the taskbar and
-  Alt+Tab, over every other window. Windows hands the foreground only to
-  the app that has it, so the island attaches to that app's input queue
-  for the moment it takes the keyboard, and gives it back on close the
-  same way.
+- **A topmost tool window, made a plain popup.** GPUI's `PopUp` there is a
+  captioned window with its caption hidden: a frame on three sides and a 1px
+  line along the top of the screen. Each island window is restyled
+  `WS_POPUP` when it opens, so the client is the window and the ears stay
+  clear, with Windows 11's border and rounding off. The pill, the ink and
+  the flight never take the keyboard (`WS_EX_NOACTIVATE`).
+- **Windows move from a thread of their own.** `SetWindowPos` on GPUI's
+  thread delivers `WM_SIZE` inside the update that asked, where GPUI cannot
+  borrow the app and drops it: the window grows and GPUI goes on drawing at
+  the old size. Sent from another thread, the same messages wait for GPUI's
+  message loop. X11's configure is asynchronous and never had this.
+- **The foreground is earned, not borrowed.** Windows hands it only to the
+  process that sent the last input, so the island sends an empty one first,
+  as PowerToys does. Attaching to the front app's input queue instead hung
+  the island on an app not pumping messages.
 - **DWM always composes**, so the card always has its Mac shape and shadow.
 - **The screen is read with GDI** (`BitBlt` off the screen's DC), our windows
   hidden first, as on X11. The ink overlay lets the mouse through by being
   layered and transparent to clicks until Shift is held.
 - **Sounds play from memory** with `PlaySound`, one at a time.
+- **GPUI's own `log` output reaches `island.log`**, warnings and errors, on
+  both platforms: it is where a renderer or window failure says so.
 - **Reduce Motion is Windows' "Animation effects"** switch.
 - **Prefs are `~/.config/dray/island.json`** on Windows too, the path both
   sides already agree on; screenshots go in `%TEMP%\dray-island`, which is
@@ -269,8 +281,8 @@ as on a Mac with no notch. Everything above holds unless said here.
 
 Not on Windows yet: a bundle carrying it (`release.yml` has no Windows job,
 #1425), and dictation, which the island asks of the app and the app hides on
-Windows (#1425): a tap on the open panel answers what the app does, which
-on a machine with no model is a notice.
+Windows (#1425): a tap on the open panel says "Dictation isn't in Dray on
+Windows yet." rather than sending the reader to a tab that is not there.
 
 ## Build
 
