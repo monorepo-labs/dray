@@ -100,10 +100,10 @@ export default function AppShell({
             !sidebarOpen && "w-2",
             // The header floats over its top, so it starts below the header.
             "pt-(--titlebar-h)",
-            // Light rows sat on the bare page and now sit on the frame's
-            // darker fill, so the same veil read as half the mark it was.
-            // A palette may name the fill outright with `--sidebar-selected`.
-            "not-dark:[--sidebar-accent:var(--sidebar-selected,color-mix(in_oklab,var(--foreground)_15%,transparent))]",
+            // The frame is the page's own colour in light now, so the veil
+            // takes Default light's weight there: #ededed on white. A palette
+            // may name the fill outright with `--sidebar-selected`.
+            "not-dark:[--sidebar-accent:var(--sidebar-selected,color-mix(in_oklab,var(--foreground)_12%,transparent))]",
             // Keycaps too: their muted veil was tuned against the bare page.
             "not-dark:[&_[data-slot=kbd]]:bg-foreground/13",
           )}
@@ -135,6 +135,9 @@ export default function AppShell({
                   : undefined
               }
               {...(mainCard && { [SPLIT_CARD]: mainCard.key })}
+              data-main-sheet=""
+              // Leftmost, so the first view tab sits on its edge (App.css).
+              {...(!(panelLeft && panelOpen) && (!mainCard || mainCard.order === 0) && { "data-flush-left": "" })}
             >
         {/* `min-w-0` is load-bearing: without it a wide code block in the transcript
           sets the flex item's floor and pushes the sidebar off-screen. */}
@@ -221,16 +224,19 @@ export function Sheet({
           the corners, whose frame fill otherwise covers the ring's arc. */}
       <span
         aria-hidden
-        className="pointer-events-none absolute inset-0 z-21 rounded-[8px] shadow-(--shadow-sheet)"
+        className="pointer-events-none absolute inset-0 z-21 rounded-[8px] rounded-tl-[var(--sheet-tl,8px)] shadow-[var(--sheet-ring,var(--shadow-sheet))]"
       />
-      <span aria-hidden className={cn(corner, "top-0 left-0 bg-[radial-gradient(circle_at_100%_100%,transparent_8px,var(--surface-frame)_8.5px)]")} />
+      <span aria-hidden className="sheet-glow" />
+      <span aria-hidden className="sheet-foot" />
+      {/* Sized off `--sheet-tl` in App.css: the first tab's drag grows it. */}
+      <span aria-hidden data-sheet-tl="" className={cn(corner, "top-0 left-0")} />
       <span aria-hidden className={cn(corner, "top-0 right-0 bg-[radial-gradient(circle_at_0%_100%,transparent_8px,var(--surface-frame)_8.5px)]")} />
       <span aria-hidden className={cn(corner, "bottom-0 left-0 bg-[radial-gradient(circle_at_100%_0%,transparent_8px,var(--surface-frame)_8.5px)]")} />
       <span aria-hidden className={cn(corner, "right-0 bottom-0 bg-[radial-gradient(circle_at_0%_0%,transparent_8px,var(--surface-frame)_8.5px)]")} />
       <div
         className={cn(
           // Grows by what the sheet rose, so the contents hold still.
-          "flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-[8px] bg-(--surface-sheet) transition-[padding]",
+          "flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-[8px] rounded-tl-[var(--sheet-tl,8px)] bg-(--surface-sheet) transition-[padding]",
           tall ? "pt-[calc(var(--titlebar-h)-0.5rem)] duration-125 ease-in" : "duration-200 ease-out",
         )}
       >
