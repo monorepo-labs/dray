@@ -7,6 +7,8 @@
 //! account on the machine and a VPS is often shared, while DevTools reads
 //! files and cookies and drives the page. `--remote-debugging-pipe` is fd 3
 //! in and fd 4 out, NUL-delimited JSON, and only this process holds the ends.
+//! Windows has no fds to hand over, so the two handles ride the command line
+//! instead (`spawn_piped`).
 //!
 //! **Every tab arrives through `Target.attachedToTarget`.** Auto-attach is on
 //! at the browser level with `flatten`, so one pipe carries every page under
@@ -17,10 +19,6 @@
 //! frontend under the remote session's id, which is the key the Mac's *own*
 //! tabs for that session are held under: the server's list would replace the
 //! reader's strip.
-
-// Windows refuses to start Chromium (see `launch`), so the driving half goes
-// unreached there.
-#![cfg_attr(windows, allow(dead_code, unused_imports))]
 
 #[path = "../browser/automation.rs"]
 pub mod automation;
@@ -472,30 +470,68 @@ async fn chrome_for(session: &str) -> Result<(), String> {
     }
 }
 
-/// Chromium's DevTools pipe rides fds 3 and 4, which Windows has no way to
-/// hand a child through `Command`.
-#[cfg(windows)]
-async fn launch(_: &str, _: &Path, _: bool) -> Result<(), String> {
-    Err("the headless browser is not supported on Windows yet".into())
+/// Starts Chromium with the DevTools pipe's far ends, answering the child
+/// and this process's two ends: what Chromium reads, what it writes.
+///
+/// fd 3 is what Chromium reads, fd 4 what it writes. Copied clear of 3 and 4
+/// first, since either end may already sit on one of them; the copies are
+/// close-on-exec and the dup2'd pair is not.
+#[cfg(unix)]
+fn spawn_piped(
+    command: &mut tokio::process::Command,
+) -> Result<(tokio::process::Child, std::io::PipeWriter, std::io::PipeReader), String> {
+    let (chrome_reads, to_chrome) = std::io::pipe().map_err(|e| e.to_string())?;
+    let (from_chrome, chrome_writes) = std::io::pipe().map_err(|e| e.to_string())?;
+    let (read_fd, write_fd) = (chrome_reads.as_raw_fd(), chrome_writes.as_raw_fd());
+    command.arg("--remote-debugging-pipe");
+    unsafe {
+        command.pre_exec(move || {
+            let r = libc::fcntl(read_fd, libc::F_DUPFD_CLOEXEC, 10);
+            let w = libc::fcntl(write_fd, libc::F_DUPFD_CLOEXEC, 10);
+            if r < 0 || w < 0 || libc::dup2(r, 3) < 0 || libc::dup2(w, 4) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let child = command.spawn().map_err(|e| format!("could not start Chromium: {e}"))?;
+    Ok((child, to_chrome, from_chrome))
 }
 
-#[cfg(unix)]
+/// Windows: Chromium takes the pipe as two inherited handles named on its
+/// command line, `--remote-debugging-io-pipes=<read>,<write>`. They are made
+/// inheritable for the spawn alone; std spawns with inheritance on, so a
+/// process another thread starts in that window inherits them too, which
+/// costs no more than a late EOF.
+#[cfg(windows)]
+fn spawn_piped(
+    command: &mut tokio::process::Command,
+) -> Result<(tokio::process::Child, std::io::PipeWriter, std::io::PipeReader), String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+    let (chrome_reads, to_chrome) = std::io::pipe().map_err(|e| e.to_string())?;
+    let (from_chrome, chrome_writes) = std::io::pipe().map_err(|e| e.to_string())?;
+    let (r, w) = (chrome_reads.as_raw_handle(), chrome_writes.as_raw_handle());
+    command.arg("--remote-debugging-pipe").arg(format!("--remote-debugging-io-pipes={},{}", r as usize, w as usize));
+    let inherit = |on: bool| unsafe {
+        let flag = if on { HANDLE_FLAG_INHERIT } else { 0 };
+        SetHandleInformation(r, HANDLE_FLAG_INHERIT, flag) != 0 && SetHandleInformation(w, HANDLE_FLAG_INHERIT, flag) != 0
+    };
+    if !inherit(true) {
+        return Err(format!("could not hand Chromium its pipe: {}", std::io::Error::last_os_error()));
+    }
+    let spawned = command.spawn();
+    inherit(false);
+    let child = spawned.map_err(|e| format!("could not start Chromium: {e}"))?;
+    Ok((child, to_chrome, from_chrome))
+}
+
 async fn launch(session: &str, exe: &Path, sandboxed: bool) -> Result<(), String> {
     let profile = browser_dir().join(session);
     std::fs::create_dir_all(&profile).map_err(|e| format!("could not create {}: {e}", profile.display()))?;
     clear_stale_lock(&profile);
-    let (to_chrome, chrome_reads) = {
-        let (r, w) = std::io::pipe().map_err(|e| e.to_string())?;
-        (w, r)
-    };
-    let (chrome_writes, from_chrome) = {
-        let (r, w) = std::io::pipe().map_err(|e| e.to_string())?;
-        (w, r)
-    };
-    let (read_fd, write_fd) = (chrome_reads.as_raw_fd(), chrome_writes.as_raw_fd());
     let mut command = tokio::process::Command::new(exe);
     command
-        .arg("--remote-debugging-pipe")
         .arg(format!("--user-data-dir={}", profile.display()))
         .args([WINDOW, "--no-first-run", "--no-default-browser-check", "--mute-audio"])
         // The cookie key in a plain file. Otherwise Chromium asks the keyring
@@ -511,21 +547,7 @@ async fn launch(session: &str, exe: &Path, sandboxed: bool) -> Result<(), String
     if !sandboxed {
         command.arg("--no-sandbox");
     }
-    // fd 3 is what Chromium reads, fd 4 what it writes. Copied clear of 3 and
-    // 4 first, since either end may already sit on one of them; the copies
-    // are close-on-exec and the dup2'd pair is not.
-    unsafe {
-        command.pre_exec(move || {
-            let r = libc::fcntl(read_fd, libc::F_DUPFD_CLOEXEC, 10);
-            let w = libc::fcntl(write_fd, libc::F_DUPFD_CLOEXEC, 10);
-            if r < 0 || w < 0 || libc::dup2(r, 3) < 0 || libc::dup2(w, 4) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let mut child = command.spawn().map_err(|e| format!("could not start Chromium: {e}"))?;
-    drop((chrome_reads, chrome_writes));
+    let (mut child, to_chrome, from_chrome) = spawn_piped(&mut command)?;
 
     let stderr = Arc::new(Mutex::new(String::new()));
     if let Some(mut pipe) = child.stderr.take() {
