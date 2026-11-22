@@ -141,7 +141,9 @@ fun BotListRow(server: String, bot: Bot, chat: SessionKey?, onClick: () -> Unit)
                 else parseDate(item?.modified)?.let { Text(shortAge(it), style = Dray.Font.footnote.copy(color = Dray.tertiary)) }
             }
             // No line at all with nothing to say, so the name sits level with the face.
-            val line = previewLine(preview?.text ?: bot.greeting?.lastOrNull() ?: bot.welcome ?: "")
+            // A server that words the line sends it plain; an older one sends the raw reply.
+            val line = preview?.takeIf { it.plain }?.text
+                ?: previewLine(preview?.text ?: bot.greeting?.lastOrNull() ?: bot.welcome ?: "")
             if (item?.busy == true && !asking) {
                 Box(Modifier.heightIn(min = 20.dp), contentAlignment = Alignment.CenterStart) { TypingDots() }
             } else if (line.isNotEmpty()) {

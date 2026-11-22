@@ -2086,8 +2086,10 @@ function BotRow({
   const badge = asking ? "asking" : unread ? "unread" : null;
   const mask = badge === "asking" ? DOT_CUTOUT : badge === "unread" ? COUNT_CUTOUT : undefined;
   // Before its first chat, Dray Bot's greeting is what its chat opens on.
+  // A server that words the line sends it plain: cleaning it again would eat
+  // the reader's own `*`. An older one sends the raw reply.
   const last = preview?.text || (!sessionId && greetingOf(bot).at(-1));
-  const glimpse = last && previewLine(last);
+  const glimpse = last && (preview?.plain && preview.text ? last : previewLine(last));
   const offline = offlineLine(serverOfPath(bot.path));
   const prefetch = useHoverPrefetch(offline ? null : sessionId);
 

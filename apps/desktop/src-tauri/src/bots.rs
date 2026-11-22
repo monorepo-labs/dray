@@ -1428,6 +1428,11 @@ pub async fn delete_bot(id: String, sink: Sink) -> Result<(), Fail> {
 pub struct BotPreview {
     pub text: Option<String>,
     pub replies: u32,
+    /// `text` is already one plain line, to draw as it is. A server from
+    /// before this sends the raw reply, which the client still cleans.
+    #[serde(default)]
+    #[ts(as = "Option<bool>", optional)]
+    pub plain: bool,
 }
 
 /// Each bot chat's inbox row, keyed by session.
@@ -1438,7 +1443,7 @@ pub async fn bot_previews(
     let mut previews = std::collections::HashMap::new();
     for id in session_ids {
         let (text, replies) = crate::store::inbox_line(&id).await?;
-        previews.insert(id, BotPreview { text, replies });
+        previews.insert(id, BotPreview { text, replies, plain: true });
     }
     Ok(previews)
 }

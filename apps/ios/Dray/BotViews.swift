@@ -60,7 +60,9 @@ struct BotListRow: View {
                     }
                 }
                 // No line at all with nothing to say, so the name sits level with the face.
-                let line = previewLine(preview?.text ?? bot.greeting?.last ?? bot.welcome ?? "")
+                // A server that words the line sends it plain; an older one sends the raw reply.
+                let line = preview.flatMap { $0.plain == true ? $0.text : nil }
+                    ?? previewLine(preview?.text ?? bot.greeting?.last ?? bot.welcome ?? "")
                 if item?.busy == true && !asking {
                     TypingDots().frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
                 } else if !line.isEmpty {

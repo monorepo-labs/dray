@@ -12,7 +12,12 @@ val Bot.face: BotAvatar? get() = decodeOrNull<BotAvatar>(avatar)
 
 /** `bot_previews`' answer per chat: its row's line, worded by the server ("You: …", "Reacted 👍 to …", or the newest reply), and how many replies came since the reader last wrote. */
 @Serializable
-data class BotPreview(val text: String? = null, val replies: Int = 0)
+data class BotPreview(
+    val text: String? = null,
+    val replies: Int = 0,
+    /** `text` is one plain line already, drawn as it is; false from a server that sends the raw reply. */
+    val plain: Boolean = false,
+)
 
 /** `dray session merge-card`'s card: the task, its repo and the PR to land. */
 @Serializable

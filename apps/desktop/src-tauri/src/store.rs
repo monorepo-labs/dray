@@ -2009,50 +2009,46 @@ pub async fn get_session_calls(session_id: &str, call_ids: Vec<String>) -> Resul
 /// or a kickoff is not theirs, so neither resets it.
 pub async fn last_reply(session_id: &str) -> Result<(Option<String>, u32)> {
     let page = read_session_page(session_id, None, 20).await?;
-    let mut last = None;
-    let mut since = 0;
-    // The count stops at the reader's own last message; the preview reads on
-    // past it, or a turn still running would blank the row.
-    let mut counting = true;
-    let review = crate::bots::learn::in_review(&page.events);
-    for (event, review) in page.events.into_iter().zip(review).rev() {
-        if event.subagent.is_some() || review {
-            continue;
-        }
-        match event.payload {
-            AgentEventPayload::AssistantText { text, .. } if crate::events::has_text(&text) => {
-                since += u32::from(counting);
-                last.get_or_insert(text);
-            }
-            AgentEventPayload::UserMessage { from: None, kickoff: false, .. } => counting = false,
-            _ => {}
-        }
-        if !counting && last.is_some() {
-            break;
-        }
-    }
-    Ok((last, since))
+    let tail = tail_of(&page.events);
+    Ok((tail.reply, tail.since))
 }
 
-/// A bot chat's inbox row, read off the end of its log: the line it shows and
-/// the replies since the reader last wrote, counted as [`last_reply`] counts them.
+/// A bot chat's inbox row, read off the end of its log: the line it shows,
+/// one plain line, and the replies since the reader last wrote.
 pub async fn inbox_line(session_id: &str) -> Result<(Option<String>, u32)> {
     let page = read_session_page(session_id, None, 20).await?;
-    Ok(inbox_line_of(&page.events))
+    let tail = tail_of(&page.events);
+    Ok((tail.line, tail.since))
 }
 
 /// How much of the reader's message a reaction's line quotes: cut any later
 /// and the row's own truncation takes the closing quote mark.
 const INBOX_QUOTE: usize = 40;
 
-/// The newest of the reader's own message (`You: …`), the bot's reaction to
-/// it, or the bot's reply. Hidden notes — a review's turn, a kickoff, a task's
-/// report — are no one's line; the reader's reaction to the bot is a badge and
-/// is read past, like the hidden note telling the bot of it.
-fn inbox_line_of(events: &[AgentEvent]) -> (Option<String>, u32) {
+/// How long an inbox line runs: well past what a row draws, short enough
+/// that a long reply is not sent whole on every read.
+const INBOX_LINE: usize = 200;
+
+/// What the end of a chat's log says, read in one walk so the inbox row's
+/// unread count and a task's report can never count replies differently.
+#[derive(Debug, Default, PartialEq)]
+struct Tail {
+    /// The main thread's newest reply, read on past the reader's last
+    /// message, or a turn still running would have none.
+    reply: Option<String>,
+    /// The inbox row's line: the newest of the reader's own message
+    /// (`You: …`), the bot's reaction to it, or its reply.
+    line: Option<String>,
+    /// Replies since the reader last wrote.
+    since: u32,
+}
+
+/// Hidden notes — a review's turn, a kickoff, a task's report — are no one's
+/// line; the reader's reaction to the bot is a badge, read past like the
+/// hidden note telling the bot of it. A message showing nothing is read past.
+fn tail_of(events: &[AgentEvent]) -> Tail {
     let review = crate::bots::learn::in_review(events);
-    let mut line = None;
-    let mut since = 0;
+    let mut tail = Tail::default();
     let mut counting = true;
     for (event, review) in events.iter().zip(review).rev() {
         if event.subagent.is_some() || review {
@@ -2060,37 +2056,41 @@ fn inbox_line_of(events: &[AgentEvent]) -> (Option<String>, u32) {
         }
         match &event.payload {
             AgentEventPayload::AssistantText { text, .. } if crate::events::has_text(text) => {
-                since += u32::from(counting);
-                line.get_or_insert_with(|| text.clone());
+                tail.since += u32::from(counting);
+                tail.reply.get_or_insert_with(|| text.clone());
+                tail.line.get_or_insert_with(|| cut(&plain(text), INBOX_LINE));
             }
-            AgentEventPayload::Reaction { message_id, emoji, by_user: false } if line.is_none() => {
-                let reacted = events.iter().find(|e| &e.id == message_id).and_then(|e| match &e.payload {
-                    AgentEventPayload::UserMessage { text, images, .. } => Some(said(text, images.len(), INBOX_QUOTE)),
+            AgentEventPayload::Reaction { message_id, emoji, by_user: false } if tail.line.is_none() => {
+                let reacted = events.iter().find(|e| &e.id == message_id).map(|e| match &e.payload {
+                    AgentEventPayload::UserMessage { text, images, .. } => said(text, images.len(), INBOX_QUOTE),
                     _ => None,
                 });
-                line = Some(match reacted {
-                    Some(Said::Text(quote)) => format!("Reacted {emoji} to \"{quote}\""),
-                    Some(Said::Images(1)) => format!("Reacted {emoji} to an image"),
-                    Some(Said::Images(n)) => format!("Reacted {emoji} to {n} images"),
+                tail.line = match reacted {
+                    Some(Some(Said::Text(quote))) => Some(format!("Reacted {emoji} to \"{quote}\"")),
+                    Some(Some(Said::Images(1))) => Some(format!("Reacted {emoji} to an image")),
+                    Some(Some(Said::Images(n))) => Some(format!("Reacted {emoji} to {n} images")),
+                    Some(None) => None,
                     // Its message is older than the page read.
-                    None => format!("Reacted {emoji} to your message"),
-                });
+                    None => Some(format!("Reacted {emoji} to your message")),
+                };
             }
             AgentEventPayload::UserMessage { from: None, kickoff: false, text, images, .. } => {
                 counting = false;
-                line.get_or_insert_with(|| match said(text, images.len(), usize::MAX) {
-                    Said::Text(text) => format!("You: {text}"),
-                    Said::Images(1) => "You: Image".into(),
-                    Said::Images(n) => format!("You: {n} images"),
-                });
+                if tail.line.is_none() {
+                    tail.line = said(text, images.len(), INBOX_LINE).map(|said| match said {
+                        Said::Text(text) => format!("You: {text}"),
+                        Said::Images(1) => "You: Image".into(),
+                        Said::Images(n) => format!("You: {n} images"),
+                    });
+                }
             }
             _ => {}
         }
-        if !counting && line.is_some() {
+        if !counting && tail.reply.is_some() && tail.line.is_some() {
             break;
         }
     }
-    (line, since)
+    tail
 }
 
 enum Said {
@@ -2098,18 +2098,99 @@ enum Said {
     Images(usize),
 }
 
-/// A message of the reader's on one line, cut to `cap` characters; its images
-/// where it holds no words.
-fn said(text: &str, images: usize, cap: usize) -> Said {
-    if !crate::events::has_text(text) && images > 0 {
-        return Said::Images(images);
+/// A message of the reader's on one line, cut to `cap` characters, in their
+/// own words: a `*` they typed is theirs, not markdown. Its images where it
+/// holds no words; `None` where it shows nothing at all.
+fn said(text: &str, images: usize, cap: usize) -> Option<Said> {
+    if crate::events::has_text(text) {
+        Some(Said::Text(cut(&text.split_whitespace().collect::<Vec<_>>().join(" "), cap)))
+    } else {
+        (images > 0).then_some(Said::Images(images))
     }
-    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    Said::Text(match flat.char_indices().nth(cap) {
-        // At the last word break inside the cap, where there is one.
-        Some((at, _)) => format!("{}…", flat[..at].rsplit_once(' ').map_or(&flat[..at], |(head, _)| head)),
-        None => flat,
-    })
+}
+
+/// `line` cut to `cap` characters as a reader counts them, so an emoji
+/// joined with ZWJ or a flag is never split, at the last word break where
+/// the cut lands inside a word.
+fn cut(line: &str, cap: usize) -> String {
+    use unicode_segmentation::UnicodeSegmentation;
+    let Some((at, next)) = line.grapheme_indices(true).nth(cap) else {
+        return line.to_string();
+    };
+    let head = &line[..at];
+    let head = match next.chars().all(char::is_whitespace) {
+        true => head,
+        false => head.rsplit_once(' ').map_or(head, |(words, _)| words),
+    };
+    format!("{}…", head.trim_end())
+}
+
+/// A reply as one plain line with its markdown marks out, by the rule the
+/// clients' `previewLine` follows for a server too old to send this.
+fn plain(text: &str) -> String {
+    let mut unfenced = String::with_capacity(text.len());
+    let mut rest = text;
+    // Fences go in pairs; an unclosed one only loses its backticks below.
+    while let Some(open) = rest.find("```") {
+        let Some(close) = rest[open + 3..].find("```") else { break };
+        unfenced.push_str(&rest[..open]);
+        unfenced.push(' ');
+        rest = &rest[open + 3 + close + 3..];
+    }
+    unfenced.push_str(rest);
+    let unmarked: String = unfenced
+        .lines()
+        .map(line_marks_out)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .chars()
+        // Underscores stay: `parse_args` is a name, and agents bold with `*`.
+        .filter(|&c| c != '*' && c != '`')
+        .collect();
+    unlinked(&unmarked).split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A line without its heading and quote marks — by their place at the line's
+/// start alone, since `#908` mid-line is a PR.
+fn line_marks_out(line: &str) -> &str {
+    let mut rest = line.trim_start();
+    loop {
+        let hashes = rest.len() - rest.trim_start_matches('#').len();
+        if (1..=6).contains(&hashes) && rest[hashes..].starts_with(char::is_whitespace) {
+            rest = rest[hashes..].trim_start();
+        } else if let Some(quoted) = rest.strip_prefix('>') {
+            rest = quoted.strip_prefix(char::is_whitespace).unwrap_or(quoted);
+        } else {
+            return rest;
+        }
+    }
+}
+
+/// Every `[words](target)` as its words.
+fn unlinked(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        let after = &rest[open + 1..];
+        let link = after.find(']').and_then(|close| {
+            let target = after[close + 1..].strip_prefix('(')?;
+            let end = target.find(')')?;
+            Some((close, after.len() - target.len() + end + 1))
+        });
+        match link {
+            Some((close, end)) => {
+                out.push_str(&rest[..open]);
+                out.push_str(&after[..close]);
+                rest = &after[end..];
+            }
+            None => {
+                out.push_str(&rest[..=open]);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// What `find` picks out of a session's log, read back from the end a few
@@ -4679,6 +4760,62 @@ mod inbox_tests {
 
     fn reaction(on: &AgentEvent, emoji: &str, by_user: bool) -> AgentEvent {
         event(AgentEventPayload::Reaction { message_id: on.id.clone(), emoji: emoji.into(), by_user })
+    }
+
+    fn inbox_line_of(events: &[AgentEvent]) -> (Option<String>, u32) {
+        let tail = tail_of(events);
+        (tail.line, tail.since)
+    }
+
+    #[test]
+    fn the_reply_reads_on_past_the_readers_message_and_the_line_does_not() {
+        let events = [typed("hi"), reply("Hello"), typed("and now?")];
+        let tail = tail_of(&events);
+        assert_eq!(tail, Tail { reply: Some("Hello".into()), line: Some("You: and now?".into()), since: 0 });
+    }
+
+    #[test]
+    fn the_readers_own_words_keep_their_marks() {
+        assert_eq!(inbox_line_of(&[typed("2*3 is 6")]).0.as_deref(), Some("You: 2*3 is 6"));
+        assert_eq!(inbox_line_of(&[typed("```\nls -la\n```")]).0.as_deref(), Some("You: ``` ls -la ```"));
+    }
+
+    #[test]
+    fn a_reply_loses_its_markdown() {
+        let said = "## Done\n**Merged** — see [the PR](https://x/1) and `parse_args`, #908.\n\n```rust\nfn x() {}\n```\n> quoted";
+        assert_eq!(
+            inbox_line_of(&[typed("go"), reply(said)]).0.as_deref(),
+            Some("Done Merged — see the PR and parse_args, #908. quoted")
+        );
+        // An unclosed fence keeps its words; `[` with no link stays.
+        assert_eq!(plain("```sh\nmake [all]"), "sh make [all]");
+    }
+
+    #[test]
+    fn a_quote_keeps_a_word_that_ends_at_the_cap() {
+        let asked = typed("one two three four five six seven eights nine");
+        let events = [asked.clone(), reaction(&asked, "👍", false)];
+        assert_eq!(
+            inbox_line_of(&events).0.as_deref(),
+            Some("Reacted 👍 to \"one two three four five six seven eights…\"")
+        );
+    }
+
+    #[test]
+    fn a_cut_never_splits_an_emoji() {
+        assert_eq!(cut("👨‍👩‍👧 family", 1), "👨‍👩‍👧…");
+        assert_eq!(cut("🇳🇵🇳🇵🇳🇵", 2), "🇳🇵🇳🇵…");
+        assert_eq!(cut("short", 40), "short");
+    }
+
+    /// A message with nothing to show — a lone zero-width space, no images —
+    /// is no line, and nor is a reaction on one; the walk reads on past both.
+    #[test]
+    fn a_message_showing_nothing_is_read_past() {
+        let blank = typed(" \u{200B} ");
+        assert_eq!(inbox_line_of(&[reply("Hello"), blank.clone()]), (Some("Hello".into()), 0));
+        let events = [reply("Hi"), blank.clone(), reaction(&blank, "👍", false)];
+        assert_eq!(inbox_line_of(&events), (Some("Hi".into()), 0));
     }
 
     #[test]

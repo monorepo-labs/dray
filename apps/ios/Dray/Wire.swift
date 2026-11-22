@@ -203,6 +203,8 @@ struct Bot: Codable, Hashable {
 struct BotPreview: Codable, Hashable {
     let text: String?
     let replies: Int
+    /// `text` is one plain line already, drawn as it is; absent from a server that sends the raw reply.
+    let plain: Bool?
 }
 
 /// One branch's pull request, as `pr_marks` answers it. Only `OPEN` and
