@@ -136,6 +136,8 @@ export default function AppShell({
               }
               {...(mainCard && { [SPLIT_CARD]: mainCard.key })}
               data-main-sheet=""
+              // Leftmost, so the first view tab sits on its edge (App.css).
+              {...(!panelLeft && (!mainCard || mainCard.order === 0) && { "data-flush-left": "" })}
             >
         {/* `min-w-0` is load-bearing: without it a wide code block in the transcript
           sets the flex item's floor and pushes the sidebar off-screen. */}

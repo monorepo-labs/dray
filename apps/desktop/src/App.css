@@ -1770,12 +1770,20 @@ body.session-drag * {
 /* The first tab sits on the sheet's left edge, so lit it runs straight down
    into it: no flare that side, and the sheet gives up its rounded corner. A
    drag grows both back from its first pixel, `--first-flare` and
-   `--first-corner` set off the drag's own travel in `ViewTabs`. */
-.tab-strip[data-lit]:first-child::before {
-  --tab-r: var(--first-flare, 0px);
+   `--first-corner` set off the drag's own travel in `ViewTabs`. Only where
+   the row lines up with the main sheet (`data-flush`, set by `ViewTabs`) and
+   that sheet is the leftmost card (`data-flush-left`, set by `AppShell`): a
+   left panel or a split pane before it puts another card under the tab. */
+:root:has([data-main-sheet][data-flush-left]) [role="tablist"][data-flush] {
+  /* The tab's soft drop stops at its border, beside a sheet side with none. */
+  clip-path: inset(0 0 0 3px);
+
+  > .tab-strip[data-lit]:first-child::before {
+    --tab-r: var(--first-flare, 0px);
+  }
 }
 
-:root:has([role="tablist"] > .tab-strip[data-lit]:first-child) [data-main-sheet] {
+:root:has([role="tablist"][data-flush] > .tab-strip[data-lit]:first-child) [data-main-sheet][data-flush-left] {
   --sheet-tl: var(--first-corner, 0px);
   /* The tab covers the ring's top row: the top drop starts under it rather
      than overlapping it, and the side drops start above it, so they reach the

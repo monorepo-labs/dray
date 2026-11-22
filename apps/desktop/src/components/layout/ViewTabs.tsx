@@ -875,13 +875,14 @@ export default function ViewTabs({
     // ring rather than on them. The first tab sits on the sheet's left edge,
     // which runs straight up into it while it is lit (`tab-strip`): `pl-[3px]`
     // puts its border, drawn inside the box, in the column the sheet's ring
-    // takes just outside the sheet. The clip starts at that border, so the
-    // tab's soft drop never lands beside the sheet's side, which has none.
+    // takes just outside the sheet. `data-flush` says the row is lined up
+    // with it, which the first tab's flush corner in App.css waits on.
     <div
       ref={drag.list}
       role="tablist"
-      className="-mx-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden pr-1 pl-[3px] [clip-path:inset(0_0_0_3px)]"
+      className="-mx-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden pr-1 pl-[3px]"
       style={align}
+      data-flush={alignX > 0 ? "" : undefined}
     >
       {drag.shown.map((item, i) =>
         item.group ? (
