@@ -268,7 +268,7 @@ fn own_home() -> bool {
 
 /// Whether a Dray app here copies its own `dray` to ~/.local/bin: any Mac app,
 /// and on Linux the AppImage or `.deb` binary the app records on launch
-/// (cli.rs), while that file is still there. Its server is the app's child on Linux, so this says
+/// (cli.rs), on Windows its `.exe`, while that file is still there. Its server is the app's child on Linux, so this says
 /// nothing about who serves. install.sh asks the same.
 pub(crate) fn app_ships_this_cli() -> bool {
     if MAC {
@@ -289,8 +289,8 @@ pub(crate) fn app_ships_this_cli() -> bool {
     })
 }
 
-/// Written by the Linux app on launch, naming the AppImage or `.deb` binary it
-/// runs from.
+/// Written by the Linux and Windows app on launch, naming the AppImage, `.deb`
+/// binary or `.exe` it runs from.
 const APPIMAGE_RECORD: &str = ".local/share/dray/appimage";
 
 /// The app's login agent, which every launch installs, or its bundle, for one
