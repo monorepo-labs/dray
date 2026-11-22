@@ -121,20 +121,18 @@ pub fn hidden_console() {
 
 /// Windows refuses to rename over an `.exe` that is running — a `dray` an
 /// agent is in the middle of — but will rename the running one itself. So it
-/// moves aside first, and is deleted once nothing runs it: now, or by a later
-/// launch's sweep.
+/// moves aside first, and is deleted once nothing runs it: now, or by
+/// [`sweep_aside`] at a later launch.
 #[cfg(windows)]
 #[cfg_attr(not(feature = "desktop"), allow(dead_code))]
 pub fn replace_running(from: &Path, to: &Path) -> std::io::Result<()> {
     let dir = to.parent().expect("names a file in a directory");
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            if entry.file_name().to_string_lossy().starts_with(".dray.old.") {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-    }
-    let aside = dir.join(format!(".dray.old.{}", std::process::id()));
+    // Unique past pid reuse: an aside a reused pid left running would
+    // otherwise block this rename.
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let aside = dir.join(format!("{ASIDE}{}.{stamp}", std::process::id()));
     let moved = to.exists() && std::fs::rename(to, &aside).is_ok();
     if let Err(e) = std::fs::rename(from, to) {
         if moved {
@@ -146,6 +144,25 @@ pub fn replace_running(from: &Path, to: &Path) -> std::io::Result<()> {
         let _ = std::fs::remove_file(&aside);
     }
     Ok(())
+}
+
+/// What [`replace_running`] names a file it moved aside.
+#[cfg(windows)]
+const ASIDE: &str = ".dray.old.";
+
+/// Deletes what [`replace_running`] moved aside in `dir` and nothing runs any
+/// more. One still running stays for the next sweep.
+#[cfg(windows)]
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+pub fn sweep_aside(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with(ASIDE) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// The reader's own `PATH`, which Windows keeps in the registry under
@@ -432,7 +449,9 @@ mod windows_tests {
 
         outcome.unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), b"new");
-        // The old file, freed now, goes on the next replace.
+        // The old file, freed now, goes at the next sweep.
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "moved aside while running");
+        super::sweep_aside(&dir);
         put(&dir, &dest, b"newer").unwrap();
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         std::fs::remove_dir_all(&dir).unwrap();

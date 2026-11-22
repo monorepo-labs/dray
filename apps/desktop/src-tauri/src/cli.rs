@@ -40,6 +40,10 @@ fn install_bundled(shell: Option<PathBuf>) -> Result<(), String> {
     let home = std::env::home_dir().ok_or("no home directory")?;
     let bin = home.join(".local").join("bin");
     let dest = bin.join(format!("dray{suffix}"));
+    // Every launch, not only on a copy: a `dray` an agent was running when the
+    // last one replaced it is free by now.
+    #[cfg(windows)]
+    crate::platform::sweep_aside(&bin);
     copy_if_changed(&bundled, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     #[cfg(any(target_os = "linux", windows))]
     if let Err(e) = record_appimage(&home) {
