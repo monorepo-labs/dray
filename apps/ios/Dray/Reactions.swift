@@ -70,9 +70,8 @@ private struct Reactable: ViewModifier {
                                 if emoji != current { react(emoji) }
                             } label: {
                                 Text(emoji).font(.system(size: 24)).frame(width: 42, height: 42)
-                                    .background(emoji == current ? Theme.tile : .clear, in: .circle)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(Pick(current: emoji == current))
                             .accessibilityLabel(reactionLabels[emoji] ?? emoji)
                         }
                     }
@@ -85,6 +84,17 @@ private struct Reactable: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// An emoji in the set: the pick already made and the one under the finger sit on a squircle,
+/// the popover's own corner shape, where a circle read as a second shape inside it.
+private struct Pick: ButtonStyle {
+    let current: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(current || configuration.isPressed ? Theme.tile : .clear, in: .rect(cornerRadius: Theme.Radius.lg, style: .continuous))
     }
 }
 
