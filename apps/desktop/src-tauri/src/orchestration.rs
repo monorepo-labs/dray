@@ -1696,14 +1696,36 @@ async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
     let item = store::get_session_index_item(&set.session_id)
         .await?
         .with_context(|| format!("no session {}", set.session_id))?;
-    let harness = item.harness;
+    let mut harness = item.harness;
     if !harness.names_a_cli() {
         bail!("this build cannot run that session's agent, {}", harness.label());
     }
     let model = match set.model.as_deref() {
-        Some(alias) => resolve_model(Some(alias), None, harness).await?,
+        Some(alias) => {
+            let here = resolve_model(Some(alias), None, harness).await;
+            let listed = match &here {
+                Ok(model) => matches!(crate::session::model_spec(harness, model).await, Ok(Some(_))),
+                Err(_) => false,
+            };
+            // Another agent's model moves the task there (#1414). pi, grok and
+            // fx take any name, so one only another agent lists is that agent's
+            // — once this agent has said what it lists: a probe not answered
+            // yet lists nothing, and a move would kill the task's dev server
+            // over a name it does serve.
+            match listed || !lists_models(harness).await {
+                true => here?,
+                false => match other_agent_model(alias, harness).await {
+                    Some((other, model)) => {
+                        harness = other;
+                        model
+                    }
+                    None => here?,
+                },
+            }
+        }
         None => item.model.clone(),
     };
+    let switching = harness != item.harness;
     let spec = crate::session::model_spec(harness, &model).await?;
     if set.model.is_some() && harness == Harness::Codex && spec.is_none() {
         bail!("{model} is not a Codex model");
@@ -1715,11 +1737,27 @@ async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
     let effort = match asked {
         true => {
             let requested = resolve_effort(set.effort.as_deref(), None, harness)?;
-            effort_for(spec.as_ref(), requested, item.effort, &label, harness)?
+            // Another agent's ladder means something else by the same names.
+            let current = item.effort.filter(|_| !switching);
+            effort_for(spec.as_ref(), requested, current, &label, harness)?
         }
         false => item.effort,
     };
-    let changed = model != item.model || effort != item.effort;
+    let changed = switching || model != item.model || effort != item.effort;
+    let label = match switching {
+        true => format!("{label} on {}", harness.label()),
+        false => label,
+    };
+    let item = match switching {
+        true => {
+            // Fast mode never carries to another agent (`resolve_fast`'s rule),
+            // and the stance narrows to one the agent honours.
+            let permission_mode = stance_on(harness, item.permission_mode);
+            let pick = store::AgentPick { model: model.clone(), effort, permission_mode, fast: false };
+            manager().switch_agent(&item.session_id, harness, pick, app).await?
+        }
+        false => item,
+    };
     let item = match changed {
         true => {
             let item = store::set_session_pick(&item.session_id, model, effort)
@@ -1738,6 +1776,47 @@ async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
         effort: effort.map(|e| e.as_arg().to_string()),
         changed,
     })
+}
+
+/// The stance `harness` runs when handed `mode`: `stanceFor` in the app's
+/// `permission.ts`, whose comments say why each falls where it does. `plan`
+/// always narrows, so a task moved by the CLI never comes out freer.
+fn stance_on(harness: Harness, mode: ApprovalPolicy) -> ApprovalPolicy {
+    use ApprovalPolicy as A;
+    match (harness, mode) {
+        // pi.rs still runs a `plan` session read-only.
+        (Harness::Pi, A::Plan) => A::Plan,
+        (Harness::Pi, _) => A::BypassPermissions,
+        (Harness::Codex | Harness::Fx | Harness::Grok, A::Plan) => A::Manual,
+        (Harness::Codex | Harness::Fx, A::DontAsk) => A::Auto,
+        (Harness::Grok, A::DontAsk) => A::BypassPermissions,
+        _ => mode,
+    }
+}
+
+/// Whether `harness` has said which models it serves: Claude Code's are a
+/// table, the rest a probe that lists nothing until it answers.
+async fn lists_models(harness: Harness) -> bool {
+    use crate::harness::{codex, fx, grok, pi};
+    match harness {
+        Harness::Pi => !pi::models::list().await.is_empty(),
+        Harness::Fx => !fx::models::list().await.is_empty(),
+        Harness::Grok => !grok::models::list().await.is_empty(),
+        Harness::Codex => !codex::models::list().await.is_empty(),
+        _ => true,
+    }
+}
+
+/// The first other installed agent whose list holds `alias`, with its model.
+async fn other_agent_model(alias: &str, current: Harness) -> Option<(Harness, ModelId)> {
+    for harness in Harness::ALL.into_iter().filter(|h| *h != current) {
+        let Ok(model) = resolve_model(Some(alias), None, harness).await else { continue };
+        let listed = matches!(crate::session::model_spec(harness, &model).await, Ok(Some(_)));
+        if listed && crate::binpath::agent_available(harness).await {
+            return Some((harness, model));
+        }
+    }
+    None
 }
 
 /// The level a session runs at once `spec` replaces its model. A level the

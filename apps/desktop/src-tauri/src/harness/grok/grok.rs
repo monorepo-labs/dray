@@ -105,11 +105,9 @@ pub async fn init(
     // Ahead of the spawn: everything between the spawn and the kill-wrapped
     // `open_session` below has to be infallible, or a `?` returns leaving a
     // child nothing can reach.
-    let seq_start = if is_new_session {
-        0
-    } else {
-        next_seq_by_session_id(session_id).await?
-    };
+    // Off the log even for a new conversation: one an agent switch starts
+    // (#1414) carries on this session's log, and a new session's has none.
+    let seq_start = next_seq_by_session_id(session_id).await?;
 
     let bin = crate::binpath::grok().await;
     let mut command = Command::new(&bin);

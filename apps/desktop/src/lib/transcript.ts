@@ -665,6 +665,9 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
       current = open(event, event.id);
       continue;
     }
+    // Draws nothing: the reader just picked the agent (#1414). Kept out of
+    // `work` so it neither opens a head turn nor splits a tool run.
+    if (event.payload.type === "agent_switched") continue;
 
     // Events before any prompt still need a home — a resumed session replays
     // the log from wherever it was truncated.

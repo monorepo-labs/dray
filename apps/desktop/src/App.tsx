@@ -3520,8 +3520,9 @@ function App() {
   const agentTurnRunning = (agent: Harness) =>
     turnRunningOn(agent, statusBySession, sessionIndexItems, (id) => serverOfSession(id) === LOCAL);
   useAutoUpdateAgents(enabledAgents, agentTurnRunning);
+  // In a session too, where the pick moves it at the next send (#1414).
   useHotkey("harness.next", () => setHarness(nextHarness(harness, enabledAgents)), {
-    enabled: composingNewSession,
+    enabled: !pageOpen && (!selectedSessionId || !busy),
   });
   // A new session never starts on an agent the reader switched off. Only the
   // composer moves: a session already on one keeps it.
@@ -4667,13 +4668,14 @@ function App() {
               />
             )
           }
-          // Only on a new task. An agent is fixed at creation, so a live
-          // session cannot be pointed at one that is missing — and a session
-          // that already exists has a CLI that already ran.
+          // On a new task, or a live one picked onto another agent (#1414): a
+          // session's own agent already ran, so only a picked one can be missing.
           notice={
             sleepingBoat ? null : offlineServer ? (
               <ServerOfflineNotice server={offlineServer} />
-            ) : !selectedSessionId && missingAgent && !cloudTask ? (
+            ) : (!selectedSessionId || (selectedSession && harness !== selectedSession.harness)) &&
+              missingAgent &&
+              !cloudTask ? (
               <AgentMissingNotice agent={missingAgent} />
             ) : loggedOutAgent && authTurn && selectedSession ? (
               <LoginExpiredNotice
@@ -4695,13 +4697,12 @@ function App() {
               <CloudNotice step={placing} />
             ) : sleepingBoat ? (
               <BoatNotice server={sleepingBoat} />
-            ) : selectedBot && selectedSession && harness !== selectedSession.harness ? (
-              // A bot chat picked onto another agent: the send moves it there.
+            ) : selectedSession && harness !== selectedSession.harness ? (
+              // A bot chat or task picked onto another agent: the send switches it.
               <div className="mb-2 flex min-h-7 items-center gap-2 px-1">
                 <AgentIcon harness={harness} brand className="size-3.5 shrink-0" />
-                <p className="min-w-0 flex-1 truncate text-ui text-foreground">
-                  Moving to {AGENT_LABELS[harness]}
-                  <span className="text-muted-foreground"> · Your next message goes to it, with this conversation.</span>
+                <p className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">
+                  Your next message goes to {AGENT_LABELS[harness]}
                 </p>
               </div>
             ) : selectedItem?.continueAt && (

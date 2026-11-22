@@ -197,6 +197,19 @@ pub struct SessionIndexItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub routine_run: Option<String>,
+    /// Agents this session ran on before a switch (#1414). Claude Code, grok
+    /// and pi keep their conversation under this session's id, so a switch
+    /// back to one listed here resumes it. A fork starts with none, since its
+    /// copy of the conversation lives only on its current agent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(skip)]
+    pub other_agents: Vec<Harness>,
+    /// The log holds an `agent_switched` marker, so a spawn has a hand-over to
+    /// look for; a task never switched skips reading its log for one. A fork
+    /// inherits it with the copied log.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(skip)]
+    pub switched: bool,
     /// Every key this build does not know, carried through untouched.
     ///
     /// The index is rewritten **whole**, and `INDEX_LOCK` is an in-process
@@ -743,6 +756,8 @@ impl SessionIndexItem {
             need: None,
             adopted_by: None,
             routine_run: None,
+            other_agents: Vec::new(),
+            switched: false,
             unknown: Default::default(),
         }
     }
@@ -839,6 +854,8 @@ impl SessionIndexItem {
             need: None,
             adopted_by: None,
             routine_run: None,
+            other_agents: Vec::new(),
+            switched: self.switched,
             unknown: Default::default(),
         }
     }
@@ -1762,6 +1779,39 @@ pub async fn rename_session(session_id: &str, title: &str) -> Result<Option<Sess
     update_item(session_id, |item| {
         item.title = title.to_string();
         item.title_locked = true;
+        item.clone()
+    })
+    .await
+}
+
+/// How a session runs on the agent it moves to: picks that belong to one agent.
+pub struct AgentPick {
+    pub model: ModelId,
+    pub effort: Option<Effort>,
+    pub permission_mode: ApprovalPolicy,
+    pub fast: bool,
+}
+
+/// Moves a session onto `to` and its picks in one write, so a failed send
+/// never leaves an agent beside another's model. Remembers the agent it
+/// leaves where `remember`: that agent holds a conversation here to resume.
+pub async fn set_session_agent(
+    session_id: &str,
+    to: Harness,
+    pick: AgentPick,
+    remember: bool,
+) -> Result<Option<SessionIndexItem>> {
+    update_item(session_id, |item| {
+        if remember && !item.other_agents.contains(&item.harness) {
+            item.other_agents.push(item.harness);
+        }
+        item.harness = to;
+        item.model = pick.model;
+        item.effort = pick.effort;
+        item.effort_above = None;
+        item.permission_mode = pick.permission_mode;
+        item.fast = pick.fast;
+        item.switched = true;
         item.clone()
     })
     .await
