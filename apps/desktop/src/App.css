@@ -979,6 +979,16 @@
   container-type: inline-size;
 }
 
+/* A reaction badge's fill: the palette's panel, opaque, so a bubble under it
+   never shows through on glass. Dray light alone takes white, which its
+   near-white panel otherwise misses by a shade the hairline then has to carry. */
+:root {
+  --reaction: var(--surface-card);
+}
+[data-theme="default"][data-mode="light"] {
+  --reaction: #fff;
+}
+
 [data-bot-chat] .sent-image {
   width: auto;
   height: auto;

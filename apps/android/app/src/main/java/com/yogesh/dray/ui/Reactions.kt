@@ -48,14 +48,14 @@ val reactions = listOf("👍", "❤️", "😂", "🎉", "✅", "👀", "😢")
 
 private val reactionLabels = mapOf("👀" to "Seen", "✅" to "Done", "🎉" to "Celebrating", "👍" to "Like", "❤️" to "Love", "😂" to "Laughing", "😢" to "Sad")
 
-/** A reaction, as a messenger draws one: a round chip a step lighter than the page, with a hairline edge. */
+/** A reaction, as a messenger draws one: a round chip in the panel's colour, a hairline edge, the emoji at about half its height. */
 @Composable
 fun ReactionBadge(emoji: String, mine: Boolean = false) {
     Box(
-        Modifier.size(28.dp).clip(CircleShape).background(Dray.lifted).border(0.5.dp, Dray.border, CircleShape)
+        Modifier.size(40.dp).clip(CircleShape).background(Dray.card).border(1.dp, Dray.border, CircleShape)
             .semantics { contentDescription = "${if (mine) "You" else "Bot"} reacted: ${reactionLabels[emoji] ?: emoji}" },
         contentAlignment = Alignment.Center,
-    ) { Text(emoji, style = Dray.Font.subhead) }
+    ) { Text(emoji, style = Dray.Font.body.copy(fontSize = 18.sp, lineHeight = 20.sp)) }
 }
 
 /**

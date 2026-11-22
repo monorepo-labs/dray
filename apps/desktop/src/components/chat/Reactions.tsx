@@ -7,17 +7,16 @@ import { REACTION_LABELS, REACTIONS } from "@/lib/reactions";
 import { cn } from "@/lib/utils";
 import type { AgentEvent } from "@/types/events";
 
-/// A reaction, as iMessage draws a tapback: a round chip on the bubble's top
-/// corner on the reactor's side, a step lighter than the chat's page colour and
-/// edged by a hairline. Mixed off `--background` rather than `--muted`, which
-/// turns into a translucent veil on glass and let the bubble show through.
+/// A reaction, as iMessage draws a tapback: a round chip on a corner of the
+/// bubble, filled with `--reaction` (white on Dray light, the panel elsewhere)
+/// and edged by a hairline, the emoji at about half its height.
 export function ReactionBadge({ emoji, mine = false, className }: { emoji: string; mine?: boolean; className?: string }) {
   return (
     <span
       role="img"
       aria-label={`${mine ? "You" : "Bot"} reacted: ${REACTION_LABELS[emoji] ?? emoji}`}
       className={cn(
-        "flex size-7 items-center justify-center rounded-full border-[0.5px] border-border bg-[color-mix(in_oklab,var(--background),white_7%)] text-[15px] leading-none select-none",
+        "flex size-10 items-center justify-center rounded-full border border-border bg-(--reaction) text-[18px] leading-none select-none",
         "motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:fade-in motion-safe:duration-200",
         className,
       )}
@@ -37,6 +36,7 @@ export type Reactions = {
 };
 
 export const ReactionsContext = createContext<Reactions>({ mine: new Map(), react: null });
+
 /// A bot's message with the reader's reaction hanging off its bottom corner, under
 /// what was read, and beside it a button to pick one on hover. Takes the
 /// bubble's width and place in the chat.
@@ -44,10 +44,10 @@ export function Reactable({ event, className, children }: { event: AgentEvent; c
   const { mine, react } = useContext(ReactionsContext);
   const reaction = mine.get(event.id);
   return (
-    <div className={cn("group/react flex max-w-[85%] items-center gap-1 self-start", className, reaction && "mb-3")}>
+    <div className={cn("group/react flex max-w-[85%] items-center gap-1 self-start", className, reaction && "mb-5")}>
       <div className="relative min-w-0">
         {children}
-        {reaction && <ReactionBadge emoji={reaction} mine className="absolute -right-3 -bottom-4" />}
+        {reaction && <ReactionBadge emoji={reaction} mine className="absolute -right-4 -bottom-6" />}
       </div>
       {react && !event.subagent && <ReactButton current={reaction} onPick={(emoji) => react(event, emoji)} />}
     </div>

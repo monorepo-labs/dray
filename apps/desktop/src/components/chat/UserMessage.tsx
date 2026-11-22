@@ -164,7 +164,7 @@ export default function UserMessage({
         <div
           className={cn(
             "user-bubble max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground shadow-(--shadow-card)",
-            reaction && "relative mt-3",
+            reaction && "relative mt-5",
           )}
           // The colour rides in and App.css paints it — a palette that fills
           // this bubble has to answer differently to one that doesn't, and only
@@ -366,7 +366,7 @@ export default function UserMessage({
               );
             })}
           </ClampedBody>
-          {reaction && <ReactionBadge emoji={reaction} className="absolute -top-4 -left-3" />}
+          {reaction && <ReactionBadge emoji={reaction} className="absolute -top-6 -left-4" />}
         </div>
       )}
 

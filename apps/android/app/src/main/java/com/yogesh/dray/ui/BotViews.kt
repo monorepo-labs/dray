@@ -231,11 +231,11 @@ fun BotChatRow(key: SessionKey, rows: List<BotRow>, i: Int, items: List<BotItem>
  */
 @Composable
 fun ReplyBubble(text: String, reaction: String? = null, modifier: Modifier = Modifier) {
-    Box(Modifier.padding(end = 32.dp).padding(bottom = if (reaction == null) 0.dp else 12.dp)) {
+    Box(Modifier.padding(end = 32.dp).padding(bottom = if (reaction == null) 0.dp else 20.dp)) {
         Box(modifier.clip(RoundedCornerShape(Dray.Radius.xl)).background(Dray.card).padding(horizontal = 12.dp, vertical = 10.dp)) {
             MarkdownText(text)
         }
-        reaction?.let { Box(Modifier.align(Alignment.BottomEnd).offset(x = 12.dp, y = 16.dp)) { ReactionBadge(it, mine = true) } }
+        reaction?.let { Box(Modifier.align(Alignment.BottomEnd).offset(x = 16.dp, y = 24.dp)) { ReactionBadge(it, mine = true) } }
     }
 }
 
@@ -255,13 +255,13 @@ fun BotUserBubble(text: String, images: List<ImageRef> = emptyList(), reaction: 
     Column(Modifier.fillMaxWidth().padding(start = 48.dp), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Thumbnails(images, end = true)
         if (text.isNotEmpty()) {
-            Box(Modifier.padding(top = if (reaction == null) 0.dp else 12.dp)) {
+            Box(Modifier.padding(top = if (reaction == null) 0.dp else 20.dp)) {
                 Text(
                     text,
                     Modifier.clip(RoundedCornerShape(Dray.Radius.xl)).background(Dray.sent).padding(horizontal = 14.dp, vertical = 10.dp),
                     style = Dray.Font.body.copy(color = Dray.onSent),
                 )
-                reaction?.let { Box(Modifier.align(Alignment.TopStart).offset(x = (-12).dp, y = (-16).dp)) { ReactionBadge(it) } }
+                reaction?.let { Box(Modifier.align(Alignment.TopStart).offset(x = (-16).dp, y = (-24).dp)) { ReactionBadge(it) } }
             }
         } else reaction?.let { ReactionBadge(it) }
     }
