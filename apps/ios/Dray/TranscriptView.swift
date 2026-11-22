@@ -587,8 +587,8 @@ struct UserBubble: View {
                 Label("From \(from)", systemImage: "arrow.turn.down.right")
                     .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
             }
-            // A message of pictures alone has no bubble, so the badge sits by the first one's corner.
-            if !images.isEmpty { Thumbnails(images: images).reaction(text.isEmpty ? reaction : nil) }
+            // A message of pictures alone has no bubble, so the badge rides the first one.
+            if !images.isEmpty { Thumbnails(images: images, reaction: text.isEmpty ? reaction : nil) }
             if !text.isEmpty {
                 Text(text)
                     .font(Theme.Font.body)
@@ -614,17 +614,22 @@ struct UserBubble: View {
 /// Square thumbnails, each opening full screen on tap.
 struct Thumbnails: View {
     let images: [ImageRef]
+    /// A bot's emoji on the message, by the first picture's corner.
+    var reaction: String? = nil
 
     var body: some View {
         ThumbnailRow(spacing: Theme.Space.xs) {
-            ForEach(Array(images.enumerated()), id: \.offset) { _, ref in
+            ForEach(Array(images.enumerated()), id: \.offset) { i, ref in
                 ImageButton(ref: ref) {
                     RemoteImage(ref: ref, fill: true)
                         .frame(width: 72, height: 72)
                         .clipShape(.rect(cornerRadius: Theme.Radius.md, style: .continuous))
                 }
+                .reaction(i == 0 ? reaction : nil)
             }
         }
+        // The badge hangs past the row's edge, where a row too long to fit scrolls and would cut it.
+        .scrollClipDisabled(reaction != nil)
     }
 }
 

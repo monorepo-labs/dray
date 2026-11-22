@@ -304,8 +304,9 @@ private struct BotRowView: View {
             case .assistant(let id, let text, let reaction, let sessionId, _):
                 // The session it was said in, which an earlier one of the chat's still holds.
                 let said = SessionKey(server: key.server, id: sessionId)
-                ReplyBubble(text: text, reaction: reaction,
-                            react: store.items[said]?.archived == true ? nil : { emoji in Task { await store.react(said, id, emoji) } })
+                // A routine's run sits in its bot's folder and draws as its chat, but the server refuses a reaction there.
+                let closed = store.items[said].map { $0.archived == true || $0.routineRun != nil } ?? false
+                ReplyBubble(text: text, reaction: reaction, react: closed ? nil : { emoji in Task { await store.react(said, id, emoji) } })
             case .notice(_, let text, _):
                 FailureRow(text: text)
             case .card(_, let card, _):
