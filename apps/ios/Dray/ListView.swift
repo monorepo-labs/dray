@@ -50,6 +50,8 @@ struct SessionList: View {
     /// The pull requests or issues page, opened over the list.
     @State private var listPage: ListPage?
     @Environment(\.scenePhase) private var phase
+    /// The row whose Delete is waiting on its confirm.
+    @State private var deleting: ListRow?
 
     private static let pageSize = 40
 
@@ -76,6 +78,8 @@ struct SessionList: View {
         // Paged: only the first `shown` rows are drawn, more as the last one comes on screen.
         let runs = page(all, shown)
         let more = runs.reduce(0) { $0 + $1.rows.count } < all.reduce(0) { $0 + $1.rows.count }
+        // Nested where its parent is listed anywhere: a pinned child draws at depth 0 still holding the link.
+        let listed = Set(all.flatMap { $0.rows.map(\.key) })
         // Bots lead the live list, as on the desktop: a bot belongs to no project, so no filter narrows them.
         let botRows = mode == .live ? store.allBots.map { b in
             (id: "\(b.server)/\(b.bot.id)", server: b.server, bot: b.bot, chat: store.botChat(b.server, b.bot).last)
@@ -135,12 +139,25 @@ struct SessionList: View {
                 // One block per run: the gap between them is the whole signal, never a heading.
                 ForEach(Array(runs.enumerated()), id: \.element.stage) { i, run in
                     if i > 0 { Color.clear.frame(height: Theme.Space.l).plainRow() }
+                    // The one run with a heading: nothing else on the rows says why they lead.
+                    if run.stage == .pinned {
+                        // In line with the titles: the rows' 6pt inset and 14pt rail, past this row's own 16.
+                        Text("Pinned").font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
+                            .padding(.leading, Theme.Space.xs).padding(.bottom, Theme.Space.xs)
+                            .plainRow()
+                    }
                     ForEach(Array(run.rows.enumerated()), id: \.element.id) { j, row in
                         // Set aside fades as the desktop sidebar's does, back to full once it is the open one.
                         SessionRow(key: row.key, item: row.item, lines: elbows(run.rows, j))
                             .opacity(run.stage == .aside && selection != row.key ? 0.3 : 1)
                             .tag(row.key)
                             .sessionRow(selected: selection == row.key)
+                            .contextMenu {
+                                RowMenu(row: row, aside: run.stage == .aside || row.item.aside == true,
+                                        inheritsPin: run.stage == .pinned && row.depth > 0 && row.item.pinned != true,
+                                        nested: row.item.parentSessionId.map { listed.contains(SessionKey(server: row.key.server, id: $0)) } ?? false,
+                                        opened: { selection = $0 }, delete: { deleting = row })
+                            }
                         if mode == .live, let ask = store.asks[row.key]?.first {
                             AskCard(key: row.key, event: ask)
                                 .padding(EdgeInsets(top: 2, leading: 14, bottom: Theme.Space.m, trailing: Theme.Space.m))
@@ -232,6 +249,20 @@ struct SessionList: View {
                 }
             }
             .presentationBackground(Theme.page)
+        }
+        // Confirmed apart from the menu, which closes on any pick: the desktop asks in place.
+        .confirmationDialog("Delete \u{201C}\(deleting?.item.title ?? "")\u{201D}?", isPresented: Binding(
+            get: { deleting != nil }, set: { if !$0 { deleting = nil } }
+        ), titleVisibility: .visible, presenting: deleting) { row in
+            Button("Delete", role: .destructive) {
+                Task {
+                    guard await store.delete(row.key) else { return Haptic.error() }
+                    // Deleting the open one falls back to the list, never a neighbour: the desktop's rule.
+                    if selection == row.key { selection = nil }
+                }
+            }
+        } message: { _ in
+            Text("Its conversation goes for good.")
         }
         .sheet(isPresented: $newBot) { BotSheet(editing: nil) { selection = $0 } }
         .onChange(of: lone, initial: true) { open(lone) }
@@ -539,6 +570,92 @@ struct ProjectStrip: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(picked == value ? .isSelected : [])
+    }
+}
+
+/// A task row's long-press menu: the desktop sidebar's `RowMenu`, each item
+/// shown where it shows there. Settle lives here, since a phone row has no
+/// hover button to carry it.
+private struct RowMenu: View {
+    @Environment(Store.self) private var store
+    @Environment(\.displayScale) private var scale
+    let row: ListRow
+    /// Drawn in the set-aside run or flagged aside, so the item turns to Bring back.
+    let aside: Bool
+    /// In Pinned only through an ancestor: a pin here would move nothing and leave a flag behind.
+    let inheritsPin: Bool
+    /// Its parent is in the list, so there is a link to cut — the desktop's `isNested`.
+    let nested: Bool
+    let opened: (SessionKey) -> Void
+    let delete: () -> Void
+
+    var body: some View {
+        let key = row.key, item = row.item
+        let settled = item.archived == true
+        // Two because they differ in where the copy runs, not what it copies.
+        // Off mid-turn: the copy would inherit half a turn, and the server refuses it too.
+        Menu {
+            Button("Fork in new worktree") { fork(worktree: true) }
+            Button("Fork here") { fork(worktree: false) }
+        } label: { Label("Fork", systemImage: "arrow.triangle.branch") }
+            .disabled(item.busy)
+        // A settled list draws no Pinned run and no aside run, so neither verb would move anything there.
+        if !settled && !inheritsPin {
+            let pinned = item.pinned == true
+            Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin") {
+                // Pinning an aside row brings it back, or it would stay faded below.
+                set(item.aside == true && !pinned ? ["pinned": true, "aside": false] : ["pinned": .bool(!pinned)])
+            }
+        }
+        if !settled {
+            Button(aside ? "Bring back" : "Set aside", systemImage: aside ? "tray.and.arrow.up" : "archivebox") {
+                // Setting aside unpins, or the row would stay up in Pinned.
+                set(aside ? ["aside": false] : ["aside": true, "pinned": false])
+            }
+        }
+        // Only a read, finished session; a lazy fork has run nothing to read.
+        if item.status == "idle" && !settled && item.forkFrom == nil {
+            Button("Mark unread", systemImage: "circle.fill") { Task { await store.markUnread(key) } }
+        }
+        // Never mid-turn: settling stops the child, and the turn would die with nothing saying so.
+        if settled {
+            Button("Unsettle", systemImage: "arrow.uturn.backward") { set(["archived": false]) }
+        } else if !item.busy {
+            Button("Settle", systemImage: "checkmark") {
+                Haptic.success()
+                set(["archived": true])
+            }
+        }
+        if nested {
+            Button("Detach from parent", systemImage: "scissors") { Task { await store.detach(key) } }
+        }
+        // One bot is named on the item itself; a submenu only where there is a choice.
+        let bots = store.attachTargets(key, item)
+        if bots.count == 1, let bot = bots.first {
+            Button { attach(bot) } label: { Label { Text("Attach to \(bot.name)") } icon: { face(bot) } }
+        } else if !bots.isEmpty {
+            Menu {
+                ForEach(bots, id: \.id) { bot in
+                    Button { attach(bot) } label: { Label { Text(bot.name) } icon: { face(bot) } }
+                }
+            } label: { Label("Attach to bot", systemImage: "link") }
+        }
+        Button("Delete", systemImage: "trash", role: .destructive, action: delete)
+    }
+
+    private func set(_ flags: [String: JSON]) { Task { await store.setFlags(row.key, flags) } }
+
+    private func attach(_ bot: Bot) { Task { await store.attach(row.key, to: bot) } }
+
+    /// A bot's face as a bitmap: a menu draws only an image as an item's icon, never a Canvas.
+    private func face(_ bot: Bot) -> Image {
+        let r = ImageRenderer(content: BotFace(bot: bot, size: 22))
+        r.scale = scale
+        return r.uiImage.map { Image(uiImage: $0).renderingMode(.original) } ?? Image(systemName: "link")
+    }
+
+    private func fork(worktree: Bool) {
+        Task { if let key = await store.fork(row.key, worktree: worktree) { opened(key) } }
     }
 }
 

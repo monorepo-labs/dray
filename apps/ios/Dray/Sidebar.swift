@@ -18,17 +18,23 @@ struct ListRow: Identifiable {
 /// What a run of rows is waiting on, strongest first, which is also the order
 /// the runs are drawn in — the desktop's `SESSION_STATES`. Mid-turn is not a
 /// stage: the row's orb says it, and a run of its own moved a row twice.
+/// Pinned is no stage anything reaches by state: the reader's own picks, led out first.
 enum Stage: Int, CaseIterable, Comparable {
-    case asking, completed, idle, unreadPr, pr, checks, merged, aside
+    case pinned, asking, completed, idle, unreadPr, pr, checks, merged, aside
     static func < (a: Stage, b: Stage) -> Bool { a.rawValue < b.rawValue }
 }
 
 /// The desktop sidebar's live list (`sessionGroups` in Sidebar.tsx): one run
-/// per stage, workspace-wide, drawn under no heading. A nest stays whole under
-/// its root and takes the strongest stage anything in it holds.
-func stageRuns(_ list: [Entry], now: Date = .now, stage: (Entry) -> Stage) -> [(stage: Stage, rows: [ListRow])] {
-    let (aside, active) = splitAside(list, now: now)
+/// per stage, workspace-wide, drawn under no heading but Pinned's. A nest stays whole under
+/// its root and takes the strongest stage anything in it holds. `pins` off for
+/// the settled list, a history where a pin says nothing.
+func stageRuns(_ list: [Entry], now: Date = .now, pins: Bool = true, stage: (Entry) -> Stage) -> [(stage: Stage, rows: [ListRow])] {
+    let split = splitPinned(pins ? list : [])
+    let pinned = split.pinned, unpinned = pins ? split.rest : list
+    let (aside, active) = splitAside(unpinned, now: now)
     var runs: [Stage: [ListRow]] = [:]
+    let pinnedRows = nests(pinned).flatMap { $0 }
+    if !pinnedRows.isEmpty { runs[.pinned] = pinnedRows }
     let held = nests(active)
     let flat = held.flatMap { $0 }
     func strongest(_ rows: [ListRow]) -> Stage { rows.map { stage(($0.key, $0.item)) }.min()! }
@@ -78,6 +84,29 @@ private func nests(_ list: [Entry]) -> [[ListRow]] {
         walk(e, 0)
     }
     return out
+}
+
+/// Pinned, or under a pinned ancestor and not set aside itself — the desktop's
+/// `splitPinned`. A nest follows its pin whole, so neither half splits one.
+private func splitPinned(_ list: [Entry]) -> (pinned: [Entry], rest: [Entry]) {
+    let byKey = Dictionary(list.map { ($0.key, $0.item) }, uniquingKeysWith: { a, _ in a })
+    func underPin(_ e: Entry) -> Bool {
+        if e.item.aside == true { return false }
+        // Guarded, so a cycle in the index costs an odd grouping, never a hang.
+        var seen = Set<SessionKey>()
+        var at: Entry? = e
+        while let cur = at, seen.insert(cur.key).inserted {
+            if cur.item.pinned == true { return true }
+            at = cur.item.parentSessionId.flatMap { id in
+                let k = SessionKey(server: cur.key.server, id: id)
+                return byKey[k].map { (k, $0) }
+            }
+        }
+        return false
+    }
+    var pinned: [Entry] = [], rest: [Entry] = []
+    for e in list { if underPin(e) { pinned.append(e) } else { rest.append(e) } }
+    return (pinned, rest)
 }
 
 /// Set aside by the reader, or untouched three days with nothing below still

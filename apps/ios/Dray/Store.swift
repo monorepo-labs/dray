@@ -138,7 +138,13 @@ final class Store {
     @ObservationIgnored var onRemoving: (Server) -> Void = { _ in }
     @ObservationIgnored private let path = NWPathMonitor()
     @ObservationIgnored private var reading: Set<UUID> = []
+    /// Sessions this phone deleted. A read or event already on its way when the delete
+    /// landed still names one, and must not draw it back as a row nothing can open.
+    // ponytail: never cleared; ids are unique and a launch deletes a handful.
+    @ObservationIgnored private var deleted: Set<SessionKey> = []
     @ObservationIgnored private var statuses: [SessionKey: StatusEvent] = [:]
+    /// Status events heard per session, so a write waiting on its answer can tell one landed meanwhile.
+    @ObservationIgnored private var statusHeard: [SessionKey: Int] = [:]
     @ObservationIgnored private var connections: [UUID: Connection] = [:]
     @ObservationIgnored private var marksAt: [ProjectKey: Date] = [:]
     @ObservationIgnored private var marking: Set<ProjectKey> = []
@@ -734,7 +740,7 @@ final class Store {
             var next = items.filter { $0.key.server != server || $0.value.archived == true }
             for item in list {
                 let key = SessionKey(server: server, id: item.sessionId)
-                next[key] = merged(key, item)
+                if !deleted.contains(key) { next[key] = merged(key, item) }
             }
             items = next
             loadErrors[server] = nil
@@ -764,7 +770,7 @@ final class Store {
     /// Writes an entry read off the index. A status event that arrived while
     /// the read was out is newer than it, so it wins.
     private func store(_ key: SessionKey, _ read: SessionItem) {
-        items[key] = merged(key, read)
+        if !deleted.contains(key) { items[key] = merged(key, read) }
     }
 
     private func merged(_ key: SessionKey, _ read: SessionItem) -> SessionItem {
@@ -791,7 +797,7 @@ final class Store {
                 // The index lands before the bots, and a bot's chat would draw as a task row until they do.
                 && (settled || known(key.server))
         }.map { (key: $0.key, item: $0.value) }
-        return stageRuns(list) { stage($0.key, $0.item) }
+        return stageRuns(list, pins: !settled) { stage($0.key, $0.item) }
     }
 
     /// The desktop's `sessionState`: a merged PR holds its session whatever
@@ -820,6 +826,106 @@ final class Store {
             items[key]?.status = "idle"
             _ = try? await connections[key.server]?.call("mark_session_read", ["sessionId": .string(key.id), "read": true], as: JSON.self)
         }
+    }
+
+    // MARK: Row menu — the desktop sidebar's `RowMenu`, through the same commands
+
+    /// Writes a row's flags. The answer replaces the row here; `session_changed` carries it to other clients.
+    func setFlags(_ key: SessionKey, _ flags: [String: JSON]) async {
+        do {
+            let item = try await call(key.server, "set_session_flags", flags.merging(["sessionId": .string(key.id)]) { $1 },
+                                      as: SessionItem?.self)
+            if let item { items[key] = merged(key, item) }
+        } catch { lastError = error.localizedDescription }
+    }
+
+    /// Takes a read, finished session's unread mark back. Not echoed by the server, so set here too,
+    /// and put back where the write failed or moved nothing (`null`), or it would vanish on the next read.
+    func markUnread(_ key: SessionKey) async {
+        let was = items[key]?.status, heard = statusHeard[key]
+        items[key]?.status = "completed"
+        // Only where no status event landed meanwhile: one is newer than `was`, and a turn
+        // finishing elsewhere makes the server answer null with a real unread mark to keep.
+        func restore(_ was: String?) {
+            if let was, statusHeard[key] == heard { items[key]?.status = was }
+        }
+        do {
+            let moved = try await call(key.server, "mark_session_read", ["sessionId": .string(key.id), "read": false], as: JSON.self)
+            if moved == .null { restore(was) }
+        } catch {
+            restore(was)
+            lastError = error.localizedDescription
+        }
+    }
+
+    /// Copies a session onto a new id, `worktree` giving the copy a tree of its own.
+    /// Answers the fork's key; nothing spawns until its first send.
+    func fork(_ key: SessionKey, worktree: Bool) async -> SessionKey? {
+        do {
+            // The app picks the id and the CLI adopts it, as for a new session.
+            let item: SessionItem = try await call(key.server, "fork_session", [
+                "sessionId": .string(key.id), "forkId": .string(UUID().uuidString.lowercased()), "worktree": .bool(worktree),
+            ], timeout: .seconds(120))
+            created(key.server, item)
+            return SessionKey(server: key.server, id: item.sessionId)
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// Cuts a spawned session loose from its parent, so the list stops nesting it.
+    func detach(_ key: SessionKey) async {
+        do {
+            if let item = try await call(key.server, "detach_session", ["sessionId": .string(key.id)], as: SessionItem?.self) {
+                items[key] = merged(key, item)
+            }
+        } catch { lastError = error.localizedDescription }
+    }
+
+    /// The bots a row can be handed to: on its own server, with a chat to hang under.
+    /// None for a settled row, a bot's own chat or a task already in a bot's tree —
+    /// the server refuses each, so the menu never offers it (`attach_to_bot`).
+    func attachTargets(_ key: SessionKey, _ item: SessionItem) -> [Bot] {
+        guard item.archived != true, !inBotTree(key) else { return [] }
+        return (bots[key.server] ?? []).filter { !botChat(key.server, $0).isEmpty }
+    }
+
+    /// Whether `key` is a bot's chat or descends from one, through parents this
+    /// server lists. Bounded as the server's walk is, so a cycle costs a wrong answer.
+    private func inBotTree(_ key: SessionKey) -> Bool {
+        var at: SessionKey? = key
+        for _ in 0..<8 {
+            guard let k = at, let item = items[k] else { return false }
+            if bot(k) != nil { return true }
+            at = (item.parentSessionId ?? item.adoptedBy).map { SessionKey(server: k.server, id: $0) }
+        }
+        return false
+    }
+
+    /// Hands a task to a bot, detach's reverse: it comes back hidden under the bot's chat,
+    /// which takes it off the list and into the bot's Tasks.
+    func attach(_ key: SessionKey, to bot: Bot) async {
+        do {
+            let item = try await call(key.server, "attach_session", ["sessionId": .string(key.id), "bot": .string(bot.id)],
+                                      as: SessionItem?.self)
+            if let item { items[key] = merged(key, item) }
+        } catch { lastError = error.localizedDescription }
+    }
+
+    /// Deletes a session for good, its hidden children with it; false where the server refused.
+    /// No event says so to other clients, so the row goes here once the server agrees.
+    func delete(_ key: SessionKey) async -> Bool {
+        do {
+            _ = try await call(key.server, "delete_session", ["sessionId": .string(key.id)], as: JSON.self)
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+        deleted.insert(key)
+        items[key] = nil
+        asks[key] = nil
+        return true
     }
 
     /// Lets go of every transcript held but `kept`'s. The Island's close: held, each
@@ -1133,6 +1239,7 @@ final class Store {
             guard let s = try? decoder.decode(EventFrame<StatusEvent>.self, from: data).payload else { return }
             let key = SessionKey(server: server, id: s.sessionId)
             statuses[key] = s
+            statusHeard[key, default: 0] += 1
             notice(key)
             let ended = items[key]?.busy == true && s.status != "in_progress"
             // A turn ending is when a pull request appears.
@@ -1164,7 +1271,8 @@ final class Store {
             guard let sharing = try? decoder.decode(EventFrame<Sharing>.self, from: data).payload else { return }
             share(server, sharing.machines)
         case "session_created", "session_changed":
-            guard let item = try? decoder.decode(EventFrame<SessionItem>.self, from: data).payload else { return }
+            guard let item = try? decoder.decode(EventFrame<SessionItem>.self, from: data).payload,
+                  !deleted.contains(SessionKey(server: server, id: item.sessionId)) else { return }
             items[SessionKey(server: server, id: item.sessionId)] = item
             Task { await loadMarks(server, force: false, only: [item.projectPath]) }
             // `bots_changed` comes from the CLI alone, and a bot the app made is first seen as its chat.

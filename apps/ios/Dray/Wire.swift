@@ -172,6 +172,8 @@ struct SessionItem: Codable, Hashable {
     let adoptedBy: String?
     /// The routine this session is one run of: it sits in its bot's folder but is never the chat or a task.
     let routineRun: String?
+    /// A lazy fork the CLI has not carried out yet: it has run no turn, so there is nothing to mark unread.
+    let forkFrom: String?
 
     var busy: Bool { status == "in_progress" }
     var project: String { (projectPath as NSString).lastPathComponent }
