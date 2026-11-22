@@ -179,7 +179,15 @@ fun DeleteConfirm(row: ListRow, close: () -> Unit) {
         onDismissRequest = close,
         containerColor = Dray.card,
         title = { Text("Delete “${row.item.title.ifEmpty { "Untitled" }}”?", style = Dray.Font.headline) },
-        text = { Text("Its conversation goes for good.", style = Dray.Font.subhead.copy(color = Dray.secondary)) },
+        text = {
+            // Delete removes a session's worktree and its branch too (`SessionManager::delete`), so say what work goes with it.
+            // An unrun fork has no tree yet: the CLI makes it on the first send.
+            val tree = row.item.worktreeName != null && row.item.worktreeRemoved != true && row.item.forkFrom == null
+            Text(
+                if (tree) "Its conversation, worktree and branch go for good, uncommitted work included." else "Its conversation goes for good.",
+                style = Dray.Font.subhead.copy(color = Dray.secondary),
+            )
+        },
         confirmButton = {
             TextButton({
                 close()
