@@ -10,7 +10,9 @@ import MarkdownDoc from "@/components/MarkdownDoc";
 import { ChatSessionContext } from "@/hooks/useChatSession";
 import {
   answerFileClose,
+  closeDoc,
   filesDocKey,
+  isDirty,
   syncDoc,
   useDocs,
   useFileCloseQuestion,
@@ -83,6 +85,21 @@ export default function FileViewer({
     ? file.state.body.text
     : null;
   const lineCount = useMemo(() => (text === null ? 0 : text.split("\n").length), [text]);
+
+  // Markdown renders, and edits, only up to `read_doc`/`save_doc`'s cap. Past
+  // it a file draws as source in the virtualized viewer: rendered in one pass,
+  // a few MiB of markdown freezes the window (measured, 1.3 MiB), and a Save
+  // there would always fail. A draft already holding edits keeps the rendered
+  // view, so a file grown past the cap under it goes stale under the strip
+  // instead of hiding them; a clean one has nothing to lose and is dropped.
+  const mdStore = sessionId ? filesDocKey(sessionId) : null;
+  const draft = useDocs(mdStore).docs.find((d) => d.path === path);
+  const small = useMemo(() => text !== null && new Blob([text]).size <= MAX_DOC_BYTES, [text]);
+  const asMarkdown = text !== null && isMarkdownPath(path) && (small || (!!draft && isDirty(draft)));
+  const strayDraft = !asMarkdown && !!draft;
+  useEffect(() => {
+    if (strayDraft && mdStore) closeDoc(mdStore, path);
+  }, [strayDraft, mdStore, path]);
 
   // `onPostRender` hands back the *host* element, whose rows live in its shadow
   // root, so the query has to cross that boundary explicitly — the same reading
@@ -167,7 +184,7 @@ export default function FileViewer({
     );
   }
 
-  if (text !== null && isMarkdownPath(file.path)) {
+  if (asMarkdown && text !== null) {
     return <MarkdownFile path={file.path} text={text} sessionId={sessionId} onOpen={onOpen} />;
   }
 
@@ -320,10 +337,7 @@ function MarkdownFile({
     };
   }, [path, sessionId, onOpen]);
 
-  // `read_doc` and `save_doc` refuse past 1 MiB where Files reads up to 4, so a
-  // larger file stays read-only rather than offering a Save that always fails.
-  const editable = useMemo(() => new Blob([text]).size <= MAX_DOC_BYTES, [text]);
-  const store = sessionId && editable ? filesDocKey(sessionId) : null;
+  const store = sessionId ? filesDocKey(sessionId) : null;
   const doc = useDocs(store).docs.find((d) => d.path === path);
   // Every read of the file lands here, the first included; `syncDoc` keeps a
   // draft through the ones that would otherwise throw it away.

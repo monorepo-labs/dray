@@ -65,6 +65,13 @@ describe("withDiskText", () => {
     expect(next.stale).toBe(true);
   });
 
+  // The Files view feeds every read through here; a new object each time
+  // would re-render it into reading again.
+  it("hands back the same body for a doc already stale", () => {
+    const stale = ready("old", "mine", { stale: true });
+    expect(withDiskText(stale, "theirs")).toBe(stale);
+  });
+
   // `base` is what the next save sends as `expect`. Moving it to the disk text
   // would make the backend's compare-and-swap pass and quietly overwrite the
   // write that caused the flag in the first place.

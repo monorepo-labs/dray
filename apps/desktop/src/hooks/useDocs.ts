@@ -73,7 +73,8 @@ export function withDiskText(body: Ready, disk: string): Ready {
   if (body.draft === body.base) {
     return { ...body, base: disk, draft: disk, stale: false };
   }
-  return { ...body, stale: true };
+  // The same body where nothing moves, so a repeat read is no change at all.
+  return body.stale ? body : { ...body, stale: true };
 }
 
 /// Open docs, per session, in the order they were opened.
