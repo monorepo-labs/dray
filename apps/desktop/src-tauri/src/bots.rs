@@ -1579,6 +1579,12 @@ pub fn mark_dray_prompt(session_id: &str, prompt: &str) {
     DRAY_PROMPTS.lock().unwrap().push((session_id.to_string(), prompt.to_string()));
 }
 
+/// Whether `prompt` is Dray's own prompt for `session_id`, leaving the mark for
+/// [`take_dray_prompt`]: a prompt queued behind a running turn is logged later.
+pub fn is_dray_prompt(session_id: &str, prompt: &str) -> bool {
+    DRAY_PROMPTS.lock().unwrap().iter().any(|(s, p)| s == session_id && p == prompt)
+}
+
 /// Whether `prompt`, now being logged in `session_id`, is Dray's own, and forgets it.
 pub fn take_dray_prompt(session_id: &str, prompt: &str) -> bool {
     let mut marks = DRAY_PROMPTS.lock().unwrap();

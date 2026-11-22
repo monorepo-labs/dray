@@ -1982,7 +1982,13 @@ from: MessageSender | null,
  * the boundary would put a network call — and its failure — inside the
  * flush.
  */
-issues: Array<IssueRef>, };
+issues: Array<IssueRef>, 
+/**
+ * Dray's own prompt, which nobody typed: a bot's kickoff or review, or a
+ * reaction told to the agent. No client draws it and a cancel never takes
+ * it back, as its logged event draws nothing either.
+ */
+hidden?: boolean, };
 
 /**
  * What the This Mac row draws. No token: it is asked for on Copy, and never
