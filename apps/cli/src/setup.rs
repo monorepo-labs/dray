@@ -408,11 +408,12 @@ fn find(bin: &str) -> Option<PathBuf> {
 }
 
 /// What a bare name is found under: itself, or on Windows the launchers npm
-/// and the installers leave (`claude.exe`, `codex.cmd`).
+/// and the installers leave (`claude.exe`, `codex.cmd`). Never the bare name
+/// there: npm leaves a `sh` script of that name beside the shim.
 #[cfg(unix)]
 const EXE_SUFFIXES: [&str; 1] = [""];
 #[cfg(windows)]
-const EXE_SUFFIXES: [&str; 3] = [".exe", ".cmd", ""];
+const EXE_SUFFIXES: [&str; 2] = [".exe", ".cmd"];
 
 #[cfg(unix)]
 fn executable(meta: &std::fs::Metadata) -> bool {
@@ -693,7 +694,7 @@ pub fn serve(args: Run) -> Result<(), String> {
 
 fn beside(name: &str) -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("could not find the running dray binary: {e}"))?;
-    let bin = exe.with_file_name(name);
+    let bin = exe.with_file_name(format!("{name}{}", std::env::consts::EXE_SUFFIX));
     if bin.is_file() {
         Ok(bin)
     } else {

@@ -1261,7 +1261,7 @@ fn update(args: Update) -> Result<(), String> {
 /// the server left behind. No `dray-serve` there is no pair to keep, so this
 /// binary's tag; one too old to say is reinstalled.
 fn serve_tag_beside(dir: &std::path::Path) -> Option<String> {
-    let serve = dir.join("dray-serve");
+    let serve = dir.join(format!("dray-serve{}", std::env::consts::EXE_SUFFIX));
     if !serve.exists() {
         return Some(current_tag());
     }
