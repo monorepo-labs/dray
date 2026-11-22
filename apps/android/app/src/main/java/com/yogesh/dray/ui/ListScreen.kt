@@ -10,7 +10,9 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,6 +56,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -107,6 +111,8 @@ fun ListScreen(
     val connected = store.live.count { store.serverState[it.id] == ConnState.Connected }
 
     var newBot by remember { mutableStateOf(false) }
+    // The row whose Delete is waiting on its confirm.
+    var deleting by remember { mutableStateOf<ListRow?>(null) }
     LoneBot(settled, openSession, startBot)
     // Read whatever the view, and again as servers come up: the Settled button shows only when there are some,
     // and an empty live list counts what was settled today.
@@ -230,6 +236,10 @@ fun ListScreen(
                 runs.forEachIndexed { r, run ->
                     if (left <= 0) return@forEachIndexed
                     if (r > 0) item("gap-$r") { Spacer(Modifier.height(16.dp)) }
+                    // The one run with a heading: nothing else on the rows says why they lead. In line with the titles, past the rail.
+                    if (run.stage == Stage.Pinned) item("pinned") {
+                        Text("Pinned", Modifier.padding(start = 22.dp, bottom = 4.dp), style = Dray.Font.footnote.copy(color = Dray.secondary))
+                    }
                     // A nest is never cut: the page runs on past rows hanging under one already shown.
                     var cut = run.rows.size
                     if (run.rows.size > left) {
@@ -240,8 +250,18 @@ fun ListScreen(
                     val rowsHere = run.rows.take(cut)
                     rowsHere.forEachIndexed { i, row ->
                         item(row.key.toString()) {
-                            Box(Modifier.alpha(if (run.stage == Stage.Aside) 0.3f else 1f)) {
-                                SessionRow(rowsHere, i) { openSession(row.key) }
+                            var menu by remember { mutableStateOf(false) }
+                            Box {
+                                Box(Modifier.alpha(if (run.stage == Stage.Aside) 0.3f else 1f)) {
+                                    SessionRow(rowsHere, i, longPress = { menu = true }) { openSession(row.key) }
+                                }
+                                RowMenu(
+                                    menu, { menu = false }, row,
+                                    aside = run.stage == Stage.Aside || row.item.aside == true,
+                                    inheritsPin = run.stage == Stage.Pinned && row.depth > 0 && row.item.pinned != true,
+                                    opened = openSession,
+                                    delete = { deleting = row },
+                                )
                             }
                         }
                         if (!settled) store.asks[row.key]?.firstOrNull()?.let { ask ->
@@ -259,6 +279,7 @@ fun ListScreen(
         }
     }
     if (newBot) BotSheet(editing = null, close = { newBot = false }, started = openSession)
+    deleting?.let { DeleteConfirm(it) { deleting = null } }
 }
 
 /**
@@ -297,9 +318,11 @@ private fun ProjectStrip(names: List<String>, picked: String?, pick: (String?) -
 }
 
 /** One task: its rail mark, the elbows hanging it under its parent, its PR glyph, title and what it is doing. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SessionRow(rows: List<ListRow>, i: Int, onClick: () -> Unit) {
+private fun SessionRow(rows: List<ListRow>, i: Int, longPress: () -> Unit, onClick: () -> Unit) {
     val store = LocalStore.current
+    val haptics = LocalHapticFeedback.current
     val row = rows[i]
     val item = row.item
     val mark = store.prMark(row.key, item)
@@ -308,7 +331,10 @@ private fun SessionRow(rows: List<ListRow>, i: Int, onClick: () -> Unit) {
             .fillMaxWidth()
             .padding(horizontal = 8.dp)
             .clip(RoundedCornerShape(Dray.Radius.md))
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                longPress()
+            })
             .height(44.dp)
             .padding(end = 12.dp),
         verticalAlignment = Alignment.CenterVertically,

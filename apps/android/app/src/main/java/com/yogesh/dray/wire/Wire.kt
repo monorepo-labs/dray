@@ -76,6 +76,8 @@ data class SessionItem(
     val need: Need? = null,
     val adoptedBy: String? = null,
     val routineRun: String? = null,
+    /** A lazy fork the CLI has not carried out yet: it has run no turn, so there is nothing to mark unread. */
+    val forkFrom: String? = null,
 ) {
     val busy: Boolean get() = status == "in_progress"
     val project: String get() = projectPath.trimEnd('/').substringAfterLast('/')

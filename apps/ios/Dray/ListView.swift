@@ -31,8 +31,13 @@ struct SessionList: View {
     @Environment(NewTask.self) private var task
     @Binding var selection: SessionKey?
     @Binding var sheet: RootSheet?
+    /// This launch's one chance to open a lone bot's chat; anything the reader does first spends it.
+    /// The root's, so the new task page's dock spends it too.
+    @Binding var autoOpen: Bool
     /// The list is a split view's sidebar, beside an open chat, rather than the whole screen.
     var sidebar = false
+    /// Opens the new task page in the main pane.
+    var newTaskPage: () -> Void = {}
     @State private var project: String?
     @State private var mode = ListMode.live
     @State private var drafts: [(server: UUID, draft: DraftItem)] = []
@@ -45,8 +50,6 @@ struct SessionList: View {
     /// The pull requests or issues page, opened over the list.
     @State private var listPage: ListPage?
     @Environment(\.scenePhase) private var phase
-    /// This launch's one chance to open a lone bot's chat; anything the reader does first spends it.
-    @State private var autoOpen = true
     /// The row whose Delete is waiting on its confirm.
     @State private var deleting: ListRow?
 
@@ -108,12 +111,13 @@ struct SessionList: View {
                         // No chat yet: the dock aims at its folder, and the first message starts one.
                         Button {
                             task.aim(at: b.bot, on: b.server)
-                            if hideSessions { starting = BotStart(server: b.server, bot: b.bot) }
+                            // Beside the main pane, the new task page is where that dock is.
+                            if hideSessions { starting = BotStart(server: b.server, bot: b.bot) } else { newTaskPage() }
                         } label: {
                             BotListRow(server: b.server, bot: b.bot, chat: nil)
                         }
                         .buttonStyle(RowButtonStyle())
-                        .sessionRow(selected: task.bot?.bot.id == b.bot.id)
+                        .sessionRow(selected: selection == nil && task.bot?.bot.id == b.bot.id)
                     }
                 }
                 // Under the bots, since no filter narrows them; its top padding is the gap after them.
@@ -175,7 +179,7 @@ struct SessionList: View {
             .focusable(false)
             .contentMargins(.top, Theme.Space.m, for: .scrollContent)
             // The resting dock's height, so the last row scrolls clear of the orb.
-            .contentMargins(.bottom, dock ? 160 : 0, for: .scrollContent)
+            .contentMargins(.bottom, dock ? (sidebar ? 96 : 160) : 0, for: .scrollContent)
             // The breaks between runs are 16pt, under the 44pt a list row otherwise takes.
             .environment(\.defaultMinListRowHeight, 1)
             .themedList()
@@ -189,9 +193,25 @@ struct SessionList: View {
             .overlay { if blank { empty(filter) } }
         }
         .overlay(alignment: .bottom) {
-            if dock {
+            // Beside the main pane the orb is the new task page's, opened from here.
+            if dock && sidebar {
+                Button {
+                    task.bot = nil
+                    newTaskPage()
+                } label: {
+                    Label("New task", systemImage: "square.and.pencil")
+                }
+                .buttonStyle(DockButtonStyle())
+                .padding(.horizontal, Theme.Space.l)
+                .padding(.top, Theme.Space.xxl)
+                .padding(.bottom, Theme.Space.l)
+                .background {
+                    LinearGradient(stops: [.init(color: Theme.page.opacity(0), location: 0), .init(color: Theme.page, location: 0.4)],
+                                   startPoint: .top, endPoint: .bottom).ignoresSafeArea()
+                }
+            } else if dock {
                 // Dim while nothing is connected: the screen above says why.
-                VoiceDock(task: task, started: { selection = $0 }, engaged: { autoOpen = false }, slim: sidebar).opacity(blank && !anyConnected ? 0.3 : 1)
+                VoiceDock(task: task, started: { selection = $0 }, engaged: { autoOpen = false }).opacity(blank && !anyConnected ? 0.3 : 1)
             }
         }
         // A new view or filter starts on its first page.
@@ -224,6 +244,7 @@ struct SessionList: View {
                         // The tag lands in the dock's words, where project and agent are still to pick: the desktop's Work on.
                         task.text = task.hasText ? "\(task.text) \(tag) " : "\(tag) "
                         listPage = nil
+                        newTaskPage()
                     }
                 }
             }
@@ -319,6 +340,7 @@ struct SessionList: View {
             Button {
                 task.open(entry.draft, on: entry.server)
                 mode = .live
+                newTaskPage()
             } label: {
                 RowLine(title: entry.draft.title, time: entry.draft.created.flatMap(parseDate))
             }
@@ -376,6 +398,7 @@ struct SessionList: View {
 
     /// What the list says with no rows: no server yet, one coming up, or nothing started.
     private var anyConnected: Bool { store.live.contains { store.serverState[$0.id] == .connected } }
+    private var startHint: String { sidebar ? "Tap New task to start one." : "Tap the orb to start one." }
 
     /// The whole screen when the live list has nothing: pair, connecting, can't reach,
     /// or nothing to do yet — the last pointing at the orb, or at today's settled work.
@@ -436,10 +459,10 @@ struct SessionList: View {
                                 title: "All clear", message: today.count == 1 ? "1 settled today." : "\(today.count) settled today.")
                 } else if let filter {
                     EmptyScreen(art: EmptyArt(kind: .project), title: "Nothing in \(filter)",
-                                message: "Tap the orb to start one.", pointsAtOrb: true)
+                                message: startHint, pointsAtOrb: true)
                 } else {
                     EmptyScreen(art: EmptyArt(kind: .tasks), title: "No tasks yet",
-                                message: "Tap the orb to start one.", pointsAtOrb: true)
+                                message: startHint, pointsAtOrb: true)
                 }
             }
             .padding(.horizontal, 40)
