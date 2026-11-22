@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { centring, inkBox } from "@/lib/emojiInk";
+import { centring, inkBox, opticalDrop } from "@/lib/emojiInk";
 
 /// An RGBA buffer `width` wide with the given pixels inked at `alpha`.
 function buffer(width: number, height: number, inked: [number, number][], alpha = 255) {
@@ -21,19 +21,23 @@ describe("inkBox", () => {
 });
 
 describe("centring", () => {
-  it("moves ink sitting low and right back to the box's centre", () => {
-    // An 18px box, baseline 14px down; ink from 2px left of centre's right, low.
-    const ink = { left: 2, right: 18, top: -12, bottom: 4 };
-    // Ink centre (10, 14 - 4 = 10) against the box centre (9, 9).
-    expect(centring(ink, 18, 18, 14)).toEqual({ x: -1, y: -1 });
+  it("moves ink sitting low up to the box's middle", () => {
+    // An 18px box, baseline 14px down; ink centre at 14 - 4 = 10 against 9.
+    expect(centring({ left: 2, right: 18, top: -12, bottom: 4 }, 18, 14)).toBe(-1);
   });
 
   it("drops the ink further where it reads high centred", () => {
-    const ink = { left: 0, right: 18, top: -14, bottom: 4 };
-    expect(centring(ink, 18, 18, 14, 2.52)).toEqual({ x: 0, y: 2.5 });
+    expect(centring({ left: 0, right: 18, top: -14, bottom: 4 }, 18, 14, 1.008)).toBe(1);
   });
 
   it("rounds to half a pixel", () => {
-    expect(centring({ left: 0, right: 17, top: -14, bottom: 3 }, 18, 18, 14)).toEqual({ x: 0.5, y: 0.5 });
+    expect(centring({ left: 0, right: 17, top: -14, bottom: 3 }, 18, 14)).toBe(0.5);
+  });
+});
+
+describe("opticalDrop", () => {
+  it("lifts every reaction half a pixel at 18px and sinks the heart one past that", () => {
+    expect(opticalDrop("👍") * 18).toBeCloseTo(-0.5, 1);
+    expect(opticalDrop("❤️") * 18).toBeCloseTo(0.5, 1);
   });
 });

@@ -24,7 +24,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
@@ -84,8 +83,8 @@ private fun Demo() {
 /** The nudge [ReactionBadge] applies to `emoji`, in pixels. */
 @Composable
 private fun Nudge(emoji: String) {
-    var at by remember { mutableStateOf<Offset?>(null) }
+    var at by remember { mutableStateOf<Float?>(null) }
     // Laid out off screen, the way the badge lays it out, to read the same numbers.
     Box(Modifier.size(0.dp)) { Text(emoji, Modifier.wrapContentSize(unbounded = true).graphicsLayer { alpha = 0f }, style = reactionStyle, onTextLayout = { at = centring(emoji, it) }) }
-    Text(at?.let { "${(it.x * 10).roundToInt() / 10f}, ${(it.y * 10).roundToInt() / 10f}" } ?: "…", style = Dray.Font.footnote.copy(color = Dray.tertiary))
+    Text(at?.let { "${(it * 10).roundToInt() / 10f}" } ?: "…", style = Dray.Font.footnote.copy(color = Dray.tertiary))
 }

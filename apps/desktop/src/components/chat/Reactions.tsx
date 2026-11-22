@@ -3,28 +3,28 @@ import { SmilePlus } from "lucide-react";
 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { centring, inkOf, OPTICAL_DROP } from "@/lib/emojiInk";
+import { centring, inkOf, opticalDrop } from "@/lib/emojiInk";
 import { REACTION_LABELS, REACTIONS } from "@/lib/reactions";
 import { cn } from "@/lib/utils";
 import type { AgentEvent } from "@/types/events";
 
 /// A reaction, as iMessage draws a tapback: a round chip on a corner of the
 /// bubble, filled with `--reaction` (white on Dray light, the panel elsewhere)
-/// and edged by a hairline, the emoji at about half its height and centred by
-/// its ink (see [emojiInk]).
+/// and edged by a hairline, the emoji at about half its height and centred
+/// upright by its ink (see [emojiInk]).
 export function ReactionBadge({ emoji, mine = false, className }: { emoji: string; mine?: boolean; className?: string }) {
   const glyph = useRef<HTMLSpanElement>(null);
   const baseline = useRef<HTMLSpanElement>(null);
-  const [nudge, setNudge] = useState<{ x: number; y: number } | null>(null);
+  const [nudge, setNudge] = useState<number | null>(null);
   useLayoutEffect(() => {
     const el = glyph.current;
     const mark = baseline.current;
     if (!el || !mark) return;
     const s = getComputedStyle(el);
     const ink = inkOf(emoji, `${s.fontStyle} ${s.fontWeight} ${s.fontSize} ${s.fontFamily}`);
-    const drop = (OPTICAL_DROP[emoji] ?? 0) * parseFloat(s.fontSize);
+    const drop = opticalDrop(emoji) * parseFloat(s.fontSize);
     // Offsets, not client rects: those take the badge's zoom-in mid-flight.
-    setNudge(ink && centring(ink, el.offsetWidth, el.offsetHeight, mark.offsetTop, drop));
+    setNudge(ink && centring(ink, el.offsetHeight, mark.offsetTop, drop));
   }, [emoji]);
   return (
     <span
@@ -39,7 +39,7 @@ export function ReactionBadge({ emoji, mine = false, className }: { emoji: strin
       <span
         ref={glyph}
         className="relative"
-        style={nudge ? { transform: `translate(${nudge.x}px, ${nudge.y}px)` } : undefined}
+        style={nudge ? { transform: `translateY(${nudge}px)` } : undefined}
       >
         {emoji}
         {/* An empty inline-block's bottom edge sits on the baseline, which is how

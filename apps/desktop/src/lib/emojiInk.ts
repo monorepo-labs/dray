@@ -65,21 +65,19 @@ export function inkOf(text: string, font: string): Box | null {
   return box;
 }
 
-/// How far below its ink's centre an emoji must sit to look centred, in ems.
-/// The heart's point leaves the middle of its box well above its mass, so
-/// centred by box it reads high; judged by eye on Apple's font at the badge's
-/// 18px, where 1px down (2px with its ink centring) looked centred, and
-/// Android's heart has the same shape.
-export const OPTICAL_DROP: Record<string, number> = { "❤️": 0.056 };
+/// How far below its ink's centre `emoji` must sit to look centred, in ems,
+/// judged by eye on Apple's font at the badge's 18px. Centred exactly, every
+/// emoji read half a pixel low, so all rise by that; the heart's point leaves
+/// the middle of its box above its mass, so it alone sinks a pixel past that.
+export function opticalDrop(emoji: string): number {
+  return emoji === "❤️" ? 0.028 : -0.028;
+}
 
-/// How far to move a text box `width` by `height`, its baseline `baseline` from
-/// its top, so `ink` (from [inkOf]) sits at the box's centre, then `drop` pixels
-/// lower. Rounded to half a pixel, which a Retina screen draws and a plain one
-/// does not blur.
-export function centring(ink: Box, width: number, height: number, baseline: number, drop = 0): { x: number; y: number } {
-  const half = (n: number) => Math.round(n * 2) / 2;
-  return {
-    x: half(width / 2 - (ink.left + ink.right) / 2),
-    y: half(height / 2 - (baseline + (ink.top + ink.bottom) / 2) + drop),
-  };
+/// How far down to move a text box `height` tall, its baseline `baseline` from
+/// its top, so `ink` (from [inkOf]) sits at its middle, then `drop` pixels
+/// lower. Vertical alone: an emoji's shape is lopsided sideways by design (a
+/// thumb, a party popper), and centring that ink read as a shift. Rounded to
+/// half a pixel, which a Retina screen draws and a plain one does not blur.
+export function centring(ink: Box, height: number, baseline: number, drop = 0): number {
+  return Math.round((height / 2 - (baseline + (ink.top + ink.bottom) / 2) + drop) * 2) / 2;
 }

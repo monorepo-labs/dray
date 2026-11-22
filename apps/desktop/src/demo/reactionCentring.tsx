@@ -25,7 +25,7 @@ function Readout({ at }: { at: React.RefObject<HTMLDivElement | null> }) {
   useEffect(() => {
     const t = setTimeout(() => {
       const glyph = at.current?.querySelector<HTMLElement>("[role=img] > span");
-      setText(glyph?.style.transform.replace(/translate\((.*)\)/, "$1") || "no nudge");
+      setText(glyph?.style.transform.replace(/translateY\((.*)\)/, "$1") || "0px");
     }, 300);
     return () => clearTimeout(t);
   }, [at]);

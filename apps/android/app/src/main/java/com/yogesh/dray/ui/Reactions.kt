@@ -30,7 +30,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -62,11 +61,11 @@ val reactionStyle = Dray.Font.body.copy(fontSize = 18.sp, lineHeight = 20.sp)
 
 /**
  * A reaction, as a messenger draws one: a round chip in the panel's colour, a hairline edge, the
- * emoji at about half its height and centred by its ink ([inkOf]), not by its text box.
+ * emoji at about half its height and centred upright by its ink ([inkOf]), not by its text box.
  */
 @Composable
 fun ReactionBadge(emoji: String, mine: Boolean = false) {
-    var nudge by remember(emoji) { mutableStateOf(Offset.Zero) }
+    var nudge by remember(emoji) { mutableStateOf(0f) }
     Box(
         Modifier.size(40.dp).clip(CircleShape).background(Dray.card).border(1.dp, Dray.border, CircleShape)
             .semantics { contentDescription = "${if (mine) "You" else "Bot"} reacted: ${reactionLabels[emoji] ?: emoji}" },
@@ -74,7 +73,7 @@ fun ReactionBadge(emoji: String, mine: Boolean = false) {
     ) {
         Text(
             emoji,
-            Modifier.graphicsLayer { translationX = nudge.x; translationY = nudge.y },
+            Modifier.graphicsLayer { translationY = nudge },
             style = reactionStyle,
             onTextLayout = { layout -> nudge = centring(emoji, layout) },
         )
@@ -82,19 +81,20 @@ fun ReactionBadge(emoji: String, mine: Boolean = false) {
 }
 
 /**
- * How far below its ink's centre an emoji must sit to look centred, in ems: the desktop's
- * `OPTICAL_DROP`. The heart's point leaves the middle of its box well above its mass.
+ * How far below its ink's centre `emoji` must sit to look centred, in ems: the desktop's
+ * `opticalDrop`, judged on Apple's font. Centred exactly, every emoji read half a pixel low at
+ * 18px; the heart's point leaves the middle of its box above its mass, so it sinks a pixel past.
  */
-private val opticalDrop = mapOf("❤️" to 0.056f)
+private fun opticalDrop(emoji: String) = if (emoji == "❤️") 0.028f else -0.028f
 
-/** How far to move `emoji`'s laid-out text so its ink sits at the text box's centre, by eye. */
-fun centring(emoji: String, layout: TextLayoutResult): Offset {
+/**
+ * How far down to move `emoji`'s laid-out text so its ink sits at the box's middle, by eye.
+ * Vertical alone: an emoji is lopsided sideways by design, and centring that ink read as a shift.
+ */
+fun centring(emoji: String, layout: TextLayoutResult): Float {
     val px = with(layout.layoutInput.density) { layout.layoutInput.style.fontSize.toPx() }
-    val ink = inkOf(emoji, px) ?: return Offset.Zero
-    return Offset(
-        layout.size.width / 2f - (ink.left + ink.right) / 2f,
-        layout.size.height / 2f - (layout.firstBaseline + (ink.top + ink.bottom) / 2f) + (opticalDrop[emoji] ?: 0f) * px,
-    )
+    val ink = inkOf(emoji, px) ?: return 0f
+    return layout.size.height / 2f - (layout.firstBaseline + (ink.top + ink.bottom) / 2f) + opticalDrop(emoji) * px
 }
 
 private val measured = HashMap<Pair<String, Float>, RectF?>()
