@@ -175,6 +175,21 @@ function ModelRow({
           )}
           <span aria-hidden>·</span>
           <span>{formatSize(model.sizeBytes)}</span>
+          {model.desktopOnlyLicense && (
+            <>
+              <span aria-hidden>·</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void openUrl(`https://huggingface.co/${model.repo}`);
+                }}
+                className="cursor-pointer underline decoration-dotted underline-offset-2 hover:text-foreground"
+              >
+                {model.desktopOnlyLicense} · Noncommercial desktop use only
+              </button>
+            </>
+          )}
         </p>
       </div>
 
@@ -186,8 +201,8 @@ function ModelRow({
           give up nothing, so the buttons can grow into the gap between. */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <ScoreBar label="Speed" value={model.speed} />
-          <ScoreBar label="Accuracy" value={model.accuracy} />
+          {model.speed != null && <ScoreBar label="Speed" value={model.speed} />}
+          {model.accuracy != null && <ScoreBar label="Accuracy" value={model.accuracy} />}
         </div>
 
         {/* Every button here sits inside the row's own click target, so the
