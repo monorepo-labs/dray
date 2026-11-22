@@ -21,10 +21,18 @@ suspend fun Store.setFlags(key: SessionKey, flags: Map<String, Boolean>) {
     }
 }
 
-/** Takes a read, finished session's unread mark back. Not echoed by the server, so set here too. */
+/**
+ * Takes a read, finished session's unread mark back. Not echoed by the server, so set here once
+ * it agrees: set first, an offline phone showed a mark the next read took away.
+ */
 suspend fun Store.markUnread(key: SessionKey) {
+    try {
+        call(key.server, "mark_session_read", jsonOf("sessionId" to key.id, "read" to false))
+    } catch (e: Exception) {
+        lastError = e.message
+        return
+    }
     items[key]?.let { setItem(key, it.copy(status = "completed")) }
-    runCatching { call(key.server, "mark_session_read", jsonOf("sessionId" to key.id, "read" to false)) }
 }
 
 /**
