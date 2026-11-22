@@ -1795,12 +1795,13 @@ body.session-drag * {
   --foot-top: 6px;
 }
 
-/* Off the sheet's edge, with the sidebar shut, the first tab's left foot
-   reaches past the row's own box: the row clips everywhere but there, or the
-   foot is cut to a stub and the tab looks to float beside the sheet. */
-[role="tablist"]:has(> .tab-strip):not([data-flush]) {
+/* Right after the sidebar toggle (sidebar shut), the first tab's left foot
+   reaches past the row's own box: the row clips everywhere but the foot's
+   10px square, or the foot is cut to a stub and the tab looks to float beside
+   the sheet. A dragged tab or a hover pill stays off the toggle. */
+[role="tablist"][data-after-toggle] {
   overflow: visible;
-  clip-path: inset(0 0 0 -10px);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, -10px 100%, -10px calc(100% - 10px), 0 calc(100% - 10px));
 }
 
 /* The frame's fill outside the sheet's top-left curve, at whatever radius. */
@@ -1832,13 +1833,13 @@ body.session-drag * {
   );
 }
 
-/* A page with no tabs, sidebar shut: the leftmost card drops under the header
-   as a task view's does, and one lit tab spans its top from just past the
-   header's controls (`--notch-w`), its left foot on the card as a first tab's
-   is, its right side running straight down into the card's, the first tab's
-   flush join mirrored. The frame fills the band the card left. */
+/* A page with no tabs, sidebar shut: the cards sit under the header as a task
+   view's do (`AppShell`), and one lit tab spans the leftmost one's top from
+   just past the header's controls (`--notch-w`), its left foot on the card as
+   a first tab's is, its right side running straight down into the card's, the
+   first tab's flush join mirrored. Only where the card has room for it
+   (`data-notch`); the tab is laid out either way, so the room can be read. */
 [data-notch] {
-  border-top: calc(var(--titlebar-h) - 0.5rem) solid var(--surface-frame);
   --sheet-tr: 0px;
   --glow-top: 8px;
   --foot-top: 6px;
@@ -1858,6 +1859,7 @@ body.session-drag * {
   z-index: 22;
   padding: 0;
   pointer-events: none;
+  visibility: hidden;
   /* Cut at the card's top, as the task view's row is at its floor: its drops
      below would draw a line across the card. And at its right border, as the
      flush first tab is at its left: the soft drop stops where the card's side,
@@ -1866,5 +1868,9 @@ body.session-drag * {
 
   &::after {
     --tab-r: 0px;
+  }
+
+  [data-notch] > & {
+    visibility: visible;
   }
 }

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { DROP_ATTR } from "@/lib/dragSession";
 import { cn } from "@/lib/utils";
@@ -63,7 +63,7 @@ export default function AppShell({
   sidebar,
   sidebarOpen = true,
   notch,
-  tall = false,
+  tall: pageTall = false,
   header,
   footer,
   panel,
@@ -77,16 +77,21 @@ export default function AppShell({
   mainCard,
   children,
 }: AppShellProps) {
-  // The leftmost card on a tall page, sidebar shut: under the header instead,
-  // with the page's own lit tab over it.
-  const pageTab = (on: boolean) => (on && notch ? { tall: false, notch } : { tall });
+  // A tall page with the sidebar shut sits under the header as a task view
+  // does, every card and the strip above them together, so nothing moves
+  // twice on the way between; its leftmost card wears the page's lit tab.
+  const notched = pageTall && !sidebarOpen && !!notch;
+  const tall = pageTall && !notched;
+  const pageTab = (leftmost: boolean) => (notched && leftmost ? notch : undefined);
   // A card of its own beside the sheet, with the frame showing between. Kept
   // mounted while shut, since the pane hides rather than unmounts.
   const gap = <div className="w-1.5 shrink-0 bg-surface-frame" />;
   const panelCard = panel && (
     <div className={cn("flex shrink-0", !panelOpen && "hidden")}>
       {!panelLeft && gap}
-      <Sheet {...pageTab(tall && !sidebarOpen && panelLeft)}>{panel}</Sheet>
+      <Sheet tall={tall} notch={pageTab(panelLeft)}>
+        {panel}
+      </Sheet>
       {panelLeft && gap}
     </div>
   );
@@ -138,7 +143,8 @@ export default function AppShell({
             <div className="relative flex min-h-0 min-w-0 flex-1" {...{ [SPLIT_HOST]: "" }}>
             <Sheet
               className="flex-1"
-              {...pageTab(tall && !sidebarOpen && !(panelLeft && panelOpen) && (!mainCard || mainCard.order === 0))}
+              tall={tall}
+              notch={pageTab(!(panelLeft && panelOpen) && (!mainCard || mainCard.order === 0))}
               style={
                 mainCard
                   ? { flexGrow: mainCard.grow, order: mainCard.order, minWidth: mainCard.minWidth }
@@ -231,11 +237,23 @@ export function Sheet({
   children: ReactNode;
 }) {
   const corner = "pointer-events-none absolute z-20 size-2";
+  // A card too narrow to carry the page's tab past both its corners keeps its
+  // own round ones instead. Read off the tab, which is laid out either way.
+  const box = useRef<HTMLDivElement>(null);
+  const [roomy, setRoomy] = useState(true);
+  useLayoutEffect(() => {
+    const tab = box.current?.querySelector<HTMLElement>(".page-tab");
+    if (!tab) return;
+    const ro = new ResizeObserver(() => setRoomy(tab.offsetWidth >= 2 * 10 + 8));
+    ro.observe(tab);
+    return () => ro.disconnect();
+  }, [notch]);
   return (
     <div
+      ref={box}
       className={cn("relative flex min-h-0 min-w-0", className)}
       style={notch ? ({ ...style, "--notch-w": notch } as React.CSSProperties) : style}
-      {...(notch && { "data-notch": "" })}
+      {...(notch && roomy && { "data-notch": "" })}
       {...attrs}
     >
       {notch && <span aria-hidden data-lit="" className="tab-strip page-tab" />}

@@ -4319,6 +4319,7 @@ function App() {
               }
               // Not past a parent's breadcrumb, whose width the lead leaves out.
               alignX={crumb ? 0 : sidebarDrawn}
+              afterToggle={!crumb && !sidebarDrawn}
             />
           )}
           {/* Keeps the far end at the far end on pages with no tab row. */}

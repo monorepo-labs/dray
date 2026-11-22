@@ -269,6 +269,7 @@ export default function ViewTabs({
   branch,
   cwd,
   alignX = 0,
+  afterToggle = false,
   rename,
   machine,
   working = false,
@@ -295,6 +296,8 @@ export default function ViewTabs({
   cwd?: string;
   /// Where the sheet starts, from the header's left. The row lines up with it.
   alignX?: number;
+  /// The row follows the sidebar toggle directly: sidebar shut, no breadcrumb.
+  afterToggle?: boolean;
   /// The chat's tab, which stands for the session: `project / title`.
   title: string;
   /// Which machine the session runs on. This Mac is never named: no name is
@@ -698,11 +701,15 @@ export default function ViewTabs({
     };
   }, [firstOut]);
   // No entrance: the row is simply there when a task opens, as a browser's is.
-  // Not lined up (sidebar shut), the first tab sits 3px off the control before
-  // it: the same gap that control keeps to the sheet's top edge below it.
+  // Right after the sidebar toggle, the first tab sits 3px off it: the same
+  // gap the toggle keeps to the sheet's top edge below it.
   const align = {
     marginLeft:
-      alignX > 0 ? `max(-0.25rem, calc(${alignX}px - 0.25rem - var(--tabs-lead)))` : "calc(-0.25rem - 3px)",
+      alignX > 0
+        ? `max(-0.25rem, calc(${alignX}px - 0.25rem - var(--tabs-lead)))`
+        : afterToggle
+          ? "calc(-0.25rem - 3px)"
+          : "-0.25rem",
   };
 
   // The browser view with nothing in the row lit for it — its tab shut by ⌘W
@@ -885,6 +892,7 @@ export default function ViewTabs({
       className="-mx-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden pr-1 pl-[3px]"
       style={align}
       data-flush={alignX > 0 ? "" : undefined}
+      data-after-toggle={afterToggle ? "" : undefined}
     >
       {drag.shown.map((item, i) =>
         item.group ? (
