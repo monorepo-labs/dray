@@ -918,20 +918,6 @@ const handleSendMsg = async (
     return false;
   }
   if (switching) unsentPicks.current.delete(selected.sessionId);
-  // Ahead of the send, so a server from before #1414 refuses the switch rather
-  // than the old agent answering under the new one's name.
-  if (moving && !switching) {
-    try {
-      await invoke("switch_agent", { sessionId: selected.sessionId, harness });
-    } catch (e) {
-      setError(
-        String(e).includes("unknown command")
-          ? `Update this server to switch a task to ${AGENT_LABELS[harness]}.`
-          : String(e),
-      );
-      return false;
-    }
-  }
 
   let sessionId = switching ? null : selectedSessionId;
   const isNewSession = !sessionId;
@@ -1137,6 +1123,18 @@ const handleSendMsg = async (
         stopWaiting(provisional);
         if (uploadsAhead.get(sessionId) === settled) uploadsAhead.delete(sessionId);
       }
+    }
+    // A task moving agent moves ahead of its send, once its machine is awake,
+    // so a server from before #1414 refuses it rather than the old agent
+    // answering under the new one's name.
+    if (moving && !switching) {
+      await invoke("switch_agent", { sessionId, harness, model: modelId, effort, permissionMode: stance, fast }).catch(
+        (e) => {
+          throw String(e).includes("unknown command")
+            ? `Update this server to switch a task to ${AGENT_LABELS[harness]}.`
+            : e;
+        },
+      );
     }
     // Nothing awaited between here and the dispatch, so a send queued behind
     // this one cannot overtake it.

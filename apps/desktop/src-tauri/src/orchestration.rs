@@ -1746,7 +1746,13 @@ async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
         false => label,
     };
     let item = match switching {
-        true => manager().switch_agent(item, harness, app).await?,
+        true => {
+            // Fast mode never carries to another agent (`resolve_fast`'s rule),
+            // and the stance narrows to one the agent honours.
+            let permission_mode = stance_on(harness, item.permission_mode);
+            let pick = store::AgentPick { model: model.clone(), effort, permission_mode, fast: false };
+            manager().switch_agent(item, harness, pick, app).await?
+        }
         false => item,
     };
     let item = match changed {
@@ -1767,6 +1773,20 @@ async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
         effort: effort.map(|e| e.as_arg().to_string()),
         changed,
     })
+}
+
+/// The stance `harness` runs when handed `mode`: `stanceFor` in the app's
+/// `permission.ts`, whose comments say why each falls where it does. `plan`
+/// always narrows, so a task moved by the CLI never comes out freer.
+fn stance_on(harness: Harness, mode: ApprovalPolicy) -> ApprovalPolicy {
+    use ApprovalPolicy as A;
+    match (harness, mode) {
+        (Harness::Pi, _) => A::BypassPermissions,
+        (Harness::Codex | Harness::Fx | Harness::Grok, A::Plan) => A::Manual,
+        (Harness::Codex | Harness::Fx, A::DontAsk) => A::Auto,
+        (Harness::Grok, A::DontAsk) => A::BypassPermissions,
+        _ => mode,
+    }
 }
 
 /// The first other installed agent whose list holds `alias`, with its model.

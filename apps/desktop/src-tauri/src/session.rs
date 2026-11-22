@@ -232,7 +232,13 @@ fn respawn_needed(
 /// across at the next spawn, which reads that line back
 /// ([`crate::bots::mark_switch_if_unanswered`]). Each CLI resumes only its own
 /// sessions, so the old child cannot carry on, background tasks included.
-async fn move_agent(slot: &mut Option<Session>, item: SessionIndexItem, to: Harness, app: &Sink) -> Result<SessionIndexItem> {
+async fn move_agent(
+    slot: &mut Option<Session>,
+    item: SessionIndexItem,
+    to: Harness,
+    pick: crate::store::AgentPick,
+    app: &Sink,
+) -> Result<SessionIndexItem> {
     if let Some(s) = slot.as_ref() {
         if s.status.lock().await.turn_in_flight() {
             bail!("Wait for this turn to finish before switching to {}.", to.label());
@@ -250,26 +256,38 @@ async fn move_agent(slot: &mut Option<Session>, item: SessionIndexItem, to: Harn
     // can still log a late line after the kill.
     let seq = match slot.take() {
         Some(s) => {
+            // Its background tasks go too (a dev server, a `Monitor`): the next
+            // agent cannot see or stop them. Cleared off the panel here, since
+            // the old reader's settle skips a slot the next child already holds.
+            if !s.status.lock().await.background_task_ids().is_empty() {
+                let payload = AgentEventPayload::BackgroundTasksChanged { tasks: vec![] };
+                let cleared = AgentEvent::mint(id.clone(), item.harness, s.seq.fetch_add(1, Relaxed), None, None, payload);
+                app.emit("agent_event", &cleared).ok();
+            }
             let seq = s.seq.fetch_add(1, Relaxed);
-            // Its background tasks too (a dev server, a `Monitor`): the next
-            // agent cannot see or stop them, and the reader's settle clears
-            // them off the panel once the child is gone.
             s.kill_tree().await?;
             seq
         }
         None => next_seq_by_session_id(id).await?,
     };
+    // A replay queued for a switch that never reached its agent (one logged
+    // out, say) speaks of that agent and its history; the next spawn builds
+    // this one's.
+    crate::bots::drop_task_handover(id);
     // Only an agent that took part has a conversation here to go back to.
     let remember = crate::bots::agent_joined(&item).await;
     // Codex and fx keep one thread id on the index, so they always start fresh.
     let resumed = item.other_agents.contains(&to) && !matches!(to, Harness::Codex | Harness::Fx);
     let payload = AgentEventPayload::AgentSwitched { from: item.harness, to, resumed };
     let event = AgentEvent::mint(id.clone(), to, seq, None, None, payload);
-    let item = crate::store::set_session_agent(id, to, remember)
+    // The marker before the index: a marker whose agent the index never took
+    // is ignored at the next spawn, while an index moved with no marker would
+    // hand the new agent nothing.
+    append_session_event(id, event.clone()).await?;
+    app.emit("agent_event", &event)?;
+    let item = crate::store::set_session_agent(id, to, pick, remember)
         .await?
         .with_context(|| format!("unknown session {id}"))?;
-    app.emit("agent_event", &event)?;
-    append_session_event(id, event).await?;
     app.emit(crate::orchestration::SESSION_CHANGED, &item).ok();
     Ok(item)
 }
@@ -1511,7 +1529,8 @@ impl SessionManager {
         // The composer picked another agent's model: the task moves there
         // before this prompt, which the new agent answers.
         if let Some(item) = get_session_index_item(session_id).await?.filter(|i| i.harness != harness) {
-            move_agent(&mut slot_guard, item, harness, app).await?;
+            let pick = crate::store::AgentPick { model: model.clone(), effort, permission_mode, fast };
+            move_agent(&mut slot_guard, item, harness, pick, app).await?;
         }
         // An idle child whose first turn since a switch ended before it said
         // anything may have dropped that prompt, and the replay with it. A
@@ -2302,11 +2321,18 @@ impl SessionManager {
         guard.as_ref()?.child.id()
     }
 
-    /// [`move_agent`] for `dray session model` naming another agent's model.
-    pub async fn switch_agent(&self, item: SessionIndexItem, to: Harness, app: &Sink) -> Result<SessionIndexItem> {
+    /// [`move_agent`] ahead of a send: the composer's `switch_agent`, and
+    /// `dray session model` naming another agent's model.
+    pub async fn switch_agent(
+        &self,
+        item: SessionIndexItem,
+        to: Harness,
+        pick: crate::store::AgentPick,
+        app: &Sink,
+    ) -> Result<SessionIndexItem> {
         let slot = self.slot(&item.session_id).await;
         let mut guard = slot.lock().await;
-        move_agent(&mut guard, item, to, app).await
+        move_agent(&mut guard, item, to, pick, app).await
     }
 
     /// Whether a turn is running in this session now. Fork and the CLI's

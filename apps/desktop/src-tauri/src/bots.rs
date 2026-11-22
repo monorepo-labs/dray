@@ -1085,17 +1085,19 @@ fn joined(e: &crate::events::AgentEvent) -> bool {
         )
 }
 
-/// What followed a task's newest agent switch: the switch's `(to, resumed)`,
-/// whether a prompt reached the agent since (its CLI then holds the
-/// conversation), and whether it answered (text or a tool call). Stops at the
-/// first answer, which leaves nothing owed.
-async fn since_switch(id: &str) -> (Option<(Harness, bool)>, bool, bool) {
+/// What followed a task's newest agent switch, as `agent` saw it: the
+/// switch's `(to, resumed)`, whether a prompt reached `agent` since (its CLI
+/// then holds the conversation), and whether it answered (text or a tool
+/// call). Another agent's lines never count: a killed child's reader can log
+/// one after the switch. Stops at the first answer, which leaves nothing owed.
+async fn since_switch(id: &str, agent: Harness) -> (Option<(Harness, bool)>, bool, bool) {
     use crate::events::AgentEventPayload as P;
     use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
     let prompted = AtomicBool::new(false);
     let found = crate::store::find_newest(id, |events| {
         events.iter().rev().filter(|e| e.subagent.is_none()).find_map(|e| match &e.payload {
             P::AgentSwitched { to, resumed, .. } => Some(Some((*to, *resumed))),
+            _ if e.harness != agent => None,
             P::AssistantText { .. } | P::ToolCallStarted { .. } => Some(None),
             _ if joined(e) => {
                 prompted.store(true, Relaxed);
@@ -1118,12 +1120,30 @@ async fn since_switch(id: &str) -> (Option<(Harness, bool)>, bool, bool) {
 /// Whether the agent a task runs on now holds a conversation under its id, so
 /// a switch back to it can resume. An unspawned fork holds none of its own.
 pub async fn agent_joined(item: &SessionIndexItem) -> bool {
-    item.fork_from.is_none() && since_switch(&item.session_id).await.1
+    item.fork_from.is_none() && since_switch(&item.session_id, item.harness).await.1
 }
 
 /// How a task's replay ends, which also marks one waiting in [`HANDOVERS`]:
 /// the conversation inside it is escaped, so nothing else carries this.
 const TASK_HANDOVER_END: &str = "</conversation>\n\nThe user's new message:\n\n";
+
+/// Takes a task's waiting replay out of [`HANDOVERS`], leaving any lead-in
+/// beside it. The replay opens on the last `[Dray: ` before its
+/// `<conversation>`, whose content is escaped and cannot hold either.
+pub fn drop_task_handover(session_id: &str) {
+    let mut handovers = HANDOVERS.lock().unwrap();
+    let Some(at) = handovers.iter().position(|(id, _)| id == session_id) else { return };
+    let text = &mut handovers[at].1;
+    let Some(end) = text.find(TASK_HANDOVER_END) else { return };
+    let start = text[..end]
+        .rfind("\n<conversation>\n")
+        .and_then(|open| text[..open].rfind("[Dray: "))
+        .unwrap_or(0);
+    text.replace_range(start..end + TASK_HANDOVER_END.len(), "");
+    if text.is_empty() {
+        handovers.remove(at);
+    }
+}
 
 /// Hands a task's next prompt the conversation where its newest agent switch
 /// has no answer yet: the send that made it, a retry after a failed send or a
@@ -1131,8 +1151,11 @@ const TASK_HANDOVER_END: &str = "</conversation>\n\nThe user's new message:\n\n"
 /// whose prompt the CLI may have dropped. Answers whether the agent resumes a
 /// conversation of its own; `None` where no switch is waiting.
 pub async fn mark_switch_if_unanswered(item: &SessionIndexItem) -> Option<bool> {
+    if !item.switched {
+        return None;
+    }
     let id = &item.session_id;
-    let (switch, prompted, answered) = since_switch(id).await;
+    let (switch, prompted, answered) = since_switch(id, item.harness).await;
     let (_, resumed) = switch.filter(|(to, _)| !answered && *to == item.harness)?;
     let waiting = HANDOVERS.lock().unwrap().iter().any(|(i, text)| i == id && text.contains(TASK_HANDOVER_END));
     if !waiting {
@@ -2677,6 +2700,13 @@ mod tests {
         let note = task_handover_prompt(&item, &events, true).await;
         assert!(note.contains("User: two") && note.contains("User: three"), "{note}");
         assert!(!note.contains("User: one"), "{note}");
+
+        // A switch away drops that replay and keeps a lead-in queued before it.
+        let id = "drop-a-stale-replay";
+        lead_in(id, "[Dray: you report to Ops now.]\n\n".into());
+        lead_in(id, note);
+        drop_task_handover(id);
+        assert_eq!(take_handover(id).as_deref(), Some("[Dray: you report to Ops now.]\n\n"));
     }
 
     #[test]

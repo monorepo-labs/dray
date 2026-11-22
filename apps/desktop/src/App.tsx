@@ -4664,13 +4664,14 @@ function App() {
               />
             )
           }
-          // Only on a new task. An agent is fixed at creation, so a live
-          // session cannot be pointed at one that is missing — and a session
-          // that already exists has a CLI that already ran.
+          // On a new task, or a live one picked onto another agent (#1414): a
+          // session's own agent already ran, so only a picked one can be missing.
           notice={
             sleepingBoat ? null : offlineServer ? (
               <ServerOfflineNotice server={offlineServer} />
-            ) : !selectedSessionId && missingAgent && !cloudTask ? (
+            ) : (!selectedSessionId || (selectedSession && harness !== selectedSession.harness)) &&
+              missingAgent &&
+              !cloudTask ? (
               <AgentMissingNotice agent={missingAgent} />
             ) : loggedOutAgent && authTurn && selectedSession ? (
               <LoginExpiredNotice

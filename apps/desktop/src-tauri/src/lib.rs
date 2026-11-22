@@ -884,12 +884,21 @@ async fn stop_task(
 /// Its own command so a server from before the switch answers `unknown
 /// command` and the app sends nothing, rather than the old agent answering.
 #[cfg_attr(feature = "desktop", tauri::command)]
-async fn switch_agent(session_id: &str, harness: Harness, sink: Sink) -> Result<(), Fail> {
+async fn switch_agent(
+    session_id: &str,
+    harness: Harness,
+    model: ModelId,
+    effort: Option<Effort>,
+    permission_mode: ApprovalPolicy,
+    fast: bool,
+    sink: Sink,
+) -> Result<(), Fail> {
     let item = store::get_session_index_item(session_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("no session {session_id}"))?;
     if item.harness != harness {
-        manager().switch_agent(item, harness, &sink).await?;
+        let pick = store::AgentPick { model, effort, permission_mode, fast };
+        manager().switch_agent(item, harness, pick, &sink).await?;
     }
     Ok(())
 }

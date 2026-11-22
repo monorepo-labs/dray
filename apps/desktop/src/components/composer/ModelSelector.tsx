@@ -76,7 +76,7 @@ export function nextEffort(model: Model | undefined, current: Effort | null): Ef
 /// controls fit one track. The active one is read off the rows fx answered
 /// with.
 ///
-/// Unlike the agent beside it, this is *not* creation-time. fx takes a provider
+/// Like the agent beside it, this moves on a live session. fx takes a provider
 /// switch in place and a switched session keeps it: the change persists onto
 /// fx's own session record, so a later `session/resume` comes back on it rather
 /// than on whatever the settings file names by then (`provider_switch.jsonl`).
