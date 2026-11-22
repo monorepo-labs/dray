@@ -31,6 +31,9 @@ struct SessionList: View {
     @Environment(NewTask.self) private var task
     @Binding var selection: SessionKey?
     @Binding var sheet: RootSheet?
+    /// This launch's one chance to open a lone bot's chat; anything the reader does first spends it.
+    /// The root's, so the new task page's dock spends it too.
+    @Binding var autoOpen: Bool
     /// The list is a split view's sidebar, beside an open chat, rather than the whole screen.
     var sidebar = false
     /// Opens the new task page in the main pane.
@@ -47,8 +50,6 @@ struct SessionList: View {
     /// The pull requests or issues page, opened over the list.
     @State private var listPage: ListPage?
     @Environment(\.scenePhase) private var phase
-    /// This launch's one chance to open a lone bot's chat; anything the reader does first spends it.
-    @State private var autoOpen = true
 
     private static let pageSize = 40
 
@@ -226,6 +227,7 @@ struct SessionList: View {
                         // The tag lands in the dock's words, where project and agent are still to pick: the desktop's Work on.
                         task.text = task.hasText ? "\(task.text) \(tag) " : "\(tag) "
                         listPage = nil
+                        newTaskPage()
                     }
                 }
             }
@@ -307,6 +309,7 @@ struct SessionList: View {
             Button {
                 task.open(entry.draft, on: entry.server)
                 mode = .live
+                newTaskPage()
             } label: {
                 RowLine(title: entry.draft.title, time: entry.draft.created.flatMap(parseDate))
             }

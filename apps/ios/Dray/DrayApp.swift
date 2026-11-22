@@ -63,12 +63,15 @@ struct RootView: View {
     @State private var paneWidth: CGFloat = 0
     @State private var windowWidth: CGFloat = 0
     @State private var sheet: RootSheet?
+    @State private var autoOpen = true
     /// Tasks opened over a bot's chat, so Back walks back to the bot.
     @State private var opened: [SessionKey] = []
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
-            SessionList(selection: $selection, sheet: $sheet, sidebar: width == .regular) {
+            SessionList(selection: $selection, sheet: $sheet, autoOpen: $autoOpen, sidebar: width == .regular) {
+                // A phone's dock is under its list, already on screen.
+                guard width == .regular else { return }
                 selection = nil
                 // As a row tap does: a sidebar over the page gets out of its way, one beside it stays.
                 if paneWidth >= windowWidth - 1 { columns = .detailOnly }
@@ -87,12 +90,19 @@ struct RootView: View {
                     // The new task page: the phone's dock under its list, with the main pane to itself.
                     Color.clear
                         .overlay(alignment: .bottom) {
-                            VoiceDock(task: task, started: { selection = $0 })
+                            VoiceDock(task: task, started: { selection = $0 }, engaged: { autoOpen = false })
                                 .opacity(store.live.contains { store.serverState[$0.id] == .connected } ? 1 : 0.3)
                         }
                         .page()
                         .navigationTitle(task.bot?.bot.name ?? "New task")
                         .navigationBarTitleDisplayMode(.inline)
+                        // A row picked mid-recording takes the dock and its Done away: stopped and kept,
+                        // as leaving `BotStartView` does, its words here next visit.
+                        .onDisappear {
+                            if Dictations.shared.state(.newSession) == .recording {
+                                Task { await Dictations.shared.stop(store, draft: .newSession) }
+                            }
+                        }
                 } else {
                     EmptyState(title: "No session open", message: "Pick one from the list.") {
                         Orb(state: .idle, size: 40)

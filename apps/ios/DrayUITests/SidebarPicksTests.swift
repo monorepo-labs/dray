@@ -75,9 +75,12 @@ final class SidebarPicksTests: XCTestCase {
         app.buttons["Done"].tap()
         sleep(1)
         snap(app, "3-ready")
+        // In the chat, not the list's cells: earlier runs leave tasks titled HELLO there, and an
+        // upright Duo shuts the sidebar, so where the reply sits on screen says nothing.
+        let hello = NSPredicate(format: "label == 'HELLO'")
+        let replied = { app.staticTexts.matching(hello).count > app.cells.staticTexts.matching(hello).count }
+        XCTAssertFalse(replied(), "a HELLO outside the list before the task started")
         app.buttons["Start task"].tap()
-        // In the chat, right of the sidebar: earlier runs leave tasks titled HELLO in it.
-        let replied = { app.staticTexts.matching(identifier: "HELLO").allElementsBoundByIndex.contains { $0.frame.minX > edge } }
         let deadline = Date.now.addingTimeInterval(120)
         while !replied() && Date.now < deadline { sleep(2) }
         XCTAssertTrue(replied(), "reply never landed")
