@@ -1226,6 +1226,13 @@ fn attach_in(sessions: &mut [SessionIndexItem], session_id: &str, chat: &str, no
             queue.push_back(id);
         }
     }
+    // Hidden now, so an open session under a settled one is listed only by
+    // its adopter: the Tasks tab skips the settled step it would walk through.
+    for id in readopt_in(sessions, session_id, None) {
+        if !changed.contains(&id) {
+            changed.push(id);
+        }
+    }
     Some(changed)
 }
 
@@ -3212,6 +3219,24 @@ mod tests {
         assert_eq!(items[1].modified, "now");
         assert!(!items[3].hidden);
         assert!(attach_in(&mut items, "gone", "chat", "now".into()).is_none());
+    }
+
+    /// An open session under a settled one is adopted by the attached task, or
+    /// it would be hidden with no list left that reaches it.
+    #[test]
+    fn attaching_adopts_what_hangs_under_a_settled_sub_task() {
+        let mut items = vec![
+            tree_item("chat", None),
+            tree_item("task", None),
+            tree_item("sub", Some("task")),
+            tree_item("leaf", Some("sub")),
+        ];
+        items[2].archived = true;
+        items[3].hidden = false;
+        let changed = attach_in(&mut items, "task", "chat", "now".into()).unwrap();
+        assert_eq!(changed, ["task", "sub", "leaf"]);
+        assert!(items[3].hidden);
+        assert_eq!(adopted(&items, "leaf"), Some("task"));
     }
 
     /// A bot's task from another machine is the top of its tree here, its
