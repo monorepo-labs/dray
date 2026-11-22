@@ -33,7 +33,7 @@
         // case and this owns the ordinary one. Linux is the exception and draws
         // flat, as a Mac does a flat palette; `useGlass` keeps it so. Deleted
         // there, not just left unset: the `<html>` tag above carries it.
-        if (/Linux/.test(navigator.platform)) delete el.dataset.transparency;
+        if (/Linux|Win/.test(navigator.platform)) delete el.dataset.transparency;
         else el.dataset.transparency = "";
         // The window's material is macOS-only, so the translucency that reveals
         // it is too — anywhere else it would punch a hole through to nothing.
