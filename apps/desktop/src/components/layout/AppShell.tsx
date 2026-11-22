@@ -240,7 +240,7 @@ export function Sheet({
   children: ReactNode;
 }) {
   const corner = "pointer-events-none absolute z-20 size-2";
-  // A card too narrow for the page's tab keeps its round corners; a hidden one measures 0 and keeps its last answer.
+  // A card too narrow for the page's tab keeps its round corners. The tab is laid out either way (`visibility`, never `display`), so it measures; a hidden shell's 0 keeps the last answer.
   const box = useRef<HTMLDivElement>(null);
   const [roomy, setRoomy] = useState(true);
   useLayoutEffect(() => {

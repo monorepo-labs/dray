@@ -1833,9 +1833,23 @@ body.session-drag * {
 [data-notch] {
   --sheet-tr: 0px;
 
+  /* The right side alone rises 2px under the tab's join, so its drop starts there at full strength; the left corner stays round. */
   > .sheet-foot {
     mask-image: linear-gradient(transparent 7px, black 7px), linear-gradient(to right, black 7px, transparent 7px),
       linear-gradient(to left, black 7px, transparent 7px);
+
+    &::before {
+      clip-path: inset(-8px 0 -8px -8px);
+    }
+
+    &::after {
+      content: "";
+      position: absolute;
+      inset: 6px 8px 8px;
+      border-radius: 8px 0 8px 8px;
+      box-shadow: var(--sheet-foot, none);
+      clip-path: inset(0 -8px -8px 100%);
+    }
   }
 }
 
