@@ -2046,10 +2046,16 @@ struct Tail {
 /// Hidden notes — a review's turn, a kickoff, a task's report — are no one's
 /// line; the reader's reaction to the bot is a badge, read past like the
 /// hidden note telling the bot of it. A message showing nothing is read past.
+///
+/// The bot's reaction is the line only where it said nothing after the
+/// reader's message: a reply, then 👀 turning into ✅ on that message, still
+/// shows the reply, the newest thing it said.
 fn tail_of(events: &[AgentEvent]) -> Tail {
     let review = crate::bots::learn::in_review(events);
     let mut tail = Tail::default();
     let mut counting = true;
+    // Held until the reader's message is reached, so a reply in between wins.
+    let mut reaction = None;
     for (event, review) in events.iter().zip(review).rev() {
         if event.subagent.is_some() || review {
             continue;
@@ -2060,12 +2066,14 @@ fn tail_of(events: &[AgentEvent]) -> Tail {
                 tail.reply.get_or_insert_with(|| text.clone());
                 tail.line.get_or_insert_with(|| cut(&plain(text), INBOX_LINE));
             }
-            AgentEventPayload::Reaction { message_id, emoji, by_user: false } if tail.line.is_none() => {
+            AgentEventPayload::Reaction { message_id, emoji, by_user: false }
+                if tail.line.is_none() && reaction.is_none() =>
+            {
                 let reacted = events.iter().find(|e| &e.id == message_id).map(|e| match &e.payload {
                     AgentEventPayload::UserMessage { text, images, .. } => said(text, images.len(), INBOX_QUOTE),
                     _ => None,
                 });
-                tail.line = match reacted {
+                reaction = match reacted {
                     Some(Some(Said::Text(quote))) => Some(format!("Reacted {emoji} to \"{quote}\"")),
                     Some(Some(Said::Images(1))) => Some(format!("Reacted {emoji} to an image")),
                     Some(Some(Said::Images(n))) => Some(format!("Reacted {emoji} to {n} images")),
@@ -2077,10 +2085,12 @@ fn tail_of(events: &[AgentEvent]) -> Tail {
             AgentEventPayload::UserMessage { from: None, kickoff: false, text, images, .. } => {
                 counting = false;
                 if tail.line.is_none() {
-                    tail.line = said(text, images.len(), INBOX_LINE).map(|said| match said {
-                        Said::Text(text) => format!("You: {text}"),
-                        Said::Images(1) => "You: Image".into(),
-                        Said::Images(n) => format!("You: {n} images"),
+                    tail.line = reaction.take().or_else(|| {
+                        said(text, images.len(), INBOX_LINE).map(|said| match said {
+                            Said::Text(text) => format!("You: {text}"),
+                            Said::Images(1) => "You: Image".into(),
+                            Said::Images(n) => format!("You: {n} images"),
+                        })
                     });
                 }
             }
@@ -2090,6 +2100,8 @@ fn tail_of(events: &[AgentEvent]) -> Tail {
             break;
         }
     }
+    // The page ran out before the reader's message: nothing came after it here.
+    tail.line = tail.line.or(reaction);
     tail
 }
 
@@ -4845,6 +4857,20 @@ mod inbox_tests {
         let asked = typed("ok");
         let events = [asked.clone(), reaction(&asked, "👀", false), reply("On it")];
         assert_eq!(inbox_line_of(&events), (Some("On it".into()), 1));
+    }
+
+    /// 👀 turning into ✅ once the work is done lands after the bot's reply,
+    /// and must not hide it: the reply is the newest thing the bot said.
+    #[test]
+    fn a_reaction_after_a_reply_leaves_the_reply_as_the_line() {
+        let asked = typed("fix the build");
+        let events = [
+            asked.clone(),
+            reaction(&asked, "👀", false),
+            reply("Fixed, PR is up"),
+            reaction(&asked, "✅", false),
+        ];
+        assert_eq!(inbox_line_of(&events), (Some("Fixed, PR is up".into()), 1));
     }
 
     #[test]
