@@ -40,6 +40,12 @@ private func relayedId(_ parent: UUID, _ machine: String) -> UUID {
     return UUID(uuid: digest.withUnsafeBytes { $0.load(as: uuid_t.self) })
 }
 
+/// What a server's welcome names it by, from the token the phone holds for it:
+/// `server_id` in serve.rs, which must hash it the same way.
+func serverId(token: String) -> String {
+    SHA256.hash(data: Data("dray-server\0\(token)".utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+}
+
 /// A session is named by its server and its id; nothing on the wire carries
 /// the server, so the connection a frame arrived on is the answer.
 struct SessionKey: Hashable {
@@ -138,6 +144,9 @@ final class Store {
     @ObservationIgnored private var reading: Set<UUID> = []
     @ObservationIgnored private var statuses: [SessionKey: StatusEvent] = [:]
     @ObservationIgnored private var connections: [UUID: Connection] = [:]
+    /// Shared machines this phone also pairs directly, held back from `share` so each
+    /// session draws once (#1404). The direct way wins, since it works with the sharer off.
+    @ObservationIgnored private var pairedCopies: Set<Via> = []
     @ObservationIgnored private var marksAt: [ProjectKey: Date] = [:]
     @ObservationIgnored private var marking: Set<ProjectKey> = []
     /// `dropTranscripts` calls so far, and the session the last one kept, so a read out across a drop knows.
@@ -207,6 +216,7 @@ final class Store {
         Keychain.set(token, for: s.id.uuidString)
         servers.append(s)
         save()
+        dropPairedCopies()
         start(s)
     }
 
@@ -246,6 +256,9 @@ final class Store {
         forget(s.id)
         Keychain.delete(s.id.uuidString)
         save()
+        // A copy held back for it comes back; one held back for a server still paired goes again on connect.
+        pairedCopies.removeAll()
+        Task { for p in servers where p.via == nil && serverState[p.id] == .connected { await loadShared(p.id) } }
     }
 
     /// The servers that are on, which is every one the list, Run with and banners reason about.
@@ -413,7 +426,7 @@ final class Store {
     private func share(_ parent: UUID, _ machines: [Sharing.Machine]) {
         guard home == nil, let p = servers.first(where: { $0.id == parent }), p.via == nil else { return }
         for s in servers where s.via?.parent == parent && !machines.contains(where: { $0.id == s.via?.machine }) { forget(s.id) }
-        for m in machines {
+        for m in machines where !pairedCopies.contains(Via(parent: parent, machine: m.id)) {
             let id = relayedId(parent, m.id)
             if let i = servers.firstIndex(where: { $0.id == id }) {
                 servers[i].name = m.name
@@ -424,6 +437,17 @@ final class Store {
             let after = servers.lastIndex { $0.id == parent || $0.via?.parent == parent } ?? servers.count - 1
             servers.insert(s, at: after + 1)
             start(s)
+        }
+    }
+
+    /// Drops each shared machine whose welcome names a server this phone pairs directly.
+    /// No `onRemoving`: its push handle is the direct one's too, on the same server.
+    private func dropPairedCopies() {
+        let mine = Set(servers.filter { $0.via == nil }.compactMap { Keychain.get($0.id.uuidString).map { serverId(token: $0) } })
+        for s in servers {
+            guard let via = s.via, let id = connections[s.id]?.welcome?.identity, mine.contains(id) else { continue }
+            pairedCopies.insert(via)
+            forget(s.id)
         }
     }
 
@@ -515,6 +539,8 @@ final class Store {
     /// A fresh connection re-reads the index and the tail of every open
     /// transcript, so nothing that happened while it was down is missed.
     private func connected(_ server: UUID) async {
+        dropPairedCopies()
+        guard servers.contains(where: { $0.id == server }) else { return }
         if server == home { linksMayHaveMoved() }
         onConnected(server)
         Task { await loadBots(server) }

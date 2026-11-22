@@ -752,6 +752,15 @@ fn same_token(given: &str, token: &str) -> bool {
             == 0
 }
 
+/// Who this server is, the same however it was reached: a phone pairing it
+/// directly and reaching it through a Mac that shares it (#1404) holds the
+/// token itself, so hashing that matches the two. One-way, so the welcome
+/// that carries it through a relay gives the token to no one.
+fn server_id(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(format!("dray-server\0{token}"))[..8].iter().map(|b| format!("{b:02x}")).collect()
+}
+
 #[derive(Deserialize)]
 struct Hello {
     v: u32,
@@ -1597,6 +1606,8 @@ async fn connection(
         "os": std::env::consts::OS,
         // This server judges its bots' "Waiting on you" cards (`bot_stalls`).
         "stalls": true,
+        // Never `id`: every client reads a frame's `id` as a call's, and a phone's fails on a string.
+        "identity": server_id(token),
     });
     // The welcome stays text whatever was asked: a client reads it before it
     // knows whether this server understood `deflate` at all.
@@ -2197,6 +2208,13 @@ mod tests {
         assert!(!relayed("GET /file?path=%2Fvia%3Dx HTTP/1.1"), "a path holding via= is not a via");
         assert!(!relayed("GET /file?path=%2Fa HTTP/1.1"));
         assert!(!relayed("GET /?via=69b4 HTTP/1.1"), "the socket's upgrade carries via in its hello");
+    }
+
+    /// The phone hashes the token it holds the same way (`serverId` in its
+    /// Store.swift, whose test pins this value too), or the copies never match.
+    #[test]
+    fn server_id_is_the_phones_hash_of_the_token() {
+        assert_eq!(super::server_id("test-token"), "4b3f3d0f73afd9cc");
     }
 
     use super::*;

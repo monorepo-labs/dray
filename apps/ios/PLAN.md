@@ -59,7 +59,14 @@ phone reads and drives it over the same WebSocket the desktop uses
   own, never saved, with a hello naming `via` its id and `/file`/`/upload`
   carrying `via=`, under the paired server's token. Its id is hashed from the
   pair, so transcripts survive a reconnect. The Island skips this: it follows
-  the app's links, which already name those machines.
+  the app's links, which already name those machines. **A machine the phone
+  also pairs directly is shown once, the direct way** (#1404): every welcome
+  carries `identity`, a hash of the server's token that a relay passes
+  through untouched, so a relayed copy whose `identity` hashes a token the
+  phone holds is dropped and held back from later shares, whatever state the
+  direct one is in. Removing a paired server lets them all back. A server
+  from before `identity` is still shown twice. Never `id` in a welcome:
+  `Head` reads every frame's `id` as a call's, and fails on a string.
 - **Pull request** sheet from the session view: readiness in the desktop's
   order with checks speaking first, checks failing-first, comments; every
   check and comment opens on GitHub. Merge is the desktop's split button —

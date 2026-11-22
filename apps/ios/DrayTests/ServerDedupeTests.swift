@@ -56,6 +56,12 @@ final class ServerDedupeTests: XCTestCase {
         XCTAssertEqual(Keychain.get(a1.id.uuidString), String(repeating: "2", count: 64))
     }
 
+    /// A relayed welcome's `id` is matched against this hash of the token the phone
+    /// holds (#1404). Pinned to the value `server_id` in serve.rs pins.
+    func testServerIdIsTheServersOwnHash() {
+        XCTAssertEqual(serverId(token: "test-token"), "4b3f3d0f73afd9cc")
+    }
+
     func testMovedAddressUpdatesTheEntry() {
         let token = String(repeating: "d", count: 64)
         let s = Server(id: UUID(), name: "Studio Mac", url: "wss://old.example")
