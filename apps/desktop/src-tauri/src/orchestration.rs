@@ -503,6 +503,8 @@ fn session_named(request: &Request) -> Option<&str> {
         Request::StopSession(r) => Some(&r.session_id),
         Request::SettleSession(r) => Some(&r.session_id),
         Request::DetachSession(r) => Some(&r.session_id),
+        // The bot must be on the task's machine too, which that machine checks.
+        Request::AttachSession(r) => Some(&r.session_id),
         Request::SetAside(r) => Some(&r.session_id),
         Request::Share(r) => Some(&r.session_id),
         Request::Browser(r) => Some(&r.session_id),
@@ -1556,13 +1558,16 @@ async fn detach_session(id: &str, app: &Sink) -> Result<Response> {
 /// Hands session `id` to the bot `bot` names (#1395), detach's reverse: it
 /// becomes that bot's task, hidden under its chat, reporting after each turn.
 /// The sidebar's Attach to bot, `dray session attach` and the iOS menu all
-/// come here. Only a bot on this server: the task's reports go out from here,
-/// and a bot elsewhere would need the outbox a cross-machine create sets up.
+/// come here, on the task's own machine. Only a bot there: the task's reports
+/// go out from there, and a bot elsewhere would need the outbox a
+/// cross-machine create sets up.
 pub async fn attach_to_bot(id: &str, bot: &str, app: &Sink) -> Result<SessionIndexItem> {
     let item = store::get_session_index_item(id)
         .await?
-        .with_context(|| format!("no session {id} on this machine — a task attaches to a bot on the machine it runs on"))?;
-    let bot = bots::find_bot(bot).await?;
+        .with_context(|| format!("no session {id}"))?;
+    let bot = bots::find_bot(bot)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e:#} (a task attaches only to a bot on the machine it runs on)"))?;
     if bots::bot_holding(&item.cwd).await.is_some() {
         bail!("session {id} is a bot's own chat, not a task");
     }

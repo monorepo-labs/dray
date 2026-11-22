@@ -784,12 +784,13 @@ export function isNested(item: SessionIndexItem, items: SessionIndexItem[]): boo
 }
 
 /// The bots a row can be handed to: those on its own server, since its reports
-/// go out from there. None for a settled row or a bot's own chat; a bot's tasks
+/// go out from there, and with a chat to hang it under, which the server
+/// refuses without. None for a settled row or a bot's own chat; a bot's tasks
 /// never reach the sidebar.
 export function attachTargets(bots: readonly BotEntry[], item: SessionIndexItem): Bot[] {
   if (item.archived || botAt(bots.map((b) => b.bot), item.cwd)) return [];
   const server = serverOfPath(item.cwd);
-  return bots.map((b) => b.bot).filter((bot) => serverOfPath(bot.path) === server);
+  return bots.filter((b) => b.session && serverOfPath(b.bot.path) === server).map((b) => b.bot);
 }
 
 /// Sidebar toggle. Lives outside `Sidebar` because a collapsed sidebar renders
@@ -2848,7 +2849,9 @@ export function RowMenu({
           the two elements the key lands on.
       */}
       <ContextMenuContent
-        className="w-40"
+        // Wider where one bot is named on its item, so the name has room; still
+        // fixed per row, which is what the width is for.
+        className={onAttach && attachBots?.length === 1 ? "w-56" : "w-40"}
         onKeyDown={(e) => {
           if (!forkOpen) return;
           const picked = forkRefs.current[Number(e.key) - 1];
@@ -2952,7 +2955,17 @@ export function RowMenu({
               </ContextMenuItem>
             )}
 
-            {onAttach && attachBots && attachBots.length > 0 && (
+            {/* One bot is a pick already made, so it is named on the item itself. */}
+            {onAttach && attachBots?.length === 1 && (
+              <ContextMenuItem className="text-ui" onSelect={() => onAttach(attachBots[0])}>
+                <Link2 />
+                <span className="shrink-0">Attach to</span>
+                <BotAvatar seed={attachBots[0].id} avatar={attachBots[0].avatar} still className="size-4 shrink-0" />
+                <span className="truncate">{attachBots[0].name}</span>
+              </ContextMenuItem>
+            )}
+
+            {onAttach && attachBots && attachBots.length > 1 && (
               <ContextMenuSub>
                 <ContextMenuSubTrigger className="text-ui">
                   <Link2 />
