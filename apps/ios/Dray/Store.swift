@@ -138,6 +138,10 @@ final class Store {
     @ObservationIgnored var onRemoving: (Server) -> Void = { _ in }
     @ObservationIgnored private let path = NWPathMonitor()
     @ObservationIgnored private var reading: Set<UUID> = []
+    /// Sessions this phone deleted. A read or event already on its way when the delete
+    /// landed still names one, and must not draw it back as a row nothing can open.
+    // ponytail: never cleared; ids are unique and a launch deletes a handful.
+    @ObservationIgnored private var deleted: Set<SessionKey> = []
     @ObservationIgnored private var statuses: [SessionKey: StatusEvent] = [:]
     @ObservationIgnored private var connections: [UUID: Connection] = [:]
     @ObservationIgnored private var marksAt: [ProjectKey: Date] = [:]
@@ -734,7 +738,7 @@ final class Store {
             var next = items.filter { $0.key.server != server || $0.value.archived == true }
             for item in list {
                 let key = SessionKey(server: server, id: item.sessionId)
-                next[key] = merged(key, item)
+                if !deleted.contains(key) { next[key] = merged(key, item) }
             }
             items = next
             loadErrors[server] = nil
@@ -764,7 +768,7 @@ final class Store {
     /// Writes an entry read off the index. A status event that arrived while
     /// the read was out is newer than it, so it wins.
     private func store(_ key: SessionKey, _ read: SessionItem) {
-        items[key] = merged(key, read)
+        if !deleted.contains(key) { items[key] = merged(key, read) }
     }
 
     private func merged(_ key: SessionKey, _ read: SessionItem) -> SessionItem {
@@ -833,10 +837,22 @@ final class Store {
         } catch { lastError = error.localizedDescription }
     }
 
-    /// Takes a read, finished session's unread mark back. Not echoed by the server, so set here too.
+    /// Takes a read, finished session's unread mark back. Not echoed by the server, so set here too,
+    /// and put back where the write failed or moved nothing (`null`), or it would vanish on the next read.
     func markUnread(_ key: SessionKey) async {
+        let was = items[key]?.status
         items[key]?.status = "completed"
-        _ = try? await call(key.server, "mark_session_read", ["sessionId": .string(key.id), "read": false], as: JSON.self)
+        // Only while the mark is still this one: a status event landing meanwhile is newer.
+        func restore(_ was: String?) {
+            if let was, items[key]?.status == "completed" { items[key]?.status = was }
+        }
+        do {
+            let moved = try await call(key.server, "mark_session_read", ["sessionId": .string(key.id), "read": false], as: JSON.self)
+            if moved == .null { restore(was) }
+        } catch {
+            restore(was)
+            lastError = error.localizedDescription
+        }
     }
 
     /// Copies a session onto a new id, `worktree` giving the copy a tree of its own.
@@ -903,6 +919,7 @@ final class Store {
             lastError = error.localizedDescription
             return false
         }
+        deleted.insert(key)
         items[key] = nil
         asks[key] = nil
         return true
@@ -1250,7 +1267,8 @@ final class Store {
             guard let sharing = try? decoder.decode(EventFrame<Sharing>.self, from: data).payload else { return }
             share(server, sharing.machines)
         case "session_created", "session_changed":
-            guard let item = try? decoder.decode(EventFrame<SessionItem>.self, from: data).payload else { return }
+            guard let item = try? decoder.decode(EventFrame<SessionItem>.self, from: data).payload,
+                  !deleted.contains(SessionKey(server: server, id: item.sessionId)) else { return }
             items[SessionKey(server: server, id: item.sessionId)] = item
             Task { await loadMarks(server, force: false, only: [item.projectPath]) }
             // `bots_changed` comes from the CLI alone, and a bot the app made is first seen as its chat.
