@@ -64,6 +64,60 @@ pub fn hostname() -> String {
     imp::hostname()
 }
 
+/// Gives a process with no console a hidden one, for its console children to
+/// share. The release app is a GUI binary, so it and its `--serve` start with
+/// none, and every `git`, `gh` or agent they ran then opened a console window
+/// of its own. Keeps the stdout and stderr it was started with, the server's
+/// log. A dev build is a console binary and already has one.
+#[cfg(windows)]
+pub fn hidden_console() {
+    use windows_sys::Win32::System::Console::{
+        AllocConsole, GetConsoleWindow, GetStdHandle, SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+
+    /// `ALLOC_CONSOLE_OPTIONS`, which windows-sys does not spell yet.
+    #[repr(C)]
+    struct Options {
+        mode: i32,
+        use_show_window: i32,
+        show_window: u16,
+    }
+    const ALLOC_CONSOLE_MODE_NO_WINDOW: i32 = 2;
+    type AllocWithOptions = unsafe extern "system" fn(*const Options, *mut i32) -> i32;
+
+    // SAFETY: plain Win32 calls; the looked-up symbol is called with the
+    // signature Microsoft documents for it.
+    unsafe {
+        if !GetConsoleWindow().is_null() {
+            return;
+        }
+        let (out, err) = (GetStdHandle(STD_OUTPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE));
+        // Windows 11 24H2 and Server 2025 make one with no window at all.
+        // Looked up, since naming it would stop the app loading on older ones.
+        let kernel32 = GetModuleHandleA(c"kernel32.dll".as_ptr().cast());
+        let made = match GetProcAddress(kernel32, c"AllocConsoleWithOptions".as_ptr().cast()) {
+            Some(found) => {
+                let alloc: AllocWithOptions = std::mem::transmute(found);
+                let options = Options { mode: ALLOC_CONSOLE_MODE_NO_WINDOW, use_show_window: 0, show_window: 0 };
+                let mut result = 0;
+                alloc(&options, &mut result) >= 0
+            }
+            None => false,
+        };
+        // Older Windows: an ordinary console, hidden as soon as it exists.
+        if !made && AllocConsole() != 0 {
+            let window = GetConsoleWindow();
+            if !window.is_null() {
+                ShowWindow(window, SW_HIDE);
+            }
+        }
+        SetStdHandle(STD_OUTPUT_HANDLE, out);
+        SetStdHandle(STD_ERROR_HANDLE, err);
+    }
+}
+
 #[cfg(unix)]
 mod imp {
     use std::path::Path;
