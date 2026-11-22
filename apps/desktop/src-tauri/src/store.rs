@@ -3337,6 +3337,7 @@ mod tests {
             .collect();
         assert!(prefixes.len() > 1, "only drew {prefixes:?}");
     }
+    #[cfg_attr(windows, allow(unused_imports))]
     use crate::events::{AgentEventPayload, ImageRef, ToolResult};
 
     /// A field a *newer* build wrote has to survive being read and written back

@@ -8,9 +8,6 @@ export const IS_MAC =
 export const IS_LINUX =
   typeof navigator !== "undefined" && /Linux/.test(navigator.platform);
 
-export const IS_WINDOWS =
-  typeof navigator !== "undefined" && /Win/.test(navigator.platform);
-
 /// Dictation runs on the machine the reader sits at, so a Mac and a Linux
 /// desktop have it and nothing else does: elsewhere its button, chord and tab
 /// are not drawn.

@@ -4931,6 +4931,7 @@ mod tests {
     }
 
     /// A live child over `cat`, its tracker as given.
+    #[cfg(unix)]
     async fn child_with(manager: &SessionManager, id: &str, tracker: StatusTracker) -> Slot {
         let mut child = tokio::process::Command::new("cat")
             .stdin(std::process::Stdio::piped())
