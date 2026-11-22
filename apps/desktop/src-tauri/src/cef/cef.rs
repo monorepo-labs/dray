@@ -2115,6 +2115,10 @@ mod key_char_tests {
     }
 }
 
+/// `EVENTFLAG_ALTGR_DOWN`: set beside Ctrl and Alt when the keystroke is
+/// AltGr's.
+const ALTGR_DOWN: u32 = 1 << 12;
+
 /// The platform's own key event, which CEF hands over beside its own.
 #[cfg(target_os = "macos")]
 type OsEvent<'a> = *mut u8;
@@ -2135,6 +2139,12 @@ wrap_keyboard_handler! {
             _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>,
         ) -> ::std::os::raw::c_int {
             let Some(event) = event else { return 0 };
+            // AltGr types a character, and Windows reports it as Ctrl+Alt:
+            // read as the accelerator, AltGr+Q (`@` on a German layout) never
+            // reached the page and AltGr+I opened DevTools.
+            if cfg!(windows) && event.modifiers & ALTGR_DOWN != 0 {
+                return 0;
+            }
             let raw_down = sys::cef_key_event_type_t::from(event.type_)
                 == sys::cef_key_event_type_t::KEYEVENT_RAWKEYDOWN;
             // The app's accelerator is ⌘ on a Mac and Ctrl elsewhere, and
