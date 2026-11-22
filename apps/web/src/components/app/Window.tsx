@@ -64,7 +64,7 @@ export default function Window({
         </div>
         {/* `-ml-1 pl-[3px]` puts the first tab's border in the column the
             sheet's ring takes, just outside the sheet's left edge. */}
-        <div role="tablist" className="-ml-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden pr-1 pl-[3px]">
+        <div data-tab-row className="-ml-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden pr-1 pl-[3px]">
           {tabs}
         </div>
         {headerEnd && <div className="flex shrink-0 items-center gap-3 pl-3">{headerEnd}</div>}

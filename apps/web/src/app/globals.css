@@ -427,7 +427,7 @@ body {
 
 /* The first tab sits on the sheet's left edge, so lit it runs straight down
    into it: no flare that side, and the sheet squares its top-left corner. */
-[data-app-window] [role="tablist"] {
+[data-app-window] [data-tab-row] {
   /* The tab's soft drop stops at its border, beside a sheet side with none. */
   clip-path: inset(0 0 0 3px);
 
@@ -436,7 +436,7 @@ body {
   }
 }
 
-[data-app-window]:has([role="tablist"] > .tab-strip[data-lit]:first-child) [data-main-sheet] {
+[data-app-window]:has([data-tab-row] > .tab-strip[data-lit]:first-child) [data-main-sheet] {
   --sheet-tl: 0px;
   --glow-top: 8px;
   --foot-top: 6px;
