@@ -1401,17 +1401,10 @@ fn lock_owner_pid(reason: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
-/// `kill(pid, 0)` — the signal number that checks for a process without
-/// sending anything. `EPERM` counts as alive: a process owned by another user
-/// is still a process holding that lock.
+/// Whether the process holding a worktree lock still lives. A process owned
+/// by another user is still a process holding that lock.
 fn pid_is_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-    // SAFETY: signal 0 delivers nothing; it only performs the existence and
-    // permission check that gives this function its answer.
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    crate::platform::pid_alive(pid)
 }
 
 /// The `locked` reason git records for `worktree_path`, if any.

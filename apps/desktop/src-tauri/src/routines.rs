@@ -567,6 +567,10 @@ async fn run_check(check: &str, cwd: &str) -> Result<String, String> {
             if let Some(pid) = group {
                 unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
             }
+            #[cfg(windows)]
+            if let Some(pid) = group {
+                crate::platform::kill_tree(pid);
+            }
             return Err(format!("timed out after {}s", CHECK_TIMEOUT.as_secs()));
         }
         Ok(Err(e)) => return Err(format!("could not run: {e}")),

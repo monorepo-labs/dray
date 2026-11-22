@@ -487,7 +487,7 @@ async fn shut_down(code: i32) -> ! {
     // ponytail: a pid that exited in those 3s could be reused; a process
     // group per agent would make this one signal.
     for pid in tree.into_iter().filter(|&p| p != me) {
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        crate::platform::kill(pid);
     }
     // `_exit`, not `process::exit`: once a phone's dictation has loaded a
     // model, ggml-metal's atexit handler aborts (lib.rs's `RunEvent::Exit`
@@ -535,12 +535,21 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
         .write(true)
         .open(home.join("serve.lock"))
         .context("could not open serve.lock")?;
-    if unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&held), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    if held.try_lock().is_err() {
         anyhow::bail!("a Dray server is already running on {}", home.display());
     }
     std::mem::forget(held);
     let socket = home.join(dray_proto::SOCKET_NAME);
-    if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
+    #[cfg(unix)]
+    let answers = std::os::unix::net::UnixStream::connect(&socket).is_ok();
+    // Opening a pipe instance is connecting to it, as a client would.
+    #[cfg(windows)]
+    let answers = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(dray_proto::pipe_name(&socket.to_string_lossy()))
+        .is_ok();
+    if answers {
         anyhow::bail!(
             "a Dray is already running on {} ({} answers). Quit it, or start \
              dray-serve with DRAY_HOME set to a directory of its own.",

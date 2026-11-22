@@ -243,6 +243,16 @@ optional = true
 version = "0.4"
 optional = true
 
+# Process liveness and killing, and the process table (platform.rs,
+# local_servers.rs). Already in the lock under tokio and mio.
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = [
+  "Win32_Foundation",
+  "Win32_System_Threading",
+  "Win32_System_Diagnostics_ToolHelp",
+]
+
 # Unconditional, not CEF's alone: the composer's paste reads NSPasteboard
 # (attachments.rs). tao already compiles all three, so this costs no build.
 [target.'cfg(target_os = "macos")'.dependencies.objc2]

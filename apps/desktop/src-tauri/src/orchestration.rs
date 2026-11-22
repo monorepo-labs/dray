@@ -30,10 +30,9 @@ use dray_proto::{
     Response, SendMessage, SendToBot, SessionSummary, SetAside, MAX_LINE, OLDEST_SPOKEN, PROTOCOL_VERSION,
 };
 use std::path::Path;
-use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    net::{UnixListener, UnixStream},
-};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+#[cfg(unix)]
+use tokio::net::{UnixListener, UnixStream};
 
 /// Emitted when a session is created by something other than the composer, so
 /// the sidebar gains the row without a refetch.
@@ -116,6 +115,7 @@ pub fn child_endpoint() -> Option<String> {
 /// Errors are logged and swallowed by the caller: orchestration is a side
 /// channel, and an app that refuses to start because a socket is in use would
 /// be trading the whole product for a feature.
+#[cfg(unix)]
 pub async fn serve(app: Sink) -> Result<()> {
     let path = socket_path().context("could not resolve the socket path")?;
 
@@ -164,15 +164,56 @@ pub async fn serve(app: Sink) -> Result<()> {
     }
 }
 
+/// Windows serves a named pipe in the socket's place, named after the socket
+/// path (`dray_proto::pipe_name`), so each home still keeps its own channel.
+/// A pipe is no file: nothing can unlink or replace it, so there is nothing to
+/// heal. `first_pipe_instance` refuses a name another live process already
+/// serves, which is the "a Dray already lives here" answer the unix bind gets
+/// from its connect check.
+#[cfg(windows)]
+pub async fn serve(app: Sink) -> Result<()> {
+    use tokio::net::windows::named_pipe::ServerOptions;
+
+    let path = socket_path().context("could not resolve the socket path")?;
+    store::get_home_app_dir().await?;
+    let name = dray_proto::pipe_name(&path.to_string_lossy());
+
+    let mut server = ServerOptions::new()
+        .first_pipe_instance(true)
+        .create(&name)
+        .with_context(|| format!("could not create {name} for {}", path.display()))?;
+    loop {
+        if let Err(e) = server.connect().await {
+            eprintln!("[orchestration accept err] {e}");
+            continue;
+        }
+        let connected = server;
+        // The next instance before this one is served, or a caller arriving
+        // meanwhile finds no pipe and reads Dray as closed.
+        server = ServerOptions::new()
+            .create(&name)
+            .with_context(|| format!("could not create {name}"))?;
+        let app = app.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handle(connected, &app).await {
+                eprintln!("[orchestration conn err] {e:#}");
+            }
+        });
+    }
+}
+
 /// How often the socket path is checked against the file this process bound.
 /// One `stat` a tick; a longer gap is that much longer of every `dray` call
 /// failing.
+#[cfg(unix)]
 const SOCKET_CHECK: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// `(dev, ino)`: what tells the socket this process bound apart from another
 /// file later put at the same path.
+#[cfg(unix)]
 type FileId = (u64, u64);
 
+#[cfg(unix)]
 fn file_id(path: &Path) -> std::io::Result<FileId> {
     use std::os::unix::fs::MetadataExt;
 
@@ -181,6 +222,7 @@ fn file_id(path: &Path) -> std::io::Result<FileId> {
 }
 
 /// What the socket path names on one check.
+#[cfg(unix)]
 #[derive(Debug, PartialEq, Eq)]
 enum PathState {
     Ours,
@@ -188,6 +230,7 @@ enum PathState {
     Other(FileId),
 }
 
+#[cfg(unix)]
 fn path_state(bound: FileId, seen: std::io::Result<FileId>) -> PathState {
     match seen {
         Ok(id) if id == bound => PathState::Ours,
@@ -206,6 +249,7 @@ fn path_state(bound: FileId, seen: std::io::Result<FileId>) -> PathState {
 /// it as Dray not running. Deleting `~/.dray` does it; so did a sandbox
 /// restored from a snapshot, whose disk was swapped under a running server and
 /// left a copied socket file behind (#801). [`Socket::heal`] binds again.
+#[cfg(unix)]
 struct Socket {
     listener: UnixListener,
     id: FileId,
@@ -216,6 +260,7 @@ struct Socket {
     failing: bool,
 }
 
+#[cfg(unix)]
 impl Socket {
     /// Binds the path, unlinking whatever stale file holds it, and narrows the
     /// socket to `0600`.
@@ -305,6 +350,7 @@ impl Socket {
 /// never notice the directory was deleted. The narrowing is not redundant with
 /// creating at `0700`: a session's log write can recreate the directory first,
 /// under the umask, and a check alone would then refuse it forever.
+#[cfg(unix)]
 async fn rebind(path: &Path) -> Result<Socket> {
     let dir = path.parent().context("the socket path has no directory")?;
     tokio::fs::create_dir_all(dir)
@@ -327,6 +373,7 @@ async fn rebind(path: &Path) -> Result<Socket> {
 /// Refusing costs orchestration and nothing else, which is the bargain this
 /// whole module already makes: the caller logs and drops the error, and the
 /// app carries on without a side channel.
+#[cfg(unix)]
 async fn check_private(dir: &Path) -> Result<()> {
     let mode = owner_bits(dir).await?;
     if mode & 0o077 != 0 {
@@ -341,6 +388,7 @@ async fn check_private(dir: &Path) -> Result<()> {
 }
 
 /// The permission bits on a directory, for the check above.
+#[cfg(unix)]
 async fn owner_bits(path: &Path) -> Result<u32> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -354,6 +402,7 @@ async fn owner_bits(path: &Path) -> Result<u32> {
 /// `0600` on the socket itself. Defence in depth behind the `0700` directory,
 /// which is the boundary that holds from before the socket exists — this one
 /// cannot, because `bind` has already applied the umask by the time it runs.
+#[cfg(unix)]
 fn restrict(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -392,8 +441,8 @@ fn refusal(line: &str) -> Option<String> {
 
 /// Reads one request, answers it, closes. A connection carries one command so
 /// that a client crashing mid-line costs nothing but itself.
-async fn handle(stream: UnixStream, app: &Sink) -> Result<()> {
-    let (read_half, mut write_half) = stream.into_split();
+async fn handle<S: AsyncRead + AsyncWrite>(stream: S, app: &Sink) -> Result<()> {
+    let (read_half, mut write_half) = tokio::io::split(stream);
 
     let mut line = String::new();
     BufReader::new(read_half.take(MAX_LINE))
@@ -3576,6 +3625,7 @@ mod tests {
 
     /// A private dir of its own per test, short enough for a socket path's
     /// 108-byte limit.
+    #[cfg(unix)]
     fn socket_dir(name: &str) -> std::path::PathBuf {
         use std::os::unix::fs::DirBuilderExt;
 
@@ -3586,12 +3636,14 @@ mod tests {
     }
 
     /// A connection reaching the listener, proven by the accept landing.
+    #[cfg(unix)]
     async fn reaches(socket: &Socket, path: &Path) {
         let client = UnixStream::connect(path).await.expect("connect");
         socket.listener.accept().await.expect("accept");
         drop(client);
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_path_state_follows_the_inode() {
         let missing = || Err(std::io::Error::from(std::io::ErrorKind::NotFound));
@@ -3604,6 +3656,7 @@ mod tests {
         assert_eq!(path_state((1, 2), denied()), PathState::Ours);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_socket_still_in_place_is_left_alone() {
         let dir = socket_dir("kept");
@@ -3615,6 +3668,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_deleted_socket_is_bound_again() {
         let dir = socket_dir("deleted");
@@ -3631,6 +3685,7 @@ mod tests {
 
     /// `rm -rf ~/.dray` takes the directory too, and the rebind brings it back
     /// private.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_deleted_directory_is_made_again_private() {
         use std::os::unix::fs::PermissionsExt;
@@ -3652,6 +3707,7 @@ mod tests {
 
     /// A session's log write can recreate the directory before the check runs,
     /// under a `022` umask. The rebind narrows it rather than refusing it.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_directory_recreated_open_is_narrowed_and_bound() {
         use std::os::unix::fs::PermissionsExt;
@@ -3671,6 +3727,7 @@ mod tests {
     }
 
     /// The case seen live (#801): a copied socket file with nothing behind it.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_dead_socket_file_in_its_place_is_replaced() {
         let dir = socket_dir("dead");
@@ -3688,6 +3745,7 @@ mod tests {
     }
 
     /// Two processes on one path must not take it from each other in turn.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_live_socket_in_its_place_is_left_to_its_owner() {
         let dir = socket_dir("live");

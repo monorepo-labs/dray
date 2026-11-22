@@ -260,7 +260,7 @@ pub(crate) async fn kill_descendants(root: u32) {
     for pid in tree.into_iter().filter(|&p| p != root) {
         // ponytail: a process group set at spawn would make this one signal
         // with no walk; four spawn sites to change if this bites.
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        crate::platform::kill(pid);
     }
 }
 

@@ -1332,13 +1332,20 @@ pub(super) fn emit_shooting(session: &str, shooting: bool, shot: u64, tab: Optio
 /// the checkout, which is the agent's own.
 fn write_nofollow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    // Windows has no O_NOFOLLOW; a link there takes an administrator or
+    // developer mode to plant, so a check before the open is the guard.
+    #[cfg(windows)]
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(std::io::Error::other("refusing to write through a symlink"));
+    }
+    let mut file = options.open(path)?;
     file.write_all(bytes)
 }
 

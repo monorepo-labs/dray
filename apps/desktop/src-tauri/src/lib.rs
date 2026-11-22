@@ -48,6 +48,7 @@ pub mod headless;
 #[cfg_attr(not(any(feature = "cef", feature = "serve")), allow(dead_code))]
 pub mod recording;
 mod local_servers;
+pub mod platform;
 pub mod docs;
 pub mod download;
 #[path = "events/events.rs"]

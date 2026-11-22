@@ -363,9 +363,7 @@ async fn make_home_app_dir() -> Result<PathBuf> {
 /// Best-effort: a directory that cannot be narrowed is worth carrying on with,
 /// since the alternative is an app that refuses to start.
 pub(crate) async fn restrict_to_owner(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    if let Err(e) = fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await {
+    if let Err(e) = crate::platform::set_mode(path, 0o700) {
         eprintln!("[app dir permissions err] {e}");
     }
 }
@@ -471,8 +469,16 @@ struct IndexStamp {
 
 impl IndexStamp {
     fn of(meta: &std::fs::Metadata) -> Option<Self> {
-        use std::os::unix::fs::MetadataExt;
-        Some(Self { dev: meta.dev(), ino: meta.ino(), mtime: meta.modified().ok()?, len: meta.len() })
+        #[cfg(unix)]
+        let (dev, ino) = {
+            use std::os::unix::fs::MetadataExt;
+            (meta.dev(), meta.ino())
+        };
+        // Std has no stable file id on Windows; NTFS's 100ns mtime and the
+        // length carry the stamp alone there.
+        #[cfg(not(unix))]
+        let (dev, ino) = (0, 0);
+        Some(Self { dev, ino, mtime: meta.modified().ok()?, len: meta.len() })
     }
 }
 
@@ -542,8 +548,7 @@ pub async fn lock_across_processes(name: &str) -> Option<std::fs::File> {
     let path = config_dir().await.ok()?.join(format!("{name}.lock"));
     tokio::task::spawn_blocking(move || {
         let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path).ok()?;
-        let locked = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX) } == 0;
-        locked.then_some(file)
+        file.lock().is_ok().then_some(file)
     })
     .await
     .ok()
