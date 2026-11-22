@@ -149,9 +149,22 @@ pub(super) async fn open_in_app(app_path: &str, path: &str) -> Result<(), String
     let name = exe.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let (args, console) = match kind {
         ExternalAppKind::Terminal => terminal_args(exe, dir),
-        _ => (vec![path.to_string()], false),
+        ExternalAppKind::Files => (vec![explorer_arg(target)], false),
+        ExternalAppKind::Editor => (vec![path.to_string()], false),
     };
     spawn(exe, &args, dir, console, &name).await
+}
+
+/// What Explorer is handed, already quoted for its own command-line parser:
+/// a folder to open, or a file to *select*. `explorer.exe <file>` opens the
+/// file with its default program, which runs a `.bat` or `.ps1`.
+fn explorer_arg(target: &Path) -> String {
+    let quoted = quote_arg(&target.to_string_lossy());
+    if target.is_dir() {
+        quoted
+    } else {
+        format!("/select,{quoted}")
+    }
 }
 
 /// Starts a program detached, waiting briefly so one refusing its arguments
@@ -165,15 +178,23 @@ async fn spawn(exe: &Path, args: &[String], cwd: &Path, console: bool, name: &st
             .await
             .map_err(|e| e.to_string())?;
     }
+    let explorer = exe_name(exe) == "explorer.exe";
     let mut cmd = tokio::process::Command::new(exe);
-    cmd.args(args)
-        .current_dir(cwd)
+    // Explorer splits its own command line and reads `/select,"C:\a b"`
+    // whole; std's quoting would wrap the switch in quotes and lose it.
+    if explorer {
+        for arg in args {
+            cmd.raw_arg(arg);
+        }
+    } else {
+        cmd.args(args);
+    }
+    cmd.current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .creation_flags(DETACHED);
     let mut child = cmd.spawn().map_err(|err| format!("could not start {name}: {err}"))?;
-    let explorer = exe_name(exe) == "explorer.exe";
     match tokio::time::timeout(Duration::from_millis(1500), child.wait()).await {
         Ok(Ok(status)) if !status.success() && !explorer => Err(format!("{name} failed ({status})")),
         Ok(_) => Ok(()),
@@ -251,17 +272,22 @@ fn quote_arg(arg: &str) -> String {
 
 /// Git for Windows' `bash.exe`, which every agent here already runs under.
 fn git_bash() -> Option<PathBuf> {
+    // The first `git.exe` on `PATH` may be `mingw64\bin`'s, two levels down,
+    // so every one is asked until one has a `bash.exe` beside its install.
     let beside_git = || {
         let path = std::env::var_os("PATH")?;
         std::env::split_paths(&path).find_map(|dir| {
-            dir.join("git.exe").is_file().then(|| dir.parent().map(|git| git.join("bin").join("bash.exe")))?
+            if !dir.join("git.exe").is_file() {
+                return None;
+            }
+            dir.ancestors().skip(1).take(2).map(|git| git.join("bin").join("bash.exe")).find(|p| p.is_file())
         })
     };
     ["%ProgramFiles%\\Git\\bin\\bash.exe", "%LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe"]
         .iter()
-        .find_map(|p| expand(p))
-        .filter(|p| p.is_file())
-        .or_else(|| beside_git().filter(|p| p.is_file()))
+        .filter_map(|p| expand(p))
+        .find(|p| p.is_file())
+        .or_else(beside_git)
 }
 
 /// Runs one shell line in a console window of its own, through Git Bash: the
@@ -411,6 +437,17 @@ mod tests {
         assert_eq!(quote_arg(r"C:\work\my repo\"), r#""C:\work\my repo\\""#);
         assert_eq!(quote_arg(r#"say "hi""#), r#""say \"hi\"""#);
         assert_eq!(quote_arg(""), r#""""#);
+    }
+
+    #[test]
+    fn explorer_selects_a_file_and_opens_a_folder() {
+        let dir = std::env::temp_dir().join(format!("dray apps {}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("run me.bat");
+        std::fs::write(&file, b"").unwrap();
+        assert_eq!(explorer_arg(&dir), format!("\"{}\"", dir.display()));
+        assert_eq!(explorer_arg(&file), format!("/select,\"{}\"", file.display()));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
