@@ -227,15 +227,15 @@ fun BotChatRow(key: SessionKey, rows: List<BotRow>, i: Int, items: List<BotItem>
 
 /**
  * An agent's reply as a bot chat draws it: a card-filled bubble short of the trailing edge, the
- * reader's reaction on its far corner as the bot's sits on theirs. `modifier` is the bubble's own.
+ * reader's reaction hanging off its bottom corner, under what was read. `modifier` is the bubble's own.
  */
 @Composable
 fun ReplyBubble(text: String, reaction: String? = null, modifier: Modifier = Modifier) {
-    Box(Modifier.padding(end = 32.dp).padding(top = if (reaction == null) 0.dp else 12.dp)) {
+    Box(Modifier.padding(end = 32.dp).padding(bottom = if (reaction == null) 0.dp else 12.dp)) {
         Box(modifier.clip(RoundedCornerShape(Dray.Radius.xl)).background(Dray.card).padding(horizontal = 12.dp, vertical = 10.dp)) {
             MarkdownText(text)
         }
-        reaction?.let { Box(Modifier.align(Alignment.TopEnd).offset(x = 12.dp, y = (-16).dp)) { ReactionBadge(it, mine = true) } }
+        reaction?.let { Box(Modifier.align(Alignment.BottomEnd).offset(x = 12.dp, y = 16.dp)) { ReactionBadge(it, mine = true) } }
     }
 }
 

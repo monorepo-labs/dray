@@ -37,18 +37,17 @@ export type Reactions = {
 };
 
 export const ReactionsContext = createContext<Reactions>({ mine: new Map(), react: null });
-
-/// A bot's message with the reader's reaction on its corner, as the bot's sits
-/// on the reader's, and beside it a button to pick one on hover. Takes the
+/// A bot's message with the reader's reaction hanging off its bottom corner, under
+/// what was read, and beside it a button to pick one on hover. Takes the
 /// bubble's width and place in the chat.
 export function Reactable({ event, className, children }: { event: AgentEvent; className?: string; children: ReactNode }) {
   const { mine, react } = useContext(ReactionsContext);
   const reaction = mine.get(event.id);
   return (
-    <div className={cn("group/react flex max-w-[85%] items-center gap-1 self-start", className, reaction && "mt-3")}>
+    <div className={cn("group/react flex max-w-[85%] items-center gap-1 self-start", className, reaction && "mb-3")}>
       <div className="relative min-w-0">
         {children}
-        {reaction && <ReactionBadge emoji={reaction} mine className="absolute -top-4 -right-3" />}
+        {reaction && <ReactionBadge emoji={reaction} mine className="absolute -right-3 -bottom-4" />}
       </div>
       {react && !event.subagent && <ReactButton current={reaction} onPick={(emoji) => react(event, emoji)} />}
     </div>
