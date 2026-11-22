@@ -22,7 +22,12 @@ phone reads and drives it over the same WebSocket the desktop uses
   the words show as the bubble they will send as, the keyboard edits them
   in a sheet that can also send, and Cancel asks first. A swipe up from the
   resting orb or under it opens that sheet too, on every dock (#1302);
-  "Swipe up to type" sits over the orb until the reader has done it three times. The model chip and
+  "Swipe up to type" sits over the orb until the reader has done it three times.
+  The sheet opens short over the keyboard, as Android's does, and a drag up
+  its header takes it to full height (#1415): one detent at a time, since a
+  sheet offered both goes to the larger as soon as the keyboard is up. In a
+  bot's chat a swipe in from the right edge opens its Tasks sheet, the button
+  being a reach to the top of the screen. The model chip and
   "···" open **This task**: the session's model, effort, fast mode and
   stance for the next reply, each locked mid-turn where the harness can't
   carry it onto a queued prompt (`liveControls.ts`, restated in
