@@ -1,0 +1,104 @@
+import React, { useEffect, useRef, useState } from "react";
+import ReactDOM from "react-dom/client";
+
+import { ReactionBadge } from "@/components/chat/Reactions";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import DemoThemeBar from "@/demo/ThemeBar";
+import { setMode, setTheme } from "@/hooks/useTheme";
+import { REACTIONS } from "@/lib/reactions";
+import { THEMES } from "@/lib/theme";
+import "../App.css";
+
+/// Whether every reaction sits at the centre of its badge by eye. Each emoji is
+/// drawn twice, at the badge's real size and blown up, once as the box puts it
+/// ("raw") and once as the real `ReactionBadge` does; hairlines cross at the
+/// circle's centre. Judge it in the browser whose emoji font is in question:
+/// Safari or the app for Apple's, the session browser or Android's for Noto.
+
+const RAW =
+  "flex size-10 items-center justify-center rounded-full border border-border bg-(--reaction) text-[18px] leading-none select-none";
+
+/// Hairlines through the centre of the 40px circle under them.
+function Cross() {
+  return (
+    <>
+      <span className="pointer-events-none absolute top-0 left-1/2 h-full w-px -translate-x-1/2 bg-red-500/50" />
+      <span className="pointer-events-none absolute top-1/2 left-0 h-px w-full -translate-y-1/2 bg-red-500/50" />
+    </>
+  );
+}
+
+/// The nudge the badge beside it applied, read off its glyph once it settled.
+function Readout({ at }: { at: React.RefObject<HTMLDivElement | null> }) {
+  const [text, setText] = useState("…");
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const glyph = at.current?.querySelector<HTMLElement>("[role=img] > span");
+      setText(glyph?.style.transform.replace(/translate\((.*)\)/, "$1") || "no nudge");
+    }, 300);
+    return () => clearTimeout(t);
+  }, [at]);
+  return <p className="text-center text-[12px] text-muted-foreground tabular-nums">{text}</p>;
+}
+
+function Blown({ emoji, raw }: { emoji: string; raw: boolean }) {
+  const at = useRef<HTMLDivElement>(null);
+  return (
+    <div className="flex flex-col gap-2">
+      <div ref={at} className="relative size-40">
+        <div className="relative size-10 origin-top-left scale-400">
+          {raw ? <span className={RAW}>{emoji}</span> : <ReactionBadge emoji={emoji} />}
+          <Cross />
+        </div>
+      </div>
+      {!raw && <Readout at={at} />}
+    </div>
+  );
+}
+
+function Row({ label, raw }: { label: string; raw: boolean }) {
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-[13px] text-muted-foreground">{label}</p>
+      <div className="flex gap-6">
+        {REACTIONS.map((emoji) => (
+          <div key={emoji} className="relative size-10">
+            {raw ? <span className={RAW}>{emoji}</span> : <ReactionBadge emoji={emoji} />}
+            <Cross />
+          </div>
+        ))}
+      </div>
+      {/* Blown up by a transform, which leaves layout and so the measuring alone. */}
+      <div className="flex gap-2 pt-2">
+        {REACTIONS.map((emoji) => (
+          <Blown key={emoji} emoji={emoji} raw={raw} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Demo() {
+  return (
+    <main className="flex flex-col gap-10 py-8 pr-8 pl-56 text-foreground">
+      <Row label="Raw: the emoji's box centred, as the badge drew it before" raw />
+      <Row label="ReactionBadge: centred by its ink" raw={false} />
+    </main>
+  );
+}
+
+// `?mode=light&theme=default` opens on that pick, for a screenshot taken without a click.
+const query = new URLSearchParams(location.search);
+const mode = query.get("mode");
+if (mode === "light" || mode === "dark") setMode(mode);
+const theme = THEMES.find((t) => t.id === query.get("theme"));
+if (theme) setTheme(theme.id);
+
+ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+  <React.StrictMode>
+    <TooltipProvider>
+      <Demo />
+      <DemoThemeBar />
+    </TooltipProvider>
+  </React.StrictMode>,
+);

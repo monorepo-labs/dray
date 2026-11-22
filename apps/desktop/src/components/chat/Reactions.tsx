@@ -1,16 +1,30 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { SmilePlus } from "lucide-react";
 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { centring, inkOf } from "@/lib/emojiInk";
 import { REACTION_LABELS, REACTIONS } from "@/lib/reactions";
 import { cn } from "@/lib/utils";
 import type { AgentEvent } from "@/types/events";
 
 /// A reaction, as iMessage draws a tapback: a round chip on a corner of the
 /// bubble, filled with `--reaction` (white on Dray light, the panel elsewhere)
-/// and edged by a hairline, the emoji at about half its height.
+/// and edged by a hairline, the emoji at about half its height and centred by
+/// its ink (see [emojiInk]).
 export function ReactionBadge({ emoji, mine = false, className }: { emoji: string; mine?: boolean; className?: string }) {
+  const glyph = useRef<HTMLSpanElement>(null);
+  const baseline = useRef<HTMLSpanElement>(null);
+  const [nudge, setNudge] = useState<{ x: number; y: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = glyph.current;
+    const mark = baseline.current;
+    if (!el || !mark) return;
+    const s = getComputedStyle(el);
+    const ink = inkOf(emoji, `${s.fontStyle} ${s.fontWeight} ${s.fontSize} ${s.fontFamily}`);
+    // Offsets, not client rects: those take the badge's zoom-in mid-flight.
+    setNudge(ink && centring(ink, el.offsetWidth, el.offsetHeight, mark.offsetTop));
+  }, [emoji]);
   return (
     <span
       role="img"
@@ -21,7 +35,16 @@ export function ReactionBadge({ emoji, mine = false, className }: { emoji: strin
         className,
       )}
     >
-      {emoji}
+      <span
+        ref={glyph}
+        className="relative"
+        style={nudge ? { transform: `translate(${nudge.x}px, ${nudge.y}px)` } : undefined}
+      >
+        {emoji}
+        {/* An empty inline-block's bottom edge sits on the baseline, which is how
+            the text box says where its baseline is. */}
+        <span ref={baseline} className="inline-block size-0 align-baseline" />
+      </span>
     </span>
   );
 }

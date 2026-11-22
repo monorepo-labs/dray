@@ -1,5 +1,10 @@
 package com.yogesh.dray.ui
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Typeface
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -25,13 +30,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -42,20 +50,73 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import com.yogesh.dray.model.SessionKey
+import kotlin.math.ceil
 
 /** The reactions there are, the bot's and the reader's alike: `EMOJI` in react.rs, which refuses any other. */
 val reactions = listOf("👍", "❤️", "😂", "🎉", "✅", "👀", "😢")
 
 private val reactionLabels = mapOf("👀" to "Seen", "✅" to "Done", "🎉" to "Celebrating", "👍" to "Like", "❤️" to "Love", "😂" to "Laughing", "😢" to "Sad")
 
-/** A reaction, as a messenger draws one: a round chip in the panel's colour, a hairline edge, the emoji at about half its height. */
+/** A reaction's emoji as its badge draws it. */
+val reactionStyle = Dray.Font.body.copy(fontSize = 18.sp, lineHeight = 20.sp)
+
+/**
+ * A reaction, as a messenger draws one: a round chip in the panel's colour, a hairline edge, the
+ * emoji at about half its height and centred by its ink ([inkOf]), not by its text box.
+ */
 @Composable
 fun ReactionBadge(emoji: String, mine: Boolean = false) {
+    var nudge by remember(emoji) { mutableStateOf(Offset.Zero) }
     Box(
         Modifier.size(40.dp).clip(CircleShape).background(Dray.card).border(1.dp, Dray.border, CircleShape)
             .semantics { contentDescription = "${if (mine) "You" else "Bot"} reacted: ${reactionLabels[emoji] ?: emoji}" },
         contentAlignment = Alignment.Center,
-    ) { Text(emoji, style = Dray.Font.body.copy(fontSize = 18.sp, lineHeight = 20.sp)) }
+    ) {
+        Text(
+            emoji,
+            Modifier.graphicsLayer { translationX = nudge.x; translationY = nudge.y },
+            style = reactionStyle,
+            onTextLayout = { layout -> nudge = centring(emoji, layout) },
+        )
+    }
+}
+
+/** How far to move `emoji`'s laid-out text so its ink sits at the text box's centre. */
+fun centring(emoji: String, layout: TextLayoutResult): Offset {
+    val px = with(layout.layoutInput.density) { layout.layoutInput.style.fontSize.toPx() }
+    val ink = inkOf(emoji, px) ?: return Offset.Zero
+    return Offset(
+        layout.size.width / 2f - (ink.left + ink.right) / 2f,
+        layout.size.height / 2f - (layout.firstBaseline + (ink.top + ink.bottom) / 2f),
+    )
+}
+
+private val measured = HashMap<Pair<String, Float>, RectF?>()
+
+/**
+ * `emoji`'s ink at `px`, relative to where it starts on its baseline. Every emoji font places
+ * each glyph at its own spot in the em box (Google's, Samsung's), so a fixed nudge per emoji is
+ * right on some phones alone; the default typeface is the one Compose draws emoji in here.
+ */
+private fun inkOf(emoji: String, px: Float): RectF? = measured.getOrPut(emoji to px) {
+    val size = ceil(px).toInt()
+    val side = size * 4
+    val bitmap = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
+    // Origin a size in from the left and three down, so overhang either way is kept.
+    Canvas(bitmap).drawText(emoji, size.toFloat(), size * 3f, Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = px; typeface = Typeface.DEFAULT })
+    val pixels = IntArray(side * side).also { bitmap.getPixels(it, 0, side, 0, 0, side, side) }
+    bitmap.recycle()
+    var left = side; var top = side; var right = 0; var bottom = 0
+    for (y in 0 until side) for (x in 0 until side) {
+        // Alpha at or under this is anti-aliasing haze, not ink.
+        if ((pixels[y * side + x] ushr 24) <= 24) continue
+        if (x < left) left = x
+        if (x >= right) right = x + 1
+        if (y < top) top = y
+        if (y >= bottom) bottom = y + 1
+    }
+    if (right <= left) null
+    else RectF(left - size.toFloat(), top - size * 3f, right - size.toFloat(), bottom - size * 3f)
 }
 
 /**
