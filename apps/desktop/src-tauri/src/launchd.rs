@@ -226,6 +226,13 @@ fn spawn_dev(exe: &std::path::Path, log: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+/// Undoes [`stop`]'s hold on the reconnect loop, for a stop whose reason fell
+/// through: an update that never ran.
+#[cfg(windows)]
+pub fn resume() {
+    STOPPED.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Stops the server and keeps it stopped until the agent is loaded again —
 /// the next launch of the app, or the next login. A dev server has no agent,
 /// so it is signalled by the pid it wrote beside its port.

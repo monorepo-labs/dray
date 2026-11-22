@@ -263,9 +263,20 @@ async fn install(app: AppHandle) -> Result<(), InstallError> {
         return Err(InstallError::install("no update has been downloaded"));
     };
 
-    update
-        .install(bytes)
-        .map_err(|e| InstallError::install(e.to_string()))?;
+    // Windows: the plugin runs the installer and exits inside `install`. NSIS
+    // stops a running `dray-app.exe` by name and msiexec does not, so the
+    // server child would hold the exe open: a reboot prompt, or the old binary
+    // back at relaunch. Stopped first, and started again if nothing ran.
+    #[cfg(windows)]
+    if let Err(e) = crate::launchd::stop().await {
+        eprintln!("[update] could not stop the server: {e:#}");
+    }
+    let installed = update.install(bytes);
+    #[cfg(windows)]
+    if installed.is_err() {
+        crate::launchd::resume();
+    }
+    installed.map_err(|e| InstallError::install(e.to_string()))?;
     // The plugin's own save runs on exit, after the new instance has already
     // read the file, so the relaunch would open at the previous quit's size.
     if let Err(e) = app.save_window_state(StateFlags::all()) {
