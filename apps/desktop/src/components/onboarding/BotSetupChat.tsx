@@ -70,7 +70,7 @@ export default function BotSetupChat({
 function Arrive({ at, className, children }: { at: number; className?: string; children: ReactNode }) {
   const style: CSSProperties = { animationDelay: `${at * 450}ms`, animationFillMode: "both" };
   return (
-    <div style={style} className={`flex flex-col animate-in fade-in slide-in-from-bottom-1 duration-300 ${className ?? ""}`}>
+    <div style={style} className={`animate-in fade-in slide-in-from-bottom-1 duration-300 ${className ?? "flex flex-col"}`}>
       {children}
     </div>
   );

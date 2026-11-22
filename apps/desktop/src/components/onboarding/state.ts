@@ -57,6 +57,21 @@ export function useOnboardingPick(): Variant | null {
   return useSyncExternalStore(changed.subscribe, () => state).variant;
 }
 
+const FRESH = "dray.dev.onboarding.fresh";
+let fresh = ON && localStorage.getItem(FRESH) === "1";
+
+/// Dev only: draws every agent as not signed in, so a machine with all five
+/// set up can still see the setup screens a new user gets.
+export function useFreshMachine(): boolean {
+  return useSyncExternalStore(changed.subscribe, () => fresh);
+}
+
+export function setFreshMachine(on: boolean) {
+  fresh = on;
+  localStorage.setItem(FRESH, on ? "1" : "0");
+  changed.emit();
+}
+
 /// What a new user is offered to send Dray Bot first.
 export const STARTERS = [
   "What can you do for me?",

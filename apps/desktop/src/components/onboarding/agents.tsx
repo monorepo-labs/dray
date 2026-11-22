@@ -21,14 +21,14 @@ import { invoke, LOCAL } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { Harness } from "@/types/events";
 
+import { useFreshMachine } from "./state";
+
 export type SetupState = "checking" | "ready" | "signin" | "install";
 
 export type SetupRow = {
   harness: Harness;
   label: string;
   state: SetupState;
-  /// Who it is signed in as, where the CLI says.
-  detail: string | null;
   installCommand: string | null;
   docsUrl: string | null;
 };
@@ -41,16 +41,16 @@ export function useAgentSetup(): AgentSetup {
   const { agents, refresh } = useAgentAccounts("", LOCAL);
   const availability = useAgentAvailability(LOCAL);
   useEffect(() => onFocusChange((focused) => focused && void refresh()), [refresh]);
+  const fresh = useFreshMachine();
 
   const rows = HARNESS_ORDER.map((harness): SetupRow => {
     const agent = agents?.find((a) => a.harness === harness);
     const avail = availability?.find((a) => a.harness === harness);
-    const signedIn = agent?.accounts.find((a) => a.state === "logged_in");
+    const signedIn = !fresh && agent?.accounts.some((a) => a.state === "logged_in");
     return {
       harness,
       label: agent?.label ?? AGENT_LABELS[harness],
       state: !agent ? "checking" : !agent.installed ? "install" : signedIn ? "ready" : "signin",
-      detail: signedIn?.detail ?? null,
       installCommand: avail?.installCommand ?? null,
       docsUrl: avail?.docsUrl ?? null,
     };
@@ -75,7 +75,7 @@ export function StateLine({ row, className }: { row: SetupRow; className?: strin
           row.state === "ready" ? "bg-accent-add" : "bg-muted-foreground/40",
         )}
       />
-      <span className="truncate">{row.state === "ready" && row.detail ? row.detail : STATE_TEXT[row.state]}</span>
+      <span className="truncate">{STATE_TEXT[row.state]}</span>
     </span>
   );
 }
@@ -84,7 +84,7 @@ export function StateLine({ row, className }: { row: SetupRow; className?: strin
 /// `onMore` opens Settings → Agents, which holds the key and provider forms.
 export function AgentAction({ row, onMore }: { row: SetupRow; onMore: () => void }) {
   if (row.state === "checking") return <Spinner className="size-3.5 text-muted-foreground" />;
-  if (row.state === "ready") return <Check aria-label="Ready" className="size-4 text-accent-add" />;
+  if (row.state === "ready") return null;
   if (row.state === "install") return <InstallAction row={row} />;
   return <SignInAction row={row} onMore={onMore} />;
 }
@@ -117,7 +117,7 @@ function SignInAction({ row, onMore }: { row: SetupRow; onMore: () => void }) {
           <ChevronDown className="text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="max-w-72">
+      <DropdownMenuContent align="start" className="w-64">
         {options.map((option) => (
           <DropdownMenuItem
             key={option.id}

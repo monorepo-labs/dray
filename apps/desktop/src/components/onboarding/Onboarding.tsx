@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import type { Bot } from "@/types/events";
 
@@ -9,7 +10,15 @@ import Checklist from "./Checklist";
 import Steps from "./Steps";
 import Tour from "./Tour";
 import { useAgentSetup } from "./agents";
-import { finishOnboarding, replayOnboarding, useOnboarding, useOnboardingPick, VARIANTS } from "./state";
+import {
+  finishOnboarding,
+  replayOnboarding,
+  setFreshMachine,
+  useFreshMachine,
+  useOnboarding,
+  useOnboardingPick,
+  VARIANTS,
+} from "./state";
 
 export type OnboardingProps = {
   /// Dray Bot, the one the flows introduce.
@@ -109,6 +118,7 @@ export function OnboardingChat({
 function DevSwitch() {
   const [open, setOpen] = useState(false);
   const pick = useOnboardingPick();
+  const fresh = useFreshMachine();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -170,6 +180,10 @@ function DevSwitch() {
       </div>
       {VARIANTS.map((v, i) => row(v.label, String(i + 1), pick === v.id, () => replayOnboarding(v.id)))}
       {row("Off", "0", pick === null, () => replayOnboarding(null))}
+      <label className="mt-1 flex h-8 cursor-pointer items-center gap-2 border-t border-hairline px-2 pt-1 text-ui">
+        <Switch checked={fresh} onCheckedChange={setFreshMachine} />
+        Show agents as not set up
+      </label>
     </div>
   );
 }
