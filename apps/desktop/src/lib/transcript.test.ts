@@ -182,6 +182,25 @@ describe("a queued prompt", () => {
   });
 });
 
+describe("an agent switch", () => {
+  // Logged between turns, so it belongs to the prompt after it, not the
+  // turn before, and draws no row of its own in either's work.
+  it("marks the turn the new agent answers", () => {
+    const { turns } = buildTranscript(
+      [
+        prompt(0, "go", false),
+        text(1, "done"),
+        completed(2, "done"),
+        event(3, { type: "agent_switched", from: "claude_code", to: "codex", resumed: false }),
+        prompt(4, "carry on", false),
+      ],
+      false,
+    );
+    expect(turns.map((t) => t.switchedTo)).toEqual([null, "codex"]);
+    expect(turns.flatMap((t) => t.work).some((w) => "payload" in w && w.payload.type === "agent_switched")).toBe(false);
+  });
+});
+
 describe("a turn that closed without finalText", () => {
   /// An interrupt closes the turn with `finalText: null`. Falling back to the
   /// last message keeps the collapsed view ending on what the agent last said,

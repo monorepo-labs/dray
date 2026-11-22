@@ -1,5 +1,5 @@
 import { subagentBrief, toolSummary } from "@/lib/tools";
-import type { AgentEvent, FileEdit, ImageRef, ToolResult, Usage } from "@/types/events";
+import type { AgentEvent, FileEdit, Harness, ImageRef, ToolResult, Usage } from "@/types/events";
 
 export type SubagentRun = {
   /// The spawning tool call's id — what the envelope correlates on, and the key
@@ -314,6 +314,9 @@ export type Turn = {
   /// Merge cards posted this turn. Kept out of `work` so no fold or live
   /// window hides one: `MergeCard` decides when it shrinks.
   cards: AgentEvent[];
+  /// The agent the reader moved the task to just ahead of this turn's prompt,
+  /// drawn as "Switched to X" above it (#1414).
+  switchedTo: Harness | null;
   /// The closing `turn_completed`, absent while the turn is still running.
   completed: AgentEvent | null;
   /// `turn_completed.finalText`, which is a verbatim copy of the turn's last
@@ -579,6 +582,8 @@ function groupTools(work: AgentEvent[], subagentIds: Set<string>): WorkItem[] {
 function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
   const turns: Turn[] = [];
   let current: OpenTurn | null = null;
+  // Logged between turns, so held for the prompt the new agent answers.
+  let switchedTo: Harness | null = null;
 
   // A turn is only pushed once, here, so the tool grouping runs exactly once
   // per turn rather than on every render.
@@ -640,6 +645,7 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
     prompt,
     work: [],
     cards: [],
+    switchedTo: null,
     completed: null,
     finalText: null,
     toolCalls: 0,
@@ -662,7 +668,12 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
 
     if (event.payload.type === "user_message" && !inlineQueued) {
       if (current) close(current);
-      current = open(event, event.id);
+      current = { ...open(event, event.id), switchedTo };
+      switchedTo = null;
+      continue;
+    }
+    if (event.payload.type === "agent_switched") {
+      switchedTo = event.payload.to;
       continue;
     }
 

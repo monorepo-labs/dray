@@ -197,11 +197,9 @@ pub async fn init(
     let stdout_pending = pending_permissions.clone();
     let stdout_stdin = stdin.clone();
 
-    let seq_start: u64 = if is_new_session {
-        0
-    } else {
-        next_seq_by_session_id(session_id).await?
-    };
+    // Off the log even for a new conversation: one an agent switch starts
+    // (#1414) carries on this session's log, and a new session's has none.
+    let seq_start: u64 = next_seq_by_session_id(session_id).await?;
 
     let seq = Arc::new(AtomicU64::new(seq_start));
     let stdout_seq = seq.clone();

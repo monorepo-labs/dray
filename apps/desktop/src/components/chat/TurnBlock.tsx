@@ -2,6 +2,7 @@ import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useSta
 import { ChevronRight } from "lucide-react";
 
 import AssistantMessage from "@/components/chat/AssistantMessage";
+import { SwitchLine } from "@/components/chat/BotTranscript";
 import EventRow from "@/components/chat/EventRow";
 import MediaRow from "@/components/chat/MediaRow";
 import SubagentRow from "@/components/chat/SubagentRow";
@@ -150,6 +151,7 @@ export default memo(function TurnBlock({
   return (
     <div className="flex flex-col gap-3">
       {/* A bot's kickoff is Dray's own prompt: its chat opens on the reply. */}
+      {turn.switchedTo && <SwitchLine harness={turn.switchedTo} />}
       {turn.prompt && !isKickoff(turn) && <UserMessage {...userProps(turn)} onOpenSession={onOpenSession} />}
 
       {/* The work is cut at each queued prompt and each stretch collapses

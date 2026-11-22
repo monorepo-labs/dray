@@ -472,7 +472,7 @@ export function BotBubble({
 }
 
 /// Where the chat moved to another agent, said as quietly as a time label.
-function SwitchLine({ harness }: { harness: Harness }) {
+export function SwitchLine({ harness }: { harness: Harness }) {
   return <p className="self-center text-[12px] text-muted-foreground/70">Switched to {AGENT_LABELS[harness]}</p>;
 }
 

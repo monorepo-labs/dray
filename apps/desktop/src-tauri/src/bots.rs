@@ -1065,6 +1065,168 @@ fn replay(events: &[crate::events::AgentEvent]) -> Vec<String> {
         .collect()
 }
 
+/// How much of a task's conversation a new agent is handed (#1414): a quarter
+/// of a 200k-token window, at about four bytes a token. A bot's chat is mostly
+/// talk, so it keeps [`HANDOVER_CAP`].
+const TASK_HANDOVER_CAP: usize = 200_000;
+/// The opening stretch of a task kept whatever the cap cuts: its brief and the
+/// first steers, which the newest messages rarely restate.
+const TASK_HANDOVER_HEAD: usize = 30_000;
+
+/// Hands a task's next prompt the conversation where its newest agent switch
+/// has no answer yet: the send that made it, or a retry after a failed send or
+/// a restart. Answers whether that switch resumes the agent's own earlier
+/// conversation; `None` where no switch is waiting.
+pub async fn mark_switch_if_unanswered(item: &SessionIndexItem) -> Option<bool> {
+    use crate::events::AgentEventPayload as P;
+    if item.other_agents.is_empty() {
+        return None;
+    }
+    let id = &item.session_id;
+    let (to, resumed) = crate::store::find_newest(id, |events| {
+        events.iter().rev().find_map(|e| match &e.payload {
+            P::AgentSwitched { to, resumed, .. } => Some(Some((*to, *resumed))),
+            P::AssistantText { .. } | P::ToolCallStarted { .. } if e.subagent.is_none() => Some(None),
+            _ => None,
+        })
+    })
+    .await
+    .ok()
+    .flatten()
+    .flatten()?;
+    if to != item.harness {
+        return None;
+    }
+    let marked = HANDOVERS.lock().unwrap().iter().any(|(i, _)| i == id);
+    if !marked {
+        let events = crate::store::list_session_events(id).await.unwrap_or_default();
+        restore_handover(id, task_handover_prompt(item, &events, resumed).await);
+    }
+    Some(resumed)
+}
+
+/// The hidden note a task's new agent reads ahead of the reader's message:
+/// the conversation replayed from the log, as a bot's is. An agent picking its
+/// own conversation back up is handed only what happened since it left.
+async fn task_handover_prompt(item: &SessionIndexItem, events: &[crate::events::AgentEvent], resumed: bool) -> String {
+    use crate::events::AgentEventPayload as P;
+    let switches: Vec<(usize, Harness)> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match e.payload {
+            P::AgentSwitched { from, .. } => Some((i, from)),
+            _ => None,
+        })
+        .collect();
+    let Some(&(end, _)) = switches.last() else { return String::new() };
+    let to = item.harness;
+    let start = match resumed {
+        true => switches[..switches.len() - 1].iter().rev().find(|(_, from)| *from == to).map_or(0, |(i, _)| *i),
+        false => 0,
+    };
+
+    let mut entries = Vec::new();
+    if start == 0 {
+        entries.push(format!("[on {}]", switches[0].1.label()));
+    }
+    let mut tools: Vec<String> = Vec::new();
+    for e in events[start..end].iter().filter(|e| e.subagent.is_none()) {
+        let line = match &e.payload {
+            P::AgentSwitched { to, .. } => format!("[on {}]", to.label()),
+            P::UserMessage { kickoff: true, .. } => continue,
+            P::UserMessage { text, from: Some(_), .. } => text.trim().to_string(),
+            P::UserMessage { text, .. } => format!("User: {}", text.trim()),
+            P::AssistantText { text, .. } if crate::events::has_text(text) => format!("Agent: {}", text.trim()),
+            P::ToolCallStarted { name, tool_type, input, title, .. } => {
+                tools.push(tool_line(name, *tool_type, input, title.as_deref(), &item.cwd));
+                continue;
+            }
+            _ => continue,
+        };
+        if !tools.is_empty() {
+            entries.push(std::mem::take(&mut tools).join("\n"));
+        }
+        entries.push(line);
+    }
+    if !tools.is_empty() {
+        entries.push(tools.join("\n"));
+    }
+
+    let (kept, cut) = head_and_newest_within(&entries, TASK_HANDOVER_HEAD, TASK_HANDOVER_CAP);
+    let conversation = escape(&kept.join("\n\n"), "conversation");
+    let log = crate::store::get_session_path(&item.session_id)
+        .await
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let agent = to.label();
+    let what = match resumed {
+        true => format!("the user moved this task to another agent for a while and has now moved it back to you, {agent}. Below is what happened while you were away"),
+        false => format!("the user just moved this task to you, {agent}, from another agent. You work in the same folder and branch, and the work so far is on disk. Below is the conversation so far"),
+    };
+    let middle = if cut { "Part of the middle is left out, marked […]. " } else { "" };
+    format!(
+        "[Dray: {what}, oldest first: the user's messages and the agent's replies in full, and each tool call as one line with no output, since the files show the result. {middle}The full log, one JSON event per line, is {log}.\n\nCarry on as if you had been here all along, and don't mention this note.]\n\n<conversation>\n{conversation}\n</conversation>\n\nThe user's new message:\n\n"
+    )
+}
+
+/// One tool call as a hand-over line: what it did, never what it returned.
+fn tool_line(name: &str, kind: crate::events::ToolType, input: &serde_json::Value, title: Option<&str>, cwd: &str) -> String {
+    use crate::events::ToolType as T;
+    let field = |keys: &[&str]| keys.iter().find_map(|k| input.get(*k).and_then(serde_json::Value::as_str));
+    let path = field(&["file_path", "path", "notebook_path"]).map(|p| {
+        p.strip_prefix(&format!("{cwd}/")).unwrap_or(p)
+    });
+    let what = match kind {
+        T::Shell => field(&["command", "cmd"]).or(title).map(|c| format!("ran {c}")),
+        T::FileEdit => path.map(|p| format!("edited {p}")),
+        T::FileRead => path.map(|p| format!("read {p}")),
+        T::Search => field(&["pattern", "query"]).map(|q| format!("searched for {q}")),
+        T::Web => field(&["url", "query"]).map(|q| format!("looked up {q}")),
+        T::SubagentSpawn => field(&["description"]).map(|d| format!("started a subagent: {d}")),
+        _ => None,
+    };
+    let line = what.unwrap_or_else(|| match title {
+        Some(t) => format!("{name}: {t}"),
+        None => format!("called {name}"),
+    });
+    // A heredoc or a long prompt is one line here, and a short one.
+    let line = format!("- {}", line.split_whitespace().collect::<Vec<_>>().join(" "));
+    match line.char_indices().nth(200) {
+        Some((at, _)) => format!("{}…", &line[..at]),
+        None => line,
+    }
+}
+
+/// Every entry where they fit in `cap` bytes; else the oldest up to `head`
+/// bytes, a `[…]`, and the newest that fit in what is left. Answers whether any
+/// were cut. An opening entry larger than `head` keeps its start.
+fn head_and_newest_within(entries: &[String], head: usize, cap: usize) -> (Vec<String>, bool) {
+    if entries.iter().map(String::len).sum::<usize>() <= cap {
+        return (entries.to_vec(), false);
+    }
+    let mut kept = Vec::new();
+    let mut used = 0;
+    for entry in entries {
+        if used + entry.len() > head {
+            break;
+        }
+        used += entry.len();
+        kept.push(entry.clone());
+    }
+    if kept.is_empty() {
+        let mut end = head.min(entries[0].len());
+        while !entries[0].is_char_boundary(end) {
+            end -= 1;
+        }
+        kept.push(format!("{}…", &entries[0][..end]));
+        used = end;
+    }
+    let (tail, _) = newest_within(&entries[kept.len()..], cap - used);
+    kept.push("[…]".into());
+    kept.extend(tail);
+    (kept, true)
+}
+
 /// Makes the folder, both files and the list entry. Both files start empty: the
 /// bot is told its job in its first message and writes it down itself.
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -2428,6 +2590,34 @@ mod tests {
         assert_eq!(kept.last().unwrap(), "User: hi");
         assert!(kept[0].starts_with('…') && kept[0].ends_with('é'));
         assert_eq!(newest_within(&entries, 1000), (entries.clone(), false));
+    }
+
+    #[test]
+    fn a_task_replay_keeps_its_brief_and_its_latest() {
+        let entries: Vec<String> = (0..10).map(|i| format!("{i}{}", "x".repeat(9))).collect();
+        assert_eq!(head_and_newest_within(&entries, 30, 200), (entries.clone(), false));
+        let (kept, cut) = head_and_newest_within(&entries, 30, 60);
+        assert!(cut);
+        let firsts: Vec<char> = kept.iter().map(|e| e.chars().next().unwrap()).collect();
+        assert_eq!(firsts, ['0', '1', '2', '[', '7', '8', '9']);
+
+        // A brief longer than the whole head keeps its start.
+        let long = vec![format!("User: {}", "é".repeat(40)), "Agent: done".into()];
+        let (kept, _) = head_and_newest_within(&long, 20, 40);
+        assert!(kept[0].starts_with("User: ") && kept[0].ends_with('…'));
+        assert_eq!(kept.last().unwrap(), "Agent: done");
+    }
+
+    #[test]
+    fn a_tool_call_replays_as_one_line() {
+        use crate::events::ToolType as T;
+        let edit = serde_json::json!({"file_path": "/w/src/App.css", "old_string": "a"});
+        assert_eq!(tool_line("Edit", T::FileEdit, &edit, None, "/w"), "- edited src/App.css");
+        let run = serde_json::json!({"command": "pnpm test\n  --run"});
+        assert_eq!(tool_line("Bash", T::Shell, &run, None, "/w"), "- ran pnpm test --run");
+        assert_eq!(tool_line("mcp__x", T::Mcp, &serde_json::json!({}), None, "/w"), "- called mcp__x");
+        let long = serde_json::json!({"command": "y".repeat(500)});
+        assert!(tool_line("Bash", T::Shell, &long, None, "/w").ends_with('…'));
     }
 
     #[test]

@@ -189,7 +189,6 @@ export default function ComposerToolbar({
         fastNote={fastNote}
         onFastChange={onFastChange}
         isNewSession={isNewSession}
-        agentSwitch={agentSwitch}
         busy={busy}
         onChange={onModelChange}
         onRefreshModels={onRefreshModels}

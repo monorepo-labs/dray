@@ -366,7 +366,12 @@ automatic: boolean, } | { "type": "permission_denied", toolName: string, toolUse
  * notice says it did. The session layer records it, so the composer
  * stops naming the model the CLI left.
  */
-model: ModelId | null, } | { "type": "task_started", taskId: string, title: string, } | { "type": "merge_card", taskId: string, title: string, 
+model: ModelId | null, } | { "type": "agent_switched", from: Harness, to: Harness, 
+/**
+ * `to` picks its own earlier conversation in this session back up,
+ * so it is handed only what happened since it left.
+ */
+resumed: boolean, } | { "type": "task_started", taskId: string, title: string, } | { "type": "merge_card", taskId: string, title: string, 
 /**
  * The repo root, what the sidebar's PR marks are keyed by. The task's
  * machine's path where `machine` is set.

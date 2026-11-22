@@ -197,6 +197,13 @@ pub struct SessionIndexItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub routine_run: Option<String>,
+    /// Agents this session ran on before a switch (#1414). Claude Code, grok
+    /// and pi keep their conversation under this session's id, so a switch
+    /// back to one listed here resumes it. A fork starts with none, since its
+    /// copy of the conversation lives only on its current agent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(skip)]
+    pub other_agents: Vec<Harness>,
     /// Every key this build does not know, carried through untouched.
     ///
     /// The index is rewritten **whole**, and `INDEX_LOCK` is an in-process
@@ -743,6 +750,7 @@ impl SessionIndexItem {
             need: None,
             adopted_by: None,
             routine_run: None,
+            other_agents: Vec::new(),
             unknown: Default::default(),
         }
     }
@@ -839,6 +847,7 @@ impl SessionIndexItem {
             need: None,
             adopted_by: None,
             routine_run: None,
+            other_agents: Vec::new(),
             unknown: Default::default(),
         }
     }
@@ -1772,6 +1781,18 @@ pub async fn rename_session(session_id: &str, title: &str) -> Result<Option<Sess
 /// Written once, when `thread/start` answers. A session whose entry has gone —
 /// deleted while its child was starting — answers `Ok` rather than erroring:
 /// there is nothing to record it on and nothing has gone wrong.
+/// Moves a session onto `to`, remembering the agent it leaves.
+pub async fn set_session_agent(session_id: &str, to: Harness) -> Result<Option<SessionIndexItem>> {
+    update_item(session_id, |item| {
+        if !item.other_agents.contains(&item.harness) {
+            item.other_agents.push(item.harness);
+        }
+        item.harness = to;
+        item.clone()
+    })
+    .await
+}
+
 pub async fn set_session_thread_id(session_id: &str, thread_id: &str) -> Result<()> {
     update_item(session_id, |item| item.thread_id = Some(thread_id.to_string())).await?;
     Ok(())

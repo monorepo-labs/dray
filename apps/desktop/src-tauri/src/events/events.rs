@@ -418,6 +418,19 @@ pub enum AgentEventPayload {
         model: Option<crate::models::ModelId>,
     },
 
+    /// The reader moved this task to another agent (#1414), logged ahead of the
+    /// first prompt the new one answers. Drawn as "Switched to X", and read
+    /// back at the next spawn: an unanswered one is what hands the new agent
+    /// the conversation.
+    AgentSwitched {
+        from: Harness,
+        to: Harness,
+        /// `to` picks its own earlier conversation in this session back up,
+        /// so it is handed only what happened since it left.
+        #[serde(default)]
+        resumed: bool,
+    },
+
     /// A session this bot chat started, logged by the server as it creates it.
     /// The chat's "Started a new task" row reads this, never the bot's shell
     /// call, whose output a pipe or a script may hide. `title` is the one it

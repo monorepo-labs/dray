@@ -104,7 +104,6 @@ pub async fn init(
     permission_mode: ApprovalPolicy,
     cwd: &str,
     session_cwd: &str,
-    is_new_session: bool,
     app: &Sink,
 ) -> Result<Session> {
     // The session *file*, not the session id, is pi's resume handle. pi mints
@@ -178,11 +177,9 @@ pub async fn init(
 
     let client = PiClient::new(stdin);
 
-    let seq_start: u64 = if is_new_session {
-        0
-    } else {
-        next_seq_by_session_id(session_id).await?
-    };
+    // Off the log even for a new conversation: one an agent switch starts
+    // (#1414) carries on this session's log, and a new session's has none.
+    let seq_start: u64 = next_seq_by_session_id(session_id).await?;
     let seq = Arc::new(AtomicU64::new(seq_start));
 
     let status: Arc<Mutex<StatusTracker>> = Arc::new(Mutex::new(StatusTracker::default()));
