@@ -174,8 +174,10 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
                 // empty.
                 "--mcp-config",
                 r#"{"mcpServers":{}}"#,
+                // PowerShell is Windows' shell tool; denying Bash alone left
+                // it named in a warning on every title.
                 "--disallowed-tools",
-                "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,Task",
+                "Bash,PowerShell,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,Task",
                 // `manual` hangs here — it produced no output and had to be
                 // killed, twice. `auto` is safe only because the tool list
                 // above is empty.
@@ -824,6 +826,7 @@ mod command_tests {
 
         assert!(claude.contains(&"--strict-mcp-config".to_string()));
         assert!(claude.iter().any(|a| a.contains("Read,Write,Edit")));
+        assert!(claude.iter().any(|a| a.contains("PowerShell")), "Windows' shell tool too");
     }
 
     /// Codex cannot: it has no `--disallowed-tools`, and `-s read-only` permits
