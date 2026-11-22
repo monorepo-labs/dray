@@ -144,6 +144,15 @@ fn hostname() -> String {
 /// Whether `pid` is alive and, where `/proc` can say, runs this binary: a
 /// resume reuses low pids, so a live pid alone is often someone else.
 fn holds_lock(pid: i32) -> bool {
+    // Only a pid this user may signal holds it, unlike `platform::pid_alive`:
+    // after a host rename a stale lock's pid can belong to a root daemon, and
+    // counting `EPERM` as alive would refuse the profile for good.
+    #[cfg(unix)]
+    // SAFETY: signal 0 only checks the pid.
+    if pid <= 0 || unsafe { libc::kill(pid, 0) } != 0 {
+        return false;
+    }
+    #[cfg(windows)]
     if pid <= 0 || !crate::platform::pid_alive(pid as u32) {
         return false;
     }
