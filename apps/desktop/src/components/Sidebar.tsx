@@ -2848,7 +2848,9 @@ export function RowMenu({
           the two elements the key lands on.
       */}
       <ContextMenuContent
-        className="w-40"
+        // Wider where one bot is named on its item, so the name has room; still
+        // fixed per row, which is what the width is for.
+        className={onAttach && attachBots?.length === 1 ? "w-56" : "w-40"}
         onKeyDown={(e) => {
           if (!forkOpen) return;
           const picked = forkRefs.current[Number(e.key) - 1];
@@ -2952,7 +2954,17 @@ export function RowMenu({
               </ContextMenuItem>
             )}
 
-            {onAttach && attachBots && attachBots.length > 0 && (
+            {/* One bot is a pick already made, so it is named on the item itself. */}
+            {onAttach && attachBots?.length === 1 && (
+              <ContextMenuItem className="text-ui" onSelect={() => onAttach(attachBots[0])}>
+                <Link2 />
+                <span className="shrink-0">Attach to</span>
+                <BotAvatar seed={attachBots[0].id} avatar={attachBots[0].avatar} still className="size-4 shrink-0" />
+                <span className="truncate">{attachBots[0].name}</span>
+              </ContextMenuItem>
+            )}
+
+            {onAttach && attachBots && attachBots.length > 1 && (
               <ContextMenuSub>
                 <ContextMenuSubTrigger className="text-ui">
                   <Link2 />
