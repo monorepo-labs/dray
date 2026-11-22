@@ -1417,6 +1417,7 @@ dependencies = [
  "chrono",
  "cpal",
  "dray-proto",
+ "dunce",
  "earshot",
  "fff-search",
  "flate2",

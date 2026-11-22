@@ -1435,7 +1435,7 @@ fn parse_lock_reason(porcelain: &str, worktree_path: &Path) -> Option<String> {
 /// this is usable on a tree that has already been deleted, and in tests over
 /// paths that were never on disk.
 pub(crate) fn resolved(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Whether this path is a worktree **Dray created**, which is the only kind it

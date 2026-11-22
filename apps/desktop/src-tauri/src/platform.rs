@@ -34,6 +34,13 @@ pub fn kill_tree(pid: u32) {
         .status();
 }
 
+/// `tokio::fs::canonicalize`, minus the `\\?\` prefix Windows puts on every
+/// answer. Left on, a project read `\\?\C:\work\demo` and matched no path
+/// git or a reader writes. `dunce::canonicalize` is the same for sync code.
+pub async fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<std::path::PathBuf> {
+    tokio::fs::canonicalize(path).await.map(|real| dunce::simplified(&real).to_path_buf())
+}
+
 /// Sets Unix permission bits. A no-op on Windows, where a file under the
 /// user's profile is already readable by that user and administrators alone.
 pub fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {

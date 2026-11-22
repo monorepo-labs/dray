@@ -3273,7 +3273,7 @@ fn project_from(requested: Option<&str>, parent: Option<&SessionIndexItem>) -> O
     let raw = requested.or_else(|| parent.map(|p| p.project_path.as_str()))?;
 
     Some(
-        std::fs::canonicalize(raw)
+        dunce::canonicalize(raw)
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| raw.to_string()),
     )

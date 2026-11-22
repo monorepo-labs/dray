@@ -1360,11 +1360,11 @@ async fn screenshot_path(session: &str, given: &str) -> Result<PathBuf, String> 
         .flatten()
         .map(|item| PathBuf::from(item.cwd))
         .ok_or("this session has no checkout to write under")?;
-    let cwd = std::fs::canonicalize(&cwd).map_err(|e| format!("{}: {e}", cwd.display()))?;
+    let cwd = dunce::canonicalize(&cwd).map_err(|e| format!("{}: {e}", cwd.display()))?;
     let full = if Path::new(given).is_absolute() { PathBuf::from(given) } else { cwd.join(given) };
     let name = full.file_name().ok_or("the path names no file")?.to_owned();
     let parent = full.parent().ok_or("the path names no directory")?;
-    let parent = std::fs::canonicalize(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    let parent = dunce::canonicalize(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     if !parent.starts_with(&cwd) {
         return Err(format!(
             "screenshots go under the session's checkout ({}); with no path, under ~/.dray/browser/shots",

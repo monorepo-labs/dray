@@ -131,7 +131,7 @@ fn home_dir(plist: &str) -> Option<PathBuf> {
         Some(home) => PathBuf::from(home),
         None => std::env::home_dir()?.join(".dray"),
     };
-    Some(std::fs::canonicalize(&home).unwrap_or(home))
+    Some(dunce::canonicalize(&home).unwrap_or(home))
 }
 
 /// Whether the server running now was started from an older plist.

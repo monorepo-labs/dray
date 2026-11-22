@@ -1475,7 +1475,7 @@ async fn servable(path: &str) -> Option<PathBuf> {
     if let Some(real) = servable_under(&store::get_home_app_dir().await.ok()?, path).await {
         return Some(real);
     }
-    let real = tokio::fs::canonicalize(path).await.ok()?;
+    let real = crate::platform::canonicalize(path).await.ok()?;
     let opened = OPENED_VIDEOS.lock().unwrap_or_else(|e| e.into_inner());
     opened.contains(&real).then_some(real)
 }
@@ -1499,10 +1499,10 @@ async fn read_file(path: &str) -> Result<files::FileBody, String> {
 }
 
 async fn servable_under(home: &std::path::Path, path: &str) -> Option<PathBuf> {
-    let real = tokio::fs::canonicalize(path).await.ok()?;
+    let real = crate::platform::canonicalize(path).await.ok()?;
     let browser = home.join("browser");
     for root in [home.join("attachments"), browser.join("recordings"), browser.join("shots")] {
-        if let Ok(root) = tokio::fs::canonicalize(&root).await {
+        if let Ok(root) = crate::platform::canonicalize(&root).await {
             if real.starts_with(&root) && real.is_file() {
                 return Some(real);
             }
