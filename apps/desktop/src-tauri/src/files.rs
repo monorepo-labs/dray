@@ -737,6 +737,7 @@ mod tests {
     /// is not text rather than blaming its size — the two ways the viewer used
     /// to refuse a video with the wrong sentence.
     #[tokio::test]
+    #[cfg(unix)]
     async fn answers_a_large_file_by_kind_not_size() {
         let dir = scratch();
         let big = vec![0u8; MAX_FILE as usize + 1];

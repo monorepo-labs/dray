@@ -244,6 +244,7 @@ mod tests {
     /// modes still land and the binary runs. ~100MB, so ignored.
     #[tokio::test]
     #[ignore]
+    #[cfg(unix)]
     async fn unpacks_the_real_archive() {
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("dray-headless-{}", std::process::id()));
