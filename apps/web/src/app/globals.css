@@ -88,6 +88,8 @@
   --color-surface-thumb: color-mix(in oklab, oklch(1 0 0) 16%, var(--color-card));
   /* The picker's arrow-key highlight, a white veil rather than a fill. */
   --color-veil-strong: oklch(1 0 0 / 11.5%);
+  /* Send's fill: `--primary` in every palette but Default light. */
+  --color-send: var(--color-primary);
 
   /* Everything in the transcript is one size; weight and colour carry
      hierarchy. Only code and tool output scale separately. */
@@ -159,6 +161,11 @@ body {
      root against the site's card: declared on the window, it mixes from
      whichever card the window's palette names. */
   --color-surface-thumb: color-mix(in oklab, oklch(1 0 0) 16%, var(--color-card));
+  /* The composer and the merge card draw their edge as a white ring, so the
+     composer's border goes. */
+  --color-edge-surface: transparent;
+  --shadow-composer: 0 0 0 1px oklch(1 0 0 / 8%);
+  --shadow-raised-card: 0 0 0 1px oklch(1 0 0 / 8%);
 }
 
 /* Both translucent over the page, painted as one fill each so a sheet is
@@ -254,6 +261,16 @@ body {
 :root[data-scheme="light"] [data-home] [data-app-window] {
   --color-surface-frame: #ffffff;
   --color-surface-sheet: #ffffff;
+  /* The composer is white on the white sheet, drawn by its shadow: a hairline
+     ring over `--shadow-surface` with the wide stop pulled in. The merge card
+     wears the same ring over the card's own softer drop. Send keeps the
+     palette's blue where every other filled button is near-black. */
+  --color-composer: #ffffff;
+  --color-send: oklch(0.65 0.17 250);
+  --shadow-composer:
+    0 0 0 1px oklch(0 0 0 / 6%), 0 1px 1px oklch(0 0 0 / 8%), 0 1px 1px oklch(0 0 0 / 10%), 0 1px 2px oklch(0 0 0 / 8%);
+  --shadow-raised-card:
+    0 0 0 1px oklch(0 0 0 / 6%), 0 1px 1px oklch(0 0 1 / 4%), 0 1px 1px oklch(0 0 0 / 6%), 0 1px 4px oklch(0 0 0 / 4%);
   --sheet-ring: 0 0 0 1px oklch(0 0 0 / 6%);
   --sheet-foot: 0 1px 1px oklch(0 0 0 / 8%), 0 1px 1px oklch(0 0 0 / 10%), 0 1px 2px oklch(0 0 0 / 8%);
   --sheet-glow: 0 1px 3px oklch(0 0 0 / 10%);

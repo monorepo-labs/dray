@@ -150,9 +150,9 @@ function ContextRing({ fraction }: { fraction: number }) {
   );
 }
 
-/// The composer card and the control row under it. The card carries the edge
-/// and no shadow: a shadow under a dark card falls on something already darker
-/// than itself.
+/// The composer card and the control row under it. Inside the drawn window
+/// it wears the app's `--shadow-composer`: a hairline ring in dark, the ring
+/// and three short drops in light.
 export function Composer({
   placeholder = "Send follow-up",
   value,
@@ -210,7 +210,7 @@ export function Composer({
   return (
     <div className={cx("px-4 pb-4", className)}>
       <div className="mx-auto max-w-3xl">
-        <div className={cx("relative border border-edge-surface bg-composer backdrop-blur-xl", radius)}>
+        <div className={cx("relative border border-edge-surface bg-composer shadow-(--shadow-composer) backdrop-blur-xl", radius)}>
           {/* Controls ride the text's own row, always. `items-end` is what makes
               one row read correctly at both heights. */}
           <div className="flex items-end gap-1 px-3 py-3">
@@ -229,20 +229,22 @@ export function Composer({
                   <Mic className="size-4" />
                 </span>
               )}
-              {/* The one filled button that keeps `--primary`, and the one round
-                  control in a row of rounded squares. */}
+              {/* The one filled button that keeps the palette's own primary
+                  (`--color-send`, blue in light), and the one round control in a row
+                  of rounded squares. Muted while there is nothing to send, as
+                  the app's is. */}
               {onSend ? (
                 <button
                   type="button"
                   aria-label="Send"
                   onClick={onSend.send}
                   disabled={onSend.disabled}
-                  className="grid size-7 place-items-center rounded-full bg-primary text-primary-foreground transition-opacity disabled:opacity-50"
+                  className={cx(SEND, "hover:bg-send/90 disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none")}
                 >
                   <ArrowUp strokeWidth={2} className="size-4" />
                 </button>
               ) : (
-                <span className="grid size-7 place-items-center rounded-full bg-primary text-primary-foreground">
+                <span className={cx(SEND, !value && "bg-muted! text-muted-foreground! shadow-none!")}>
                   <span className="grid size-4 place-items-center">
                     <ArrowUp strokeWidth={2} className="size-4" />
                   </span>
@@ -289,6 +291,9 @@ export function Composer({
     </div>
   );
 }
+
+const SEND =
+  "grid size-7 place-items-center rounded-full bg-send text-primary-foreground shadow-[0_1px_4px_oklch(0_0_0/45%)] transition-colors light:shadow-[0_1px_3px_oklch(0_0_0/12%)]";
 
 const BUTTON =
   "flex h-7 items-center rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none";
