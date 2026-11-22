@@ -422,11 +422,25 @@ fn known_dirs() -> Vec<PathBuf> {
         local.map(|l| l.join("Microsoft").join("WinGet").join("Links")),
         std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("nodejs")),
         std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("Git").join("cmd")),
+        // Git's `sh`, which a routine's check runs through: the installer puts
+        // only `Git\cmd` on `PATH`. Beside whichever `git` is found, else
+        // the default install.
+        git_bin().or_else(|| std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("Git").join("bin"))),
         std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("GitHub CLI")),
     ]
     .into_iter()
     .flatten()
     .collect()
+}
+
+/// `<Git>\bin` for the `git.exe` on the inherited `PATH`, which Git for
+/// Windows keeps at `<Git>\cmd`.
+#[cfg(windows)]
+fn git_bin() -> Option<PathBuf> {
+    let git = search_path("git")?;
+    let root = git.parent()?.parent()?;
+    let bin = root.join("bin");
+    bin.join("sh.exe").is_file().then_some(bin)
 }
 
 /// Where a user-installed CLI tends to land.
@@ -709,6 +723,22 @@ fn is_executable(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A child's `PATH` reaches Git's `sh`, which only `Git\cmd` on the
+    /// inherited one would not: every routine check runs through it.
+    #[test]
+    #[cfg(windows)]
+    fn a_child_path_reaches_gits_sh() {
+        if search_path("git").is_none() {
+            return eprintln!("git not installed; skipping");
+        }
+        let out = std::process::Command::new("sh")
+            .args(["-c", "echo ok"])
+            .env("PATH", child_path(Vec::new()))
+            .output()
+            .expect("sh on the child's PATH");
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "ok");
+    }
 
     /// npm's two shim shapes as written on Windows: a native binary run
     /// straight, and a script run under `node`.

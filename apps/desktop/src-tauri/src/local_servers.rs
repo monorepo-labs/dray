@@ -276,11 +276,16 @@ pub(crate) fn serving(roots: &[(u32, usize)]) -> Vec<Vec<u16>> {
 }
 
 fn serving_ports(procs: &Processes, ports_of: &HashMap<u32, Vec<u16>>, root: u32, shells: usize) -> Vec<u16> {
+    #[cfg(unix)]
     const SHELLS: &[&str] = &["bash", "zsh", "sh", "dash", "fish"];
+    // Claude's PowerShell tool runs PowerShell; Git Bash is still `bash`.
+    #[cfg(windows)]
+    const SHELLS: &[&str] = &["bash", "sh", "powershell", "pwsh", "cmd"];
     let mut ports = Vec::new();
     let mut listening = 0;
     for &child in procs.children.get(&root).into_iter().flatten() {
-        if !SHELLS.contains(&procs.name(child)) {
+        // Case-blind, since Windows images keep whatever case they ship in.
+        if !SHELLS.iter().any(|shell| shell.eq_ignore_ascii_case(procs.name(child))) {
             continue;
         }
         let tree = subtree(&procs.children, child);
@@ -654,6 +659,16 @@ mod tests {
         assert!(serving_ports(&procs, &ports, 1, 2).is_empty(), "a build beside it keeps the agent working");
         let build_only = HashMap::from([(30, vec![9000])]);
         assert!(serving_ports(&procs, &build_only, 1, 1).is_empty(), "an MCP server's port is no shell's");
+    }
+
+    /// A dev server Claude's PowerShell tool started counts, as one under Git
+    /// Bash does.
+    #[test]
+    #[cfg(windows)]
+    fn a_powershell_serving_counts_on_windows() {
+        let procs = parse_ps("10 1 powershell.exe\n11 10 node.exe\n20 1 bash.exe\n21 20 node.exe\n");
+        let ports = HashMap::from([(11, vec![5173]), (21, vec![3000])]);
+        assert_eq!(serving_ports(&procs, &ports, 1, 2), vec![3000, 5173]);
     }
 
     /// The ToolHelp walk reaches a real child, which is what kill and settle
