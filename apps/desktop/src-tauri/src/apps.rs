@@ -1048,7 +1048,12 @@ mod tests {
             for id in known.desktop {
                 assert!(id.ends_with(".desktop"), "{id} is not a desktop file id");
             }
-            assert!(known.bundle.is_some() || !known.desktop.is_empty() || !known.bins.is_empty());
+            for path in known.windows {
+                assert!(path.to_lowercase().ends_with(".exe"), "{path} is not a program");
+            }
+            assert!(
+                known.bundle.is_some() || !known.desktop.is_empty() || !known.bins.is_empty() || !known.windows.is_empty()
+            );
             assert!(!known.name.is_empty());
         }
     }
