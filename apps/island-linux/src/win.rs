@@ -9,7 +9,7 @@ use crate::tap::{Kind, Pen, Tap};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
@@ -34,8 +34,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, GetWindowRect,
     GetWindowLongPtrW, GetWindowThreadProcessId, HC_ACTION, HWND_TOPMOST, KBDLLHOOKSTRUCT, LWA_ALPHA, MSG, SM_CXSCREEN,
     SM_CYSCREEN, SPI_GETCLIENTAREAANIMATION, SPI_GETWORKAREA, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetForegroundWindow, SetLayeredWindowAttributes,
-    SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, ShowWindow, SystemParametersInfoW, TranslateMessage,
+    SWP_ASYNCWINDOWPOS, SWP_NOSIZE, SWP_NOZORDER, SET_WINDOW_POS_FLAGS, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetForegroundWindow, SetLayeredWindowAttributes,
+    SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, ShowWindowAsync, SystemParametersInfoW, TranslateMessage,
     WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_RBUTTONDOWN,
     WM_RBUTTONUP, WM_SYSKEYDOWN, WM_XBUTTONDOWN, WM_XBUTTONUP, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
 };
@@ -73,9 +73,35 @@ pub fn adopt(window: Wid, takes_keys: bool) {
         let (dx, dy) = ((left + right) / 2 - left, (top + bottom) / 2 - top);
         let mut outer = RECT::default();
         if (dx, dy) != (0, 0) && GetWindowRect(h, &mut outer).is_ok() {
-            let _ = SetWindowPos(h, None, outer.left + dx, outer.top + dy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            set_pos(window, outer.left + dx, outer.top + dy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         }
     }
+}
+
+/// Moves a window from a thread of our own, posted to GPUI's message loop.
+/// `SetWindowPos` from GPUI's own thread delivers `WM_SIZE` and `WM_MOVE`
+/// at once, inside the update that asked, where GPUI cannot borrow the app
+/// and drops them: the window grew and GPUI went on laying out at the old
+/// size. X11's configure never had this, its events arriving later.
+fn set_pos(window: Wid, x: i32, y: i32, width: i32, height: i32, flags: SET_WINDOW_POS_FLAGS) {
+    static MOVES: OnceLock<Mutex<std::sync::mpsc::Sender<(Wid, i32, i32, i32, i32, u32)>>> = OnceLock::new();
+    let moves = MOVES.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<(Wid, i32, i32, i32, i32, u32)>();
+        std::thread::Builder::new()
+            .name("island-moves".into())
+            .spawn(move || {
+                for (window, x, y, width, height, flags) in rx {
+                    let flags = SET_WINDOW_POS_FLAGS(flags) | SWP_ASYNCWINDOWPOS;
+                    let after = if flags.contains(SWP_NOZORDER) { None } else { Some(HWND_TOPMOST) };
+                    unsafe {
+                        let _ = SetWindowPos(hwnd(window), after, x, y, width, height, flags);
+                    }
+                }
+            })
+            .expect("moves thread");
+        Mutex::new(tx)
+    });
+    let _ = moves.lock().unwrap_or_else(|e| e.into_inner()).send((window, x, y, width, height, flags.0));
 }
 
 fn hwnd(id: Wid) -> HWND {
@@ -422,13 +448,13 @@ pub fn pass_mouse(window: Wid, through: bool) {
 /// screen must not see it, or puts it back.
 pub fn unmap(window: Wid) {
     unsafe {
-        let _ = ShowWindow(hwnd(window), SW_HIDE);
+        let _ = ShowWindowAsync(hwnd(window), SW_HIDE);
     }
 }
 
 pub fn map(window: Wid) {
     unsafe {
-        let _ = ShowWindow(hwnd(window), SW_SHOWNOACTIVATE);
+        let _ = ShowWindowAsync(hwnd(window), SW_SHOWNOACTIVATE);
     }
 }
 
@@ -449,9 +475,7 @@ pub fn shift_alone() -> bool {
 /// Puts `window` over every other window of ours: the panel over a capture's
 /// overlay, so dictation stays in sight and in reach.
 pub fn raise(window: Wid) {
-    unsafe {
-        let _ = SetWindowPos(hwnd(window), Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    }
+    set_pos(window, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
 /// Moves and sizes a window of ours in device pixels. GPUI reads the
@@ -461,19 +485,15 @@ pub fn raise(window: Wid) {
 /// bar keeps Windows' frame on its other three sides, so the window itself
 /// is that much larger, or each fit would shrink it by the frame.
 pub fn configure(window: Wid, x: i32, y: i32, width: i32, height: i32) {
-    let h = hwnd(window);
-    let (left, top, right, bottom) = frame(h);
-    unsafe {
-        let _ = SetWindowPos(
-            h,
-            None,
-            x - left,
-            y - top,
-            width.max(1) + left + right,
-            height.max(1) + top + bottom,
-            SWP_NOZORDER | SWP_NOACTIVATE,
-        );
-    }
+    let (left, top, right, bottom) = frame(hwnd(window));
+    set_pos(
+        window,
+        x - left,
+        y - top,
+        width.max(1) + left + right,
+        height.max(1) + top + bottom,
+        SWP_NOZORDER | SWP_NOACTIVATE,
+    );
 }
 
 /// The frame around the client, per side, in device pixels.

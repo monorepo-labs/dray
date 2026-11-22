@@ -67,6 +67,25 @@ const NEEDS_MODEL: &str = if cfg!(windows) {
 /// How long news lights the pill's edge.
 const GLOW: Duration = Duration::from_secs(2);
 
+/// GPUI reports its own failures — a renderer that would not resize, a
+/// device lost — through `log`, which goes nowhere without a logger: its
+/// warnings and errors land in `island.log` with ours.
+struct StderrLog;
+
+impl log::Log for StderrLog {
+    fn enabled(&self, meta: &log::Metadata) -> bool {
+        meta.level() <= log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("island: {} {}: {}", record.level(), record.target(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
 enum Msg {
     Tap,
     /// The screenshot key.
@@ -371,6 +390,9 @@ impl Island {
 }
 
 fn main() {
+    if log::set_logger(&StderrLog).is_ok() {
+        log::set_max_level(log::LevelFilter::Warn);
+    }
     // `--orb-png <dir>`: the orb's reference frames as PNGs, for setting the
     // port beside the Mac's captures. No window, no server.
     let args: Vec<String> = std::env::args().collect();
