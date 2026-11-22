@@ -65,13 +65,20 @@ export function inkOf(text: string, font: string): Box | null {
   return box;
 }
 
+/// How far below its ink's centre an emoji must sit to look centred, in ems.
+/// The heart's point leaves the middle of its box well above its mass, so
+/// centred by box it reads high; judged by eye on Apple's font at the badge's
+/// 18px, where 2.5px down looked centred, and Android's heart has the same shape.
+export const OPTICAL_DROP: Record<string, number> = { "❤️": 0.14 };
+
 /// How far to move a text box `width` by `height`, its baseline `baseline` from
-/// its top, so `ink` (from [inkOf]) sits at the box's centre. Rounded to half a
-/// pixel, which a Retina screen draws and a plain one does not blur.
-export function centring(ink: Box, width: number, height: number, baseline: number): { x: number; y: number } {
+/// its top, so `ink` (from [inkOf]) sits at the box's centre, then `drop` pixels
+/// lower. Rounded to half a pixel, which a Retina screen draws and a plain one
+/// does not blur.
+export function centring(ink: Box, width: number, height: number, baseline: number, drop = 0): { x: number; y: number } {
   const half = (n: number) => Math.round(n * 2) / 2;
   return {
     x: half(width / 2 - (ink.left + ink.right) / 2),
-    y: half(height / 2 - (baseline + (ink.top + ink.bottom) / 2)),
+    y: half(height / 2 - (baseline + (ink.top + ink.bottom) / 2) + drop),
   };
 }

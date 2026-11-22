@@ -9,14 +9,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
@@ -29,7 +25,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
@@ -38,21 +33,13 @@ import kotlin.math.roundToInt
 /**
  * Whether every reaction sits at the centre of its badge by eye, on this phone's emoji font: each
  * drawn as the text box puts it (raw) and as [ReactionBadge] does, at real size and blown up
- * four times, red lines crossing at the circle's centre, the nudge under each in pixels.
+ * four times, plain as the app draws them, with the nudge under each in pixels.
  * `adb shell am start -n com.yogesh.dray.android/com.yogesh.dray.ui.ReactionDemoActivity`
  */
 class ReactionDemoActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { DrayTheme { Demo() } }
-    }
-}
-
-@Composable
-private fun Cross() {
-    Box(Modifier.fillMaxSize()) {
-        Box(Modifier.align(Alignment.Center).width(1.dp).fillMaxHeight().background(Color.Red.copy(alpha = 0.5f)))
-        Box(Modifier.align(Alignment.Center).height(1.dp).fillMaxWidth().background(Color.Red.copy(alpha = 0.5f)))
     }
 }
 
@@ -70,7 +57,6 @@ private fun Badge(emoji: String, raw: Boolean, scale: Float) {
     Box(Modifier.size(40.dp * scale)) {
         Box(Modifier.size(40.dp).graphicsLayer { scaleX = scale; scaleY = scale; transformOrigin = TransformOrigin(0f, 0f) }) {
             if (raw) RawBadge(emoji) else ReactionBadge(emoji)
-            Cross()
         }
     }
 }

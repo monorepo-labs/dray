@@ -28,6 +28,11 @@ describe("centring", () => {
     expect(centring(ink, 18, 18, 14)).toEqual({ x: -1, y: -1 });
   });
 
+  it("drops the ink further where it reads high centred", () => {
+    const ink = { left: 0, right: 18, top: -14, bottom: 4 };
+    expect(centring(ink, 18, 18, 14, 2.52)).toEqual({ x: 0, y: 2.5 });
+  });
+
   it("rounds to half a pixel", () => {
     expect(centring({ left: 0, right: 17, top: -14, bottom: 3 }, 18, 18, 14)).toEqual({ x: 0.5, y: 0.5 });
   });

@@ -3,7 +3,7 @@ import { SmilePlus } from "lucide-react";
 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { centring, inkOf } from "@/lib/emojiInk";
+import { centring, inkOf, OPTICAL_DROP } from "@/lib/emojiInk";
 import { REACTION_LABELS, REACTIONS } from "@/lib/reactions";
 import { cn } from "@/lib/utils";
 import type { AgentEvent } from "@/types/events";
@@ -22,8 +22,9 @@ export function ReactionBadge({ emoji, mine = false, className }: { emoji: strin
     if (!el || !mark) return;
     const s = getComputedStyle(el);
     const ink = inkOf(emoji, `${s.fontStyle} ${s.fontWeight} ${s.fontSize} ${s.fontFamily}`);
+    const drop = (OPTICAL_DROP[emoji] ?? 0) * parseFloat(s.fontSize);
     // Offsets, not client rects: those take the badge's zoom-in mid-flight.
-    setNudge(ink && centring(ink, el.offsetWidth, el.offsetHeight, mark.offsetTop));
+    setNudge(ink && centring(ink, el.offsetWidth, el.offsetHeight, mark.offsetTop, drop));
   }, [emoji]);
   return (
     <span
