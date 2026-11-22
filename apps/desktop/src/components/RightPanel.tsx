@@ -1,6 +1,7 @@
 import { Suspense, useState } from "react";
 import { RefreshCw } from "lucide-react";
 
+import { DocControls } from "@/components/DocEditing";
 import OpenInButton from "@/components/OpenInButton";
 import TabButton from "@/components/TabButton";
 import PanelRightIcon from "@/components/icons/PanelRightIcon";
@@ -371,13 +372,18 @@ export function PanelActions({
   cwd,
   refresh,
   file,
+  docStore,
 }: Pick<RightPanelProps, "actions" | "cwd" | "refresh"> & {
   /// A file to open in place of `cwd`, through the file opener's own pick.
   file?: { path: string; line?: number };
+  /// The docs store holding `file`'s draft, where it is markdown in Files.
+  docStore?: string;
 }) {
   return (
     <>
     {actions}
+
+    {file && docStore && <DocControls store={docStore} path={file.path} />}
 
     {/* Gone entirely on Subagents, which has nothing to re-read. It
         reserved its width back when the keycaps sat to its right and

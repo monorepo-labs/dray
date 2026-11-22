@@ -134,7 +134,8 @@ import ShortcutKeys from "@/components/ShortcutKeys";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { attachmentKey, clearAttachments, pickAttachments, readAttachments, restoreAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
-import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
+import { docsFor, filesDocKey, isDirty, refreshActiveDoc, saveActiveDoc, saveDoc, useDocs } from "@/hooks/useDocs";
+import { isMarkdownPath } from "@/lib/markdown";
 import {
   closeFile,
   forgetOpenFiles,
@@ -3473,6 +3474,22 @@ function App() {
   useHotkey("doc.save", () => saveActiveDoc(selectedSessionId), {
     enabled: panelShown && activeTab === "docs",
   });
+  // And on a markdown file in Files, whose draft lives in the docs store under
+  // its own key. Off the docs tab's chord, the two never claim ⌘S at once.
+  const shownDocFile = fileShown ? activeFile : litPickFile?.path;
+  const shownDocStore =
+    shownDocFile && isMarkdownPath(shownDocFile)
+      ? filesDocKey(fileShown ? selectedSessionId! : pickFilesKey(litPick!))
+      : null;
+  useHotkey(
+    "doc.save",
+    () => {
+      if (!shownDocStore || !shownDocFile) return;
+      const doc = docsFor(shownDocStore).docs.find((d) => d.path === shownDocFile);
+      if (doc && isDirty(doc)) void saveDoc(shownDocStore, shownDocFile);
+    },
+    { enabled: !!shownDocStore && !(panelShown && activeTab === "docs") },
+  );
   // The same ⌘S on any composer, wherever the docs tab is not the one taking it.
   // Off Chat the composer is hidden, so there is nothing on screen to save.
   useHotkey("composer.draft", () => void saveAsDraft(), {
@@ -4330,6 +4347,7 @@ function App() {
                       fileShown
                         ? openFiles.find((f) => f.path === activeFile)
                         : litPickFile}
+                    docStore={shownDocStore ?? undefined}
                   />
                   {/* A pull request, open or merged, stands in for the toggle and opens
                       the pane on itself; the pane's own tabs are inside it. */}

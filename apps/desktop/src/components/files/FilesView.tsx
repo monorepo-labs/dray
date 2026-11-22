@@ -11,7 +11,7 @@ import {
 
 import FileIcon from "@/components/FileIcon";
 import FileTree from "@/components/files/FileTree";
-import FileViewer from "@/components/files/FileViewer";
+import FileViewer, { FileCloseConfirm } from "@/components/files/FileViewer";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useHotkey } from "@/hooks/useHotkey";
@@ -53,10 +53,11 @@ const VIEWER_MIN = 360;
 
 /// The session's directory as a tree, with the files it opens beside it.
 ///
-/// Read-only, for the reason the repo view states: the conversation next door
-/// is where work gets made, so a second place to write it would be a second way
-/// to do what the reader is already asking the agent for. Nothing here edits,
-/// commits or deletes.
+/// Read-only for code, for the reason the repo view states: the conversation
+/// next door is where work gets made, so a second place to write it would be a
+/// second way to do what the reader is already asking the agent for. A markdown
+/// file is the exception, editable the Docs panel's way, since a doc is the
+/// reader's own writing. Nothing here commits or deletes.
 export default function FilesView({
   sessionId,
   cwd,
@@ -124,7 +125,7 @@ export default function FilesView({
     [sessionId, cwd, bring],
   );
   const openAbsolute = useCallback(
-    (path: string) => openInFiles(sessionId, path, undefined, bring),
+    (path: string, line?: number) => openInFiles(sessionId, path, line, bring),
     [sessionId, bring],
   );
   const selected = activePath?.startsWith(`${cwd}/`)
@@ -251,8 +252,9 @@ export default function FilesView({
       {list}
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <FileViewer file={file} onOpen={openAbsolute} />
+        <FileViewer file={file} sessionId={sessionId} onOpen={openAbsolute} />
       </div>
+      <FileCloseConfirm sessionId={sessionId} />
     </div>
   );
 }

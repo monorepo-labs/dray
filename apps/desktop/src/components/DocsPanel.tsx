@@ -1,20 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
-import { Eye, Loader2, Pencil, X } from "lucide-react";
+import { useState } from "react";
+import { X } from "lucide-react";
 
-import FileIcon from "@/components/FileIcon";
-import IconToggle from "@/components/IconToggle";
-import { Markdown } from "@/components/chat/Markdown";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
+  DiscardConfirm,
+  DocModeToggle,
+  DocSaveButton,
+  DocStaleStrip,
+  DocTextarea,
+} from "@/components/DocEditing";
+import FileIcon from "@/components/FileIcon";
+import MarkdownDoc from "@/components/MarkdownDoc";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import {
   Tooltip,
@@ -24,23 +19,13 @@ import {
 import {
   closeDoc,
   isDirty,
-  reloadDoc,
-  saveDoc,
   selectDoc,
-  setDocDraft,
-  setDocMode,
   useDocs,
   useDocWatcher,
   type Doc,
-  type DocMode,
 } from "@/hooks/useDocs";
 import { useHotkey } from "@/hooks/useHotkey";
 import { splitPath } from "@/lib/changes";
-import {
-  FIRST_SECTIONS,
-  SECTION_STEP,
-  splitMarkdownSections,
-} from "@/lib/markdown";
 import { cn } from "@/lib/utils";
 
 /// A markdown file from the transcript, rendered and editable.
@@ -130,45 +115,17 @@ export default function DocsPanel({
           ))}
         </div>
 
-        {/* Only while there is something to write. A Save that is always drawn
-            and mostly disabled explains nothing about why it cannot be
-            pressed. */}
-        {current && isDirty(current) && (
-          <Button
-            size="sm"
-            variant="outline"
-            // Full strength while the write is out: the spinner beside the verb
-            // is the state, and dimming it too makes the one live thing in the
-            // row the hardest part of it to read.
-            className="shrink-0 disabled:opacity-100"
-            disabled={current.body.status === "ready" && current.body.saving}
-            onClick={() => void saveDoc(sessionId, current.path)}
-          >
-            {current.body.status === "ready" && current.body.saving && (
-              <Loader2 className="animate-spin" />
-            )}
-            Save
-          </Button>
-        )}
-
-        {current && (
-          // Per doc, not one setting for the panel. A reader flipping their
-          // notes into edit mode has said nothing about the readme beside it.
-          <IconToggle
-            value={current.mode}
-            options={MODES}
-            onChange={(mode) => setDocMode(sessionId, current.path, mode)}
-          />
-        )}
+        {current && <DocSaveButton store={sessionId} doc={current} />}
+        {current && <DocModeToggle store={sessionId} doc={current} />}
       </div>
 
-      {current && <Strip sessionId={sessionId} doc={current} />}
+      {current && <DocStaleStrip store={sessionId} doc={current} />}
 
       <div className="min-h-0 flex-1 overflow-auto">
         {current && <Body sessionId={sessionId} doc={current} />}
       </div>
 
-      <CloseConfirm
+      <DiscardConfirm
         path={confirming}
         onConfirm={() => {
           if (confirming) closeDoc(sessionId, confirming);
@@ -269,54 +226,6 @@ function Chip({
   );
 }
 
-const MODES: { value: DocMode; label: string; Icon: typeof Eye }[] = [
-  { value: "view", label: "Read", Icon: Eye },
-  { value: "edit", label: "Edit", Icon: Pencil },
-];
-
-/// What the reader has to settle before the body means anything.
-///
-/// The watcher is what puts this up now. It used to appear only after a save had
-/// already bounced off the backend's compare-and-swap; the file moving is what
-/// raises it today, so the reader is told while they still have somewhere to go
-/// with it rather than at the press. A clean doc never gets here — it adopts the
-/// new text — so this row only ever stands over edits worth keeping.
-///
-/// "Discard my edits" rather than "Reload", because reloading is what the button
-/// *does* and losing the draft is what it *costs*, and the cost is the part
-/// worth reading before clicking. Neither it nor Overwrite takes the destructive
-/// fill: both lose something — one the reader's edits, the other whatever wrote
-/// the file underneath them — and red on one of a matched pair says the other is
-/// safe.
-function Strip({ sessionId, doc }: { sessionId: string | null; doc: Doc }) {
-  if (doc.body.status !== "ready") return null;
-  const { stale, saveError } = doc.body;
-  if (!stale && !saveError) return null;
-
-  return (
-    <div className="shrink-0 space-y-1.5 border-b border-border px-3 py-2 text-ui">
-      {stale && (
-        <div className="flex items-center gap-2">
-          <span className="min-w-0 flex-1 text-muted-foreground">
-            This file changed on disk since you opened it.
-          </span>
-          <Button size="sm" variant="outline" onClick={() => reloadDoc(sessionId, doc.path)}>
-            Discard my edits
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void saveDoc(sessionId, doc.path, { force: true })}
-          >
-            Overwrite
-          </Button>
-        </div>
-      )}
-      {saveError && <p className="text-destructive">{saveError}</p>}
-    </div>
-  );
-}
-
 function Body({ sessionId, doc }: { sessionId: string | null; doc: Doc }) {
   if (doc.body.status === "loading") {
     return (
@@ -334,99 +243,8 @@ function Body({ sessionId, doc }: { sessionId: string | null; doc: Doc }) {
   if (doc.mode === "view") {
     // Keyed on the path so switching chips starts the next document at its own
     // top rather than inheriting how far the last one had mounted.
-    return <Rendered key={doc.path} text={doc.body.draft} />;
+    return <MarkdownDoc key={doc.path} text={doc.body.draft} />;
   }
 
-  return (
-    <textarea
-      // Per doc, so switching chips gives each file its own element and the
-      // caret cannot arrive in one file where it was left in another. The tab
-      // being hidden keeps this mounted either way.
-      key={doc.path}
-      value={doc.body.draft}
-      onChange={(e) => setDocDraft(sessionId, doc.path, e.target.value)}
-      spellCheck={false}
-      // Tab is deliberately left alone: stealing it takes the keyboard's way
-      // out of this box, and markdown lists need no indent to be written.
-      className="h-full w-full resize-none bg-transparent px-3 py-2 font-mono text-code outline-none"
-    />
-  );
-}
-
-/// The document, mounted a few sections at a time.
-///
-/// One commit was what made a long file take seconds to open: 282KB of markdown
-/// measured at 930ms of parsing before any of the 608KB of HTML it produces
-/// reached the DOM, and the commit and layout of that tree after it. A reader
-/// opens a document at its top, so the top is what has to be on screen — the
-/// rest arrives behind it, which is the bargain the transcript's own backfill
-/// makes for a long session.
-///
-/// The total work is unchanged. What changes is that the main thread comes back
-/// between steps, so the panel is readable and scrollable throughout instead of
-/// frozen until the last section lands.
-function Rendered({ text }: { text: string }) {
-  const sections = useMemo(() => splitMarkdownSections(text), [text]);
-  const [mounted, setMounted] = useState(FIRST_SECTIONS);
-
-  useEffect(() => {
-    if (mounted >= sections.length) return;
-    // A macrotask rather than a frame: this is parse work, and yielding to the
-    // event loop is what keeps a click or a keystroke from queueing behind it.
-    const id = setTimeout(() => setMounted((n) => n + SECTION_STEP), 0);
-    return () => clearTimeout(id);
-  }, [mounted, sections.length]);
-
-  return (
-    <div className="px-3 py-2">
-      {sections.slice(0, mounted).map((section, i) => (
-        // `Markdown` strips its own first child's top margin, which is right for
-        // one message in a transcript and wrong for a section stacked under
-        // another — without this every heading after the first would sit flush
-        // against the paragraph above it.
-        <div key={i} className={i > 0 ? "mt-4" : undefined}>
-          {/* `linkFilePaths` stays off. It is on for the assistant's own
-              messages alone, and a doc's relative links are markdown the author
-              wrote — Streamdown's business, not this app's. */}
-          <Markdown>{section}</Markdown>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function CloseConfirm({
-  path,
-  onConfirm,
-  onClose,
-}: {
-  path: string | null;
-  onConfirm: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <AlertDialog
-      open={path !== null}
-      onOpenChange={(next) => !next && onClose()}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Close without saving?</AlertDialogTitle>
-          <AlertDialogDescription>
-            <span className="font-medium text-foreground">
-              {path && splitPath(path).name}
-            </span>{" "}
-            has unsaved edits. Closing it here discards them. The file on disk
-            is untouched.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Keep editing</AlertDialogCancel>
-          <AlertDialogAction destructive onClick={onConfirm}>
-            Discard edits
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
+  return <DocTextarea store={sessionId} doc={doc} />;
 }

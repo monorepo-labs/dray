@@ -215,6 +215,48 @@ function rehypeFilePaths() {
   return (tree: HastNode) => walk(tree);
 }
 
+/// Converts the links an author wrote to files, and leaves the prose alone.
+///
+/// For a document read as a document: a path mentioned in its sentences is the
+/// author's text, not a reference to redraw as a mention.
+function rehypeFileAnchors() {
+  return (tree: HastNode) => markAnchors(tree);
+}
+
+export function markAnchors(node: HastNode) {
+  const children = node.children;
+  if (!children) return;
+  for (let i = 0; i < children.length; i += 1) {
+    const child = children[i];
+    if (child.type !== "element") continue;
+    const link = docAnchorToFile(child);
+    if (link) children[i] = link;
+    else if (!NOT_PROSE.has(child.tagName ?? "")) markAnchors(child);
+  }
+}
+
+/// The file a document's own link names: any href with no scheme, the way a
+/// README links its neighbours. Looser than [anchorToFile] on purpose — in a
+/// doc `guide.md`, `../README.md` and `docs/` all mean the file beside it,
+/// where prose rules exist to keep an agent's sentences from linking words.
+/// A bare relative path gets `./`, so it still reads as a path once marked.
+function docAnchorToFile(node: HastNode): HastNode | null {
+  if (node.tagName !== "a") return null;
+  const href = node.properties?.href;
+  if (typeof href !== "string") return null;
+  const raw = href.trim().replace(/\?[^#]*/, "");
+  if (!raw || URL_SCHEME.test(raw) || raw.startsWith("//") || raw.startsWith("#")) return null;
+
+  // A heading anchor names a place this view cannot scroll to; `#L12` is a line.
+  const hash = raw.indexOf("#");
+  const bare = hash >= 0 && !/^#L\d+$/.test(raw.slice(hash)) ? raw.slice(0, hash) : raw;
+  const { path, line } = splitLocator(decodePath(bare));
+  if (!path || path.startsWith("~") || path.startsWith("$")) return null;
+
+  const written = path.startsWith("/") || path.startsWith(".") ? path : `./${path}`;
+  return marked(written, node.children ?? [], true, line);
+}
+
 export function walk(node: HastNode) {
   const children = node.children;
   if (!children) return;
@@ -350,6 +392,19 @@ export const REHYPE_PLUGINS_WITH_FILE_PATHS = [
   rehypeTableCells,
   rehypeBareUrls,
   rehypeFilePaths,
+  rehypeLocalImages,
+  HARDEN,
+] as StreamdownProps["rehypePlugins"];
+
+/// For a markdown file read in the Files view: the links its author wrote to
+/// files and its local images resolve, and its prose stays as written.
+export const REHYPE_PLUGINS_WITH_FILE_LINKS = [
+  defaultRehypePlugins.raw,
+  rehypeFileImageUrls,
+  defaultRehypePlugins.sanitize,
+  rehypeTableCells,
+  rehypeBareUrls,
+  rehypeFileAnchors,
   rehypeLocalImages,
   HARDEN,
 ] as StreamdownProps["rehypePlugins"];

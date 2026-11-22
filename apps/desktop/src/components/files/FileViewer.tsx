@@ -1,17 +1,31 @@
-import { useCallback, useMemo, useRef, useState } from "react";
-import { fileSrc, invoke } from "@/lib/transport";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { fileSrc, invoke, qualify, serverOfPath } from "@/lib/transport";
 import { getFiletypeFromFileName } from "@pierre/diffs";
 import { File, Virtualizer } from "@pierre/diffs/react";
 
 import Note from "@/components/changes/Note";
 import FileIcon from "@/components/FileIcon";
+import { DiscardConfirm, DocStaleStrip, DocTextarea } from "@/components/DocEditing";
+import MarkdownDoc from "@/components/MarkdownDoc";
+import { ChatSessionContext } from "@/hooks/useChatSession";
+import {
+  answerFileClose,
+  closeDoc,
+  filesDocKey,
+  isDirty,
+  syncDoc,
+  useDocs,
+  useFileCloseQuestion,
+} from "@/hooks/useDocs";
 import { useCodeThemeWithMode } from "@/hooks/useCodeTheme";
 import { useFirstFrame } from "@/hooks/useFirstFrame";
 import { useHighlighter } from "@/hooks/useHighlighter";
-import type { OpenFile } from "@/hooks/useOpenFiles";
+import { openInFiles, type OpenFile } from "@/hooks/useOpenFiles";
 import type { DirEntry, FileBody } from "@/types/events";
 import { diffSide } from "@/lib/diff";
+import { normalizePath } from "@/lib/filePath";
 import { basename } from "@/lib/format";
+import { isMarkdownPath } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
 
 /// The line a chat link named, painted where the row sits.
@@ -23,6 +37,9 @@ import { cn } from "@/lib/utils";
 /// was sent to".
 const TARGET_CSS = `[data-target] { background: color-mix(in oklab, var(--primary) 18%, transparent); }`;
 
+/// `MAX_DOC` in docs.rs: the most `read_doc` and `save_doc` take.
+const MAX_DOC_BYTES = 1 << 20;
+
 /// What `onPostRender` hands back once `File` runs under a `Virtualizer`: a
 /// `VirtualizedFile`, which can say where a line sits without drawing it. Both
 /// optional, since the callback is typed against the plain `File`.
@@ -31,16 +48,20 @@ type VirtualizedInstance = {
   getEditorViewport?: () => HTMLElement | Document | undefined;
 };
 
-/// The active file, read and highlighted. Read-only throughout.
+/// The active file, read and highlighted, or rendered where it is markdown.
+/// Read-only throughout.
 export default function FileViewer({
   file,
+  sessionId,
   onOpen,
 }: {
   /// Null where nothing is open, which is the view's own empty state.
   file: OpenFile | null;
+  /// Whose file this is: a markdown file's links open among its files.
+  sessionId: string | null;
   /// Opens an entry of a folder on screen. Absent, the listing only reads —
   /// a split pane shows one file and has no strip to open another into.
-  onOpen?: (path: string) => void;
+  onOpen?: (path: string, line?: number) => void;
 }) {
   const { pair, resolvedMode } = useCodeThemeWithMode();
   const path = file?.path ?? "";
@@ -64,6 +85,23 @@ export default function FileViewer({
     ? file.state.body.text
     : null;
   const lineCount = useMemo(() => (text === null ? 0 : text.split("\n").length), [text]);
+
+  // Markdown renders, and edits, only up to `read_doc`/`save_doc`'s cap. Past
+  // it a file draws as source in the virtualized viewer: rendered in one pass,
+  // a few MiB of markdown freezes the window (measured, 1.3 MiB), and a Save
+  // there would always fail. A draft already holding edits keeps the rendered
+  // view whatever the disk says — grown past the cap, deleted, unreadable — so
+  // the edits stay on screen with Overwrite to write them back. Only a clean
+  // draft is ever dropped, and only for a file the source view can show.
+  const mdStore = sessionId ? filesDocKey(sessionId) : null;
+  const draft = useDocs(mdStore).docs.find((d) => d.path === path);
+  const dirty = !!draft && isDirty(draft);
+  const small = useMemo(() => text !== null && new Blob([text]).size <= MAX_DOC_BYTES, [text]);
+  const asMarkdown = isMarkdownPath(path) && ((text !== null && small) || dirty);
+  const strayDraft = !!draft && !dirty && text !== null && !asMarkdown;
+  useEffect(() => {
+    if (strayDraft && mdStore) closeDoc(mdStore, path);
+  }, [strayDraft, mdStore, path]);
 
   // `onPostRender` hands back the *host* element, whose rows live in its shadow
   // root, so the query has to cross that boundary explicitly — the same reading
@@ -145,6 +183,18 @@ export default function FileViewer({
       <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-ui text-muted-foreground">
         Pick a file to read it.
       </div>
+    );
+  }
+
+  if (asMarkdown) {
+    return (
+      <MarkdownFile
+        path={file.path}
+        text={text}
+        readError={file.state.status === "error" ? file.state.message : null}
+        sessionId={sessionId}
+        onOpen={onOpen}
+      />
     );
   }
 
@@ -258,6 +308,97 @@ function Video({ body }: { body: { path: string } }) {
         onError={onError}
       />
     </div>
+  );
+}
+
+/// A markdown file, drawn the way markdown is everywhere else in the app, and
+/// editable the way the Docs panel edits one: the draft lives in that panel's
+/// store under `filesDocKey`, and the titlebar carries its Read/Edit and Save.
+///
+/// Its relative links and images resolve against its own folder, which is what
+/// its author wrote them against, and a link opens here in Files — markdown
+/// included, where a chat link would send it to the Docs panel.
+function MarkdownFile({
+  path,
+  text,
+  readError,
+  sessionId,
+  onOpen,
+}: {
+  path: string;
+  /// Null while the file cannot be read; drawn then only for a draft holding
+  /// edits, which `FileViewer` will not let a failed read take away.
+  text: string | null;
+  readError: string | null;
+  sessionId: string | null;
+  onOpen?: (path: string, line?: number) => void;
+}) {
+  const context = useMemo(() => {
+    // Off the file's own path, not the store key: a Files pick's key is no
+    // session, so asking it for a server answers This Mac for a remote file.
+    const server = serverOfPath(path);
+    return {
+      cwd: path.slice(0, path.lastIndexOf("/")) || "/",
+      sessionId,
+      server,
+      // A relative link arrives already qualified, being resolved against this
+      // file's own path; `qualify` leaves that alone and keys an absolute one.
+      open: (target: string, line?: number) => {
+        const qualified = qualify(normalizePath(target), server);
+        if (onOpen) onOpen(qualified, line);
+        else openInFiles(sessionId, qualified, line);
+      },
+    };
+  }, [path, sessionId, onOpen]);
+
+  const store = sessionId ? filesDocKey(sessionId) : null;
+  const doc = useDocs(store).docs.find((d) => d.path === path);
+  // Every read of the file lands here, the first included; `syncDoc` keeps a
+  // draft through the ones that would otherwise throw it away.
+  useEffect(() => {
+    if (store && text !== null) syncDoc(store, path, text);
+  }, [store, path, text]);
+
+  const shown = doc?.body.status === "ready" ? doc.body.draft : (text ?? "");
+
+  // Keyed on the path, so the next file starts at its own top rather than at
+  // this one's scroll and section count.
+  return (
+    <div key={path} className="flex min-h-0 flex-1 flex-col">
+      {readError && doc && (
+        // No write-back offered: `save_doc` will not create a file it cannot
+        // find, on purpose. The edits stay here to copy out, and come back
+        // under the stale strip if the file does.
+        <p className="shrink-0 border-b border-border px-3 py-2 text-ui text-destructive">
+          {readError} Your unsaved edits are kept below.
+        </p>
+      )}
+      {doc && <DocStaleStrip store={store} doc={doc} />}
+      {doc?.mode === "edit" ? (
+        <div className="min-h-0 flex-1">
+          <DocTextarea store={store} doc={doc} className="px-8 py-6" />
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto">
+          <ChatSessionContext.Provider value={context}>
+            <MarkdownDoc text={shown} linkFilePaths="written" className="mx-auto max-w-3xl px-8 py-6" />
+          </ChatSessionContext.Provider>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/// "Close without saving?" for a Files tab holding unsaved edits, asked by
+/// the close guard in `useDocs` whichever way the tab was closed.
+export function FileCloseConfirm({ sessionId }: { sessionId: string }) {
+  const path = useFileCloseQuestion(sessionId);
+  return (
+    <DiscardConfirm
+      path={path}
+      onConfirm={() => answerFileClose(true)}
+      onClose={() => answerFileClose(false)}
+    />
   );
 }
 
