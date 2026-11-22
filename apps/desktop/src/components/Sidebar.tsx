@@ -784,12 +784,13 @@ export function isNested(item: SessionIndexItem, items: SessionIndexItem[]): boo
 }
 
 /// The bots a row can be handed to: those on its own server, since its reports
-/// go out from there. None for a settled row or a bot's own chat; a bot's tasks
+/// go out from there, and with a chat to hang it under, which the server
+/// refuses without. None for a settled row or a bot's own chat; a bot's tasks
 /// never reach the sidebar.
 export function attachTargets(bots: readonly BotEntry[], item: SessionIndexItem): Bot[] {
   if (item.archived || botAt(bots.map((b) => b.bot), item.cwd)) return [];
   const server = serverOfPath(item.cwd);
-  return bots.map((b) => b.bot).filter((bot) => serverOfPath(bot.path) === server);
+  return bots.filter((b) => b.session && serverOfPath(b.bot.path) === server).map((b) => b.bot);
 }
 
 /// Sidebar toggle. Lives outside `Sidebar` because a collapsed sidebar renders
