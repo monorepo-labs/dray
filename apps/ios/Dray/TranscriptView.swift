@@ -19,8 +19,7 @@ struct TranscriptView: View {
     @State private var bannerHeight: CGFloat = 0
     /// Whether new rows scroll into view: dropped by the reader scrolling up (`FollowsBottom`).
     @State private var following = true
-    /// The row "Load earlier" found at the top, held still on screen while pages land above it,
-    /// and its top in the content as last read (`HoldsPlace`).
+    /// The row "Load earlier" holds on screen, and its top in the content (`HoldsPlace`).
     @State private var held: String?
     @State private var heldTop: CGFloat?
     /// Pages being read for "Load earlier", counted since a tap can overlap a Retry.
@@ -52,7 +51,8 @@ struct TranscriptView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
-                    if !complete { older(bot, segments, first: bot == nil ? turns.first?.id : botRows(chat).first?.id) }
+                    // Never a run of sends: one folds into the run above it once that page lands, under a new id.
+                    if !complete { older(bot, segments, first: bot == nil ? turns.first?.id : botRows(chat).first { if case .item = $0 { true } else { false } }?.id) }
                     if transcript == nil {
                         placeholder
                     } else if bot == nil && turns.isEmpty && !busy && (store.queued[key] ?? []).isEmpty {
@@ -989,14 +989,8 @@ struct FollowsBottom: ViewModifier {
     }
 }
 
-/// Keeps what the reader sees still while "Load earlier" lays pages in above it. A scroll view
-/// holds its offset from the top, so a page pushed everything under it down and the reader was
-/// left at the page's top (#1422); `defaultScrollAnchor(.bottom, for: .sizeChanges)` holds only a
-/// view at the end. So the row that was first when the reader tapped is watched (`heldRow`), and
-/// whatever moves its top is scrolled away: only what lands above it can, never a reply streaming
-/// in below. The hold lasts until the reader scrolls with nothing loading, so a page or a picture
-/// landing late is held too. A view at the end is left to `FollowsBottom`.
-/// iOS 17 reads no scroll geometry, so there a page still lands on the reader.
+/// Keeps the row first at a "Load earlier" tap still on screen as pages land above it, since a scroll
+/// view holds its offset from the top (#1422); iOS 17 reads no scroll geometry, so there it still jumps.
 struct HoldsPlace: ViewModifier {
     static let space = "transcript"
     /// The held row's top in the content; nil while nothing is held, or before it is first read.
@@ -1020,38 +1014,49 @@ struct HoldsPlace: ViewModifier {
         let loading: Bool
         let release: () -> Void
         @State private var position = ScrollPosition()
+        @State private var visible: CGRect = .zero
+        /// From the content's top, as `scrollTo(y:)` takes it; `contentOffset` counts the inset above it too.
         @State private var offset: CGFloat = 0
-        @State private var idle = true
-        /// What landed above while a finger or a fling had the view: scrolled away once it stops,
-        /// since moving the view under either kills the fling or lands it a page off.
+        @State private var phase: ScrollPhase = .idle
+        /// Held back while a finger or a fling has the view, since moving it then kills the fling.
         @State private var owed: CGFloat = 0
 
         func body(content: Content) -> some View {
             content
                 .scrollPosition($position)
-                // `scrollTo(y:)` measures from the content's top, where `contentOffset` counts the inset above it too.
+                .onScrollGeometryChange(for: CGRect.self) { $0.visibleRect } action: { visible = $1 }
                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { offset = $1 }
                 .onChange(of: top) { old, new in
                     guard let old, let new, !following else { return }
+                    // Below the screen, what moves it is in view, so it is the reader's to see.
+                    if visible.height > 0, old > visible.maxY { return end() }
                     owed += new - old
-                    if idle { settle() }
+                    if phase == .idle { settle() }
                 }
-                .onScrollPhaseChange { _, phase in
-                    idle = phase == .idle
-                    if idle {
-                        settle()
-                    } else if phase == .interacting, !loading, owed == 0 {
-                        release()
-                        // Nothing left set, so no stale offset can fight `FollowsBottom`'s scroll to the end.
-                        position = ScrollPosition()
-                    }
+                .onScrollPhaseChange { old, new in
+                    phase = new
+                    if new == .idle { settle() }
+                    // Any scroll of the reader's own ends it: a drag, or a status-bar tap or VoiceOver landing.
+                    let theirs = new == .interacting || (old == .animating && new == .idle)
+                    if theirs, !loading, owed == 0 { end() }
                 }
+                // So a send's scroll to the end can't land on an old target.
+                .onChange(of: following) { if following { position = ScrollPosition() } }
         }
 
         private func settle() {
             guard owed != 0 else { return }
-            position.scrollTo(y: offset + owed)
+            // Read back only on the next scroll report, so two moves before it must add up.
+            offset += owed
+            visible.origin.y += owed
+            position.scrollTo(y: offset)
             owed = 0
+        }
+
+        private func end() {
+            release()
+            owed = 0
+            position = ScrollPosition()
         }
     }
 }
