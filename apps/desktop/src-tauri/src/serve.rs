@@ -1981,6 +1981,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             &session_id, Some(crate::bots::Act::Stopped), &sink.clone(), crate::interrupt_session(&session_id, sink),
         ).await;
         stop_task(session_id: String, task_id: String) => crate::stop_task(&session_id, &task_id).await;
+        switch_agent(session_id: String, harness: Harness) => crate::switch_agent(&session_id, harness, sink).await;
         cancel_queued(session_id: String) => crate::cancel_queued(&session_id, sink).await;
         respond_permission(session_id: String, request_id: String, option_id: String) =>
             crate::respond_permission(&session_id, &request_id, &option_id, sink).await;

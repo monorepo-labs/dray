@@ -1776,15 +1776,11 @@ pub async fn rename_session(session_id: &str, title: &str) -> Result<Option<Sess
     .await
 }
 
-/// Records the id the harness knows this session by.
-///
-/// Written once, when `thread/start` answers. A session whose entry has gone —
-/// deleted while its child was starting — answers `Ok` rather than erroring:
-/// there is nothing to record it on and nothing has gone wrong.
-/// Moves a session onto `to`, remembering the agent it leaves.
-pub async fn set_session_agent(session_id: &str, to: Harness) -> Result<Option<SessionIndexItem>> {
+/// Moves a session onto `to`, remembering the agent it leaves where
+/// `remember`: that agent holds a conversation here to resume.
+pub async fn set_session_agent(session_id: &str, to: Harness, remember: bool) -> Result<Option<SessionIndexItem>> {
     update_item(session_id, |item| {
-        if !item.other_agents.contains(&item.harness) {
+        if remember && !item.other_agents.contains(&item.harness) {
             item.other_agents.push(item.harness);
         }
         item.harness = to;
@@ -1793,6 +1789,11 @@ pub async fn set_session_agent(session_id: &str, to: Harness) -> Result<Option<S
     .await
 }
 
+/// Records the id the harness knows this session by.
+///
+/// Written once, when `thread/start` answers. A session whose entry has gone —
+/// deleted while its child was starting — answers `Ok` rather than erroring:
+/// there is nothing to record it on and nothing has gone wrong.
 pub async fn set_session_thread_id(session_id: &str, thread_id: &str) -> Result<()> {
     update_item(session_id, |item| item.thread_id = Some(thread_id.to_string())).await?;
     Ok(())

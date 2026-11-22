@@ -880,6 +880,20 @@ async fn stop_task(
     Ok(manager().stop_task(session_id, task_id).await?)
 }
 
+/// Moves a task onto another agent ahead of the send that picked it (#1414).
+/// Its own command so a server from before the switch answers `unknown
+/// command` and the app sends nothing, rather than the old agent answering.
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn switch_agent(session_id: &str, harness: Harness, sink: Sink) -> Result<(), Fail> {
+    let item = store::get_session_index_item(session_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no session {session_id}"))?;
+    if item.harness != harness {
+        manager().switch_agent(item, harness, &sink).await?;
+    }
+    Ok(())
+}
+
 /// Takes back the newest prompt still held for a running turn, returning its
 /// text so the composer can restore it. `None` once the flush has written it —
 /// past that point the CLI owns the prompt and there is no way to retract it.

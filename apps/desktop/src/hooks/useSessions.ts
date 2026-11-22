@@ -918,6 +918,20 @@ const handleSendMsg = async (
     return false;
   }
   if (switching) unsentPicks.current.delete(selected.sessionId);
+  // Ahead of the send, so a server from before #1414 refuses the switch rather
+  // than the old agent answering under the new one's name.
+  if (moving && !switching) {
+    try {
+      await invoke("switch_agent", { sessionId: selected.sessionId, harness });
+    } catch (e) {
+      setError(
+        String(e).includes("unknown command")
+          ? `Update this server to switch a task to ${AGENT_LABELS[harness]}.`
+          : String(e),
+      );
+      return false;
+    }
+  }
 
   let sessionId = switching ? null : selectedSessionId;
   const isNewSession = !sessionId;

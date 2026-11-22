@@ -245,15 +245,29 @@ async fn move_agent(slot: &mut Option<Session>, item: SessionIndexItem, to: Harn
     if !crate::binpath::agent_available(to).await {
         bail!("{} isn't installed. Install it with `{}`, then send again.", to.label(), to.install_command());
     }
-    if let Some(s) = slot.take() {
-        s.kill().await?;
-    }
     let id = &item.session_id;
+    // Numbered off the old child's counter while one runs, since its reader
+    // can still log a late line after the kill.
+    let seq = match slot.take() {
+        Some(s) => {
+            let seq = s.seq.fetch_add(1, Relaxed);
+            // Its background tasks too (a dev server, a `Monitor`): the next
+            // agent cannot see or stop them, and the reader's settle clears
+            // them off the panel once the child is gone.
+            s.kill_tree().await?;
+            seq
+        }
+        None => next_seq_by_session_id(id).await?,
+    };
+    // Only an agent that took part has a conversation here to go back to.
+    let remember = crate::bots::agent_joined(&item).await;
     // Codex and fx keep one thread id on the index, so they always start fresh.
     let resumed = item.other_agents.contains(&to) && !matches!(to, Harness::Codex | Harness::Fx);
     let payload = AgentEventPayload::AgentSwitched { from: item.harness, to, resumed };
-    let event = AgentEvent::mint(id.clone(), to, next_seq_by_session_id(id).await?, None, None, payload);
-    let item = crate::store::set_session_agent(id, to).await?.with_context(|| format!("unknown session {id}"))?;
+    let event = AgentEvent::mint(id.clone(), to, seq, None, None, payload);
+    let item = crate::store::set_session_agent(id, to, remember)
+        .await?
+        .with_context(|| format!("unknown session {id}"))?;
     app.emit("agent_event", &event)?;
     append_session_event(id, event).await?;
     app.emit(crate::orchestration::SESSION_CHANGED, &item).ok();
@@ -1498,6 +1512,16 @@ impl SessionManager {
         // before this prompt, which the new agent answers.
         if let Some(item) = get_session_index_item(session_id).await?.filter(|i| i.harness != harness) {
             move_agent(&mut slot_guard, item, harness, app).await?;
+        }
+        // An idle child whose first turn since a switch ended before it said
+        // anything may have dropped that prompt, and the replay with it. A
+        // spawn below asks the same itself.
+        if let Some(s) = slot_guard.as_ref() {
+            if !s.status.lock().await.turn_in_flight() {
+                if let Some(item) = get_session_index_item(session_id).await? {
+                    crate::bots::mark_switch_if_unanswered(&item).await;
+                }
+            }
         }
 
         // Decided here rather than by the caller: the frontend's own `busy` is

@@ -1701,15 +1701,25 @@ async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
         bail!("this build cannot run that session's agent, {}", harness.label());
     }
     let model = match set.model.as_deref() {
-        Some(alias) => match resolve_model(Some(alias), None, harness).await {
-            Ok(model) => model,
-            // Another agent's model moves the task there (#1414).
-            Err(e) => {
-                let (other, model) = other_agent_model(alias, harness).await.ok_or(e)?;
-                harness = other;
-                model
+        Some(alias) => {
+            let here = resolve_model(Some(alias), None, harness).await;
+            let listed = match &here {
+                Ok(model) => matches!(crate::session::model_spec(harness, model).await, Ok(Some(_))),
+                Err(_) => false,
+            };
+            // Another agent's model moves the task there (#1414). pi, grok and
+            // fx take any name, so one only another agent lists is that agent's.
+            match listed {
+                true => here?,
+                false => match other_agent_model(alias, harness).await {
+                    Some((other, model)) => {
+                        harness = other;
+                        model
+                    }
+                    None => here?,
+                },
             }
-        },
+        }
         None => item.model.clone(),
     };
     let switching = harness != item.harness;

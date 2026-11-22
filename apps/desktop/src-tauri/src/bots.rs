@@ -1073,36 +1073,74 @@ const TASK_HANDOVER_CAP: usize = 200_000;
 /// first steers, which the newest messages rarely restate.
 const TASK_HANDOVER_HEAD: usize = 30_000;
 
-/// Hands a task's next prompt the conversation where its newest agent switch
-/// has no answer yet: the send that made it, or a retry after a failed send or
-/// a restart. Answers whether that switch resumes the agent's own earlier
-/// conversation; `None` where no switch is waiting.
-pub async fn mark_switch_if_unanswered(item: &SessionIndexItem) -> Option<bool> {
+/// Whether `e` shows the agent it names took part in the conversation: a
+/// prompt reached it or a turn of its own closed. A turn that says nothing (an
+/// early Stop, an API error) still leaves the CLI holding the conversation.
+fn joined(e: &crate::events::AgentEvent) -> bool {
     use crate::events::AgentEventPayload as P;
-    if item.other_agents.is_empty() {
-        return None;
-    }
-    let id = &item.session_id;
-    let (to, resumed) = crate::store::find_newest(id, |events| {
-        events.iter().rev().find_map(|e| match &e.payload {
+    e.subagent.is_none()
+        && matches!(
+            e.payload,
+            P::UserMessage { .. } | P::TurnCompleted { .. } | P::AssistantText { .. } | P::ToolCallStarted { .. }
+        )
+}
+
+/// What followed a task's newest agent switch: the switch's `(to, resumed)`,
+/// whether a prompt reached the agent since (its CLI then holds the
+/// conversation), and whether it answered (text or a tool call). Stops at the
+/// first answer, which leaves nothing owed.
+async fn since_switch(id: &str) -> (Option<(Harness, bool)>, bool, bool) {
+    use crate::events::AgentEventPayload as P;
+    use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+    let prompted = AtomicBool::new(false);
+    let found = crate::store::find_newest(id, |events| {
+        events.iter().rev().filter(|e| e.subagent.is_none()).find_map(|e| match &e.payload {
             P::AgentSwitched { to, resumed, .. } => Some(Some((*to, *resumed))),
-            P::AssistantText { .. } | P::ToolCallStarted { .. } if e.subagent.is_none() => Some(None),
+            P::AssistantText { .. } | P::ToolCallStarted { .. } => Some(None),
+            _ if joined(e) => {
+                prompted.store(true, Relaxed);
+                None
+            }
             _ => None,
         })
     })
     .await
     .ok()
-    .flatten()
-    .flatten()?;
-    if to != item.harness {
-        return None;
+    .flatten();
+    let prompted = prompted.load(Relaxed);
+    match found {
+        Some(None) => (None, true, true),
+        Some(switch) => (switch, prompted, false),
+        None => (None, prompted, false),
     }
-    let marked = HANDOVERS.lock().unwrap().iter().any(|(i, _)| i == id);
-    if !marked {
+}
+
+/// Whether the agent a task runs on now holds a conversation under its id, so
+/// a switch back to it can resume. An unspawned fork holds none of its own.
+pub async fn agent_joined(item: &SessionIndexItem) -> bool {
+    item.fork_from.is_none() && since_switch(&item.session_id).await.1
+}
+
+/// How a task's replay ends, which also marks one waiting in [`HANDOVERS`]:
+/// the conversation inside it is escaped, so nothing else carries this.
+const TASK_HANDOVER_END: &str = "</conversation>\n\nThe user's new message:\n\n";
+
+/// Hands a task's next prompt the conversation where its newest agent switch
+/// has no answer yet: the send that made it, a retry after a failed send or a
+/// restart, or one after a turn that ended before the agent said anything,
+/// whose prompt the CLI may have dropped. Answers whether the agent resumes a
+/// conversation of its own; `None` where no switch is waiting.
+pub async fn mark_switch_if_unanswered(item: &SessionIndexItem) -> Option<bool> {
+    let id = &item.session_id;
+    let (switch, prompted, answered) = since_switch(id).await;
+    let (_, resumed) = switch.filter(|(to, _)| !answered && *to == item.harness)?;
+    let waiting = HANDOVERS.lock().unwrap().iter().any(|(i, text)| i == id && text.contains(TASK_HANDOVER_END));
+    if !waiting {
         let events = crate::store::list_session_events(id).await.unwrap_or_default();
-        restore_handover(id, task_handover_prompt(item, &events, resumed).await);
+        // After anything already waiting, such as a bot's lead-in note.
+        lead_in(id, task_handover_prompt(item, &events, resumed).await);
     }
-    Some(resumed)
+    Some(resumed || prompted)
 }
 
 /// The hidden note a task's new agent reads ahead of the reader's message:
@@ -1120,8 +1158,14 @@ async fn task_handover_prompt(item: &SessionIndexItem, events: &[crate::events::
         .collect();
     let Some(&(end, _)) = switches.last() else { return String::new() };
     let to = item.harness;
+    // Back to an agent: from the switch that took the task off it after it
+    // last joined, since a stay with no send gave it nothing to remember.
     let start = match resumed {
-        true => switches[..switches.len() - 1].iter().rev().find(|(_, from)| *from == to).map_or(0, |(i, _)| *i),
+        true => events[..end]
+            .iter()
+            .rposition(|e| e.harness == to && joined(e))
+            .and_then(|last| switches.iter().find(|(i, _)| *i > last))
+            .map_or(0, |(i, _)| *i),
         false => 0,
     };
 
@@ -1165,7 +1209,7 @@ async fn task_handover_prompt(item: &SessionIndexItem, events: &[crate::events::
     };
     let middle = if cut { "Part of the middle is left out, marked […]. " } else { "" };
     format!(
-        "[Dray: {what}, oldest first: the user's messages and the agent's replies in full, and each tool call as one line with no output, since the files show the result. {middle}The full log, one JSON event per line, is {log}.\n\nCarry on as if you had been here all along, and don't mention this note.]\n\n<conversation>\n{conversation}\n</conversation>\n\nThe user's new message:\n\n"
+        "[Dray: {what}, oldest first: the user's messages and the agent's replies in full, and each tool call as one line with no output, since the files show the result. {middle}The full log, one JSON event per line, is {log}.\n\nCarry on as if you had been here all along, and don't mention this note.]\n\n<conversation>\n{conversation}\n{TASK_HANDOVER_END}"
     )
 }
 
@@ -2606,6 +2650,33 @@ mod tests {
         let (kept, _) = head_and_newest_within(&long, 20, 40);
         assert!(kept[0].starts_with("User: ") && kept[0].ends_with('…'));
         assert_eq!(kept.last().unwrap(), "Agent: done");
+    }
+
+    /// Claude, then Codex, then Claude with no send, then grok, then back to
+    /// Claude: its conversation ends before Codex, so Codex's part goes too.
+    #[tokio::test]
+    async fn a_resumed_agent_hears_everything_since_it_last_took_part() {
+        use serde_json::json;
+        let on = |h: Harness, payload: serde_json::Value| crate::events::AgentEvent { harness: h, ..event(payload, false) };
+        let say = |text: &str| json!({"type": "user_message", "text": text, "images": [], "issues": [], "kickoff": false});
+        let switch = |from: &str, to: &str| json!({"type": "agent_switched", "from": from, "to": to, "resumed": false});
+        let (c, x, g) = (Harness::ClaudeCode, Harness::Codex, Harness::Grok);
+        let events = vec![
+            on(c, say("one")),
+            on(x, switch("claude_code", "codex")),
+            on(x, say("two")),
+            on(c, switch("codex", "claude_code")),
+            on(g, switch("claude_code", "grok")),
+            on(g, say("three")),
+            on(c, switch("grok", "claude_code")),
+        ];
+        let item = SessionIndexItem::new(
+            "s", c, "/p", "/p", None, None, "one", crate::models::ModelId::new("haiku"), None,
+            crate::events::ApprovalPolicy::Auto, false, None,
+        );
+        let note = task_handover_prompt(&item, &events, true).await;
+        assert!(note.contains("User: two") && note.contains("User: three"), "{note}");
+        assert!(!note.contains("User: one"), "{note}");
     }
 
     #[test]
