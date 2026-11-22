@@ -32,7 +32,8 @@ suspend fun Store.markUnread(key: SessionKey) {
         lastError = e.message
         return
     }
-    items[key]?.let { setItem(key, it.copy(status = "completed")) }
+    // Still idle only: a turn another client started while this was out must keep its in_progress.
+    items[key]?.takeIf { it.status == "idle" }?.let { setItem(key, it.copy(status = "completed")) }
 }
 
 /**
