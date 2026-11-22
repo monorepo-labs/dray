@@ -2141,11 +2141,13 @@ fn turn_message(files: &[&str]) -> String {
 
 /// Runs git in a bot's folder, cut off from the reader's global setup: their
 /// hooks would run against the notes and could fail or hang a commit, their
-/// ignore rules could leave the bot's notes untracked, and a signing key would
-/// prompt on every turn.
+/// ignore rules could leave the bot's notes untracked, a signing key would
+/// prompt on every turn, and Git for Windows' `autocrlf` would hand back a
+/// restored note with CRLF endings it was never written with.
 async fn git(dir: &Path, args: &[&str]) -> Result<String> {
     let out = tokio::process::Command::new("git")
         .args(["-c", "core.hooksPath=/dev/null", "-c", "core.excludesFile=/dev/null", "-c", "commit.gpgsign=false"])
+        .args(["-c", "core.autocrlf=false"])
         .args(args)
         .current_dir(dir)
         .output()

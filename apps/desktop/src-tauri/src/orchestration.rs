@@ -3255,7 +3255,7 @@ fn expand_home(path: &str) -> String {
         },
     };
     match std::env::home_dir() {
-        Some(home) => home.join(rest).to_string_lossy().trim_end_matches('/').to_string(),
+        Some(home) => home.join(rest).to_string_lossy().trim_end_matches(['/', '\\']).to_string(),
         None => path.to_string(),
     }
 }
