@@ -65,7 +65,9 @@ struct Chrome {
     /// next one's tabs.
     generation: u64,
     out: mpsc::Sender<Vec<u8>>,
-    _child: tokio::process::Child,
+    /// Dropped with the entry, which kills the process: `kill_on_drop` moved
+    /// into the task that waits on it.
+    _kill: oneshot::Sender<()>,
     /// Last driven, for the discard.
     seen: Instant,
     /// Tabs asked for and not yet attached, oldest first: an attach with no
@@ -500,9 +502,12 @@ fn spawn_piped(
 
 /// Windows: Chromium takes the pipe as two inherited handles named on its
 /// command line, `--remote-debugging-io-pipes=<read>,<write>`. They are made
-/// inheritable for the spawn alone; std spawns with inheritance on, so a
-/// process another thread starts in that window inherits them too, which
-/// costs no more than a late EOF.
+/// inheritable for the spawn alone, but std spawns with inheritance on and
+/// takes its own lock only around its stdio, so a process another thread
+/// starts in that window inherits them too and can hold the pipe open past
+/// Chromium. `launch` therefore watches the process itself for the exit. A
+/// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` would close the window, and std's
+/// way to set one is unstable.
 #[cfg(windows)]
 fn spawn_piped(
     command: &mut tokio::process::Command,
@@ -598,9 +603,25 @@ async fn launch(session: &str, exe: &Path, sandboxed: bool) -> Result<(), String
             gone(&owner, generation);
         });
     }
+    // The process exiting is read off the process too, not only off the
+    // pipe's EOF: on Windows a process another thread started while the
+    // handles were inheritable holds the write end open, an agent's dev server
+    // for hours, and a crashed Chromium then never read as gone.
+    let (kill, killed) = oneshot::channel::<()>();
+    {
+        let owner = session.to_string();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = child.wait() => gone(&owner, generation),
+                _ = killed => {
+                    let _ = child.kill().await;
+                }
+            }
+        });
+    }
     CHROMES.lock().unwrap().insert(
         session.to_string(),
-        Chrome { generation, out, _child: child, seen: Instant::now(), creating: VecDeque::new() },
+        Chrome { generation, out, _kill: kill, seen: Instant::now(), creating: VecDeque::new() },
     );
 
     let ready = async {
