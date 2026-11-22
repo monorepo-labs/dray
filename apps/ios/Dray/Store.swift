@@ -143,6 +143,8 @@ final class Store {
     // ponytail: never cleared; ids are unique and a launch deletes a handful.
     @ObservationIgnored private var deleted: Set<SessionKey> = []
     @ObservationIgnored private var statuses: [SessionKey: StatusEvent] = [:]
+    /// Status events heard per session, so a write waiting on its answer can tell one landed meanwhile.
+    @ObservationIgnored private var statusHeard: [SessionKey: Int] = [:]
     @ObservationIgnored private var connections: [UUID: Connection] = [:]
     @ObservationIgnored private var marksAt: [ProjectKey: Date] = [:]
     @ObservationIgnored private var marking: Set<ProjectKey> = []
@@ -840,11 +842,12 @@ final class Store {
     /// Takes a read, finished session's unread mark back. Not echoed by the server, so set here too,
     /// and put back where the write failed or moved nothing (`null`), or it would vanish on the next read.
     func markUnread(_ key: SessionKey) async {
-        let was = items[key]?.status
+        let was = items[key]?.status, heard = statusHeard[key]
         items[key]?.status = "completed"
-        // Only while the mark is still this one: a status event landing meanwhile is newer.
+        // Only where no status event landed meanwhile: one is newer than `was`, and a turn
+        // finishing elsewhere makes the server answer null with a real unread mark to keep.
         func restore(_ was: String?) {
-            if let was, items[key]?.status == "completed" { items[key]?.status = was }
+            if let was, statusHeard[key] == heard { items[key]?.status = was }
         }
         do {
             let moved = try await call(key.server, "mark_session_read", ["sessionId": .string(key.id), "read": false], as: JSON.self)
@@ -1236,6 +1239,7 @@ final class Store {
             guard let s = try? decoder.decode(EventFrame<StatusEvent>.self, from: data).payload else { return }
             let key = SessionKey(server: server, id: s.sessionId)
             statuses[key] = s
+            statusHeard[key, default: 0] += 1
             notice(key)
             let ended = items[key]?.busy == true && s.status != "in_progress"
             // A turn ending is when a pull request appears.
