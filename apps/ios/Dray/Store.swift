@@ -1155,6 +1155,16 @@ final class Store {
         }
     }
 
+    /// The reader's emoji on a bot's message, in the session it was said in. The badge and the bot's answer come back as events.
+    func react(_ key: SessionKey, _ messageId: String, _ emoji: String) async {
+        do {
+            _ = try await call(key.server, "react_to_message",
+                               ["sessionId": .string(key.id), "messageId": .string(messageId), "emoji": .string(emoji)], as: JSON.self)
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
     func interrupt(_ key: SessionKey) async {
         do {
             _ = try await connections[key.server]?.call("interrupt_session", ["sessionId": .string(key.id)], as: JSON.self)

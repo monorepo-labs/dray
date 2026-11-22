@@ -5,7 +5,8 @@ import Foundation
 enum BotItem: Identifiable {
     /// `reaction`: the bot's emoji on it, the newest where it reacted twice.
     case user(id: String, text: String, images: [ImageRef], reaction: String?, ts: String?)
-    case assistant(id: String, text: String, ts: String?)
+    /// `reaction`: the reader's emoji on it. `sessionId`: the session of the chat it was said in, which a reaction names.
+    case assistant(id: String, text: String, reaction: String?, sessionId: String, ts: String?)
     /// A failed turn's sentence, or an error the harness raised.
     case notice(id: String, text: String, ts: String?)
     case card(id: String, MergeCard, ts: String?)
@@ -24,7 +25,7 @@ enum BotItem: Identifiable {
 
     var id: String {
         switch self {
-        case .user(let id, _, _, _, _), .assistant(let id, _, _), .notice(let id, _, _), .card(let id, _, _),
+        case .user(let id, _, _, _, _), .assistant(let id, _, _, _, _), .notice(let id, _, _), .card(let id, _, _),
              .task(let id, _, _, _), .sent(let id, _, _), .botMessage(let id, _, _, _, _), .botSent(let id, _, _, _),
              .learned(let id, _, _, _, _), .switchTo(let id, _, _): id
         }
@@ -32,7 +33,7 @@ enum BotItem: Identifiable {
 
     var ts: String? {
         switch self {
-        case .user(_, _, _, _, let ts), .assistant(_, _, let ts), .notice(_, _, let ts), .card(_, _, let ts),
+        case .user(_, _, _, _, let ts), .assistant(_, _, _, _, let ts), .notice(_, _, let ts), .card(_, _, let ts),
              .task(_, _, _, let ts), .sent(_, _, let ts), .botMessage(_, _, _, _, let ts), .botSent(_, _, _, let ts),
              .learned(_, _, _, _, let ts), .switchTo(_, _, let ts): ts
         }
@@ -67,7 +68,11 @@ func botItems(_ events: [AgentEvent]) -> [BotItem] {
     for e in main { if case .learnedUndone(let commit, let path) = e.payload { undone.insert("\(commit)\0\(path)") } }
     // Read whole first, since a reaction lands after its message; the newest wins.
     var reactions: [String: String] = [:]
-    for e in main { if case .reaction(let messageId, let emoji) = e.payload { reactions[messageId] = emoji } }
+    var mine: [String: String] = [:]
+    for e in main {
+        guard case .reaction(let messageId, let emoji, let byUser) = e.payload else { continue }
+        if byUser { mine[messageId] = emoji } else { reactions[messageId] = emoji }
+    }
     // Tasks the server logged; a bot's call is read only for an id none names,
     // as a log from before that event holds.
     var announced = Set<String>()
@@ -91,7 +96,7 @@ func botItems(_ events: [AgentEvent]) -> [BotItem] {
             }
         case .assistantText(let text):
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !review {
-                items.append(.assistant(id: e.id, text: text, ts: e.ts))
+                items.append(.assistant(id: e.id, text: text, reaction: mine[e.id], sessionId: e.sessionId, ts: e.ts))
             }
         case .error(let message):
             items.append(.notice(id: e.id, text: message, ts: e.ts))
@@ -107,7 +112,7 @@ func botItems(_ events: [AgentEvent]) -> [BotItem] {
         case .turnCompleted(true, let finalText):
             let said = finalText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             // The harness says a failure twice; the red row wins.
-            if !said.isEmpty, case .assistant(_, let last, _)? = items.last,
+            if !said.isEmpty, case .assistant(_, let last, _, _, _)? = items.last,
                last.trimmingCharacters(in: .whitespacesAndNewlines) == said {
                 items.removeLast()
             }
@@ -163,7 +168,7 @@ func firstUnread(_ items: [BotItem]) -> String? {
     for item in items {
         switch item {
         case .user: mark = nil
-        case .assistant(let id, _, _) where mark == nil: mark = id
+        case .assistant(let id, _, _, _, _) where mark == nil: mark = id
         default: break
         }
     }

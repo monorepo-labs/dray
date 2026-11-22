@@ -578,7 +578,7 @@ struct UserBubble: View {
     var images: [ImageRef] = []
     /// Typed into a running turn and not yet read by it: held back, dimmed.
     var queued = false
-    /// A bot's emoji on this message, drawn on the bubble's corner.
+    /// A bot's emoji on this message, beside the bubble's top corner.
     var reaction: String? = nil
 
     var body: some View {
@@ -587,7 +587,8 @@ struct UserBubble: View {
                 Label("From \(from)", systemImage: "arrow.turn.down.right")
                     .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
             }
-            if !images.isEmpty { Thumbnails(images: images) }
+            // A message of pictures alone has no bubble, so the badge sits by the first one's corner.
+            if !images.isEmpty { Thumbnails(images: images).reaction(text.isEmpty ? reaction : nil) }
             if !text.isEmpty {
                 Text(text)
                     .font(Theme.Font.body)
@@ -596,11 +597,8 @@ struct UserBubble: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(Theme.sent, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
-                    .overlay(alignment: .topLeading) {
-                        if let reaction { ReactionBadge(emoji: reaction).offset(x: -12, y: -16) }
-                    }
-                    .padding(.top, reaction == nil ? 0 : 12)
-            } else if let reaction {
+                    .reaction(reaction)
+            } else if images.isEmpty, let reaction {
                 ReactionBadge(emoji: reaction)
             }
             if queued {
@@ -610,22 +608,6 @@ struct UserBubble: View {
         .opacity(queued ? 0.55 : 1)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 48)
-    }
-}
-
-/// A bot's reaction, as a messenger draws one: a round chip a step lighter than the
-/// page, with a hairline edge. The desktop's `ReactionBadge`.
-struct ReactionBadge: View {
-    let emoji: String
-
-    var body: some View {
-        let labels = ["👀": "Seen", "✅": "Done", "🎉": "Celebrating", "👍": "Like", "❤️": "Love", "😂": "Laughing", "😢": "Sad"]
-        Text(emoji)
-            .font(.system(size: 15))
-            .frame(width: 28, height: 28)
-            .background(Theme.lifted, in: .circle)
-            .overlay(Circle().strokeBorder(Theme.border, lineWidth: 0.5))
-            .accessibilityLabel("Bot reacted: \(labels[emoji] ?? emoji)")
     }
 }
 
@@ -834,6 +816,8 @@ struct GroupRow: View {
 /// here and drawn as the blocks they are.
 struct MarkdownText: View {
     let text: String
+    /// Off where a long press reacts instead, or the same press raises Copy under the emoji.
+    var selectable = true
 
     var body: some View {
         let recordings = recordingPaths(in: text)
@@ -888,7 +872,14 @@ struct MarkdownText: View {
             }
         }
         .tint(Theme.link)
-        .textSelection(.enabled)
+        .selectable(selectable)
+    }
+}
+
+private extension View {
+    /// `textSelection` takes a type per answer, so the choice is two branches.
+    @ViewBuilder func selectable(_ on: Bool) -> some View {
+        if on { textSelection(.enabled) } else { textSelection(.disabled) }
     }
 }
 

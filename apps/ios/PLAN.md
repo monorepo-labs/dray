@@ -33,6 +33,11 @@ phone reads and drives it over the same WebSocket the desktop uses
 - **Permission and question cards**, answered in place. A hidden task's card,
   a bot's above all, draws at the foot of the chat that started it under the
   task's title, on whichever machine the task runs, and lights the bot's face.
+- **Reactions in a bot's chat** (#1416), never a task's: a long press on the
+  bot's message opens the seven emoji and nothing else, so its words cannot be
+  copied there while the chat is open (`react_to_message`). The pick is a badge
+  beside the bubble's bottom corner; the bot's own sits beside the top corner
+  of the reader's. Both are overlays, so neither moves a row.
 - **New task by voice**, from a dock under the list: hold the orb to talk,
   and the recording runs hands-free until Done or Cancel. The words land as
   the task's text; holding again adds to them, the keyboard edits them in a
