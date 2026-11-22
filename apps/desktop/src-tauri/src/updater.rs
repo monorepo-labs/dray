@@ -158,12 +158,17 @@ pub async fn check_update(
         .build()
         .map_err(|e| e.to_string())?;
 
-    // A manifest without this install's entry — an MSI install on beta,
-    // which ships NSIS alone, or a release whose Windows build failed — has
-    // nothing for it, which is no update rather than a failed check.
+    // On Windows, a manifest without this install's entry — an MSI install on
+    // beta, which ships NSIS alone, or a release whose Windows job failed — has
+    // nothing for it, which is no update rather than a failed check. Elsewhere
+    // a missing entry is a release gone wrong, and stays an error.
     let update = match updater.check().await {
         Ok(Some(update)) => update,
-        Ok(None) | Err(tauri_plugin_updater::Error::TargetsNotFound(_)) => return Ok(()),
+        Ok(None) => return Ok(()),
+        Err(tauri_plugin_updater::Error::TargetsNotFound(targets)) if cfg!(windows) => {
+            eprintln!("[update] no entry for {targets:?}");
+            return Ok(());
+        }
         Err(e) => return Err(e.to_string()),
     };
 
