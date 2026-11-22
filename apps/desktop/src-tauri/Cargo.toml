@@ -257,6 +257,8 @@ features = [
   "Win32_System_Console",
   "Win32_System_LibraryLoader",
   "Win32_UI_WindowsAndMessaging",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_Networking_WinSock",
 ]
 
 # Unconditional, not CEF's alone: the composer's paste reads NSPasteboard
