@@ -321,8 +321,10 @@ pub async fn config_dir() -> Result<PathBuf> {
 /// The `<name>` of a path under `.claude/worktrees/<name>/`, the innermost
 /// where worktrees nest.
 fn worktree_name(dir: &str) -> Option<&str> {
-    let (_, rest) = dir.rsplit_once("/.claude/worktrees/")?;
-    rest.split('/').next().filter(|name| !name.is_empty())
+    let (_, rest) = dir
+        .rsplit_once("/.claude/worktrees/")
+        .or_else(|| dir.rsplit_once("\\.claude\\worktrees\\"))?;
+    rest.split(['/', '\\']).next().filter(|name| !name.is_empty())
 }
 
 async fn make_home_app_dir() -> Result<PathBuf> {

@@ -226,6 +226,7 @@ pub async fn run_mac() -> Result<()> {
     tokio::spawn(crate::remote_access::start(sink.clone()));
 
     // launchd, and Quit and stop sessions in dev, stop the server with SIGTERM.
+    #[cfg(unix)]
     tokio::spawn(async {
         use tokio::signal::unix::{signal, SignalKind};
         let (Ok(mut term), Ok(mut int)) = (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) else {
@@ -236,6 +237,14 @@ pub async fn run_mac() -> Result<()> {
             _ = int.recv() => {}
         }
         shut_down(0).await;
+    });
+    // Windows has no SIGTERM; a stop there is `TerminateProcess`, which no
+    // handler sees. Ctrl-C reaches a server run in a console.
+    #[cfg(windows)]
+    tokio::spawn(async {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            shut_down(0).await;
+        }
     });
 
     eprintln!("dray --serve listening on 127.0.0.1:{port}, home {}", home.display());

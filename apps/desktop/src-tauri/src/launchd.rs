@@ -22,7 +22,17 @@ pub(crate) fn as_child() -> bool {
 }
 
 fn target() -> String {
-    format!("gui/{}/{}", unsafe { libc::getuid() }, label())
+    format!("gui/{}/{}", uid(), label())
+}
+
+/// The user's id, for launchd's domain. Never asked off a Mac, where
+/// [`as_child`] holds, but compiled everywhere.
+fn uid() -> u32 {
+    #[cfg(unix)]
+    // SAFETY: no arguments, no failure mode.
+    return unsafe { libc::getuid() };
+    #[cfg(not(unix))]
+    return 0;
 }
 
 fn plist_path() -> Result<PathBuf> {
@@ -151,13 +161,16 @@ async fn install(path: &std::path::Path, wanted: &str, loaded: bool) -> Result<(
 }
 
 async fn bootstrap(path: &std::path::Path) -> Result<()> {
-    let domain = format!("gui/{}", unsafe { libc::getuid() });
+    let domain = format!("gui/{}", uid());
     let out = launchctl(&["bootstrap", &domain, &path.to_string_lossy()]).await?;
     if !out.status.success() {
         bail!("launchctl bootstrap: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
     Ok(())
 }
+
+#[cfg(windows)]
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
 /// Set by [`stop`], or the reconnect loop would start a dev server again in
 /// the moment between it stopping and the app exiting.
@@ -188,8 +201,14 @@ fn spawn_dev(exe: &std::path::Path, log: &std::path::Path) -> Result<()> {
         .arg("--serve")
         .stdin(std::process::Stdio::null())
         .stdout(out.try_clone()?)
-        .stderr(out)
-        .process_group(0);
+        .stderr(out);
+    #[cfg(unix)]
+    command.process_group(0);
+    // Windows' Ctrl-C goes to the console's process group, and a hidden
+    // console of its own is what its children's consoles then share, so no
+    // agent or git it starts opens a window.
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP | crate::platform::CREATE_NO_WINDOW);
     // Off the app's AppImage mount, which goes when the app quits.
     #[cfg(target_os = "linux")]
     {
@@ -216,7 +235,13 @@ pub async fn stop() -> Result<()> {
         let written = tokio::fs::read_to_string(home.join(crate::serve::PORT_FILE)).await?;
         let pid: i32 = written.lines().nth(2).and_then(|l| l.trim().parse().ok()).context("no pid in serve-port")?;
         STOPPED.store(true, std::sync::atomic::Ordering::Relaxed);
-        unsafe { libc::kill(pid, libc::SIGTERM) };
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(pid, libc::SIGTERM)
+        };
+        // No SIGTERM to send: the server ends without its 3s for agents.
+        #[cfg(windows)]
+        crate::platform::kill(pid as u32);
         return Ok(());
     }
     launchctl(&["bootout", &target()]).await?;
