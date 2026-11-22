@@ -28,6 +28,11 @@ import { useSendProgress } from "@/lib/uploads";
 import { cn } from "@/lib/utils";
 import type { Bot, ImageRef, IssueRef, MessageSender } from "@/types/events";
 
+/// Where a bot's reaction sits: out to the side of the top corner, in the 15% no
+/// bubble reaches and inside the bubble's own height, so it lands without
+/// moving the message or anything after it — see `Reactable`.
+const BADGE_CORNER = "absolute top-0 -left-8";
+
 /// The user's own text, echoed from the event log rather than local state — the
 /// backend synthesizes and persists it, so this renders the same live or replayed.
 ///
@@ -122,6 +127,7 @@ export default function UserMessage({
   // cleared out from under a transcript that still names it. `ImageRow` drops
   // those, so this row is what is left to say about them.
   const missing = images.filter((image) => !image.path && !image.url);
+  const pictured = images.length > missing.length;
   // Dimmed the way a queued prompt is: the same message a moment early.
   const uploading = useSendProgress(eventId ?? "");
 
@@ -150,9 +156,16 @@ export default function UserMessage({
           read before the sentence written about it, on the way in and on the way
           back out. `end` so the row grows leftwards from the same edge the
           bubble sits on. */}
-      {/* A message of images alone has no bubble to sit on. */}
-      {reaction && !body && <ReactionBadge emoji={reaction} />}
-      <ImageRow images={images} variant="sent" />
+      {/* A message of images alone has no bubble, so the badge sits on the
+          pictures' corner. In the row only where no picture draws either. */}
+      {reaction && !body && !pictured && <ReactionBadge emoji={reaction} />}
+      {pictured && (
+        <div className="relative max-w-full">
+          <ImageRow images={images} variant="sent" />
+          {/* Further onto a picture, which can fill the column and has no text to cover. */}
+          {reaction && !body && <ReactionBadge emoji={reaction} className="absolute top-0 -left-4" />}
+        </div>
+      )}
 
       {body && (
         // `none` in dark, where the bubble already reads as raised by being
@@ -164,7 +177,7 @@ export default function UserMessage({
         <div
           className={cn(
             "user-bubble max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground shadow-(--shadow-card)",
-            reaction && "relative mt-5",
+            reaction && "relative",
           )}
           // The colour rides in and App.css paints it — a palette that fills
           // this bubble has to answer differently to one that doesn't, and only
@@ -366,7 +379,7 @@ export default function UserMessage({
               );
             })}
           </ClampedBody>
-          {reaction && <ReactionBadge emoji={reaction} className="absolute -top-6 -left-4" />}
+          {reaction && <ReactionBadge emoji={reaction} className={BADGE_CORNER} />}
         </div>
       )}
 
