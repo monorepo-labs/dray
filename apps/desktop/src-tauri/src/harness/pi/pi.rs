@@ -39,7 +39,7 @@ use crate::sink::Sink;
 use std::time::Duration;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::{Child, ChildStdout, Command},
+    process::{Child, ChildStdout},
     sync::Mutex,
 };
 
@@ -153,7 +153,7 @@ pub async fn init(
     args.push(crate::bots::system_prompt(APPEND_SYSTEM_PROMPT, session_id, session_cwd, crate::session::Harness::Pi).await);
 
     let bin = crate::binpath::pi().await;
-    let mut command = Command::new(&bin);
+    let mut command = crate::binpath::command(&bin);
 
     // Which app the agent's own `dray` calls reach. Dev and release builds
     // listen on different sockets and the CLI's default names the release one.
@@ -510,7 +510,7 @@ pub async fn shutdown(child: &mut Child, client: &PiClient) {
 /// spawn error.
 pub(super) async fn spawn_probe(cwd: Option<&str>, what: &str) -> Result<(Child, PiClient)> {
     let bin = crate::binpath::pi().await;
-    let mut command = Command::new(&bin);
+    let mut command = crate::binpath::command(&bin);
     command
         .args([
             "--mode",

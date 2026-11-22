@@ -53,7 +53,7 @@ use std::sync::Arc;
 use crate::sink::Sink;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::{ChildStdout, Command},
+    process::ChildStdout,
     sync::Mutex,
 };
 
@@ -112,7 +112,7 @@ pub async fn init(
     };
 
     let bin = crate::binpath::grok().await;
-    let mut command = Command::new(&bin);
+    let mut command = crate::binpath::command(&bin);
     probe::child_env(&mut command, &bin);
 
     if let Some(endpoint) = crate::orchestration::child_endpoint() {

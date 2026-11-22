@@ -159,7 +159,7 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
     Ok(match harness {
         Harness::ClaudeCode => {
             let bin = crate::binpath::claude().await;
-            let mut cmd = Command::new(&bin);
+            let mut cmd = crate::binpath::command(&bin);
             cmd.env("PATH", crate::harness::agent_path(&bin));
             cmd.args([
                 "-p",
@@ -189,7 +189,7 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
         }
         Harness::Codex => {
             let bin = crate::binpath::codex().await;
-            let mut cmd = Command::new(&bin);
+            let mut cmd = crate::binpath::command(&bin);
             cmd.env("PATH", crate::harness::agent_path(&bin));
             cmd.args([
                 "exec",
@@ -252,7 +252,7 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
         Harness::Grok => bail!("grok titles its own sessions on the wire"),
         Harness::Fx => {
             let bin = crate::binpath::fx().await;
-            let mut cmd = Command::new(&bin);
+            let mut cmd = crate::binpath::command(&bin);
             cmd.env("PATH", crate::harness::agent_path(&bin));
 
             // Named through the environment because `fx ask` takes no `--model`

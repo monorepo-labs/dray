@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::sink::Sink;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::{ChildStdin, ChildStdout, Command},
+    process::{ChildStdin, ChildStdout},
     sync::Mutex,
 };
 pub mod parser;
@@ -158,7 +158,7 @@ pub async fn init(
     // Resolved rather than spawned by bare name: a bundled `.app` launched from
     // Finder inherits launchd's `PATH`, which holds no `claude`.
     let bin = crate::binpath::claude().await;
-    let mut command = Command::new(&bin);
+    let mut command = crate::binpath::command(&bin);
 
     // Which app the agent's own `dray` calls reach. Set because dev and release
     // builds listen on different sockets and the CLI's default names the

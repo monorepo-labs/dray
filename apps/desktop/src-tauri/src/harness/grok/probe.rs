@@ -65,7 +65,7 @@ pub fn child_env(command: &mut Command, bin: &std::path::Path) {
 /// every MCP server the reader has configured.
 pub async fn initialize(cwd: Option<&str>) -> Result<Value> {
     let bin = crate::binpath::grok().await;
-    let mut command = Command::new(&bin);
+    let mut command = crate::binpath::command(&bin);
     child_env(&mut command, &bin);
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
