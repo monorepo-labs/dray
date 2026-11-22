@@ -1,9 +1,9 @@
 import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 
-import { useChatSession } from "@/hooks/useChatSession";
+import { pathServer, useChatSession } from "@/hooks/useChatSession";
 import { openPath } from "@/hooks/useDocs";
 import { openFile } from "@/lib/openWith";
-import { displayPath, LOCAL, serverOfSession } from "@/lib/transport";
+import { displayPath, LOCAL } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 
 /// A path anywhere in the chat, drawn as something that opens.
@@ -50,7 +50,8 @@ export default function FileLink({
   // belongs in. Read from context rather than passed down: three components in
   // between would carry an id they never look at, and the transcript that drew
   // the link is the right answer even where it is not the selected session.
-  const { sessionId } = useChatSession();
+  const session = useChatSession();
+  const { sessionId, open: openHere } = session;
 
   const open = (e: MouseEvent | KeyboardEvent) => {
     e.stopPropagation();
@@ -59,8 +60,9 @@ export default function FileLink({
     // reader's own editor, line and all. A plain click stays in the app:
     // markdown in the Docs panel, everything else in the Files view.
     // A remote file has no copy on this Mac for an editor to open.
-    if ((e.metaKey || e.ctrlKey) && serverOfSession(sessionId) === LOCAL) return void openFile(path, line);
-    openPath(sessionId, path, line);
+    if ((e.metaKey || e.ctrlKey) && pathServer(session) === LOCAL) return void openFile(path, line);
+    if (openHere) openHere(path, line);
+    else openPath(sessionId, path, line);
   };
 
   return (

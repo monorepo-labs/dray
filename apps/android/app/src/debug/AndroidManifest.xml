@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds alone: the voice orb in every state, and every reaction's centring, for screenshots. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name=".ui.OrbDemoActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Dray" />
+        <activity
+            android:name=".ui.ReactionDemoActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Dray" />
+    </application>
+</manifest>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { absolutePath, findFilePaths, isFilePath } from "@/lib/filePath";
+import { absolutePath, findFilePaths, isFilePath, normalizePath } from "@/lib/filePath";
 
 const paths = (text: string) => findFilePaths(text).map((m) => m.path);
 
@@ -174,5 +174,18 @@ describe("absolutePath", () => {
   it("answers null with no cwd", () => {
     expect(absolutePath("src/a.ts", null)).toBeNull();
     expect(absolutePath("", "/repo")).toBeNull();
+  });
+});
+
+describe("normalizePath", () => {
+  it("folds dot segments and a trailing slash", () => {
+    expect(normalizePath("/repo/docs/../README.md")).toBe("/repo/README.md");
+    expect(normalizePath("/repo/docs/./guide.md")).toBe("/repo/docs/guide.md");
+    expect(normalizePath("/repo/docs/")).toBe("/repo/docs");
+  });
+
+  it("never climbs past the root", () => {
+    expect(normalizePath("/a/../../b")).toBe("/b");
+    expect(normalizePath("/..")).toBe("/");
   });
 });

@@ -197,6 +197,16 @@ export function activateFile(sid: string | null, path: string) {
   write(sid, { active: path });
 }
 
+/// Asked before any tab closes; `true` holds the close, the guard having put a
+/// question to the reader instead. [useDocs](./useDocs.ts) sets it, for a
+/// markdown file with unsaved edits — registered rather than imported, since
+/// that module already imports this one.
+let closeGuard: ((sid: string, path: string) => boolean) | null = null;
+
+export function guardCloses(guard: (sid: string, path: string) => boolean) {
+  closeGuard = guard;
+}
+
 /// Closes a tab.
 ///
 /// Closing the active one activates its left-hand neighbour, or the right-hand
@@ -207,6 +217,7 @@ export function closeFile(sid: string | null, path: string) {
   const { open, active } = state(sid);
   const at = open.findIndex((file) => file.path === path);
   if (at === -1) return;
+  if (closeGuard?.(sid, path)) return;
   pushClosedTab(sid, { key: `file:${path}` });
   // A read still out for this path must not write into the store after the
   // reader has closed it.

@@ -106,6 +106,18 @@ pub struct QueuedMessage {
     /// flush.
     #[serde(default)]
     pub issues: Vec<IssueRef>,
+    /// Dray's own prompt, which nobody typed: a bot's kickoff or review, or a
+    /// reaction told to the agent. No client draws it and a cancel never takes
+    /// it back, as its logged event draws nothing either.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+}
+
+impl QueuedMessage {
+    /// Whether the reader typed this, the only kind a client draws or cancels.
+    fn typed(&self) -> bool {
+        self.from.is_none() && !self.hidden
+    }
 }
 
 /// Held prompts, oldest first. Shared with the stdout task, which is where the
@@ -130,12 +142,12 @@ pub struct QueueChangedEvent {
 ///
 /// A relayed message — a task's report, another bot's or session's send — is
 /// left out: it is for the agent, and every client drew it as the reader's own
-/// bubble until its flush.
+/// bubble until its flush. So is Dray's own prompt ([`QueuedMessage::hidden`]).
 pub async fn publish_queue(session_id: &str, queued: &QueuedMessages, app: &Sink) {
     let held = queued.lock().await;
     let event = QueueChangedEvent {
         session_id: session_id.to_string(),
-        queued: held.iter().filter(|m| m.from.is_none()).cloned().collect(),
+        queued: held.iter().filter(|m| m.typed()).cloned().collect(),
     };
     if let Err(e) = app.emit("queue_changed", &event) {
         eprintln!("[queue emit err] {e}");
@@ -865,6 +877,13 @@ impl SessionManager {
     /// allocates nothing.
     async fn existing(&self, id: &str) -> Option<Slot> {
         self.sessions.lock().await.get(id).cloned()
+    }
+
+    /// Whether a child runs for `session_id`, so a fact it read at spawn may be
+    /// stale. A slot locked by a send counts: that send may be spawning one.
+    pub async fn has_child(&self, session_id: &str) -> bool {
+        let Some(slot) = self.existing(session_id).await else { return false };
+        slot.try_lock().map_or(true, |guard| guard.is_some())
     }
 
     /// Commits the server to exiting if nothing is running, and holds every
@@ -2729,6 +2748,9 @@ impl Session {
             attachment_paths: attachment_paths.to_vec(),
             from,
             issues: issues.to_vec(),
+            // Peeked, not taken: the flush that logs it takes the mark, and
+            // logs it as a kickoff that draws nothing.
+            hidden: crate::bots::is_dray_prompt(&self.id, prompt),
         };
         self.queued.lock().await.push(message.clone());
         publish_queue(&self.id, &self.queued, app).await;
@@ -2778,7 +2800,7 @@ impl Session {
     pub async fn cancel_queued(&self, app: &Sink) -> Option<QueuedMessage> {
         let cancelled = {
             let mut held = self.queued.lock().await;
-            let newest = held.iter().rposition(|m| m.from.is_none());
+            let newest = held.iter().rposition(QueuedMessage::typed);
             newest.map(|i| held.remove(i))
         };
         if cancelled.is_some() {
@@ -3771,7 +3793,7 @@ fn forget_turn(session_id: &str) {
 
 /// Records a reaction landing in `session_id`, for [`REACTED`].
 fn note_reaction(session_id: &str, payload: &AgentEventPayload) {
-    if let AgentEventPayload::Reaction { emoji, .. } = payload {
+    if let AgentEventPayload::Reaction { emoji, by_user: false, .. } = payload {
         REACTED.lock().unwrap().insert(session_id.to_string(), emoji.clone());
     }
 }
@@ -4743,7 +4765,7 @@ mod tests {
             serde_json::from_value(serde_json::json!({"type": "turn_completed", "status": "success", "finalText": t}))
                 .unwrap()
         };
-        let reaction = AgentEventPayload::Reaction { message_id: "m".into(), emoji: "❤️".into() };
+        let reaction = AgentEventPayload::Reaction { message_id: "m".into(), emoji: "❤️".into(), by_user: false };
 
         assert!(!drops_echo(session, &mut text("❤️")), "no reaction yet");
         assert!(!drops_echo(session, &mut reaction.clone()));
@@ -4835,9 +4857,32 @@ mod tests {
     }
 
     #[test]
+    fn a_queued_dray_prompt_is_neither_drawn_nor_cancelled() {
+        let session = "queued-dray-prompt";
+        let note = "The user reacted 👍 (like) to your message";
+        crate::bots::mark_dray_prompt(session, note);
+        assert!(crate::bots::is_dray_prompt(session, note));
+        // Peeked, the mark is still there for the flush that logs it.
+        assert!(crate::bots::take_dray_prompt(session, note));
+        assert!(!crate::bots::is_dray_prompt(session, note));
+
+        let held = |hidden: bool| QueuedMessage {
+            id: "q".into(),
+            session_id: session.into(),
+            text: note.into(),
+            attachment_paths: vec![],
+            from: None,
+            issues: vec![],
+            hidden,
+        };
+        assert!(held(false).typed());
+        assert!(!held(true).typed());
+    }
+
+    #[test]
     fn a_turn_its_child_died_in_forgets_its_reaction() {
         let session = "echo-dead-child";
-        let reaction = AgentEventPayload::Reaction { message_id: "m".into(), emoji: "👍".into() };
+        let reaction = AgentEventPayload::Reaction { message_id: "m".into(), emoji: "👍".into(), by_user: false };
         assert!(!drops_echo(session, &mut reaction.clone()));
         forget_turn(session);
         let mut reply = AgentEventPayload::AssistantText { block: None, text: "👍".into() };
@@ -5009,6 +5054,7 @@ mod tests {
             attachment_paths: vec![],
             from: None,
             issues: vec![],
+            hidden: false,
         });
 
         manager.reap_idle(Instant::now()).await;

@@ -17,7 +17,7 @@ mod routine;
 mod setup;
 use draft::DraftCommand;
 use dray_proto::{
-    encode_line, AddVideo, BrowserAction, MergeCard, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
+    encode_line, AddVideo, AttachSession, BrowserAction, MergeCard, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
     LinkIssues, ListSessions, Locator, OnMachine, RenameSession, Request, Response, SendMessage, SessionRef,
     React, SessionSummary, SetAside, SetModel, SetNeed, SettleSession, ShareAction, ShareRequest,
 };
@@ -147,8 +147,12 @@ enum SessionCommand {
     UnsetAside(SessionArg),
     /// Take a task out of the session that started it, like the sidebar's
     /// Detach from parent: it stands on its own in the sidebar, shown even if
-    /// it ran hidden, and reports back to nobody. One-way.
+    /// it ran hidden, and reports back to nobody. `attach` hands it to a bot.
     Detach(SessionArg),
+    /// Hand a task to a bot, like the sidebar's Attach to bot: it leaves the
+    /// sidebar for the bot's Tasks, the bot is told where it stands, and its
+    /// reports go to the bot after every turn. Detach undoes it.
+    Attach(Attach),
     /// Post a card in this session's chat for a task's open pull request, so
     /// the user can merge it from the chat.
     MergeCard(SessionArg),
@@ -173,6 +177,15 @@ struct ReactArgs {
 struct SessionArg {
     /// The session, as printed by `dray session ls`.
     session_id: String,
+}
+
+#[derive(Args)]
+struct Attach {
+    /// The task, as printed by `dray session ls`.
+    session_id: String,
+    /// The bot, by name or id, as `dray bot ls` prints it.
+    #[arg(long)]
+    bot: String,
 }
 
 #[derive(Args)]
@@ -581,6 +594,10 @@ fn session(command: SessionCommand) -> Result<(), String> {
         SessionCommand::Detach(args) => {
             (Request::DetachSession(SessionRef { session_id: args.session_id }), "Detached")
         }
+        SessionCommand::Attach(args) => (
+            Request::AttachSession(AttachSession { session_id: args.session_id, bot: args.bot }),
+            "Attached",
+        ),
     };
     match send(request)? {
         // Its machine did not answer, so all that is known is the id.

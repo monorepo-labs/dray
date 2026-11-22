@@ -80,6 +80,9 @@ const POINTER_TEXT: &str = "@AGENTS.md\n";
 /// A folder, one `YYYY-MM-DD-title.md` per memory. Never put in the prompt:
 /// the bot lists and greps it when it needs to, so it costs nothing to keep.
 pub const MEMORY: &str = "memory";
+/// Documents the bot makes for the user to open later, sorted into category
+/// folders by the bot. Made empty so the prompt's path is real from the start.
+pub const DOCS: &str = "docs";
 
 /// Past this the bot is told to ask the user what to cut. The agent loads the
 /// file whole, so one let grow without bound crowds out the conversation.
@@ -428,6 +431,17 @@ pub fn take_handover(session_id: &str) -> Option<String> {
     let mut handovers = HANDOVERS.lock().unwrap();
     let at = handovers.iter().position(|(id, _)| id == session_id)?;
     Some(handovers.remove(at).1)
+}
+
+/// Queues `text` ahead of `session_id`'s next prompt, after anything already
+/// waiting there. For a running task handed to a bot, whose child read its
+/// system prompt before it had a bot to report to.
+pub fn lead_in(session_id: &str, text: String) {
+    let mut handovers = HANDOVERS.lock().unwrap();
+    match handovers.iter_mut().find(|(id, _)| id == session_id) {
+        Some((_, waiting)) => waiting.push_str(&text),
+        None => handovers.push((session_id.to_string(), text)),
+    }
 }
 
 /// Queues a hand-over, or puts one back after a send that failed, so the
@@ -881,6 +895,7 @@ enum Note {
     Renamed,
     UserName,
     Moved,
+    Docs,
 }
 
 /// Tells the bot at `path` `note` ahead of its next prompt.
@@ -890,6 +905,7 @@ fn note_bot(path: &str, kind: Note, note: String) {
         Note::Renamed => "The user renamed you",
         Note::UserName => "The user asked to be called",
         Note::Moved => "Your instructions moved",
+        Note::Docs => "Your folder now has",
     };
     notes.retain(|(p, n)| !(same_dir(p, path) && n.starts_with(tag(&kind))));
     debug_assert!(note.starts_with(tag(&kind)));
@@ -1342,6 +1358,7 @@ async fn make_bot(name: String, avatar: Option<BotAvatar>, welcome: Option<Strin
     // Before the first commit, so the ignore rule is in it and the pointer never is.
     write_pointer(&dir).await;
     tokio::fs::create_dir_all(dir.join(MEMORY)).await.context("could not make the bot's memory folder")?;
+    tokio::fs::create_dir_all(dir.join(DOCS)).await.ok();
 
     let bot = Bot {
         id,
@@ -1571,6 +1588,12 @@ static DRAY_PROMPTS: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex:
 
 pub fn mark_dray_prompt(session_id: &str, prompt: &str) {
     DRAY_PROMPTS.lock().unwrap().push((session_id.to_string(), prompt.to_string()));
+}
+
+/// Whether `prompt` is Dray's own prompt for `session_id`, leaving the mark for
+/// [`take_dray_prompt`]: a prompt queued behind a running turn is logged later.
+pub fn is_dray_prompt(session_id: &str, prompt: &str) -> bool {
+    DRAY_PROMPTS.lock().unwrap().iter().any(|(s, p)| s == session_id && p == prompt)
 }
 
 /// Whether `prompt`, now being logged in `session_id`, is Dray's own, and forgets it.
@@ -1810,6 +1833,20 @@ pub async fn prepare(cwd: &str) {
     }
 }
 
+/// Makes `docs/` where it is missing. A missing one means a bot older than
+/// the rule, and a grok or fx chat resumes on the prompt it started with, so
+/// the bot is told once, whatever its agent.
+async fn ensure_docs(bot: &Bot) {
+    let dir = Path::new(&bot.path);
+    if !dir.join(DOCS).exists() && tokio::fs::create_dir_all(dir.join(DOCS)).await.is_ok() {
+        note_bot(
+            &bot.path,
+            Note::Docs,
+            format!("Your folder now has `{DOCS}/`. Put every document you make for the user to open later there, such as a guide, a summary, a plan or research notes, never on the Desktop, in `/tmp` or in a repo, and give the user its path. Sort them into a folder per category: `{DOCS}/personal/` for the user's personal things, and others you name as needed. Not for task scratch files or memory."),
+        );
+    }
+}
+
 /// What every spawn of a bot needs on disk before its agent reads the folder.
 async fn prepare_folder(bot: &Bot) {
     let dir = Path::new(&bot.path);
@@ -1827,6 +1864,7 @@ async fn prepare_folder(bot: &Bot) {
     // A bot made before memory was a folder has none, and the prompt sends it
     // straight to one. Its old `MEMORY.md` is left alone: bots had no users yet.
     tokio::fs::create_dir_all(dir.join(MEMORY)).await.ok();
+    ensure_docs(bot).await;
     learn::ensure_skills(dir).await;
     if let Err(e) = write_user_file(bot).await {
         eprintln!("[user name] {e:#}");
@@ -2284,6 +2322,7 @@ mod tests {
         assert!(block.contains("/h/bots/b"));
         assert!(block.contains(&format!("`{MEMORY}/`")));
         assert!(block.contains("YYYY-MM-DD-short-title.md"));
+        assert!(block.contains(&format!("`{DOCS}/personal/`")));
         assert!(block.contains("never ask it to report back"));
         assert!(block.contains("dray session settle <id> --delete-worktree"));
         assert!(block.contains("- \"Research\": Reads papers."));
@@ -2510,6 +2549,21 @@ mod tests {
         write_pointer(&dir).await;
         assert_eq!(tokio::fs::read_to_string(dir.join(".gitignore")).await.unwrap(), "/CLAUDE.md\n");
         assert_eq!(tokio::fs::read_to_string(dir.join(CLAUDE_POINTER)).await.unwrap(), "mine");
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn an_older_bot_is_told_of_docs_once() {
+        let dir = std::env::temp_dir().join(format!("dray-bot-{}", uuid::Uuid::now_v7()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let bot = Bot { path: dir.to_string_lossy().into_owned(), ..bot() };
+        let told = || NOTES.lock().unwrap().iter().filter(|(p, n)| p == &bot.path && n.contains("`docs/personal/`")).count();
+        ensure_docs(&bot).await;
+        assert!(dir.join(DOCS).is_dir());
+        assert_eq!(told(), 1);
+        NOTES.lock().unwrap().retain(|(p, _)| p != &bot.path);
+        ensure_docs(&bot).await;
+        assert_eq!(told(), 0);
         tokio::fs::remove_dir_all(&dir).await.ok();
     }
 

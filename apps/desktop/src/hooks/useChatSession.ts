@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 
-import { qualify, serverOfSession } from "@/lib/transport";
+import { qualify, serverOfSession, type ServerId } from "@/lib/transport";
 
 /// Which session the transcript on screen belongs to, and where it runs.
 ///
@@ -20,7 +20,18 @@ import { qualify, serverOfSession } from "@/lib/transport";
 export const ChatSessionContext = createContext<{
   cwd: string | null;
   sessionId: string | null;
+  /// Where a file link opens instead of `openPath`'s usual split — a markdown
+  /// file read in the Files view keeps its links there, Markdown included.
+  open?: (path: string, line?: number) => void;
+  /// The machine the paths name, where `sessionId` cannot say: a Files pick's
+  /// store key is no session, and its file says which server it is on itself.
+  server?: ServerId;
 }>({ cwd: null, sessionId: null });
+
+/// The server a path drawn here belongs to.
+export function pathServer({ server, sessionId }: { server?: ServerId; sessionId: string | null }): ServerId {
+  return server ?? serverOfSession(sessionId);
+}
 
 export function useChatSession() {
   return useContext(ChatSessionContext);
@@ -30,6 +41,6 @@ export function useChatSession() {
 /// session runs on — an attachment, a recording, a file it named. Agents name
 /// their own machine's paths.
 export function useSessionPath(): (path: string) => string {
-  const { sessionId } = useChatSession();
-  return (path) => qualify(path, serverOfSession(sessionId));
+  const session = useChatSession();
+  return (path) => qualify(path, pathServer(session));
 }

@@ -10,6 +10,8 @@ import BotAvatar from "@/components/BotAvatar";
 import MachineMark from "@/components/MachineMark";
 import Favicon, { hostOf } from "@/components/browser/Favicon";
 import FileIcon from "@/components/FileIcon";
+import { DocTabIcon } from "@/components/DocEditing";
+import { filesDocKey } from "@/hooks/useDocs";
 import GlobeFilledIcon from "@/components/icons/GlobeFilledIcon";
 import Orb from "@/components/Orb";
 import { CHAT_MIN } from "@/components/ResizeHandle";
@@ -421,7 +423,11 @@ export default function ViewTabs({
       : []),
     ...files.map((file, i) => ({
       key: `file:${file.path}`,
-      icon: <FileIcon path={file.path} dir={isFolder(file)} className="size-3.5 shrink-0" />,
+      icon: (
+        <DocTabIcon store={filesDocKey(sessionId)} path={file.path}>
+          <FileIcon path={file.path} dir={isFolder(file)} className="size-3.5 shrink-0" />
+        </DocTabIcon>
+      ),
       label: fileLabels[i],
       active: own === "files" && file.path === activeFile,
       pick: () => {

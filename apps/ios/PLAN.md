@@ -45,6 +45,10 @@ phone reads and drives it over the same WebSocket the desktop uses
   it, on this phone, per agent; starred ones lead. With the worktree off a
   Branch row switches the checkout at once (`checkout_branch`), asking
   Bring or Stash first where files are uncommitted, as the desktop does.
+  On an iPad or an unfolded Duo (#1390) the list is a sidebar whose foot is
+  a **New task** button instead: the same dock fills the main pane, which
+  shows it whenever no session is open. A sidebar laid over the pane shuts;
+  one beside it stays, as a row tap does.
 - **A lone bot opens itself** (#1169): a cold launch where one bot is all
   the list would draw — no other bot, no session shown, or Hide sessions on —
   opens its chat at once. It decides off the cached list, so the list never

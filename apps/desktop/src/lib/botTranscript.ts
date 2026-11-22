@@ -427,7 +427,7 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
 function reactionsOf(events: readonly AgentEvent[]): Map<string, string> {
   const reactions = new Map<string, string>();
   for (const { payload } of events) {
-    if (payload.type === "reaction") reactions.set(payload.messageId, payload.emoji);
+    if (payload.type === "reaction" && !payload.byUser) reactions.set(payload.messageId, payload.emoji);
   }
   return reactions;
 }

@@ -325,3 +325,20 @@ export function absolutePath(raw: string, cwd: string | null): string | null {
 
   return `${cwd.replace(/\/+$/, "")}/${raw.replace(/^\.\//, "")}`;
 }
+
+/// `a/./b/../c/` as `a/c`, so a doc's `../README.md` opens the tab the tree's
+/// own click would rather than a second one under another spelling.
+export function normalizePath(path: string): string {
+  const out: string[] = [];
+  for (const part of path.split("/")) {
+    if (part === ".") continue;
+    // Never past the root: on an absolute path `out[0]` is the empty segment
+    // before it.
+    if (part === "..") {
+      if (out.length > 1) out.pop();
+      continue;
+    }
+    out.push(part);
+  }
+  return out.join("/").replace(/(?<=.)\/+$/, "") || "/";
+}

@@ -1989,6 +1989,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         // A phone's alerts (#1299), through the relay.
         push_register(handle: String, tag: String, off: Option<Vec<String>>) => crate::push::push_register(handle, tag, off).await;
         push_unregister(handle: String) => crate::push::push_unregister(handle).await;
+        react_to_message(session_id: String, message_id: String, emoji: String) =>
+            crate::bots::react::react_to_message(session_id, message_id, emoji, sink).await;
         mark_session_read(session_id: String, read: bool) => crate::mark_session_read(&session_id, read, sink).await;
         set_session_flags(session_id: String, archived: Option<bool>, pinned: Option<bool>, hidden: Option<bool>, aside: Option<bool>) =>
             crate::bots::reader_did(
@@ -2032,6 +2034,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         worktree_disposition(session_id: String) =>crate::worktree_disposition(&session_id).await;
         remove_session_worktree(session_id: String) => crate::remove_session_worktree(&session_id).await;
         detach_session(session_id: String) => store::detach_session(&session_id).await;
+        attach_session(session_id: String, bot: String) => crate::orchestration::attach_to_bot(&session_id, &bot, &sink).await.map_err(crate::Fail::from);
         set_auto_continue(session_id: String, on: bool) => crate::auto_continue::set_auto_continue(session_id, on, sink).await;
         list_session_index_items(archived: bool) => store::list_session_index_items(archived).await;
         reachable_sessions() => ok(crate::machines::reachable_sessions().await);

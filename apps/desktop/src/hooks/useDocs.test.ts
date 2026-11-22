@@ -5,14 +5,19 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/transport", () => ({ invoke: () => Promise.resolve("# hi") }));
 
 import {
+  answerFileClose,
   closeDoc,
   docsFor,
+  filesDocKey,
   isDirty,
   openDoc,
+  setDocDraft,
+  syncDoc,
   withDiskText,
   type Doc,
   type DocBody,
 } from "./useDocs";
+import { closeFile, openFilesFor, openInFiles } from "./useOpenFiles";
 
 const ready = (base: string, draft = base, rest: Partial<DocBody> = {}) =>
   ({
@@ -58,6 +63,13 @@ describe("withDiskText", () => {
     const next = withDiskText(ready("old", "mine"), "theirs");
     expect(next.draft).toBe("mine");
     expect(next.stale).toBe(true);
+  });
+
+  // The Files view feeds every read through here; a new object each time
+  // would re-render it into reading again.
+  it("hands back the same body for a doc already stale", () => {
+    const stale = ready("old", "mine", { stale: true });
+    expect(withDiskText(stale, "theirs")).toBe(stale);
   });
 
   // `base` is what the next save sends as `expect`. Moving it to the disk text
@@ -122,5 +134,49 @@ describe("docs belong to the session they were opened from", () => {
   it("opens nothing with no session", () => {
     openDoc(null, "/nowhere/README.md");
     expect(docsFor(null).docs).toEqual([]);
+  });
+});
+
+describe("Files view drafts", () => {
+  const body = (store: string, path: string) => {
+    const it = docsFor(store).docs.find((d) => d.path === path)?.body;
+    if (it?.status !== "ready") throw new Error("not ready");
+    return it;
+  };
+
+  it("keeps a draft through a re-read, and holds the close until answered", () => {
+    const sid = "files-a";
+    const store = filesDocKey(sid);
+    const path = "/r/NOTES.md";
+    openInFiles(sid, path);
+    syncDoc(store, path, "one");
+    expect(docsFor(sid).docs).toEqual([]);
+
+    setDocDraft(store, path, "one!");
+    syncDoc(store, path, "two");
+    expect(body(store, path)).toMatchObject({ draft: "one!", base: "one", stale: true });
+
+    closeFile(sid, path);
+    expect(openFilesFor(sid).open).toHaveLength(1);
+    answerFileClose(false);
+    expect(openFilesFor(sid).open).toHaveLength(1);
+
+    closeFile(sid, path);
+    answerFileClose(true);
+    expect(openFilesFor(sid).open).toHaveLength(0);
+    expect(docsFor(store).docs).toEqual([]);
+  });
+
+  it("closes a clean file at once and drops its doc", () => {
+    const sid = "files-b";
+    const store = filesDocKey(sid);
+    openInFiles(sid, "/r/A.md");
+    syncDoc(store, "/r/A.md", "a");
+    syncDoc(store, "/r/A.md", "b");
+    expect(body(store, "/r/A.md")).toMatchObject({ base: "b", draft: "b", stale: false });
+
+    closeFile(sid, "/r/A.md");
+    expect(openFilesFor(sid).open).toHaveLength(0);
+    expect(docsFor(store).docs).toEqual([]);
   });
 });
