@@ -786,7 +786,7 @@ class Store(private val context: Context) {
         }
     }
 
-    /** The reader's emoji on the agent's message `messageId`. The badge and the agent's answer come back as events. */
+    /** The reader's emoji on a bot's message `messageId`. The badge and the bot's answer come back as events. */
     fun react(key: SessionKey, messageId: String, emoji: String) = scope.launch {
         runCatching { call(key.server, "react_to_message", jsonOf("sessionId" to key.id, "messageId" to messageId, "emoji" to emoji)) }
             .onFailure { lastError = it.message }

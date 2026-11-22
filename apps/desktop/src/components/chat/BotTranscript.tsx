@@ -276,7 +276,7 @@ const ChatRow = memo(function ChatRow({ item, time, tight, isNew, bots, taskOf, 
           onOpenBot={onOpenBot}
         />
       ) : item.kind === "assistant" && item.event.payload.type === "assistant_text" ? (
-        <Reactable event={item.event} bubble className={tight ? "-mt-2.5" : undefined}>
+        <Reactable event={item.event} className={tight ? "-mt-2.5" : undefined}>
           <BotBubble className="max-w-full">
             <AssistantMessage text={item.event.payload.text} />
           </BotBubble>

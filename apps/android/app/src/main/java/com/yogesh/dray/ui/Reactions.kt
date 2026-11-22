@@ -59,7 +59,7 @@ fun ReactionBadge(emoji: String, mine: Boolean = false) {
 }
 
 /**
- * The agent's message, which a long press reacts to, as a messenger does: the set opens over it,
+ * A bot's message, which a long press reacts to, as a messenger does: the set opens over it,
  * with Copy, since the press no longer starts a selection there. `content` takes the press on the
  * modifier it is handed. Nothing reacts where `key` is null or the chat is settled.
  */

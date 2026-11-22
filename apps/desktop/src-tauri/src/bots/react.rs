@@ -2,8 +2,8 @@
 //! newest message in place of a reply when it has nothing to say: Claude Code
 //! bots through the `react` tool on Dray's in-process MCP server
 //! ([no_reply](crate::harness::claude_code::no_reply)), every other harness
-//! through `dray session react`. The user reacts to any agent's message, in a
-//! bot's chat or a task's, through [`react_to_message`].
+//! through `dray session react`. The user reacts back to the bot's messages
+//! through [`react_to_message`].
 
 use anyhow::{bail, Context, Result};
 
@@ -69,22 +69,23 @@ pub async fn reaction(session_id: &str, cwd: &str, said: &str) -> Result<AgentEv
     Ok(AgentEventPayload::Reaction { message_id, emoji: emoji.to_string(), by_user: false })
 }
 
-/// The user's emoji on the agent's message `message_id` in `session_id`, a
-/// bot's chat or a task's. Logged as a badge on that message, replacing any
-/// earlier one of theirs, then told to the agent as a hidden prompt, so it can
+/// The user's emoji on the bot's message `message_id` in `session_id`, one of
+/// its chat's sessions. Logged as a badge on that message, replacing any
+/// earlier one of theirs, then told to the bot as a hidden prompt, so it can
 /// answer. The badge is all the reader sees of it, as a kickoff draws nothing.
+/// Refused in a task: a task is talked to in words, not tapbacks.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn react_to_message(session_id: String, message_id: String, emoji: String, sink: Sink) -> Result<(), Fail> {
     let item = crate::store::get_session_index_item(&session_id).await?.context("no such session")?;
     let Some(picked) = self::emoji(&emoji) else {
         return Err(anyhow::anyhow!("no reaction \"{emoji}\"").into());
     };
+    if item.routine_run.is_some() || super::bot_at(&item.cwd).await.is_none() {
+        return Err(anyhow::anyhow!("only a bot's chat takes reactions").into());
+    }
     // An earlier session of a bot's chat still holds its own messages, but its
     // agent is gone: the bot's newest chat is who hears about it.
-    let to = match super::bot_at(&item.cwd).await {
-        Some(_) if item.routine_run.is_none() => super::chat_sessions(&item.cwd).await?.pop().unwrap_or_else(|| item.clone()),
-        _ => item.clone(),
-    };
+    let to = super::chat_sessions(&item.cwd).await?.pop().unwrap_or_else(|| item.clone());
     if to.archived {
         return Err(anyhow::anyhow!("this chat is settled").into());
     }

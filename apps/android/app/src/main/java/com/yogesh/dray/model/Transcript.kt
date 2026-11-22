@@ -55,8 +55,7 @@ data class ToolCall(
 sealed interface Item {
     val id: String
 
-    /** `reaction`: the reader's emoji on it. */
-    data class Text(override val id: String, val text: String, val reaction: String? = null) : Item
+    data class Text(override val id: String, val text: String) : Item
     data class Tool(val call: ToolCall) : Item { override val id get() = call.id }
     /** Consecutive calls to one tool, behind one row. */
     data class Group(override val id: String, val name: String, val calls: List<ToolCall>, val targets: Int, val target: String?) : Item
@@ -82,8 +81,6 @@ data class Turn(
     val finalText: String? = null,
     /** `finalText` was the last row of `work` and is dropped from it, so it draws in the same place folded or not. */
     val finalLifted: Boolean = false,
-    /** The message `finalText` stands for, which a reaction names. */
-    val finalMessage: Item.Text? = null,
 ) {
     val running: Boolean get() = !completed
     /** Rows a collapse would hide: queued prompts stay on screen. */
@@ -188,10 +185,6 @@ fun buildTurns(events: List<AgentEvent>, busy: Boolean): List<Turn> {
         else -> {}
     }
 
-    // The reader's reaction on each message, the newest where they changed it.
-    val mine = HashMap<String, String>()
-    for (e in main) (e.payload as? Payload.Reaction)?.takeIf { it.byUser }?.let { mine[it.messageId] = it.emoji }
-
     val turns = mutableListOf<Turn>()
     var current: Turn? = null
     val calls = mutableListOf<ToolCall>()
@@ -222,10 +215,10 @@ fun buildTurns(events: List<AgentEvent>, busy: Boolean): List<Turn> {
         }
         val tail = turn.work.lastOrNull()
         if (turn.completed && tail is Item.Text) {
-            turn = turn.copy(finalText = tail.text, finalLifted = true, finalMessage = tail, work = turn.work.dropLast(1))
+            turn = turn.copy(finalText = tail.text, finalLifted = true, work = turn.work.dropLast(1))
         } else if (turn.completed) {
             // Cut short with a call after its last message: that message still ends the fold.
-            (turn.work.lastOrNull { it is Item.Text } as Item.Text?)?.let { turn = turn.copy(finalText = it.text, finalMessage = it) }
+            turn.work.lastOrNull { it is Item.Text }?.let { turn = turn.copy(finalText = (it as Item.Text).text) }
         }
         turns += turn
     }
@@ -236,20 +229,18 @@ fun buildTurns(events: List<AgentEvent>, busy: Boolean): List<Turn> {
         when (val p = e.payload) {
             is Payload.UserMessage -> {
                 val shown = stripSender(p.text, p.fromTitle, p.fromId, p.fromBot != null)
-                // Dray's own prompt draws no bubble: a kickoff, a review, a reaction told to the agent.
-                if (p.kickoff && p.queued && current != null) continue
                 if (p.queued && current != null) {
                     flushCalls()
                     append(Item.Prompt(e.id, shown, p.fromTitle, p.images))
                 } else {
                     close()
-                    current = Turn(e.id, if (p.kickoff) null else TurnPrompt(shown, p.fromTitle, p.images))
+                    current = Turn(e.id, TurnPrompt(shown, p.fromTitle, p.images))
                 }
             }
             is Payload.AssistantText -> if (p.text.isNotBlank()) {
                 ensureTurn(e)
                 flushCalls()
-                append(Item.Text(e.id, p.text, mine[e.id]))
+                append(Item.Text(e.id, p.text))
             }
             is Payload.ToolStarted -> {
                 ensureTurn(e)

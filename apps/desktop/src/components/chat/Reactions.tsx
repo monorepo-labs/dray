@@ -27,10 +27,10 @@ export function ReactionBadge({ emoji, mine = false, className }: { emoji: strin
   );
 }
 
-/// The reader's reactions in the chat on screen, and how to make one. A context,
-/// since the agent's text is drawn several components below `Chat` in a task's
-/// transcript. `react` is null where nothing can take one: a settled chat, a
-/// subagent's view.
+/// The reader's reactions in the bot chat on screen, and how to make one. A
+/// context, since its rows are memoised on what they were built from and a
+/// reaction lands as an event of its own. `react` is null where nothing can
+/// take one: a settled chat.
 export type Reactions = {
   mine: ReadonlyMap<string, string>;
   react: ((event: AgentEvent, emoji: string) => void) | null;
@@ -38,59 +38,26 @@ export type Reactions = {
 
 export const ReactionsContext = createContext<Reactions>({ mine: new Map(), react: null });
 
-/// The agent's message with the reader's reaction on it and, on hover, a button
-/// to pick one. `bubble` for a bot's chat, where the badge sits on the bubble's
-/// corner as the bot's does on the reader's, and this row takes the bubble's
-/// width and place; otherwise under the text, which has no corner to sit on.
-export function Reactable({
-  event,
-  bubble = false,
-  className,
-  children,
-}: {
-  event: AgentEvent;
-  bubble?: boolean;
-  className?: string;
-  children: ReactNode;
-}) {
+/// A bot's message with the reader's reaction on its corner, as the bot's sits
+/// on the reader's, and beside it a button to pick one on hover. Takes the
+/// bubble's width and place in the chat.
+export function Reactable({ event, className, children }: { event: AgentEvent; className?: string; children: ReactNode }) {
   const { mine, react } = useContext(ReactionsContext);
   const reaction = mine.get(event.id);
-  const pick = react && !event.subagent ? (emoji: string) => react(event, emoji) : null;
-  if (bubble) {
-    return (
-      <div className={cn("group/react flex max-w-[85%] items-center gap-1 self-start", className, reaction && "mt-3")}>
-        <div className="relative min-w-0">
-          {children}
-          {reaction && <ReactionBadge emoji={reaction} mine className="absolute -top-4 -right-3" />}
-        </div>
-        {pick && <ReactButton current={reaction} onPick={pick} />}
-      </div>
-    );
-  }
-  if (!reaction && !pick) return <>{children}</>;
   return (
-    <div className={cn("group/react relative", className)}>
-      {children}
-      {reaction && <ReactionBadge emoji={reaction} mine className="mt-1.5" />}
-      {pick && <ReactButton current={reaction} onPick={pick} className="absolute right-0 -bottom-3" floating />}
+    <div className={cn("group/react flex max-w-[85%] items-center gap-1 self-start", className, reaction && "mt-3")}>
+      <div className="relative min-w-0">
+        {children}
+        {reaction && <ReactionBadge emoji={reaction} mine className="absolute -top-4 -right-3" />}
+      </div>
+      {react && !event.subagent && <ReactButton current={reaction} onPick={(emoji) => react(event, emoji)} />}
     </div>
   );
 }
 
 /// The hover button and the set it opens. Shown while the row is hovered or the
 /// set is open, and always to the keyboard.
-function ReactButton({
-  current,
-  onPick,
-  floating = false,
-  className,
-}: {
-  current: string | undefined;
-  onPick: (emoji: string) => void;
-  /// Sits over the text rather than beside it, so it takes a fill of its own.
-  floating?: boolean;
-  className?: string;
-}) {
+function ReactButton({ current, onPick }: { current: string | undefined; onPick: (emoji: string) => void }) {
   return (
     <DropdownMenu modal={false}>
       <Tooltip>
@@ -99,11 +66,7 @@ function ReactButton({
             <button
               type="button"
               aria-label="React"
-              className={cn(
-                "flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 transition-[opacity,color] outline-none group-hover/react:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring/50 data-[state=open]:opacity-100",
-                floating && "bg-popover shadow-xs ring-1 ring-foreground/10 backdrop-blur-xl",
-                className,
-              )}
+              className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 transition-[opacity,color] outline-none group-hover/react:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring/50 data-[state=open]:opacity-100"
             >
               <SmilePlus className="size-4" />
             </button>
@@ -111,10 +74,8 @@ function ReactButton({
         </TooltipTrigger>
         <TooltipContent>React</TooltipContent>
       </Tooltip>
-      {/* A floating button sits at the column's right edge, so its set opens
-          leftwards from it; beside a bubble there is room to the right. */}
       <DropdownMenuContent
-        align={floating ? "end" : "start"}
+        align="start"
         collisionPadding={8}
         className="flex w-auto min-w-0 gap-0.5"
         onCloseAutoFocus={(e) => e.preventDefault()}

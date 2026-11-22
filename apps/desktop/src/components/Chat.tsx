@@ -722,21 +722,21 @@ export default function Chat({
     [segments, bot],
   );
 
-  // Kept while its contents hold, so a new event re-renders no message the
-  // reader has not reacted to anew.
-  const reactionKey = [...readerReactions(segments.flatMap((s) => s.events))].join();
-  const archived = !!session?.archived;
+  // A bot's chat alone takes the reader's reactions. Kept while its contents
+  // hold, so a new event re-renders no message the reader has not reacted to anew.
+  const reactionKey = bot ? [...readerReactions(segments.flatMap((s) => s.events))].join() : "";
+  const closed = !bot || !!session?.archived;
   const reactions = useMemo<Reactions>(
     () => ({
-      mine: readerReactions(segments.flatMap((s) => s.events)),
-      react: archived
+      mine: bot ? readerReactions(segments.flatMap((s) => s.events)) : new Map(),
+      react: closed
         ? null
         : (event, emoji) =>
             void invoke("react_to_message", { sessionId: event.sessionId, messageId: event.id, emoji }).catch((e) =>
               console.error("[react]", e),
             ),
     }),
-    [reactionKey, archived],
+    [reactionKey, closed],
   );
 
   if (!session) return null;
