@@ -54,6 +54,7 @@ import {
   useParkedTabs,
   usePendingTab,
   useRecordedTab,
+  tint,
   type BrowserTab,
 } from "@/lib/browser";
 
@@ -108,6 +109,9 @@ export type ViewTab = (typeof VIEW_TABS)[number] | "pick" | "subagent";
 /// The pointer crosses this row on its way to everything below it, so a
 /// tooltip waits for a hover that means it — the crew's own delay.
 const TIP_DELAY = 700;
+/// How far the first tab travels from the sheet's edge before its left foot is
+/// whole: the sheet's 8px corner and a 10px flare (`--tab-r`), side by side.
+const FIRST_CURVE = 18;
 
 /// Where a fresh session's row starts.
 const DEFAULT_ORDER: TabKey[] = ["chat", "changes", "files"];
@@ -239,6 +243,8 @@ type Item = {
   prefetch?: string;
   /// A split group, drawn as one tab: its members, lead first.
   group?: Member[];
+  /// A browser page's own colour, which its tab wears while lit.
+  fill?: string;
 };
 
 /// The titlebar as a browser's tab strip.
@@ -367,6 +373,7 @@ export default function ViewTabs({
       label: pageLabel(page, browserId),
       active: own === "browser" && page.active && !pending,
       overlay: <AgentBeam tab={page.id} top />,
+      fill: page.background ?? undefined,
       locked: page.id === recorded,
       pick: () => {
         onChange("browser");
@@ -657,16 +664,37 @@ export default function ViewTabs({
   // out in CSS from what sits before the row — the header names that as
   // `--tabs-lead` — rather than measured: a layout read on every render forced
   // a full layout each time, and switching sessions renders many times over.
-  // The row's `-mx-1` is the floor; its `pl-5` puts the first tab 16px in.
+  // The row's `-mx-1` is the floor; its `pl-[3px]` puts the first tab on the
+  // sheet's left edge.
   // Every row, not a lone title alone: aligned only when alone, the row slid
   // across on every switch between one tab and several.
   const lone = drag.shown.length === 1;
+  // Flush with the sheet at rest, the first tab grows its left foot as soon as
+  // a drag moves it: by its own travel, or whole when it steps aside for
+  // another tab taking its place. Read off the drag, never a measured gap.
+  // The sheet's corner and the flare share the travel 8:10, so the two
+  // curves always meet at the floor; both are whole from 18px on.
+  const firstOut = !drag.drag
+    ? 0
+    : drag.drag.from === 0
+      ? Math.max(0, drag.drag.d)
+      : drag.drag.to === 0
+        ? FIRST_CURVE
+        : 0;
+  useLayoutEffect(() => {
+    const k = Math.min(firstOut, FIRST_CURVE) / FIRST_CURVE;
+    const root = document.documentElement.style;
+    root.setProperty("--first-corner", `${8 * k}px`);
+    root.setProperty("--first-flare", `${10 * k}px`);
+    return () => {
+      root.removeProperty("--first-corner");
+      root.removeProperty("--first-flare");
+    };
+  }, [firstOut]);
+  // No entrance: the row is simply there when a task opens, as a browser's is.
   const align = {
     marginLeft:
       alignX > 0 ? `max(-0.25rem, calc(${alignX}px - 0.25rem - var(--tabs-lead)))` : "-0.25rem",
-    // Here rather than as classes so `duration-300` does not also ease the
-    // margin at entrance speed.
-    animation: "enter 300ms ease-out 150ms backwards",
   };
 
   // The browser view with nothing in the row lit for it — its tab shut by ⌘W
@@ -838,12 +866,15 @@ export default function ViewTabs({
     // Clips rather than scrolls: past every tab's icon floor there is nothing
     // left to give, and a scrolling row hides tabs the reader cannot see.
     // Full height and inset, so the clip lands past the lit tab's flares and
-    // ring rather than on them. `pl-5` holds the first tab's flare clear of
-    // the sheet's rounded corner: 8px of corner, 8px of flare.
+    // ring rather than on them. The first tab sits on the sheet's left edge,
+    // which runs straight up into it while it is lit (`tab-strip`): `pl-[3px]`
+    // puts its border, drawn inside the box, in the column the sheet's ring
+    // takes just outside the sheet. The clip starts at that border, so the
+    // tab's soft drop never lands beside the sheet's side, which has none.
     <div
       ref={drag.list}
       role="tablist"
-      className="-mx-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden pr-1 pl-5 fade-in slide-in-from-left-3"
+      className="-mx-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden pr-1 pl-[3px] [clip-path:inset(0_0_0_3px)]"
       style={align}
     >
       {drag.shown.map((item, i) =>
@@ -866,12 +897,11 @@ export default function ViewTabs({
           />
         ) : (
         <ItemTab
-          // Remounted when the chat turns between a lone title and a tab, or
-          // its min-width eases across the change and the switch drags.
-          // Per session too, so a rename left open does not follow the reader.
-          key={item.key === "chat" ? `chat:${lone}:${sessionId}` : item.key}
+          // Per session, so a rename left open does not follow the reader.
+          key={item.key === "chat" ? `chat:${sessionId}` : item.key}
           icon={item.icon}
           overlay={item.overlay}
+          fill={item.fill}
           label={item.label}
           active={item.active}
           locked={item.locked}
@@ -886,9 +916,7 @@ export default function ViewTabs({
           transform={drag.offset(i)}
           held={drag.drag?.from === i}
           gliding={!!drag.drag && drag.drag.from !== i}
-          // The chat alone is a title, not a tab: nothing beside it to pick
-          // between, so no pill to say which is picked.
-          plain={lone}
+          // A tab even alone, the way a browser draws one page.
           strip
         />
         ),
@@ -1120,6 +1148,7 @@ export function ItemTab({
   hint,
   rename,
   overlay,
+  fill,
   machine,
   prefetch,
 }: {
@@ -1130,6 +1159,8 @@ export function ItemTab({
   prefetch?: string;
   /// Drawn over the whole tab, out of the row's flow: the agent's beam.
   overlay?: React.ReactNode;
+  /// Worn while lit in the strip, so the tab runs into its page's URL row.
+  fill?: string;
   label: string;
   active: boolean;
   /// Not closed, while a recording films it.
@@ -1203,7 +1234,9 @@ export function ItemTab({
         hover.onPointerDown();
         onPointerDown?.(e);
       }}
-      style={{ transform }}
+      // Its ink and `--tab-fill` alone: the fill is drawn by `tab-strip`,
+      // under the edge its border carries.
+      style={{ transform, ...(browserTab && active && fill ? { ...tint(fill), background: undefined } : null) }}
       data-lit={browserTab && active ? "" : undefined}
       data-held={browserTab && held ? "" : undefined}
       className={cn(
