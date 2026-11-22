@@ -7,6 +7,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -61,6 +62,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yogesh.dray.model.BotItem
@@ -227,16 +231,27 @@ fun BotChatRow(key: SessionKey, rows: List<BotRow>, i: Int, items: List<BotItem>
 
 /**
  * An agent's reply as a bot chat draws it: a card-filled bubble short of the trailing edge, the
- * reader's reaction hanging off its bottom corner, under what was read. `modifier` is the bubble's own.
+ * reader's reaction on its bottom corner, beside what was read. `modifier` is the bubble's own.
+ *
+ * A reaction lands on a message already read, so it must move nothing: the badge sits out to the
+ * side, in the room the bubble stops short of, and inside the bubble's own height, which one line
+ * of text gives it. Hung under the bubble it needed padding to clear the next row, and the chat
+ * jumped. It laps the bubble by its padding less the ring, so no text is under it.
  */
 @Composable
 fun ReplyBubble(text: String, reaction: String? = null, modifier: Modifier = Modifier) {
-    Box(Modifier.padding(end = 32.dp).padding(bottom = if (reaction == null) 0.dp else 20.dp)) {
+    Box(Modifier.padding(end = 32.dp)) {
         Box(modifier.clip(RoundedCornerShape(Dray.Radius.xl)).background(Dray.card).padding(horizontal = 12.dp, vertical = 10.dp)) {
             MarkdownText(text)
         }
-        reaction?.let { Box(Modifier.align(Alignment.BottomEnd).offset(x = 16.dp, y = 24.dp)) { ReactionBadge(it, mine = true) } }
+        reaction?.let { Box(Modifier.align(Alignment.BottomEnd).hung(x = (-8).dp, y = (-40).dp)) { ReactionBadge(it, mine = true) } }
     }
+}
+
+/** Draws its content `x`, `y` from where it is put and takes no room there, so a badge landing resizes nothing. */
+private fun Modifier.hung(x: Dp, y: Dp = 0.dp) = layout { measurable, _ ->
+    val placeable = measurable.measure(Constraints())
+    layout(0, 0) { placeable.placeRelative(x.roundToPx(), y.roundToPx()) }
 }
 
 /** Where the replies the reader has not seen begin, as a messenger marks it. */
@@ -249,21 +264,29 @@ fun NewDivider() {
     }
 }
 
-/** The reader's own words in a bot's chat: the sent bubble, the bot's reaction on its corner. */
+/**
+ * The reader's own words in a bot's chat: the sent bubble, the bot's reaction out to the side of
+ * its top corner, where it lands without moving anything — see [ReplyBubble].
+ */
 @Composable
 fun BotUserBubble(text: String, images: List<ImageRef> = emptyList(), reaction: String? = null) {
     Column(Modifier.fillMaxWidth().padding(start = 48.dp), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Thumbnails(images, end = true)
+        // A message of pictures alone has no bubble, so the badge sits on the first one's corner.
+        if (images.isNotEmpty()) BoxWithConstraints {
+            Thumbnails(images, end = true)
+            val wide = minOf(maxWidth, 72.dp * images.size + 4.dp * (images.size - 1))
+            if (text.isEmpty()) reaction?.let { Box(Modifier.align(Alignment.TopEnd).hung(x = -wide - 32.dp)) { ReactionBadge(it) } }
+        }
         if (text.isNotEmpty()) {
-            Box(Modifier.padding(top = if (reaction == null) 0.dp else 20.dp)) {
+            Box {
                 Text(
                     text,
                     Modifier.clip(RoundedCornerShape(Dray.Radius.xl)).background(Dray.sent).padding(horizontal = 14.dp, vertical = 10.dp),
                     style = Dray.Font.body.copy(color = Dray.onSent),
                 )
-                reaction?.let { Box(Modifier.align(Alignment.TopStart).offset(x = (-16).dp, y = (-24).dp)) { ReactionBadge(it) } }
+                reaction?.let { Box(Modifier.align(Alignment.TopStart).hung(x = (-32).dp)) { ReactionBadge(it) } }
             }
-        } else reaction?.let { ReactionBadge(it) }
+        } else if (images.isEmpty()) reaction?.let { ReactionBadge(it) }
     }
 }
 
@@ -329,7 +352,7 @@ private fun BotRowView(key: SessionKey, row: BotRow, late: Boolean, openTask: (S
         }
         is BotRow.One -> when (val item = row.item) {
             is BotItem.User -> BotUserBubble(item.text, item.images, item.reaction)
-            is BotItem.Assistant -> Reactable(SessionKey(key.server, item.sessionId ?: key.id), item.id, item.text, item.reaction) {
+            is BotItem.Assistant -> Reactable(SessionKey(key.server, item.sessionId ?: key.id), item.id, item.reaction) {
                 ReplyBubble(item.text, item.reaction, it)
             }
             is BotItem.Notice -> FailureRow(item.text)

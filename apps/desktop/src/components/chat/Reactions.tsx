@@ -62,17 +62,23 @@ export type Reactions = {
 
 export const ReactionsContext = createContext<Reactions>({ mine: new Map(), react: null });
 
-/// A bot's message with the reader's reaction hanging off its bottom corner, under
-/// what was read, and beside it a button to pick one on hover. Takes the
-/// bubble's width and place in the chat.
+/// A bot's message with the reader's reaction on its bottom corner, beside what
+/// was read, and a button to pick one on hover. Takes the bubble's width and
+/// place in the chat.
+///
+/// A reaction lands on a message already read, so it must move nothing: the
+/// badge sits out to the side, in the 15% no bubble reaches, and inside the
+/// bubble's own height, which one line of text already gives it. Hung under
+/// the bubble it needed a margin to clear the next message, and the chat
+/// jumped. It laps the bubble by its padding less the ring, so no text is under it.
 export function Reactable({ event, className, children }: { event: AgentEvent; className?: string; children: ReactNode }) {
   const { mine, react } = useContext(ReactionsContext);
   const reaction = mine.get(event.id);
   return (
-    <div className={cn("group/react flex max-w-[85%] items-center gap-1 self-start", className, reaction && "mb-5")}>
+    <div className={cn("group/react flex max-w-[85%] items-center gap-1 self-start", className)}>
       <div className="relative min-w-0">
         {children}
-        {reaction && <ReactionBadge emoji={reaction} mine className="absolute -right-4 -bottom-6" />}
+        {reaction && <ReactionBadge emoji={reaction} mine className="absolute -right-8 bottom-0" />}
       </div>
       {react && !event.subagent && <ReactButton current={reaction} onPick={(emoji) => react(event, emoji)} />}
     </div>
@@ -90,7 +96,12 @@ function ReactButton({ current, onPick }: { current: string | undefined; onPick:
             <button
               type="button"
               aria-label="React"
-              className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 transition-[opacity,color] outline-none group-hover/react:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring/50 data-[state=open]:opacity-100"
+              className={cn(
+                "flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 transition-[opacity,color] outline-none group-hover/react:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring/50 data-[state=open]:opacity-100",
+                // Past the badge, which sits where the button rests. A transform,
+                // since a margin would narrow the bubble and rewrap it.
+                current && "translate-x-9",
+              )}
             >
               <SmilePlus className="size-4" />
             </button>
