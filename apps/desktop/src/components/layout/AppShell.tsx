@@ -10,6 +10,10 @@ type AppShellProps = {
   /// The sidebar is drawn. Shut, a strip of the frame still holds the sheet
   /// off the window's left edge.
   sidebarOpen?: boolean;
+  /// With the sidebar shut on a tall page, how far in from the leftmost card's
+  /// edge the header's controls reach, as a CSS length. That card drops below
+  /// them and a lit tab spans the rest of its top, as in a task view.
+  notch?: string;
   /// The sheet reaches up behind the header rather than starting under it —
   /// for pages with no tabs to sit in the strip. The header floats over the
   /// sheet's top, and the sheet's contents keep their place below it.
@@ -58,6 +62,7 @@ type AppShellProps = {
 export default function AppShell({
   sidebar,
   sidebarOpen = true,
+  notch,
   tall = false,
   header,
   footer,
@@ -72,20 +77,25 @@ export default function AppShell({
   mainCard,
   children,
 }: AppShellProps) {
+  // The leftmost card on a tall page, sidebar shut: under the header instead,
+  // with the page's own lit tab over it.
+  const pageTab = (on: boolean) => (on && notch ? { tall: false, notch } : { tall });
   // A card of its own beside the sheet, with the frame showing between. Kept
   // mounted while shut, since the pane hides rather than unmounts.
   const gap = <div className="w-1.5 shrink-0 bg-surface-frame" />;
   const panelCard = panel && (
     <div className={cn("flex shrink-0", !panelOpen && "hidden")}>
       {!panelLeft && gap}
-      <Sheet tall={tall}>{panel}</Sheet>
+      <Sheet {...pageTab(tall && !sidebarOpen && panelLeft)}>{panel}</Sheet>
       {panelLeft && gap}
     </div>
   );
   return (
     // The header spans the window and everything else sits under it, the way a
     // browser's tab strip sits over its pages.
-    <div className="relative flex h-full w-full flex-col overflow-hidden">
+    // `data-shell` bounds App.css's first-tab joins to this shell: asked of
+    // the whole document, Settings' sheet took the hidden task view's corner.
+    <div className="relative flex h-full w-full flex-col overflow-hidden" data-shell="">
       {/* Always floating, so the sheet's top can glide between under the
           header and behind it; the strip above the sheet is the header's fill. */}
       <div className="absolute inset-x-0 top-0 z-30">{header}</div>
@@ -128,7 +138,7 @@ export default function AppShell({
             <div className="relative flex min-h-0 min-w-0 flex-1" {...{ [SPLIT_HOST]: "" }}>
             <Sheet
               className="flex-1"
-              tall={tall}
+              {...pageTab(tall && !sidebarOpen && !(panelLeft && panelOpen) && (!mainCard || mainCard.order === 0))}
               style={
                 mainCard
                   ? { flexGrow: mainCard.grow, order: mainCard.order, minWidth: mainCard.minWidth }
@@ -204,6 +214,7 @@ export default function AppShell({
 export function Sheet({
   className,
   tall = false,
+  notch,
   style,
   children,
   ...attrs
@@ -214,29 +225,38 @@ export function Sheet({
   [attr: `data-${string}`]: string;
   /// Reaching up behind the header: its contents start below it all the same.
   tall?: boolean;
+  /// Draws a lit tab over the whole top from this far in, as a CSS length:
+  /// a page's stand-in for a task view's first tab (`page-tab` in App.css).
+  notch?: string;
   children: ReactNode;
 }) {
   const corner = "pointer-events-none absolute z-20 size-2";
   return (
-    <div className={cn("relative flex min-h-0 min-w-0", className)} style={style} {...attrs}>
+    <div
+      className={cn("relative flex min-h-0 min-w-0", className)}
+      style={notch ? ({ ...style, "--notch-w": notch } as React.CSSProperties) : style}
+      {...(notch && { "data-notch": "" })}
+      {...attrs}
+    >
+      {notch && <span aria-hidden data-lit="" className="tab-strip page-tab" />}
       {/* Its own box over the panes rather than a shadow on them, which would
           clip at their edge. Inert, so every click passes through. One above
           the corners, whose frame fill otherwise covers the ring's arc. */}
       <span
         aria-hidden
-        className="pointer-events-none absolute inset-0 z-21 rounded-[8px] rounded-tl-[var(--sheet-tl,8px)] shadow-[var(--sheet-ring,var(--shadow-sheet))]"
+        className="pointer-events-none absolute inset-0 z-21 rounded-[8px] rounded-tl-[var(--sheet-tl,8px)] rounded-tr-[var(--sheet-tr,8px)] shadow-[var(--sheet-ring,var(--shadow-sheet))]"
       />
       <span aria-hidden className="sheet-glow" />
       <span aria-hidden className="sheet-foot" />
       {/* Sized off `--sheet-tl` in App.css: the first tab's drag grows it. */}
       <span aria-hidden data-sheet-tl="" className={cn(corner, "top-0 left-0")} />
-      <span aria-hidden className={cn(corner, "top-0 right-0 bg-[radial-gradient(circle_at_0%_100%,transparent_8px,var(--surface-frame)_8.5px)]")} />
+      <span aria-hidden data-sheet-tr="" className={cn(corner, "top-0 right-0")} />
       <span aria-hidden className={cn(corner, "bottom-0 left-0 bg-[radial-gradient(circle_at_100%_0%,transparent_8px,var(--surface-frame)_8.5px)]")} />
       <span aria-hidden className={cn(corner, "right-0 bottom-0 bg-[radial-gradient(circle_at_0%_0%,transparent_8px,var(--surface-frame)_8.5px)]")} />
       <div
         className={cn(
           // Grows by what the sheet rose, so the contents hold still.
-          "flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-[8px] rounded-tl-[var(--sheet-tl,8px)] bg-(--surface-sheet) transition-[padding]",
+          "flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-[8px] rounded-tl-[var(--sheet-tl,8px)] rounded-tr-[var(--sheet-tr,8px)] bg-(--surface-sheet) transition-[padding]",
           tall ? "pt-[calc(var(--titlebar-h)-0.5rem)] duration-125 ease-in" : "duration-200 ease-out",
         )}
       >

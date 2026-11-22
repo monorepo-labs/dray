@@ -698,9 +698,11 @@ export default function ViewTabs({
     };
   }, [firstOut]);
   // No entrance: the row is simply there when a task opens, as a browser's is.
+  // Not lined up (sidebar shut), the first tab sits 3px off the control before
+  // it: the same gap that control keeps to the sheet's top edge below it.
   const align = {
     marginLeft:
-      alignX > 0 ? `max(-0.25rem, calc(${alignX}px - 0.25rem - var(--tabs-lead)))` : "-0.25rem",
+      alignX > 0 ? `max(-0.25rem, calc(${alignX}px - 0.25rem - var(--tabs-lead)))` : "calc(-0.25rem - 3px)",
   };
 
   // The browser view with nothing in the row lit for it — its tab shut by ⌘W

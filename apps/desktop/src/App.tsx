@@ -3988,6 +3988,9 @@ function App() {
     <AppShell
       sidebarOpen={!collapsed}
       tall={tallSheet}
+      // To the side of a task view's first tab: the header's lead, less where
+      // the row starts it (ViewTabs) and the frame strip left of the sheet.
+      notch={lights ? "calc(var(--traffic-lights-w) + 2.25rem - 11px)" : "calc(3rem - 11px)"}
       // The issues page fills the column, so the centred empty-composer state
       // is wrong there even with no session selected.
       centered={!shownSession && !pageOpen && !welcomeBot}

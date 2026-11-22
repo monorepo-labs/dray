@@ -1659,7 +1659,9 @@ body.session-drag * {
     --tl: var(--sheet-tl, 8px);
     inset: var(--glow-top, 7px) 7px 7px;
     border-radius: 9px;
+    --tr: var(--sheet-tr, 8px);
     border-top-left-radius: calc(var(--tl) + min(var(--tl), 1px));
+    border-top-right-radius: calc(var(--tr) + min(var(--tr), 1px));
     box-shadow: var(--sheet-glow, none);
   }
 }
@@ -1674,6 +1676,7 @@ body.session-drag * {
   &::before {
     top: var(--foot-top, 8px);
     border-top-left-radius: var(--sheet-tl, 8px);
+    border-top-right-radius: var(--sheet-tr, 8px);
     box-shadow: var(--sheet-foot, none);
   }
 }
@@ -1774,7 +1777,7 @@ body.session-drag * {
    the row lines up with the main sheet (`data-flush`, set by `ViewTabs`) and
    that sheet is the leftmost card (`data-flush-left`, set by `AppShell`): a
    left panel or a split pane before it puts another card under the tab. */
-:root:has([data-main-sheet][data-flush-left]) [role="tablist"][data-flush] {
+[data-shell]:has([data-main-sheet][data-flush-left]) [role="tablist"][data-flush] {
   /* The tab's soft drop stops at its border, beside a sheet side with none. */
   clip-path: inset(0 0 0 3px);
 
@@ -1783,13 +1786,21 @@ body.session-drag * {
   }
 }
 
-:root:has([role="tablist"][data-flush] > .tab-strip[data-lit]:first-child) [data-main-sheet][data-flush-left] {
+[data-shell]:has([role="tablist"][data-flush] > .tab-strip[data-lit]:first-child) [data-main-sheet][data-flush-left] {
   --sheet-tl: var(--first-corner, 0px);
   /* The tab covers the ring's top row: the top drop starts under it rather
      than overlapping it, and the side drops start above it, so they reach the
      join at full strength rather than fading in there. */
   --glow-top: 8px;
   --foot-top: 6px;
+}
+
+/* Off the sheet's edge, with the sidebar shut, the first tab's left foot
+   reaches past the row's own box: the row clips everywhere but there, or the
+   foot is cut to a stub and the tab looks to float beside the sheet. */
+[role="tablist"]:has(> .tab-strip):not([data-flush]) {
+  overflow: visible;
+  clip-path: inset(0 0 0 -10px);
 }
 
 /* The frame's fill outside the sheet's top-left curve, at whatever radius. */
@@ -1808,4 +1819,52 @@ body.session-drag * {
   background:
     radial-gradient(circle at 100% 0, var(--edge)),
     radial-gradient(circle at 100% 0, var(--floor));
+}
+
+/* The top-right twin of `[data-sheet-tl]`: a page's tab squares it (`--sheet-tr`). */
+[data-sheet-tr] {
+  width: var(--sheet-tr, 8px);
+  height: var(--sheet-tr, 8px);
+  background: radial-gradient(
+    circle at 0 100%,
+    transparent var(--sheet-tr, 8px),
+    var(--surface-frame) calc(var(--sheet-tr, 8px) + 0.5px)
+  );
+}
+
+/* A page with no tabs, sidebar shut: the leftmost card drops under the header
+   as a task view's does, and one lit tab spans its top from just past the
+   header's controls (`--notch-w`), its left foot on the card as a first tab's
+   is, its right side running straight down into the card's, the first tab's
+   flush join mirrored. The frame fills the band the card left. */
+[data-notch] {
+  border-top: calc(var(--titlebar-h) - 0.5rem) solid var(--surface-frame);
+  --sheet-tr: 0px;
+  --glow-top: 8px;
+  --foot-top: 6px;
+
+  > .sheet-foot {
+    mask-image: linear-gradient(transparent 7px, black 7px), linear-gradient(to right, black 7px, transparent 7px),
+      linear-gradient(to left, black 7px, transparent 7px);
+  }
+}
+
+.tab-strip.page-tab {
+  position: absolute;
+  top: calc(2px - var(--titlebar-h));
+  height: calc(var(--titlebar-h) - 2px);
+  left: calc(var(--notch-w) - 1px);
+  right: -1px;
+  z-index: 22;
+  padding: 0;
+  pointer-events: none;
+  /* Cut at the card's top, as the task view's row is at its floor: its drops
+     below would draw a line across the card. And at its right border, as the
+     flush first tab is at its left: the soft drop stops where the card's side,
+     which has none, takes over. */
+  clip-path: inset(-12px 0 0 -12px);
+
+  &::after {
+    --tab-r: 0px;
+  }
 }

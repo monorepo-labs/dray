@@ -1573,7 +1573,9 @@ function SettingsTabs({
       sidebar={
         // Scrolls, since the account card above twelve tabs nearly fills a
         // window at its 480px minimum and the shell clips what overflows.
-        <aside className="flex min-h-0 w-60 shrink-0 flex-col overflow-y-auto px-2">
+        // `-mt-[3px] py-[3px]`: the scroll clips at its own edge, and a row's
+        // focus ring sits 3px out; with no account card the first row is flush.
+        <aside className="-mt-[3px] flex min-h-0 w-60 shrink-0 flex-col overflow-y-auto px-2 py-[3px]">
           <AccountCard />
           <div
             role="tablist"
