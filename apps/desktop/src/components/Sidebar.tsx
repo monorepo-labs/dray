@@ -2066,7 +2066,8 @@ function BotRow({
   bot: Bot;
   /// The rail: the face alone, the name in a tooltip.
   iconOnly?: boolean;
-  /// The chat's last reply and the replies since the reader last wrote.
+  /// The chat's newest line — the reader's own, the bot's reaction, or its
+  /// reply — and the replies since the reader last wrote.
   preview?: BotPreview;
   /// Its chat, for the jump digit and the hover read; absent before the first message.
   sessionId?: string;
@@ -2085,8 +2086,10 @@ function BotRow({
   const badge = asking ? "asking" : unread ? "unread" : null;
   const mask = badge === "asking" ? DOT_CUTOUT : badge === "unread" ? COUNT_CUTOUT : undefined;
   // Before its first chat, Dray Bot's greeting is what its chat opens on.
+  // A server that words the line sends it plain: cleaning it again would eat
+  // the reader's own `*`. An older one sends the raw reply.
   const last = preview?.text || (!sessionId && greetingOf(bot).at(-1));
-  const glimpse = last && previewLine(last);
+  const glimpse = last && (preview?.plain && preview.text ? last : previewLine(last));
   const offline = offlineLine(serverOfPath(bot.path));
   const prefetch = useHoverPrefetch(offline ? null : sessionId);
 

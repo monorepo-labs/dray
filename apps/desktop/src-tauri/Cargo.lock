@@ -1455,6 +1455,7 @@ dependencies = [
  "tokio-tungstenite",
  "transcribe-cpp",
  "ts-rs",
+ "unicode-segmentation",
  "uuid",
  "x11",
  "zbus",

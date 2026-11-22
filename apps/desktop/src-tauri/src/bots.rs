@@ -1419,14 +1419,20 @@ pub async fn delete_bot(id: String, sink: Sink) -> Result<(), Fail> {
     Ok(())
 }
 
-/// A bot chat's inbox row: its last reply, and the replies since the reader
-/// last wrote.
+/// A bot chat's inbox row: its newest line — the reader's own message, the
+/// bot's reaction to it, or its last reply — and the replies since the reader
+/// last wrote. Worded here so every client draws it as it is.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "events.ts")]
 pub struct BotPreview {
     pub text: Option<String>,
     pub replies: u32,
+    /// `text` is already one plain line, to draw as it is. A server from
+    /// before this sends the raw reply, which the client still cleans.
+    #[serde(default)]
+    #[ts(as = "Option<bool>", optional)]
+    pub plain: bool,
 }
 
 /// Each bot chat's inbox row, keyed by session.
@@ -1436,8 +1442,8 @@ pub async fn bot_previews(
 ) -> Result<std::collections::HashMap<String, BotPreview>, Fail> {
     let mut previews = std::collections::HashMap::new();
     for id in session_ids {
-        let (text, replies) = crate::store::last_reply(&id).await?;
-        previews.insert(id, BotPreview { text, replies });
+        let (text, replies) = crate::store::inbox_line(&id).await?;
+        previews.insert(id, BotPreview { text, replies, plain: true });
     }
     Ok(previews)
 }

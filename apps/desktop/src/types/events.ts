@@ -646,10 +646,16 @@ greeting?: Array<string>, };
 export type BotAvatar = { shape: string, hue: number, };
 
 /**
- * A bot chat's inbox row: its last reply, and the replies since the reader
- * last wrote.
+ * A bot chat's inbox row: its newest line — the reader's own message, the
+ * bot's reaction to it, or its last reply — and the replies since the reader
+ * last wrote. Worded here so every client draws it as it is.
  */
-export type BotPreview = { text: string | null, replies: number, };
+export type BotPreview = { text: string | null, replies: number, 
+/**
+ * `text` is already one plain line, to draw as it is. A server from
+ * before this sends the raw reply, which the client still cleans.
+ */
+plain?: boolean, };
 
 /**
  * One bot's card, as `bot_stalls` answers and `bot_stalls_changed` carries it.
