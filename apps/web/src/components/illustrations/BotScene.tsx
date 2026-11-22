@@ -392,14 +392,15 @@ export function BotRows({
 }
 
 /// A bot's row of tabs: its chat, the tasks it has open, then its browser's
-/// page. A chat with nothing beside it is a title.
+/// page. A chat with nothing beside it is still a tab, as a browser draws one
+/// page.
 export function BotTabs({ scene, bot, name }: { scene: BotScene; bot: BotId; name: string }) {
   const state = scene.bots[bot];
   const open = state.tabs.map((id) => state.tasks.find((t) => t.id === id)).filter((t) => t !== undefined);
-  if (!state.page && open.length === 0) return <ItemTab icon={<ChatIcon />} label={name} plain />;
   return (
     <>
       <ItemTab
+        strip
         // Off the chat, its tab is what says the bot is working.
         icon={state.pending > 0 && state.view !== "chat" ? <Orb size={16} /> : <ChatIcon />}
         label={name}
@@ -409,6 +410,7 @@ export function BotTabs({ scene, bot, name }: { scene: BotScene; bot: BotId; nam
       {open.map((t) => (
         <ItemTab
           key={t.id}
+          strip
           icon={t.working ? <Orb size={16} /> : <BotFace still seed={t.id} className="block size-4 shrink-0 scale-[1.18]" />}
           label={t.title}
           trailing={t.machine && <MachineMark />}
@@ -418,6 +420,7 @@ export function BotTabs({ scene, bot, name }: { scene: BotScene; bot: BotId; nam
       ))}
       {state.page && (
         <ItemTab
+          strip
           icon={<Globe className="size-3.5 shrink-0 text-muted-foreground" />}
           label={state.page}
           active={state.view === "browser"}
