@@ -1,6 +1,7 @@
 package com.yogesh.dray.ui
 
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -80,7 +81,8 @@ fun RowMenu(
     }
     fun set(vararg flags: Pair<String, Boolean>) = act { store.setFlags(key, mapOf(*flags)) }
 
-    DropdownMenu(expanded, dismiss, offset = DpOffset(20.dp, 0.dp), containerColor = Dray.raised) {
+    // Material sizes a menu to its longest item, which left short menus a narrow strip; this is iOS's context-menu width.
+    DropdownMenu(expanded, dismiss, Modifier.widthIn(min = 250.dp), offset = DpOffset(20.dp, 0.dp), containerColor = Dray.raised) {
         when (page) {
             MenuPage.Fork -> {
                 Back("Fork") { page = MenuPage.Main }
