@@ -5,7 +5,7 @@ use crate::asks::{AskKind, Permission, Question, ToolLine};
 use crate::draft::{Field, Menu, Target};
 use crate::newtask::{self, STANCES};
 use crate::orb::Dictation;
-use crate::prefs::{Mode, Placement};
+use crate::prefs::{self, Mode, Placement};
 use crate::{Island, Link};
 use crate::{ROOM, WIDTH};
 use crate::fluid;
@@ -15,6 +15,9 @@ use gpui::{
     AnyElement, App, BoxShadow, Context, Entity, FocusHandle, Focusable, Hsla, KeyDownEvent, MouseButton,
     MouseDownEvent, PathBuilder, Pixels, Window, canvas, deferred, div, point, prelude::*, px, rgb,
 };
+
+/// A command's font: fontconfig resolves the generic name, DirectWrite wants a real one.
+const MONO: &str = if cfg!(windows) { "Consolas" } else { "monospace" };
 
 const YELLOW: u32 = 0xffd23f;
 /// The Mac's waiting dot, `StatusDot.waiting`.
@@ -529,7 +532,7 @@ fn permission(state: &Entity<Island>, island: &Island, p: &Permission) -> impl I
                 }),
         )
         .children(line.hidden.filter(|_| show).map(|c| {
-            div().text_size(px(SMALL)).font_family("monospace").text_color(white(0.5)).child(c)
+            div().text_size(px(SMALL)).font_family(MONO).text_color(white(0.5)).child(c)
         }))
         .children(p.options.iter().enumerate().map(|(n, option)| {
             let state = state.clone();
@@ -979,7 +982,7 @@ fn camera(state: &Entity<Island>, island: &Island, cx: &App) -> impl IntoElement
         .flex()
         .items_center()
         .gap(px(6.))
-        .children(hovered.then(|| div().text_size(px(ASIDE)).text_color(white(0.5)).child("Super Shift 2")))
+        .children(hovered.then(|| div().text_size(px(ASIDE)).text_color(white(0.5)).child(format!("{} Shift 2", prefs::Key::Command.label()))))
         .child(
             div()
                 .id("camera")
@@ -1089,7 +1092,7 @@ fn clock(island: &Island) -> impl IntoElement {
     div()
         .text_size(px(ASIDE))
         .font_weight(gpui::FontWeight::MEDIUM)
-        .font_family("monospace")
+        .font_family(MONO)
         .text_color(white(0.55))
         .when(since.is_none(), |d| d.opacity(0.4))
         .child(format!("{}:{:02}", secs / 60, secs % 60))
@@ -1926,7 +1929,7 @@ fn done_face(state: &Entity<Island>, island: &Island, lead: Option<AnyElement>, 
             .text_color(white(1.))
             .child("Open in app")
             // Super+⏎ opens the newest alone, so only its button names the chord.
-            .when(chord, |d| d.child(icons::line("Super ⏎", SMALL, white(0.45), cx)))
+            .when(chord, |d| d.child(icons::line(&format!("{} ⏎", prefs::Key::Command.label()), SMALL, white(0.45), cx)))
             .on_click(move |_, _, cx| {
                 cx.stop_propagation();
                 let id = id.clone();
