@@ -56,7 +56,10 @@ fn install_bundled(shell: Option<PathBuf>) -> Result<(), String> {
     // A CLI installed elsewhere with `DRAY_INSTALL_DIR` sits ahead of this copy
     // on the reader's PATH, and would keep answering stale. A symlink is left
     // alone: somebody pointed it at a build of their own on purpose.
-    if let Some(shell) = shell.filter(|p| *p != dest && is_plain_dray(p)) {
+    // On Windows only an `.exe`: PATH can resolve npm's `dray.cmd`, a script
+    // the binary's bytes would overwrite.
+    let runnable = |p: &Path| cfg!(not(windows)) || p.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe"));
+    if let Some(shell) = shell.filter(|p| *p != dest && runnable(p) && is_plain_dray(p)) {
         if let Err(e) = copy_if_changed(&bundled, &shell) {
             eprintln!("[cli install] {}: {e}", shell.display());
         }
