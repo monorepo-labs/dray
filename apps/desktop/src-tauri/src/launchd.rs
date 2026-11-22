@@ -247,8 +247,18 @@ pub async fn stop() -> Result<()> {
             libc::kill(pid, libc::SIGTERM)
         };
         // No SIGTERM to send: the server ends without its 3s for agents.
+        // Waited out, since an update's installer runs next and would find
+        // the exe still in use.
         #[cfg(windows)]
-        crate::platform::kill(pid as u32);
+        {
+            crate::platform::kill(pid as u32);
+            for _ in 0..20 {
+                if !crate::platform::pid_alive(pid as u32) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
         return Ok(());
     }
     launchctl(&["bootout", &target()]).await?;
