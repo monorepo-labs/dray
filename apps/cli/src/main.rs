@@ -22,7 +22,6 @@ use dray_proto::{
     React, SessionSummary, SetAside, SetModel, SetNeed, SettleSession, ShareAction, ShareRequest,
 };
 use std::io::{BufRead, BufReader, ErrorKind, Write};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -1373,10 +1372,32 @@ fn send(request: Request) -> Result<Response, String> {
     send_to(&endpoint, request)
 }
 
+#[cfg(unix)]
+fn connect(endpoint: &str) -> std::io::Result<std::os::unix::net::UnixStream> {
+    std::os::unix::net::UnixStream::connect(endpoint)
+}
+
+/// The server's named pipe for this socket path (`dray_proto::pipe_name`).
+/// Every instance busy reads as `ERROR_PIPE_BUSY`, which a moment cures.
+#[cfg(windows)]
+fn connect(endpoint: &str) -> std::io::Result<std::fs::File> {
+    const ERROR_PIPE_BUSY: i32 = 231;
+    let pipe = dray_proto::pipe_name(endpoint);
+    let mut tries = 0;
+    loop {
+        match std::fs::OpenOptions::new().read(true).write(true).open(&pipe) {
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) && tries < 50 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            other => return other,
+        }
+    }
+}
+
 /// [`send`] to a socket the caller names.
 fn send_to(endpoint: &str, request: Request) -> Result<Response, String> {
-    let mut stream =
-        UnixStream::connect(&endpoint).map_err(|e| connect_failure(&e, &endpoint))?;
+    let mut stream = connect(endpoint).map_err(|e| connect_failure(&e, endpoint))?;
 
     let line = encode_line(&Envelope::new(request)).map_err(|e| e.to_string())?;
     stream
@@ -1542,6 +1563,7 @@ mod tests {
     /// A wrong answer either stops the installer with the server left behind
     /// or lets leaving beta downgrade it.
     #[test]
+    #[cfg(unix)]
     fn hands_the_installer_the_servers_version() {
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("dray-serve-tag-{}", std::process::id()));
