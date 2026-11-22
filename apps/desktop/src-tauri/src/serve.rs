@@ -521,7 +521,7 @@ async fn sweep_browser_profiles() {
     // session made or unsettled meanwhile would lose a profile it just opened.
     // Only the renames are waited on; the removals run on.
     let _ = tokio::task::spawn_blocking(move || {
-        #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+        #[cfg(feature = "cef")]
         crate::cef::automation::sweep_profiles(&live);
         crate::headless::automation::sweep_profiles(&live);
     })

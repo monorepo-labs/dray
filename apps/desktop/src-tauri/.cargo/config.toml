@@ -7,5 +7,14 @@ TS_RS_EXPORT_DIR = { value = "../src/types", relative = true }
 # transcribe-cpp links whatever system BLAS it finds off a Mac, which makes
 # `libblas.so.3` a load-time need of the whole Linux app on every machine it
 # ships to. Off, as transcribe's own Linux wheels ship. A Mac links Accelerate
-# whatever this says.
-TRANSCRIBE_CMAKE_ARGS = "-DTRANSCRIBE_USE_SYSTEM_BLAS=OFF"
+# whatever this says. The static CRT is Windows' (see the rustflags below):
+# transcribe's CMake picks the CRT from that variable alone, never from
+# Rust's `+crt-static`, and every other compiler ignores it.
+TRANSCRIBE_CMAKE_ARGS = "-DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+
+# The static CRT on Windows. `cef-dll-sys` builds CEF's C++ wrapper with
+# `/MT`, and one binary cannot mix it with the `/MD` Rust picks by default:
+# the link fails on every `msvcprt` symbol. Everything else's C and C++
+# (`cc`, `cmake`) follows the flag, and the exe needs no VC++ runtime.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

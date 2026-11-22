@@ -2,8 +2,8 @@
 //!
 //! The in-app browser is CEF, and the framework it loads is ~330MB unpacked.
 //! Shipped in the bundle it would ride every download and every update, so the
-//! bundle carries only the five helper apps (on Linux, nothing: the app's own
-//! binary is the subprocess) and this fetches the framework a
+//! bundle carries only the five helper apps (on Linux and Windows, nothing:
+//! the app's own binary is the subprocess) and this fetches the framework a
 //! few seconds after the window first opens — from the CDN the `cef` crate's
 //! own build script reads, pinned to the crate's CEF version. Same shape as the
 //! transcription models: `.part` + rename, size and hash checked before
@@ -30,13 +30,15 @@ const CDN: &str = "https://cef-builds.spotifycdn.com";
 pub const FRAMEWORK: &str = "Chromium Embedded Framework.framework";
 #[cfg(target_os = "macos")]
 const LIBRARY: &str = "Chromium Embedded Framework";
-/// Linux has no framework bundle: libcef.so wants its `.pak`s, `icudtl.dat`
-/// and `locales/` in one directory, so the archive's `Release` and
-/// `Resources` are unpacked together into this one.
-#[cfg(target_os = "linux")]
+/// Linux and Windows have no framework bundle: libcef wants its `.pak`s,
+/// `icudtl.dat` and `locales/` in one directory, so the archive's `Release`
+/// and `Resources` are unpacked together into this one.
+#[cfg(not(target_os = "macos"))]
 pub const FRAMEWORK: &str = "lib";
 #[cfg(target_os = "linux")]
 const LIBRARY: &str = "libcef.so";
+#[cfg(windows)]
+const LIBRARY: &str = "libcef.dll";
 
 /// One minimal tarball per architecture. Size and hash are of the file as
 /// downloaded and checked by hand; the CDN publishes only a sha1.
@@ -72,6 +74,20 @@ const X64: Tarball = Tarball {
     platform: "linux64",
     size: 333_332_290,
     sha256: "356db99d653698aa9ba78b22965032b4fa5b23ba079ffdbaa5d28a8530f04011",
+};
+
+#[cfg(windows)]
+const ARM64: Tarball = Tarball {
+    platform: "windowsarm64",
+    size: 170_141_809,
+    sha256: "f92dcdc83c22db3ce8e804c6bbd4462717bd0a100776b10b5801f11baae0e2ca",
+};
+
+#[cfg(windows)]
+const X64: Tarball = Tarball {
+    platform: "windows64",
+    size: 175_176_258,
+    sha256: "74fd321975e99703acd8fc7e3c1b0859292f61b388f4052a0cd7ef1fb3b29f6e",
 };
 
 fn tarball() -> Option<&'static Tarball> {
@@ -129,7 +145,7 @@ fn set(app: &AppHandle, status: ChromiumStatus) {
 }
 
 /// `~/.dray/cef/` (`cef-dev/` under `tauri dev`, `~/.dray-dev/cef` on
-/// Linux), one version directory at a time. `DRAY_HOME` does not move it, on
+/// Linux and Windows), one version directory at a time. `DRAY_HOME` does not move it, on
 /// purpose: one release's framework is the same bytes in every home, and
 /// sharing it is ~330MB downloaded once a machine. The profiles it writes do
 /// move (`headless::browser_dir`).
@@ -142,7 +158,7 @@ fn cef_dir() -> PathBuf {
     // Linux dev builds keep out of `~/.dray` altogether: that home is the
     // release server's, the only one a Linux box may be running — sharing
     // `~/.dray-dev` the way every dev build shares projects and settings.
-    #[cfg(target_os = "linux")]
+    #[cfg(not(target_os = "macos"))]
     let dir = if tauri::is_dev() { ".dray-dev/cef" } else { ".dray/cef" };
     std::env::home_dir().unwrap_or_default().join(dir)
 }
@@ -296,10 +312,10 @@ async fn unpack(tarball: &Tarball, part: &Path, stage: &Path) -> Result<()> {
 }
 
 /// In-process, since nothing promises a Linux desktop has `bzip2`. `Release`
-/// and `Resources` both land in [`FRAMEWORK`]. `chrome-sandbox` is left
-/// out: it is only of use installed setuid root, and Chromium runs
-/// unsandboxed here as on the Mac.
-#[cfg(target_os = "linux")]
+/// and `Resources` both land in [`FRAMEWORK`]. What only a build or a
+/// sandbox reads is left out ([`skipped`]): Chromium runs unsandboxed here,
+/// as on the Mac.
+#[cfg(not(target_os = "macos"))]
 async fn unpack(tarball: &Tarball, part: &Path, stage: &Path) -> Result<()> {
     let root = PathBuf::from(tarball.root());
     let (part, lib) = (part.to_path_buf(), stage.join(FRAMEWORK));
@@ -312,7 +328,7 @@ async fn unpack(tarball: &Tarball, part: &Path, stage: &Path) -> Result<()> {
 /// The archive's `<root>/Release/*` and `<root>/Resources/*` into `lib`, one
 /// level up. Paths are taken apart by component, so an entry naming `..`
 /// or an absolute path is refused rather than written outside `lib`.
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "macos"))]
 fn unpack_runtime(part: &Path, root: &Path, lib: &Path) -> Result<()> {
     use std::path::Component;
     std::fs::create_dir_all(lib)?;
@@ -328,7 +344,7 @@ fn unpack_runtime(part: &Path, root: &Path, lib: &Path) -> Result<()> {
             continue;
         }
         let rel = parts.as_path();
-        if rel.as_os_str().is_empty() || rel == Path::new("chrome-sandbox") {
+        if rel.as_os_str().is_empty() || skipped(rel) {
             continue;
         }
         if !rel.components().all(|c| matches!(c, Component::Normal(_))) {
@@ -341,6 +357,15 @@ fn unpack_runtime(part: &Path, root: &Path, lib: &Path) -> Result<()> {
         entry.unpack(&dest)?;
     }
     Ok(())
+}
+
+/// Files of the runtime nothing at run time opens. `chrome-sandbox` is only
+/// of use installed setuid root; Windows' `libcef.lib` is the import library
+/// a build links against, and `bootstrap*.exe` the sandbox's launcher.
+#[cfg(not(target_os = "macos"))]
+fn skipped(rel: &Path) -> bool {
+    let name = rel.to_string_lossy();
+    rel == Path::new("chrome-sandbox") || name.ends_with(".lib") || name.starts_with("bootstrap")
 }
 
 /// Everything in `~/.dray/cef` but the current version: older frameworks,
@@ -468,6 +493,26 @@ mod tests {
         assert_eq!(X64.name(), "cef_binary_156.0.30+g6028375+chromium-156.0.8078.96_linux64_minimal.tar.bz2");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn tarball_names_match_the_cdn_index() {
+        assert_eq!(
+            ARM64.name(),
+            "cef_binary_156.0.30+g6028375+chromium-156.0.8078.96_windowsarm64_minimal.tar.bz2"
+        );
+        assert_eq!(X64.name(), "cef_binary_156.0.30+g6028375+chromium-156.0.8078.96_windows64_minimal.tar.bz2");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn only_the_runtime_is_unpacked() {
+        assert!(skipped(Path::new("chrome-sandbox")));
+        assert!(skipped(Path::new("libcef.lib")));
+        assert!(skipped(Path::new("bootstrapc.exe")));
+        assert!(!skipped(Path::new("libcef.dll")));
+        assert!(!skipped(Path::new("locales/en-US.pak")));
+    }
+
     #[test]
     fn version_is_the_crate_build_prefix() {
         assert!(BUILD.starts_with(VERSION));
@@ -475,7 +520,7 @@ mod tests {
         // release app's `.dray/cef`.
         #[cfg(target_os = "macos")]
         assert!(version_dir().ends_with(Path::new(".dray/cef-dev").join(VERSION)));
-        #[cfg(target_os = "linux")]
+        #[cfg(not(target_os = "macos"))]
         assert!(version_dir().ends_with(Path::new(".dray-dev/cef").join(VERSION)));
     }
 

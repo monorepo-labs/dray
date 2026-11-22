@@ -16,6 +16,11 @@ export const IS_WINDOWS =
 /// are not drawn.
 export const HAS_DICTATION = IS_MAC || IS_LINUX;
 
+/// Whether a browser page can be split out beside the chat. Every tab is a
+/// native view of its own on a Mac and on Windows; on Linux every tab lives
+/// in the one X11 frame the pane keeps, so a page stays in the main view.
+export const SPLITS_PAGES = IS_MAC || IS_WINDOWS;
+
 /// What copy calls the machine the app runs on: "this Mac" on a Mac, "this
 /// machine" anywhere else. One noun, so every sentence reads the same per platform.
 export const MACHINE = IS_MAC ? "Mac" : "machine";
