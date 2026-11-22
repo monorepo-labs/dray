@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Bash refuses a CRLF script, and Git for Windows (a Windows runner included)
+# checks text out with CRLF unless told otherwise.
+*.sh text eol=lf
