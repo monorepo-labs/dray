@@ -130,6 +130,8 @@ struct TranscriptView: View {
             }
         }
         .page()
+        // The Tasks button is a reach to the top of the screen; a swipe in from the right edge is not.
+        .background { if bot != nil { HostPan(start: .rightEdge) { _ in showingTasks = true } } }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
         .environment(\.imageServer, store.connection(key.server))
         .environment(\.callSession, key)
