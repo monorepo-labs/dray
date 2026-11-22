@@ -50,8 +50,9 @@ use std::path::PathBuf;
 /// added `set_model`, which an older app reads as a broken CLI, and v23 the
 /// routine verbs. v24 added `ask` on a bot send: an older app delivers the
 /// message and passes no answer back, so the asking bot waits on nothing.
-/// v25 added `detach_session`, which an older app reads as a broken CLI.
-pub const PROTOCOL_VERSION: u32 = 25;
+/// v25 added `detach_session`, which an older app reads as a broken CLI, and
+/// v26 `attach_session`.
+pub const PROTOCOL_VERSION: u32 = 26;
 
 /// Remote MCP (#863), held out of release builds until Dray accounts (#874)
 /// land (#900). Gates `/mcp`, the assistant commands and the CLI's `assistant`
@@ -146,6 +147,7 @@ impl Request {
             | Request::RemoveRoutine(_)
             | Request::RunRoutine(_) => 23,
             Request::DetachSession(_) => 25,
+            Request::AttachSession(_) => 26,
         }
     }
 }
@@ -202,6 +204,16 @@ pub enum Request {
     RunRoutine(RoutineRef),
     /// Takes a task out of its parent, the sidebar's Detach from parent.
     DetachSession(SessionRef),
+    /// Hands a task to a bot, the sidebar's Attach to bot: detach's reverse.
+    AttachSession(AttachSession),
+}
+
+/// `dray session attach`: the task, and the bot by id or name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachSession {
+    pub session_id: String,
+    pub bot: String,
 }
 
 /// A session's model and effort, changed the way its composer's picker does:
@@ -1472,6 +1484,8 @@ mod tests {
         assert_eq!(Envelope::new(ask.clone()).v, 24);
         let detach = Request::DetachSession(Default::default());
         assert_eq!(Envelope::new(detach.clone()).v, 25);
+        let attach = Request::AttachSession(Default::default());
+        assert_eq!(Envelope::new(attach.clone()).v, 26);
         let newest = old
             .iter()
             .chain(&drafts)
@@ -1484,7 +1498,7 @@ mod tests {
             .chain(&bots)
             .chain([&card, &need, &react, &image, &model])
             .chain(&routines)
-            .chain([&ask, &detach])
+            .chain([&ask, &detach, &attach])
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));

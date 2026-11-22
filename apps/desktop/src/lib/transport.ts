@@ -90,6 +90,7 @@ const QUALIFIED = new Set([
   "list_session_index_items",
   "session_index_item",
   "detach_session",
+  "attach_session",
   "remove_session_worktree",
   "set_session_flags",
   "get_session_by_id",
