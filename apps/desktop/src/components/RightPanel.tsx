@@ -300,14 +300,12 @@ export default function RightPanel({
           // height alone took it with them when they wrapped and the second
           // line surfaced in the slack. `content-start` pins the first line to
           // the top, or two lines would centre and clip the tabs.
-          // `-mx-[3px] px-[3px]` here and on the scroll inside: room for a
-          // tab's 3px focus ring, which either clip would cut.
-          <div className="-mx-[3px] flex h-full min-w-0 flex-wrap content-start items-center gap-0.5 overflow-hidden px-[3px]">
+          <div className="flex h-full min-w-0 flex-wrap content-start items-center gap-0.5 overflow-hidden">
             {/* Their own scroll, so a row still too long after the caps have
                 gone gives way here rather than pushing Open and Refresh past
                 the edge: those are reached for by position, where a tab can
                 still be scrolled to. */}
-            <div className="-mx-[3px] flex h-full min-w-0 items-center gap-0.5 overflow-x-auto px-[3px]">
+            <div className="flex h-full min-w-0 items-center gap-0.5 overflow-x-auto">
               {tabs.map((value) => (
                 <TabButton
                   key={value}

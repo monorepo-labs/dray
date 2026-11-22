@@ -1796,12 +1796,12 @@ body.session-drag * {
 }
 
 /* Right after the sidebar toggle (sidebar shut), the first tab's left foot
-   reaches past the row's own box: the row clips everywhere but the foot's
-   10px square, or the foot is cut to a stub and the tab looks to float beside
-   the sheet. A dragged tab or a hover pill stays off the toggle. */
+   reaches 10px left of the tab: the row starts 10px early to hold it
+   (`ViewTabs`), or the foot is cut to a stub and the tab looks to float beside
+   the sheet. That strip shows the foot's square alone, so a dragged tab or a
+   hover pill stays off the toggle. */
 [role="tablist"][data-after-toggle] {
-  overflow: visible;
-  clip-path: polygon(0 0, 100% 0, 100% 100%, -10px 100%, -10px calc(100% - 10px), 0 calc(100% - 10px));
+  clip-path: polygon(10px 0, 100% 0, 100% 100%, 0 100%, 0 calc(100% - 10px), 10px calc(100% - 10px));
 }
 
 /* The frame's fill outside the sheet's top-left curve, at whatever radius. */
@@ -1835,7 +1835,7 @@ body.session-drag * {
 
 /* A page with no tabs, sidebar shut: the cards sit under the header as a task
    view's do (`AppShell`), and one lit tab spans the leftmost one's top from
-   just past the header's controls (`--notch-w`), its left foot on the card as
+   where a task view's first tab starts, its left foot on the card as
    a first tab's is, its right side running straight down into the card's, the
    first tab's flush join mirrored. Only where the card has room for it
    (`data-notch`); the tab is laid out either way, so the room can be read. */
@@ -1854,7 +1854,10 @@ body.session-drag * {
   position: absolute;
   top: calc(2px - var(--titlebar-h));
   height: calc(var(--titlebar-h) - 2px);
-  left: calc(var(--notch-w) - 1px);
+  /* That first tab's left edge — the lead, less the row's -0.25rem, its 3px
+     toggle gap and plus its 3px padding — in the card's terms: 8px of frame
+     sit left of the card. */
+  left: calc(var(--tabs-lead) - 0.25rem - 0.5rem);
   right: -1px;
   z-index: 22;
   padding: 0;

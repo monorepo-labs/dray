@@ -10,10 +10,10 @@ type AppShellProps = {
   /// The sidebar is drawn. Shut, a strip of the frame still holds the sheet
   /// off the window's left edge.
   sidebarOpen?: boolean;
-  /// With the sidebar shut on a tall page, how far in from the leftmost card's
-  /// edge the header's controls reach, as a CSS length. That card drops below
-  /// them and a lit tab spans the rest of its top, as in a task view.
-  notch?: string;
+  /// What sits before the header's tab row, as a CSS length, published as
+  /// `--tabs-lead`. With the sidebar shut, a tall page's cards drop below the
+  /// header and the leftmost wears a lit tab from there, as in a task view.
+  lead?: string;
   /// The sheet reaches up behind the header rather than starting under it —
   /// for pages with no tabs to sit in the strip. The header floats over the
   /// sheet's top, and the sheet's contents keep their place below it.
@@ -62,7 +62,7 @@ type AppShellProps = {
 export default function AppShell({
   sidebar,
   sidebarOpen = true,
-  notch,
+  lead,
   tall: pageTall = false,
   header,
   footer,
@@ -80,16 +80,16 @@ export default function AppShell({
   // A tall page with the sidebar shut sits under the header as a task view
   // does, every card and the strip above them together, so nothing moves
   // twice on the way between; its leftmost card wears the page's lit tab.
-  const notched = pageTall && !sidebarOpen && !!notch;
+  const notched = pageTall && !sidebarOpen && !!lead;
   const tall = pageTall && !notched;
-  const pageTab = (leftmost: boolean) => (notched && leftmost ? notch : undefined);
+  const pageTab = (leftmost: boolean) => notched && leftmost;
   // A card of its own beside the sheet, with the frame showing between. Kept
   // mounted while shut, since the pane hides rather than unmounts.
   const gap = <div className="w-1.5 shrink-0 bg-surface-frame" />;
   const panelCard = panel && (
     <div className={cn("flex shrink-0", !panelOpen && "hidden")}>
       {!panelLeft && gap}
-      <Sheet tall={tall} notch={pageTab(panelLeft)}>
+      <Sheet tall={tall} pageTab={pageTab(panelLeft)}>
         {panel}
       </Sheet>
       {panelLeft && gap}
@@ -100,7 +100,11 @@ export default function AppShell({
     // browser's tab strip sits over its pages.
     // `data-shell` bounds App.css's first-tab joins to this shell: asked of
     // the whole document, Settings' sheet took the hidden task view's corner.
-    <div className="relative flex h-full w-full flex-col overflow-hidden" data-shell="">
+    <div
+      className="relative flex h-full w-full flex-col overflow-hidden"
+      data-shell=""
+      style={lead ? ({ "--tabs-lead": lead } as React.CSSProperties) : undefined}
+    >
       {/* Always floating, so the sheet's top can glide between under the
           header and behind it; the strip above the sheet is the header's fill. */}
       <div className="absolute inset-x-0 top-0 z-30">{header}</div>
@@ -144,7 +148,7 @@ export default function AppShell({
             <Sheet
               className="flex-1"
               tall={tall}
-              notch={pageTab(!(panelLeft && panelOpen) && (!mainCard || mainCard.order === 0))}
+              pageTab={pageTab(!(panelLeft && panelOpen) && (!mainCard || mainCard.order === 0))}
               style={
                 mainCard
                   ? { flexGrow: mainCard.grow, order: mainCard.order, minWidth: mainCard.minWidth }
@@ -220,7 +224,7 @@ export default function AppShell({
 export function Sheet({
   className,
   tall = false,
-  notch,
+  pageTab = false,
   style,
   children,
   ...attrs
@@ -231,9 +235,9 @@ export function Sheet({
   [attr: `data-${string}`]: string;
   /// Reaching up behind the header: its contents start below it all the same.
   tall?: boolean;
-  /// Draws a lit tab over the whole top from this far in, as a CSS length:
-  /// a page's stand-in for a task view's first tab (`page-tab` in App.css).
-  notch?: string;
+  /// A lit tab over its top from where a task view's first tab starts: a
+  /// page's stand-in for one (`page-tab` in App.css).
+  pageTab?: boolean;
   children: ReactNode;
 }) {
   const corner = "pointer-events-none absolute z-20 size-2";
@@ -247,16 +251,16 @@ export function Sheet({
     const ro = new ResizeObserver(() => setRoomy(tab.offsetWidth >= 2 * 10 + 8));
     ro.observe(tab);
     return () => ro.disconnect();
-  }, [notch]);
+  }, [pageTab]);
   return (
     <div
       ref={box}
       className={cn("relative flex min-h-0 min-w-0", className)}
-      style={notch ? ({ ...style, "--notch-w": notch } as React.CSSProperties) : style}
-      {...(notch && roomy && { "data-notch": "" })}
+      style={style}
+      {...(pageTab && roomy && { "data-notch": "" })}
       {...attrs}
     >
-      {notch && <span aria-hidden data-lit="" className="tab-strip page-tab" />}
+      {pageTab && <span aria-hidden data-lit="" className="tab-strip page-tab" />}
       {/* Its own box over the panes rather than a shadow on them, which would
           clip at their edge. Inert, so every click passes through. One above
           the corners, whose frame fill otherwise covers the ring's arc. */}
