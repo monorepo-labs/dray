@@ -215,11 +215,14 @@ struct BotChatRows: View {
                 Text(label).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                     .frame(maxWidth: .infinity).padding(.top, Theme.Space.s)
             }
-            if case .item(.switchTo(_, let harness, _)) = row {
-                SwitchLine(harness: harness)
-            } else {
-                BotRowView(key: key, row: row, late: late(items, row))
+            Group {
+                if case .item(.switchTo(_, let harness, _)) = row {
+                    SwitchLine(harness: harness)
+                } else {
+                    BotRowView(key: key, row: row, late: late(items, row))
+                }
             }
+            .heldRow(row.id)
         }
     }
 
