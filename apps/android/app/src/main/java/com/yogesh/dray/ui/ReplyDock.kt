@@ -51,11 +51,14 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.yogesh.dray.model.Model
 import com.yogesh.dray.model.Picks
 import com.yogesh.dray.model.SessionKey
 import com.yogesh.dray.net.ConnState
+import com.yogesh.dray.store.AgentPick
 import com.yogesh.dray.store.botSend
 import com.yogesh.dray.voice.Dictation
 import com.yogesh.dray.voice.Dictations
@@ -78,24 +81,32 @@ fun ReplyDock(key: SessionKey) {
     val item = store.items[key] ?: return
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
-    var picks by remember(key) { mutableStateOf(ReplyPicks()) }
+    // A move to another agent drops picks made for the one it left.
+    var picks by remember(key, item.harness) { mutableStateOf(ReplyPicks()) }
     var sending by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf<String?>(null) }
     var sheet by remember { mutableStateOf(false) }
-    var models by remember { mutableStateOf(emptyList<Model>()) }
+    // Tagged with the agent they were read for, so a pick is never judged against the last agent's list.
+    var modelsOf by remember { mutableStateOf("" to emptyList<Model>()) }
+    var agents by remember { mutableStateOf(emptyList<com.yogesh.dray.model.AgentAvailability>()) }
     val connected = store.serverState[key.server] == ConnState.Connected
     val away = key.server in store.lost
     val draft = store.drafts[key].orEmpty()
-    // A bot chat's agent and model from its sheet, waiting for this reply; another agent moves the chat.
+    // The agent and model picked for this reply. Another agent moves the chat: a task in place
+    // through `switch_agent`, a bot chat to a new session.
     val pick = store.botState.unsent[key]
     val moving = pick != null && pick.harness != item.harness
     val harness = pick?.harness ?: item.harness
+    val models = if (modelsOf.first == harness) modelsOf.second else emptyList()
 
     LaunchedEffect(key.server, harness, connected) {
-        if (connected) models = store.models(key.server, harness)
+        if (connected) modelsOf = harness to store.models(key.server, harness)
+    }
+    LaunchedEffect(key.server, sheet, connected) {
+        if (sheet && connected) agents = store.agents(key.server)
     }
 
-    val modelId = picks.model ?: pick?.model ?: item.model
+    val modelId = (picks.model ?: pick?.model ?: item.model).let { if (moving) Picks.usableModel(models, it, harness) else it }
     val model = models.firstOrNull { it.id == modelId }
     val effort = picks.effort ?: if (moving) null else item.effort
     val dictation = Dictations.state(key)
@@ -114,10 +125,11 @@ fun ReplyDock(key: SessionKey) {
             // Effort goes only where the reader moved it, coerced to a rung the model has.
             val moved = picks.model != null || picks.effort != null || pick != null
             val level = if (moved) model?.let { Picks.usableEffort(it, effort) } ?: effort else null
+            val chosen = if (moving) modelId else picks.model ?: pick?.model
             val ok = if (store.bot(key) != null) {
-                store.botSend(key, text, pick?.harness, picks.model ?: pick?.model, level, picks.stance, picks.fast) != null
+                store.botSend(key, text, pick?.harness, chosen, level, picks.stance, picks.fast) != null
             } else {
-                store.send(key, text, picks.model, level, picks.stance, picks.fast, effortMoved = moved)
+                store.send(key, text, chosen, level, picks.stance, picks.fast, effortMoved = moved, harness = pick?.harness)
             }
             sending = false
             if (ok) {
@@ -163,36 +175,55 @@ fun ReplyDock(key: SessionKey) {
         words = DockWords.Reply,
         covers = false,
         header = if (!moving) null else ({
-            Text(
-                "Your next message moves this chat to ${Picks.agentLabels[harness] ?: harness}.",
-                Modifier.padding(bottom = 8.dp),
-                style = Dray.Font.footnote.copy(color = Dray.tertiary),
-            )
+            Row(Modifier.padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                AgentMark(harness, 13.dp)
+                Text(
+                    "Your next message goes to ${Picks.agentLabels[harness] ?: harness}",
+                    style = Dray.Font.footnote.copy(fontWeight = FontWeight.Medium),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
         }),
     )
 
-    if (sheet) ThisTaskSheet(harness, item.busy, models, modelId, effort, picks.stance ?: item.permissionMode,
-        picks.fast ?: item.fast ?: false, onModel = { picks = picks.copy(model = it, effort = null) },
+    if (sheet) ThisTaskSheet(harness, item.busy, agents.filter { it.available || it.harness == harness }, models, modelId, effort,
+        picks.stance ?: item.permissionMode, picks.fast ?: item.fast ?: false,
+        onAgent = { to ->
+            // Back on its own agent is no move; another starts on that agent's default model.
+            if (to == item.harness) store.botState.unsent.remove(key)
+            else store.botState.unsent[key] = AgentPick(to, Picks.defaultModel[to].orEmpty())
+            picks = picks.copy(model = null, effort = null)
+        },
+        onModel = { picks = picks.copy(model = it, effort = null) },
         onEffort = { picks = picks.copy(effort = it) }, onStance = { picks = picks.copy(stance = it) },
         onFast = { picks = picks.copy(fast = it) }) { sheet = false }
 }
 
 /**
- * This task: the session's model, effort, fast mode and stance for the next reply, each locked
- * mid-turn where the harness can't carry it onto a queued prompt. Nothing reaches the session
- * until a reply goes out, since `send_msg` is what carries it.
+ * This task: the session's agent, model, effort, fast mode and stance for the next reply, each
+ * locked mid-turn where the harness can't carry it onto a queued prompt. Nothing reaches the
+ * session until a reply goes out, since `send_msg` (and `switch_agent`) is what carries it.
+ * The agent is always held mid-turn, since a move stops the agent running it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ThisTaskSheet(
-    harness: String, busy: Boolean, models: List<Model>, model: String, effort: String?, stance: String, fast: Boolean,
+    harness: String, busy: Boolean, agents: List<com.yogesh.dray.model.AgentAvailability>, models: List<Model>, model: String,
+    effort: String?, stance: String, fast: Boolean, onAgent: (String) -> Unit,
     onModel: (String) -> Unit, onEffort: (String) -> Unit, onStance: (String) -> Unit, onFast: (Boolean) -> Unit, dismiss: () -> Unit,
 ) {
     val picked = models.firstOrNull { it.id == model }
+    // One agent is no choice.
+    val offersAgents = agents.size > 1
     ModalBottomSheet(dismiss, containerColor = Dray.card) {
         Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Text("This task", style = Dray.Font.title)
             val locked = { c: String -> Picks.lockedMidTurn(harness, c, busy) }
+            if (offersAgents) Section("Agent", locked("agent")) {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (a in agents) Chip(Picks.agentLabels[a.harness] ?: a.label, a.harness == harness) { onAgent(a.harness) }
+                }
+            }
             Section("Model", locked("model")) {
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     val shown = models.filter { it.secondary != true || it.id == model }
@@ -228,10 +259,12 @@ private fun ThisTaskSheet(
                     }
                 }
             }
-            val lockedNames = listOf("model" to "Model", "effort" to "Effort", "fast" to "Fast mode", "stance" to "Permissions").filter { locked(it.first) }
+            val controls = (if (offersAgents) listOf("agent" to "Agent") else emptyList()) +
+                listOf("model" to "Model", "effort" to "Effort", "fast" to "Fast mode", "stance" to "Permissions")
+            val lockedNames = controls.filter { locked(it.first) }
             if (busy && lockedNames.isNotEmpty()) {
                 Text(
-                    if (lockedNames.size == 4) "These can change once this turn ends."
+                    if (lockedNames.size == controls.size) "These can change once this turn ends."
                     else "${lockedNames.joinToString(" and ") { it.second }} can change once this turn ends. The rest go with your next message.",
                     style = Dray.Font.footnote.copy(color = Dray.tertiary),
                 )

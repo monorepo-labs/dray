@@ -189,15 +189,6 @@ fun BotTitle(bot: Bot, modifier: Modifier = Modifier, edit: () -> Unit) {
 
 // The chat
 
-/** Between two sessions of one bot chat: the agent the later one runs. */
-@Composable
-fun SwitchLine(harness: String?) {
-    Text(
-        "Switched to ${harness?.let { Picks.agentLabels[it] ?: it } ?: "another agent"}",
-        Modifier.fillMaxWidth(), style = Dray.Font.footnote.copy(color = Dray.tertiary), textAlign = TextAlign.Center,
-    )
-}
-
 /** Before the first row, and before any row 15 minutes or more after the one above. */
 fun timeLabel(rows: List<BotRow>, i: Int): String? {
     val at = parseDate(rows[i].ts) ?: return null
@@ -225,9 +216,7 @@ fun BotChatRow(key: SessionKey, rows: List<BotRow>, i: Int, items: List<BotItem>
         timeLabel(rows, i)?.let {
             Text(it, Modifier.fillMaxWidth().padding(top = 8.dp), style = Dray.Font.footnote.copy(color = Dray.tertiary), textAlign = TextAlign.Center)
         }
-        val item = (row as? BotRow.One)?.item
-        if (item is BotItem.SwitchTo) SwitchLine(item.harness)
-        else BotRowView(key, row, lateCard(items, row), openTask, openSession)
+        BotRowView(key, row, lateCard(items, row), openTask, openSession)
     }
 }
 
@@ -375,7 +364,7 @@ private fun BotRowView(key: SessionKey, row: BotRow, late: Boolean, openTask: (S
                     ),
                 )
             }
-            is BotItem.Sent, is BotItem.SwitchTo -> {}
+            is BotItem.Sent -> {}
         }
     }
 }

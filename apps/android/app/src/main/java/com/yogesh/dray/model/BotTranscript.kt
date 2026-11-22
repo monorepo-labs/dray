@@ -42,8 +42,6 @@ sealed interface BotItem {
     /** "Messaged" another bot, by the id `dray bot send` printed where it did. */
     data class BotSent(override val id: String, val name: String, val botId: String?, override val ts: String?) : BotItem
     data class Learned(override val id: String, val lesson: Lesson, val commit: String, val undone: Boolean, override val ts: String?) : BotItem
-    /** Where the chat moved to another session, and the agent it runs. */
-    data class SwitchTo(override val id: String, val harness: String?, override val ts: String?) : BotItem
 }
 
 /** A drawn row: an item, or a run of sends folded into one "Messaged" line. */
