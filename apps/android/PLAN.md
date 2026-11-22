@@ -107,6 +107,11 @@ the iOS app's dark tokens, dark only, yellow for *needs you* alone. Roboto
 stands in for SF Pro; Material is used where Android readers expect it
 (back arrow, bottom sheet, pull to refresh, switches).
 
+**The orbs are the [Thinking Orbs](https://github.com/yogesharc/thinking-orbs)
+library**, its Compose port from JitPack, pinned to a tag in
+`app/build.gradle.kts` as iOS pins the Swift package. `Orb.kt` only maps an
+`OrbKind` to its state and variant. Change the drawing there, not here.
+
 ## Build and test
 
 JDK 17 and the Android SDK (`compileSdk 35`). From `apps/android`:

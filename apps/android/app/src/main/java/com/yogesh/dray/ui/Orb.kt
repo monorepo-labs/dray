@@ -1,6 +1,5 @@
 package com.yogesh.dray.ui
 
-import android.provider.Settings
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -9,26 +8,16 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.roundToInt
+import com.yogesharc.thinkingorbs.OrbState
+import com.yogesharc.thinkingorbs.OrbVariant
+import com.yogesharc.thinkingorbs.Orb as ThinkingOrb
 
 /**
  * What the app is waiting on wherever an orb is drawn. Each maps to the orb the desktop draws for
@@ -47,55 +36,26 @@ enum class OrbKind {
     Loading,
 }
 
-/** The orb for an activity, in the page's ink, at the package's tuned 20dp unless asked. The iOS app's `Orb(activity)`. */
-@Composable
-fun Orb(kind: OrbKind, size: Dp = 20.dp, modifier: Modifier = Modifier, label: String? = null) {
-    when (kind) {
-        OrbKind.Working -> ThinkingOrb(OrbState.Working, size = size, modifier = modifier, label = label)
-        OrbKind.Delegating -> ThinkingOrb(OrbState.Working, OrbVariant.Gyro, size, modifier = modifier, label = label)
-        OrbKind.Background -> ThinkingOrb(OrbState.Background, OrbVariant.Spiral, size, modifier = modifier, label = label)
-        OrbKind.Reconnecting -> ThinkingOrb(OrbState.Searching, OrbVariant.Lighthouse, size, speed = 3.0, modifier = modifier, label = label)
-        OrbKind.Loading -> ThinkingOrb(OrbState.Searching, size = size, modifier = modifier, label = label)
+/** The Thinking Orbs look a kind draws as. */
+internal data class OrbLook(val state: OrbState, val variant: OrbVariant = OrbVariant.Default, val speed: Double = 1.0)
+
+internal val OrbKind.look: OrbLook
+    get() = when (this) {
+        OrbKind.Working -> OrbLook(OrbState.Working)
+        OrbKind.Delegating -> OrbLook(OrbState.Working, OrbVariant.Gyro)
+        OrbKind.Background -> OrbLook(OrbState.Background, OrbVariant.Spiral)
+        OrbKind.Reconnecting -> OrbLook(OrbState.Searching, OrbVariant.Lighthouse, speed = 3.0)
+        OrbKind.Loading -> OrbLook(OrbState.Searching)
     }
-}
 
 /**
- * The Thinking Orbs package's `Orb`: a sphere of dots in the page's ink, every look tuned to read at
- * 20dp. One frame clock drives it, read in the draw phase alone, so a turning orb never recomposes its
- * row. With animations off in the system's settings it holds still, as iOS does under Reduce Motion.
+ * The orb for an activity, at the library's tuned 20dp unless asked. The iOS app's `Orb(activity)`.
+ * Drawn in the page's ink: the library defaults to the content color, which Dray's pages don't set.
  */
 @Composable
-fun ThinkingOrb(
-    state: OrbState = OrbState.Idle,
-    variant: OrbVariant = OrbVariant.Default,
-    size: Dp = 20.dp,
-    speed: Double = 1.0,
-    paused: Boolean = false,
-    tint: Color = Dray.text,
-    modifier: Modifier = Modifier,
-    label: String? = null,
-) {
-    val config = OrbConfig(Look.of(state, variant), size.value.toDouble())
-    val engine = remember(config) { OrbEngine(config) }
-    val context = LocalContext.current
-    val still = remember {
-        Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
-    }
-    var now by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(paused, still) {
-        if (paused || still) return@LaunchedEffect
-        while (true) withFrameMillis { now = it }
-    }
-    val clock = "${config.look.key}@$speed"
-    Canvas(modifier.size(size).then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier)) {
-        val t = if (still) 0.0 else tick(clock, now.toDouble(), speed)
-        val k = this.size.width / config.size.toFloat()
-        engine.draw(t) { x, y, r, a ->
-            // Opacity to two places like the web's; no dot drops below 0.45pt, or it renders as a grey haze.
-            val o = min(100, (a * 100).roundToInt())
-            if (o > 0) drawCircle(tint, (max(0.45, r) * k).toFloat(), Offset((x * k).toFloat(), (y * k).toFloat()), alpha = o / 100f)
-        }
-    }
+fun Orb(kind: OrbKind, size: Dp = 20.dp, modifier: Modifier = Modifier, label: String? = null) {
+    val look = kind.look
+    ThinkingOrb(look.state, modifier, look.variant, size, color = Dray.text, speed = look.speed, label = label)
 }
 
 /** A yellow dashed circle turning once every 3s: a PR whose checks are running. */
