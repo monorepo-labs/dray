@@ -126,6 +126,62 @@ final class RowMenuTests: XCTestCase {
         shot("after")
     }
 
+    /// Attach names the one bot that could take the task — "Helper Bot", which has a chat,
+    /// not "Empty Bot", which has none — and the task leaves the list for the bot's Tasks.
+    /// Needs finished "Alpha task" and settled "Settled task" beside those two bots:
+    /// With TEST_RUNNER_DRAY_ATTACH_TWO=1 both bots have chats, and a submenu lists them.
+    ///   TEST_RUNNER_DRAY_TOKEN=… TEST_RUNNER_DRAY_ATTACH_URL=ws://127.0.0.1:47231
+    func testAttachToBot() throws {
+        guard let url = env["DRAY_ATTACH_URL"], let token = env["DRAY_TOKEN"] else { throw XCTSkip("no server") }
+        var link = URLComponents(string: "dray://connect")!
+        link.queryItems = [.init(name: "url", value: url), .init(name: "token", value: token), .init(name: "name", value: "Test Mac")]
+        app = XCUIApplication()
+        app.launchArguments = ["-servers", ""]
+        app.launch()
+        app.open(link.url!)
+        XCTAssertTrue(app.buttons["Add"].waitForExistence(timeout: 10), "the link opened no add sheet")
+        app.buttons["Add"].tap()
+        XCTAssertTrue(row("Alpha task").waitForExistence(timeout: 15), "no rows after pairing")
+        XCTAssertTrue(row("Helper Bot").waitForExistence(timeout: 10), "no bot row")
+
+        open("Alpha task")
+        if env["DRAY_ATTACH_TWO"] != nil {
+            // Both bots have chats: a submenu picks one. The menu's copy is the last match,
+            // should a bot's list row also read as a button.
+            XCTAssertFalse(app.buttons["Attach to Helper Bot"].exists, "a direct item with two bots")
+            app.buttons["Attach to bot"].tap()
+            let helper = app.buttons.matching(identifier: "Helper Bot")
+            XCTAssertTrue(helper.firstMatch.waitForExistence(timeout: 3) && app.buttons["Empty Bot"].exists,
+                          "the submenu does not list both bots")
+            shot("menu-attach-two")
+            helper.element(boundBy: helper.count - 1).tap()
+        } else {
+            // One bot could take it, so the item names that bot and attaches straight away.
+            XCTAssertTrue(app.buttons["Attach to Helper Bot"].exists, "no direct Attach to Helper Bot")
+            XCTAssertFalse(app.buttons["Attach to bot"].exists, "a submenu for a single bot")
+            XCTAssertFalse(app.buttons["Attach to Empty Bot"].exists, "a bot with no chat offered")
+            shot("menu-attach")
+            app.buttons["Attach to Helper Bot"].tap()
+        }
+        XCTAssertTrue(row("Alpha task").waitForNonExistence(timeout: 10), "attached task stayed in the list")
+
+        // A settled task can't be attached.
+        app.buttons["Settled"].tap()
+        XCTAssertTrue(row("Settled task").waitForExistence(timeout: 5), "no settled row")
+        open("Settled task")
+        XCTAssertFalse(app.buttons["Attach to bot"].exists, "Attach to bot on a settled row")
+        dismiss()
+        app.buttons["Settled"].tap()
+
+        // It sits under the bot's Tasks now.
+        row("Helper Bot").tap()
+        let tasks = app.buttons["Tasks"]
+        XCTAssertTrue(tasks.waitForExistence(timeout: 10), "no Tasks button")
+        tasks.tap()
+        XCTAssertTrue(app.staticTexts["Alpha task"].waitForExistence(timeout: 10), "attached task not in the bot's Tasks")
+        shot("bot-tasks")
+    }
+
     private func row(_ title: String) -> XCUIElement { app.staticTexts[title].firstMatch }
 
     private func open(_ title: String) {

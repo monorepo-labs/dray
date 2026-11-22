@@ -552,6 +552,7 @@ struct ProjectStrip: View {
 /// hover button to carry it.
 private struct RowMenu: View {
     @Environment(Store.self) private var store
+    @Environment(\.displayScale) private var scale
     let row: ListRow
     /// Drawn in the set-aside run or flagged aside, so the item turns to Bring back.
     let aside: Bool
@@ -600,10 +601,30 @@ private struct RowMenu: View {
         if row.depth > 0 {
             Button("Detach from parent", systemImage: "scissors") { Task { await store.detach(key) } }
         }
+        // One bot is named on the item itself; a submenu only where there is a choice.
+        let bots = store.attachTargets(key, item)
+        if bots.count == 1, let bot = bots.first {
+            Button { attach(bot) } label: { Label { Text("Attach to \(bot.name)") } icon: { face(bot) } }
+        } else if !bots.isEmpty {
+            Menu {
+                ForEach(bots, id: \.id) { bot in
+                    Button { attach(bot) } label: { Label { Text(bot.name) } icon: { face(bot) } }
+                }
+            } label: { Label("Attach to bot", systemImage: "link") }
+        }
         Button("Delete", systemImage: "trash", role: .destructive, action: delete)
     }
 
     private func set(_ flags: [String: JSON]) { Task { await store.setFlags(row.key, flags) } }
+
+    private func attach(_ bot: Bot) { Task { await store.attach(row.key, to: bot) } }
+
+    /// A bot's face as a bitmap: a menu draws only an image as an item's icon, never a Canvas.
+    private func face(_ bot: Bot) -> Image {
+        let r = ImageRenderer(content: BotFace(bot: bot, size: 22))
+        r.scale = scale
+        return r.uiImage.map { Image(uiImage: $0).renderingMode(.original) } ?? Image(systemName: "link")
+    }
 
     private func fork(worktree: Bool) {
         Task { if let key = await store.fork(row.key, worktree: worktree) { opened(key) } }

@@ -864,6 +864,36 @@ final class Store {
         } catch { lastError = error.localizedDescription }
     }
 
+    /// The bots a row can be handed to: on its own server, with a chat to hang under.
+    /// None for a settled row, a bot's own chat or a task already in a bot's tree —
+    /// the server refuses each, so the menu never offers it (`attach_to_bot`).
+    func attachTargets(_ key: SessionKey, _ item: SessionItem) -> [Bot] {
+        guard item.archived != true, !inBotTree(key) else { return [] }
+        return (bots[key.server] ?? []).filter { !botChat(key.server, $0).isEmpty }
+    }
+
+    /// Whether `key` is a bot's chat or descends from one, through parents this
+    /// server lists. Bounded as the server's walk is, so a cycle costs a wrong answer.
+    private func inBotTree(_ key: SessionKey) -> Bool {
+        var at: SessionKey? = key
+        for _ in 0..<8 {
+            guard let k = at, let item = items[k] else { return false }
+            if bot(k) != nil { return true }
+            at = (item.parentSessionId ?? item.adoptedBy).map { SessionKey(server: k.server, id: $0) }
+        }
+        return false
+    }
+
+    /// Hands a task to a bot, detach's reverse: it comes back hidden under the bot's chat,
+    /// which takes it off the list and into the bot's Tasks.
+    func attach(_ key: SessionKey, to bot: Bot) async {
+        do {
+            let item = try await call(key.server, "attach_session", ["sessionId": .string(key.id), "bot": .string(bot.id)],
+                                      as: SessionItem?.self)
+            if let item { items[key] = merged(key, item) }
+        } catch { lastError = error.localizedDescription }
+    }
+
     /// Deletes a session for good, its hidden children with it; false where the server refused.
     /// No event says so to other clients, so the row goes here once the server agrees.
     func delete(_ key: SessionKey) async -> Bool {
