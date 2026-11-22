@@ -75,6 +75,8 @@ struct SessionList: View {
         // Paged: only the first `shown` rows are drawn, more as the last one comes on screen.
         let runs = page(all, shown)
         let more = runs.reduce(0) { $0 + $1.rows.count } < all.reduce(0) { $0 + $1.rows.count }
+        // Nested where its parent is listed anywhere: a pinned child draws at depth 0 still holding the link.
+        let listed = Set(all.flatMap { $0.rows.map(\.key) })
         // Bots lead the live list, as on the desktop: a bot belongs to no project, so no filter narrows them.
         let botRows = mode == .live ? store.allBots.map { b in
             (id: "\(b.server)/\(b.bot.id)", server: b.server, bot: b.bot, chat: store.botChat(b.server, b.bot).last)
@@ -149,6 +151,7 @@ struct SessionList: View {
                             .contextMenu {
                                 RowMenu(row: row, aside: run.stage == .aside || row.item.aside == true,
                                         inheritsPin: run.stage == .pinned && row.depth > 0 && row.item.pinned != true,
+                                        nested: row.item.parentSessionId.map { listed.contains(SessionKey(server: row.key.server, id: $0)) } ?? false,
                                         opened: { selection = $0 }, delete: { deleting = row })
                             }
                         if mode == .live, let ask = store.asks[row.key]?.first {
@@ -558,6 +561,8 @@ private struct RowMenu: View {
     let aside: Bool
     /// In Pinned only through an ancestor: a pin here would move nothing and leave a flag behind.
     let inheritsPin: Bool
+    /// Its parent is in the list, so there is a link to cut — the desktop's `isNested`.
+    let nested: Bool
     let opened: (SessionKey) -> Void
     let delete: () -> Void
 
@@ -598,7 +603,7 @@ private struct RowMenu: View {
                 set(["archived": true])
             }
         }
-        if row.depth > 0 {
+        if nested {
             Button("Detach from parent", systemImage: "scissors") { Task { await store.detach(key) } }
         }
         // One bot is named on the item itself; a submenu only where there is a choice.

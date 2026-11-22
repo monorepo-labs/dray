@@ -68,6 +68,11 @@ final class RowMenuTests: XCTestCase {
         open("Delta child")
         XCTAssertTrue(app.buttons["Detach from parent"].exists, "no Detach on a nested row")
         shot("menu-nested")
+        // Pinned on its own it leads at depth 0, still holding the link to cut.
+        app.buttons["Pin"].tap()
+        XCTAssertTrue(app.staticTexts["Pinned"].waitForExistence(timeout: 5), "no Pinned heading")
+        open("Delta child")
+        XCTAssertTrue(app.buttons["Detach from parent"].exists, "no Detach on a pinned child")
         app.buttons["Detach from parent"].tap()
         sleep(1)
         open("Delta child")
