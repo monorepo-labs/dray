@@ -353,6 +353,7 @@ function App() {
     forkSession,
     unlinkIssue,
     detachSession,
+    attachSession,
     deleteSession,
     removeWorktree,
     ensureLoaded,
@@ -4068,6 +4069,7 @@ function App() {
             removeDraft(id);
           }}
           onDetach={detachSession}
+          onAttach={(sessionId, bot) => attachSession(sessionId, bot.id)}
           onSetFlags={handleSetSessionFlags}
           onFork={forkSession}
           onDelete={deleteTask}

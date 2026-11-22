@@ -1156,10 +1156,8 @@ pub async fn take_continue_at(session_id: &str, at: &str) -> Result<Option<(Sess
 /// Cuts a session loose from the parent that spawned it, so the sidebar draws
 /// it as a top-level row rather than nested.
 ///
-/// One-way on purpose: there is no re-attach. Parentage records who *created*
-/// a session, which is a fact about the past — a session detached and then
-/// re-parented somewhere else would describe a history that never happened,
-/// and nothing in the app needs that.
+/// Nothing re-parents it to another session. The one way back under anyone is
+/// [`attach_session`], to a bot, which the reader asks for by name.
 ///
 /// `modified` is left alone for [`set_session_flags`]'s reason: it orders the
 /// list, and detaching must not jump the row to the top of it.
@@ -1169,6 +1167,9 @@ pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>
     // outbox, not its parent link, so clearing the link alone kept it the bot's.
     // First, so a failure leaves the link standing and a retry can finish.
     crate::remote_reports::disown(session_id).await?;
+    // An attach's note to a child still running, not yet sent: it now names a
+    // bot this task no longer reports to.
+    crate::bots::take_handover(session_id);
     Ok(update_item(session_id, |item| {
         item.parent_session_id = None;
         // Or the walk would still find a way up through it.
@@ -1178,6 +1179,54 @@ pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>
         item.clone()
     })
     .await?)
+}
+
+/// Detach's reverse, for a task the reader hands to a bot (#1395): `chat` becomes
+/// its parent, and it and everything below it run hidden, as a bot's own tasks
+/// do. Answers the ids written, the task first, or `None` for an unknown id.
+///
+/// The one place parentage stops meaning "who created it". `modified` moves so
+/// the stall clock starts at the hand-over: the bot is told where the task
+/// stands then, and a nudge for a week it already heard of says nothing new.
+pub async fn attach_session(session_id: &str, chat: &str) -> Result<Option<Vec<String>>> {
+    let _guard = INDEX_LOCK.lock().await;
+    let mut sessions = read_index().await?;
+    let Some(changed) = attach_in(&mut sessions, session_id, chat, now_rfc3339()) else {
+        return Ok(None);
+    };
+    write_session_index(sessions).await?;
+    Ok(Some(changed))
+}
+
+/// [`attach_session`] on a held index.
+fn attach_in(sessions: &mut [SessionIndexItem], session_id: &str, chat: &str, now: String) -> Option<Vec<String>> {
+    let task = sessions.iter_mut().find(|i| i.session_id == session_id)?;
+    task.parent_session_id = Some(chat.to_string());
+    task.adopted_by = None;
+    task.hidden = true;
+    // Neither means anything on a row the sidebar no longer draws, and either
+    // would come back with it on a detach.
+    task.pinned = false;
+    task.aside = false;
+    task.modified = now;
+    let mut changed = vec![session_id.to_string()];
+    let mut queue = std::collections::VecDeque::from([session_id.to_string()]);
+    while let Some(parent) = queue.pop_front() {
+        let kids: Vec<usize> = (0..sessions.len())
+            .filter(|&k| tree_parent_in(sessions, &sessions[k]).is_some_and(|p| p.session_id == parent))
+            .collect();
+        for k in kids {
+            let id = sessions[k].session_id.clone();
+            // A cycle in the index cannot queue a session twice.
+            if changed.contains(&id) {
+                continue;
+            }
+            sessions[k].hidden = true;
+            changed.push(id.clone());
+            queue.push_back(id);
+        }
+    }
+    Some(changed)
 }
 
 /// The hidden sessions `parent_id` started directly — the ones that follow it
@@ -3142,6 +3191,27 @@ mod tests {
         assert_eq!(readopt_in(&mut items, "task", None), ["sub"]);
         assert_eq!(adopted(&items, "sub"), None);
         assert_eq!(live_ancestor_in(&items, "sub"), Some("task"));
+    }
+
+    /// A task handed to a bot hangs under its chat, hidden, and so does what it
+    /// started; nothing else moves.
+    #[test]
+    fn an_attached_task_and_its_sub_tasks_go_hidden_under_the_chat() {
+        let mut items = vec![
+            tree_item("chat", None),
+            tree_item("task", None),
+            tree_item("sub", Some("task")),
+            tree_item("other", None),
+        ];
+        items[2].hidden = false;
+        items[1].pinned = true;
+        let changed = attach_in(&mut items, "task", "chat", "now".into()).unwrap();
+        assert_eq!(changed, ["task", "sub"]);
+        assert_eq!(items[1].parent_session_id.as_deref(), Some("chat"));
+        assert!(items[1].hidden && items[2].hidden && !items[1].pinned);
+        assert_eq!(items[1].modified, "now");
+        assert!(!items[3].hidden);
+        assert!(attach_in(&mut items, "gone", "chat", "now".into()).is_none());
     }
 
     /// A bot's task from another machine is the top of its tree here, its

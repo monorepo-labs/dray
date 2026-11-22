@@ -328,6 +328,7 @@ dray session unsettle <id>
 dray session set-aside <id>                 # sink it in the sidebar: started, not wanted now
 dray session unset-aside <id>
 dray session detach <id>                    # out of its parent: a top-level row of its own
+dray session attach <id> --bot <name>       # hand it to a bot: the bot's task from now on
 ```
 
 These are the user's sidebar buttons, so act on sessions the user named, or
@@ -336,8 +337,12 @@ Settling is refused while a turn runs — stop it first, or wait.
 
 `detach` is the sidebar's Detach from parent. The session stops nesting under
 the one that started it, a hidden one shows in the sidebar, and it no longer
-reports back. Use it when the user wants to work with a task directly. There
-is no re-attach.
+reports back. Use it when the user wants to work with a task directly.
+
+`attach` is the sidebar's Attach to bot, detach's reverse: the task leaves the
+sidebar for the bot's Tasks, the bot gets a note saying where it stands, and
+its reports go to the bot after every turn. The bot must be on the same machine
+as the task and have a chat already.
 
 **`--delete-worktree` deletes whatever the worktree holds**, uncommitted and
 unpushed work included, and nothing asks. Before passing it, check the tree

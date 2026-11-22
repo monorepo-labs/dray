@@ -2032,6 +2032,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         worktree_disposition(session_id: String) =>crate::worktree_disposition(&session_id).await;
         remove_session_worktree(session_id: String) => crate::remove_session_worktree(&session_id).await;
         detach_session(session_id: String) => store::detach_session(&session_id).await;
+        attach_session(session_id: String, bot: String) => crate::orchestration::attach_to_bot(&session_id, &bot, &sink).await.map_err(crate::Fail::from);
         set_auto_continue(session_id: String, on: bool) => crate::auto_continue::set_auto_continue(session_id, on, sink).await;
         list_session_index_items(archived: bool) => store::list_session_index_items(archived).await;
         reachable_sessions() => ok(crate::machines::reachable_sessions().await);

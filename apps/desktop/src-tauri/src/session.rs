@@ -867,6 +867,13 @@ impl SessionManager {
         self.sessions.lock().await.get(id).cloned()
     }
 
+    /// Whether a child runs for `session_id`, so a fact it read at spawn may be
+    /// stale. A slot locked by a send counts: that send may be spawning one.
+    pub async fn has_child(&self, session_id: &str) -> bool {
+        let Some(slot) = self.existing(session_id).await else { return false };
+        slot.try_lock().map_or(true, |guard| guard.is_some())
+    }
+
     /// Commits the server to exiting if nothing is running, and holds every
     /// send from then on — the process is about to end under it. Counted from
     /// a send's start, since a new session joins the map only once its prompt

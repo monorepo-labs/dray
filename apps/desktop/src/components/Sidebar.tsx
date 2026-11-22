@@ -9,6 +9,7 @@ import {
   CircleDashed,
   Ellipsis,
   GitBranchPlus,
+  Link2,
   Unlink,
   Pin,
   Plus,
@@ -19,7 +20,7 @@ import {
 import Orb from "@/components/Orb";
 import BotAvatar from "@/components/BotAvatar";
 import { TypingDots } from "@/components/chat/BotTranscript";
-import { greetingOf, previewLine, type BotEntry } from "@/lib/bots";
+import { botAt, greetingOf, previewLine, type BotEntry } from "@/lib/bots";
 
 import PrStateIcon, { ChecksRunningIcon, prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
@@ -164,6 +165,9 @@ type SidebarProps = {
   onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
+  /// Hands a task to a bot on its own server (#1395): it leaves this list for
+  /// the bot's Tasks.
+  onAttach?: (sessionId: string, bot: Bot) => Promise<void>;
   /// Puts the unread mark back on a session the reader has already read, so it
   /// rejoins the Completed run.
   onMarkUnread: (sessionId: string) => void;
@@ -779,6 +783,15 @@ export function isNested(item: SessionIndexItem, items: SessionIndexItem[]): boo
   );
 }
 
+/// The bots a row can be handed to: those on its own server, since its reports
+/// go out from there. None for a settled row or a bot's own chat; a bot's tasks
+/// never reach the sidebar.
+export function attachTargets(bots: readonly BotEntry[], item: SessionIndexItem): Bot[] {
+  if (item.archived || botAt(bots.map((b) => b.bot), item.cwd)) return [];
+  const server = serverOfPath(item.cwd);
+  return bots.map((b) => b.bot).filter((bot) => serverOfPath(bot.path) === server);
+}
+
 /// Sidebar toggle. Lives outside `Sidebar` because a collapsed sidebar renders
 /// nothing at all — the button has to survive its own pane disappearing, so the
 /// app header owns it and its y position never moves.
@@ -1112,6 +1125,7 @@ export default function Sidebar({
   onSpaceChange,
   projectFilter,
   onDetach,
+  onAttach,
   onProjectFilterChange,
   onStepProjectFilter,
   onNewSessionInProject,
@@ -1793,6 +1807,8 @@ export default function Sidebar({
                     onFork={onFork}
                     onDelete={onDelete}
                     onDetach={onDetach}
+                    attachBots={onAttach && attachTargets(bots, item)}
+                    onAttach={onAttach}
                     onMarkUnread={onMarkUnread}
                   />
                 )) : []),
@@ -2762,6 +2778,8 @@ export function RowMenu({
   onDelete,
   onDetach,
   detachLabel = "Detach from parent",
+  attachBots,
+  onAttach,
   onMarkUnread,
   onSettle,
   pin,
@@ -2781,6 +2799,10 @@ export function RowMenu({
   onDetach?: () => void;
   /// What the parent is called, where "parent" undersells it: a bot.
   detachLabel?: string;
+  /// The bots this row can be handed to. Absent or empty draws no item: a
+  /// bot's own chat or task, or no bot on the row's server.
+  attachBots?: Bot[];
+  onAttach?: (bot: Bot) => void;
   /// Absent where the mark would say nothing: a settled session is a history
   /// row with no Completed run to rejoin, and one already unread or mid-turn
   /// has nothing to take back.
@@ -2930,6 +2952,23 @@ export function RowMenu({
               </ContextMenuItem>
             )}
 
+            {onAttach && attachBots && attachBots.length > 0 && (
+              <ContextMenuSub>
+                <ContextMenuSubTrigger className="text-ui">
+                  <Link2 />
+                  Attach to bot
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent className="max-w-56">
+                  {attachBots.map((bot) => (
+                    <ContextMenuItem key={bot.id} className="text-ui" onSelect={() => onAttach(bot)}>
+                      <BotAvatar seed={bot.id} avatar={bot.avatar} still className="size-4 shrink-0" />
+                      <span className="truncate">{bot.name}</span>
+                    </ContextMenuItem>
+                  ))}
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+            )}
+
             {/* `preventDefault` holds the menu open — an item select closes it by
                 default, which would take the confirm step down with it. */}
             <ContextMenuItem
@@ -3061,6 +3100,8 @@ function SessionRow({
   onFork,
   onDelete,
   onDetach,
+  attachBots,
+  onAttach,
   onMarkUnread,
 }: {
   item: SessionIndexItem;
@@ -3109,6 +3150,8 @@ function SessionRow({
   onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
+  attachBots?: Bot[];
+  onAttach?: (sessionId: string, bot: Bot) => Promise<void>;
   onMarkUnread: (sessionId: string) => void;
 }) {
   // The keyboard shortcut can walk the selection past the fold, and `nearest`
@@ -3137,6 +3180,8 @@ function SessionRow({
       forkDisabled={status === "in_progress"}
       onDelete={() => void onDelete(item.sessionId)}
       onDetach={nested ? () => void onDetach(item.sessionId) : undefined}
+      attachBots={attachBots}
+      onAttach={onAttach && ((bot) => void onAttach(item.sessionId, bot))}
       // Never on a settled row, whose list draws no aside run.
       aside={item.archived ? undefined : aside}
       onSetAside={(v) =>
