@@ -1267,6 +1267,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_quoted_path_reaches_sh_as_one_word() {
         let path = "/Users/a b'c/x.plist";
         let out = std::process::Command::new("sh")

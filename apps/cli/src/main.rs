@@ -1533,7 +1533,11 @@ fn repo_root(dir: &Path) -> Option<String> {
         return None;
     }
 
-    main_worktree(&String::from_utf8(output.stdout).ok()?)
+    let root = main_worktree(&String::from_utf8(output.stdout).ok()?)?;
+    // Git answers `C:/x/repo` on Windows; the spelling a reader types back.
+    #[cfg(windows)]
+    let root = root.replace('/', "\\");
+    Some(root)
 }
 
 /// The first record's path, or `None` for a bare repo — nothing is checked out
@@ -1943,6 +1947,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).ok()?;
         let dir = std::fs::canonicalize(&dir).ok()?;
+        // Windows' canonical form is `\\?\C:\…`, which git never prints.
+        #[cfg(windows)]
+        let dir = PathBuf::from(dir.to_string_lossy().trim_start_matches(r"\\?\"));
 
         if !git(&dir, &["init", "-q", "."]) {
             return None;
