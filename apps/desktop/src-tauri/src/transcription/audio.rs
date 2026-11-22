@@ -272,23 +272,88 @@ fn osascript(line: &str) -> Result<String> {
 
 /// The output a reading was taken from. A Mac's is the system output, which
 /// needs no name.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 type Output = ();
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 fn read_output() -> Option<(Output, bool)> {
     read_muted().map(|muted| ((), muted))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 fn set_output(_output: &Output, muted: bool) -> bool {
     set_muted(muted)
 }
 
 /// The system output never goes away.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 fn output_gone(_output: &Output) -> bool {
     false
+}
+
+/// A Windows output: the default render endpoint's id, so the restore asks
+/// the same device.
+#[cfg(windows)]
+type Output = Vec<u16>;
+
+/// The default playback device and whether it is muted, through Core Audio's
+/// endpoint volume — what the volume flyout's mute moves.
+#[cfg(windows)]
+fn read_output() -> Option<(Output, bool)> {
+    use windows::Win32::Media::Audio::{eConsole, eRender};
+    let devices = endpoint::devices()?;
+    let device = unsafe { devices.GetDefaultAudioEndpoint(eRender, eConsole) }.ok()?;
+    let id = unsafe { device.GetId() }.ok()?;
+    let output = unsafe { id.as_wide() }.to_vec();
+    unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(id.0 as *const _)) };
+    let muted = unsafe { endpoint::volume(&device)?.GetMute() }.ok()?.as_bool();
+    Some((output, muted))
+}
+
+#[cfg(windows)]
+fn set_output(output: &Output, muted: bool) -> bool {
+    endpoint::device(output)
+        .and_then(|device| endpoint::volume(&device))
+        .is_some_and(|volume| unsafe { volume.SetMute(muted, std::ptr::null()) }.is_ok())
+}
+
+/// Whether the device is unplugged or disabled. One Core Audio cannot be
+/// asked about is not proof, for the reason Linux's isn't.
+#[cfg(windows)]
+fn output_gone(output: &Output) -> bool {
+    use windows::Win32::Media::Audio::DEVICE_STATE_ACTIVE;
+    let Some(devices) = endpoint::devices() else { return false };
+    let id: Vec<u16> = output.iter().copied().chain(Some(0)).collect();
+    match unsafe { devices.GetDevice(windows::core::PCWSTR(id.as_ptr())) } {
+        Ok(device) => unsafe { device.GetState() }.is_ok_and(|state| state != DEVICE_STATE_ACTIVE),
+        Err(_) => true,
+    }
+}
+
+#[cfg(windows)]
+mod endpoint {
+    use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
+    use windows::Win32::Media::Audio::{IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator};
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
+
+    /// The device enumerator, with COM joined on this thread first. A thread
+    /// COM already runs on as single-threaded (the main one, at quit) refuses
+    /// the join and keeps working, so the answer is ignored.
+    pub(super) fn devices() -> Option<IMMDeviceEnumerator> {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()
+        }
+    }
+
+    pub(super) fn device(id: &[u16]) -> Option<IMMDevice> {
+        let id: Vec<u16> = id.iter().copied().chain(Some(0)).collect();
+        unsafe { devices()?.GetDevice(windows::core::PCWSTR(id.as_ptr())) }.ok()
+    }
+
+    pub(super) fn volume(device: &IMMDevice) -> Option<IAudioEndpointVolume> {
+        unsafe { device.Activate(CLSCTX_ALL, None) }.ok()
+    }
 }
 
 /// A Linux output, named by the tool that read it so the restore asks the same
@@ -433,12 +498,12 @@ fn run(program: &str, args: &[&str]) -> Option<String> {
 
 /// Every other target answers as though there were nothing to mute. The
 /// setting still draws, since a row that vanishes reads as one the app forgot.
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn read_muted() -> Option<bool> {
     None
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn set_muted(_muted: bool) -> bool {
     false
 }

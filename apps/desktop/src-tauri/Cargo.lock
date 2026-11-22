@@ -1457,6 +1457,7 @@ dependencies = [
  "transcribe-cpp",
  "ts-rs",
  "uuid",
+ "windows",
  "windows-sys 0.61.2",
  "x11",
  "zbus",

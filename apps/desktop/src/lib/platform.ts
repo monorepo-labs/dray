@@ -11,10 +11,10 @@ export const IS_LINUX =
 export const IS_WINDOWS =
   typeof navigator !== "undefined" && /Win/.test(navigator.platform);
 
-/// Dictation runs on the machine the reader sits at, so a Mac and a Linux
-/// desktop have it and nothing else does: elsewhere its button, chord and tab
-/// are not drawn.
-export const HAS_DICTATION = IS_MAC || IS_LINUX;
+/// Dictation runs on the machine the reader sits at, so a Mac, a Linux and a
+/// Windows desktop have it and nothing else does: elsewhere its button, chord
+/// and tab are not drawn.
+export const HAS_DICTATION = IS_MAC || IS_LINUX || IS_WINDOWS;
 
 /// Whether a browser page can be split out beside the chat. Every tab is a
 /// native view of its own on a Mac and on Windows; on Linux every tab lives
