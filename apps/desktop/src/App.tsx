@@ -3988,6 +3988,10 @@ function App() {
     <AppShell
       sidebarOpen={!collapsed}
       tall={tallSheet}
+      // What sits before the tab row: the header's padding, the 28px sidebar
+      // toggle and one gap. `ViewTabs` lines its row up from it, and a page's
+      // lit tab starts where a task view's first one does.
+      lead={lights ? "calc(var(--traffic-lights-w) + 2.25rem)" : "3rem"}
       // The issues page fills the column, so the centred empty-composer state
       // is wrong there even with no session selected.
       centered={!shownSession && !pageOpen && !welcomeBot}
@@ -4127,9 +4131,6 @@ function App() {
             // the sheet is what gives this row its colour.
             "relative flex h-(--titlebar-h) shrink-0 items-center gap-2 overflow-hidden px-3",
             lights && "pl-(--traffic-lights-w)",
-            // What sits before the tab row: this padding, the 28px sidebar
-            // toggle and one gap. `ViewTabs` lines its row up from it.
-            lights ? "[--tabs-lead:calc(var(--traffic-lights-w)+2.25rem)]" : "[--tabs-lead:3rem]",
           )}
           // `deep`, not bare: bare drags only on direct hits, so every label
           // inside this row was a dead strip in a titlebar that looks uniform.
@@ -4144,7 +4145,9 @@ function App() {
             // With no traffic lights it sits over the rail: 12px padding puts
             // its centre at 26px, the rail's icons at 28. A nudge, not
             // padding, so `--tabs-lead` still holds.
-            className={cn(!lights && sidebarDrawn === SIDEBAR_RAIL && "translate-x-0.5")}
+            // Above the tab row, whose first 10px reach under it with the sidebar
+            // shut (`data-after-toggle`): its clicks stay its own.
+            className={cn("relative z-1", !lights && sidebarDrawn === SIDEBAR_RAIL && "translate-x-0.5")}
           />
 
           {/* Over the sidebar's right end, out of the flow so the tabs do not
@@ -4316,6 +4319,7 @@ function App() {
               }
               // Not past a parent's breadcrumb, whose width the lead leaves out.
               alignX={crumb ? 0 : sidebarDrawn}
+              afterToggle={!crumb && !sidebarDrawn}
             />
           )}
           {/* Keeps the far end at the far end on pages with no tab row. */}
