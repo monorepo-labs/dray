@@ -177,22 +177,35 @@ pub async fn serve(app: Sink) -> Result<()> {
     let path = socket_path().context("could not resolve the socket path")?;
     store::get_home_app_dir().await?;
     let name = dray_proto::pipe_name(&path.to_string_lossy());
+    let owner = crate::platform::OwnerOnly::new().context("could not make the pipe's security descriptor")?;
+    let create = |first: bool| {
+        let mut attributes = owner.attributes();
+        // SAFETY: the attributes point at `owner`'s descriptor, which outlives
+        // every instance made here.
+        unsafe {
+            ServerOptions::new()
+                .first_pipe_instance(first)
+                .create_with_security_attributes_raw(&name, (&raw mut attributes).cast())
+        }
+        .with_context(|| format!("could not create {name} for {}", path.display()))
+    };
 
-    let mut server = ServerOptions::new()
-        .first_pipe_instance(true)
-        .create(&name)
-        .with_context(|| format!("could not create {name} for {}", path.display()))?;
+    let mut server = create(true)?;
     loop {
+        // A caller that opens and drops the pipe before this sees it (the
+        // server's own startup probe does) leaves the instance broken, and
+        // `connect` on it fails at once forever after. A fresh one, after a
+        // pause so a failure that does repeat cannot spin a core.
         if let Err(e) = server.connect().await {
             eprintln!("[orchestration accept err] {e}");
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            server = create(false)?;
             continue;
         }
         let connected = server;
         // The next instance before this one is served, or a caller arriving
         // meanwhile finds no pipe and reads Dray as closed.
-        server = ServerOptions::new()
-            .create(&name)
-            .with_context(|| format!("could not create {name}"))?;
+        server = create(false)?;
         let app = app.clone();
         tokio::spawn(async move {
             if let Err(e) = handle(connected, &app).await {

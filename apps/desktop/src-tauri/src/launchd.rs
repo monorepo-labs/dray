@@ -239,9 +239,11 @@ pub async fn stop() -> Result<()> {
         unsafe {
             libc::kill(pid, libc::SIGTERM)
         };
-        // No SIGTERM to send: the server ends without its 3s for agents.
+        // No SIGTERM to send, so the server never kills its agents itself:
+        // they go with it, or a stopped server's Claude kept running and the
+        // next launch resumed the same conversation beside it.
         #[cfg(windows)]
-        crate::platform::kill(pid as u32);
+        let _ = tokio::task::spawn_blocking(move || crate::platform::kill_tree(pid as u32)).await;
         return Ok(());
     }
     launchctl(&["bootout", &target()]).await?;
