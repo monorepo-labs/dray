@@ -17,14 +17,26 @@
 
 - The in-app browser (CEF builds for Mac and Linux only) and `dray browser`'s headless Chromium, whose DevTools pipe rides fds 3 and 4.
 - Dictation (hidden: `HAS_DICTATION`), Dray Island, Open in (apps list is empty), the dock badge.
-- The CLI ships in no Windows bundle and nothing copies it onto `PATH`, so an agent in the release app has no `dray`. `dray server install|start` and `dray update` are systemd/launchd and `install.sh`.
-- `release.yml` has no Windows job, no code signing (SmartScreen warns) and no updater manifest entry.
+- `dray server install|start` and `dray update` are systemd/launchd and `install.sh`.
+- Authenticode. The release is unsigned, so SmartScreen warns on the download; the switch is under _Releasing_ below.
+- A Windows button on the site's downloads page.
 - A refused upload reads as a reset connection, not 401: the server answers before reading the body and Windows resets a socket closed with unread data.
+
+## Releasing
+
+**`release.yml`'s `windows` job builds an NSIS installer and an MSI, x64**, beside the Linux job and the same way: held out of tags until the repo variable `RELEASE_WINDOWS` is `true`, built as artifacts alone on a manual run, and put into each manifest by `manifest` ([windows-release.sh](../../../.github/scripts/windows-release.sh)). On R2 each also lands as `Dray_x64-setup.exe` and `Dray_x64.msi` behind the dmg's guard.
+
+- **The updater signs each installer**, with the minisign key the Mac and Linux use, and the app updates by running it: NSIS per user with no prompt, the MSI through `msiexec`. The manifest carries `windows-x86_64-nsis` and `windows-x86_64-msi` and never the bare `windows-x86_64` the plugin falls back to, since an MSI install handed the NSIS installer ends up installed twice.
+- **A beta ships no MSI.** WiX takes a version of numbers alone and `-beta.N` is not one, so an MSI install stays on stable.
+- **The binary is `dray-app.exe`** (`mainBinaryName` in [tauri.windows-release.conf.json](../src-tauri/tauri.windows-release.conf.json)). The installer finds a running app by its exe's name before replacing it, and as `dray.exe` every running `dray` CLI would count.
+- **The CLI rides the bundle as `dray-cli.exe`**; the app copies it to `~/.local/bin/dray.exe` on launch and puts that folder on the user `PATH` ([orchestration.md](orchestration.md)).
+- **Authenticode is one switch**: the repo variable `WINDOWS_SIGN_COMMAND` becomes the bundler's `bundle.windows.signCommand` (`%1` is the file), which signs the app, the CLI and both installers before the updater signature is taken over them. Set, the job fails unless every one carries a valid signature; the secrets the command reads go in the build step's `env`. Unset, the job runs unsigned and says so.
 
 ## Building and testing on a VM
 
 - Toolchain: Git, rustup (MSVC), Visual Studio Build Tools with the C++ workload, Node, pnpm, CMake and LLVM (transcribe-cpp's ggml). WebView2 ships with Windows.
-- `pnpm tauri dev` works as everywhere. `pnpm tauri build` makes the MSI and NSIS installers; without the updater key, pass a `--config` file holding `{"bundle":{"createUpdaterArtifacts":false}}`.
+- `pnpm tauri dev` works as everywhere. `pnpm tauri build` makes the MSI and NSIS installers; without the updater key, pass a `--config` file holding `{"bundle":{"createUpdaterArtifacts":false}}`. The release's shape is `scripts/cli-sidecar.sh` under Git Bash, then `pnpm tauri build --config src-tauri/tauri.windows-release.conf.json`.
+- **Git checks `.sh` files out LF** (`.gitattributes`): Git for Windows, a runner's included, would hand bash CRLF otherwise.
 - `cargo test --no-default-features --features serve --lib` passes on Windows; tests that spawn `sh`, `cat` or `sleep`, or build `/`-paths, are `#[cfg(unix)]`.
 - **A GUI started over SSH has no desktop.** Run it in the logged-in RDP session through a scheduled task with an interactive principal (`New-ScheduledTaskPrincipal -LogonType Interactive`), and screenshot the same way (`CopyFromScreen`).
 - **Driving the dev app**: Tauri's own WebView2 arguments override `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, so the dev shim passes that variable on; set it to `--remote-debugging-port=9222` and DevTools' protocol on that port clicks, types and screenshots the webview.
