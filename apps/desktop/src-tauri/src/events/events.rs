@@ -419,9 +419,9 @@ pub enum AgentEventPayload {
     },
 
     /// The reader moved this task to another agent (#1414), logged ahead of the
-    /// first prompt the new one answers. Drawn as "Switched to X", and read
-    /// back at the next spawn: an unanswered one is what hands the new agent
-    /// the conversation.
+    /// first prompt the new one answers. Draws nothing, since the reader just
+    /// picked the agent; read back at the next spawn, an unanswered one is
+    /// what hands the new agent the conversation.
     AgentSwitched {
         from: Harness,
         to: Harness,

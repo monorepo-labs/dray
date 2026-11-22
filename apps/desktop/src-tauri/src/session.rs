@@ -228,7 +228,7 @@ fn respawn_needed(
 }
 
 /// Moves a task to another agent (#1414): stops the old child, records the
-/// move on the index and logs the "Switched to" line. The conversation goes
+/// move on the index and logs an `agent_switched` event. The conversation goes
 /// across at the next spawn, which reads that line back
 /// ([`crate::bots::mark_switch_if_unanswered`]). Each CLI resumes only its own
 /// sessions, so the old child cannot carry on, background tasks included.

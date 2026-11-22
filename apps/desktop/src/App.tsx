@@ -4693,11 +4693,11 @@ function App() {
             ) : sleepingBoat ? (
               <BoatNotice server={sleepingBoat} />
             ) : selectedSession && harness !== selectedSession.harness ? (
-              // A bot chat or task picked onto another agent: the send moves it there.
+              // A bot chat or task picked onto another agent: the send switches it.
               <div className="mb-2 flex min-h-7 items-center gap-2 px-1">
                 <AgentIcon harness={harness} brand className="size-3.5 shrink-0" />
-                <p className="min-w-0 flex-1 truncate text-ui text-foreground">
-                  <span className="font-semibold">{AGENT_LABELS[harness]} takes over</span>
+                <p className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">
+                  {AGENT_LABELS[harness]} takes over
                   <span className="text-muted-foreground"> from your next message</span>
                 </p>
               </div>

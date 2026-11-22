@@ -27,14 +27,13 @@ import {
   type BotSegment,
   type TalkItem,
 } from "@/lib/botTranscript";
-import { AGENT_LABELS } from "@/lib/model";
 import { isModClick } from "@/lib/platform";
 import { stripSenderPrefix } from "@/lib/relay";
 import { streamingCall } from "@/lib/streaming";
 import { streamingLabel, toolArgument, toolLabel } from "@/lib/tools";
 import { invoke } from "@/lib/transport";
 import { cn } from "@/lib/utils";
-import type { AgentEvent, Bot, BotAvatar as Avatar, Harness, LearnedDiff, LearnedFile, ToolResult } from "@/types/events";
+import type { AgentEvent, Bot, BotAvatar as Avatar, LearnedDiff, LearnedFile, ToolResult } from "@/types/events";
 
 /// A task a bot started, as its card names it.
 /// A task as its chat draws it. `sessionId` is the full id, since the bot may
@@ -226,9 +225,7 @@ const ChatRow = memo(function ChatRow({ item, time, tight, isNew, bots, taskOf, 
     <>
       {isNew && <NewDivider />}
       {time && <TimeLabel at={time} />}
-      {item.kind === "switch" ? (
-        <SwitchLine harness={item.harness} />
-      ) : item.kind === "learned" ? (
+      {item.kind === "learned" ? (
         <LearnedLine sessionId={item.sessionId} commit={item.commit} file={item.file} undone={item.undone} />
       ) : item.kind === "botMessage" ? (
         <>
@@ -469,11 +466,6 @@ export function BotBubble({
       {children}
     </div>
   );
-}
-
-/// Where the chat moved to another agent, said as quietly as a time label.
-export function SwitchLine({ harness }: { harness: Harness }) {
-  return <p className="self-center text-[12px] text-muted-foreground/70">Switched to {AGENT_LABELS[harness]}</p>;
 }
 
 /// Where the replies the reader has not seen begin, as a messenger marks it.

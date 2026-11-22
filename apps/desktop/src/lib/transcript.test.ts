@@ -183,9 +183,8 @@ describe("a queued prompt", () => {
 });
 
 describe("an agent switch", () => {
-  // Logged between turns, so it belongs to the prompt after it, not the
-  // turn before, and draws no row of its own in either's work.
-  it("marks the turn the new agent answers", () => {
+  // Logged between turns, and draws nothing: the reader just picked it.
+  it("draws no row and opens no turn", () => {
     const { turns } = buildTranscript(
       [
         prompt(0, "go", false),
@@ -196,7 +195,7 @@ describe("an agent switch", () => {
       ],
       false,
     );
-    expect(turns.map((t) => t.switchedTo)).toEqual([null, "codex"]);
+    expect(turns.map((t) => t.prompt?.seq)).toEqual([0, 4]);
     expect(turns.flatMap((t) => t.work).some((w) => "payload" in w && w.payload.type === "agent_switched")).toBe(false);
   });
 });
