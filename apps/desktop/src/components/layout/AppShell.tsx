@@ -77,12 +77,11 @@ export default function AppShell({
   mainCard,
   children,
 }: AppShellProps) {
-  // A tall page with the sidebar shut sits under the header as a task view
-  // does, every card and the strip above them together, so nothing moves
-  // twice on the way between; its leftmost card wears the page's lit tab.
+  // Sidebar shut, a tall page sits under the header as a task view does, so nothing moves twice between them.
   const notched = pageTall && !sidebarOpen && !!lead;
   const tall = pageTall && !notched;
   const pageTab = (leftmost: boolean) => notched && leftmost;
+  const mainLeftmost = !(panelLeft && panelOpen) && (!mainCard || mainCard.order === 0);
   // A card of its own beside the sheet, with the frame showing between. Kept
   // mounted while shut, since the pane hides rather than unmounts.
   const gap = <div className="w-1.5 shrink-0 bg-surface-frame" />;
@@ -148,7 +147,7 @@ export default function AppShell({
             <Sheet
               className="flex-1"
               tall={tall}
-              pageTab={pageTab(!(panelLeft && panelOpen) && (!mainCard || mainCard.order === 0))}
+              pageTab={pageTab(mainLeftmost)}
               style={
                 mainCard
                   ? { flexGrow: mainCard.grow, order: mainCard.order, minWidth: mainCard.minWidth }
@@ -157,7 +156,7 @@ export default function AppShell({
               {...(mainCard && { [SPLIT_CARD]: mainCard.key })}
               data-main-sheet=""
               // Leftmost, so the first view tab sits on its edge (App.css).
-              {...(!(panelLeft && panelOpen) && (!mainCard || mainCard.order === 0) && { "data-flush-left": "" })}
+              {...(mainLeftmost && { "data-flush-left": "" })}
             >
         {/* `min-w-0` is load-bearing: without it a wide code block in the transcript
           sets the flex item's floor and pushes the sidebar off-screen. */}
@@ -241,14 +240,18 @@ export function Sheet({
   children: ReactNode;
 }) {
   const corner = "pointer-events-none absolute z-20 size-2";
-  // A card too narrow to carry the page's tab past both its corners keeps its
-  // own round ones instead. Read off the tab, which is laid out either way.
+  // A card too narrow for the page's tab keeps its round corners; a hidden one measures 0 and keeps its last answer.
   const box = useRef<HTMLDivElement>(null);
   const [roomy, setRoomy] = useState(true);
   useLayoutEffect(() => {
     const tab = box.current?.querySelector<HTMLElement>(".page-tab");
     if (!tab) return;
-    const ro = new ResizeObserver(() => setRoomy(tab.offsetWidth >= 2 * 10 + 8));
+    const measure = () => {
+      const w = tab.offsetWidth;
+      if (w > 0) setRoomy(w >= 2 * 10 + 8);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
     ro.observe(tab);
     return () => ro.disconnect();
   }, [pageTab]);

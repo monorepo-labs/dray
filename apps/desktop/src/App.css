@@ -1795,11 +1795,7 @@ body.session-drag * {
   --foot-top: 6px;
 }
 
-/* Right after the sidebar toggle (sidebar shut), the first tab's left foot
-   reaches 10px left of the tab: the row starts 10px early to hold it
-   (`ViewTabs`), or the foot is cut to a stub and the tab looks to float beside
-   the sheet. That strip shows the foot's square alone, so a dragged tab or a
-   hover pill stays off the toggle. */
+/* After the toggle the row starts 10px early to hold the first tab's left foot (`ViewTabs`); that strip shows the foot alone, so nothing else lands on the toggle. */
 [role="tablist"][data-after-toggle] {
   clip-path: polygon(10px 0, 100% 0, 100% 100%, 0 100%, 0 calc(100% - 10px), 10px calc(100% - 10px));
 }
@@ -1833,16 +1829,9 @@ body.session-drag * {
   );
 }
 
-/* A page with no tabs, sidebar shut: the cards sit under the header as a task
-   view's do (`AppShell`), and one lit tab spans the leftmost one's top from
-   where a task view's first tab starts, its left foot on the card as
-   a first tab's is, its right side running straight down into the card's, the
-   first tab's flush join mirrored. Only where the card has room for it
-   (`data-notch`); the tab is laid out either way, so the room can be read. */
+/* A tabless page with the sidebar shut wears one lit tab over its leftmost card, its right side running straight into the card's: the flush first tab mirrored. */
 [data-notch] {
   --sheet-tr: 0px;
-  --glow-top: 8px;
-  --foot-top: 6px;
 
   > .sheet-foot {
     mask-image: linear-gradient(transparent 7px, black 7px), linear-gradient(to right, black 7px, transparent 7px),
@@ -1854,19 +1843,14 @@ body.session-drag * {
   position: absolute;
   top: calc(2px - var(--titlebar-h));
   height: calc(var(--titlebar-h) - 2px);
-  /* That first tab's left edge — the lead, less the row's -0.25rem, its 3px
-     toggle gap and plus its 3px padding — in the card's terms: 8px of frame
-     sit left of the card. */
+  /* Where a task view's first tab starts, less the 8px of frame left of the card. */
   left: calc(var(--tabs-lead) - 0.25rem - 0.5rem);
   right: -1px;
   z-index: 22;
   padding: 0;
   pointer-events: none;
   visibility: hidden;
-  /* Cut at the card's top, as the task view's row is at its floor: its drops
-     below would draw a line across the card. And at its right border, as the
-     flush first tab is at its left: the soft drop stops where the card's side,
-     which has none, takes over. */
+  /* Cut at the card's top and its right border, or its drops draw lines across the card. */
   clip-path: inset(-12px 0 0 -12px);
 
   &::after {
