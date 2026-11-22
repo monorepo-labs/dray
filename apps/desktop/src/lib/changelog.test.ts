@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { announcement, compareVersions, forChannel, type Release } from "@/lib/changelog";
+import {
+  announcement,
+  compareVersions,
+  desktopHighlights,
+  forChannel,
+  type ChangelogApp,
+  type ChangelogItem,
+  type Release,
+} from "@/lib/changelog";
 
 const rel = (version: string, notify = false): Release => ({
   version,
@@ -58,4 +66,46 @@ it("hides betas off the beta channel", () => {
   const feed = [rel("0.27.0-beta.1"), rel("0.26.0")];
   expect(forChannel(feed, "stable").map((r) => r.version)).toEqual(["0.26.0"]);
   expect(forChannel(feed, "beta")).toHaveLength(2);
+});
+
+describe("highlights", () => {
+  const item = (title: string, apps: ChangelogApp[] | null): ChangelogItem => ({
+    title,
+    body: "",
+    media: [],
+    highlight: apps && { apps, action: null },
+  });
+  const withItems = (version: string, notify: boolean, items: ChangelogItem[]): Release => ({
+    ...rel(version, notify),
+    sections: [{ kind: "new", items }],
+  });
+  const feed = [
+    withItems("0.30.0", false, [item("Big", ["desktop"]), item("Phone", ["ios"]), item("Small", null)]),
+    withItems("0.29.0", true, [item("Older", ["desktop", "android"])]),
+    withItems("0.28.0", true, [item("Card only", null)]),
+  ];
+
+  it("pages every desktop highlight past seen, newest release first, and no card", () => {
+    const next = announcement(feed, "0.30.0", "0.28.0");
+    expect(next.highlights.map((h) => h.item.title)).toEqual(["Big", "Older"]);
+    expect(next.highlights[0].version).toBe("0.30.0");
+    expect(next.release).toBeNull();
+    expect(next.seen).toBe("0.30.0");
+  });
+
+  it("a release with no desktop highlights keeps the card", () => {
+    const next = announcement(feed, "0.28.0", "0.27.0");
+    expect(next.highlights).toEqual([]);
+    expect(next.release?.version).toBe("0.28.0");
+  });
+
+  it("an install from before the feature hears of the newest release alone", () => {
+    expect(announcement(feed, "0.30.0", null).highlights.map((h) => h.item.title)).toEqual(["Big"]);
+  });
+
+  it("reads a feed built before highlights existed", () => {
+    const old = withItems("0.30.0", true, [{ title: "X", body: "", media: [] }]);
+    expect(desktopHighlights(old)).toEqual([]);
+    expect(announcement([old], "0.30.0", "0.29.0").release?.version).toBe("0.30.0");
+  });
 });

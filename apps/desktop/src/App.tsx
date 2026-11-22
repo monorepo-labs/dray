@@ -17,7 +17,7 @@ import { useBreakDue } from "@/lib/breaks";
 import { askToFixConflicts } from "@/lib/fixConflicts";
 import LinkDialog from "@/components/chat/LinkDialog";
 import QuitDialog from "@/components/QuitDialog";
-import type { SettingsTab } from "@/components/SettingsPage";
+import type { SettingsTab } from "@/lib/settingsTabs";
 import WorktreeDialog, { type WorktreePrompt } from "@/components/WorktreeDialog";
 import { useInstallWithServers } from "@/components/ServerUpdateDialog";
 import MorePanel from "@/components/MorePanel";
@@ -170,8 +170,10 @@ import {
   showJumpBadges,
 } from "@/lib/digitChords";
 import { dismissNotice, getNotices, pushNotice } from "@/hooks/useNotices";
-import { checkChangelog, markChangelogSeen, type Release } from "@/lib/changelog";
+import { checkChangelog, markChangelogSeen, type Announcement } from "@/lib/changelog";
+import { isSettingsTab } from "@/lib/settingsTabs";
 import WhatsNewCard from "@/components/WhatsNewCard";
+import WhatsNewDialog from "@/components/WhatsNewDialog";
 import StarCard from "@/components/StarCard";
 import { noteMergeForStar, useStarPrompt } from "@/hooks/useStarPrompt";
 import { useIntegrations } from "@/hooks/useIntegrations";
@@ -854,9 +856,10 @@ function App() {
     setSettingsTab("changelog");
     setSettingsOpen(true);
   }, []);
-  // Once a launch: a release flagged `notify` that the reader runs and has not
-  // dismissed yet gets the what's-new card.
-  const [whatsNew, setWhatsNew] = useState<{ release: Release; seen: string } | null>(null);
+  // Once a launch: highlights the reader runs and has not dismissed yet get the
+  // what's-new dialog, and failing those a release flagged `notify` gets the
+  // card.
+  const [whatsNew, setWhatsNew] = useState<Announcement | null>(null);
   const starPrompt = useStarPrompt();
   useEffect(() => {
     checkChangelog().then(setWhatsNew, () => {});
@@ -3977,6 +3980,27 @@ function App() {
   // Pages with no tabs for the strip: the sheet reaches up behind the header.
   const tallSheet = pageOpen || !shownSession;
 
+  /// What a highlight's action target does here; the vocabulary is written
+  /// down in CHANGELOG.md's own header. Null draws no button.
+  const highlightAction = (target: string): (() => void) | null => {
+    if (target === "new-task") return () => goToSession(handleNewSession);
+    if (target === "new-bot")
+      return () => {
+        goToSession(handleNewSession);
+        setBotServer(LOCAL);
+        setBotToEdit(null);
+        setNewBotOpen(true);
+      };
+    if (target.startsWith("https://")) return () => void openUrl(target).catch(console.error);
+    const tab = /^settings\/(.+)$/.exec(target)?.[1];
+    if (tab && isSettingsTab(tab))
+      return () => {
+        setSettingsTab(tab);
+        setSettingsOpen(true);
+      };
+    return null;
+  };
+
   return (
     <TooltipProvider>
     <MergeCardHostContext value={mergeCardHost}>
@@ -4988,11 +5012,18 @@ function App() {
       }
       onDeleteWorktree={(id) => removeWorktree(id)}
     />
-    {whatsNew && (
+    {whatsNew?.kind === "card" && (
       <WhatsNewCard
         release={whatsNew.release}
         onDismiss={() => closeWhatsNew(false)}
         onView={() => closeWhatsNew(true)}
+      />
+    )}
+    {whatsNew?.kind === "highlights" && (
+      <WhatsNewDialog
+        highlights={whatsNew.highlights}
+        actionFor={highlightAction}
+        onClose={() => closeWhatsNew(false)}
       />
     )}
     {/* Same corner as What's New, so it waits for that card to go. */}
