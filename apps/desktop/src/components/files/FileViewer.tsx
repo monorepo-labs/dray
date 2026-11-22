@@ -90,13 +90,15 @@ export default function FileViewer({
   // it a file draws as source in the virtualized viewer: rendered in one pass,
   // a few MiB of markdown freezes the window (measured, 1.3 MiB), and a Save
   // there would always fail. A draft already holding edits keeps the rendered
-  // view, so a file grown past the cap under it goes stale under the strip
-  // instead of hiding them; a clean one has nothing to lose and is dropped.
+  // view whatever the disk says — grown past the cap, deleted, unreadable — so
+  // the edits stay on screen with Overwrite to write them back. Only a clean
+  // draft is ever dropped, and only for a file the source view can show.
   const mdStore = sessionId ? filesDocKey(sessionId) : null;
   const draft = useDocs(mdStore).docs.find((d) => d.path === path);
+  const dirty = !!draft && isDirty(draft);
   const small = useMemo(() => text !== null && new Blob([text]).size <= MAX_DOC_BYTES, [text]);
-  const asMarkdown = text !== null && isMarkdownPath(path) && (small || (!!draft && isDirty(draft)));
-  const strayDraft = !asMarkdown && !!draft;
+  const asMarkdown = isMarkdownPath(path) && ((text !== null && small) || dirty);
+  const strayDraft = !!draft && !dirty && text !== null && !asMarkdown;
   useEffect(() => {
     if (strayDraft && mdStore) closeDoc(mdStore, path);
   }, [strayDraft, mdStore, path]);
@@ -184,8 +186,16 @@ export default function FileViewer({
     );
   }
 
-  if (asMarkdown && text !== null) {
-    return <MarkdownFile path={file.path} text={text} sessionId={sessionId} onOpen={onOpen} />;
+  if (asMarkdown) {
+    return (
+      <MarkdownFile
+        path={file.path}
+        text={text}
+        readError={file.state.status === "error" ? file.state.message : null}
+        sessionId={sessionId}
+        onOpen={onOpen}
+      />
+    );
   }
 
   // No header row: the titlebar's tab already names the file, so a second line
@@ -311,11 +321,15 @@ function Video({ body }: { body: { path: string } }) {
 function MarkdownFile({
   path,
   text,
+  readError,
   sessionId,
   onOpen,
 }: {
   path: string;
-  text: string;
+  /// Null while the file cannot be read; drawn then only for a draft holding
+  /// edits, which `FileViewer` will not let a failed read take away.
+  text: string | null;
+  readError: string | null;
   sessionId: string | null;
   onOpen?: (path: string, line?: number) => void;
 }) {
@@ -342,15 +356,23 @@ function MarkdownFile({
   // Every read of the file lands here, the first included; `syncDoc` keeps a
   // draft through the ones that would otherwise throw it away.
   useEffect(() => {
-    if (store) syncDoc(store, path, text);
+    if (store && text !== null) syncDoc(store, path, text);
   }, [store, path, text]);
 
-  const shown = doc?.body.status === "ready" ? doc.body.draft : text;
+  const shown = doc?.body.status === "ready" ? doc.body.draft : (text ?? "");
 
   // Keyed on the path, so the next file starts at its own top rather than at
   // this one's scroll and section count.
   return (
     <div key={path} className="flex min-h-0 flex-1 flex-col">
+      {readError && doc && (
+        // No write-back offered: `save_doc` will not create a file it cannot
+        // find, on purpose. The edits stay here to copy out, and come back
+        // under the stale strip if the file does.
+        <p className="shrink-0 border-b border-border px-3 py-2 text-ui text-destructive">
+          {readError} Your unsaved edits are kept below.
+        </p>
+      )}
       {doc && <DocStaleStrip store={store} doc={doc} />}
       {doc?.mode === "edit" ? (
         <div className="min-h-0 flex-1">
