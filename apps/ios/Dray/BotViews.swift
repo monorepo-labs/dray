@@ -237,15 +237,22 @@ struct BotChatRows: View {
     }
 }
 
-/// An agent's reply as a bot chat draws it: a card-filled bubble short of the trailing edge.
+/// An agent's reply as a bot chat draws it: a card-filled bubble short of the trailing edge,
+/// the reader's reaction beside its bottom corner.
 struct ReplyBubble: View {
     let text: String
+    var reaction: String? = nil
+    /// Takes the reader's pick. Nil where nothing reacts: a settled chat, a reply quoted in a sheet.
+    var react: ((String) -> Void)? = nil
 
     var body: some View {
-        MarkdownText(text: text)
+        MarkdownText(text: text, selectable: react == nil)
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, 10)
             .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+            // The press and the set are the bubble's own; the badge hangs outside both.
+            .reactable(current: reaction, react)
+            .reaction(reaction, mine: true)
             .padding(.trailing, 32)
     }
 }
@@ -294,8 +301,12 @@ private struct BotRowView: View {
             switch item {
             case .user(_, let text, let images, let reaction, _):
                 UserBubble(text: text, from: nil, images: images, reaction: reaction)
-            case .assistant(_, let text, _):
-                ReplyBubble(text: text)
+            case .assistant(let id, let text, let reaction, let sessionId, _):
+                // The session it was said in, which an earlier one of the chat's still holds.
+                let said = SessionKey(server: key.server, id: sessionId)
+                // A routine's run sits in its bot's folder and draws as its chat, but the server refuses a reaction there.
+                let closed = store.items[said].map { $0.archived == true || $0.routineRun != nil } ?? false
+                ReplyBubble(text: text, reaction: reaction, react: closed ? nil : { emoji in Task { await store.react(said, id, emoji) } })
             case .notice(_, let text, _):
                 FailureRow(text: text)
             case .card(_, let card, _):
