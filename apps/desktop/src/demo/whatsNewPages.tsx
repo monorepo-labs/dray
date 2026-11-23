@@ -454,8 +454,8 @@ function ActionMono({ h, onAction }: { h: Highlight; onAction: (label: string) =
   );
 }
 
-/// One feature, as the site's blue band draws a way in: a square card of
-/// white at 10% over the blue, the picture or video on top, the title under
+/// One feature, as the sign-in gate draws a way in: a square #1C1C1C card,
+/// the picture or video on top, the title under
 /// it and any action as a small link. No description: the title is a
 /// sentence that says the whole thing, two lines at most.
 ///
@@ -469,14 +469,14 @@ function LandingCard({ h, onAction }: { h: Highlight; onAction: (label: string) 
   );
   if (!media)
     return (
-      <article className="flex flex-col justify-between gap-8 bg-white/10 p-6">
+      <article className="flex flex-col justify-between gap-8 bg-[#1C1C1C] p-6">
         {heading}
         <ActionMono h={h} onAction={onAction} />
       </article>
     );
   return (
-    <article className="flex flex-col bg-white/10">
-      <Media media={media} className="aspect-video w-full bg-black/20" />
+    <article className="flex flex-col bg-[#1C1C1C]">
+      <Media media={media} className="aspect-video w-full bg-[#141414]" />
       <div className="flex flex-col gap-3 p-6">
         {heading}
         <ActionMono h={h} onAction={onAction} />
@@ -518,10 +518,10 @@ function ContinueCard({ row, onClose }: { row: boolean; onClose: () => void }) {
   );
 }
 
-/// F — landing, on the brand blue (#1612F8, the site's closing band and the
-/// Dray theme's `--break-card`): the sign-in gate's frame (#1277) and the
-/// site's blue band, the tiles along the bottom, the light heading counting
-/// what is new, and the features as square cards 2px apart. Nothing opens and
+/// F — landing, in the sign-in gate's own frame (#1277): black whatever the
+/// theme, the site's striped tiles along the bottom, the light heading
+/// counting what is new, and the features as the gate's square cards 2px
+/// apart. The brand blue was tried and read too intense. Nothing opens and
 /// nothing is picked: the reader scans the cards and leaves by Continue, the
 /// grid's last card, or Escape.
 ///
@@ -531,17 +531,17 @@ function ContinueCard({ row, onClose }: { row: boolean; onClose: () => void }) {
 function TakeLanding({ hl, onAction, onClose }: TakeProps) {
   const one = hl.length === 1;
   return (
-    <Shell label="New in Dray" onClose={onClose} className="overflow-hidden bg-[#1612F8] text-white select-none">
-      <GateTiles tone="blue" />
+    <Shell label="New in Dray" onClose={onClose} className="overflow-hidden bg-black text-white select-none">
+      <GateTiles accent />
       <header data-tauri-drag-region="deep" className="relative flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">
         <WindowControls />
       </header>
       <main className="relative min-h-0 flex-1 overflow-y-auto px-10 pb-12">
         <div className="mx-auto flex w-full max-w-[1120px] flex-col pt-6">
           <GateHeading>{one ? "New in Dray." : `${hl.length} new things in Dray.`}</GateHeading>
-          {/* Backed by the blue itself, so the tiles never show through the
-              2px gaps or the cards' 10% white. */}
-          <div className="grid grid-cols-2 gap-[2px] bg-[#1612F8]">
+          {/* Backed by the page's black, so the tiles never show through the
+              2px gaps as a dotted line. */}
+          <div className="grid grid-cols-2 gap-[2px] bg-black">
             {hl.map((h, i) => (
               <LandingCard key={i} h={h} onAction={onAction} />
             ))}
@@ -557,7 +557,7 @@ const TAKES: { id: string; name: string; what: string; Take: (props: TakeProps) 
   {
     id: "F",
     name: "Landing (picked)",
-    what: "A landing page's feature section on the brand blue, in the sign-in gate's frame: the count as the title, every highlight a large card its title alone explains, Continue the grid's last card. Escape leaves too.",
+    what: "A landing page's feature section in the sign-in gate's own frame: the count as the title, every highlight a large card its title alone explains, Continue the grid's last card. Escape leaves too.",
     Take: TakeLanding,
   },
   {

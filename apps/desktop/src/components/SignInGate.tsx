@@ -293,19 +293,11 @@ function pts(list: string, fill: string): [number, number, string][] {
 // pages read as one family.
 export { Heading as GateHeading, Tiles as GateTiles };
 
-/// The black fills as the site's blue band draws its tiles: shades of black
-/// and white laid over the blue, so they darken and lift whatever is under them.
-const ON_BLUE: Record<string, string> = {
-  "#121212": "#0000001A",
-  "#0C0C0C": "#00000033",
-  "#181818": "#FFFFFF14",
-  "#1F1F1F": "#FFFFFF1F",
-};
+/// Tiles drawn in the brand blue (#1612F8) when `accent` is on: a few, spread
+/// along the strip, never all, so the blue reads as an accent on the black.
+const ACCENT = new Set(["360,60", "720,120", "1140,120", "1260,60"]);
 
-/// `blue` for a page on the brand blue, where the black fills would read as
-/// grey blocks.
-function Tiles({ tone = "black" }: { tone?: "black" | "blue" }) {
-  const id = `gate-stripes-${tone}`;
+function Tiles({ accent = false }: { accent?: boolean }) {
   return (
     <svg
       aria-hidden
@@ -315,14 +307,14 @@ function Tiles({ tone = "black" }: { tone?: "black" | "blue" }) {
       className="pointer-events-none absolute bottom-0 left-1/2 -translate-x-1/2"
     >
       <defs>
-        <pattern id={id} width="6" height="60" patternUnits="userSpaceOnUse">
-          <rect width="2" height="60" fill={tone === "blue" ? "#0000001F" : "#00000080"} />
+        <pattern id="gate-stripes" width="6" height="60" patternUnits="userSpaceOnUse">
+          <rect width="2" height="60" fill="#00000080" />
         </pattern>
       </defs>
       {TILES.map(([x, y, fill]) => (
         <g key={`${x},${y}`}>
-          <rect x={x} y={y} width="60" height="60" fill={tone === "blue" ? ON_BLUE[fill] : fill} />
-          <rect x={x} y={y} width="60" height="60" fill={`url(#${id})`} />
+          <rect x={x} y={y} width="60" height="60" fill={accent && ACCENT.has(`${x},${y}`) ? "#1612F8" : fill} />
+          <rect x={x} y={y} width="60" height="60" fill="url(#gate-stripes)" />
         </g>
       ))}
     </svg>
