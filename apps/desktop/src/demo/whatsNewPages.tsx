@@ -22,13 +22,7 @@ import "../App.css";
 /// over the whole window, as the app would; an action is logged in its row
 /// rather than run. `?takes=ACE` lists only those. F is the one picked.
 
-type TakeProps = {
-  hl: Highlight[];
-  onAction: (label: string) => void;
-  onClose: () => void;
-  /// What F draws behind its grid, for the demo's switch.
-  backdrop?: "tiles" | "black";
-};
+type TakeProps = { hl: Highlight[]; onAction: (label: string) => void; onClose: () => void };
 
 const title = (h: Highlight) => changelogPlain(h.item.title ?? h.item.body);
 
@@ -460,39 +454,41 @@ function ActionMono({ h, onAction }: { h: Highlight; onAction: (label: string) =
   );
 }
 
-/// One feature as a cell of the site's "Ticket to merge" grid (`Features` in
-/// apps/web): the picture or video inset on a #FFFFFF1A panel, over a caption
-/// with its own hairline top border, the title in the site's 20px and any
-/// action as a small link. No description: the title is a sentence that says
-/// the whole thing, two lines at most. Cells are opaque black, so tiles behind
-/// the grid never show through them.
+/// One feature, as the sign-in gate draws a way in: a square #1C1C1C card,
+/// the picture or video on top, the title under
+/// it and any action as a small link. No description: the title is a
+/// sentence that says the whole thing, two lines at most.
 ///
 /// A highlight with no picture or video is text alone: the title at the top
-/// of a cell the grid stretches to its neighbour's height, the action at its
-/// foot, rather than an empty panel where a picture would be.
+/// of a card the grid stretches to its neighbour's height, the action at its
+/// foot, rather than an empty box where a picture would be.
 function LandingCard({ h, onAction }: { h: Highlight; onAction: (label: string) => void }) {
   const media = h.item.media[0];
-  const caption = (
-    <>
-      <h2 className="line-clamp-2 text-xl leading-[26px] tracking-[-0.02em] text-balance text-white">{title(h)}</h2>
-      <ActionMono h={h} onAction={onAction} />
-    </>
+  const heading = (
+    <h2 className="line-clamp-2 text-[20px] leading-7 tracking-[-0.01em] text-balance text-white">{title(h)}</h2>
   );
-  if (!media) return <article className="flex flex-col justify-between gap-8 bg-black p-6">{caption}</article>;
+  if (!media)
+    return (
+      <article className="flex flex-col justify-between gap-8 bg-[#1C1C1C] p-6">
+        {heading}
+        <ActionMono h={h} onAction={onAction} />
+      </article>
+    );
   return (
-    <article className="flex flex-col bg-black">
-      <div className="bg-[#FFFFFF1A] p-6">
-        <Media media={media} className="aspect-video w-full bg-black/40" />
+    <article className="flex flex-col bg-[#1C1C1C]">
+      <Media media={media} className="aspect-video w-full bg-[#141414]" />
+      <div className="flex flex-col gap-3 p-6">
+        {heading}
+        <ActionMono h={h} onAction={onAction} />
       </div>
-      <div className="flex flex-col gap-3 border-t border-[#FFFFFF26] p-6">{caption}</div>
     </article>
   );
 }
 
-/// The page's way on, as the grid's last cell: the panel's own #FFFFFF1A
-/// tone, so it reads as the one thing to press without a bright block on the
-/// black (solid white was tried and glared). `row` lays it across both
-/// columns.
+/// The page's way on, as a card of its own in the grid: a step lighter than
+/// the feature cards (#242424, the gate cards' own hover tone) with the label
+/// in full white. Solid white was tried and glared on the black. `row` lays it
+/// across both columns.
 function ContinueCard({ row, onClose }: { row: boolean; onClose: () => void }) {
   const arrow = (
     <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden>
@@ -505,7 +501,7 @@ function ContinueCard({ row, onClose }: { row: boolean; onClose: () => void }) {
       data-autofocus
       onClick={onClose}
       className={cn(
-        "flex cursor-pointer bg-[#1A1A1A] text-left text-white outline-none transition-colors hover:bg-[#242424] focus-visible:bg-[#242424]",
+        "flex cursor-pointer bg-[#242424] text-left text-white outline-none transition-colors hover:bg-[#2C2C2C] focus-visible:ring-1 focus-visible:ring-white/40",
         row ? "col-span-2 h-24 items-center justify-between px-8" : "min-h-48 flex-col justify-between p-8",
       )}
     >
@@ -572,30 +568,29 @@ function TileField() {
 }
 
 /// F — landing, in the sign-in gate's own frame (#1277): black whatever the
-/// theme, the light heading counting what is new, and the features as the
-/// site's hairline grid, over the gate's striped tiles or plain black as the
-/// demo's switch picks (`backdrop`). The brand blue was tried and read too
-/// intense. Nothing opens and nothing is picked: the reader scans the cells
-/// and leaves by Continue, the grid's last cell, or Escape.
+/// theme, the site's striped tiles over the whole page, the light heading
+/// counting what is new, and the features as the gate's square cards 2px
+/// apart. The brand blue was tried and read too intense. Nothing opens and
+/// nothing is picked: the reader scans the cards and leaves by Continue, the
+/// grid's last card, or Escape.
 ///
 /// Two columns throughout. Continue fills the last row's empty slot when the
 /// count is odd and takes a row of its own when it is even, so no count leaves
 /// a hole.
-function TakeLanding({ hl, onAction, onClose, backdrop = "tiles" }: TakeProps) {
+function TakeLanding({ hl, onAction, onClose }: TakeProps) {
   const one = hl.length === 1;
   return (
     <Shell label="New in Dray" onClose={onClose} className="overflow-hidden bg-black text-white select-none">
-      {backdrop === "tiles" && <TileField />}
+      <TileField />
       <header data-tauri-drag-region="deep" className="relative flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">
         <WindowControls />
       </header>
       <main className="relative min-h-0 flex-1 overflow-y-auto px-10 pb-12">
         <div className="mx-auto flex w-full max-w-[1120px] flex-col pt-6">
           <GateHeading>{one ? "New in Dray." : `${hl.length} new things in Dray.`}</GateHeading>
-          {/* The site's grid wraps one row or column, so its divide-x/y; this
-              one wraps rows and spans cells, so the hairlines are a 1px gap
-              over the hairline colour instead, which draws the same lines. */}
-          <div className="grid grid-cols-2 gap-px border border-[#FFFFFF26] bg-[#FFFFFF26]">
+          {/* Backed by the page's black, so the tiles never show through the
+              2px gaps as a dotted line. */}
+          <div className="grid grid-cols-2 gap-[2px] bg-black">
             {hl.map((h, i) => (
               <LandingCard key={i} h={h} onAction={onAction} />
             ))}
@@ -646,14 +641,7 @@ const TAKES: { id: string; name: string; what: string; Take: (props: TakeProps) 
   },
 ];
 
-function Row({
-  id,
-  name,
-  what,
-  Take,
-  hl,
-  backdrop,
-}: (typeof TAKES)[number] & { hl: Highlight[]; backdrop: "tiles" | "black" }) {
+function Row({ id, name, what, Take, hl }: (typeof TAKES)[number] & { hl: Highlight[] }) {
   const [open, setOpen] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
   const done = (line: string) => {
@@ -672,12 +660,7 @@ function Row({
         Open
       </Button>
       {open && (
-        <Take
-          hl={hl}
-          backdrop={backdrop}
-          onAction={(label) => done(`action: ${label}`)}
-          onClose={() => done("closed, seen")}
-        />
+        <Take hl={hl} onAction={(label) => done(`action: ${label}`)} onClose={() => done("closed, seen")} />
       )}
     </li>
   );
@@ -688,7 +671,6 @@ function Demo() {
   const only = params.get("takes");
   const [count, setCount] = useState(() => Math.min(Math.max(Number(params.get("n")) || 4, 1), PAGE_HIGHLIGHTS.length));
   const hl = PAGE_HIGHLIGHTS.slice(0, count);
-  const [backdrop, setBackdrop] = useState<"tiles" | "black">(() => (params.get("bg") === "black" ? "black" : "tiles"));
   return (
     <TooltipProvider>
       <div className="mx-auto flex max-w-3xl flex-col gap-6 p-10">
@@ -715,27 +697,10 @@ function Demo() {
               ))}
             </div>
           </div>
-          <div className="flex items-center gap-3 text-ui">
-            <span className="text-muted-foreground">F behind the grid</span>
-            <div role="radiogroup" aria-label="F behind the grid" className="flex gap-1">
-              {(["tiles", "black"] as const).map((b) => (
-                <Button
-                  key={b}
-                  role="radio"
-                  aria-checked={backdrop === b}
-                  size="sm"
-                  variant={backdrop === b ? "default" : "outline"}
-                  onClick={() => setBackdrop(b)}
-                >
-                  {b === "tiles" ? "Tiles" : "Plain black"}
-                </Button>
-              ))}
-            </div>
-          </div>
         </header>
         <ul className="flex flex-col border-t border-border">
           {TAKES.filter((t) => !only || only.includes(t.id)).map((t) => (
-            <Row key={t.id} {...t} hl={hl} backdrop={backdrop} />
+            <Row key={t.id} {...t} hl={hl} />
           ))}
         </ul>
       </div>
