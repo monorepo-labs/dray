@@ -2,10 +2,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    // Chromium's renderer, GPU and zygote processes on Linux: this binary
-    // again, run with `--type=`. Before tokio, since the zygote forks every
-    // renderer and refuses to with other threads alive.
-    #[cfg(all(feature = "cef", target_os = "linux"))]
+    // Chromium's renderer, GPU and zygote processes on Linux and Windows:
+    // this binary again, run with `--type=`. Before tokio, since the zygote
+    // forks every renderer and refuses to with other threads alive.
+    #[cfg(all(feature = "cef", not(target_os = "macos")))]
     if let Some(code) = ade_lib::cef::subprocess() {
         std::process::exit(code);
     }
