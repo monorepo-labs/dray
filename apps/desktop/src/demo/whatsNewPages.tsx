@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
 import { PAGE_HIGHLIGHTS } from "@/demo/whatsNewData";
+import { Stripes } from "@/demo/whatsNewStripes";
 import type { ChangelogMedia, Highlight } from "@/lib/changelog";
 import { cn } from "@/lib/utils";
 import "../App.css";
@@ -22,7 +23,17 @@ import "../App.css";
 /// over the whole window, as the app would; an action is logged in its row
 /// rather than run. `?takes=ACE` lists only those. F is the one picked.
 
-type TakeProps = { hl: Highlight[]; onAction: (label: string) => void; onClose: () => void };
+/// What F draws behind its cards: the gate's tiles over the whole page, the
+/// site's long stripes from its closing band, or plain black.
+type Backdrop = "tiles" | "stripes" | "black";
+
+type TakeProps = {
+  hl: Highlight[];
+  onAction: (label: string) => void;
+  onClose: () => void;
+  /// What F draws behind its cards, for the demo's switch.
+  backdrop?: Backdrop;
+};
 
 const title = (h: Highlight) => changelogPlain(h.item.title ?? h.item.body);
 
@@ -568,20 +579,23 @@ function TileField() {
 }
 
 /// F — landing, in the sign-in gate's own frame (#1277): black whatever the
-/// theme, the site's striped tiles over the whole page, the light heading
-/// counting what is new, and the features as the gate's square cards 2px
-/// apart. The brand blue was tried and read too intense. Nothing opens and
+/// theme, whichever `backdrop` the demo's switch picks behind it, the light
+/// heading counting what is new,
+/// and the features as the gate's square cards 2px apart. The brand blue was
+/// tried and read too intense, and a hairline grid after the site's
+/// "Ticket to merge" section was tried and dropped. Nothing opens and
 /// nothing is picked: the reader scans the cards and leaves by Continue, the
 /// grid's last card, or Escape.
 ///
 /// Two columns throughout. Continue fills the last row's empty slot when the
 /// count is odd and takes a row of its own when it is even, so no count leaves
 /// a hole.
-function TakeLanding({ hl, onAction, onClose }: TakeProps) {
+function TakeLanding({ hl, onAction, onClose, backdrop = "tiles" }: TakeProps) {
   const one = hl.length === 1;
   return (
     <Shell label="New in Dray" onClose={onClose} className="overflow-hidden bg-black text-white select-none">
-      <TileField />
+      {backdrop === "tiles" && <TileField />}
+      {backdrop === "stripes" && <Stripes ink="#FFFFFF14" />}
       <header data-tauri-drag-region="deep" className="relative flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">
         <WindowControls />
       </header>
@@ -641,7 +655,14 @@ const TAKES: { id: string; name: string; what: string; Take: (props: TakeProps) 
   },
 ];
 
-function Row({ id, name, what, Take, hl }: (typeof TAKES)[number] & { hl: Highlight[] }) {
+function Row({
+  id,
+  name,
+  what,
+  Take,
+  hl,
+  backdrop,
+}: (typeof TAKES)[number] & { hl: Highlight[]; backdrop: Backdrop }) {
   const [open, setOpen] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
   const done = (line: string) => {
@@ -660,7 +681,12 @@ function Row({ id, name, what, Take, hl }: (typeof TAKES)[number] & { hl: Highli
         Open
       </Button>
       {open && (
-        <Take hl={hl} onAction={(label) => done(`action: ${label}`)} onClose={() => done("closed, seen")} />
+        <Take
+          hl={hl}
+          backdrop={backdrop}
+          onAction={(label) => done(`action: ${label}`)}
+          onClose={() => done("closed, seen")}
+        />
       )}
     </li>
   );
@@ -671,6 +697,10 @@ function Demo() {
   const only = params.get("takes");
   const [count, setCount] = useState(() => Math.min(Math.max(Number(params.get("n")) || 4, 1), PAGE_HIGHLIGHTS.length));
   const hl = PAGE_HIGHLIGHTS.slice(0, count);
+  const [backdrop, setBackdrop] = useState<Backdrop>(() => {
+    const asked = params.get("bg");
+    return asked === "stripes" || asked === "black" ? asked : "tiles";
+  });
   return (
     <TooltipProvider>
       <div className="mx-auto flex max-w-3xl flex-col gap-6 p-10">
@@ -697,10 +727,27 @@ function Demo() {
               ))}
             </div>
           </div>
+          <div className="flex items-center gap-3 text-ui">
+            <span className="text-muted-foreground">F behind the cards</span>
+            <div role="radiogroup" aria-label="F behind the cards" className="flex gap-1">
+              {(["tiles", "stripes", "black"] as const).map((b) => (
+                <Button
+                  key={b}
+                  role="radio"
+                  aria-checked={backdrop === b}
+                  size="sm"
+                  variant={backdrop === b ? "default" : "outline"}
+                  onClick={() => setBackdrop(b)}
+                >
+                  {b === "tiles" ? "Tiles" : b === "stripes" ? "Stripes" : "Plain black"}
+                </Button>
+              ))}
+            </div>
+          </div>
         </header>
         <ul className="flex flex-col border-t border-border">
           {TAKES.filter((t) => !only || only.includes(t.id)).map((t) => (
-            <Row key={t.id} {...t} hl={hl} />
+            <Row key={t.id} {...t} hl={hl} backdrop={backdrop} />
           ))}
         </ul>
       </div>
