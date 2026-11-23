@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "mainBinaryName": "dray-app",
+  "bundle": {
+    "publisher": "Dray",
+    "shortDescription": "Desktop app for coding agents",
+    "externalBin": ["target/cli/dray-cli"],
+    "windows": {
+      "nsis": { "installMode": "currentUser" }
+    }
+  }
+}

@@ -1,5 +1,6 @@
 //! What Unix and Windows spell differently: whether a pid lives, killing one,
-//! owner-only modes, the host name and the effective user.
+//! owner-only modes, the host name and the effective user; and on Windows the
+//! user `PATH` and replacing a running `.exe`.
 
 use std::path::Path;
 
@@ -245,6 +246,213 @@ pub fn hidden_console() {
     }
 }
 
+/// Windows refuses to rename over an `.exe` that is running — a `dray` an
+/// agent is in the middle of — but will rename the running one itself. So it
+/// moves aside first, and is deleted once nothing runs it: now, or by
+/// [`sweep_aside`] at a later launch.
+#[cfg(windows)]
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+pub fn replace_running(from: &Path, to: &Path) -> std::io::Result<()> {
+    let dir = to.parent().expect("names a file in a directory");
+    // Unique past pid reuse: an aside a reused pid left running would
+    // otherwise block this rename.
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let aside = dir.join(format!("{ASIDE}{}.{stamp}", std::process::id()));
+    let moved = to.exists() && std::fs::rename(to, &aside).is_ok();
+    if let Err(e) = std::fs::rename(from, to) {
+        if moved {
+            let _ = std::fs::rename(&aside, to);
+        }
+        return Err(e);
+    }
+    if moved {
+        let _ = std::fs::remove_file(&aside);
+    }
+    Ok(())
+}
+
+/// What [`replace_running`] names a file it moved aside.
+#[cfg(windows)]
+const ASIDE: &str = ".dray.old.";
+
+/// Deletes what [`replace_running`] moved aside in `dir` and nothing runs any
+/// more. One still running stays for the next sweep.
+#[cfg(windows)]
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+pub fn sweep_aside(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with(ASIDE) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// The reader's own `PATH`, which Windows keeps in the registry under
+/// `HKCU\Environment` rather than in any shell's rc file.
+#[cfg(windows)]
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+pub mod user_path {
+    use std::path::Path;
+    use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+    use windows_sys::Win32::System::Registry::{
+        HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_EXPAND_SZ, REG_SZ, RegCloseKey,
+        RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
+    };
+    use windows_sys::Win32::System::Environment::ExpandEnvironmentStringsW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        HWND_BROADCAST, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_SETTINGCHANGE,
+    };
+
+    /// Appends `dir` to the user `PATH` unless an entry already names it, and
+    /// tells running programs so: Explorer then hands the new `PATH` to every
+    /// terminal opened after, where an already-open one keeps its own.
+    pub fn ensure(dir: &Path) -> Result<(), String> {
+        ensure_in("Environment", dir).map(|changed| {
+            if changed {
+                broadcast();
+            }
+        })
+    }
+
+    /// [`ensure`] against any subkey of `HKCU`, answering whether it wrote.
+    pub(super) fn ensure_in(subkey: &str, dir: &Path) -> Result<bool, String> {
+        let dir = dir.to_str().ok_or("the folder's path is not UTF-16 clean")?;
+        let key = Key::open(subkey)?;
+        let (current, kind) = key.read("Path")?;
+        let Some(next) = with_entry(&current, dir, expand) else {
+            return Ok(false);
+        };
+        key.write("Path", &next, kind)?;
+        Ok(true)
+    }
+
+    /// `path` with `dir` appended, or `None` where an entry names it already,
+    /// compared as Windows would: case aside, `%VARS%` expanded, a trailing
+    /// separator ignored.
+    pub(super) fn with_entry(path: &str, dir: &str, expand: impl Fn(&str) -> String) -> Option<String> {
+        let norm = |s: &str| expand(s.trim()).trim_end_matches(['\\', '/']).to_lowercase();
+        let want = norm(dir);
+        if path.split(';').any(|entry| norm(entry) == want) {
+            return None;
+        }
+        let kept = path.trim_end_matches(';');
+        Some(if kept.is_empty() { dir.to_string() } else { format!("{kept};{dir}") })
+    }
+
+    fn expand(s: &str) -> String {
+        let src = wide(s);
+        let mut buf = vec![0u16; 32_768];
+        // SAFETY: both buffers live across the call and `buf`'s length is passed.
+        let n = unsafe { ExpandEnvironmentStringsW(src.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+        if n == 0 || n as usize > buf.len() {
+            return s.to_string();
+        }
+        String::from_utf16_lossy(&buf[..n as usize - 1])
+    }
+
+    fn broadcast() {
+        let what = wide("Environment");
+        let mut result = 0usize;
+        // SAFETY: `what` outlives the call, which copies it across processes.
+        unsafe {
+            SendMessageTimeoutW(
+                HWND_BROADCAST,
+                WM_SETTINGCHANGE,
+                0,
+                what.as_ptr() as isize,
+                SMTO_ABORTIFHUNG,
+                5000,
+                &mut result,
+            );
+        }
+    }
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    struct Key(HKEY);
+
+    impl Key {
+        fn open(subkey: &str) -> Result<Self, String> {
+            let name = wide(subkey);
+            let mut key: HKEY = std::ptr::null_mut();
+            // SAFETY: `name` is NUL-terminated and `key` is written on success.
+            let rc = unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, name.as_ptr(), 0, KEY_READ | KEY_WRITE, &mut key) };
+            if rc != 0 {
+                return Err(format!("could not open HKCU\\{subkey} ({rc})"));
+            }
+            Ok(Self(key))
+        }
+
+        /// The value as stored, `%VARS%` unexpanded, and its type. An absent
+        /// value reads as empty, to be written as `REG_EXPAND_SZ` like the
+        /// one Windows makes.
+        fn read(&self, value: &str) -> Result<(String, u32), String> {
+            let name = wide(value);
+            let (mut kind, mut size) = (0u32, 0u32);
+            // SAFETY: a null data pointer asks for the size alone.
+            let rc = unsafe {
+                RegQueryValueExW(self.0, name.as_ptr(), std::ptr::null(), &mut kind, std::ptr::null_mut(), &mut size)
+            };
+            if rc == ERROR_FILE_NOT_FOUND {
+                return Ok((String::new(), REG_EXPAND_SZ));
+            }
+            if rc != 0 {
+                return Err(format!("could not read {value} ({rc})"));
+            }
+            if kind != REG_SZ && kind != REG_EXPAND_SZ {
+                return Err(format!("{value} is not a string (type {kind})"));
+            }
+            let mut buf = vec![0u16; (size as usize).div_ceil(2)];
+            // SAFETY: `buf` holds `size` bytes, the length just reported.
+            let rc = unsafe {
+                RegQueryValueExW(
+                    self.0,
+                    name.as_ptr(),
+                    std::ptr::null(),
+                    &mut kind,
+                    buf.as_mut_ptr().cast(),
+                    &mut size,
+                )
+            };
+            if rc != 0 {
+                return Err(format!("could not read {value} ({rc})"));
+            }
+            buf.truncate((size as usize) / 2);
+            while buf.last() == Some(&0) {
+                buf.pop();
+            }
+            Ok((String::from_utf16_lossy(&buf), kind))
+        }
+
+        fn write(&self, value: &str, data: &str, kind: u32) -> Result<(), String> {
+            let name = wide(value);
+            let data = wide(data);
+            // SAFETY: `data` is NUL-terminated and its byte length is passed.
+            let rc = unsafe {
+                RegSetValueExW(self.0, name.as_ptr(), 0, kind, data.as_ptr().cast(), (data.len() * 2) as u32)
+            };
+            if rc != 0 {
+                return Err(format!("could not write {value} ({rc})"));
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for Key {
+        fn drop(&mut self) {
+            // SAFETY: opened by `Key::open`, closed once here.
+            unsafe { RegCloseKey(self.0) };
+        }
+    }
+}
+
 #[cfg(unix)]
 mod imp {
     use std::path::Path;
@@ -335,5 +543,100 @@ mod imp {
 
     pub fn hostname() -> String {
         std::env::var("COMPUTERNAME").unwrap_or_default()
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    /// What cli.rs does: a temp file beside, renamed over the target.
+    fn put(dir: &std::path::Path, dest: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+        let tmp = dir.join(".dray.tmp");
+        std::fs::write(&tmp, bytes)?;
+        super::replace_running(&tmp, dest)
+    }
+
+    /// A `dray` an agent is running holds its file open, which is what the
+    /// move-aside in `replace_running` gets past.
+    #[test]
+    fn replaces_a_running_exe() {
+        let dir = std::env::temp_dir().join(format!("dray-cli-run-{}", std::process::id()));
+        let dest = dir.join("dray.exe");
+        let ping = std::env::var("SystemRoot").unwrap() + r"\System32\PING.EXE";
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::copy(&ping, &dest).unwrap();
+        let mut running = std::process::Command::new(&dest)
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let outcome = put(&dir, &dest, b"new");
+        running.kill().unwrap();
+        running.wait().unwrap();
+
+        outcome.unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        // The old file, freed now, goes at the next sweep.
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "moved aside while running");
+        super::sweep_aside(&dir);
+        put(&dir, &dest, b"newer").unwrap();
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    mod user_path {
+        use crate::platform::user_path::{ensure_in, with_entry};
+        use std::path::Path;
+
+        fn no_vars(s: &str) -> String {
+            s.replace("%USERPROFILE%", r"C:\Users\me")
+        }
+
+        #[test]
+        fn appends_a_missing_folder() {
+            let next = with_entry(r"C:\a;C:\b", r"C:\Users\me\.local\bin", no_vars);
+            assert_eq!(next.as_deref(), Some(r"C:\a;C:\b;C:\Users\me\.local\bin"));
+            assert_eq!(with_entry("", r"C:\x", no_vars).as_deref(), Some(r"C:\x"));
+            assert_eq!(with_entry(r"C:\a;", r"C:\x", no_vars).as_deref(), Some(r"C:\a;C:\x"));
+        }
+
+        #[test]
+        fn leaves_a_folder_named_any_way() {
+            let dir = r"C:\Users\me\.local\bin";
+            for path in [
+                r"C:\a;c:\users\ME\.local\bin",
+                r"C:\Users\me\.local\bin\;C:\a",
+                r"%USERPROFILE%\.local\bin",
+                r" C:\Users\me\.local\bin ",
+            ] {
+                assert_eq!(with_entry(path, dir, no_vars), None, "{path}");
+            }
+        }
+
+        /// The registry half, against a scratch key rather than the reader's
+        /// own `PATH`.
+        #[test]
+        fn writes_the_registry_once() {
+            let sub = format!("Software\\DrayTest\\cli-{}", std::process::id());
+            let status = std::process::Command::new("reg")
+                .args(["add", &format!("HKCU\\{sub}"), "/v", "Path", "/t", "REG_EXPAND_SZ", "/d", r"%SystemRoot%;C:\a", "/f"])
+                .output()
+                .unwrap()
+                .status;
+            assert!(status.success());
+
+            let dir = Path::new(r"C:\dray-test\bin");
+            assert!(ensure_in(&sub, dir).unwrap(), "missing: written");
+            assert!(!ensure_in(&sub, dir).unwrap(), "present: left alone");
+
+            let out = std::process::Command::new("reg")
+                .args(["query", &format!("HKCU\\{sub}"), "/v", "Path"])
+                .output()
+                .unwrap();
+            let out = String::from_utf8_lossy(&out.stdout).into_owned();
+            let _ = std::process::Command::new("reg").args(["delete", r"HKCU\Software\DrayTest", "/f"]).output();
+            assert!(out.contains("REG_EXPAND_SZ"), "{out}");
+            assert!(out.contains(r"%SystemRoot%;C:\a;C:\dray-test\bin"), "{out}");
+        }
     }
 }

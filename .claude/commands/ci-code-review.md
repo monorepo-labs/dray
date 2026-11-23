@@ -3,8 +3,8 @@
 # c905cd8f), run by .github/workflows/claude-code-review.yml. The plugin
 # skips any PR Claude has commented on, so fix pushes went unreviewed; this
 # copy re-reviews each push instead. Changes: step 1, "Re-review mode", the
-# sha marker in step 7's comment, `gh api` in allowed-tools, and the
-# foreground-agents rule.
+# sha marker in step 7's comment, `gh api` in allowed-tools, the
+# foreground-agents rule, and step 1's Skipped comment.
 allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh api:*), mcp__github_inline_comment__create_inline_comment
 description: Code review a pull request, re-reviewing what changed on each push
 disable-model-invocation: false
@@ -25,7 +25,23 @@ To do this, follow these steps precisely:
    - The pull request is a draft
    - The pull request does not need code review (e.g. automated PR, trivial change that is obviously correct)
 
-   If any condition is true, stop and do not proceed.
+   The agent also returns which condition held, a one-line reason, and the PR's full head sha (`gh pr view <PR> --json headRefOid`).
+
+   If the PR is closed or a draft, stop and do not proceed.
+
+   If it only does not need code review, and `--comment` argument is provided, post this comment with `gh pr comment`, then stop. A run that leaves no comment reads as a broken review, so never skip this one or its marker:
+
+---
+
+## Code review
+
+Skipped: <one-line reason>.
+
+<!-- claude-review sha=<head-sha> -->
+
+---
+
+   Without `--comment`, stop and do not proceed.
 
    Claude having already commented on this PR is NOT a reason to stop: every push gets reviewed. Instead, the same agent returns Claude's earlier review of this PR, for re-review mode below:
    - Every comment Claude left (author `claude` or `claude[bot]`): top-level ones from `gh pr view <PR> --comments`, and inline ones from `gh api repos/<owner>/<repo>/pulls/<number>/comments --paginate`, using the PR's own owner and repo. For each: file path, line, body, creation time, and for inline ones `original_commit_id`.

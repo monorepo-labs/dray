@@ -2,8 +2,7 @@ import { createContext, useContext, useLayoutEffect, useRef, useState, type Reac
 import { SmilePlus } from "lucide-react";
 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { centring, inkOf, opticalDrop } from "@/lib/emojiInk";
+import { centring, inkOf } from "@/lib/emojiInk";
 import { REACTION_LABELS, REACTIONS } from "@/lib/reactions";
 import { cn } from "@/lib/utils";
 import type { AgentEvent } from "@/types/events";
@@ -11,28 +10,48 @@ import type { AgentEvent } from "@/types/events";
 /// A reaction, as iMessage draws a tapback: a round chip on a corner of the
 /// bubble in the chat pane's own colour (`--reaction`), edged by a hairline and
 /// ringed in that colour again, so it reads as cut out of the bubble under it;
-/// the emoji at about half its height and centred upright by its ink (see
-/// [emojiInk]).
+/// the emoji at about half its height and centred by its ink (see [emojiInk]).
 export function ReactionBadge({ emoji, mine = false, className }: { emoji: string; mine?: boolean; className?: string }) {
   const glyph = useRef<HTMLSpanElement>(null);
   const baseline = useRef<HTMLSpanElement>(null);
-  const [nudge, setNudge] = useState<number | null>(null);
+  const [nudge, setNudge] = useState<{ x: number; y: number } | null>(null);
   useLayoutEffect(() => {
-    const el = glyph.current;
-    const mark = baseline.current;
-    if (!el || !mark) return;
-    const s = getComputedStyle(el);
-    const ink = inkOf(emoji, `${s.fontStyle} ${s.fontWeight} ${s.fontSize} ${s.fontFamily}`);
-    const drop = opticalDrop(emoji) * parseFloat(s.fontSize);
-    // Offsets, not client rects: those take the badge's zoom-in mid-flight.
-    setNudge(ink && centring(ink, el.offsetHeight, mark.offsetTop, drop));
+    let live = true;
+    const measure = () => {
+      const el = glyph.current;
+      const mark = baseline.current;
+      const badge = el?.parentElement;
+      if (!live || !el || !mark || !badge) return;
+      const s = getComputedStyle(el);
+      const ink = inkOf(emoji, `${s.fontStyle} ${s.fontWeight} ${s.fontSize} ${s.fontFamily}`);
+      // Rects, since offsets round to whole pixels and the glyph sits at a
+      // fraction of one. They take the badge's zoom-in mid-flight, which scales
+      // about its centre, so dividing by that scale gets layout pixels back.
+      const b = badge.getBoundingClientRect();
+      const scale = b.width / badge.offsetWidth;
+      if (!ink || !scale) return setNudge(null);
+      // Less the nudge already on it, from before.
+      const was = new DOMMatrixReadOnly(s.transform === "none" ? undefined : s.transform);
+      const start = {
+        x: (el.getBoundingClientRect().left - b.left - b.width / 2) / scale - was.e,
+        y: (mark.getBoundingClientRect().bottom - b.top - b.height / 2) / scale - was.f,
+      };
+      setNudge(centring(ink, start));
+    };
+    measure();
+    // The baseline moves a fraction of a pixel once the UI font loads, and
+    // the badge can mount before it has.
+    document.fonts?.ready.then(measure);
+    return () => {
+      live = false;
+    };
   }, [emoji]);
   return (
     <span
       role="img"
       aria-label={`${mine ? "You" : "Bot"} reacted: ${REACTION_LABELS[emoji] ?? emoji}`}
       className={cn(
-        "flex size-10 items-center justify-center rounded-full border border-border bg-(--reaction) text-[18px] shadow-[0_0_0_3px_var(--reaction)] leading-none select-none",
+        "flex size-8 items-center justify-center rounded-full border border-border bg-(--reaction) text-[12px] shadow-[0_0_0_3px_var(--reaction)] leading-none select-none",
         "motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:fade-in motion-safe:duration-200",
         className,
       )}
@@ -40,7 +59,7 @@ export function ReactionBadge({ emoji, mine = false, className }: { emoji: strin
       <span
         ref={glyph}
         className="relative"
-        style={nudge ? { transform: `translateY(${nudge}px)` } : undefined}
+        style={nudge ? { transform: `translate(${nudge.x}px, ${nudge.y}px)` } : undefined}
       >
         {emoji}
         {/* An empty inline-block's bottom edge sits on the baseline, which is how
@@ -78,7 +97,7 @@ export function Reactable({ event, className, children }: { event: AgentEvent; c
     <div className={cn("group/react flex max-w-[85%] items-center gap-1 self-start", className)}>
       <div className="relative min-w-0">
         {children}
-        {reaction && <ReactionBadge emoji={reaction} mine className="absolute -right-8 bottom-0" />}
+        {reaction && <ReactionBadge emoji={reaction} mine className="absolute -right-6 bottom-0" />}
       </div>
       {react && !event.subagent && <ReactButton current={reaction} onPick={(emoji) => react(event, emoji)} />}
     </div>
@@ -90,25 +109,20 @@ export function Reactable({ event, className, children }: { event: AgentEvent; c
 function ReactButton({ current, onPick }: { current: string | undefined; onPick: (emoji: string) => void }) {
   return (
     <DropdownMenu modal={false}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              aria-label="React"
-              className={cn(
-                "flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 transition-[opacity,color] outline-none group-hover/react:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring/50 data-[state=open]:opacity-100",
-                // Past the badge, which sits where the button rests. A transform,
-                // since a margin would narrow the bubble and rewrap it.
-                current && "translate-x-9",
-              )}
-            >
-              <SmilePlus className="size-4" />
-            </button>
-          </DropdownMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent>React</TooltipContent>
-      </Tooltip>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="React"
+          className={cn(
+            "flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 transition-[opacity,color] outline-none group-hover/react:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring/50 data-[state=open]:opacity-100",
+            // Past the badge, which sits where the button rests. A transform,
+            // since a margin would narrow the bubble and rewrap it.
+            current && "translate-x-7",
+          )}
+        >
+          <SmilePlus className="size-4" />
+        </button>
+      </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
         collisionPadding={8}
