@@ -4,6 +4,8 @@ import ReactDOM from "react-dom/client";
 import { ArrowLeftIcon, ArrowRightIcon, SparklesIcon, XMarkIcon } from "@heroicons/react/16/solid";
 
 import { changelogInline, changelogPlain } from "@/components/changelogText";
+import WindowControls from "@/components/layout/WindowControls";
+import { GateHeading, GateLabel, GateTiles } from "@/components/SignInGate";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -15,10 +17,10 @@ import "../App.css";
 
 /// Full-window takes on What's New, for a release with highlights: the whole
 /// window, the way an Apple release page reads, rather than a carousel in a
-/// dialog. Every take reads the same four highlights (a video, two pictures,
-/// one with none) and leaves by Continue, the close cross or Escape. Open
-/// raises a take over the whole window, as the app would; an action is logged
-/// in its row rather than run. `?takes=ACE` lists only those.
+/// dialog. Every take reads the same highlights, one to six as the page's
+/// switch or `?n=` picks, and leaves by Continue or Escape. Open raises a take
+/// over the whole window, as the app would; an action is logged in its row
+/// rather than run. `?takes=ACE` lists only those. F is the one picked.
 
 type TakeProps = { hl: Highlight[]; onAction: (label: string) => void; onClose: () => void };
 
@@ -435,7 +437,93 @@ function TakeSpotlight({ hl, onAction, onClose }: TakeProps) {
   );
 }
 
+/// One feature, as the sign-in gate draws a way in: a square #1C1C1C card,
+/// here with the picture or video on top, the title and a short line under it,
+/// and any action as a small link. `wide` lays the picture beside the text
+/// instead, for a card alone or one spanning both columns.
+function LandingCard({ h, wide, span, onAction }: { h: Highlight; wide: boolean; span: boolean; onAction: (label: string) => void }) {
+  const action = h.item.highlight?.action;
+  return (
+    <article className={cn("bg-[#1C1C1C]", wide ? "grid grid-cols-[3fr_2fr]" : "flex flex-col", span && "col-span-2")}>
+      <Media media={h.item.media[0]} className="aspect-video w-full bg-[#141414] [&_svg]:text-white/60" />
+      <div className={cn("flex flex-col gap-2 p-6", wide && "justify-center p-8")}>
+        <h2 className={cn("tracking-[-0.01em] text-white", wide ? "text-[24px] leading-8" : "text-[19px] leading-7")}>
+          {title(h)}
+        </h2>
+        <p className="text-[14px] leading-[22px] text-white/50">{changelogPlain(h.item.body)}</p>
+        {action && (
+          <button
+            type="button"
+            onClick={() => onAction(action.label)}
+            className="mt-2 inline-flex cursor-pointer items-center gap-1.5 self-start font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white/70 uppercase outline-none hover:text-white focus-visible:text-white"
+          >
+            {action.label}
+            <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden>
+              <path d="M7 17 17 7M7 7h10v10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
+      </div>
+    </article>
+  );
+}
+
+/// F — landing, in the sign-in gate's own frame (#1277): black whatever the
+/// theme, the site's striped tiles along the bottom, the mono label and light
+/// heading, and the features as the gate's square cards, 2px apart. "New in
+/// Dray" is the page's title, nothing opens and nothing is picked: the reader
+/// scans the cards and leaves by Continue at the foot, or Escape.
+///
+/// Two columns, and an odd count leads with a card across both, so one to six
+/// never leaves a hole in the grid; a card alone lies wide, picture beside text,
+/// so it fits the window whole.
+function TakeLanding({ hl, onAction, onClose }: TakeProps) {
+  const one = hl.length === 1;
+  const lead = !one && hl.length % 2 === 1;
+  return (
+    <Shell label="New in Dray" onClose={onClose} className="overflow-hidden bg-black text-white select-none">
+      <GateTiles />
+      <header data-tauri-drag-region="deep" className="relative flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">
+        <WindowControls />
+      </header>
+      <main className="relative min-h-0 flex-1 overflow-y-auto px-10 pb-10 [mask-image:linear-gradient(to_bottom,black_calc(100%-40px),transparent)]">
+        <div className="mx-auto flex w-full max-w-[1120px] flex-col pt-6">
+          <GateLabel>New in Dray</GateLabel>
+          <GateHeading>{one ? "One thing worth knowing." : `${hl.length} things worth knowing.`}</GateHeading>
+          <div className={cn("grid gap-[2px]", one ? "grid-cols-1" : "grid-cols-2")}>
+            {hl.map((h, i) => (
+              <LandingCard key={i} h={h} wide={one || (lead && i === 0)} span={lead && i === 0} onAction={onAction} />
+            ))}
+          </div>
+        </div>
+      </main>
+      {/* Over the tiles, like the gate's cards: the page's one way on. */}
+      <footer className="relative flex shrink-0 justify-center px-10 pt-4 pb-8">
+        <div className="flex w-full max-w-[1120px] justify-end">
+          <button
+            type="button"
+            data-autofocus
+            onClick={onClose}
+            className="flex h-12 min-w-56 cursor-pointer items-center justify-between gap-6 bg-white px-5 text-[15px] text-black outline-none transition-colors hover:bg-white/90 focus-visible:ring-2 focus-visible:ring-white/50 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
+          >
+            Continue
+            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+              <path d="M4 12h14M12 5l7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" />
+            </svg>
+          </button>
+        </div>
+      </footer>
+    </Shell>
+  );
+}
+
 const TAKES: { id: string; name: string; what: string; Take: (props: TakeProps) => ReactNode }[] = [
+  {
+    id: "F",
+    name: "Landing (picked)",
+    what: "A landing page's feature section in the sign-in gate's own frame: 'New in Dray' as the title, every highlight a large card, nothing to open. Continue at the foot, or Escape.",
+    Take: TakeLanding,
+  },
   {
     id: "A",
     name: "Hero",
@@ -468,7 +556,7 @@ const TAKES: { id: string; name: string; what: string; Take: (props: TakeProps) 
   },
 ];
 
-function Row({ id, name, what, Take }: (typeof TAKES)[number]) {
+function Row({ id, name, what, Take, hl }: (typeof TAKES)[number] & { hl: Highlight[] }) {
   const [open, setOpen] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
   const done = (line: string) => {
@@ -486,26 +574,46 @@ function Row({ id, name, what, Take }: (typeof TAKES)[number]) {
       <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
         Open
       </Button>
-      {open && <Take hl={PAGE_HIGHLIGHTS} onAction={(label) => done(`action: ${label}`)} onClose={() => done("closed, seen")} />}
+      {open && <Take hl={hl} onAction={(label) => done(`action: ${label}`)} onClose={() => done("closed, seen")} />}
     </li>
   );
 }
 
 function Demo() {
-  const only = new URLSearchParams(location.search).get("takes");
+  const params = new URLSearchParams(location.search);
+  const only = params.get("takes");
+  const [count, setCount] = useState(() => Math.min(Math.max(Number(params.get("n")) || 4, 1), PAGE_HIGHLIGHTS.length));
+  const hl = PAGE_HIGHLIGHTS.slice(0, count);
   return (
     <TooltipProvider>
       <div className="mx-auto flex max-w-3xl flex-col gap-6 p-10">
         <header className="flex flex-col gap-2">
           <h1 className="text-lg font-medium">What's new: full-page takes</h1>
           <p className="text-ui text-muted-foreground">
-            Five ways to give a release's highlights the whole window. Open covers the window as the app would. Each
-            leaves by Continue, the cross or Escape.
+            Ways to give a release's highlights the whole window; F is the one picked. Open covers the window as the app
+            would. Each leaves by Continue or Escape.
           </p>
+          <div className="mt-2 flex items-center gap-3 text-ui">
+            <span className="text-muted-foreground">Highlights</span>
+            <div role="radiogroup" aria-label="Highlights" className="flex gap-1">
+              {PAGE_HIGHLIGHTS.map((_, i) => (
+                <Button
+                  key={i}
+                  role="radio"
+                  aria-checked={count === i + 1}
+                  size="icon-sm"
+                  variant={count === i + 1 ? "default" : "outline"}
+                  onClick={() => setCount(i + 1)}
+                >
+                  {i + 1}
+                </Button>
+              ))}
+            </div>
+          </div>
         </header>
         <ul className="flex flex-col border-t border-border">
           {TAKES.filter((t) => !only || only.includes(t.id)).map((t) => (
-            <Row key={t.id} {...t} />
+            <Row key={t.id} {...t} hl={hl} />
           ))}
         </ul>
       </div>

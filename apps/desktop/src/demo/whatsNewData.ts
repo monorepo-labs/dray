@@ -54,9 +54,10 @@ const page = (
   item: { title, body, media, highlight: { apps: ["desktop"], action: action ?? null } },
 });
 
-/// Four highlights for the full-page takes: a video, two pictures and one with
-/// no media, two of them carrying an action. The video is a pan over the
-/// site's own app screenshot, kept beside the demo.
+/// Six highlights for the full-page takes, which show the first four unless
+/// asked for a count: a video, pictures, one with no media, two carrying an
+/// action. The video and the last two pictures are cut from the site's own app
+/// screenshots and kept beside the demo.
 export const PAGE_HIGHLIGHTS: Highlight[] = [
   page(
     "Merge from the task",
@@ -79,5 +80,15 @@ export const PAGE_HIGHLIGHTS: Highlight[] = [
     "Bots learn from corrections",
     "Correct a bot and it writes the lesson down where it will use it next time: a rule, a skill or a memory.",
     [],
+  ),
+  page(
+    "Search every task",
+    "⌘F finds any task by its title or by what was said in it, across every project.",
+    [{ kind: "image", url: "/demo/whats-new/sidebar.webp", alt: "The sidebar with Search" }],
+  ),
+  page(
+    "Follow-ups while it works",
+    "Send a follow-up mid-turn and it waits its turn, or steers the agent where the harness allows.",
+    [{ kind: "image", url: "/demo/whats-new/composer.webp", alt: "The composer" }],
   ),
 ];
