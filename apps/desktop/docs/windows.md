@@ -22,7 +22,6 @@
 ## Not on Windows yet
 
 - Dray Island, the dock badge.
-- **Nothing builds Windows' Chromium side in a release yet**: the app needs `--features cef`.
 - `dray server install|start` and `dray update` are systemd/launchd and `install.sh`.
 - Authenticode. The release is unsigned, so SmartScreen warns on the download; the switch is under _Releasing_ below.
 - A Windows button on the site's downloads page.
@@ -37,6 +36,7 @@
 - **The server child is stopped before the installer runs** (`install` in updater.rs). NSIS stops every `dray-app.exe` by name; msiexec stops none, and a `--serve` child holding the exe open meant a reboot prompt or the old binary back at relaunch.
 - **Dictation's ggml is built for any x86 CPU**: `CMAKE_ARGS=-DTRANSCRIBE_X86_CONSERVATIVE=ON` in the job. Left alone it tunes to the runner's CPU; `GGML_NATIVE=OFF` alone still assumes AVX2, which Windows 11's Celerons and Pentiums (Gemini and Jasper Lake) lack. Conservative is SSE2 alone: slower, never a crash. Linux's runtime pick per CPU tier (`dynamic-backends`) is the faster shape, and wants the modules bundled beside the app. `CMAKE_ARGS` because `.cargo/config.toml` sets `TRANSCRIBE_CMAKE_ARGS` and the job would replace it; transcribe-cpp reads both.
 - **Windows never holds back Mac or Linux.** The job has a 35-minute cap, since `manifest` waits for it and release-cli's publish gate waits 45 minutes for `manifest`; and `manifest` writes the Windows entries to a copy, leaving Windows out with a warning where anything there fails.
+- **The release is built with `--features cef`**, so the installer carries the in-app browser and none of Chromium: libcef.dll is delay-loaded and downloads on first launch, and the job's _Install and open_ starts the app on a runner without it. CEF's wrapper builds with Ninja, which the runner has only inside Visual Studio; the job puts that one on `PATH`.
 - **The binary is `dray-app.exe`** (`mainBinaryName` in [tauri.windows-release.conf.json](../src-tauri/tauri.windows-release.conf.json)). The installer finds a running app by its exe's name before replacing it, and as `dray.exe` every running `dray` CLI would count.
 - **The CLI rides the bundle as `dray-cli.exe`**; the app copies it to `~/.local/bin/dray.exe` on launch and puts that folder on the user `PATH` ([orchestration.md](orchestration.md)).
 - **Authenticode is one switch**: the repo variable `WINDOWS_SIGN_COMMAND` becomes the bundler's `bundle.windows.signCommand` (`%1` is the file), which signs the app, the CLI and both installers before the updater signature is taken over them. Set, the job fails unless every one carries a valid signature; the secrets the command reads go in the build step's `env`. Unset, the job runs unsigned and says so.
