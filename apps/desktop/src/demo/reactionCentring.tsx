@@ -17,7 +17,7 @@ import "../App.css";
 /// browser or Android's for Noto.
 
 const RAW =
-  "flex size-8 items-center justify-center rounded-full border border-border bg-(--reaction) text-[14px] shadow-[0_0_0_3px_var(--reaction)] leading-none select-none";
+  "flex size-8 items-center justify-center rounded-full border border-border bg-(--reaction) text-[12px] shadow-[0_0_0_3px_var(--reaction)] leading-none select-none";
 
 /// The nudge the badge beside it applied, read off its glyph once it settled.
 function Readout({ at }: { at: React.RefObject<HTMLDivElement | null> }) {

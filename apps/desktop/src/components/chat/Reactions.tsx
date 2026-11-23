@@ -51,7 +51,7 @@ export function ReactionBadge({ emoji, mine = false, className }: { emoji: strin
       role="img"
       aria-label={`${mine ? "You" : "Bot"} reacted: ${REACTION_LABELS[emoji] ?? emoji}`}
       className={cn(
-        "flex size-8 items-center justify-center rounded-full border border-border bg-(--reaction) text-[14px] shadow-[0_0_0_3px_var(--reaction)] leading-none select-none",
+        "flex size-8 items-center justify-center rounded-full border border-border bg-(--reaction) text-[12px] shadow-[0_0_0_3px_var(--reaction)] leading-none select-none",
         "motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:fade-in motion-safe:duration-200",
         className,
       )}
