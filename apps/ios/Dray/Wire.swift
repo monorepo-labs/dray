@@ -146,7 +146,8 @@ struct Welcome: Decodable {
 /// newer server adding some costs nothing.
 struct SessionItem: Codable, Hashable {
     let sessionId: String
-    let harness: String
+    /// Moves with `agent_switched` (#1414).
+    var harness: String
     let cwd: String
     let projectPath: String
     var title: String
@@ -199,10 +200,12 @@ struct Bot: Codable, Hashable {
     var greeting: [String]? = nil
 }
 
-/// `bot_previews`' answer per chat: its newest reply and how many came since the reader last wrote.
+/// `bot_previews`' answer per chat: its row's line, worded by the server ("You: …", "Reacted 👍 to …", or the newest reply), and how many replies came since the reader last wrote.
 struct BotPreview: Codable, Hashable {
     let text: String?
     let replies: Int
+    /// `text` is one plain line already, drawn as it is; absent from a server that sends the raw reply.
+    let plain: Bool?
 }
 
 /// One branch's pull request, as `pr_marks` answers it. Only `OPEN` and
@@ -510,6 +513,8 @@ enum Payload: Decodable {
     case learnedUndone(commit: String, path: String)
     /// An emoji on a message: a bot's on one the user typed, or with `byUser` the user's on the bot's.
     case reaction(messageId: String, emoji: String, byUser: Bool = false)
+    /// The task moved to another agent (#1414). Draws nothing: the reader picked it.
+    case agentSwitched(to: String)
     case error(String)
     case other(String)
 
@@ -585,6 +590,8 @@ enum Payload: Decodable {
                 self = .reaction(messageId: try c.decode(String.self, forKey: "messageId"),
                                  emoji: try c.decode(String.self, forKey: "emoji"),
                                  byUser: (try? c.decode(Bool.self, forKey: "byUser")) ?? false)
+            case "agent_switched":
+                self = .agentSwitched(to: try c.decode(String.self, forKey: "to"))
             default:
                 self = .other(type)
             }

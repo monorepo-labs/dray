@@ -309,13 +309,12 @@ describe("chatItems", () => {
     events,
   });
 
-  it("draws every session in order, with a line where the agent changed", () => {
+  it("draws every session in order, with no line where the agent changed", () => {
     const items = chatItems([
       segment("a", "claude_code", [user("hi"), said("hello")]),
       segment("b", "codex", [user("still there?"), said("yes")]),
     ]);
-    expect(items.map((i) => i.kind)).toEqual(["user", "assistant", "switch", "user", "assistant"]);
-    expect(items[2]).toMatchObject({ kind: "switch", harness: "codex", key: "switch:b" });
+    expect(items.map((i) => i.kind)).toEqual(["user", "assistant", "user", "assistant"]);
   });
 
   it("draws no line between two sessions on the same agent", () => {

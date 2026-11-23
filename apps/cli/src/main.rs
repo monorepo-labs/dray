@@ -199,8 +199,9 @@ struct Need {
 struct ModelArgs {
     /// The session, as printed by `dray session ls`.
     session_id: String,
-    /// A model alias its agent knows, like fable, opus or sonnet on
-    /// claude_code. Without it the model stays and only --effort moves.
+    /// A model alias, like fable, opus or sonnet on claude_code. Another
+    /// agent's model moves the session to that agent. Without it the model
+    /// stays and only --effort moves.
     model: Option<String>,
     /// low, medium, high, xhigh, max or ultra, where the model has it. Without
     /// it the session keeps its level if the new model has it, else takes the
