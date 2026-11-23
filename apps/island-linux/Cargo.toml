@@ -3,7 +3,7 @@ name = "dray-island"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "Dray Island on Linux: the panel that answers, replies and starts tasks without Dray's window."
+description = "Dray Island on Linux and Windows: the panel that answers, replies and starts tasks without Dray's window."
 publish = false
 
 [[bin]]
@@ -11,13 +11,14 @@ name = "dray-island"
 path = "src/main.rs"
 
 # GPUI is taken from one Zed commit, bumped on purpose: the crates.io release
-# is a 2025 snapshot that no longer builds. X11 alone, since the app forces X11
-# too; native Wayland is #839.
+# is a 2025 snapshot that no longer builds. On Linux X11 alone, since the app
+# forces X11 too; native Wayland is #839. Windows draws through GPUI's DirectX.
 [dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "b1962f7cd8569ecade486c40320e3cff2d4b9d22", default-features = false, features = ["font-kit", "x11"] }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "b1962f7cd8569ecade486c40320e3cff2d4b9d22", default-features = false, features = ["x11", "font-kit"] }
 anyhow = "1"
 futures = "0.3"
+log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tungstenite = "0.30"
@@ -25,9 +26,24 @@ unicode-segmentation = "1"
 uuid = { version = "1", features = ["v4"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 raw-window-handle = "0.6"
-x11rb = { version = "0.13", features = ["xinput", "shape"] }
 # Runs the Mac island's `botface.js`, so a bot's face is the app's own code.
 rquickjs = "0.14"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["xinput", "shape"] }
+
+# GPUI's own version, so the two share one build.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [profile.release]
 strip = true

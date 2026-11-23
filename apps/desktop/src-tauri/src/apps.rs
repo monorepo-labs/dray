@@ -554,20 +554,20 @@ pub async fn open_in_app(app_path: String, path: String) -> Result<(), String> {
 /// and it outlives Dray on purpose: it talks to the background server, which
 /// does too — so the launch also pings it, and an island left on a binary an
 /// update replaced restarts onto the new one. A build with no island inside it
-/// (`tauri dev`) only writes the pick. On Linux the island is the app's child
+/// (`tauri dev`) only writes the pick. On Linux and Windows the island is the app's child
 /// instead, and quits with it: see `island.rs`.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn configure_island(key: String) -> Result<(), String> {
     if !matches!(key.as_str(), "control" | "option" | "command" | "off") {
         return Err(format!("unknown island key {key}"));
     }
-    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    #[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
     return crate::island::configure(&key).await;
-    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    #[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
     configure_mac_island(key).await
 }
 
-#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+#[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
 async fn configure_mac_island(key: String) -> Result<(), String> {
     use tokio::process::Command;
     async fn run(cmd: &mut Command) -> Result<std::process::Output, String> {
@@ -726,9 +726,9 @@ mod x11_idle {
 /// island the reader quit never swallows the banner that would have replaced it.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn island_running() -> bool {
-    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    #[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
     return crate::island::running();
-    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    #[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
     tokio::process::Command::new("pgrep")
         .args(["-x", "Dray Island"])
         .output()
@@ -754,13 +754,13 @@ pub async fn island_done(
         return Err("not a session id".into());
     }
     // Linux's island is this app's child, and hears it on the pipe it holds.
-    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    #[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
     return crate::island::done(&session_id, note, rows);
-    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    #[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
     island_done_mac(session_id, note.unwrap_or_default(), rows).await
 }
 
-#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+#[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
 async fn island_done_mac(session_id: String, note: String, rows: Option<serde_json::Value>) -> Result<(), String> {
     let dir = island_done_dir().ok_or("no home directory")?;
     tokio::fs::create_dir_all(&dir).await.map_err(|err| format!("could not reach the island: {err}"))?;
@@ -798,7 +798,7 @@ async fn island_done_mac(session_id: String, note: String, rows: Option<serde_js
 /// Whether the running island reads `<id>.<n>` events and their notes: one
 /// that does writes its pid beside the inbox at launch (`Delegate.eventsMarker`),
 /// so an island an update left running on its old binary answers no.
-#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+#[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
 async fn island_reads_events(dir: &std::path::Path) -> bool {
     let Ok(pid) = tokio::fs::read_to_string(dir.with_file_name("events-pid")).await else { return false };
     let Ok(out) = tokio::process::Command::new("pgrep").args(["-x", "Dray Island"]).output().await else {
@@ -808,7 +808,7 @@ async fn island_reads_events(dir: &std::path::Path) -> bool {
 }
 
 /// The island's inbox for finished sessions; `Delegate.doneDir` in the island names it too.
-#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+#[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
 fn island_done_dir() -> Option<std::path::PathBuf> {
     Some(std::env::home_dir()?.join("Library/Caches/com.yogesh.dray.island/done"))
 }
@@ -817,7 +817,7 @@ fn island_done_dir() -> Option<std::path::PathBuf> {
 /// writes the first three as well (a pinch writes the transcript too), so they
 /// are read back rather than kept here, and `captureTaken` is the island's
 /// alone: the chord it could not register.
-#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+#[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
 const ISLAND_PREFS: [&str; 6] =
     ["island.placement", "island.mode", "island.transcript", "island.tap", "island.captureKey", "island.captureTaken"];
 
@@ -838,13 +838,13 @@ fn island_pref_valid(name: &str, value: &str) -> bool {
 /// The island's stored picks, by name; an absent one is the island's default.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn island_prefs() -> std::collections::HashMap<String, String> {
-    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    #[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
     return crate::island::prefs();
-    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    #[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
     island_prefs_mac().await
 }
 
-#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+#[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
 async fn island_prefs_mac() -> std::collections::HashMap<String, String> {
     let reads = ISLAND_PREFS.map(|name| async move {
         let out = tokio::process::Command::new("defaults")
@@ -865,13 +865,13 @@ pub async fn set_island_pref(name: String, value: String) -> Result<(), String> 
     if !island_pref_valid(&name, &value) {
         return Err(format!("not an island setting: {name} = {value}"));
     }
-    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    #[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
     return crate::island::set_pref(&name, &value);
-    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    #[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
     set_island_pref_mac(name, value).await
 }
 
-#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+#[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
 async fn set_island_pref_mac(name: String, value: String) -> Result<(), String> {
     use tokio::process::Command;
     let out = Command::new("defaults")

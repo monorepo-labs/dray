@@ -34,7 +34,7 @@ pub mod cef;
 pub mod chromium;
 #[cfg(all(feature = "desktop", target_os = "macos"))]
 mod trackpad;
-#[cfg(all(feature = "desktop", target_os = "linux"))]
+#[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
 mod island;
 #[cfg(feature = "desktop")]
 mod cli;

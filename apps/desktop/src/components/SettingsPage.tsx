@@ -69,7 +69,7 @@ import ShortcutsSettings from "@/components/settings/ShortcutsSettings";
 import SpacesSettings from "@/components/settings/SpacesSettings";
 import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
 import { useTranscriptionSettings } from "@/hooks/useTranscription";
-import { HAS_DICTATION, IS_LINUX, IS_MAC, IS_WINDOWS } from "@/lib/platform";
+import { HAS_DICTATION, HAS_ISLAND, IS_LINUX, IS_MAC, IS_WINDOWS } from "@/lib/platform";
 import { applyIsland, ISLAND_ENABLED, ISLAND_KEY, ISLAND_KEYS, type IslandKey } from "@/lib/island";
 import { captureCaps, captureFrom, decodeCapture, DEFAULT_CAPTURE, encodeCapture } from "@/lib/islandCapture";
 import { useWindowFocused } from "@/lib/focus";
@@ -1165,8 +1165,9 @@ function IslandSettings() {
             </DropdownMenuContent>
           </DropdownMenu>
         </SettingRow>
-        {/* Linux's island opens on one tap, two opening it listening, and
-            takes its screenshot on Super+Shift+2: neither is a pick there. */}
+        {/* The Linux and Windows island opens on one tap, two opening it
+            listening, and takes its screenshot on Super/Win+Shift+2: neither
+            is a pick there. */}
         {IS_MAC && (
           <SettingRow
             id={tapId}
@@ -1211,7 +1212,7 @@ function IslandSettings() {
             labelledBy={layoutId}
           />
         </SettingRow>
-        {/* The Linux island draws no transcript above the draft yet. */}
+        {/* The Linux and Windows island draws no transcript above the draft yet. */}
         {IS_MAC && (
           <SettingRow
             id={messagesId}
@@ -1327,14 +1328,14 @@ function PositionPicture({ bottom }: { bottom: boolean }) {
   );
 }
 
-/// The Mac's `notch` is the top of the screen on Linux, which has none.
+/// The Mac's `notch` is the top of the screen on Linux and Windows, which have none.
 const ISLAND_PLACEMENTS = [
-  IS_LINUX
-    ? { id: "notch", label: "Top", hint: "At the top of the screen.", picture: <PositionPicture bottom={false} /> }
-    : { id: "notch", label: "Notch", hint: "Hanging from the notch.", picture: <PositionPicture bottom={false} /> },
-  IS_LINUX
-    ? { id: "bottom", label: "Bottom", hint: "At the bottom of the screen.", picture: <PositionPicture bottom /> }
-    : { id: "bottom", label: "Bottom", hint: "Above the Dock.", picture: <PositionPicture bottom /> },
+  IS_MAC
+    ? { id: "notch", label: "Notch", hint: "Hanging from the notch.", picture: <PositionPicture bottom={false} /> }
+    : { id: "notch", label: "Top", hint: "At the top of the screen.", picture: <PositionPicture bottom={false} /> },
+  IS_MAC
+    ? { id: "bottom", label: "Bottom", hint: "Above the Dock.", picture: <PositionPicture bottom /> }
+    : { id: "bottom", label: "Bottom", hint: "At the bottom of the screen.", picture: <PositionPicture bottom /> },
 ] as const;
 const ISLAND_LAYOUTS = [
   { id: "compact", label: "Compact", hint: "The orb beside the input.", picture: <LayoutPicture expanded={false} /> },
@@ -1467,9 +1468,9 @@ const ALL_TABS = [
 
 export type SettingsTab = (typeof ALL_TABS)[number]["id"];
 
-/// Dray Island runs on a Mac and on Linux, so elsewhere its tab would be a page of controls for nothing.
+/// Dray Island runs on a Mac, Linux and Windows, so elsewhere its tab would be a page of controls for nothing.
 const SETTINGS_TABS = ALL_TABS.filter(
-  (t) => (IS_MAC || IS_LINUX || t.id !== "island") && (HAS_DICTATION || t.id !== "transcription"),
+  (t) => (HAS_ISLAND || t.id !== "island") && (HAS_DICTATION || t.id !== "transcription"),
 );
 
 /// A line under a tab's title saying what the tab is for. Accounts has one
