@@ -735,7 +735,6 @@ pub async fn cancel_transcription(state: State<'_, TranscriptionState>) -> Resul
 /// on a task, held for the owning client's stop, which answers with a Retry;
 /// `transcription_interrupted` tells the window to ask, and the Island asks when
 /// the reader presses stop.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn close_for_sleep(app: &AppHandle) {
     use std::sync::atomic::Ordering::SeqCst;
 

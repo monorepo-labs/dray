@@ -285,8 +285,6 @@ features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_Graphics_Gdi",
   "Win32_UI_Shell",
-  # `SHELLEXECUTEINFOW` carries a registry key, so `ShellExecuteExW` needs this.
-  "Win32_System_Registry",
   "Win32_Security",
   "Win32_Security_Authorization",
   "Win32_Storage_FileSystem",
