@@ -6,6 +6,7 @@ import { ArrowRightIcon, CheckIcon, ChevronLeftIcon, SparklesIcon } from "@heroi
 import { changelogInline, changelogPlain } from "@/components/changelogText";
 import WhatsNewDialog from "@/components/WhatsNewDialog";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
 import { HIGHLIGHTS } from "@/demo/whatsNewData";
@@ -15,10 +16,10 @@ import "../App.css";
 
 /// Takes on the what's-new dialog, side by side over the same three pages: an
 /// action on the first, a picture on the second (a video with `?video=<url>`),
-/// none on the third. Each is drawn in place over a dimmed stage rather than as
-/// a modal, so they can be compared at once; every button works. A is the
-/// shipped layout, and "Open the real dialog" raises the real one.
-/// `?takes=ACE` draws only those.
+/// none on the third. Each is drawn in place over a dimmed stage, so they can be
+/// compared at once, and "Open as dialog" raises it full size as the app would;
+/// every button works in both. A is the shipped layout, and its dialog is the
+/// real one. `?takes=ACE` draws only those.
 
 type TakeProps = { hl: Highlight[]; onAction: (label: string) => void; onClose: () => void };
 
@@ -47,7 +48,13 @@ function Dots({ count, page, onPick, tone = "default" }: { count: number; page: 
   return (
     <div className="flex items-center gap-0.5">
       {Array.from({ length: count }, (_, i) => (
-        <button key={i} type="button" onClick={() => onPick(i)} className="flex size-4 cursor-pointer items-center justify-center">
+        <button
+          key={i}
+          type="button"
+          aria-label={`Page ${i + 1}`}
+          onClick={() => onPick(i)}
+          className="flex size-4 cursor-pointer items-center justify-center"
+        >
           <span
             className={cn(
               "size-1.5 rounded-full transition-colors",
@@ -393,17 +400,57 @@ const TAKES: { id: string; name: string; Take: (props: TakeProps) => ReactNode }
   { id: "F", name: "Index of highlights beside the page", Take: TakeF },
 ];
 
+/// A take raised full size the way the real one is: the shared `DialogContent`
+/// for its overlay, blur, placement and Escape, stripped of its own frame so
+/// the take's card is the only one drawn.
+function TakeDialog({ id, Take, onDone }: { id: string; Take: (props: TakeProps) => ReactNode; onDone: (said: string) => void }) {
+  return (
+    <Dialog open onOpenChange={(open) => !open && onDone("closed, seen")}>
+      <DialogContent
+        showClose={false}
+        dismissible={false}
+        onEscapeKeyDown={() => onDone("escape, seen")}
+        aria-describedby={undefined}
+        className="w-auto max-w-none gap-0 rounded-none border-0 bg-transparent p-0 shadow-none backdrop-blur-none"
+      >
+        <DialogTitle className="sr-only">What's new, take {id}</DialogTitle>
+        <Take hl={HIGHLIGHTS} onAction={(label) => onDone(`action: ${label}`)} onClose={() => onDone("closed, seen")} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /// The app dimmed behind, as the overlay draws it, with the take over it.
 function Stage({ id, name, Take }: (typeof TAKES)[number]) {
   const [open, setOpen] = useState(true);
+  const [modal, setModal] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
+  const done = (line: string) => {
+    setSaid(line);
+    setModal(false);
+  };
   return (
     <section className="flex flex-col gap-2">
-      <h2 className="flex items-baseline gap-2 text-ui">
+      <h2 className="flex items-center gap-2 text-ui">
         <span className="font-medium text-foreground">{id}</span>
         <span className="text-muted-foreground">{name}</span>
-        {said && <span className="ml-auto font-mono text-xs text-muted-foreground">{said}</span>}
+        <span className="ml-auto flex items-center gap-3">
+          {said && <span className="font-mono text-xs text-muted-foreground">{said}</span>}
+          <Button size="sm" variant="outline" onClick={() => setModal(true)}>
+            Open as dialog
+          </Button>
+        </span>
       </h2>
+      {modal &&
+        (id === "A" ? (
+          <WhatsNewDialog
+            highlights={HIGHLIGHTS}
+            actionFor={(target) => () => setSaid(`action: ${target}`)}
+            onClose={() => done("closed, seen")}
+          />
+        ) : (
+          <TakeDialog id={id} Take={Take} onDone={done} />
+        ))}
       <div className="relative flex min-h-[34rem] items-center justify-center overflow-hidden rounded-xl border border-border bg-background p-8">
         <div className="absolute inset-0 bg-black/50" />
         <div className="relative">
@@ -432,7 +479,6 @@ function Stage({ id, name, Take }: (typeof TAKES)[number]) {
 
 function Demo() {
   const only = new URLSearchParams(location.search).get("takes");
-  const [real, setReal] = useState(false);
   return (
     <TooltipProvider>
       <div className="mx-auto flex max-w-[60rem] flex-col gap-10 p-10">
@@ -440,16 +486,13 @@ function Demo() {
           <h1 className="text-lg font-medium">What's new: takes</h1>
           <p className="text-ui text-muted-foreground">
             Three pages each: an action, a picture, no media. Every button works; Show again resets a take.
+            Open as dialog raises a take full size over the page, as the app would; A's is the real dialog.
           </p>
-          <Button size="sm" variant="outline" className="self-start" onClick={() => setReal(true)}>
-            Open the real dialog
-          </Button>
         </header>
         {TAKES.filter((t) => !only || only.includes(t.id)).map((t) => (
           <Stage key={t.id} {...t} />
         ))}
       </div>
-      {real && <WhatsNewDialog highlights={HIGHLIGHTS} actionFor={() => () => {}} onClose={() => setReal(false)} />}
       <DemoThemeBar />
     </TooltipProvider>
   );
