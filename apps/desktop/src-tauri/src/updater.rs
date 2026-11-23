@@ -144,11 +144,32 @@ pub async fn check_update(
         .version_comparator(move |running, release| {
             release.version > version_to_beat(running, pending.as_deref())
         })
+        // Windows only: the plugin runs the installer and exits inside
+        // `install`, so the save in `install` below is never reached there.
+        // The installer relaunches the app itself.
+        .on_before_exit({
+            let app = app.clone();
+            move || {
+                if let Err(e) = app.save_window_state(StateFlags::all()) {
+                    eprintln!("[window state save err] {e}");
+                }
+            }
+        })
         .build()
         .map_err(|e| e.to_string())?;
 
-    let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
-        return Ok(());
+    // On Windows, a manifest without this install's entry — an MSI install on
+    // beta, which ships NSIS alone, or a release whose Windows job failed — has
+    // nothing for it, which is no update rather than a failed check. Elsewhere
+    // a missing entry is a release gone wrong, and stays an error.
+    let update = match updater.check().await {
+        Ok(Some(update)) => update,
+        Ok(None) => return Ok(()),
+        Err(tauri_plugin_updater::Error::TargetsNotFound(targets)) if cfg!(windows) => {
+            eprintln!("[update] no entry for {targets:?}");
+            return Ok(());
+        }
+        Err(e) => return Err(e.to_string()),
     };
 
     let version = update.version.clone();
@@ -252,9 +273,20 @@ async fn install(app: AppHandle) -> Result<(), InstallError> {
         return Err(InstallError::install("no update has been downloaded"));
     };
 
-    update
-        .install(bytes)
-        .map_err(|e| InstallError::install(e.to_string()))?;
+    // Windows: the plugin runs the installer and exits inside `install`. NSIS
+    // stops a running `dray-app.exe` by name and msiexec does not, so the
+    // server child would hold the exe open: a reboot prompt, or the old binary
+    // back at relaunch. Stopped first, and started again if nothing ran.
+    #[cfg(windows)]
+    if let Err(e) = crate::launchd::stop().await {
+        eprintln!("[update] could not stop the server: {e:#}");
+    }
+    let installed = update.install(bytes);
+    #[cfg(windows)]
+    if installed.is_err() {
+        crate::launchd::resume();
+    }
+    installed.map_err(|e| InstallError::install(e.to_string()))?;
     // The plugin's own save runs on exit, after the new instance has already
     // read the file, so the relaunch would open at the previous quit's size.
     if let Err(e) = app.save_window_state(StateFlags::all()) {

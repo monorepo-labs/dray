@@ -28,31 +28,6 @@ function freePort() {
 const args = process.argv.slice(2);
 const env = { ...process.env };
 
-// Dictation's ggml is tuned to the build machine's CPU on Windows unless told
-// otherwise, so a release built on a CI runner could crash on an older laptop
-// (macOS pins its own floor, Linux ships one module per tier). This floor is
-// x86-64-v3, which every CPU Windows 11 supports has. Here because Cargo's
-// `[env]` cannot differ by target; set in the environment, it wins over the
-// value in `src-tauri/.cargo/config.toml`, so that one's arguments are
-// repeated first.
-if (process.platform === "win32" && !env.TRANSCRIBE_CMAKE_ARGS) {
-  env.TRANSCRIBE_CMAKE_ARGS = [
-    "-DTRANSCRIBE_USE_SYSTEM_BLAS=OFF",
-    "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded",
-    // Explicit as well as implied: the switch below only fills flags a
-    // build directory's CMake cache does not hold yet, and one configured
-    // before it holds `GGML_NATIVE=ON`.
-    "-DGGML_NATIVE=OFF",
-    "-DTRANSCRIBE_X86_CONSERVATIVE=ON",
-    "-DGGML_SSE42=ON",
-    "-DGGML_AVX=ON",
-    "-DGGML_F16C=ON",
-    "-DGGML_FMA=ON",
-    "-DGGML_BMI2=ON",
-    "-DGGML_AVX2=ON",
-  ].join(" ");
-}
-
 if (args[0] === "dev" && !args.some((a) => a === "-c" || a === "--config")) {
   // A fixed 1420 was one worktree's dev build refusing to start because
   // another's held it. `strictPort` on the Vite side still holds: the port is

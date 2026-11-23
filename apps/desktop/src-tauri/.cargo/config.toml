@@ -9,9 +9,7 @@ TS_RS_EXPORT_DIR = { value = "../src/types", relative = true }
 # ships to. Off, as transcribe's own Linux wheels ship. A Mac links Accelerate
 # whatever this says. The static CRT is Windows' (see the rustflags below):
 # transcribe's CMake picks the CRT from that variable alone, never from
-# Rust's `+crt-static`, and every other compiler ignores it. Windows builds
-# through `pnpm tauri` set this whole variable themselves, with a CPU floor
-# added (scripts/tauri.mjs); keep the two in step.
+# Rust's `+crt-static`, and every other compiler ignores it.
 TRANSCRIBE_CMAKE_ARGS = "-DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
 
 # The static CRT on Windows. `cef-dll-sys` builds CEF's C++ wrapper with
