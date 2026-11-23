@@ -485,8 +485,10 @@ function LandingCard({ h, onAction }: { h: Highlight; onAction: (label: string) 
   );
 }
 
-/// The page's way on, as a card of its own in the grid: white, the one solid
-/// thing on the page. `row` lays it across both columns.
+/// The page's way on, as a card of its own in the grid: a step lighter than
+/// the feature cards (#242424, the gate cards' own hover tone) with the label
+/// in full white. Solid white was tried and glared on the black. `row` lays it
+/// across both columns.
 function ContinueCard({ row, onClose }: { row: boolean; onClose: () => void }) {
   const arrow = (
     <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden>
@@ -499,7 +501,7 @@ function ContinueCard({ row, onClose }: { row: boolean; onClose: () => void }) {
       data-autofocus
       onClick={onClose}
       className={cn(
-        "flex cursor-pointer bg-white text-left text-[#0B0B0F] outline-none transition-colors hover:bg-white/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white",
+        "flex cursor-pointer bg-[#242424] text-left text-white outline-none transition-colors hover:bg-[#2C2C2C] focus-visible:ring-1 focus-visible:ring-white/40",
         row ? "col-span-2 h-24 items-center justify-between px-8" : "min-h-48 flex-col justify-between p-8",
       )}
     >
