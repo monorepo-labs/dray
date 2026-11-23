@@ -379,7 +379,7 @@ async fn write_config(
     key: &str,
 ) -> Result<bool, String> {
     // Through a symlink, or a dotfile manager's link becomes a plain file.
-    let real = std::fs::canonicalize(config).map_err(|e| format!("could not read {}: {e}", config.display()))?;
+    let real = dunce::canonicalize(config).map_err(|e| format!("could not read {}: {e}", config.display()))?;
     let mode = std::fs::metadata(&real).map_err(|e| e.to_string())?.permissions();
     let tmp = real.with_file_name(format!(".config.dray-{}", uuid::Uuid::now_v7()));
     let done = async {

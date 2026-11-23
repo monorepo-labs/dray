@@ -446,7 +446,7 @@ pub(crate) async fn read_body(path: &str) -> Result<FileBody, String> {
     // Judged on the link's target, or `secret.mp4` pointing at a database
     // would stream it whole past the cap. Canonical is also what the protocol
     // matches against, since it resolves links before it checks.
-    if let Ok(real) = tokio::fs::canonicalize(path).await {
+    if let Ok(real) = crate::platform::canonicalize(path).await {
         if is_video(&real) {
             let real = real.to_string_lossy().into_owned();
             file_len(&real).await?;
@@ -737,6 +737,7 @@ mod tests {
     /// is not text rather than blaming its size — the two ways the viewer used
     /// to refuse a video with the wrong sentence.
     #[tokio::test]
+    #[cfg(unix)]
     async fn answers_a_large_file_by_kind_not_size() {
         let dir = scratch();
         let big = vec![0u8; MAX_FILE as usize + 1];
@@ -745,7 +746,7 @@ mod tests {
         let zip = dir.join("bundle.zip");
         std::fs::write(&zip, &big).unwrap();
 
-        let real = std::fs::canonicalize(&mov).unwrap();
+        let real = dunce::canonicalize(&mov).unwrap();
         let body = read_body(mov.to_str().unwrap()).await.unwrap();
         assert!(matches!(body, FileBody::Video { path } if path == real.to_str().unwrap()));
         assert_eq!(read_body(zip.to_str().unwrap()).await.unwrap_err(), NOT_TEXT);

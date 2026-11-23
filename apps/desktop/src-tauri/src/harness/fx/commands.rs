@@ -105,7 +105,7 @@ fn walk(cwd: &Path) -> Vec<SlashCommand> {
     let authorities: Vec<PathBuf> = [Some(cwd.to_path_buf()), home.clone()]
         .into_iter()
         .flatten()
-        .filter_map(|dir| std::fs::canonicalize(dir).ok())
+        .filter_map(|dir| dunce::canonicalize(dir).ok())
         .collect();
 
     let mut found: Vec<SlashCommand> = Vec::new();
@@ -181,7 +181,7 @@ fn skills_in(root: &Path, authorities: &[PathBuf]) -> Vec<SlashCommand> {
 /// that sends `/name` to a model with no such skill. Read wrongly it costs a
 /// row; unread it costs the same row, and only for a reader who set it.
 fn authorized(path: &Path, authorities: &[PathBuf]) -> bool {
-    let Ok(target) = std::fs::canonicalize(path) else {
+    let Ok(target) = dunce::canonicalize(path) else {
         return false;
     };
 

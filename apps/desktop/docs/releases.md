@@ -28,7 +28,9 @@
 - **Every release installs and opens both, per arch, on a clean `ubuntu:22.04`** ([linux-smoke.sh](../../../.github/scripts/linux-smoke.sh)): the `.deb` through apt, then each must draw its window without a panic in its log; screenshots stay as the `smoke-<arch>` artifact. It is how arm64 gets opened at all, and it caught `ca-certificates` missing from the `.deb`'s depends: a bare system has no CA bundle, and every HTTP call panicked behind a window that looked fine.
 - **arm64 dictation runs on the CPU.** ggml's Vulkan backend compiles its shaders with `glslc`, which neither 22.04 nor LunarG ships for arm64, so Cargo.toml asks for Vulkan on x86_64 alone.
 
-**No PR job compiles Linux**, by choice: per-PR CI was turned down here before, and the release's `linux` job compiles it, so a Mac-side change that breaks Linux fails there. Run the workflow by hand (`gh workflow run release.yml --ref <branch>`) to build the `linux` job alone; it keeps each arch's files as a 7-day workflow artifact, never attached or published.
+**The Windows app ships only where the repo variable `RELEASE_WINDOWS` is `true`**, the Linux rule again: an NSIS installer and, on a stable release, an MSI, from one `windows` job, with `windows-x86_64-nsis`/`-msi` entries and versionless `Dray_x64-setup.exe`/`Dray_x64.msi` on R2. Unsigned until `WINDOWS_SIGN_COMMAND` is set. Detail in [windows.md](windows.md).
+
+**No PR job compiles Linux**, by choice: per-PR CI was turned down here before, and the release's `linux` job compiles it, so a Mac-side change that breaks Linux fails there. Run the workflow by hand (`gh workflow run release.yml --ref <branch>`) to build the `linux` and `windows` jobs alone; they keep their files as 7-day workflow artifacts, never attached or published.
 
 **The channel is chosen per check, in Rust** ([updater.rs](../src-tauri/src/updater.rs)), so switching channels need no rebuild. It is owned by [useUpdater](../src/hooks/useUpdater.ts) and handed down as a prop — `useLocalStorage` is per-component, so a second copy in the dialog write a value the hook never sees, and `channel` is what re-arm the checking effect.
 

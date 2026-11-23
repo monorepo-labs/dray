@@ -60,7 +60,9 @@ struct BotListRow: View {
                     }
                 }
                 // No line at all with nothing to say, so the name sits level with the face.
-                let line = previewLine(preview?.text ?? bot.greeting?.last ?? bot.welcome ?? "")
+                // A server that words the line sends it plain; an older one sends the raw reply.
+                let line = preview.flatMap { $0.plain == true ? $0.text : nil }
+                    ?? previewLine(preview?.text ?? bot.greeting?.last ?? bot.welcome ?? "")
                 if item?.busy == true && !asking {
                     TypingDots().frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
                 } else if !line.isEmpty {
@@ -187,18 +189,6 @@ struct BotStartView: View {
 
 /// A bot's chat: the conversation, a line where it started or messaged a task,
 /// merge cards, lessons, and a time label wherever 15 minutes passed between rows.
-/// Between two sessions of one bot chat: the agent the later one runs (`AGENT_LABELS`).
-struct SwitchLine: View {
-    let harness: String?
-
-    var body: some View {
-        Text("Switched to \(harness.map { Picks.agentLabels[$0] ?? $0 } ?? "another agent")")
-            .font(Theme.Font.footnote)
-            .foregroundStyle(Theme.tertiary)
-            .frame(maxWidth: .infinity)
-    }
-}
-
 struct BotChatRows: View {
     /// Any of the chat's sessions: its rows reach only for the server.
     let key: SessionKey
@@ -215,11 +205,8 @@ struct BotChatRows: View {
                 Text(label).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                     .frame(maxWidth: .infinity).padding(.top, Theme.Space.s)
             }
-            if case .item(.switchTo(_, let harness, _)) = row {
-                SwitchLine(harness: harness)
-            } else {
-                BotRowView(key: key, row: row, late: late(items, row))
-            }
+            BotRowView(key: key, row: row, late: late(items, row))
+                .heldRow(row.id)
         }
     }
 
@@ -237,15 +224,22 @@ struct BotChatRows: View {
     }
 }
 
-/// An agent's reply as a bot chat draws it: a card-filled bubble short of the trailing edge.
+/// An agent's reply as a bot chat draws it: a card-filled bubble short of the trailing edge,
+/// the reader's reaction beside its bottom corner.
 struct ReplyBubble: View {
     let text: String
+    var reaction: String? = nil
+    /// Takes the reader's pick. Nil where nothing reacts: a settled chat, a reply quoted in a sheet.
+    var react: ((String) -> Void)? = nil
 
     var body: some View {
-        MarkdownText(text: text)
+        MarkdownText(text: text, selectable: react == nil)
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, 10)
             .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+            // The press and the set are the bubble's own; the badge hangs outside both.
+            .reactable(current: reaction, react)
+            .reaction(reaction, mine: true)
             .padding(.trailing, 32)
     }
 }
@@ -294,8 +288,12 @@ private struct BotRowView: View {
             switch item {
             case .user(_, let text, let images, let reaction, _):
                 UserBubble(text: text, from: nil, images: images, reaction: reaction)
-            case .assistant(_, let text, _):
-                ReplyBubble(text: text)
+            case .assistant(let id, let text, let reaction, let sessionId, _):
+                // The session it was said in, which an earlier one of the chat's still holds.
+                let said = SessionKey(server: key.server, id: sessionId)
+                // A routine's run sits in its bot's folder and draws as its chat, but the server refuses a reaction there.
+                let closed = store.items[said].map { $0.archived == true || $0.routineRun != nil } ?? false
+                ReplyBubble(text: text, reaction: reaction, react: closed ? nil : { emoji in Task { await store.react(said, id, emoji) } })
             case .notice(_, let text, _):
                 FailureRow(text: text)
             case .card(_, let card, _):
@@ -319,8 +317,6 @@ private struct BotRowView: View {
                         .strikethrough(undone).lineLimit(1)
                 }
                 .font(Theme.Font.subhead)
-            case .switchTo:
-                EmptyView()
             }
         }
     }

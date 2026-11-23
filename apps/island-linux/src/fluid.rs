@@ -59,8 +59,12 @@ pub fn drop_disc(rect: Bounds<Pixels>, emerge: f32) -> (Point<f32>, f32) {
 }
 
 /// The desktop's own "reduce motion": GNOME's animations switch, which
-/// most desktops honour. Read when a disc shows; no answer means animate.
+/// most desktops honour, or Windows' animation effects. Read when a disc
+/// shows; no answer means animate.
 pub fn still() -> bool {
+    #[cfg(windows)]
+    return crate::sys::animations_off();
+    #[cfg(not(windows))]
     std::process::Command::new("gsettings")
         .args(["get", "org.gnome.desktop.interface", "enable-animations"])
         .output()

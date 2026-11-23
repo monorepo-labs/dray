@@ -71,9 +71,9 @@ pub async fn save(samples: &[f32]) -> Result<PathBuf> {
 /// A phone's dictation is the other place one may sit: uploaded through
 /// `/upload`, so at `attachments/uploads/<uuid>/<name>`, one level deeper.
 pub async fn read(path: &Path) -> Result<Vec<f32>> {
-    let home = fs::canonicalize(dir().await?).await?;
-    let uploads = fs::canonicalize(crate::attachments::uploads_dir().await?).await.ok();
-    let real = fs::canonicalize(path)
+    let home = crate::platform::canonicalize(dir().await?).await?;
+    let uploads = crate::platform::canonicalize(crate::attachments::uploads_dir().await?).await.ok();
+    let real = crate::platform::canonicalize(path)
         .await
         .with_context(|| format!("{} is not there any more", path.display()))?;
 

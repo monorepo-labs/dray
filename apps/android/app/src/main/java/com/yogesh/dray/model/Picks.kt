@@ -61,6 +61,12 @@ object Picks {
         }
     }
 
+    /**
+     * `taskStance`: [stanceFor] for a task that already exists. A pi task recorded `plan` keeps it,
+     * since it got there by moving from a `plan` task and must not come out able to write.
+     */
+    fun taskStance(harness: String, mode: String) = if (harness == "pi" && mode == "plan") "plan" else stanceFor(harness, mode)
+
     /** What each harness carries onto a prompt sent while a turn runs; `send_msg`'s gate states it too. */
     private val live = mapOf(
         "claude_code" to setOf("model", "stance", "fast"), "grok" to setOf("model", "effort", "fast"),

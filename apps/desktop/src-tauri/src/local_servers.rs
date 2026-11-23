@@ -11,6 +11,7 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+#[cfg_attr(windows, allow(unused_imports))]
 use std::process::Command;
 
 use crate::git::resolved;
@@ -93,10 +94,16 @@ impl Processes {
     /// shell's `-zsh`.
     fn name(&self, pid: u32) -> &str {
         let first = self.args.get(&pid).and_then(|a| a.split_whitespace().next()).unwrap_or_default();
-        first.rsplit('/').next().unwrap_or_default().trim_start_matches('-')
+        let base = first.rsplit(['/', '\\']).next().unwrap_or_default().trim_start_matches('-');
+        // Windows names a process by its image, `bash.exe`.
+        match base.len().checked_sub(4).and_then(|at| Some((at, base.get(at..)?))) {
+            Some((at, ext)) if ext.eq_ignore_ascii_case(".exe") => &base[..at],
+            _ => base,
+        }
     }
 }
 
+#[cfg(unix)]
 fn processes() -> Processes {
     // `ww`, or a long command line is cut to the terminal's width.
     let Ok(out) = Command::new("ps").args(["-axwwo", "pid=,ppid=,args="]).output() else {
@@ -105,7 +112,69 @@ fn processes() -> Processes {
     parse_ps(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// The process table off a ToolHelp snapshot. Args are the image name alone:
+/// a command line takes reading another process's memory.
+///
+/// Windows keeps a dead parent's pid on its children and reuses pids freely,
+/// so a parent link is taken only from a process created before its child.
+/// Without that check the walk could reach a stranger, and what it reaches is
+/// killed.
+#[cfg(windows)]
+fn processes() -> Processes {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    fn created(pid: u32) -> Option<u64> {
+        // SAFETY: the handle is checked and closed; the out pointers are locals.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return None;
+            }
+            let zero = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+            let (mut c, mut e, mut k, mut u) = (zero, zero, zero, zero);
+            let ok = GetProcessTimes(handle, &mut c, &mut e, &mut k, &mut u) != 0;
+            CloseHandle(handle);
+            ok.then(|| (u64::from(c.dwHighDateTime) << 32) | u64::from(c.dwLowDateTime))
+        }
+    }
+
+    let mut rows = Vec::new();
+    // SAFETY: the snapshot is checked and closed; `entry` carries its size.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Processes::default();
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut more = Process32FirstW(snapshot, &mut entry) != 0;
+        while more {
+            let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+            let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+            rows.push((entry.th32ProcessID, entry.th32ParentProcessID, name));
+            more = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+    }
+
+    let born: HashMap<u32, u64> = rows.iter().filter_map(|(pid, _, _)| Some((*pid, created(*pid)?))).collect();
+    let mut p = Processes::default();
+    for (pid, ppid, name) in rows {
+        let older = matches!((born.get(&ppid), born.get(&pid)), (Some(parent), Some(child)) if parent <= child);
+        if older && pid != ppid {
+            p.children.entry(ppid).or_default().push(pid);
+        }
+        p.args.insert(pid, name);
+    }
+    p
+}
+
 /// `ps -o pid=,ppid=,args=`.
+#[cfg_attr(windows, allow(dead_code))]
 fn parse_ps(text: &str) -> Processes {
     let mut p = Processes::default();
     for line in text.lines() {
@@ -207,11 +276,16 @@ pub(crate) fn serving(roots: &[(u32, usize)]) -> Vec<Vec<u16>> {
 }
 
 fn serving_ports(procs: &Processes, ports_of: &HashMap<u32, Vec<u16>>, root: u32, shells: usize) -> Vec<u16> {
+    #[cfg(unix)]
     const SHELLS: &[&str] = &["bash", "zsh", "sh", "dash", "fish"];
+    // Claude's PowerShell tool runs PowerShell; Git Bash is still `bash`.
+    #[cfg(windows)]
+    const SHELLS: &[&str] = &["bash", "sh", "powershell", "pwsh", "cmd"];
     let mut ports = Vec::new();
     let mut listening = 0;
     for &child in procs.children.get(&root).into_iter().flatten() {
-        if !SHELLS.contains(&procs.name(child)) {
+        // Case-blind, since Windows images keep whatever case they ship in.
+        if !SHELLS.iter().any(|shell| shell.eq_ignore_ascii_case(procs.name(child))) {
             continue;
         }
         let tree = subtree(&procs.children, child);
@@ -260,13 +334,13 @@ pub(crate) async fn kill_descendants(root: u32) {
     for pid in tree.into_iter().filter(|&p| p != root) {
         // ponytail: a process group set at spawn would make this one signal
         // with no walk; four spawn sites to change if this bites.
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        crate::platform::kill(pid);
     }
 }
 
 /// `(pid, process name, port)` for every TCP listener, via lsof's machine
 /// format: one field per line, `p` opening a process and `n` naming a socket.
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
 fn listening() -> Vec<(u32, String, u16)> {
     let Ok(out) = Command::new("lsof")
         .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"])
@@ -279,7 +353,7 @@ fn listening() -> Vec<(u32, String, u16)> {
 
 /// Working directory per pid, for the listeners only. One lsof for the lot:
 /// `-a` ands the pid list with the `cwd` descriptor.
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
 fn cwd_of(pids: Vec<u32>) -> HashMap<u32, PathBuf> {
     if pids.is_empty() {
         return HashMap::new();
@@ -326,6 +400,83 @@ fn cwd_of(pids: Vec<u32>) -> HashMap<u32, PathBuf> {
         .collect()
 }
 
+/// Every loopback or wildcard TCP listener off the system's own tables, IPv4
+/// and IPv6, named by image.
+#[cfg(windows)]
+fn listening() -> Vec<(u32, String, u16)> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetExtendedTcpTable, MIB_TCP6ROW_OWNER_PID, MIB_TCPROW_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER,
+    };
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
+
+    /// The table for one family. A listener opening between the sizing call
+    /// and the read grows the table past the buffer, which the call answers
+    /// with the size it needs now, so it is asked again.
+    fn table(family: u16) -> Vec<u8> {
+        const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+        let mut buf = Vec::new();
+        let mut size = 0u32;
+        for _ in 0..4 {
+            buf.resize(size as usize, 0);
+            let ptr = if buf.is_empty() { std::ptr::null_mut() } else { buf.as_mut_ptr().cast() };
+            // SAFETY: `size` is the buffer's length, which the call writes
+            // within or answers with the length it needs.
+            match unsafe { GetExtendedTcpTable(ptr, &mut size, 0, family.into(), TCP_TABLE_OWNER_PID_LISTENER, 0) } {
+                0 => return buf,
+                ERROR_INSUFFICIENT_BUFFER => size += 1024,
+                _ => return Vec::new(),
+            }
+        }
+        Vec::new()
+    }
+
+    /// The rows after the table's leading `u32` count, aligned as the
+    /// system laid them out.
+    fn rows<T: Copy>(buf: &[u8]) -> Vec<T> {
+        if buf.len() < 4 {
+            return Vec::new();
+        }
+        let count = u32::from_ne_bytes(buf[..4].try_into().unwrap()) as usize;
+        let start = std::mem::align_of::<T>().max(4);
+        (0..count)
+            .filter_map(|i| {
+                let at = start + i * std::mem::size_of::<T>();
+                // SAFETY: bounds are checked; the system wrote `count` rows of `T`.
+                (at + std::mem::size_of::<T>() <= buf.len()).then(|| unsafe { buf.as_ptr().add(at).cast::<T>().read_unaligned() })
+            })
+            .collect()
+    }
+
+    let port = |raw: u32| u16::from_be(raw as u16);
+    let mut found: Vec<(u32, u16)> = rows::<MIB_TCPROW_OWNER_PID>(&table(AF_INET))
+        .into_iter()
+        // In network order: 127.x.x.x, or 0.0.0.0 for every address.
+        .filter(|r| r.dwLocalAddr == 0 || r.dwLocalAddr & 0xff == 127)
+        .map(|r| (r.dwOwningPid, port(r.dwLocalPort)))
+        .collect();
+    found.extend(
+        rows::<MIB_TCP6ROW_OWNER_PID>(&table(AF_INET6))
+            .into_iter()
+            .filter(|r| {
+                let a = r.ucLocalAddr;
+                a == [0; 16] || a == std::net::Ipv6Addr::LOCALHOST.octets()
+            })
+            .map(|r| (r.dwOwningPid, port(r.dwLocalPort))),
+    );
+    let names = processes().args;
+    found
+        .into_iter()
+        .map(|(pid, port)| (pid, names.get(&pid).cloned().unwrap_or_default(), port))
+        .collect()
+}
+
+/// A process's working directory sits in its own memory on Windows, so no
+/// listener is matched by tree there; one under the agent still is.
+#[cfg(windows)]
+fn cwd_of(_: Vec<u32>) -> HashMap<u32, PathBuf> {
+    HashMap::new()
+}
+
 /// `inode → port` for each loopback or wildcard listener in `/proc/net/tcp`
 /// or `tcp6`. Addresses are hex in host byte order per 32-bit word, ports
 /// plain hex; `0A` is LISTEN.
@@ -344,7 +495,7 @@ fn parse_proc_net(text: &str) -> Vec<(u64, u16)> {
         .collect()
 }
 
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn parse_cwds(text: &str) -> HashMap<u32, PathBuf> {
     let mut map = HashMap::new();
     let mut pid = 0u32;
@@ -360,7 +511,7 @@ fn parse_cwds(text: &str) -> HashMap<u32, PathBuf> {
     map
 }
 
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn parse_lsof(text: &str) -> Vec<(u32, String, u16)> {
     let mut rows = Vec::new();
     let (mut pid, mut name) = (0u32, String::new());
@@ -410,14 +561,16 @@ mod tests {
         assert_eq!(parse_proc_net(v6), vec![(555, 4900)]);
     }
 
-    /// The real read, lsof on a Mac and `/proc` on Linux, finding a socket
-    /// this process just opened, and where this process stands.
+    /// The real read, lsof on a Mac, `/proc` on Linux and the TCP table on
+    /// Windows, finding a socket this process just opened, and where this
+    /// process stands where the platform can say.
     #[test]
     fn finds_its_own_listener() {
         let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = socket.local_addr().unwrap().port();
         let me = std::process::id();
         assert!(listening().iter().any(|(pid, _, p)| *pid == me && *p == port), "port {port} not listed");
+        #[cfg(unix)]
         assert_eq!(cwd_of(vec![me]).get(&me).map(|p| resolved(p)), Some(resolved(&std::env::current_dir().unwrap())));
     }
 
@@ -429,6 +582,20 @@ mod tests {
         assert_eq!(p.name(12), "node");
         assert_eq!(p.args[&12], "node /x/node_modules/.bin/vite --port 5173");
         assert_eq!(p.children[&10], vec![11, 12]);
+    }
+
+    /// Windows' process table names images, so a shell is `bash.exe` there and
+    /// must still count as one.
+    #[test]
+    fn names_a_windows_image_without_its_extension() {
+        let mut p = Processes::default();
+        for (pid, image) in [(1, "bash.exe"), (2, "NODE.EXE"), (3, r"C:\tools\zsh.exe"), (4, "exe")] {
+            p.args.insert(pid, image.to_string());
+        }
+        assert_eq!(p.name(1), "bash");
+        assert_eq!(p.name(2), "NODE");
+        assert_eq!(p.name(3), "zsh");
+        assert_eq!(p.name(4), "exe");
     }
 
     #[test]
@@ -494,8 +661,31 @@ mod tests {
         assert!(serving_ports(&procs, &build_only, 1, 1).is_empty(), "an MCP server's port is no shell's");
     }
 
+    /// A dev server Claude's PowerShell tool started counts, as one under Git
+    /// Bash does.
+    #[test]
+    #[cfg(windows)]
+    fn a_powershell_serving_counts_on_windows() {
+        let procs = parse_ps("10 1 powershell.exe\n11 10 node.exe\n20 1 bash.exe\n21 20 node.exe\n");
+        let ports = HashMap::from([(11, vec![5173]), (21, vec![3000])]);
+        assert_eq!(serving_ports(&procs, &ports, 1, 2), vec![3000, 5173]);
+    }
+
+    /// The ToolHelp walk reaches a real child, which is what kill and settle
+    /// stand on.
+    #[test]
+    #[cfg(windows)]
+    fn walks_a_real_child_on_windows() {
+        let mut child = Command::new("cmd").args(["/c", "ping -n 10 127.0.0.1 >NUL"]).spawn().unwrap();
+        let tree = descendants(std::process::id());
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(tree.contains(&child.id()), "{tree:?}");
+    }
+
     /// The real read: a shell under this process listening through a child.
     #[test]
+    #[cfg(unix)]
     fn finds_a_real_shell_serving() {
         let mut shell = Command::new("sh")
             // `; true`, or the shell execs python and there is no shell to find.

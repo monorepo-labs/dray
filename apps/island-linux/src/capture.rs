@@ -191,16 +191,29 @@ pub fn write(image: &RgbaImage) -> std::io::Result<PathBuf> {
         }
     }
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     let dir = private_folder()?;
     sweep(&dir);
     let name = format!("Screenshot {}.{ext}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
     let path = dir.join(name);
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(&path)?;
     file.write_all(&data)?;
     Ok(path)
 }
 
+/// Windows' temp dir is the account's own (`%LOCALAPPDATA%\Temp`), so a
+/// folder in it is private already.
+#[cfg(windows)]
+fn private_folder() -> std::io::Result<PathBuf> {
+    let dir = std::env::temp_dir().join("dray-island");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+#[cfg(unix)]
 /// The island's folder in the shared temp dir, owner-only: a screenshot is
 /// the reader's screen, sent or not. One already there must be a real
 /// directory of ours, or another account could have planted it to read them.
@@ -223,6 +236,7 @@ fn private_folder() -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
+#[cfg(unix)]
 /// The process's own user id, read off `/proc/self`, which it owns.
 fn whoami() -> std::io::Result<u32> {
     use std::os::unix::fs::MetadataExt;

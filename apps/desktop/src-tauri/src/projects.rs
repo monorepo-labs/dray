@@ -64,7 +64,7 @@ async fn canonical(path: &str) -> Result<String> {
         Some(rest) => home()?.join(rest),
         None => PathBuf::from(path),
     };
-    let resolved = fs::canonicalize(&expanded)
+    let resolved = crate::platform::canonicalize(&expanded)
         .await
         .with_context(|| format!("no such directory: {path}"))?;
     if !resolved.is_dir() {

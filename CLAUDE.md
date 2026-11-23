@@ -14,18 +14,18 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 **Status = open or closed, and the PR is what close it.** `Fixes #123` in the PR body, which GitHub read on merge. Body = the only slot: worktree branch is `worktree-<name>` minted by the CLI and carry no id, unlike the tracker this replaced. **Exception: work pushed straight to `main`.** No PR = nothing to read, so `gh issue close` yourself.
 
-**PR nobody need review carry `no-review` label, put on before the push so Greptile skip it.** Copy tweak, doc, prompt wording, config. Anything touching behaviour = no label, reviewed.
+**Review = the `Claude Code Review` Action** ([claude-code-review.yml](.github/workflows/claude-code-review.yml) running [ci-code-review.md](.claude/commands/ci-code-review.md)). It review every push to a non-draft PR, skip drafts and PRs touching only markdown, images or video, and skip trivial PRs on its own with a "Skipped: …" comment. It read no label, so put none on to steer it.
 
-**Default road = work → test → draft PR → his feedback → his go → ready → `/greploop`.** He sees the work before Greptile runs, not after. Draft because an open ready PR make Dray post a merge card and "ready to merge" nudges before he had looked or Greptile had run. No Codex reviewer sessions: that road only ran while Greptile credits were gone.
+**Default road = work → test → draft PR → his feedback → his go → ready → Claude review loop.** He sees the work before the review runs, not after. Draft because an open ready PR make Dray post a merge card and "ready to merge" nudges before he had looked or the review had run. No Codex reviewer sessions: the Action is the reviewer.
 
 1. Do the work, then test it for real — run it, not just compile it. Tests = `pnpm test:affected`, never the whole of every suite. A UI change = drive the running app yourself, screenshot or record it, fix what you find ([Testing in the app](#testing-in-the-app)).
 2. Commit, push, open the PR as a **draft** (`gh pr create --draft`). Report: what changed, the proof (video, screenshots), and what was not tested. Then wait.
 3. Feedback → apply it, retest, commit **locally**, report again with proof. **Push nothing until he say final.**
-4. **He say final → push, `gh pr ready`, then run `/greploop`** until 5/5, then report the PR ready to merge. Loop's cap hit under 5/5 = report the score and what still stand, never "ready to merge". Marking it ready is what start Greptile's review. From here each round's push is pre-approved: fix, test, commit, push, wait for the next review. Retest a fix that touches UI the same way. Stop and wait instead when a fix changes something only a human can check (below), or when he says not to push. Never post `@greptile review` — Greptile reviews every push to a ready PR on its own, so skip the loop's trigger step.
+4. **He say final → push, `gh pr ready`, then loop the Claude review** until clean, then report the PR ready to merge. Marking it ready is what start the review. Each round: wait for the `Claude Code Review` run on the head commit (`gh run list --workflow claude-code-review.yml --branch <branch>`, `gh run watch`), read its PR comments — top-level in `gh pr view <n> --comments`, inline in `gh api repos/monorepo-labs/dray/pulls/<n>/comments` — fix real findings at the root, not the symptom, test, commit, push, wait for the next. Clean = the latest review on the head commit posts no new issues: its "No issues found", "No new issues found since …" or "Skipped: …" comment, `<!-- claude-review sha=… -->` marker naming the head sha. **A green run that posts no comment = broken review, not a clean one**: report it, never merge on it. From here each round's push is pre-approved. Retest a fix that touches UI the same way. Stop and wait instead when a fix changes something only a human can check (below), or when he says not to push. Never post a comment to trigger a review — every push trigger one.
 
-**A PR merge only with Greptile at 5/5 confidence.** Our PR rules require it. 4/5 or below = not ready, however green the rest. `no-review` PR = Greptile skip it, so no score to wait on.
+**A PR merge only with a clean latest Claude review on its head commit.** Open findings, or a run that posted nothing = not ready, however green the rest. PR touching only markdown, images or video = no run, so no review to wait on.
 
-**Nothing for him to look at = no wait.** Backend or data fix, tooling, no UI change: open the PR ready and run `/greploop` right away.
+**Nothing for him to look at = no wait.** Backend or data fix, tooling, no UI change: open the PR ready and loop the Claude review right away.
 
 **One repo, `monorepo-labs/dray`. Assign every issue to `yogesharc`.** `gh issue create --repo monorepo-labs/dray --assignee yogesharc`.
 
@@ -33,7 +33,7 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 `gh` missing or logged out → say so, then carry on with the work. Tell reader at the end which issue still want creating.
 
-**Commit, push and open the PR unasked once the work is done and tested** — draft, the default road above — then stop for his check. Mark it ready and loop Greptile only after his go. End with a short "what changed" and the proof, plus only what truly needs a human — never a list of steps to try. Still ask before anything rewriting history, and before a branch nobody asked for.
+**Commit, push and open the PR unasked once the work is done and tested** — draft, the default road above — then stop for his check. Mark it ready and loop the Claude review only after his go. End with a short "what changed" and the proof, plus only what truly needs a human — never a list of steps to try. Still ask before anything rewriting history, and before a branch nobody asked for.
 
 **Always write commit message with `caveman-commit` skill.** Invoke it, don't imitate — skill carry format and it can change under you. Every commit here, amend included.
 
@@ -66,7 +66,7 @@ apps/docs/          docs: Blume (Astro), own Vercel project, served at drayhq.co
 apps/ios/           SwiftUI client of dray-serve, XcodeGen project — read apps/ios/PLAN.md
 apps/android/       Kotlin + Compose client of dray-serve, Gradle project — read apps/android/PLAN.md
 apps/island/        Dray Island, the Mac companion panel: SwiftUI, XcodeGen — read apps/island/PLAN.md
-apps/island-linux/  Dray Island on Linux: Rust + GPUI, own crate — read apps/island-linux/PLAN.md
+apps/island-linux/  Dray Island on Linux and Windows: Rust + GPUI, own crate — read apps/island-linux/PLAN.md
 apps/cli/           the `dray` CLI: own crate, own `cli-v*` release tag
 crates/dray-proto/  the CLI's socket protocol, compiled into the CLI and the app
 charts/             standalone benchmark chart pages, built by nothing
@@ -110,7 +110,7 @@ That = real entry point. `pnpm tauri` = shim ([scripts/tauri.mjs](apps/desktop/s
 
 **Shim also pick dev port, and it only side that can.** Vite and Tauri have to agree on one, and both start from here — so shim ask the OS for a free one (`listen(0)`), hand it to Vite as `DRAY_DEV_PORT` and to Tauri as second `--config` carrying `build.devUrl`. Fixed 1420 was hard failure before, which = one worktree's dev build refusing to start because another's already running. `strictPort: true` **stay** on Vite side: port already known free, and Vite wandering off it leave Tauri loading URL nothing serve.
 
-- `pnpm test:affected` — **the test step**, run from anywhere in the repo: only the suites this branch's changes against `origin/main` can reach, uncommitted files included ([test-affected.mjs](scripts/test-affected.mjs)). A changed crate runs `cargo test` whole, and so does every crate depending on it by `path` — bar `apps/gpui`, an unshipped experiment it never runs, and `apps/island-linux` off Linux; vitest runs `related` on the changed files, or whole when one was deleted or renamed; `apps/web` runs whole when touched. A file read by path rather than imported (`include_str!`, a fixture a test opens) counts against whatever names it. A root config or lockfile, or an app's own top-level config, runs everything. `--dry-run` prints the plan. **`--full` runs every suite, and is the rule before a release.**
+- `pnpm test:affected` — **the test step**, run from anywhere in the repo: only the suites this branch's changes against `origin/main` can reach, uncommitted files included ([test-affected.mjs](scripts/test-affected.mjs)). A changed crate runs `cargo test` whole, and so does every crate depending on it by `path` — bar `apps/gpui`, an unshipped experiment it never runs, and `apps/island-linux` off Linux and Windows; vitest runs `related` on the changed files, or whole when one was deleted or renamed; `apps/web` runs whole when touched. A file read by path rather than imported (`include_str!`, a fixture a test opens) counts against whatever names it. A root config or lockfile, or an app's own top-level config, runs everything. `--dry-run` prints the plan. **`--full` runs every suite, and is the rule before a release.**
 - `pnpm dev` — frontend only, port 1420 unless `DRAY_DEV_PORT` say otherwise. `invoke` do nothing in plain browser, so only useful for pure-CSS/layout work.
 - `pnpm build` — `tsc && vite build`. `pnpm tauri build` for bundled app. **`tsc` here is already the native Go compiler** — TypeScript 7 is what `tsgo`/`@typescript/native-preview` shipped as, in desktop and web alike, so there is no faster checker to switch to.
 - `cd apps/desktop/src-tauri && cargo test` — Rust tests (parser + mapper + event-model compatibility, plus git and file index). Single test: `cargo test parses_complex_fixture`.
@@ -192,7 +192,7 @@ Prompts go the other way as one JSON line on the child's stdin ([session.rs](app
 
 **Dray closes a turn the CLI never will** (#673). An interrupt with no turn running is acked and nothing else (v2.1.310), and a task notification can open exactly that turn — `init`, no model call, no `result` — so Stop closes it itself after 5s where the tracker's `epoch` has not moved (`close_unanswered_stop`, through `ingest`, so a prompt queued behind it goes out). A child that dies mid-turn is closed by `settle_dead_child`, only while the slot still holds that child, and a send finding the child exited drops it from the slot and resumes.
 
-**What can change mid-session.** Model and permission mode apply in place; effort kills and resumes; project, branch and worktree are creation-time only and the composer hides them once a session exists. That rule keeps `git checkout` from ever running under a live child.
+**What can change mid-session.** Model and permission mode apply in place; effort kills and resumes; the agent moves the task at the next send, in place, with the conversation replayed ([bots.md](apps/desktop/docs/bots.md), #1414); project, branch and worktree are creation-time only and the composer hides them once a session exists. That rule keeps `git checkout` from ever running under a live child.
 
 **What can change mid-*turn* is narrower, and a prompt sent then must run on the pick.** Measured against each CLI with a turn running: Claude Code's `set_model`, `set_permission_mode` and `apply_flag_settings` are all taken and the next model call inside the turn uses them; grok takes `set_config_option`; pi takes `set_model` and `set_thinking_level` (and writes nothing to its own `settings.json`, the worry that once had it respawning); fx refuses every config change while a prompt is open (`-32600 Prompt already in progress`); Codex steers a queued `turn/start` into the running turn and ignores its `model`. So `send_msg` applies live controls before queueing on the first three, fx holds the whole pick on `FxSession::deferred` and applies it at the flush that opens the queued turn — taken under the queue lock with the batch it belongs to, and every fx flush spawned off the read loop since the requests are answered through it; what landed goes on `FxSession::applied` for the next send to catch the `Session`'s record up on — and anything a harness cannot carry onto the next prompt is **locked in the composer while a turn runs** ([liveControls.ts](apps/desktop/src/lib/liveControls.ts)): every control on Codex, effort on Claude Code, stance on grok and pi. That table and `send_msg`'s gate are the same fact stated twice.
 
@@ -382,6 +382,7 @@ Detail per subsystem lives in [apps/desktop/docs/](apps/desktop/docs/). **Read t
 - [harnesses.md](apps/desktop/docs/harnesses.md) — Codex, fx and grok: what runs, wire quirks, MCP, effort ladders, plan mode, todos.
 - [MCP-PLAN.md](apps/desktop/MCP-PLAN.md) — Remote MCP: `/mcp` on every server for Grok Bot, Claude and ChatGPT, OAuth with pairing codes, the tools. **Off in release builds** until Dray accounts land; [MCP-HELD.md](apps/desktop/MCP-HELD.md) is how to turn it back on.
 - [boat.md](apps/desktop/docs/boat.md) — Boat sandboxes: detecting, stopped rows, resume and send, repointing the SSH alias, the auto-stop warning.
+- [windows.md](apps/desktop/docs/windows.md) — Windows: named-pipe socket, hidden console, process tree, paths, what is not there yet, testing on a VM.
 - [cloud.md](apps/desktop/docs/cloud.md) — Dray Cloud: one machine per task as a hidden connection, the Settings row, the Cloud pick, delete on settle, kept transcripts.
 
 ## Known issues

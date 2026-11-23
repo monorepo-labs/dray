@@ -7,7 +7,6 @@
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::time::Duration;
-use tokio::process::Command;
 
 use super::mapper::{tool_input, tool_type};
 use crate::events::{AgentEvent, AgentEventPayload, ToolResult};
@@ -32,7 +31,7 @@ async fn read(session_id: String, agent: String) -> Result<Vec<AgentEvent>> {
     let bin = crate::binpath::fx().await;
     let output = tokio::time::timeout(
         READ_TIMEOUT,
-        Command::new(&bin)
+        crate::binpath::command(&bin)
             .args(["session", &format!("{thread}/{agent}"), "--json"])
             .current_dir(&item.cwd)
             .env("PATH", crate::harness::agent_path(&bin))
