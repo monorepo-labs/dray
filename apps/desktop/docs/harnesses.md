@@ -82,6 +82,8 @@ A refused effort is **never fatal and never silent**. Fatal is the half with tee
 
   **A `tool_call` opens with no arguments**: `title` is the bare tool name and `rawInput` is `{}` or `{cwd}`, so the row is drawn on the first `in_progress` update, which carries the whole input. Input fields are camelCase (`filePath`, `oldString`) and are renamed to Claude Code's spelling once in the mapper, so `diff.ts` and the path readers need nothing. **OpenCode asks `fs/write_text_file` after every edit it has already made**, unadvertised — refused quietly, not filed, since the file has landed. `usage_update` is the ring (`used` of `size`); a cancelled turn reports `used: 0`, which keeps the last reading. A `task` subagent runs as a child session filtered on `sessionId`, and its row is `other` until its lifecycle is mapped.
 
+  **OpenCode titles its own sessions and never says so on the wire** — no `session_info_update` on any capture. The title is ready by the first turn's answer, and `session/list` carries it, so the read loop asks once a turn ends (spawned off the loop, which routes the answer) until one is not OpenCode's `New session - <time>` placeholder. `title.rs` has no OpenCode arm for the same reason it has no grok one.
+
 ## Updating the CLIs
 
 **A check that finds an enabled agent behind runs its updater, one at a time** (#777, `useAutoUpdateAgents` in [useAgentUpdates.ts](../src/hooks/useAgentUpdates.ts)). The app drives it, so nothing updates while the app is closed, and it covers This Mac alone. A failed version is not retried until a newer one is out or the app restarts: a failure stays on the update list and every update ends in a fresh check, so without `tried` a failing updater runs in a loop.

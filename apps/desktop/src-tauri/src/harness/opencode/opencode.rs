@@ -17,6 +17,9 @@
 //!   `OPENCODE_PERMISSION` — so a stance change replaces the child.
 //! - **Rules ride `OPENCODE_CONFIG_CONTENT`** as an `instructions` file, read
 //!   on every spawn; there is no system-prompt field on the wire.
+//! - **OpenCode titles its own sessions and never says so on the wire.** The
+//!   title is ready by the first turn's answer and `session/list` returns it,
+//!   so it is read back from there — see [`note_title`].
 
 pub mod commands;
 pub mod mapper;
@@ -36,7 +39,7 @@ use crate::store::{self, next_seq_by_session_id};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::process::Stdio;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -386,6 +389,9 @@ async fn read_stdout(
     let mut mapper = mapper::Mapper::new(handles.session_id.clone(), seq.clone());
     let mut ready = Some(ready);
     let mut transport: Option<Transport> = None;
+    // Set once OpenCode's own title has been read back, so later turns ask
+    // nothing.
+    let titled = Arc::new(AtomicBool::new(false));
 
     loop {
         let line = match lines.next_line().await {
@@ -481,6 +487,11 @@ async fn read_stdout(
         let Some(transport) = transport.as_ref() else {
             continue;
         };
+        if let (parser::OpenCodeEvent::PromptDone(_), Some(session)) = (&event, session) {
+            if !titled.load(Ordering::Relaxed) {
+                tokio::spawn(note_title(session.clone(), handles.session_cwd.clone(), handles.session_id.clone(), handles.app.clone(), titled.clone()));
+            }
+        }
         let ingest = crate::session::Ingest {
             session_id: &handles.session_id,
             harness: OpenCode,
@@ -533,6 +544,47 @@ async fn read_stdout(
     )
     .await;
     Ok(())
+}
+
+/// Records OpenCode's own title for this session and tells the sidebar.
+///
+/// Spawned off the read loop, which is what routes the answer. A title not
+/// written yet ("New session - <time>") leaves `titled` unset, so the next
+/// turn asks again. A name the reader typed wins over it in the store.
+async fn note_title(session: OpenCodeSession, cwd: String, session_id: String, app: Sink, titled: Arc<AtomicBool>) {
+    let Ok(list) = session.client.request("session/list", json!({"cwd": cwd})).await else {
+        return;
+    };
+    let Some(title) = own_title(&list, &session.id) else {
+        return;
+    };
+    titled.store(true, Ordering::Relaxed);
+    match store::set_session_title(&session_id, &title).await {
+        Ok(Some(_)) => {
+            let payload = json!({"sessionId": session_id, "title": title, "titleLocked": false});
+            if let Err(err) = app.emit("session_title", payload) {
+                eprintln!("[opencode title emit err] {err}");
+            }
+        }
+        Ok(None) => {}
+        Err(err) => eprintln!("[opencode title write err] {err}"),
+    }
+}
+
+/// OpenCode's title for `id` in a `session/list` answer, or `None` while it is
+/// still the placeholder OpenCode opens every session with.
+///
+/// shortcut: reads the first page alone (100 sessions, newest first), where a
+/// session that has just answered always sits; page on `nextCursor` if not.
+fn own_title(list: &Value, id: &str) -> Option<String> {
+    list.get("sessions")?
+        .as_array()?
+        .iter()
+        .find(|s| s["sessionId"] == id)?
+        .get("title")?
+        .as_str()
+        .filter(|t| !t.is_empty() && !t.starts_with("New session - "))
+        .map(str::to_string)
 }
 
 /// The running prompt's answer, where `line` is it. Clears the id, so a Stop
@@ -695,6 +747,23 @@ mod tests {
         assert_eq!(current(&reply, "model"), Some("opencode-go/qwen3.8-flash"));
         assert_eq!(current(&reply, "mode"), Some("build"));
         assert_eq!(stance_agent(ApprovalPolicy::Plan, current(&reply, "mode")), Some("plan"));
+    }
+
+    /// Shapes as `session/list` answered on 1.19.5, before and after the
+    /// first turn.
+    #[test]
+    fn the_title_is_read_back_once_opencode_has_written_one() {
+        let before = json!({"sessions": [
+            {"sessionId": "ses_a", "cwd": "/p", "title": "New session - 2026-11-23T10:16:53.976Z", "updatedAt": "x"},
+        ]});
+        assert_eq!(own_title(&before, "ses_a"), None);
+
+        let after = json!({"sessions": [
+            {"sessionId": "ses_b", "cwd": "/p", "title": "Something else", "updatedAt": "x"},
+            {"sessionId": "ses_a", "cwd": "/p", "title": "Binary search tree explanation", "updatedAt": "x"},
+        ]});
+        assert_eq!(own_title(&after, "ses_a").as_deref(), Some("Binary search tree explanation"));
+        assert_eq!(own_title(&after, "ses_c"), None);
     }
 
     #[test]
