@@ -7,13 +7,13 @@
 //! one block runs until an update of another kind arrives.
 
 use crate::events::{
-    usage::ContextWindow, AgentEvent, AgentEventPayload, BlockType, DeltaEvent, SessionInfo, ToolResult, ToolType,
-    TurnStatus, Usage,
+    usage::ContextWindow, AgentEvent, AgentEventPayload, BlockType, DeltaEvent, SessionInfo, Subagent, ToolResult,
+    ToolType, TurnStatus, Usage,
 };
 use crate::harness::acp::{self, block_ref, OpenBlock};
 use crate::harness::{mentions_any, Harness};
 use serde_json::{json, Map, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 
@@ -42,6 +42,8 @@ pub struct Mapper {
     occupancy: Option<ContextWindow>,
     /// Calls opened by `tool_call` whose row has not been drawn yet.
     opening: HashMap<String, OpeningCall>,
+    /// `task` calls whose run is open in the panel, by call id.
+    runs: HashSet<String>,
 }
 
 impl Mapper {
@@ -54,6 +56,7 @@ impl Mapper {
             blocks: 0,
             occupancy: None,
             opening: HashMap::new(),
+            runs: HashSet::new(),
         }
     }
 
@@ -101,16 +104,23 @@ impl Mapper {
                         out.extend(self.ensure_turn());
                         out.extend(self.close_open());
                         let kind = kind.unwrap_or(call.kind);
+                        let input = tool_input(raw_input);
+                        let tool_type = tool_type(&call.name, kind);
+                        let run = (tool_type == ToolType::SubagentSpawn).then(|| started_run(&input));
                         out.push(self.event(AgentEventPayload::ToolCallStarted {
                             call_id: tool_call_id.clone(),
-                            tool_type: tool_type(&call.name, kind),
-                            input: tool_input(raw_input),
+                            tool_type,
+                            input,
                             name: call.name,
                             raw_input: None,
                             // Left unset so the row draws its subject off the
                             // input, which is what OpenCode's title says too.
                             title: None,
                         }));
+                        if let Some(started) = run {
+                            self.runs.insert(tool_call_id.clone());
+                            out.push(self.subagent_event(&tool_call_id, started));
+                        }
                     }
                 }
 
@@ -126,11 +136,18 @@ impl Mapper {
                     })
                     .collect();
                 let has_diff = content.iter().any(|c| matches!(c, ToolContent::Diff));
+                let mut text = result_text(raw_output.as_ref(), closing, has_diff);
+                // A subagent answers in `<task …><task_result>…`; the report
+                // inside is the result, and it closes the run.
+                let report = self.runs.remove(&tool_call_id).then(|| task_report(&text, status));
+                if let Some((report, _)) = &report {
+                    text = report.clone();
+                }
 
                 out.push(self.event(AgentEventPayload::ToolCallCompleted {
-                    call_id: tool_call_id,
+                    call_id: tool_call_id.clone(),
                     result: ToolResult {
-                        text: result_text(raw_output.as_ref(), closing, has_diff),
+                        text,
                         is_error: status == ToolStatus::Failed,
                         structured: None,
                         exit_code: raw_output.as_ref().and_then(RawOutput::exit_code).map(|c| c as i32),
@@ -138,6 +155,17 @@ impl Mapper {
                         images: Vec::new(),
                     },
                 }));
+                if let Some((summary, outcome)) = report {
+                    out.push(self.subagent_event(
+                        &tool_call_id,
+                        AgentEventPayload::SubagentCompleted {
+                            agent_id: String::new(),
+                            status: outcome,
+                            summary: (!summary.is_empty()).then_some(summary),
+                            usage: None,
+                        },
+                    ));
+                }
                 // The model reads the result next.
                 out.push(self.event(AgentEventPayload::ModelRequestStarted));
                 out
@@ -245,6 +273,9 @@ impl Mapper {
         // A call that never got past `pending` draws nothing; its id must not
         // leak into the next turn.
         self.opening.clear();
+        // A run still open here never answered — a cancelled turn — and the
+        // transcript's own stand-in closes its call.
+        self.runs.clear();
         event
     }
 
@@ -304,6 +335,21 @@ impl Mapper {
         self.event(payload)
     }
 
+    /// A lifecycle event of a run, filed under the spawning call's id, which is
+    /// what the transcript joins a run to its `task` row on.
+    fn subagent_event(&self, call_id: &str, payload: AgentEventPayload) -> AgentEvent {
+        let label = match &payload {
+            AgentEventPayload::SubagentStarted { label, .. } => label.clone(),
+            _ => SUBAGENT_LABEL.to_string(),
+        };
+        let mut event = self.event(payload);
+        event.subagent = Some(Subagent {
+            id: call_id.to_string(),
+            label: Some(label),
+        });
+        event
+    }
+
     fn event(&self, payload: AgentEventPayload) -> AgentEvent {
         AgentEvent::mint(
             self.session_id.clone(),
@@ -316,10 +362,11 @@ impl Mapper {
     }
 }
 
-/// OpenCode's tool name onto Dray's row type, ACP's kind as the fallback.
-/// `task` stays `other`: OpenCode's subagent runs as a child session whose
-/// lifecycle this build does not map yet, and a spawn row with no run behind it
-/// would shimmer for good.
+/// What a delegated run is called where OpenCode names no agent type.
+const SUBAGENT_LABEL: &str = "Subagent";
+
+/// OpenCode's tool name onto Dray's row type, ACP's kind as the fallback —
+/// which calls `task` `think`, so it is named here.
 fn tool_type(name: &str, kind: ToolKind) -> ToolType {
     match name {
         "bash" => ToolType::Shell,
@@ -327,9 +374,45 @@ fn tool_type(name: &str, kind: ToolKind) -> ToolType {
         "edit" | "write" | "patch" | "multiedit" => ToolType::FileEdit,
         "glob" | "grep" | "list" => ToolType::Search,
         "webfetch" | "websearch" => ToolType::Web,
-        "task" => ToolType::Other,
+        "task" => ToolType::SubagentSpawn,
         _ => kind.tool_type(),
     }
+}
+
+/// A run opening off its `task` call's arguments.
+///
+/// `agent_id` is empty on purpose: it is the handle a Stop names, and OpenCode
+/// gives the child's session id only once the child is done, so a filled one
+/// would offer a button with nothing behind it. fx's reading of the same gap.
+fn started_run(input: &Value) -> AgentEventPayload {
+    let field = |key: &str| input.get(key).and_then(Value::as_str).map(str::to_string);
+    AgentEventPayload::SubagentStarted {
+        agent_id: String::new(),
+        label: field("subagent_type").filter(|t| !t.is_empty()).unwrap_or_else(|| SUBAGENT_LABEL.to_string()),
+        description: field("description"),
+        prompt: field("prompt"),
+    }
+}
+
+/// The child's report and how it ended, out of a `task` answer:
+/// `<task id="ses_…" state="completed">\n<task_result>\n…\n</task_result>\n</task>`.
+/// Any other shape is the report as it came.
+fn task_report(output: &str, status: ToolStatus) -> (String, String) {
+    let report = output
+        .split_once("<task_result>")
+        .and_then(|(_, rest)| rest.split_once("</task_result>"))
+        .map_or(output, |(inner, _)| inner)
+        .trim()
+        .to_string();
+    let state = output
+        .split_once("state=\"")
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(state, _)| state.to_string());
+    let outcome = match status {
+        ToolStatus::Failed => "failed".to_string(),
+        _ => state.unwrap_or_else(|| "completed".to_string()),
+    };
+    (report, outcome)
 }
 
 /// The call's arguments as the row draws them, always an object.
@@ -379,6 +462,7 @@ mod tests {
     const LIVE_TURN: &str = include_str!("fixtures/live_turn.jsonl");
     const CANCEL: &str = include_str!("fixtures/cancel.jsonl");
     const AUTH_ERROR: &str = include_str!("fixtures/auth_error.jsonl");
+    const SUBAGENT: &str = include_str!("fixtures/subagent.jsonl");
 
     /// Replays a capture the way the read loop does: updates for the session
     /// the capture opened, then the answer to the last prompt sent.
@@ -536,6 +620,69 @@ mod tests {
         assert_eq!(*status, TurnStatus::Error);
         assert!(final_text.as_deref().unwrap().contains("API key"));
         assert!(auth_failed);
+    }
+
+    /// A `task` call is a run in the panel, filed under the call's own id,
+    /// with the child's report as both the row's result and the run's summary.
+    /// The run has no stop handle: OpenCode names the child only once it is
+    /// done.
+    #[test]
+    fn a_task_call_opens_and_closes_a_run() {
+        let events = replay(SUBAGENT);
+
+        let task = tool_starts(&events)
+            .into_iter()
+            .find(|(name, _, _)| *name == "task")
+            .expect("the task row");
+        assert_eq!(task.1, ToolType::SubagentSpawn);
+
+        let (started, run) = events
+            .iter()
+            .find_map(|e| match &e.payload {
+                P::SubagentStarted { agent_id, label, description, .. } => {
+                    Some(((agent_id.clone(), label.clone(), description.clone()), e.subagent.clone()))
+                }
+                _ => None,
+            })
+            .expect("the run opened");
+        assert_eq!(started.0, "", "no stop handle while the child runs");
+        assert_eq!(started.1, "general");
+        assert!(started.2.is_some());
+
+        let call_id = events
+            .iter()
+            .find_map(|e| match &e.payload {
+                P::ToolCallStarted { name, call_id, .. } if name == "task" => Some(call_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(run.expect("an envelope").id, call_id);
+
+        let summary = events
+            .iter()
+            .find_map(|e| match &e.payload {
+                P::SubagentCompleted { status, summary, .. } => Some((status.clone(), summary.clone())),
+                _ => None,
+            })
+            .expect("the run closed");
+        assert_eq!(summary.0, "completed");
+        let report = summary.1.expect("the child's report");
+        assert!(report.contains("notes.txt") && !report.contains("<task"), "{report}");
+
+        let result = events
+            .iter()
+            .find_map(|e| match &e.payload {
+                P::ToolCallCompleted { call_id: id, result } if *id == call_id => Some(result.text.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(result, report);
+    }
+
+    #[test]
+    fn a_task_answer_that_is_not_wrapped_is_its_own_report() {
+        assert_eq!(task_report("plain words", ToolStatus::Completed), ("plain words".into(), "completed".into()));
+        assert_eq!(task_report("boom", ToolStatus::Failed).1, "failed");
     }
 
     #[test]

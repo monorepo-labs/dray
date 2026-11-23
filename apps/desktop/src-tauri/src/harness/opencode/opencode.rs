@@ -14,7 +14,11 @@
 //!   `effort` and `mode` while a prompt runs. The mode is not kept across a
 //!   resume, so the stance's mode is set on every open.
 //! - **Permission rules are config, fixed at spawn**, through
-//!   `OPENCODE_PERMISSION` — so a stance change replaces the child.
+//!   `OPENCODE_PERMISSION` — so a stance change replaces the child. A subagent
+//!   cannot ask, so its rules refuse instead; see [`stance_config`].
+//! - **A fork is `session/fork` on the fork's first send**, Codex's lazy route.
+//!   OpenCode files the copy under the parent's folder whatever `cwd` says, so
+//!   only a fork in place is offered.
 //! - **Rules ride `OPENCODE_CONFIG_CONTENT`** as an `instructions` file, read
 //!   on every spawn; there is no system-prompt field on the wire.
 //! - **OpenCode titles its own sessions and never says so on the wire.** The
@@ -73,6 +77,9 @@ pub async fn init(
     cwd: &str,
     session_cwd: &str,
     is_new_session: bool,
+    // The session this one is a fork of, on a fork's first send and never
+    // again. Its index entry already holds the parent's OpenCode id.
+    fork_from: Option<&str>,
     app: &Sink,
 ) -> Result<Session> {
     // Everything fallible goes ahead of the spawn, so no `?` can leave a child
@@ -82,15 +89,17 @@ pub async fn init(
     } else {
         next_seq_by_session_id(session_id).await?
     };
-    let resume = if is_new_session {
-        None
+    let open = if is_new_session {
+        Open::New
     } else {
-        Some(
-            store::get_session_index_item(session_id)
-                .await?
-                .and_then(|item| item.thread_id)
-                .context("this session has no OpenCode session to resume")?,
-        )
+        let recorded = store::get_session_index_item(session_id)
+            .await?
+            .and_then(|item| item.thread_id)
+            .context("this session has no OpenCode session to resume")?;
+        match fork_from {
+            Some(_) => Open::Fork(recorded),
+            None => Open::Resume(recorded),
+        }
     };
     let rules = write_rules(session_id, session_cwd).await?;
 
@@ -105,10 +114,8 @@ pub async fn init(
         .current_dir(cwd)
         .env("DRAY_SESSION_ID", session_id)
         .env("PATH", crate::harness::agent_path(&bin))
-        .env("OPENCODE_PERMISSION", permission_rules(permission_mode).to_string())
-        // Merged over the reader's own config, and `instructions` is a list
-        // OpenCode concatenates, so the reader's own instruction files stay.
-        .env("OPENCODE_CONFIG_CONTENT", json!({"instructions": [rules]}).to_string())
+        .env("OPENCODE_PERMISSION", refusing(&permission_rules(permission_mode)).to_string())
+        .env("OPENCODE_CONFIG_CONTENT", stance_config(&rules, permission_mode).to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -147,7 +154,7 @@ pub async fn init(
         }
     });
 
-    let opened = open_session(&client, session_id, session_cwd, resume, model, effort, permission_mode).await;
+    let opened = open_session(&client, session_id, session_cwd, open, model, effort, permission_mode).await;
     let (id, effort) = match opened {
         Ok(opened) => opened,
         Err(error) => {
@@ -192,21 +199,21 @@ async fn write_rules(session_id: &str, session_cwd: &str) -> Result<String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
-/// Dray's stance as OpenCode permission rules.
+/// Dray's stance as OpenCode permission rules, for the agent Dray runs.
 ///
 /// Set whole rather than left to the reader's config, because OpenCode's own
 /// default allows everything and a stance that said otherwise would be a lie.
 /// Plan is the `plan` agent, which refuses edits itself; its shell still asks.
-/// `dontAsk` is never offered and runs as Auto.
+/// `external_directory` is OpenCode's own default, stated so the refusing set
+/// can turn it. `dontAsk` is never offered and runs as Auto.
 fn permission_rules(mode: ApprovalPolicy) -> Value {
     match mode {
         ApprovalPolicy::Plan | ApprovalPolicy::Manual => {
-            json!({"edit": "ask", "bash": "ask", "webfetch": "ask"})
+            json!({"edit": "ask", "bash": "ask", "webfetch": "ask", "external_directory": "ask"})
         }
-        // Edits inside the project go through; OpenCode's own
-        // `external_directory` check still asks about paths outside it.
+        // Edits inside the project go through.
         ApprovalPolicy::Auto | ApprovalPolicy::DontAsk => {
-            json!({"edit": "allow", "bash": "ask", "webfetch": "ask"})
+            json!({"edit": "allow", "bash": "ask", "webfetch": "ask", "external_directory": "ask"})
         }
         ApprovalPolicy::BypassPermissions => json!({
             "edit": "allow", "bash": "allow", "webfetch": "allow", "external_directory": "allow",
@@ -214,15 +221,59 @@ fn permission_rules(mode: ApprovalPolicy) -> Value {
     }
 }
 
-/// The agent a stance runs as. `None` leaves the reader's default agent, which
-/// may be one of their own.
-fn stance_agent(mode: ApprovalPolicy, current: Option<&str>) -> Option<&'static str> {
-    match (mode, current) {
-        (ApprovalPolicy::Plan, Some("plan")) => None,
-        (ApprovalPolicy::Plan, _) => Some("plan"),
-        (_, Some("plan")) => Some("build"),
-        _ => None,
+/// The rules with every `ask` turned into `deny` — what every agent but the
+/// one Dray runs gets.
+///
+/// **A subagent cannot ask.** Measured on 1.19.6: a `task` child's permission
+/// ask is logged and never forwarded over ACP, so its turn waits for good.
+/// Refused instead, the tool leaves the child's list and it works without it —
+/// a child told to run `ls` listed the folder with `glob`.
+fn refusing(rules: &Value) -> Value {
+    let mut rules = rules.clone();
+    if let Some(map) = rules.as_object_mut() {
+        for rule in map.values_mut().filter(|r| *r == "ask") {
+            *rule = json!("deny");
+        }
     }
+    rules
+}
+
+/// `OPENCODE_CONFIG_CONTENT`: Dray's rules file, and the asking rules handed
+/// back to `build` and `plan` over [`refusing`]'s globals.
+///
+/// `plan` takes no `edit` key, so its own refusal of edits stands. Merged over
+/// the reader's config, and `instructions` is a list OpenCode concatenates, so
+/// their own instruction files stay.
+fn stance_config(rules_path: &str, mode: ApprovalPolicy) -> Value {
+    let asks: serde_json::Map<String, Value> = permission_rules(mode)
+        .as_object()
+        .map(|map| map.iter().filter(|(_, r)| *r == "ask").map(|(k, r)| (k.clone(), r.clone())).collect())
+        .unwrap_or_default();
+    let mut plan = asks.clone();
+    plan.remove("edit");
+    json!({
+        "instructions": [rules_path],
+        "agent": {"build": {"permission": asks}, "plan": {"permission": plan}},
+    })
+}
+
+/// The agent a stance runs as: `plan` for Plan, `build` for the rest. Always
+/// one of the two, since they are the agents holding the asking rules.
+fn stance_agent(mode: ApprovalPolicy, current: Option<&str>) -> Option<&'static str> {
+    let wanted = match mode {
+        ApprovalPolicy::Plan => "plan",
+        _ => "build",
+    };
+    (current != Some(wanted)).then_some(wanted)
+}
+
+/// How a spawn reaches its OpenCode session.
+enum Open {
+    New,
+    Resume(String),
+    /// A fork's first send: the parent's OpenCode id, copied onto the fork's
+    /// index entry when it was forked.
+    Fork(String),
 }
 
 /// `initialize`, `session/new` or `session/resume`, then the reader's model,
@@ -231,7 +282,7 @@ async fn open_session(
     client: &RpcClient,
     session_id: &str,
     session_cwd: &str,
-    resume: Option<String>,
+    open: Open,
     model: Option<&Model>,
     effort: Option<Effort>,
     mode: ApprovalPolicy,
@@ -251,15 +302,31 @@ async fn open_session(
 
     // MCP is OpenCode's own: it reads the reader's config, so Dray hands over
     // nothing.
-    let (id, mut config) = match resume {
-        Some(id) => {
+    let (id, mut config) = match open {
+        Open::Resume(id) => {
             let answer = client
                 .request("session/resume", json!({"sessionId": id, "cwd": session_cwd, "mcpServers": []}))
                 .await
                 .with_context(|| format!("couldn't resume OpenCode session {id}"))?;
             (id, answer)
         }
-        None => {
+        // The answer is the copy, opened. OpenCode replays the parent's history
+        // ahead of it, which the read loop drops: nothing is drawn until the
+        // session is handed over, and Dray's own copied log is the transcript.
+        Open::Fork(parent) => {
+            let answer = client
+                .request("session/fork", json!({"sessionId": parent, "cwd": session_cwd, "mcpServers": []}))
+                .await
+                .with_context(|| format!("couldn't fork OpenCode session {parent}"))?;
+            let id = answer
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .context("session/fork answered with no session id")?
+                .to_string();
+            store::set_session_thread_id(session_id, &id).await?;
+            (id, answer)
+        }
+        Open::New => {
             let answer = client
                 .request("session/new", json!({"cwd": session_cwd, "mcpServers": []}))
                 .await?;
@@ -704,14 +771,38 @@ mod tests {
         assert_eq!(stance_agent(ApprovalPolicy::Plan, Some("build")), Some("plan"));
         assert_eq!(stance_agent(ApprovalPolicy::Plan, Some("plan")), None);
         assert_eq!(stance_agent(ApprovalPolicy::Manual, Some("plan")), Some("build"));
-        // The reader's own default agent is left alone.
-        assert_eq!(stance_agent(ApprovalPolicy::Auto, Some("my-agent")), None);
+        assert_eq!(stance_agent(ApprovalPolicy::Auto, Some("build")), None);
+        // A default agent of the reader's own holds no asking rules.
+        assert_eq!(stance_agent(ApprovalPolicy::Auto, Some("my-agent")), Some("build"));
 
         assert_eq!(permission_rules(ApprovalPolicy::Plan)["bash"], "ask");
         assert_eq!(permission_rules(ApprovalPolicy::Manual)["edit"], "ask");
         assert_eq!(permission_rules(ApprovalPolicy::Auto)["edit"], "allow");
         assert_eq!(permission_rules(ApprovalPolicy::Auto)["bash"], "ask");
         assert_eq!(permission_rules(ApprovalPolicy::BypassPermissions)["bash"], "allow");
+    }
+
+    /// What would ask is refused for every agent but the two Dray runs, which
+    /// get the asking rules back — a subagent's ask never reaches Dray, and a
+    /// refused tool leaves its list rather than hanging the turn.
+    #[test]
+    fn subagents_are_refused_what_they_cannot_ask_for() {
+        let global = refusing(&permission_rules(ApprovalPolicy::Auto));
+        assert_eq!(global, json!({"edit": "allow", "bash": "deny", "webfetch": "deny", "external_directory": "deny"}));
+
+        let config = stance_config("/r.md", ApprovalPolicy::Auto);
+        assert_eq!(config["instructions"], json!(["/r.md"]));
+        assert_eq!(config["agent"]["build"]["permission"], json!({"bash": "ask", "webfetch": "ask", "external_directory": "ask"}));
+
+        // Plan keeps its own refusal of edits.
+        let plan = stance_config("/r.md", ApprovalPolicy::Plan);
+        assert_eq!(plan["agent"]["build"]["permission"]["edit"], "ask");
+        assert!(plan["agent"]["plan"]["permission"].get("edit").is_none());
+
+        // Nothing asks under Bypass, so nothing is refused or handed back.
+        let bypass = permission_rules(ApprovalPolicy::BypassPermissions);
+        assert_eq!(refusing(&bypass), bypass);
+        assert_eq!(stance_config("/r.md", ApprovalPolicy::BypassPermissions)["agent"]["build"]["permission"], json!({}));
     }
 
     /// The effort option exists only for a model with variants, so a level is
@@ -764,6 +855,25 @@ mod tests {
         ]});
         assert_eq!(own_title(&after, "ses_a").as_deref(), Some("Binary search tree explanation"));
         assert_eq!(own_title(&after, "ses_c"), None);
+    }
+
+    /// `session/fork` replays the parent's history as updates **ahead of** its
+    /// answer, under the copy's id. Nothing is drawn before the session is
+    /// handed over, which happens after that answer, so the replay never
+    /// reaches the transcript — this pins the ordering that rests on.
+    #[test]
+    fn a_fork_replays_the_parent_before_it_answers() {
+        let lines: Vec<Value> = include_str!("fixtures/fork.jsonl")
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line.strip_prefix("<< ")?).ok())
+            .collect();
+        let answered = lines.iter().position(|l| l["id"] == 2).expect("the fork answered");
+        let fork = lines[answered]["result"]["sessionId"].as_str().expect("the copy's id");
+
+        let replayed: Vec<&Value> = lines[..answered].iter().filter(|l| l["method"] == "session/update").collect();
+        assert!(!replayed.is_empty(), "1.19 replays the parent");
+        assert!(replayed.iter().all(|l| l["params"]["sessionId"] == fork));
+        assert!(replayed.iter().any(|l| l["params"]["update"]["sessionUpdate"] == "user_message_chunk"));
     }
 
     #[test]

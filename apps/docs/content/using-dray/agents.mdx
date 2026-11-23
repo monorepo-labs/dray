@@ -21,7 +21,7 @@ Dray installs no agent and stores no agent login. Each agent keeps its own, exac
 | Permission modes | Ask every time, Plan, Auto, Bypass permissions | Ask every time, Auto, Bypass permissions | None | Ask every time, Auto, Bypass permissions | Ask every time, Auto, Bypass permissions | Ask every time, Plan, Auto, Bypass permissions |
 | Slash commands | Claude Code's commands and skills | Skills | pi's commands | Skills | Grok Build's commands and skills | OpenCode's commands and skills |
 | Images in prompts | Yes | Yes, if the model takes them | Yes, if the model takes them | No | Yes, from Grok Build 1.0.70 | Yes, if the model takes them |
-| Fork a session | Yes | Yes | Yes | Yes | Yes | No |
+| Fork a session | Yes | Yes | Yes | Yes | Yes | In place only |
 | Worktrees | Yes | Yes | Yes | Yes | Yes | Yes |
 | Change during a turn | Model, permission mode, fast mode | Nothing | Model, effort | Model, effort, permission mode, fast mode, for the next turn | Model, effort, fast mode | Model, effort |
 | A prompt sent during a turn | Joins the running turn | Joins the running turn | Joins at the next tool call | Waits for the turn to end | Joins at the next step | Waits for the turn to end |
@@ -137,12 +137,13 @@ Limits:
 
 The open source agent from [opencode.ai](https://opencode.ai). It runs models from every provider you have signed in to, so the model list is yours: open **Shortlist models** in the picker and switch on the ones you use. Dray passes no model unless you pick one, so OpenCode's own default stands.
 
-- **Permission modes.** Dray sets OpenCode's permission rules when it starts the agent. **Ask every time** asks before edits, shell commands and web requests. **Auto** lets edits in the project through and asks for the rest. **Plan** runs OpenCode's `plan` agent, which edits nothing. **Bypass permissions** asks nothing. These replace your own `permission` settings for `edit`, `bash` and `webfetch`, and a change of mode restarts the agent behind the session.
+- **Permission modes.** Dray sets OpenCode's permission rules when it starts the agent. **Ask every time** asks before edits, shell commands and web requests. **Auto** lets edits in the project through and asks for the rest. **Plan** runs OpenCode's `plan` agent, which edits nothing. **Bypass permissions** asks nothing. These replace your own `permission` settings for `edit`, `bash`, `webfetch` and `external_directory`, and a change of mode restarts the agent behind the session.
+- **Subagents** show in the side panel's **More** tab, and their report opens in a tab of its own. OpenCode does not pass a subagent's permission questions on, so a subagent is refused whatever would have asked, under every mode but **Bypass permissions**. It works without those tools and says so in its report.
+- **Fork here** works. **Fork in new worktree** is refused: OpenCode keeps a session in the folder it started in, so the fork would run in this checkout.
 - **A prompt sent during a turn** waits for the turn to end, like fx. **Now** under it stops the turn and sends it.
 - **Slash commands.** `/` lists OpenCode's commands and skills. The first time in a folder takes a few seconds while Dray asks OpenCode.
 - **MCP servers and instructions** are OpenCode's own: it reads your config, `AGENTS.md` and `~/.claude/skills`. Dray adds its own instructions as one more instruction file.
 
 Limits:
 
-- No fork yet.
-- A subagent OpenCode starts shows as a plain tool row, with no panel entry or stop button.
+- A subagent has no stop button. Stop the whole turn instead.

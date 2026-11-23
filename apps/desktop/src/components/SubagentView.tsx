@@ -33,8 +33,14 @@ export default function SubagentView({
   // turn is saved and worth reading again.
   const report = resultByCallId.get(run.id)?.text;
   const fx = useFxHistory(agent ? sessionId : null, agent, report);
-  const events = (agent ? (fx.events ?? []) : run.events).flatMap(handback);
   const working = !run.done;
+  // OpenCode streams nothing of the child's own, so its report — the spawning
+  // call's result — is drawn as the child's answer once it lands.
+  const opencodeReport =
+    run.spawn?.harness === "opencode" && !working && report
+      ? [{ ...run.spawn, id: `${run.spawn.id}:report`, payload: { type: "assistant_text" as const, block: null, text: report } }]
+      : [];
+  const events = (agent ? (fx.events ?? []) : run.events).flatMap(handback).concat(opencodeReport);
 
   return (
     <ChatSessionContext value={{ cwd, sessionId }}>

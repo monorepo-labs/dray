@@ -2020,8 +2020,18 @@ impl SessionManager {
         // `thread/fork` and `session recover` both name the parent's own id, so
         // a Codex or fx parent that never got one has nothing to fork — refused
         // before a row exists.
-        if matches!(parent.harness, Harness::Codex | Harness::Fx) && parent.thread_id.is_none() {
+        if matches!(parent.harness, Harness::Codex | Harness::Fx | Harness::OpenCode) && parent.thread_id.is_none() {
             bail!("this {} session has no conversation to fork yet", parent.harness.label());
+        }
+
+        // OpenCode files a session under the folder it was made in, and a fork
+        // or resume naming another `cwd` still runs in that one — measured, so a
+        // fork into a worktree would edit the parent's checkout.
+        if worktree && parent.harness == Harness::OpenCode {
+            bail!(
+                "OpenCode keeps a session in the folder it started in, so a fork can't move to a new \
+                 worktree. Fork it in place instead."
+            );
         }
 
         // Resolved against the project rather than the parent's own name, so a
@@ -2076,7 +2086,7 @@ impl SessionManager {
         // first send: a parent deleted in between would otherwise leave a fork
         // that fails every send. Safe while `fork_from` stands, since that is
         // what makes the first spawn fork this thread instead of resuming it.
-        if parent.harness == Harness::Codex {
+        if matches!(parent.harness, Harness::Codex | Harness::OpenCode) {
             item.thread_id = parent.thread_id.clone();
         }
         append_session_index_item(item.clone()).await?;
@@ -2781,13 +2791,10 @@ impl Session {
                 .await
             }
             Harness::OpenCode => {
-                // No `-w` and no fork yet, so the tree is made before this and
-                // a fork never reaches it.
+                // No `-w`, so the tree is made before this. A fork's first send
+                // carries `fork_from`, and the spawn makes the copy.
                 if worktree_name.is_some() {
                     bail!("OpenCode cannot create a worktree — it has to be made first");
-                }
-                if fork_from.is_some() {
-                    bail!("an OpenCode session cannot be forked yet");
                 }
 
                 crate::harness::opencode::init(
@@ -2798,6 +2805,7 @@ impl Session {
                     cwd,
                     session_cwd,
                     is_new_session,
+                    fork_from,
                     app,
                 )
                 .await

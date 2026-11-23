@@ -828,8 +828,12 @@ impl Harness {
             // ACP, and plain ACP. `session/set_config_option` moves model and
             // effort on a running child, mid-turn included, measured on 1.19.5.
             // The stance is permission rules read from `OPENCODE_PERMISSION` at
-            // spawn, so it is a respawn. No fast tier, and no fork yet: OpenCode
-            // has `session/fork`, which this build does not call.
+            // spawn, so it is a respawn. No fast tier.
+            //
+            // Forked by Codex's lazy route: `session/fork` names the parent's
+            // OpenCode id, which the fork's entry takes at the press, and runs
+            // on the first send's own spawn. In place only — OpenCode keeps the
+            // copy in the parent's folder whatever `cwd` it is handed.
             Harness::OpenCode => Capabilities {
                 creates_own_worktree: false,
                 applies_model_in_place: true,
@@ -837,8 +841,8 @@ impl Harness {
                 applies_permission_in_place: false,
                 fast_mode: FastMode::Unsupported,
                 expands_at_mentions: false,
-                forkable: false,
-                fork_needs_cli: false,
+                forkable: true,
+                fork_needs_cli: true,
             },
             // A session some other build wrote and this one cannot run. `false`
             // throughout: the row still draws, so the reader can see the session
