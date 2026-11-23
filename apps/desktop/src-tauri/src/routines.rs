@@ -559,6 +559,9 @@ async fn run_check(check: &str, cwd: &str) -> Result<String, String> {
     // not `sh` alone; the next run would otherwise start another copy beside it.
     #[cfg(unix)]
     cmd.process_group(0);
+    // Kept alive past a timeout so the tree is walked from a live root.
+    #[cfg(windows)]
+    cmd.kill_on_drop(false);
     let child = cmd.spawn().map_err(|e| format!("could not run: {e}"))?;
     let group = child.id();
     let out = match tokio::time::timeout(CHECK_TIMEOUT, child.wait_with_output()).await {
@@ -566,6 +569,10 @@ async fn run_check(check: &str, cwd: &str) -> Result<String, String> {
             #[cfg(unix)]
             if let Some(pid) = group {
                 unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
+            }
+            #[cfg(windows)]
+            if let Some(pid) = group {
+                let _ = tokio::task::spawn_blocking(move || crate::platform::kill_tree(pid)).await;
             }
             return Err(format!("timed out after {}s", CHECK_TIMEOUT.as_secs()));
         }

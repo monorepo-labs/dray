@@ -1,13 +1,15 @@
 //! The `dray` CLI the bundle carries as `dray-cli` beside the app's binary
 //! (tauri.cli.conf.json) — `Contents/MacOS` on a Mac, the AppImage's `usr/bin`
-//! on Linux — put where agents and shells find it.
+//! on Linux, the install folder on Windows — put where agents and shells find
+//! it.
 
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// Copies the bundled CLI to `~/.local/bin/dray` where the bytes there differ,
-/// then has it write its skill. Every launch of a release build, off the main
+/// Copies the bundled CLI to `~/.local/bin/dray` (`dray.exe` on Windows) where
+/// the bytes there differ, then has it write its skill. Every launch of a release build, off the main
 /// thread; dev and debug builds skip it, since the CLI on disk belongs to the
 /// release app.
 ///
@@ -31,21 +33,37 @@ fn install_bundled(shell: Option<PathBuf>) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("no exe path: {e}"))?;
     // Absent from a bundle built without the CLI overlay, which is every
     // local `tauri build`.
-    let Ok(bundled) = std::fs::read(exe.with_file_name("dray-cli")) else {
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let Ok(bundled) = std::fs::read(exe.with_file_name(format!("dray-cli{suffix}"))) else {
         return Ok(());
     };
     let home = std::env::home_dir().ok_or("no home directory")?;
-    let dest = home.join(".local/bin/dray");
+    let bin = home.join(".local").join("bin");
+    let dest = bin.join(format!("dray{suffix}"));
+    // Every launch, not only on a copy: a `dray` an agent was running when the
+    // last one replaced it is free by now.
+    #[cfg(windows)]
+    crate::platform::sweep_aside(&bin);
     copy_if_changed(&bundled, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     if let Err(e) = record_appimage(&home) {
         eprintln!("[cli install] {APPIMAGE_RECORD}: {e}");
+    }
+    // A Mac or Linux shell has ~/.local/bin on PATH already, or the reader put
+    // it there for Claude Code; a Windows one has it only where Claude Code's
+    // own installer ran.
+    #[cfg(windows)]
+    if let Err(e) = crate::platform::user_path::ensure(&bin) {
+        eprintln!("[cli install] user PATH: {e}");
     }
 
     // A CLI installed elsewhere with `DRAY_INSTALL_DIR` sits ahead of this copy
     // on the reader's PATH, and would keep answering stale. A symlink is left
     // alone: somebody pointed it at a build of their own on purpose.
-    if let Some(shell) = shell.filter(|p| *p != dest && is_plain_dray(p)) {
+    // On Windows only an `.exe`: PATH can resolve npm's `dray.cmd`, a script
+    // the binary's bytes would overwrite.
+    let runnable = |p: &Path| cfg!(not(windows)) || p.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe"));
+    if let Some(shell) = shell.filter(|p| *p != dest && runnable(p) && is_plain_dray(p)) {
         if let Err(e) = copy_if_changed(&bundled, &shell) {
             eprintln!("[cli install] {}: {e}", shell.display());
         }
@@ -94,9 +112,9 @@ fn command(path: &Path) -> Command {
 }
 
 /// Where the Linux app writes down the AppImage it runs from, or its binary
-/// where a `.deb` installed it, under home. `app_ships_this_cli` in
-/// apps/cli/src/setup.rs and install.sh read it.
-#[cfg(target_os = "linux")]
+/// where a `.deb` installed it, under home; the Windows app, its own `.exe`.
+/// `app_ships_this_cli` in apps/cli/src/setup.rs and install.sh read it.
+#[cfg(any(target_os = "linux", windows))]
 const APPIMAGE_RECORD: &str = ".local/share/dray/appimage";
 
 /// Records which AppImage or package installed the CLI, so `dray update` and
@@ -104,18 +122,26 @@ const APPIMAGE_RECORD: &str = ".local/share/dray/appimage";
 /// a Mac's app is found at fixed paths, an AppImage can live anywhere. The
 /// path, not a flag: one deleted or uninstalled since frees the CLI to update
 /// itself, and one moved is written again by its next launch.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 fn record_appimage(home: &Path) -> std::io::Result<()> {
-    use std::os::unix::ffi::OsStrExt;
-    use tauri::utils::{config::BundleType, platform::bundle_type};
-    let installed = crate::serve::appimage().or_else(|| {
-        (bundle_type() == Some(BundleType::Deb)).then(std::env::current_exe).and_then(Result::ok)
-    });
+    #[cfg(target_os = "linux")]
+    let installed = {
+        use tauri::utils::{config::BundleType, platform::bundle_type};
+        crate::serve::appimage().or_else(|| {
+            (bundle_type() == Some(BundleType::Deb)).then(std::env::current_exe).and_then(Result::ok)
+        })
+    };
+    // Read back as UTF-8 by the CLI, the one form both sides can spell.
+    #[cfg(windows)]
+    let installed = std::env::current_exe().ok().filter(|p| p.to_str().is_some());
     let Some(image) = installed else {
         return Ok(());
     };
     let record = home.join(APPIMAGE_RECORD);
-    let bytes = image.as_os_str().as_bytes();
+    #[cfg(target_os = "linux")]
+    let bytes = std::os::unix::ffi::OsStrExt::as_bytes(image.as_os_str());
+    #[cfg(windows)]
+    let bytes = image.to_str().expect("filtered to UTF-8 above").as_bytes();
     if std::fs::read(&record).is_ok_and(|on_disk| on_disk == bytes) {
         return Ok(());
     }
@@ -140,31 +166,54 @@ fn copy_if_changed(bytes: &[u8], dest: &Path) -> std::io::Result<bool> {
     // Per process, since an `open -n` relaunch can run two of these at once.
     let tmp = dir.join(format!(".dray.{}", std::process::id()));
     let written = std::fs::write(&tmp, bytes)
-        .and_then(|()| std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)))
-        .and_then(|()| std::fs::rename(&tmp, dest));
+        .and_then(|()| make_executable(&tmp))
+        .and_then(|()| replace(&tmp, dest));
     if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
     written.map(|()| true)
 }
 
+#[cfg(unix)]
+fn make_executable(path: &Path) -> std::io::Result<()> {
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+}
+
+#[cfg(windows)]
+fn make_executable(_: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::rename(from, to)
+}
+
+#[cfg(windows)]
+fn replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    crate::platform::replace_running(from, to)
+}
+
 #[cfg(test)]
 mod tests {
     use super::copy_if_changed;
-    use std::os::unix::fs::PermissionsExt;
 
     #[test]
-    fn copies_only_what_differs_and_leaves_it_executable() {
+    fn copies_only_what_differs() {
         let dir = std::env::temp_dir().join(format!("dray-cli-test-{}", std::process::id()));
-        let dest = dir.join("bin/dray");
+        let dest = dir.join("bin").join("dray");
 
         assert!(copy_if_changed(b"one", &dest).unwrap(), "absent: written");
         assert!(!copy_if_changed(b"one", &dest).unwrap(), "same bytes: left alone");
         assert!(copy_if_changed(b"two", &dest).unwrap(), "different bytes: replaced");
 
         assert_eq!(std::fs::read(&dest).unwrap(), b"two");
-        let mode = std::fs::metadata(&dest).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o755);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&dest).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o755);
+        }
         // Nothing left behind beside it.
         assert_eq!(std::fs::read_dir(dest.parent().unwrap()).unwrap().count(), 1);
 

@@ -226,6 +226,7 @@ pub async fn run_mac() -> Result<()> {
     tokio::spawn(crate::remote_access::start(sink.clone()));
 
     // launchd, and Quit and stop sessions in dev, stop the server with SIGTERM.
+    #[cfg(unix)]
     tokio::spawn(async {
         use tokio::signal::unix::{signal, SignalKind};
         let (Ok(mut term), Ok(mut int)) = (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) else {
@@ -236,6 +237,14 @@ pub async fn run_mac() -> Result<()> {
             _ = int.recv() => {}
         }
         shut_down(0).await;
+    });
+    // Windows has no SIGTERM; a stop there is `TerminateProcess`, which no
+    // handler sees. Ctrl-C reaches a server run in a console.
+    #[cfg(windows)]
+    tokio::spawn(async {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            shut_down(0).await;
+        }
     });
 
     eprintln!("dray --serve listening on 127.0.0.1:{port}, home {}", home.display());
@@ -487,7 +496,7 @@ async fn shut_down(code: i32) -> ! {
     // ponytail: a pid that exited in those 3s could be reused; a process
     // group per agent would make this one signal.
     for pid in tree.into_iter().filter(|&p| p != me) {
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        crate::platform::kill(pid);
     }
     // `_exit`, not `process::exit`: once a phone's dictation has loaded a
     // model, ggml-metal's atexit handler aborts (lib.rs's `RunEvent::Exit`
@@ -535,12 +544,25 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
         .write(true)
         .open(home.join("serve.lock"))
         .context("could not open serve.lock")?;
-    if unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&held), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    if held.try_lock().is_err() {
         anyhow::bail!("a Dray server is already running on {}", home.display());
     }
     std::mem::forget(held);
     let socket = home.join(dray_proto::SOCKET_NAME);
-    if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
+    #[cfg(unix)]
+    let answers = std::os::unix::net::UnixStream::connect(&socket).is_ok();
+    // Opening a pipe instance is connecting to it, as a client would.
+    #[cfg(windows)]
+    // Every instance busy is a server just as surely as one answering.
+    let answers = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(dray_proto::pipe_name(&socket.to_string_lossy()))
+    {
+        Ok(_) => true,
+        Err(e) => e.raw_os_error() == Some(231), // ERROR_PIPE_BUSY
+    };
+    if answers {
         anyhow::bail!(
             "a Dray is already running on {} ({} answers). Quit it, or start \
              dray-serve with DRAY_HOME set to a directory of its own.",
@@ -1457,7 +1479,7 @@ async fn servable(path: &str) -> Option<PathBuf> {
     if let Some(real) = servable_under(&store::get_home_app_dir().await.ok()?, path).await {
         return Some(real);
     }
-    let real = tokio::fs::canonicalize(path).await.ok()?;
+    let real = crate::platform::canonicalize(path).await.ok()?;
     let opened = OPENED_VIDEOS.lock().unwrap_or_else(|e| e.into_inner());
     opened.contains(&real).then_some(real)
 }
@@ -1481,10 +1503,10 @@ async fn read_file(path: &str) -> Result<files::FileBody, String> {
 }
 
 async fn servable_under(home: &std::path::Path, path: &str) -> Option<PathBuf> {
-    let real = tokio::fs::canonicalize(path).await.ok()?;
+    let real = crate::platform::canonicalize(path).await.ok()?;
     let browser = home.join("browser");
     for root in [home.join("attachments"), browser.join("recordings"), browser.join("shots")] {
-        if let Ok(root) = tokio::fs::canonicalize(&root).await {
+        if let Ok(root) = crate::platform::canonicalize(&root).await {
             if real.starts_with(&root) && real.is_file() {
                 return Some(real);
             }
@@ -1981,6 +2003,10 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             &session_id, Some(crate::bots::Act::Stopped), &sink.clone(), crate::interrupt_session(&session_id, sink),
         ).await;
         stop_task(session_id: String, task_id: String) => crate::stop_task(&session_id, &task_id).await;
+        switch_agent(
+            session_id: String, harness: Harness, model: ModelId, effort: Option<Effort>,
+            permission_mode: ApprovalPolicy, fast: bool,
+        ) => crate::switch_agent(&session_id, harness, model, effort, permission_mode, fast, sink).await;
         cancel_queued(session_id: String) => crate::cancel_queued(&session_id, sink).await;
         respond_permission(session_id: String, request_id: String, option_id: String) =>
             crate::respond_permission(&session_id, &request_id, &option_id, sink).await;
@@ -2469,12 +2495,17 @@ mod tests {
         let landed = post("tok", "data.csv").await.text().await.unwrap();
         let uploads = store::get_home_app_dir().await.unwrap().join("attachments/uploads");
         assert!(Path::new(&landed).starts_with(&uploads), "{landed}");
-        assert!(landed.ends_with("/data.csv"));
+        assert!(Path::new(&landed).ends_with("data.csv"), "{landed}");
         assert_eq!(std::fs::read(&landed).unwrap(), body);
         std::fs::remove_dir_all(Path::new(&landed).parent().unwrap()).ok();
 
-        assert_eq!(post("nope", "data.csv").await.status(), 401);
-        assert_eq!(post("tok", "..").await.status(), 400);
+        // Refused before the body is read, and Windows resets a socket closed
+        // with unread data, so the client there reads a reset, not the status.
+        #[cfg(unix)]
+        {
+            assert_eq!(post("nope", "data.csv").await.status(), 401);
+            assert_eq!(post("tok", "..").await.status(), 400);
+        }
     }
 
     #[test]

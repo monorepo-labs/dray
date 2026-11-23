@@ -43,7 +43,7 @@ class BotState {
     val previews = mutableStateMapOf<SessionKey, BotPreview>()
     /** Each server's "Waiting on you" cards by bot id, where it judges them (#1259); absent is a server too old to. */
     val stallCards = mutableStateMapOf<String, Map<String, BotStalls>>()
-    /** A bot chat's agent and model for its next message, the desktop's `unsentPicks`. */
+    /** A chat's agent and model for its next message, a bot's or a task's: the desktop's `unsentPicks`. */
     val unsent = mutableStateMapOf<SessionKey, AgentPick>()
     /** The session an agent switch goes to, minted once and kept until it lands. */
     internal val switches = mutableMapOf<SessionKey, SessionKey>()

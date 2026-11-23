@@ -41,6 +41,9 @@ async fn run() {
     // The Mac's background server: this same binary, run by launchd with no
     // window. Read before Tauri is touched, so no `NSApplication` exists and
     // macOS never counts it as the app running. See MAC-SERVER-PLAN.md.
+    // The app and its server alike, before either spawns a console child.
+    #[cfg(windows)]
+    ade_lib::platform::hidden_console();
     if std::env::args().nth(1).as_deref() == Some("--serve") {
         ade_lib::analytics::install_panic_hook();
         if let Err(e) = ade_lib::serve::run_mac().await {

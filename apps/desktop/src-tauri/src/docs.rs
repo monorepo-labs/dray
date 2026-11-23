@@ -196,7 +196,7 @@ fn watch_targets(
     };
 
     for path in paths {
-        let Ok(real) = std::fs::canonicalize(&path) else { continue };
+        let Ok(real) = dunce::canonicalize(&path) else { continue };
         let Some(dir) = real.parent().map(|p| p.to_path_buf()) else { continue };
         watch_dir(dir);
 
@@ -206,7 +206,7 @@ fn watch_targets(
         // purpose.
         let lexical = std::path::Path::new(&path);
         if let Some(parent) = lexical.parent() {
-            if let (Ok(dir), Some(name)) = (std::fs::canonicalize(parent), lexical.file_name()) {
+            if let (Ok(dir), Some(name)) = (dunce::canonicalize(parent), lexical.file_name()) {
                 watch_dir(dir.clone());
                 watched.insert(dir.join(name), path.clone());
             }
@@ -394,9 +394,9 @@ mod tests {
 
         // Two files in one directory is one watch, and the file that does not
         // exist is dropped rather than watched blind.
-        assert_eq!(dirs, vec![std::fs::canonicalize(&dir).unwrap()]);
+        assert_eq!(dirs, vec![dunce::canonicalize(&dir).unwrap()]);
         assert_eq!(watched.len(), 2);
-        assert_eq!(watched.get(&std::fs::canonicalize(&one).unwrap()), Some(&one));
+        assert_eq!(watched.get(&dunce::canonicalize(&one).unwrap()), Some(&one));
         assert!(folders.is_empty());
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -413,7 +413,7 @@ mod tests {
 
         let (_, folders, dirs) = watch_targets(vec![sub.clone()]);
 
-        let real = std::fs::canonicalize(&sub).unwrap();
+        let real = dunce::canonicalize(&sub).unwrap();
         assert!(dirs.contains(&real));
         assert_eq!(folders.get(&real), Some(&sub));
 

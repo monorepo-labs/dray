@@ -44,7 +44,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 use crate::sink::Sink;
-use tokio::process::Command;
 
 /// How long a cached answer stands. Expires, because `fx provider` and
 /// `fx login` are things a reader does while Dray is open, and "restart the
@@ -382,7 +381,7 @@ async fn write_setting_at(
 /// the settings file cannot be edited by hand.
 async fn set_provider_via_cli(provider: &str) -> Result<()> {
     let bin = crate::binpath::fx().await;
-    let output = Command::new(&bin)
+    let output = crate::binpath::command(&bin)
         .args(["provider", provider])
         .env("PATH", crate::harness::agent_path(&bin))
         .output()
@@ -434,7 +433,7 @@ async fn probe() -> Result<(Option<String>, Vec<Model>)> {
     let bin = crate::binpath::fx().await;
     let output = tokio::time::timeout(
         PROBE_TIMEOUT,
-        Command::new(&bin)
+        crate::binpath::command(&bin)
             .args(["models", "--json"])
             .env("PATH", crate::harness::agent_path(&bin))
             // Killed if the timeout drops the future, or the hung `fx models`

@@ -27,11 +27,12 @@ pub enum Key {
 }
 
 impl Key {
-    /// The key's name as a Linux keyboard prints it.
+    /// The key's name as a Linux or Windows keyboard prints it.
     pub fn label(self) -> &'static str {
         match self {
             Key::Control => "Ctrl",
             Key::Option => "Alt",
+            Key::Command if cfg!(windows) => "Win",
             Key::Command => "Super",
         }
     }

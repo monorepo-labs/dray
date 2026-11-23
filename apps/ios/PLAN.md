@@ -32,7 +32,12 @@ phone reads and drives it over the same WebSocket the desktop uses
   stance for the next reply, each locked mid-turn where the harness can't
   carry it onto a queued prompt (`liveControls.ts`, restated in
   `Picks.lockedMidTurn`). Nothing there reaches the session until a reply
-  goes out, since `send_msg` is what carries it. **Stop** sits at the end of
+  goes out, since `send_msg` is what carries it. Its agent row moves the
+  session to another agent at that send (#1439), as the desktop does: a task
+  calls `switch_agent` first and continues in place, so a server from before
+  it refuses and nothing goes out; a bot chat starts a new session in its
+  folder. Neither draws a line in the chat, and `agent_switched` moves the
+  picker when the switch was made elsewhere. **Stop** sits at the end of
   the picks while a turn runs. The top bar names the project and machine,
   never the branch.
 - **Permission and question cards**, answered in place. A hidden task's card,

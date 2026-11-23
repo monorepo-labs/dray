@@ -1,22 +1,22 @@
 import { readLocalStorage } from "@/hooks/useLocalStorage";
-import { IS_LINUX, IS_MAC } from "@/lib/platform";
+import { HAS_ISLAND, IS_MAC, IS_WINDOWS } from "@/lib/platform";
 import { invoke, LOCAL, serverOfSession } from "@/lib/transport";
 
 /// The modifier tapped alone to open Dray Island, and again to dictate.
 export type IslandKey = "control" | "option" | "command";
 
-/// The Mac's names travel to both islands; Linux reads Option as Alt and
-/// Command as Super, and its keyboards print those.
-export const ISLAND_KEYS: { value: IslandKey; label: string }[] = IS_LINUX
+/// The Mac's names travel to every island; Linux and Windows read Option as
+/// Alt and Command as Super or Win, and their keyboards print those.
+export const ISLAND_KEYS: { value: IslandKey; label: string }[] = IS_MAC
   ? [
-      { value: "control", label: "Ctrl" },
-      { value: "option", label: "Alt" },
-      { value: "command", label: "Super" },
-    ]
-  : [
       { value: "control", label: "⌃ Control" },
       { value: "option", label: "⌥ Option" },
       { value: "command", label: "⌘ Command" },
+    ]
+  : [
+      { value: "control", label: "Ctrl" },
+      { value: "option", label: "Alt" },
+      { value: "command", label: IS_WINDOWS ? "Win" : "Super" },
     ];
 
 export const ISLAND_KEY = "ade.islandKey";
@@ -30,7 +30,7 @@ const enabled = () => readLocalStorage<boolean>(ISLAND_ENABLED, true);
 /// just made is passed in, since storage is written inside a state updater
 /// React may not have run yet.
 export async function applyIsland(pick: { on?: boolean; key?: IslandKey } = {}) {
-  if (!IS_MAC && !IS_LINUX) return;
+  if (!HAS_ISLAND) return;
   const on = pick.on ?? enabled();
   const key = on ? (pick.key ?? readLocalStorage<IslandKey>(ISLAND_KEY, "control")) : "off";
   try {
@@ -47,10 +47,10 @@ export async function applyIsland(pick: { on?: boolean; key?: IslandKey } = {}) 
 /// to doubt never.
 export async function islandOn(what: "asks" | "done", sessionId: string): Promise<boolean> {
   void what;
-  // Linux's island reads this computer's sessions alone, so another
-  // machine's keeps its banner rather than going to an island that cannot
-  // show it.
-  const draws = IS_MAC || (IS_LINUX && serverOfSession(sessionId) === LOCAL);
+  // The Linux and Windows island reads this computer's sessions alone, so
+  // another machine's keeps its banner rather than going to an island that
+  // cannot show it.
+  const draws = IS_MAC || (HAS_ISLAND && serverOfSession(sessionId) === LOCAL);
   if (!draws || !enabled()) return false;
   return invoke<boolean>("island_running").catch(() => false);
 }

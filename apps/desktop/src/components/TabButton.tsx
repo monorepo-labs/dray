@@ -16,7 +16,10 @@ export default function TabButton({
     <button
       type="button"
       className={cn(
-        "rounded-md px-2 py-1 text-ui transition-colors",
+        // WebKit's own ring is the system blue: a grey one in its place, for
+        // keys alone. Inside the edge, so no scrolling row clips it; 55% holds
+        // 3:1 against the page and the selected fill alike.
+        "rounded-md px-2 py-1 text-ui transition-colors outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-foreground/55",
         active
           ? "bg-[var(--fill-soft,var(--sidebar-accent))] text-sidebar-accent-foreground"
           : "text-muted-foreground hover:text-foreground",

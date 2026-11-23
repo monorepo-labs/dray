@@ -21,7 +21,6 @@ use serde_json::Value;
 use std::{process::Stdio, sync::LazyLock, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::Command,
     time::timeout,
 };
 use ts_rs::TS;
@@ -137,7 +136,7 @@ pub(super) async fn initialize(cwd: &str) -> Result<Value> {
 /// where a session would not.
 async fn probe(cwd: &str) -> Result<Value> {
     let bin = crate::binpath::claude().await;
-    let mut child = Command::new(&bin)
+    let mut child = crate::binpath::command(&bin)
         .args([
             "-p",
             "--input-format",

@@ -95,7 +95,7 @@ enum Theme {
     }
 
     /// The type scale, and every font the app draws: SF Pro, SF Mono for diff
-    /// lines alone, regular and semibold only. Sizes are Dynamic Type's default and scale with it.
+    /// lines alone, regular and semibold bar one medium line. Sizes are Dynamic Type's default and scale with it.
     enum Font {
         /// Empty-state titles, the PR title.
         static let title = TypeStyle(20, 26, .semibold, .title3)
@@ -113,6 +113,8 @@ enum Theme {
         static let spoken = TypeStyle(20, 26, .regular, .title3)
         /// The model's name in the picks row, and nothing else.
         static let footnoteStrong = TypeStyle(13, 18, .semibold, .footnote)
+        /// "Your next message goes to …" above a reply: the desktop's one medium line.
+        static let footnoteMedium = TypeStyle(13, 18, .medium, .footnote)
         /// A diff's lines: columns only line up in a fixed width.
         static let code = TypeStyle(12, 17, .regular, .footnote, design: .monospaced)
     }

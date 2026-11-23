@@ -1347,7 +1347,7 @@ function App() {
     () => botEntries(bots, archivedShown ? [] : sessionIndexItems).flatMap((b) => (b.session ? [b.session] : [])),
     [archivedShown, bots, sessionIndexItems],
   );
-  // Each chat's last reply, read off the end of its log rather than loading the
+  // Each chat's inbox line, read off the end of its log rather than loading the
   // transcript. Read again whenever a chat's status or last activity moves.
   const [botPreviews, setBotPreviews] = useState<Record<string, BotPreview>>({});
   const previewKey = botChats
@@ -3522,8 +3522,9 @@ function App() {
   const agentTurnRunning = (agent: Harness) =>
     turnRunningOn(agent, statusBySession, sessionIndexItems, (id) => serverOfSession(id) === LOCAL);
   useAutoUpdateAgents(enabledAgents, agentTurnRunning);
+  // In a session too, where the pick moves it at the next send (#1414).
   useHotkey("harness.next", () => setHarness(nextHarness(harness, enabledAgents)), {
-    enabled: composingNewSession,
+    enabled: !pageOpen && (!selectedSessionId || !busy),
   });
   // A new session never starts on an agent the reader switched off. Only the
   // composer moves: a session already on one keeps it.
@@ -4015,6 +4016,10 @@ function App() {
     <AppShell
       sidebarOpen={!collapsed}
       tall={tallSheet}
+      // What sits before the tab row: the header's padding, the 28px sidebar
+      // toggle and one gap. `ViewTabs` lines its row up from it, and a page's
+      // lit tab starts where a task view's first one does.
+      lead={lights ? "calc(var(--traffic-lights-w) + 2.25rem)" : "3rem"}
       // The issues page fills the column, so the centred empty-composer state
       // is wrong there even with no session selected.
       centered={!shownSession && !pageOpen && !welcomeBot}
@@ -4154,9 +4159,6 @@ function App() {
             // the sheet is what gives this row its colour.
             "relative flex h-(--titlebar-h) shrink-0 items-center gap-2 overflow-hidden px-3",
             lights && "pl-(--traffic-lights-w)",
-            // What sits before the tab row: this padding, the 28px sidebar
-            // toggle and one gap. `ViewTabs` lines its row up from it.
-            lights ? "[--tabs-lead:calc(var(--traffic-lights-w)+2.25rem)]" : "[--tabs-lead:3rem]",
           )}
           // `deep`, not bare: bare drags only on direct hits, so every label
           // inside this row was a dead strip in a titlebar that looks uniform.
@@ -4171,7 +4173,9 @@ function App() {
             // With no traffic lights it sits over the rail: 12px padding puts
             // its centre at 26px, the rail's icons at 28. A nudge, not
             // padding, so `--tabs-lead` still holds.
-            className={cn(!lights && sidebarDrawn === SIDEBAR_RAIL && "translate-x-0.5")}
+            // Above the tab row, whose first 10px reach under it with the sidebar
+            // shut (`data-after-toggle`): its clicks stay its own.
+            className={cn("relative z-1", !lights && sidebarDrawn === SIDEBAR_RAIL && "translate-x-0.5")}
           />
 
           {/* Over the sidebar's right end, out of the flow so the tabs do not
@@ -4343,6 +4347,7 @@ function App() {
               }
               // Not past a parent's breadcrumb, whose width the lead leaves out.
               alignX={crumb ? 0 : sidebarDrawn}
+              afterToggle={!crumb && !sidebarDrawn}
             />
           )}
           {/* Keeps the far end at the far end on pages with no tab row. */}
@@ -4690,13 +4695,14 @@ function App() {
               />
             )
           }
-          // Only on a new task. An agent is fixed at creation, so a live
-          // session cannot be pointed at one that is missing — and a session
-          // that already exists has a CLI that already ran.
+          // On a new task, or a live one picked onto another agent (#1414): a
+          // session's own agent already ran, so only a picked one can be missing.
           notice={
             sleepingBoat ? null : offlineServer ? (
               <ServerOfflineNotice server={offlineServer} />
-            ) : !selectedSessionId && missingAgent && !cloudTask ? (
+            ) : (!selectedSessionId || (selectedSession && harness !== selectedSession.harness)) &&
+              missingAgent &&
+              !cloudTask ? (
               <AgentMissingNotice agent={missingAgent} />
             ) : loggedOutAgent && authTurn && selectedSession ? (
               <LoginExpiredNotice
@@ -4718,13 +4724,12 @@ function App() {
               <CloudNotice step={placing} />
             ) : sleepingBoat ? (
               <BoatNotice server={sleepingBoat} />
-            ) : selectedBot && selectedSession && harness !== selectedSession.harness ? (
-              // A bot chat picked onto another agent: the send moves it there.
+            ) : selectedSession && harness !== selectedSession.harness ? (
+              // A bot chat or task picked onto another agent: the send switches it.
               <div className="mb-2 flex min-h-7 items-center gap-2 px-1">
                 <AgentIcon harness={harness} brand className="size-3.5 shrink-0" />
-                <p className="min-w-0 flex-1 truncate text-ui text-foreground">
-                  Moving to {AGENT_LABELS[harness]}
-                  <span className="text-muted-foreground"> · Your next message goes to it, with this conversation.</span>
+                <p className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">
+                  Your next message goes to {AGENT_LABELS[harness]}
                 </p>
               </div>
             ) : selectedItem?.continueAt && (
@@ -4746,7 +4751,8 @@ function App() {
                 Changes auto-saved
               </span>
             ) : (
-              draftChord && `${formatChords([draftChord])[0].join("")} to save as draft`
+              // "⌘S" on a Mac, "Ctrl+S" elsewhere, where the word runs into the key.
+              draftChord && `${formatChords([draftChord])[0].join(IS_MAC ? "" : "+")} to save as draft`
             )
           }
           agentUpdate={

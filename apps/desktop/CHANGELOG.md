@@ -19,6 +19,31 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.33.0 · 2026-11-22 · notify
+
+### New
+
+- **Browser-style tabs.** A task's tabs look like a browser's: the open
+  tab is part of the page below it, the others sit flat until you hover
+  them. In light themes the window frame takes the page's colour, so
+  the whole window reads as one sheet.
+- **React to a bot's messages.** Hover a bot's message and pick an
+  emoji. The bot sees your reaction and may answer it.
+- **Attach a task to a bot.** Right-click a task in the sidebar and
+  pick Attach to. It moves under that bot's Tasks and reports to it
+  after every turn; Detach brings it back.
+  `dray session attach <id> --bot <name>` does the same.
+- **Markdown files render in Files.** A `.md` file opens rendered, with
+  working links and images. Switch to Edit to change it and ⌘S to save.
+
+### Improved
+
+- With the sidebar shut, New Task, Issues, Pull requests and bot pages
+  line up under the header the way a task does.
+- Bots keep documents they write for you in a `docs/` folder, sorted by
+  topic, instead of the Desktop or `/tmp`.
+- Keyboard focus on Settings and panel rows shows a grey ring.
+
 ## 0.32.1 · 2026-11-21 · notify
 
 ### Improved

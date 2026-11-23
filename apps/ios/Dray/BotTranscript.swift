@@ -20,14 +20,12 @@ enum BotItem: Identifiable {
     /// "Messaged" another bot, by the id `dray bot send` printed where it did.
     case botSent(id: String, name: String, botId: String?, ts: String?)
     case learned(id: String, lesson: Lesson, commit: String, undone: Bool, ts: String?)
-    /// Where the chat moved to another session, and the agent it runs.
-    case switchTo(id: String, harness: String?, ts: String?)
 
     var id: String {
         switch self {
         case .user(let id, _, _, _, _), .assistant(let id, _, _, _, _), .notice(let id, _, _), .card(let id, _, _),
              .task(let id, _, _, _), .sent(let id, _, _), .botMessage(let id, _, _, _, _), .botSent(let id, _, _, _),
-             .learned(let id, _, _, _, _), .switchTo(let id, _, _): id
+             .learned(let id, _, _, _, _): id
         }
     }
 
@@ -35,7 +33,7 @@ enum BotItem: Identifiable {
         switch self {
         case .user(_, _, _, _, let ts), .assistant(_, _, _, _, let ts), .notice(_, _, let ts), .card(_, _, let ts),
              .task(_, _, _, let ts), .sent(_, _, let ts), .botMessage(_, _, _, _, let ts), .botSent(_, _, _, let ts),
-             .learned(_, _, _, _, let ts), .switchTo(_, _, let ts): ts
+             .learned(_, _, _, _, let ts): ts
         }
     }
 }

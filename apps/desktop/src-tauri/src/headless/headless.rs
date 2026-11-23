@@ -18,6 +18,10 @@
 //! tabs for that session are held under: the server's list would replace the
 //! reader's strip.
 
+// Windows refuses to start Chromium (see `launch`), so the driving half goes
+// unreached there.
+#![cfg_attr(windows, allow(dead_code, unused_imports))]
+
 #[path = "../browser/automation.rs"]
 pub mod automation;
 #[path = "download.rs"]
@@ -26,6 +30,7 @@ mod download;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -133,20 +138,22 @@ pub(crate) fn clear_stale_lock(dir: &Path) {
 }
 
 fn hostname() -> String {
-    let mut buf = [0u8; 256];
-    // SAFETY: the buffer is writable for its whole length.
-    if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
-        return String::new();
-    }
-    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    String::from_utf8_lossy(&buf[..end]).into_owned()
+    crate::platform::hostname()
 }
 
 /// Whether `pid` is alive and, where `/proc` can say, runs this binary: a
 /// resume reuses low pids, so a live pid alone is often someone else.
 fn holds_lock(pid: i32) -> bool {
+    // Only a pid this user may signal holds it, unlike `platform::pid_alive`:
+    // after a host rename a stale lock's pid can belong to a root daemon, and
+    // counting `EPERM` as alive would refuse the profile for good.
+    #[cfg(unix)]
     // SAFETY: signal 0 only checks the pid.
-    if unsafe { libc::kill(pid, 0) } != 0 {
+    if pid <= 0 || unsafe { libc::kill(pid, 0) } != 0 {
+        return false;
+    }
+    #[cfg(windows)]
+    if pid <= 0 || !crate::platform::pid_alive(pid as u32) {
         return false;
     }
     let comm = |p: &str| std::fs::read_to_string(format!("/proc/{p}/comm")).ok();
@@ -462,7 +469,7 @@ async fn chrome_for(session: &str) -> Result<(), String> {
     // and dropped, once and for the life of the process, where Chromium says
     // it cannot. Without it a renderer exploit runs as this server's user,
     // which is what the agent's own shell already is.
-    let root = unsafe { libc::geteuid() } == 0;
+    let root = crate::platform::is_root();
     let sandboxed = !root && !NO_SANDBOX.load(Ordering::Relaxed);
     match launch(session, &exe, sandboxed).await {
         Err(e) if sandboxed && e.contains("No usable sandbox") => {
@@ -474,6 +481,14 @@ async fn chrome_for(session: &str) -> Result<(), String> {
     }
 }
 
+/// Chromium's DevTools pipe rides fds 3 and 4, which Windows has no way to
+/// hand a child through `Command`.
+#[cfg(windows)]
+async fn launch(_: &str, _: &Path, _: bool) -> Result<(), String> {
+    Err("the headless browser is not supported on Windows yet".into())
+}
+
+#[cfg(unix)]
 async fn launch(session: &str, exe: &Path, sandboxed: bool) -> Result<(), String> {
     let profile = browser_dir().join(session);
     std::fs::create_dir_all(&profile).map_err(|e| format!("could not create {}: {e}", profile.display()))?;

@@ -2,6 +2,8 @@
 /// downloads, and it is shell, so it is checked here where release-cli's test
 /// job already runs.
 #[test]
+// install.sh is the Unix installer; Windows has no `sh` to run it.
+#[cfg(unix)]
 fn installer_resolves_each_channel() {
     let dir = env!("CARGO_MANIFEST_DIR");
     let out = std::process::Command::new("sh")

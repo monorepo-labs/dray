@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "dray"
-version = "0.32.1"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -1417,6 +1417,7 @@ dependencies = [
  "chrono",
  "cpal",
  "dray-proto",
+ "dunce",
  "earshot",
  "fff-search",
  "flate2",
@@ -1455,7 +1456,9 @@ dependencies = [
  "tokio-tungstenite",
  "transcribe-cpp",
  "ts-rs",
+ "unicode-segmentation",
  "uuid",
+ "windows-sys 0.61.2",
  "x11",
  "zbus",
  "zip 9.0.5",

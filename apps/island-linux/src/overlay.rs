@@ -365,7 +365,7 @@ fn chrome(island: &Entity<Island>, s: &Shooting, vw: f32, vh: f32) -> gpui::AnyE
 }
 
 /// Ink on the live screen while dictating. The overlay lets the mouse through
-/// until Shift is held (`x11::pass_mouse`), so the page under it still
+/// until Shift is held (`sys::pass_mouse`), so the page under it still
 /// scrolls and clicks; with no compositor to see through it, it shows the
 /// screen as it was when Shift went down.
 pub struct Inking {
