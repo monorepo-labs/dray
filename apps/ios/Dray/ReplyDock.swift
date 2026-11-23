@@ -127,6 +127,15 @@ struct ReplyDock: View {
             model = nil
             effort = nil
         }
+        // A switch made elsewhere: the old agent's picks would go to the new one, which may not run them.
+        .onChange(of: item?.harness) {
+            model = nil
+            effort = nil
+            stance = nil
+            fast = nil
+        }
+        // Never the old agent's models under the new one's name while its list is read.
+        .onChange(of: harness) { models = [] }
         .task(id: "\(harness)|\(connected)") {
             guard connected, !harness.isEmpty else { return }
             let read: [Model]? = try? await store.call(key.server, "list_models", ["harness": .string(harness)])
@@ -284,19 +293,21 @@ struct ReplyDock: View {
         let offersStance = Picks.offersStances(harness)
         let effortLabel = current.flatMap { Picks.usableEffort($0, effortNow) }.map { Picks.effortLabels[$0] ?? $0 } ?? ""
         let stanceLabel = Picks.stances.first { $0.0 == Picks.stanceFor(harness, stanceNow) }?.1 ?? ""
-        let up = agents.filter(\.available)
+        let choices = agentChoices
         return PickSheet(title: "This task") {
             // Another agent takes the session over at the next send, with the conversation.
-            if up.count > 1 {
+            if choices.count > 1 {
                 PickSection("Agent") {
                     ChipRow(focus: harness) {
-                        ForEach(up, id: \.harness) { a in
+                        ForEach(choices, id: \.harness) { a in
+                            // Mid-turn the session's own agent stays open, so a pick made before the turn can be undone.
+                            let held = locked("agent") && a.harness != item?.harness
                             PickChip(label: a.label, selected: a.harness == harness, harness: a.harness) { pickAgent(a.harness) }
+                                .allowsHitTesting(!held)
+                                .opacity(held ? 0.35 : 1)
                                 .id(a.harness)
                         }
                     }
-                    .allowsHitTesting(!locked("agent"))
-                    .opacity(locked("agent") ? 0.35 : 1)
                 }
             }
             PickSection("Model") {
@@ -353,7 +364,7 @@ struct ReplyDock: View {
     /// What waits for the turn to end, said once under the card. Picks go out with the next reply,
     /// so "the rest" are the ones that reply carries into the running turn.
     private var lockNote: String? {
-        let shown: [(String, String)] = (agents.filter(\.available).count > 1 ? [("agent", "agent")] : []) + [("model", "model")]
+        let shown: [(String, String)] = (agentChoices.count > 1 ? [("agent", "agent")] : []) + [("model", "model")]
             + ((current?.efforts.isEmpty ?? true) ? [] : [("effort", "effort")])
             + (Picks.offersFast(harness, current) ? [("fast", "fast mode")] : [])
             + (Picks.offersStances(harness) ? [("stance", "permissions")] : [])
@@ -362,6 +373,15 @@ struct ReplyDock: View {
         if held.count == shown.count { return "These can change once this turn ends." }
         let names = ListFormatter.localizedString(byJoining: held)
         return names.prefix(1).uppercased() + names.dropFirst() + " can change once this turn ends. The rest go with your next message."
+    }
+
+    /// The agents up on the machine, and always the session's own, so a pick can be taken back.
+    private var agentChoices: [(harness: String, label: String)] {
+        var list = agents.filter(\.available).map { (harness: $0.harness, label: $0.label) }
+        if let own = item?.harness, !list.contains(where: { $0.harness == own }) {
+            list.insert((harness: own, label: Picks.agentLabels[own] ?? own), at: 0)
+        }
+        return list
     }
 
     /// Another agent's pick waits for the next send; the session's own takes the pick back.

@@ -774,6 +774,7 @@ final class Store {
     }
 
     private func merged(_ key: SessionKey, _ read: SessionItem) -> SessionItem {
+        dropStalePick(key, read)
         var item = read
         if let s = statuses[key], let m = s.modified, m >= item.modified {
             item.status = s.status
@@ -1297,6 +1298,7 @@ final class Store {
         case "session_created", "session_changed":
             guard let item = try? decoder.decode(EventFrame<SessionItem>.self, from: data).payload,
                   !deleted.contains(SessionKey(server: server, id: item.sessionId)) else { return }
+            dropStalePick(SessionKey(server: server, id: item.sessionId), item)
             items[SessionKey(server: server, id: item.sessionId)] = item
             Task { await loadMarks(server, force: false, only: [item.projectPath]) }
             // `bots_changed` comes from the CLI alone, and a bot the app made is first seen as its chat.
@@ -1345,6 +1347,13 @@ final class Store {
             break
         }
         if !e.payload.isTransient, transcripts[key] != nil { transcripts[key]?.append(e) }
+    }
+
+    /// A pick naming the agent the session already runs moves nothing, and kept it would move the
+    /// session back unasked once it ran elsewhere: the move that answered it was missed. A bot
+    /// sheet's pick of another model on the same agent stays.
+    private func dropStalePick(_ key: SessionKey, _ item: SessionItem) {
+        if let p = unsent[key], p.harness == item.harness, bot(key) == nil || p.model == item.model { unsent[key] = nil }
     }
 
     /// Drops a session's cards once nothing could answer them: no turn

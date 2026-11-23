@@ -43,9 +43,21 @@ final class AgentSwitchTests: XCTestCase {
         dismissSheet(app)
         signal("busy")
         XCTAssertTrue(app.buttons["Stop"].waitForExistence(timeout: 90), "no turn started")
-        app.reply("This must not send.")
-        XCTAssertTrue(waitForText(app, "Wait for this turn to finish before switching to Codex.", timeout: 15))
+        app.reply("After that, also say ok.")
+        let refused = "Wait for this turn to finish before switching to Codex."
+        XCTAssertTrue(waitForText(app, refused, timeout: 15))
         snap(app, "mid-turn-refused")
+        // The session's own agent stays open mid-turn: taking the pick back queues the words to it.
+        app.buttons["Model"].tap()
+        let claude = app.buttons["Claude Code"]
+        XCTAssertTrue(claude.waitForExistence(timeout: 10))
+        claude.tap()
+        dismissSheet(app)
+        XCTAssertFalse(app.staticTexts["Your next message goes to Codex"].exists, "the pick was not taken back")
+        app.buttons["Send"].tap()
+        sleep(3)
+        XCTAssertFalse(hasText(app, refused), "the send was still refused")
+        snap(app, "mid-turn-undone")
     }
 
     func test4BotSwitch() throws {
