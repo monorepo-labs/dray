@@ -25,7 +25,9 @@ phone reads and drives it over the same WebSocket the desktop uses
   "Swipe up to type" sits over the orb until the reader has done it three times.
   The sheet opens short over the keyboard, as Android's does, and a drag up
   its header takes it to full height (#1415): one detent at a time, since a
-  sheet offered both goes to the larger as soon as the keyboard is up. In a
+  sheet offered both goes to the larger as soon as the keyboard is up. A
+  swipe down the short sheet closes it with the keyboard, never the keyboard
+  alone (#1453). In a
   bot's chat a swipe in from the right edge opens its Tasks sheet, the button
   being a reach to the top of the screen. The model chip and
   "···" open **This task**: the session's model, effort, fast mode and

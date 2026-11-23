@@ -1158,6 +1158,11 @@ final class Store {
                 "isNewSession": .bool(isNew),
             ]) { $1 })
             if let snapshot = outcome.snapshot { created(key.server, snapshot) }
+            // The send wrote its picks to the index and announced nothing, and the dock falls back to
+            // this entry once its own pick clears: held as read before the send, it showed the old model.
+            if let now: SessionItem = (try? await c.call("get_session_by_id", ["sessionId": .string(to.id), "turns": 0])) ?? nil {
+                store(to, now)
+            }
             unsent[key] = nil
             switches[key] = nil
             // By id: the server's `queue_changed` usually lands before this reply.

@@ -735,7 +735,6 @@ pub async fn cancel_transcription(state: State<'_, TranscriptionState>) -> Resul
 /// on a task, held for the owning client's stop, which answers with a Retry;
 /// `transcription_interrupted` tells the window to ask, and the Island asks when
 /// the reader presses stop.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn close_for_sleep(app: &AppHandle) {
     use std::sync::atomic::Ordering::SeqCst;
 
@@ -820,6 +819,42 @@ pub fn stop_on_sleep(app: &AppHandle) {
             eprintln!("[sleep watch err] {e}");
         }
     });
+}
+
+/// Runs [`close_for_sleep`] on the power manager's suspend notice, which
+/// Windows waits on (up to two seconds) before it goes down. The callback
+/// runs on a thread of the system's, outside the runtime, where
+/// `block_in_place` just runs its closure.
+#[cfg(windows)]
+pub fn stop_on_sleep(app: &AppHandle) {
+    use std::ffi::c_void;
+    use windows_sys::Win32::System::Power::{PowerRegisterSuspendResumeNotification, DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{DEVICE_NOTIFY_CALLBACK, PBT_APMSUSPEND};
+
+    unsafe extern "system" fn on_power(context: *const c_void, kind: u32, _setting: *const c_void) -> u32 {
+        if kind == PBT_APMSUSPEND {
+            close_for_sleep(unsafe { &*(context as *const AppHandle) });
+        }
+        0
+    }
+
+    // Both live as long as the app; nothing ever unregisters.
+    let context: &'static AppHandle = Box::leak(Box::new(app.clone()));
+    let params: &'static DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS = Box::leak(Box::new(DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS {
+        Callback: Some(on_power),
+        Context: context as *const AppHandle as *mut c_void,
+    }));
+    let mut handle = std::ptr::null_mut();
+    let err = unsafe {
+        PowerRegisterSuspendResumeNotification(
+            DEVICE_NOTIFY_CALLBACK,
+            params as *const DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS as *mut c_void,
+            &mut handle,
+        )
+    };
+    if err != 0 {
+        eprintln!("[sleep watch err] {}", std::io::Error::from_raw_os_error(err as i32));
+    }
 }
 
 #[cfg(target_os = "linux")]

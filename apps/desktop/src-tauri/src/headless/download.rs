@@ -44,12 +44,19 @@ const MAC_X64: Zip = Zip {
     sha256: "6338a784c691f42dd1ed6aeeef650171c7d72cf74bdb8450d0079864e72a8074",
 };
 
+const WIN_X64: Zip = Zip {
+    platform: "win64",
+    size: 124_737_213,
+    sha256: "20798f7c51a22def0b3d02e526a8f52e7ee2c7eddcde9d81a4c23f618e8b5436",
+};
+
 fn zip() -> Option<&'static Zip> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => Some(&LINUX_X64),
         ("linux", "aarch64") => Some(&LINUX_ARM64),
         ("macos", "aarch64") => Some(&MAC_ARM64),
         ("macos", "x86_64") => Some(&MAC_X64),
+        ("windows", "x86_64") => Some(&WIN_X64),
         _ => None,
     }
 }
@@ -88,7 +95,7 @@ async fn dir() -> Result<PathBuf> {
 }
 
 fn binary_in(version_dir: &Path, zip: &Zip) -> PathBuf {
-    version_dir.join(zip.root()).join("chrome-headless-shell")
+    version_dir.join(zip.root()).join(if cfg!(windows) { "chrome-headless-shell.exe" } else { "chrome-headless-shell" })
 }
 
 /// The binary, if it is on disk; otherwise a download is started (or a

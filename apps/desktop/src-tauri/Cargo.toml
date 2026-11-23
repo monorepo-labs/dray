@@ -159,10 +159,31 @@ transcribe-cpp = { version = "0.4", default-features = false, features = [
 [target.'cfg(not(any(target_os = "macos", target_os = "linux")))'.dependencies]
 transcribe-cpp = { version = "0.4", default-features = false, optional = true }
 
-# Embedded Chromium for the in-app browser, on macOS and Linux (X11). Behind a
-# feature so a build without the CEF binaries on disk still compiles: the
-# `cef-dll-sys` build script downloads ~130MB and runs CMake, which is not
-# something `cargo check` should need. See cef/cef.rs.
+# Open in's app icons, read out of each `.exe` and handed over as PNG. The
+# version tauri's menus already build. Not behind `desktop`: `dray-serve`
+# answers the apps list too. See apps/windows.rs.
+[target.'cfg(windows)'.dependencies.png]
+version = "0.18"
+
+# The speakers' mute while dictating, through Core Audio's endpoint volume: a
+# COM interface, which `windows-sys` does not carry. The version cpal and cef
+# already build, so this adds one feature and no crate.
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+optional = true
+features = [
+  "Win32_Media_Audio",
+  "Win32_Media_Audio_Endpoints",
+  "Win32_System_Com",
+  # `IMMDevice::Activate` takes a `PROPVARIANT`, so it only exists with these.
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Variant",
+]
+
+# Embedded Chromium for the in-app browser, on macOS, Linux (X11) and
+# Windows. Behind a feature so a build without the CEF binaries on disk still
+# compiles: the `cef-dll-sys` build script downloads ~130MB and runs CMake,
+# which is not something `cargo check` should need. See cef/cef.rs.
 #
 # `desktop` is the shipped app: Tauri, its plugins and every Mac-only
 # dependency. Off, what is left is the core `dray-serve` runs — which is what
@@ -203,6 +224,8 @@ desktop = [
   "dep:gtk",
   # Linux's sleep and banner click. See transcription.rs and notifications.rs.
   "dep:zbus",
+  # Windows' speaker mute while dictating. See transcription/audio.rs.
+  "dep:windows",
 ]
 cef = ["desktop", "dep:cef", "dep:gtk", "dep:gdkx11", "dep:x11"]
 # `connect` and TLS: a server reaches other machines too (machines.rs).
@@ -215,7 +238,7 @@ serve = [
   "dep:flate2",
 ]
 
-[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies.cef]
+[target.'cfg(any(target_os = "macos", target_os = "linux", windows))'.dependencies.cef]
 version = "156.6.0"
 optional = true
 default-features = false
@@ -236,15 +259,15 @@ version = "2.21"
 optional = true
 features = ["xlib", "xinput"]
 
-# Chromium's tarball unpacked in-process on Linux: an AppImage cannot declare
+# Chromium's tarball unpacked in-process off a Mac: an AppImage cannot declare
 # `bzip2`, and a desktop without it would fail every download. Both already
 # in the lock — `bzip2` on the pure-Rust libbz2 under `download-cef`, `tar`
 # under the updater. See chromium.rs.
-[target.'cfg(target_os = "linux")'.dependencies.bzip2]
+[target.'cfg(not(target_os = "macos"))'.dependencies.bzip2]
 version = "0.6"
 optional = true
 
-[target.'cfg(target_os = "linux")'.dependencies.tar]
+[target.'cfg(not(target_os = "macos"))'.dependencies.tar]
 version = "0.4"
 optional = true
 
@@ -258,6 +281,10 @@ features = [
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_NetworkManagement_IpHelper",
   "Win32_Networking_WinSock",
+  "Win32_System_Power",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_Graphics_Gdi",
+  "Win32_UI_Shell",
   "Win32_Security",
   "Win32_Security_Authorization",
   "Win32_Storage_FileSystem",

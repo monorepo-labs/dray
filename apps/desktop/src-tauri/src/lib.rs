@@ -25,12 +25,12 @@ pub mod apps;
 pub mod attachments;
 pub mod auto_continue;
 pub mod binpath;
-#[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+#[cfg(feature = "cef")]
 #[path = "cef/cef.rs"]
 pub mod cef;
 // Compiled without the feature too: it needs nothing of CEF's, and that is
 // what keeps its types in `events.ts` and its tests in a bare `cargo test`.
-#[cfg(all(feature = "desktop", any(target_os = "macos", target_os = "linux")))]
+#[cfg(feature = "desktop")]
 pub mod chromium;
 #[cfg(all(feature = "desktop", target_os = "macos"))]
 mod trackpad;
@@ -1025,7 +1025,7 @@ pub fn run() {
             }
             // Chromium first: it patches NSApp and starts its pump, and every
             // window already exists here for it to parent a view into.
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::init(app.handle());
             // Mac only: X11 reports a two-finger scroll with no phases, so a
             // swipe's start and lift could only be guessed from timing, the
@@ -1049,7 +1049,6 @@ pub fn run() {
             // reader who gives up after one failure writes no more.
             tauri::async_runtime::spawn(transcription::recordings::prune());
             transcription::serve_host(app.handle());
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
             transcription::stop_on_sleep(app.handle());
 
             // Sessions live in the background server launchd runs from this
@@ -1174,37 +1173,37 @@ pub fn run() {
             // Here and not on the server: a video plays through this
             // webview's asset protocol, which only this process can widen.
             files::read_file,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_open,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_tabs,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_history,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_activate,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_close,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_move,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_nav,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_layout,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_pins,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_shutter_ready,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_devtools,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_pick,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_snapshot,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             chromium::chromium_status,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             chromium::chromium_download,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             chromium::chromium_remove,
             notifications::notify_session,
             notifications::set_window_urgent,
@@ -1248,7 +1247,7 @@ pub fn run() {
             // kill still gets past this — see `Known issues`.
             if matches!(event, tauri::RunEvent::Exit) {
                 transcription::audio::restore_other_audio();
-                #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+                #[cfg(feature = "cef")]
                 cef::save_now();
                 // Tao ends the process with `process::exit`, which runs the C
                 // atexit chain — and ggml-metal's global device registry frees
