@@ -189,18 +189,6 @@ struct BotStartView: View {
 
 /// A bot's chat: the conversation, a line where it started or messaged a task,
 /// merge cards, lessons, and a time label wherever 15 minutes passed between rows.
-/// Between two sessions of one bot chat: the agent the later one runs (`AGENT_LABELS`).
-struct SwitchLine: View {
-    let harness: String?
-
-    var body: some View {
-        Text("Switched to \(harness.map { Picks.agentLabels[$0] ?? $0 } ?? "another agent")")
-            .font(Theme.Font.footnote)
-            .foregroundStyle(Theme.tertiary)
-            .frame(maxWidth: .infinity)
-    }
-}
-
 struct BotChatRows: View {
     /// Any of the chat's sessions: its rows reach only for the server.
     let key: SessionKey
@@ -217,14 +205,8 @@ struct BotChatRows: View {
                 Text(label).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                     .frame(maxWidth: .infinity).padding(.top, Theme.Space.s)
             }
-            Group {
-                if case .item(.switchTo(_, let harness, _)) = row {
-                    SwitchLine(harness: harness)
-                } else {
-                    BotRowView(key: key, row: row, late: late(items, row))
-                }
-            }
-            .heldRow(row.id)
+            BotRowView(key: key, row: row, late: late(items, row))
+                .heldRow(row.id)
         }
     }
 
@@ -335,8 +317,6 @@ private struct BotRowView: View {
                         .strikethrough(undone).lineLimit(1)
                 }
                 .font(Theme.Font.subhead)
-            case .switchTo:
-                EmptyView()
             }
         }
     }

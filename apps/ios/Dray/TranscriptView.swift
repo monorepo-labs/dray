@@ -274,16 +274,10 @@ struct TranscriptView: View {
         }
     }
 
-    /// The bot chat's items across its sessions on screen, a line where each later one begins.
-    /// The desktop's `chatItems`.
+    /// The bot chat's items across its sessions on screen. An agent switch draws nothing: the
+    /// reader just picked the agent (#1414). The desktop's `chatItems`.
     private func chatItems(_ segments: [SessionKey]) -> [BotItem] {
-        segments.enumerated().flatMap { i, segment in
-            let events = store.transcripts[segment]?.events ?? []
-            let items = botItems(events)
-            guard i > 0 else { return items }
-            let ts = events.first?.ts ?? store.items[segment]?.created
-            return [.switchTo(id: "switch:\(segment.id)", harness: store.items[segment]?.harness, ts: ts)] + items
-        }
+        segments.flatMap { botItems(store.transcripts[$0]?.events ?? []) }
     }
 
     private func chat(_ bot: Bot?) -> [BotItem] { bot == nil ? [] : chatItems(segments(bot)) }

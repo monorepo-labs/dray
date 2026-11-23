@@ -146,7 +146,8 @@ struct Welcome: Decodable {
 /// newer server adding some costs nothing.
 struct SessionItem: Codable, Hashable {
     let sessionId: String
-    let harness: String
+    /// Moves with `agent_switched` (#1414).
+    var harness: String
     let cwd: String
     let projectPath: String
     var title: String
@@ -512,6 +513,8 @@ enum Payload: Decodable {
     case learnedUndone(commit: String, path: String)
     /// An emoji on a message: a bot's on one the user typed, or with `byUser` the user's on the bot's.
     case reaction(messageId: String, emoji: String, byUser: Bool = false)
+    /// The task moved to another agent (#1414). Draws nothing: the reader picked it.
+    case agentSwitched(to: String)
     case error(String)
     case other(String)
 
@@ -587,6 +590,8 @@ enum Payload: Decodable {
                 self = .reaction(messageId: try c.decode(String.self, forKey: "messageId"),
                                  emoji: try c.decode(String.self, forKey: "emoji"),
                                  byUser: (try? c.decode(Bool.self, forKey: "byUser")) ?? false)
+            case "agent_switched":
+                self = .agentSwitched(to: try c.decode(String.self, forKey: "to"))
             default:
                 self = .other(type)
             }
