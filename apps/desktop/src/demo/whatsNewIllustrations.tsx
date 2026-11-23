@@ -6,159 +6,123 @@ import type { Harness } from "@/types/events";
 import { cn } from "@/lib/utils";
 import "../App.css";
 
-/// Illustrations for What's New highlights, drawn in code rather than
-/// screenshotted: small, simplified pieces of Dray's real UI, the way the
-/// site's "Ticket to merge" section draws its mocks. Each is a 1280×720 frame,
-/// the 16:9 of a highlight's picture, captured to an image for the changelog
+/// Illustrations for What's New highlights, drawn in code in the site's own
+/// mock style — `Issues`, `PullRequest` and `Browser` in
+/// apps/web/src/components/home/Features.tsx and the devices in Everywhere.tsx:
+/// flat, square-cornered panels, #0A0A0A mocks on a #FFFFFF1A tile, mono type
+/// at 12px, 34px rows, the brand blue for the one thing picked. Each is drawn
+/// at the site's own size in a 400×225 frame and zoomed to 1280×720, the 16:9
+/// of a highlight's picture, then captured to an image for the changelog
 /// (`demo/whats-new/<art>.png`), since an image is what every surface reading
-/// changelog.json can show — the app, the site, GitHub's release notes and the
-/// phones. `?art=<id>` draws one frame alone at the window's corner, for that
-/// capture at a 1280×720 viewport; without it every frame is listed.
+/// changelog.json can show. `?art=<id>` draws one frame alone at the window's
+/// corner, for that capture at a 1280×720 viewport; without it every frame is
+/// listed.
 
-/// The Dray mark, as the sign-in gate draws it.
-const MARK =
-  "M101.004 0C104.603 0 107.52 2.926 107.52 6.536V18.301C107.52 36.349 122.108 50.98 140.102 50.98H152.484C156.083 50.98 159 53.907 159 57.516V142.484C159 146.093 156.083 149.02 152.484 149.02H140.102C122.108 149.02 107.52 163.651 107.52 181.699V193.464C107.52 197.074 104.603 200 101.004 200H0.326C0.146 200 0 199.854 0 199.673V134.967C0 134.787 0.146 134.641 0.326 134.641H61.254C79.249 134.641 93.836 120.009 93.836 101.961V98.039C93.836 79.991 79.249 65.36 61.254 65.36H0.326C0.146 65.36 0 65.213 0 65.033V0.327C0 0.146 0.146 0 0.326 0H101.004Z";
+const MONO = "font-mono tracking-[-0.04em]";
 
+/// The site's tile: #FFFFFF1A over the page's black, the mock centred on it.
 function Frame({ children }: { children: ReactNode }) {
   return (
-    <div className="relative h-[720px] w-[1280px] shrink-0 overflow-hidden bg-[#141414] font-sans text-white antialiased">
-      {children}
+    <div className="h-[720px] w-[1280px] shrink-0 overflow-hidden bg-black">
+      <div style={{ zoom: 3.2 }} className="flex h-[225px] w-[400px] items-center justify-center bg-[#1A1A1A] p-6 text-white antialiased">
+        {children}
+      </div>
     </div>
   );
 }
 
-/// A task moving from Claude Code to Codex: the chat so far, the agent picker
-/// open on Codex, and the line the composer shows before the send that moves it.
+/// A task with its harnesses listed as the site lists issues: Claude Code the
+/// one it runs on now, Codex picked in blue for its next message.
 function AgentSwitch() {
-  const agents: [Harness, string][] = [
-    ["claude_code", "Claude Code"],
-    ["codex", "Codex"],
-    ["grok", "Grok"],
-    ["pi", "pi"],
+  const rows: [Harness, string, string | null][] = [
+    ["claude_code", "Claude Code", "now"],
+    ["codex", "Codex", "next message"],
+    ["grok", "Grok", null],
+    ["pi", "pi", null],
   ];
   return (
-    <Frame>
-      <div className="absolute inset-x-[120px] top-[56px] bottom-[-40px] rounded-[28px] border border-white/10 bg-[#1C1C1C] shadow-[0_24px_80px_#00000080]">
-        <div className="flex flex-col gap-7 px-10 pt-9">
-          <div className="self-end rounded-[24px] bg-[#2C2C2C] px-7 py-4 text-[26px] leading-9">
-            Make the worktree test pass on Linux
-          </div>
-          <div className="flex max-w-[540px] items-start gap-4 text-[26px] leading-9 text-white/80">
-            <AgentIcon harness="claude_code" brand className="mt-1.5 size-7 shrink-0" />
-            The temp folder is shared between runs, so the second run finds the first one's files.
-          </div>
-        </div>
+    <div aria-hidden className="flex w-[300px] flex-col bg-[#0A0A0A]">
+      <div className="flex h-10 shrink-0 items-center gap-2 px-3">
+        <span className="size-1.5 shrink-0 bg-[#3FB950]" />
+        <span className={`${MONO} text-xs leading-4 text-white`}>Fix login loop</span>
+        <span className={`${MONO} ml-auto text-[11px] leading-[14px] text-[#8A8A8A]`}>harness</span>
       </div>
-
-      {/* The picker, opened on Codex beside the chat. */}
-      <div className="absolute top-[196px] right-[160px] w-[360px] rounded-[22px] border border-white/10 bg-[#262626] p-2.5 shadow-[0_20px_60px_#000000A0]">
-        {agents.map(([h, label]) => (
-          <div
-            key={h}
-            className={cn(
-              "flex items-center gap-4 rounded-[14px] px-4 py-3.5 text-[25px]",
-              h === "codex" ? "bg-white/10 text-white" : "text-white/70",
-            )}
-          >
-            <AgentIcon harness={h} brand className="size-7 shrink-0" />
-            <span className="flex-1">{label}</span>
-            {h === "codex" && (
-              <svg width="26" height="26" viewBox="0 0 24 24" aria-hidden>
-                <path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            )}
-          </div>
-        ))}
+      <div className="border-t border-[#FFFFFF14]">
+        {rows.map(([h, name, tag]) => {
+          const picked = h === "codex";
+          return (
+            <div key={h} className={cn("flex h-[34px] shrink-0 items-center gap-2.5 px-2.5", picked && "bg-[#1612F8]")}>
+              <AgentIcon harness={h} className={cn("size-3 shrink-0", picked ? "text-white" : "text-[#8A8A8A]")} />
+              <span className={cn(MONO, "text-xs leading-4", picked ? "text-white" : "text-[#CFCFCF]")}>{name}</span>
+              {tag && (
+                <span className={cn(MONO, "ml-auto text-[10px] leading-3", picked ? "text-[#FFFFFFB3]" : "text-[#8A8A8A]")}>
+                  {tag}
+                </span>
+              )}
+            </div>
+          );
+        })}
       </div>
-
-      {/* The composer, and the line over it before the send. */}
-      <div className="absolute inset-x-[160px] bottom-[52px] flex flex-col gap-3">
-        <div className="flex items-center gap-3 pl-2 text-[24px] font-medium">
-          <AgentIcon harness="codex" brand className="size-6" />
-          Your next message goes to Codex
-        </div>
-        <div className="flex h-[96px] items-center justify-between rounded-[30px] border border-white/10 bg-[#262626] pr-4 pl-8 text-[26px] text-white/40">
-          Now check it on macOS too
-          <span className="flex size-[60px] items-center justify-center rounded-full bg-white">
-            <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden>
-              <path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="black" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </span>
-        </div>
-      </div>
-    </Frame>
-  );
-}
-
-function Row({ dot, title, detail, tone }: { dot: string; title: string; detail: string; tone: string }) {
-  return (
-    <div className="flex items-start gap-4 border-b border-white/10 py-[18px]">
-      <span className={cn("mt-2.5 size-3.5 shrink-0 rounded-full", dot)} />
-      <span className="flex min-w-0 flex-col gap-1">
-        <span className="truncate text-[24px] leading-8">{title}</span>
-        <span className={cn("text-[19px] leading-6", tone)}>{detail}</span>
-      </span>
     </div>
   );
 }
 
-/// Dray on an iPhone: the task list with a card waiting on the reader, and a
-/// push alert landing beside it.
+/// The iPhone as the site's Everywhere section draws it, larger: body, screen
+/// and island, the task list as bars with one in blue, and a push alert
+/// landing beside it.
 function IPhone() {
   return (
-    <Frame>
-      <div className="absolute top-[44px] left-[300px] h-[820px] w-[400px] rounded-[64px] border-[12px] border-[#2B2B2B] bg-black shadow-[0_30px_90px_#000000B0]">
-        <div className="mx-auto mt-4 h-[34px] w-[124px] rounded-full bg-[#111]" />
-        <div className="px-7 pt-5">
-          <div className="text-[44px] leading-[52px] font-semibold tracking-[-0.02em]">Tasks</div>
-          <div className="mt-3">
-            <Row dot="bg-[#3DD68C]" title="Fix the flaky worktree test" detail="Ready to merge" tone="text-[#3DD68C]" />
-            <Row dot="bg-[#FFC53D]" title="Island send sound" detail="Waiting on you" tone="text-[#FFC53D]" />
-            <Row dot="bg-[#1612F8]" title="Split panes for bots" detail="Working" tone="text-white/50" />
-          </div>
-          <div className="mt-6 rounded-[24px] bg-[#1E1E1E] p-5">
-            <div className="text-[19px] text-white/50">Island send sound</div>
-            <div className="mt-1 font-mono text-[21px] leading-7">pnpm test:affected</div>
-            <div className="mt-4 grid grid-cols-2 gap-3 text-[21px]">
-              <span className="rounded-[14px] bg-white py-2.5 text-center font-medium text-black">Allow</span>
-              <span className="rounded-[14px] bg-white/10 py-2.5 text-center">Deny</span>
-            </div>
-          </div>
-        </div>
-      </div>
+    <svg aria-hidden viewBox="40 0 352 177" className="h-[177px] w-[352px] overflow-visible">
+      <rect x="96" y="6" width="104" height="213" rx="17" fill="#2A2A2A" />
+      <path d="M113 7H183" stroke="#4A4A4A" />
+      <rect x="101.5" y="11" width="93" height="203" rx="12.5" fill="#0A0A0A" />
+      <rect x="133" y="19" width="30" height="9.5" rx="4.75" fill="#1F1F1F" />
 
-      {/* A push alert, as iOS draws one, coming in beside the phone. */}
-      <div className="absolute top-[300px] left-[610px] w-[520px] rounded-[30px] border border-white/10 bg-[#2A2A2A]/95 p-6 shadow-[0_24px_70px_#000000B0] backdrop-blur-xl">
-        <div className="flex items-center gap-4">
-          <span className="flex size-[52px] shrink-0 items-center justify-center rounded-[14px] bg-black ring-1 ring-white/15">
-            <svg width="22" height="28" viewBox="0 0 159 200" aria-hidden>
-              <path d={MARK} fill="white" />
-            </svg>
-          </span>
-          <span className="flex min-w-0 flex-1 flex-col">
-            <span className="flex items-baseline justify-between text-[19px] text-white/50">
-              DRAY
-              <span>now</span>
-            </span>
-            <span className="text-[24px] leading-8 font-semibold">Ready to merge</span>
-          </span>
-        </div>
-        <div className="mt-2 pl-[68px] text-[22px] leading-8 text-white/80">Fix the flaky worktree test · #1015</div>
-      </div>
-    </Frame>
+      <rect x="111" y="44" width="38" height="8" fill="#3D3D3D" />
+      {[
+        [64, "#3D3D3D", "#2E2E2E", 50],
+        [84, "#1612F8", "#4A4A4A", 40],
+        [104, "#3D3D3D", "#2E2E2E", 56],
+        [124, "#3D3D3D", "#262626", 44],
+      ].map(([y, dot, bar, w]) => (
+        <g key={y as number}>
+          <rect x="111" y={y as number} width="6" height="6" fill={dot as string} />
+          <rect x="124" y={y as number} width={w as number} height="6" fill={bar as string} />
+        </g>
+      ))}
+      <rect x="109" y="148" width="78" height="22" fill="#1F1F1F" stroke="#333333" />
+      <rect x="115" y="154" width="30" height="5" fill="#4A4A4A" />
+      <rect x="115" y="162" width="20" height="4" fill="#2E2E2E" />
+
+      <g>
+        <rect x="170" y="62" width="168" height="44" fill="#1F1F1F" stroke="#333333" />
+        <rect x="179" y="71" width="14" height="14" fill="#1612F8" />
+        <text x="201" y="78" dominantBaseline="central" fontSize="11" letterSpacing="-0.04em" fill="#FFFFFF" className="font-mono">
+          Ready to merge
+        </text>
+        <text x="201" y="94" dominantBaseline="central" fontSize="9" letterSpacing="-0.04em" fill="#8A8A8A" className="font-mono">
+          Fix login loop · #1015
+        </text>
+        <rect x="325" y="70" width="5" height="5" fill="#3FB950" />
+      </g>
+    </svg>
   );
 }
 
 const ART: Record<string, { name: string; Art: () => ReactNode }> = {
-  "agent-switch": { name: "Switching a task's agent", Art: AgentSwitch },
-  iphone: { name: "Dray for iPhone", Art: IPhone },
+  "agent-switch": { name: "Switching a task's harness", Art: AgentSwitch },
+  iphone: { name: "Dray on iPhone", Art: IPhone },
 };
 
 function Demo() {
   const one = new URLSearchParams(location.search).get("art");
   if (one && ART[one]) {
     const { Art } = ART[one];
-    return <Art />;
+    return (
+      <Frame>
+        <Art />
+      </Frame>
+    );
   }
   return (
     <div className="flex flex-col gap-10 bg-black p-10 text-white">
@@ -167,7 +131,9 @@ function Demo() {
           <h2 className="text-ui text-white/60">
             {name} · <span className="font-mono">?art={id}</span>
           </h2>
-          <Art />
+          <Frame>
+            <Art />
+          </Frame>
         </section>
       ))}
     </div>

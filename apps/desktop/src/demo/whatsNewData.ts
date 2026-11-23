@@ -98,14 +98,14 @@ export const PAGE_HIGHLIGHTS: Highlight[] = [
 /// 1280×720; for the release itself they move to apps/web/public/changelog/.
 export const NEXT_RELEASE: Highlight[] = [
   page(
-    "Switch a task's agent mid-session and keep the whole conversation",
-    "Pick another agent in the composer and your next message moves the task there, with everything said so far.",
-    [{ kind: "image", url: "/demo/whats-new/agent-switch.png", alt: "The agent picker moving a task from Claude Code to Codex" }],
+    "Switch a task's harness mid-session.",
+    "Pick another harness in the composer and your next message moves the task there, with everything said so far.",
+    [{ kind: "image", url: "/demo/whats-new/agent-switch.png", alt: "A task's harnesses, Codex picked for its next message" }],
   ),
   page(
-    "Dray is on iPhone: follow your tasks and answer them from anywhere",
+    "Dray is now on iPhone. Work from anywhere.",
     "Every task on every machine, with questions to answer, permissions to allow and alerts when one is ready to merge.",
-    [{ kind: "image", url: "/demo/whats-new/iphone.png", alt: "Dray's task list on an iPhone beside a Ready to merge alert" }],
+    [{ kind: "image", url: "/demo/whats-new/iphone.png", alt: "Dray on an iPhone beside a Ready to merge alert" }],
     { label: "Get it on the App Store", target: "https://apps.apple.com/app/id6824145317" },
   ),
 ];
