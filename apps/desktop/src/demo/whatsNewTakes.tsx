@@ -18,7 +18,7 @@ import "../App.css";
 /// action on the first, a picture on the second (a video with `?video=<url>`),
 /// none on the third. Each is drawn in place over a dimmed stage, so they can be
 /// compared at once, and "Open as dialog" raises it full size as the app would;
-/// every button works in both. A is the shipped layout, and its dialog is the
+/// every button works in both. B is the shipped layout, and its dialog is the
 /// real one. `?takes=ACE` draws only those.
 
 type TakeProps = { hl: Highlight[]; onAction: (label: string) => void; onClose: () => void };
@@ -69,7 +69,8 @@ function Dots({ count, page, onPick, tone = "default" }: { count: number; page: 
   );
 }
 
-/// A — shipped: inset media, text under it, Skip · dots · Next.
+/// A — the first take, shipped before B was picked: inset media, text under
+/// it, Skip · dots · Next.
 function TakeA({ hl, onAction, onClose }: TakeProps) {
   const p = usePager(hl.length);
   const { version, item } = hl[p.page];
@@ -106,24 +107,30 @@ function TakeA({ hl, onAction, onClose }: TakeProps) {
   );
 }
 
-/// B — full bleed and bigger type: media edge to edge, a larger title, the
-/// action as a link in the text, dots left and both buttons right.
+/// B — shipped, as `WhatsNewDialog` draws it: media edge to edge and rounded
+/// below, "New in Dray" on it, a larger title, the action as a link in the
+/// text, dots left and Skip · Back · Next right.
 function TakeB({ hl, onAction, onClose }: TakeProps) {
   const p = usePager(hl.length);
-  const { version, item } = hl[p.page];
+  const { item } = hl[p.page];
   const action = item.highlight?.action;
   return (
     <div className="w-[40rem] overflow-hidden rounded-xl border border-border bg-popover backdrop-blur-xl text-popover-foreground shadow-lg">
       <div key={p.page} className="animate-in fade-in-0 [animation-duration:200ms]">
-        {item.media[0] ? (
-          <Media media={item.media[0]} className="aspect-video w-full bg-muted" />
-        ) : (
-          <div className="flex aspect-[16/5] w-full items-center justify-center bg-muted">
-            <SparklesIcon className="size-8 text-accent-add" aria-hidden />
-          </div>
-        )}
+        <div className="relative aspect-video w-full overflow-hidden rounded-b-xl bg-muted">
+          {item.media[0] ? (
+            <Media media={item.media[0]} className="size-full" />
+          ) : (
+            <div className="flex size-full items-center justify-center">
+              <SparklesIcon className="size-10 text-accent-add" aria-hidden />
+            </div>
+          )}
+          <span className="absolute top-3 left-3 flex items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 text-xs font-medium text-white backdrop-blur-md">
+            <SparklesIcon className="size-3.5 text-[#3DD68C]" aria-hidden />
+            New in Dray
+          </span>
+        </div>
         <div className="flex min-h-36 flex-col gap-2 px-7 pt-6">
-          <Version v={version} />
           <p className="text-xl font-semibold tracking-tight text-foreground">{changelogPlain(item.title ?? item.body)}</p>
           <p className="text-chat leading-relaxed text-muted-foreground">
             {changelogInline(item.body)}
@@ -143,10 +150,19 @@ function TakeB({ hl, onAction, onClose }: TakeProps) {
           </p>
         </div>
       </div>
-      <footer className="flex items-center gap-2 px-7 pt-5 pb-6">
+      <footer className="flex items-center gap-1.5 px-7 pt-5 pb-6">
         <Dots count={hl.length} page={p.page} onPick={p.setPage} />
-        <div className="ml-auto flex gap-1.5">
-          {!p.last && <Button variant="ghost" onClick={onClose}>Skip</Button>}
+        <div className="ml-auto flex items-center gap-1.5">
+          {!p.last && (
+            <Button variant="ghost" className="text-muted-foreground" onClick={onClose}>
+              Skip
+            </Button>
+          )}
+          {p.page > 0 && (
+            <Button variant="outline" onClick={() => p.step(-1)}>
+              Back
+            </Button>
+          )}
           <Button className="min-w-20" onClick={p.last ? onClose : () => p.step(1)}>
             {p.last ? "Done" : "Next"}
           </Button>
@@ -392,8 +408,8 @@ function TakeF({ hl, onAction, onClose }: TakeProps) {
 }
 
 const TAKES: { id: string; name: string; Take: (props: TakeProps) => ReactNode }[] = [
-  { id: "A", name: "Shipped: inset media, Skip · dots · Next", Take: TakeA },
-  { id: "B", name: "Full bleed, bigger type, action as a link", Take: TakeB },
+  { id: "A", name: "First take: inset media, Skip · dots · Next", Take: TakeA },
+  { id: "B", name: "Shipped: full bleed, label on the picture, Back", Take: TakeB },
   { id: "C", name: "Side by side, count and Back", Take: TakeC },
   { id: "D", name: "Centred sheet, wide Next", Take: TakeD },
   { id: "E", name: "Cinematic: media is the card", Take: TakeE },
@@ -442,7 +458,7 @@ function Stage({ id, name, Take }: (typeof TAKES)[number]) {
         </span>
       </h2>
       {modal &&
-        (id === "A" ? (
+        (id === "B" ? (
           <WhatsNewDialog
             highlights={HIGHLIGHTS}
             actionFor={(target) => () => setSaid(`action: ${target}`)}
@@ -486,7 +502,7 @@ function Demo() {
           <h1 className="text-lg font-medium">What's new: takes</h1>
           <p className="text-ui text-muted-foreground">
             Three pages each: an action, a picture, no media. Every button works; Show again resets a take.
-            Open as dialog raises a take full size over the page, as the app would; A's is the real dialog.
+            Open as dialog raises a take full size over the page, as the app would; B's is the real dialog.
           </p>
         </header>
         {TAKES.filter((t) => !only || only.includes(t.id)).map((t) => (
