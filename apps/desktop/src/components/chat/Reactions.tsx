@@ -2,8 +2,7 @@ import { createContext, useContext, useLayoutEffect, useRef, useState, type Reac
 import { SmilePlus } from "lucide-react";
 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { centring, inkOf, opticalDrop } from "@/lib/emojiInk";
+import { centring, inkOf } from "@/lib/emojiInk";
 import { REACTION_LABELS, REACTIONS } from "@/lib/reactions";
 import { cn } from "@/lib/utils";
 import type { AgentEvent } from "@/types/events";
@@ -23,9 +22,8 @@ export function ReactionBadge({ emoji, mine = false, className }: { emoji: strin
     if (!el || !mark) return;
     const s = getComputedStyle(el);
     const ink = inkOf(emoji, `${s.fontStyle} ${s.fontWeight} ${s.fontSize} ${s.fontFamily}`);
-    const drop = opticalDrop(emoji) * parseFloat(s.fontSize);
     // Offsets, not client rects: those take the badge's zoom-in mid-flight.
-    setNudge(ink && centring(ink, el.offsetHeight, mark.offsetTop, drop));
+    setNudge(ink && centring(ink, el.offsetHeight, mark.offsetTop));
   }, [emoji]);
   return (
     <span
@@ -90,25 +88,20 @@ export function Reactable({ event, className, children }: { event: AgentEvent; c
 function ReactButton({ current, onPick }: { current: string | undefined; onPick: (emoji: string) => void }) {
   return (
     <DropdownMenu modal={false}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              aria-label="React"
-              className={cn(
-                "flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 transition-[opacity,color] outline-none group-hover/react:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring/50 data-[state=open]:opacity-100",
-                // Past the badge, which sits where the button rests. A transform,
-                // since a margin would narrow the bubble and rewrap it.
-                current && "translate-x-7",
-              )}
-            >
-              <SmilePlus className="size-4" />
-            </button>
-          </DropdownMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent>React</TooltipContent>
-      </Tooltip>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="React"
+          className={cn(
+            "flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 transition-[opacity,color] outline-none group-hover/react:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring/50 data-[state=open]:opacity-100",
+            // Past the badge, which sits where the button rests. A transform,
+            // since a margin would narrow the bubble and rewrap it.
+            current && "translate-x-7",
+          )}
+        >
+          <SmilePlus className="size-4" />
+        </button>
+      </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
         collisionPadding={8}

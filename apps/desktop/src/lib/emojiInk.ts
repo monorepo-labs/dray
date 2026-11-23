@@ -5,7 +5,11 @@
 /// nudge per emoji is then right on one platform alone, so the ink is measured
 /// where it is drawn, once per emoji and font.
 
-export type Box = { left: number; top: number; right: number; bottom: number };
+/// `middle` is where the eye puts the ink's vertical centre: halfway between
+/// its bounds' middle and its centre of mass. Bounds alone sat 👍 low under its
+/// heavy fist and ❤️ high over its point; mass alone pulled them as far the
+/// other way.
+export type Box = { left: number; top: number; right: number; bottom: number; middle: number };
 
 /// Alpha at or under this is anti-aliasing haze, not ink.
 const HAZE = 24;
@@ -17,16 +21,22 @@ export function inkBox(rgba: ArrayLike<number>, width: number, height: number): 
   let top = height;
   let right = 0;
   let bottom = 0;
+  let mass = 0;
+  let moment = 0;
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      if (rgba[(y * width + x) * 4 + 3] <= HAZE) continue;
+      const alpha = rgba[(y * width + x) * 4 + 3];
+      if (alpha <= HAZE) continue;
+      mass += alpha;
+      moment += alpha * (y + 0.5);
       if (x < left) left = x;
       if (x >= right) right = x + 1;
       if (y < top) top = y;
       if (y >= bottom) bottom = y + 1;
     }
   }
-  return right > left ? { left, top, right, bottom } : null;
+  if (right <= left) return null;
+  return { left, top, right, bottom, middle: ((top + bottom) / 2 + moment / mass) / 2 };
 }
 
 const measured = new Map<string, Box | null>();
@@ -58,6 +68,7 @@ export function inkOf(text: string, font: string): Box | null {
         right: ink.right / scale - size,
         top: ink.top / scale - size * 3,
         bottom: ink.bottom / scale - size * 3,
+        middle: ink.middle / scale - size * 3,
       };
     }
   }
@@ -65,19 +76,11 @@ export function inkOf(text: string, font: string): Box | null {
   return box;
 }
 
-/// How far below its ink's centre `emoji` must sit to look centred, in ems,
-/// judged by eye on Apple's font at the badge's 18px. Centred exactly, every
-/// emoji read half a pixel low, so all rise by that; the heart's point leaves
-/// the middle of its box above its mass, so it alone sinks a pixel past that.
-export function opticalDrop(emoji: string): number {
-  return emoji === "❤️" ? 0.028 : -0.028;
-}
-
 /// How far down to move a text box `height` tall, its baseline `baseline` from
-/// its top, so `ink` (from [inkOf]) sits at its middle, then `drop` pixels
-/// lower. Vertical alone: an emoji's shape is lopsided sideways by design (a
-/// thumb, a party popper), and centring that ink read as a shift. Rounded to
-/// half a pixel, which a Retina screen draws and a plain one does not blur.
-export function centring(ink: Box, height: number, baseline: number, drop = 0): number {
-  return Math.round((height / 2 - (baseline + (ink.top + ink.bottom) / 2) + drop) * 2) / 2;
+/// its top, so `ink` (from [inkOf]) sits at its middle by eye. Vertical alone:
+/// an emoji's shape is lopsided sideways by design (a thumb, a party popper),
+/// and centring that ink read as a shift. Rounded to half a pixel, which a
+/// Retina screen draws and a plain one does not blur.
+export function centring(ink: Box, height: number, baseline: number): number {
+  return Math.round((height / 2 - (baseline + ink.middle)) * 2) / 2;
 }
