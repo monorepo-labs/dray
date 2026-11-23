@@ -226,6 +226,13 @@ fn spawn_dev(exe: &std::path::Path, log: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+/// Undoes [`stop`]'s hold on the reconnect loop, for a stop whose reason fell
+/// through: an update that never ran.
+#[cfg(windows)]
+pub fn resume() {
+    STOPPED.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Stops the server and keeps it stopped until the agent is loaded again —
 /// the next launch of the app, or the next login. A dev server has no agent,
 /// so it is signalled by the pid it wrote beside its port.
@@ -251,6 +258,14 @@ pub async fn stop() -> Result<()> {
             let theirs = crate::platform::image_of(pid as u32).and_then(|exe| dunce::canonicalize(exe).ok());
             if ours.is_some() && ours == theirs {
                 let _ = tokio::task::spawn_blocking(move || crate::platform::kill_tree(pid as u32)).await;
+                // Waited out, since an update's installer runs next and would
+                // find the exe still in use.
+                for _ in 0..20 {
+                    if !crate::platform::pid_alive(pid as u32) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
             }
         }
         return Ok(());
