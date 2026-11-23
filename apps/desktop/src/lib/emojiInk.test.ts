@@ -28,16 +28,16 @@ describe("inkBox", () => {
 });
 
 describe("centring", () => {
-  it("moves ink sitting low up to the box's middle", () => {
-    // An 18px box, baseline 14px down; ink middle at 14 - 4 = 10 against 9.
-    expect(centring({ left: 2, right: 18, top: -12, bottom: 4, middle: -4 }, 18, 14)).toBe(-1);
+  it("moves the ink's bounds onto the centre across and its middle upright", () => {
+    // Pen 10px left of centre and 5 below; ink spans 1–17 across, middle 6 up.
+    const nudge = centring({ left: 1, right: 17, top: -14, bottom: 4, middle: -6 }, { x: -10, y: 5 });
+    expect(nudge.x).toBeCloseTo(1);
+    expect(nudge.y).toBeCloseTo(1);
   });
 
-  it("goes by the middle, not the bounds", () => {
-    expect(centring({ left: 0, right: 18, top: -14, bottom: 4, middle: -6 }, 18, 14)).toBe(1);
-  });
-
-  it("rounds to half a pixel", () => {
-    expect(centring({ left: 0, right: 17, top: -14, bottom: 3, middle: -5.5 }, 18, 14)).toBe(0.5);
+  it("keeps fractions, so a quarter pixel off is put right", () => {
+    const nudge = centring({ left: 0, right: 17.5, top: -14, bottom: 3, middle: -5.5 }, { x: -9, y: 5.25 });
+    expect(nudge.x).toBeCloseTo(0.25);
+    expect(nudge.y).toBeCloseTo(0.25);
   });
 });

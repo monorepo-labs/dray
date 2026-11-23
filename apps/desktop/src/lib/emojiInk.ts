@@ -76,11 +76,13 @@ export function inkOf(text: string, font: string): Box | null {
   return box;
 }
 
-/// How far down to move a text box `height` tall, its baseline `baseline` from
-/// its top, so `ink` (from [inkOf]) sits at its middle by eye. Vertical alone:
-/// an emoji's shape is lopsided sideways by design (a thumb, a party popper),
-/// and centring that ink read as a shift. Rounded to half a pixel, which a
-/// Retina screen draws and a plain one does not blur.
-export function centring(ink: Box, height: number, baseline: number): number {
-  return Math.round((height / 2 - (baseline + ink.middle)) * 2) / 2;
+/// How far to move text whose baseline starts at `start`, measured from the
+/// centre it should sit on, so `ink` (from [inkOf]) sits there by eye: across
+/// by its bounds, upright by its `middle`. Across by bounds and not mass,
+/// since an emoji is lopsided sideways by design (a thumb, a party popper) and
+/// centring its mass read as a shift. Unrounded: a quarter pixel off read as
+/// off on the heart, and a fraction of a device pixel softens the bitmap less
+/// than that.
+export function centring(ink: Box, start: { x: number; y: number }): { x: number; y: number } {
+  return { x: -(start.x + (ink.left + ink.right) / 2), y: -(start.y + ink.middle) };
 }

@@ -10,20 +10,41 @@ import type { AgentEvent } from "@/types/events";
 /// A reaction, as iMessage draws a tapback: a round chip on a corner of the
 /// bubble in the chat pane's own colour (`--reaction`), edged by a hairline and
 /// ringed in that colour again, so it reads as cut out of the bubble under it;
-/// the emoji at about half its height and centred upright by its ink (see
-/// [emojiInk]).
+/// the emoji at about half its height and centred by its ink (see [emojiInk]).
 export function ReactionBadge({ emoji, mine = false, className }: { emoji: string; mine?: boolean; className?: string }) {
   const glyph = useRef<HTMLSpanElement>(null);
   const baseline = useRef<HTMLSpanElement>(null);
-  const [nudge, setNudge] = useState<number | null>(null);
+  const [nudge, setNudge] = useState<{ x: number; y: number } | null>(null);
   useLayoutEffect(() => {
-    const el = glyph.current;
-    const mark = baseline.current;
-    if (!el || !mark) return;
-    const s = getComputedStyle(el);
-    const ink = inkOf(emoji, `${s.fontStyle} ${s.fontWeight} ${s.fontSize} ${s.fontFamily}`);
-    // Offsets, not client rects: those take the badge's zoom-in mid-flight.
-    setNudge(ink && centring(ink, el.offsetHeight, mark.offsetTop));
+    let live = true;
+    const measure = () => {
+      const el = glyph.current;
+      const mark = baseline.current;
+      const badge = el?.parentElement;
+      if (!live || !el || !mark || !badge) return;
+      const s = getComputedStyle(el);
+      const ink = inkOf(emoji, `${s.fontStyle} ${s.fontWeight} ${s.fontSize} ${s.fontFamily}`);
+      // Rects, since offsets round to whole pixels and the glyph sits at a
+      // fraction of one. They take the badge's zoom-in mid-flight, which scales
+      // about its centre, so dividing by that scale gets layout pixels back.
+      const b = badge.getBoundingClientRect();
+      const scale = b.width / badge.offsetWidth;
+      if (!ink || !scale) return setNudge(null);
+      // Less the nudge already on it, from before.
+      const was = new DOMMatrixReadOnly(s.transform === "none" ? undefined : s.transform);
+      const start = {
+        x: (el.getBoundingClientRect().left - b.left - b.width / 2) / scale - was.e,
+        y: (mark.getBoundingClientRect().bottom - b.top - b.height / 2) / scale - was.f,
+      };
+      setNudge(centring(ink, start));
+    };
+    measure();
+    // The baseline moves a fraction of a pixel once the UI font loads, and
+    // the badge can mount before it has.
+    document.fonts?.ready.then(measure);
+    return () => {
+      live = false;
+    };
   }, [emoji]);
   return (
     <span
@@ -38,7 +59,7 @@ export function ReactionBadge({ emoji, mine = false, className }: { emoji: strin
       <span
         ref={glyph}
         className="relative"
-        style={nudge ? { transform: `translateY(${nudge}px)` } : undefined}
+        style={nudge ? { transform: `translate(${nudge.x}px, ${nudge.y}px)` } : undefined}
       >
         {emoji}
         {/* An empty inline-block's bottom edge sits on the baseline, which is how
