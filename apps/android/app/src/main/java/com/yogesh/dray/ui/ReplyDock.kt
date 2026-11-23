@@ -3,7 +3,6 @@ package com.yogesh.dray.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,7 +14,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -60,6 +59,7 @@ import com.yogesh.dray.model.SessionKey
 import com.yogesh.dray.net.ConnState
 import com.yogesh.dray.store.AgentPick
 import com.yogesh.dray.store.botSend
+import com.yogesh.dray.store.rememberedModel
 import com.yogesh.dray.voice.Dictation
 import com.yogesh.dray.voice.Dictations
 import com.yogesh.dray.voice.dictationEngine
@@ -186,12 +186,15 @@ fun ReplyDock(key: SessionKey) {
         }),
     )
 
-    if (sheet) ThisTaskSheet(harness, item.busy, agents.filter { it.available || it.harness == harness }, models, modelId, effort,
+    // The agents up on the machine, and always the session's own, so a pick can be taken back.
+    val choices = agents.filter { it.available }.map { it.harness }.let { up -> if (item.harness in up) up else listOf(item.harness) + up }
+    val context = LocalContext.current
+    if (sheet) ThisTaskSheet(harness, item.harness, item.busy, choices, models, modelId, effort,
         picks.stance ?: item.permissionMode, picks.fast ?: item.fast ?: false,
         onAgent = { to ->
-            // Back on its own agent is no move; another starts on that agent's default model.
+            // Back on its own agent is no move; another starts on the model last started a task on here.
             if (to == item.harness) store.botState.unsent.remove(key)
-            else store.botState.unsent[key] = AgentPick(to, Picks.defaultModel[to].orEmpty())
+            else store.botState.unsent[key] = AgentPick(to, rememberedModel(context, to))
             picks = picks.copy(model = null, effort = null)
         },
         onModel = { picks = picks.copy(model = it, effort = null) },
@@ -203,39 +206,46 @@ fun ReplyDock(key: SessionKey) {
  * This task: the session's agent, model, effort, fast mode and stance for the next reply, each
  * locked mid-turn where the harness can't carry it onto a queued prompt. Nothing reaches the
  * session until a reply goes out, since `send_msg` (and `switch_agent`) is what carries it.
- * The agent is always held mid-turn, since a move stops the agent running it.
+ * Another agent is held mid-turn, since a move stops the agent running it; the session's own
+ * stays open, so a pick made before the turn can be taken back. ReplyDock.swift's `thisTask`.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ThisTaskSheet(
-    harness: String, busy: Boolean, agents: List<com.yogesh.dray.model.AgentAvailability>, models: List<Model>, model: String,
+    harness: String, own: String, busy: Boolean, agents: List<String>, models: List<Model>, model: String,
     effort: String?, stance: String, fast: Boolean, onAgent: (String) -> Unit,
     onModel: (String) -> Unit, onEffort: (String) -> Unit, onStance: (String) -> Unit, onFast: (Boolean) -> Unit, dismiss: () -> Unit,
 ) {
     val picked = models.firstOrNull { it.id == model }
     // One agent is no choice.
     val offersAgents = agents.size > 1
+    var library by remember { mutableStateOf(false) }
     ModalBottomSheet(dismiss, containerColor = Dray.card) {
+        if (library) {
+            ModelLibrary(models, harness) { library = false }
+            return@ModalBottomSheet
+        }
         Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Text("This task", style = Dray.Font.title)
             val locked = { c: String -> Picks.lockedMidTurn(harness, c, busy) }
-            if (offersAgents) Section("Agent", locked("agent")) {
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (a in agents) Chip(Picks.agentLabels[a.harness] ?: a.label, a.harness == harness) { onAgent(a.harness) }
+            if (offersAgents) Section("Agent", false) {
+                ChipRow(focus = agents.indexOf(harness)) {
+                    items(agents, key = { it }) { a ->
+                        val held = locked("agent") && a != own
+                        Box(Modifier.alpha(if (held) 0.35f else 1f)) {
+                            PickChip(Picks.agentLabels[a] ?: a, a == harness, harness = a) { if (!held && a != harness) onAgent(a) }
+                        }
+                    }
                 }
             }
             Section("Model", locked("model")) {
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val shown = models.filter { it.secondary != true || it.id == model }
-                    for (m in shown) Chip(m.label, m.id == model) { onModel(m.id) }
-                    if (shown.isEmpty()) Chip(model.ifEmpty { "Default" }, true) {}
-                }
+                ModelChips(models, harness, model, onModel) { library = true }
             }
             picked?.takeIf { it.efforts.isNotEmpty() }?.let { m ->
                 Section("Effort", locked("effort")) {
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        val current = Picks.usableEffort(m, effort)
-                        for (e in m.efforts) Chip(Picks.effortLabels[e] ?: e, e == current) { onEffort(e) }
+                    val current = Picks.usableEffort(m, effort)
+                    ChipRow(focus = m.efforts.indexOf(current)) {
+                        items(m.efforts, key = { it }) { e -> PickChip(Picks.effortLabels[e] ?: e, e == current) { onEffort(e) } }
                     }
                 }
             }
@@ -284,14 +294,4 @@ private fun Section(title: String, locked: Boolean, content: @Composable () -> U
             }
         }) { content() }
     }
-}
-
-@Composable
-private fun Chip(label: String, picked: Boolean, onClick: () -> Unit) {
-    Text(
-        label,
-        Modifier.clip(CircleShape).background(if (picked) Dray.primary else Dray.tile).clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        style = Dray.Font.pill.copy(color = if (picked) Dray.onPrimary else Dray.text),
-    )
 }

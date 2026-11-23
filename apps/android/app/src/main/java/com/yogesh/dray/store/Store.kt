@@ -576,6 +576,7 @@ class Store(private val context: Context) {
 
     /** A status event that arrived while a read was out is newer than the read, so it wins. */
     internal fun merged(key: SessionKey, read: SessionItem): SessionItem {
+        dropStalePick(key, read)
         val s = statuses[key] ?: return read
         val m = s.modified ?: return read
         return if (m >= read.modified) read.copy(status = s.status, modified = m) else read
@@ -915,6 +916,7 @@ class Store(private val context: Context) {
             }
             "machines_shared" -> decodeOrNull<Sharing>(payload)?.let { share(server, it.machines) }
             "session_created", "session_changed" -> decodeOrNull<SessionItem>(payload)?.let { item ->
+                dropStalePick(SessionKey(server, item.sessionId), item)
                 setItem(SessionKey(server, item.sessionId), item)
                 scope.launch { loadMarks(server, force = false, only = setOf(item.projectPath)) }
                 // `bots_changed` comes from the CLI alone, and a bot the app made is first seen as its chat.
@@ -949,11 +951,20 @@ class Store(private val context: Context) {
             // A move made anywhere, even where its `session_changed` was missed: logged, so a catch-up carries it too.
             is Payload.AgentSwitched -> {
                 items[key]?.let { if (it.harness != p.to) setItem(key, it.copy(harness = p.to)) }
-                botState.unsent.remove(key)
+                if (botState.unsent[key]?.harness == p.to) botState.unsent.remove(key)
             }
             else -> {}
         }
         if (!e.payload.isTransient) transcripts[key]?.let { transcripts[key] = it.plus(e) }
+    }
+
+    /**
+     * A pick naming the agent a task already runs is spent: kept, a missed `agent_switched` would
+     * move the task back unasked. A bot chat's keeps a model the sheet changed. Store.swift's.
+     */
+    private fun dropStalePick(key: SessionKey, item: SessionItem) {
+        val p = botState.unsent[key] ?: return
+        if (p.harness == item.harness && (bot(key) == null || p.model == item.model)) botState.unsent.remove(key)
     }
 
     /** Drops a session's cards once nothing could answer them: no turn running and no task left — the server's own rule. */
