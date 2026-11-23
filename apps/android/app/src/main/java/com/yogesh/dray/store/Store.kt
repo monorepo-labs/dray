@@ -108,6 +108,8 @@ class Store(private val context: Context) {
     val queued = mutableStateMapOf<SessionKey, List<Queued>>()
     /** Counts the phone's own sends per session: a send brings its chat back to the bottom. */
     val sends = mutableStateMapOf<SessionKey, Int>()
+    /** Counts `session_changed` per session, so a send can tell whether the server already spoke for it. */
+    private val announced = mutableMapOf<SessionKey, Int>()
     var projects by mutableStateOf(mapOf<String, List<Project>>())
         private set
     /** Each repo's PR marks by branch, as `pr_marks` last answered. */
@@ -759,17 +761,24 @@ class Store(private val context: Context) {
                 switchAgent(c, key, merged(key, item), harness, model ?: item.model, effort, stance, fast)
                 item = item.copy(harness = harness)
             }
+            val heard = announced[key]
+            val sent = item.copy(
+                model = model ?: item.model,
+                effort = if (effortMoved) effort else effort ?: item.effort,
+                permissionMode = Picks.taskStance(item.harness, stance ?: item.permissionMode),
+                fast = fast ?: item.fast ?: false,
+            )
             val reply = c.call(
                 "send_msg",
                 jsonOf(
                     "sessionId" to key.id,
                     "prompt" to text,
                     "attachmentPaths" to emptyList<String>(),
-                    "harness" to item.harness,
-                    "model" to (model ?: item.model),
-                    "effort" to (if (effortMoved) effort else effort ?: item.effort),
-                    "permissionMode" to Picks.taskStance(item.harness, stance ?: item.permissionMode),
-                    "fast" to (fast ?: item.fast ?: false),
+                    "harness" to sent.harness,
+                    "model" to sent.model,
+                    "effort" to sent.effort,
+                    "permissionMode" to sent.permissionMode,
+                    "fast" to sent.fast,
                     "cwd" to item.cwd,
                     "branch" to null,
                     "useWorktree" to false,
@@ -779,6 +788,12 @@ class Store(private val context: Context) {
                 ),
             ).ok
             decodeOrNull<SessionItem>(reply["snapshot"])?.let { setItem(SessionKey(key.server, it.sessionId), it) }
+            // What `send_msg` wrote to the index, for a server too old to say so in `session_changed`:
+            // without it the dock falls back to the model the session just left. A newer server's word
+            // wins, since it may have refused a pick. An unset model keeps the old.
+            if (announced[key] == heard) items[key]?.let {
+                setItem(key, it.copy(model = sent.model.ifEmpty { it.model }, effort = sent.effort, permissionMode = sent.permissionMode, fast = sent.fast))
+            }
             // By id: the server's `queue_changed` usually lands before this reply.
             decodeOrNull<Queued>(reply["queued"])?.let { q ->
                 if (queued[key]?.contains(q) != true) queued[key] = queued[key].orEmpty() + q
@@ -916,6 +931,7 @@ class Store(private val context: Context) {
             }
             "machines_shared" -> decodeOrNull<Sharing>(payload)?.let { share(server, it.machines) }
             "session_created", "session_changed" -> decodeOrNull<SessionItem>(payload)?.let { item ->
+                SessionKey(server, item.sessionId).let { announced[it] = (announced[it] ?: 0) + 1 }
                 dropStalePick(SessionKey(server, item.sessionId), item)
                 setItem(SessionKey(server, item.sessionId), item)
                 scope.launch { loadMarks(server, force = false, only = setOf(item.projectPath)) }
