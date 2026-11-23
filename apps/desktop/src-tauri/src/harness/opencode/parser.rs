@@ -80,8 +80,8 @@ pub enum OpenCodeUpdate {
         #[serde(default)]
         size: u64,
     },
-    /// Every command behind a slash: OpenCode's `compact` plus each skill and
-    /// command it found, including the reader's `~/.claude/skills`.
+    /// Every command behind a slash: OpenCode's `init` and `review` plus each
+    /// skill and command it found, including the reader's `~/.claude/skills`.
     #[serde(rename_all = "camelCase")]
     AvailableCommandsUpdate {
         #[serde(default, deserialize_with = "null_as_default")]

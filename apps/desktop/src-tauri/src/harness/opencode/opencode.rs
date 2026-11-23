@@ -424,17 +424,20 @@ async fn read_stdout(
             None => match handles.client.accept(&line).await {
                 Incoming::Notification { method, params } => match parser::parse_notification(&method, params) {
                     Ok(note) => {
-                        // Before the session exists the handshake's lines are
-                        // routed and nothing is drawn; after, a subagent's
-                        // child session is dropped on its own id.
-                        if session.is_none_or(|s| note.session_id != s.id) {
-                            continue;
-                        }
+                        // A subagent's child session is dropped on its own id.
+                        // Before the session is handed over nothing is drawn —
+                        // but the command list lands then, right after
+                        // `session/new` answers and while the pick is still
+                        // being applied, and it is per directory, so it is kept.
+                        let ours = session.is_some_and(|s| note.session_id == s.id);
                         match note.update {
-                            parser::OpenCodeUpdate::AvailableCommandsUpdate { available_commands } => {
+                            parser::OpenCodeUpdate::AvailableCommandsUpdate { available_commands }
+                                if ours || session.is_none() =>
+                            {
                                 commands::remember(&handles.session_cwd, available_commands);
                                 continue;
                             }
+                            _ if !ours => continue,
                             parser::OpenCodeUpdate::Unknown => {
                                 let kind = serde_json::from_str::<Value>(&line)
                                     .ok()
