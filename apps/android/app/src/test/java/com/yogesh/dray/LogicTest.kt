@@ -3,6 +3,7 @@ package com.yogesh.dray
 import com.yogesh.dray.model.Entry
 import com.yogesh.dray.model.Item
 import com.yogesh.dray.model.MdBlock
+import com.yogesh.dray.model.Picks
 import com.yogesh.dray.model.SessionKey
 import com.yogesh.dray.model.Stage
 import com.yogesh.dray.model.ToolState
@@ -97,6 +98,26 @@ class LogicTest {
     fun anUnknownPayloadCostsOnlyItself() {
         val e = event("1", """{"type":"tool_call_started","callId":5}""")
         assertTrue(e.payload is Payload.Other)
+    }
+
+    @Test
+    fun anAgentSwitchDecodesAndDrawsNothing() {
+        val switched = event("3", """{"type":"agent_switched","from":"claude_code","to":"codex","resumed":false}""")
+        assertEquals(Payload.AgentSwitched("claude_code", "codex"), switched.payload)
+        // Between two calls of one tool, it neither opens a turn nor splits the run.
+        val turn = buildTurns(listOf(
+            event("1", """{"type":"user_message","text":"go"}"""), tool("2", "c1"), result("2r", "c1"),
+            switched, tool("4", "c2"), result("4r", "c2"),
+        ), busy = false).single()
+        assertEquals(2, (turn.work.single() as Item.Group).calls.size)
+    }
+
+    @Test
+    fun aMovedPlanTaskStaysPlanOnPi() {
+        assertEquals("plan", Picks.taskStance("pi", "plan"))
+        assertEquals("bypassPermissions", Picks.taskStance("pi", "auto"))
+        assertEquals("manual", Picks.taskStance("codex", "plan"))
+        assertEquals("plan", Picks.taskStance("claude_code", "plan"))
     }
 
     @Test

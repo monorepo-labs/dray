@@ -25,14 +25,97 @@ pub fn kill(pid: u32) {
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Kills `pid` and every process under it, which Unix gets from a process
-/// group and Windows has to ask `taskkill` for.
+/// group. Walked while `pid` lives: an orphan names a dead parent the walk
+/// cannot vouch for, so killing the root first strands its children.
+/// Blocking, a process snapshot; off the runtime's threads in async code.
 #[cfg(windows)]
 pub fn kill_tree(pid: u32) {
-    let _ = std::process::Command::new("taskkill")
-        .args(["/T", "/F", "/PID", &pid.to_string()])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
+    for pid in crate::local_servers::descendants(pid) {
+        kill(pid);
+    }
+}
+
+/// A security descriptor granting this process's user, and nobody else, full
+/// access: a named pipe's default ACL also lets Everyone read, where the unix
+/// socket sits in a `0700` directory. Freed on drop.
+#[cfg(windows)]
+pub struct OwnerOnly(windows_sys::Win32::Security::PSECURITY_DESCRIPTOR);
+
+#[cfg(windows)]
+impl OwnerOnly {
+    /// Reads this process's user off its token and grants that SID alone.
+    pub fn new() -> std::io::Result<Self> {
+        use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+        };
+        use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+        let fail = std::io::Error::last_os_error;
+        // SAFETY: every handle and buffer is checked, sized by the call that
+        // fills it, and released before return.
+        unsafe {
+            let mut token: HANDLE = std::ptr::null_mut();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+                return Err(fail());
+            }
+            let mut len = 0u32;
+            GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut len);
+            // u64s, for TOKEN_USER's alignment.
+            let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+            let read = GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), len, &mut len);
+            CloseHandle(token);
+            if read == 0 {
+                return Err(fail());
+            }
+            let user = &*buf.as_ptr().cast::<TOKEN_USER>();
+            let mut sid = std::ptr::null_mut();
+            if ConvertSidToStringSidW(user.User.Sid, &mut sid) == 0 {
+                return Err(fail());
+            }
+            let sid_len = (0..).take_while(|&i| *sid.add(i) != 0).count();
+            let sid_text = String::from_utf16_lossy(std::slice::from_raw_parts(sid, sid_len));
+            LocalFree(sid.cast());
+            // Protected DACL, one ACE: generic all to this user.
+            let sddl: Vec<u16> = format!("D:P(A;;GA;;;{sid_text})").encode_utf16().chain([0]).collect();
+            let mut descriptor = std::ptr::null_mut();
+            if ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl.as_ptr(),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                std::ptr::null_mut(),
+            ) == 0
+            {
+                return Err(fail());
+            }
+            Ok(Self(descriptor))
+        }
+    }
+
+    /// `SECURITY_ATTRIBUTES` pointing at this descriptor, valid while it lives.
+    pub fn attributes(&self) -> windows_sys::Win32::Security::SECURITY_ATTRIBUTES {
+        windows_sys::Win32::Security::SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<windows_sys::Win32::Security::SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: self.0,
+            bInheritHandle: 0,
+        }
+    }
+}
+
+// SAFETY: the descriptor is never written after it is made, only read by the
+// calls that create pipe instances.
+#[cfg(windows)]
+unsafe impl Send for OwnerOnly {}
+#[cfg(windows)]
+unsafe impl Sync for OwnerOnly {}
+
+#[cfg(windows)]
+impl Drop for OwnerOnly {
+    fn drop(&mut self) {
+        // SAFETY: allocated by ConvertStringSecurityDescriptorToSecurityDescriptorW.
+        unsafe { windows_sys::Win32::Foundation::LocalFree(self.0) };
+    }
 }
 
 /// `tokio::fs::canonicalize`, minus the `\\?\` prefix Windows puts on every
@@ -40,6 +123,50 @@ pub fn kill_tree(pid: u32) {
 /// git or a reader writes. `dunce::canonicalize` is the same for sync code.
 pub async fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<std::path::PathBuf> {
     tokio::fs::canonicalize(path).await.map(|real| dunce::simplified(&real).to_path_buf())
+}
+
+/// The executable `pid` runs, where this user may ask.
+#[cfg(windows)]
+pub fn image_of(pid: u32) -> Option<std::path::PathBuf> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: the handle is checked and closed; `len` is the buffer's size.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) != 0;
+        CloseHandle(handle);
+        ok.then(|| String::from_utf16_lossy(&buf[..len as usize]).into())
+    }
+}
+
+/// `(volume, file index)`: NTFS's own name for a file, which a rename keeps
+/// and a different file never shares. Std has no stable one on Windows.
+#[cfg(windows)]
+pub fn file_id(path: &Path) -> Option<(u64, u64)> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+
+    // No access asked and every sharing mode granted: a stamp must never
+    // refuse, or be refused by, the writer.
+    let file = std::fs::OpenOptions::new().access_mode(0).share_mode(7).open(path).ok()?;
+    // SAFETY: the handle lives as long as `file`; the out struct is a local.
+    unsafe {
+        let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+        (GetFileInformationByHandle(file.as_raw_handle(), &mut info) != 0).then(|| {
+            (
+                u64::from(info.dwVolumeSerialNumber),
+                (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+            )
+        })
+    }
 }
 
 /// Sets Unix permission bits. A no-op on Windows, where a file under the

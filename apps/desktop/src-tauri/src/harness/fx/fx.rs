@@ -35,7 +35,7 @@ use std::sync::Arc;
 use crate::sink::Sink;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::{Child, ChildStdout, Command},
+    process::{Child, ChildStdout},
     sync::Mutex,
     time::Duration,
 };
@@ -240,11 +240,9 @@ pub async fn init(
     // Ahead of the spawn: everything between the spawn and the kill-wrapped
     // `open_session` below has to be infallible, or a `?` returns leaving a
     // child nothing can reach.
-    let seq_start = if is_new_session {
-        0
-    } else {
-        next_seq_by_session_id(session_id).await?
-    };
+    // Off the log even for a new conversation: one an agent switch starts
+    // (#1414) carries on this session's log, and a new session's has none.
+    let seq_start = next_seq_by_session_id(session_id).await?;
 
     // fx's own titling holds the first prompt's reply — see [`disable_fx_titles`].
     if is_new_session {
@@ -252,7 +250,7 @@ pub async fn init(
     }
 
     let bin = crate::binpath::fx().await;
-    let mut command = Command::new(&bin);
+    let mut command = crate::binpath::command(&bin);
 
     if let Some(endpoint) = crate::orchestration::child_endpoint() {
         command.env("DRAY_ENDPOINT", endpoint);
@@ -966,7 +964,7 @@ pub async fn fork_conversation(thread_id: &str) -> Result<String> {
     let bin = crate::binpath::fx().await;
     let output = tokio::time::timeout(
         RECOVER_TIMEOUT,
-        Command::new(&bin)
+        crate::binpath::command(&bin)
             .args(["session", "recover", thread_id, "--json"])
             .env("PATH", crate::harness::agent_path(&bin))
             .kill_on_drop(true)

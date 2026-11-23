@@ -292,7 +292,7 @@ async fn speaks_app_server(bin: &Path) -> bool {
         .into_iter()
         .chain(node_dir().cloned())
         .collect();
-    let Ok(output) = Command::new(bin)
+    let Ok(output) = command(bin)
         .arg("--help")
         .env("PATH", child_path(extra))
         .output()
@@ -347,6 +347,63 @@ fn spellings(path: PathBuf) -> [PathBuf; 2] {
     [path.with_extension("exe"), path.with_extension("cmd")]
 }
 
+/// A `Command` running `bin`. On Windows an npm `.cmd` shim is read and what
+/// it launches is run directly — its `.exe`, or `node` on its script — since a
+/// `.cmd` runs through cmd.exe, which cannot carry an argument with a newline:
+/// Claude's `--append-system-prompt` failed to spawn or arrived cut.
+pub fn command(bin: &Path) -> Command {
+    #[cfg(windows)]
+    if let Some((program, script)) = shim_target(bin) {
+        let mut command = Command::new(program);
+        command.args(script);
+        return command;
+    }
+    Command::new(bin)
+}
+
+/// What an npm cmd-shim at `shim` launches: the program, and the script to
+/// hand it where that is a `node` script.
+#[cfg(windows)]
+fn shim_target(shim: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
+    if !shim.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd")) {
+        return None;
+    }
+    let text = std::fs::read_to_string(shim).ok()?;
+    let dir = shim.parent()?;
+    let target = shim_paths(&text)
+        .into_iter()
+        .rev()
+        .map(|rel| dir.join(rel))
+        .find(|p| !p.file_name().is_some_and(|n| n.eq_ignore_ascii_case("node.exe")))?;
+    let ext = target.extension()?.to_ascii_lowercase();
+    if ext == "exe" {
+        return Some((target, None));
+    }
+    if !["js", "cjs", "mjs"].contains(&ext.to_str()?) {
+        return None;
+    }
+    // The shim's own rule: a `node.exe` beside it, else whichever is found.
+    let node = Some(dir.join("node.exe"))
+        .filter(|n| n.is_file())
+        .or_else(|| search_path("node"))
+        .or_else(|| node_dir().map(|d| d.join("node.exe")))
+        .unwrap_or_else(|| PathBuf::from("node"));
+    Some((node, Some(target)))
+}
+
+/// The paths a cmd-shim names relative to itself — every quoted
+/// `%dp0%\…` or `%~dp0\…` — in the order written.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn shim_paths(text: &str) -> Vec<String> {
+    text.split('"')
+        .skip(1)
+        .step_by(2)
+        .filter_map(|quoted| quoted.strip_prefix("%dp0%").or_else(|| quoted.strip_prefix("%~dp0")))
+        .map(|rest| rest.trim_start_matches(['\\', '/']).to_string())
+        .filter(|rest| !rest.is_empty())
+        .collect()
+}
+
 /// Where a user-installed CLI tends to land.
 #[cfg(windows)]
 fn known_dirs() -> Vec<PathBuf> {
@@ -365,11 +422,25 @@ fn known_dirs() -> Vec<PathBuf> {
         local.map(|l| l.join("Microsoft").join("WinGet").join("Links")),
         std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("nodejs")),
         std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("Git").join("cmd")),
+        // Git's `sh`, which a routine's check runs through: the installer puts
+        // only `Git\cmd` on `PATH`. Beside whichever `git` is found, else
+        // the default install.
+        git_bin().or_else(|| std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("Git").join("bin"))),
         std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("GitHub CLI")),
     ]
     .into_iter()
     .flatten()
     .collect()
+}
+
+/// `<Git>\bin` for the `git.exe` on the inherited `PATH`, which Git for
+/// Windows keeps at `<Git>\cmd`.
+#[cfg(windows)]
+fn git_bin() -> Option<PathBuf> {
+    let git = search_path("git")?;
+    let root = git.parent()?.parent()?;
+    let bin = root.join("bin");
+    bin.join("sh.exe").is_file().then_some(bin)
 }
 
 /// Where a user-installed CLI tends to land.
@@ -652,6 +723,32 @@ fn is_executable(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A child's `PATH` reaches Git's `sh`, which only `Git\cmd` on the
+    /// inherited one would not: every routine check runs through it.
+    #[test]
+    #[cfg(windows)]
+    fn a_child_path_reaches_gits_sh() {
+        if search_path("git").is_none() {
+            return eprintln!("git not installed; skipping");
+        }
+        let out = std::process::Command::new("sh")
+            .args(["-c", "echo ok"])
+            .env("PATH", child_path(Vec::new()))
+            .output()
+            .expect("sh on the child's PATH");
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "ok");
+    }
+
+    /// npm's two shim shapes as written on Windows: a native binary run
+    /// straight, and a script run under `node`.
+    #[test]
+    fn reads_what_an_npm_shim_launches() {
+        let exe = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\"   %*\r\n";
+        assert_eq!(shim_paths(exe), vec![r"node_modules\@anthropic-ai\claude-code\bin\claude.exe"]);
+        let js = "IF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n)\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n";
+        assert_eq!(shim_paths(js).last().map(String::as_str), Some(r"node_modules\@openai\codex\bin\codex.js"));
+    }
 
     /// The resolver must agree with the shell about where `claude` is. Skipped
     /// rather than failed where it isn't installed, so CI without the CLI stays

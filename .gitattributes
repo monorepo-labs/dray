@@ -1,5 +1,7 @@
-# Auto detect text files and perform LF normalization
-* text=auto
-# Bash refuses a CRLF script, and Git for Windows (a Windows runner included)
-# checks text out with CRLF unless told otherwise.
-*.sh text eol=lf
+# Auto detect text files and perform LF normalization. LF in the working tree
+# too, Windows included: Git for Windows checks text out as CRLF otherwise, and
+# `include_str!` bakes that into the skill and every prompt the binaries embed.
+* text=auto eol=lf
+# cmd.exe needs CRLF: with LF it loses goto labels (gradlew.bat).
+*.bat text eol=crlf
+*.cmd text eol=crlf

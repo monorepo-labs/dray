@@ -576,6 +576,7 @@ class Store(private val context: Context) {
 
     /** A status event that arrived while a read was out is newer than the read, so it wins. */
     internal fun merged(key: SessionKey, read: SessionItem): SessionItem {
+        dropStalePick(key, read)
         val s = statuses[key] ?: return read
         val m = s.modified ?: return read
         return if (m >= read.modified) read.copy(status = s.status, modified = m) else read
@@ -743,17 +744,21 @@ class Store(private val context: Context) {
      * Sends a reply carrying the session's own recorded settings back, so `send_msg` finds nothing
      * changed and respawns nothing. They are read fresh first: another client moving the model
      * broadcasts nothing, and a held copy sent back would undo its change. Each pick that is null
-     * keeps the session's as just re-read.
+     * keeps the session's as just re-read. Another `harness` moves the task there first (#1417).
      */
     suspend fun send(
         key: SessionKey, text: String, model: String? = null, effort: String? = null,
-        stance: String? = null, fast: Boolean? = null, effortMoved: Boolean = false,
+        stance: String? = null, fast: Boolean? = null, effortMoved: Boolean = false, harness: String? = null,
     ): Boolean {
         val c = connections[key.server] ?: return false.also { lastError = "Not connected" }
         return try {
-            val item = decodeOrNull<SessionItem>(c.call("get_session_by_id", jsonOf("sessionId" to key.id, "turns" to 0)).ok)
+            var item = decodeOrNull<SessionItem>(c.call("get_session_by_id", jsonOf("sessionId" to key.id, "turns" to 0)).ok)
                 ?: throw DrayError("Session not found")
             setItem(key, merged(key, item))
+            if (harness != null && harness != item.harness) {
+                switchAgent(c, key, merged(key, item), harness, model ?: item.model, effort, stance, fast)
+                item = item.copy(harness = harness)
+            }
             val reply = c.call(
                 "send_msg",
                 jsonOf(
@@ -763,7 +768,7 @@ class Store(private val context: Context) {
                     "harness" to item.harness,
                     "model" to (model ?: item.model),
                     "effort" to (if (effortMoved) effort else effort ?: item.effort),
-                    "permissionMode" to Picks.stanceFor(item.harness, stance ?: item.permissionMode),
+                    "permissionMode" to Picks.taskStance(item.harness, stance ?: item.permissionMode),
                     "fast" to (fast ?: item.fast ?: false),
                     "cwd" to item.cwd,
                     "branch" to null,
@@ -784,6 +789,30 @@ class Store(private val context: Context) {
             lastError = e.message
             false
         }
+    }
+
+    /**
+     * Moves a task to `harness` ahead of the send that picked it. Its own command, so a server from
+     * before #1417 refuses it and nothing is sent, rather than the old agent answering.
+     */
+    private suspend fun switchAgent(
+        c: Connection, key: SessionKey, item: SessionItem, harness: String, model: String, effort: String?, stance: String?, fast: Boolean?,
+    ) {
+        val name = Picks.agentLabels[harness] ?: harness
+        // The switch stops the agent, which would cut its turn off.
+        if (item.busy) throw DrayError("Wait for this turn to finish before switching to $name.")
+        try {
+            c.call(
+                "switch_agent",
+                jsonOf(
+                    "sessionId" to key.id, "harness" to harness, "model" to model, "effort" to effort,
+                    "permissionMode" to Picks.taskStance(harness, stance ?: item.permissionMode), "fast" to (fast ?: item.fast ?: false),
+                ),
+            )
+        } catch (e: DrayError) {
+            throw if (e.message.orEmpty().contains("unknown command")) DrayError("Update this server to switch a task to $name.") else e
+        }
+        botState.unsent.remove(key)
     }
 
     /** The reader's emoji on a bot's message `messageId`. The badge and the bot's answer come back as events. */
@@ -818,6 +847,10 @@ class Store(private val context: Context) {
     private fun retire(key: SessionKey, requestId: String) {
         asks[key]?.let { list -> asks[key] = list.filter { it.payload.askId != requestId } }
     }
+
+    /** The agents a server runs, for the reply dock's agent row. */
+    suspend fun agents(server: String): List<com.yogesh.dray.model.AgentAvailability> =
+        runCatching { decodeList<com.yogesh.dray.model.AgentAvailability>(call(server, "agent_availability")) }.getOrDefault(emptyList())
 
     /** The models a harness offers on a server, for the reply dock's picks. */
     suspend fun models(server: String, harness: String): List<com.yogesh.dray.model.Model> =
@@ -883,6 +916,7 @@ class Store(private val context: Context) {
             }
             "machines_shared" -> decodeOrNull<Sharing>(payload)?.let { share(server, it.machines) }
             "session_created", "session_changed" -> decodeOrNull<SessionItem>(payload)?.let { item ->
+                dropStalePick(SessionKey(server, item.sessionId), item)
                 setItem(SessionKey(server, item.sessionId), item)
                 scope.launch { loadMarks(server, force = false, only = setOf(item.projectPath)) }
                 // `bots_changed` comes from the CLI alone, and a bot the app made is first seen as its chat.
@@ -914,9 +948,23 @@ class Store(private val context: Context) {
                 if (p.tasks.isEmpty() && items[key]?.busy != true) strand(key)
             }
             is Payload.UserMessage -> queued[key]?.let { q -> queued[key] = q.filter { it.text != p.text } }
+            // A move made anywhere, even where its `session_changed` was missed: logged, so a catch-up carries it too.
+            is Payload.AgentSwitched -> {
+                items[key]?.let { if (it.harness != p.to) setItem(key, it.copy(harness = p.to)) }
+                if (botState.unsent[key]?.harness == p.to) botState.unsent.remove(key)
+            }
             else -> {}
         }
         if (!e.payload.isTransient) transcripts[key]?.let { transcripts[key] = it.plus(e) }
+    }
+
+    /**
+     * A pick naming the agent a task already runs is spent: kept, a missed `agent_switched` would
+     * move the task back unasked. A bot chat's keeps a model the sheet changed. Store.swift's.
+     */
+    private fun dropStalePick(key: SessionKey, item: SessionItem) {
+        val p = botState.unsent[key] ?: return
+        if (p.harness == item.harness && (bot(key) == null || p.model == item.model)) botState.unsent.remove(key)
     }
 
     /** Drops a session's cards once nothing could answer them: no turn running and no task left — the server's own rule. */
