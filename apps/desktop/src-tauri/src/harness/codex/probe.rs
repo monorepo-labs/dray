@@ -11,7 +11,6 @@ use serde_json::Value;
 use std::{process::Stdio, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::Command,
     time::timeout,
 };
 
@@ -34,7 +33,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 /// through `child.kill().await`, which signals *and* waits.
 pub async fn ask(cwd: Option<&str>, method: &str, params: Value) -> Result<Value> {
     let bin = crate::binpath::codex().await;
-    let mut command = Command::new(&bin);
+    let mut command = crate::binpath::command(&bin);
     command.arg("app-server");
     if let Some(cwd) = cwd {
         command.current_dir(cwd);

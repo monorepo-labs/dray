@@ -110,9 +110,11 @@ dray session model <id>                       # print what it runs on
 
 The composer's model picker, from here. The pick lands from the session's next
 turn — the next message it gets, from you or the user, one already waiting
-included — and a running turn is not stopped. The model is an alias of the
-session's own agent; an effort the model lacks is refused with the levels it
-has. A session on another machine is found by its id. Switch a session only
+included — and a running turn is not stopped. An effort the model lacks is
+refused with the levels it has. An alias of another installed agent's model,
+like `gpt-6-luna` on a Claude Code session, moves the task to that agent: it
+keeps its worktree, branch and transcript, the new agent is handed the
+conversation so far, and it is refused while a turn runs. A session on another machine is found by its id. Switch a session only
 where the user asked, or one you started yourself, and ask before raising one
 to Fable or above its harness's default effort, for the reasons above.
 
