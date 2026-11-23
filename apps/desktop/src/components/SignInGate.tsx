@@ -293,7 +293,19 @@ function pts(list: string, fill: string): [number, number, string][] {
 // pages read as one family.
 export { Heading as GateHeading, Tiles as GateTiles };
 
-function Tiles() {
+/// The black fills as the site's blue band draws its tiles: shades of black
+/// and white laid over the blue, so they darken and lift whatever is under them.
+const ON_BLUE: Record<string, string> = {
+  "#121212": "#0000001A",
+  "#0C0C0C": "#00000033",
+  "#181818": "#FFFFFF14",
+  "#1F1F1F": "#FFFFFF1F",
+};
+
+/// `blue` for a page on the brand blue, where the black fills would read as
+/// grey blocks.
+function Tiles({ tone = "black" }: { tone?: "black" | "blue" }) {
+  const id = `gate-stripes-${tone}`;
   return (
     <svg
       aria-hidden
@@ -303,14 +315,14 @@ function Tiles() {
       className="pointer-events-none absolute bottom-0 left-1/2 -translate-x-1/2"
     >
       <defs>
-        <pattern id="gate-stripes" width="6" height="60" patternUnits="userSpaceOnUse">
-          <rect width="2" height="60" fill="#00000080" />
+        <pattern id={id} width="6" height="60" patternUnits="userSpaceOnUse">
+          <rect width="2" height="60" fill={tone === "blue" ? "#0000001F" : "#00000080"} />
         </pattern>
       </defs>
       {TILES.map(([x, y, fill]) => (
         <g key={`${x},${y}`}>
-          <rect x={x} y={y} width="60" height="60" fill={fill} />
-          <rect x={x} y={y} width="60" height="60" fill="url(#gate-stripes)" />
+          <rect x={x} y={y} width="60" height="60" fill={tone === "blue" ? ON_BLUE[fill] : fill} />
+          <rect x={x} y={y} width="60" height="60" fill={`url(#${id})`} />
         </g>
       ))}
     </svg>

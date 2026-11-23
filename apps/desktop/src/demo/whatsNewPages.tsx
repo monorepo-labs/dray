@@ -22,7 +22,7 @@ import "../App.css";
 /// over the whole window, as the app would; an action is logged in its row
 /// rather than run. `?takes=ACE` lists only those. F is the one picked.
 
-type TakeProps = { hl: Highlight[]; onAction: (label: string) => void; onClose: () => void };
+type TakeProps = { hl: Highlight[]; onAction: (label: string) => void; onClose: () => void; noMedia?: NoMedia };
 
 const title = (h: Highlight) => changelogPlain(h.item.title ?? h.item.body);
 
@@ -437,79 +437,135 @@ function TakeSpotlight({ hl, onAction, onClose }: TakeProps) {
   );
 }
 
-/// One feature, as the sign-in gate draws a way in: a square #1C1C1C card,
-/// here with the picture or video on top, the title under it and any action as
-/// a small link. No description: the title is a sentence that says the whole
-/// thing, two lines at most. `wide` lays the picture beside the text instead,
-/// for a card alone or one spanning both columns.
-function LandingCard({ h, wide, span, onAction }: { h: Highlight; wide: boolean; span: boolean; onAction: (label: string) => void }) {
+/// How a highlight with no picture or video stands on its own: `type` sets
+/// the title large across the card, `tiles` puts the brand's striped tiles
+/// where the picture would be, and `fit` lays it as a short card across both
+/// columns, as tall as its text.
+type NoMedia = "type" | "tiles" | "fit";
+
+function ActionMono({ h, onAction }: { h: Highlight; onAction: (label: string) => void }) {
   const action = h.item.highlight?.action;
+  if (!action) return null;
   return (
-    <article className={cn("bg-[#1C1C1C]", wide ? "grid grid-cols-[3fr_2fr]" : "flex flex-col", span && "col-span-2")}>
-      <Media media={h.item.media[0]} className="aspect-video w-full bg-[#141414] [&_svg]:text-white/60" />
-      <div className={cn("flex flex-col gap-3 p-6", wide && "justify-center p-8")}>
-        <h2
-          className={cn(
-            "line-clamp-2 tracking-[-0.01em] text-balance text-white",
-            wide ? "text-[26px] leading-9" : "text-[20px] leading-7",
-          )}
-        >
+    <button
+      type="button"
+      onClick={() => onAction(action.label)}
+      className="inline-flex cursor-pointer items-center gap-1.5 self-start font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white/75 uppercase outline-none hover:text-white focus-visible:text-white"
+    >
+      {action.label}
+      <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden>
+        <path d="M7 17 17 7M7 7h10v10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </button>
+  );
+}
+
+/// One feature, as the site's blue band draws a way in: a square card of
+/// white at 10% over the blue, the picture or video on top, the title under
+/// it and any action as a small link. No description: the title is a
+/// sentence that says the whole thing, two lines at most.
+function LandingCard({ h, noMedia, onAction }: { h: Highlight; noMedia: NoMedia; onAction: (label: string) => void }) {
+  const media = h.item.media[0];
+  const heading = (
+    <h2 className="line-clamp-2 text-[20px] leading-7 tracking-[-0.01em] text-balance text-white">{title(h)}</h2>
+  );
+  if (!media && noMedia === "type")
+    return (
+      <article className="flex flex-col justify-between gap-8 bg-white/10 p-8">
+        <h2 className="line-clamp-3 text-[36px] leading-10 font-light tracking-[-0.03em] text-balance text-white">
           {title(h)}
         </h2>
-        {action && (
-          <button
-            type="button"
-            onClick={() => onAction(action.label)}
-            className="mt-2 inline-flex cursor-pointer items-center gap-1.5 self-start font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white/70 uppercase outline-none hover:text-white focus-visible:text-white"
-          >
-            {action.label}
-            <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden>
-              <path d="M7 17 17 7M7 7h10v10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
-        )}
+        <ActionMono h={h} onAction={onAction} />
+      </article>
+    );
+  if (!media && noMedia === "fit")
+    return (
+      <article className="col-span-2 flex items-center justify-between gap-8 bg-white/10 px-6 py-6">
+        {heading}
+        <ActionMono h={h} onAction={onAction} />
+      </article>
+    );
+  return (
+    <article className="flex flex-col bg-white/10">
+      {media ? (
+        <Media media={media} className="aspect-video w-full bg-black/20" />
+      ) : (
+        <div className="relative aspect-video w-full overflow-hidden bg-black/10">
+          <GateTiles tone="blue" />
+        </div>
+      )}
+      <div className="flex flex-col gap-3 p-6">
+        {heading}
+        <ActionMono h={h} onAction={onAction} />
       </div>
     </article>
   );
 }
 
-/// F — landing, in the sign-in gate's own frame (#1277): black whatever the
-/// theme, the site's striped tiles along the bottom, the light heading, and
-/// the features as the gate's square cards, 2px apart. The heading is the
-/// title, counting what is new; nothing opens and nothing is picked: the
-/// reader scans the cards and leaves by Continue under them, or Escape.
-///
-/// Two columns, and an odd count leads with a card across both, so one to six
-/// never leaves a hole in the grid; a card alone lies wide, picture beside text,
-/// so it fits the window whole.
-function TakeLanding({ hl, onAction, onClose }: TakeProps) {
-  const one = hl.length === 1;
-  const lead = !one && hl.length % 2 === 1;
+/// The page's way on, as a card of its own in the grid: white, the one solid
+/// thing on the page. `row` lays it across both columns.
+function ContinueCard({ row, onClose }: { row: boolean; onClose: () => void }) {
+  const arrow = (
+    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden>
+      <path d="M4 12h14M12 5l7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" />
+    </svg>
+  );
   return (
-    <Shell label="New in Dray" onClose={onClose} className="overflow-hidden bg-black text-white select-none">
-      <GateTiles />
+    <button
+      type="button"
+      data-autofocus
+      onClick={onClose}
+      className={cn(
+        "flex cursor-pointer bg-white text-left text-[#0B0B0F] outline-none transition-colors hover:bg-white/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white",
+        row ? "col-span-2 h-24 items-center justify-between px-8" : "min-h-48 flex-col justify-between p-8",
+      )}
+    >
+      {row ? (
+        <>
+          <span className="text-[24px] leading-8 tracking-[-0.01em]">Continue</span>
+          {arrow}
+        </>
+      ) : (
+        <>
+          <span className="self-end">{arrow}</span>
+          <span className="text-[28px] leading-9 tracking-[-0.02em]">Continue</span>
+        </>
+      )}
+    </button>
+  );
+}
+
+/// F — landing, on the brand blue (#1612F8, the site's closing band and the
+/// Dray theme's `--break-card`): the sign-in gate's frame (#1277) and the
+/// site's blue band, the tiles along the bottom, the light heading counting
+/// what is new, and the features as square cards 2px apart. Nothing opens and
+/// nothing is picked: the reader scans the cards and leaves by Continue, the
+/// grid's last card, or Escape.
+///
+/// Two columns throughout. Continue fills the last row's empty slot when the
+/// count is odd and takes a row of its own when it is even, so no count leaves
+/// a hole; a `fit` card without media spans a row of its own, ahead of the rest.
+function TakeLanding({ hl, onAction, onClose, noMedia = "type" }: TakeProps) {
+  const one = hl.length === 1;
+  const banners = noMedia === "fit" ? hl.filter((h) => !h.item.media[0]) : [];
+  const cards = noMedia === "fit" ? hl.filter((h) => h.item.media[0]) : hl;
+  return (
+    <Shell label="New in Dray" onClose={onClose} className="overflow-hidden bg-[#1612F8] text-white select-none">
+      <GateTiles tone="blue" />
       <header data-tauri-drag-region="deep" className="relative flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">
         <WindowControls />
       </header>
       <main className="relative min-h-0 flex-1 overflow-y-auto px-10 pb-12">
         <div className="mx-auto flex w-full max-w-[1120px] flex-col pt-6">
           <GateHeading>{one ? "New in Dray." : `${hl.length} new things in Dray.`}</GateHeading>
-          <div className={cn("grid gap-[2px] bg-black", one ? "grid-cols-1" : "grid-cols-2")}>
-            {hl.map((h, i) => (
-              <LandingCard key={i} h={h} wide={one || (lead && i === 0)} span={lead && i === 0} onAction={onAction} />
+          {/* Backed by the blue itself, so the tiles never show through the
+              2px gaps or the cards' 10% white. */}
+          <div className="grid grid-cols-2 gap-[2px] bg-[#1612F8]">
+            {[...banners, ...cards].map((h, i) => (
+              <LandingCard key={i} h={h} noMedia={noMedia} onAction={onAction} />
             ))}
+            <ContinueCard row={cards.length % 2 === 0} onClose={onClose} />
           </div>
-          <button
-            type="button"
-            data-autofocus
-            onClick={onClose}
-            className="mt-8 flex h-12 min-w-56 cursor-pointer items-center justify-between gap-6 self-end bg-white px-5 text-[15px] text-black outline-none transition-colors hover:bg-white/90 focus-visible:ring-2 focus-visible:ring-white/50 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
-          >
-            Continue
-            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
-              <path d="M4 12h14M12 5l7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" />
-            </svg>
-          </button>
         </div>
       </main>
     </Shell>
@@ -520,7 +576,7 @@ const TAKES: { id: string; name: string; what: string; Take: (props: TakeProps) 
   {
     id: "F",
     name: "Landing (picked)",
-    what: "A landing page's feature section in the sign-in gate's own frame: the count as the title, every highlight a large card its title alone explains, nothing to open. Continue under the cards, or Escape.",
+    what: "A landing page's feature section on the brand blue, in the sign-in gate's frame: the count as the title, every highlight a large card its title alone explains, Continue the grid's last card. Escape leaves too.",
     Take: TakeLanding,
   },
   {
@@ -555,7 +611,15 @@ const TAKES: { id: string; name: string; what: string; Take: (props: TakeProps) 
   },
 ];
 
-function Row({ id, name, what, Take, hl }: (typeof TAKES)[number] & { hl: Highlight[] }) {
+/// F's ways to draw a highlight with no picture, for the page's switch and
+/// `?nomedia=`.
+const NO_MEDIA: [NoMedia, string][] = [
+  ["type", "Type"],
+  ["tiles", "Tiles"],
+  ["fit", "Fit"],
+];
+
+function Row({ id, name, what, Take, hl, noMedia }: (typeof TAKES)[number] & { hl: Highlight[]; noMedia: NoMedia }) {
   const [open, setOpen] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
   const done = (line: string) => {
@@ -573,7 +637,9 @@ function Row({ id, name, what, Take, hl }: (typeof TAKES)[number] & { hl: Highli
       <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
         Open
       </Button>
-      {open && <Take hl={hl} onAction={(label) => done(`action: ${label}`)} onClose={() => done("closed, seen")} />}
+      {open && (
+        <Take hl={hl} noMedia={noMedia} onAction={(label) => done(`action: ${label}`)} onClose={() => done("closed, seen")} />
+      )}
     </li>
   );
 }
@@ -583,6 +649,10 @@ function Demo() {
   const only = params.get("takes");
   const [count, setCount] = useState(() => Math.min(Math.max(Number(params.get("n")) || 4, 1), PAGE_HIGHLIGHTS.length));
   const hl = PAGE_HIGHLIGHTS.slice(0, count);
+  const [noMedia, setNoMedia] = useState<NoMedia>(() => {
+    const asked = params.get("nomedia");
+    return NO_MEDIA.some(([look]) => look === asked) ? (asked as NoMedia) : "type";
+  });
   return (
     <TooltipProvider>
       <div className="mx-auto flex max-w-3xl flex-col gap-6 p-10">
@@ -609,10 +679,27 @@ function Demo() {
               ))}
             </div>
           </div>
+          <div className="flex items-center gap-3 text-ui">
+            <span className="text-muted-foreground">F, no picture</span>
+            <div role="radiogroup" aria-label="F, no picture" className="flex gap-1">
+              {NO_MEDIA.map(([look, label]) => (
+                <Button
+                  key={look}
+                  role="radio"
+                  aria-checked={noMedia === look}
+                  size="sm"
+                  variant={noMedia === look ? "default" : "outline"}
+                  onClick={() => setNoMedia(look)}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+          </div>
         </header>
         <ul className="flex flex-col border-t border-border">
           {TAKES.filter((t) => !only || only.includes(t.id)).map((t) => (
-            <Row key={t.id} {...t} hl={hl} />
+            <Row key={t.id} {...t} hl={hl} noMedia={noMedia} />
           ))}
         </ul>
       </div>
