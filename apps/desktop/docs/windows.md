@@ -13,12 +13,13 @@
 - **Git's `sh` is put on every child's `PATH`** (`<Git>\bin`): the installer adds only `<Git>\cmd`, and a routine's check runs through `sh -c`.
 - **The session index's cache stamp carries NTFS's file id** (`platform::file_id`): the mtime clock ticks every ~15.6ms, and creation time is carried onto a file renamed over another, which is how the index is written.
 - **Window chrome is Linux's**: undecorated, opaque, drawn controls, flat surfaces (`tauri.windows.conf.json`, `useGlass`).
+- **Dray Island is the Linux island's binary**, `apps/island-linux` with `win.rs` in place of `x11.rs`, the app's child as on Linux (`island.rs`). Its Windows rules are in that crate's PLAN.md. A dev app finds it in the crate's `target\debug`; no bundle carries it yet.
 - **Agents run through Git Bash.** Claude Code finds it on its own; it has a PowerShell tool besides, which anything denying Bash must deny too (`title.rs`).
 
 ## Not on Windows yet
 
 - The in-app browser (CEF builds for Mac and Linux only) and `dray browser`'s headless Chromium, whose DevTools pipe rides fds 3 and 4.
-- Dictation (hidden: `HAS_DICTATION`), Dray Island, Open in (apps list is empty), the dock badge.
+- Dictation (hidden: `HAS_DICTATION`), Open in (apps list is empty), the dock badge.
 - `dray server install|start` and `dray update` are systemd/launchd and `install.sh`.
 - Authenticode. The release is unsigned, so SmartScreen warns on the download; the switch is under _Releasing_ below.
 - A Windows button on the site's downloads page.

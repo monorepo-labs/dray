@@ -1,6 +1,9 @@
-//! Dray Island on Linux: GPUI draws the panel and the pill, `server` keeps a
-//! socket to This computer's `dray --serve`, and `x11` watches for the
-//! reader's modifier tapped alone. See PLAN.md.
+//! Dray Island on Linux and Windows: GPUI draws the panel and the pill,
+//! `server` keeps a socket to This computer's `dray --serve`, and `sys` —
+//! X11 or Win32 — watches for the reader's modifier tapped alone. See PLAN.md.
+
+// A release on Windows is a GUI binary, or the app's child would open a console.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod asks;
 mod bots;
@@ -16,20 +19,25 @@ mod panel;
 mod prefs;
 mod server;
 mod sound;
-mod x11;
+mod tap;
+#[cfg(target_os = "linux")]
+#[path = "x11.rs"]
+mod sys;
+#[cfg(windows)]
+#[path = "win.rs"]
+mod sys;
 
 use asks::{Ask, AskKind, Asks};
 use draft::{Draft, Field, Pinned, Target};
 use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui::{
-    App, AppContext, Bounds, Entity, Pixels, QuitMode, Window, WindowBackgroundAppearance, WindowBounds,
+    App, AppContext, Bounds, Entity, Pixels, QuitMode, WindowBackgroundAppearance, WindowBounds,
     WindowHandle, WindowKind, WindowOptions, px, size,
 };
 use input::TextInput;
 use panel::{Panel, Pill};
 use prefs::Placement;
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use serde_json::json;
 use server::{Session, Update};
 use std::time::Duration;
@@ -49,8 +57,34 @@ const GAP: f32 = 8.;
 const DWELL: Duration = Duration::from_millis(150);
 /// How long the last answer's word stays before the panel closes.
 const FLASH: Duration = Duration::from_millis(900);
+/// What a dictation with no model says. Dray on Windows hides its
+/// Transcription tab (#1425), so there is no Settings to send the reader to.
+const NEEDS_MODEL: &str = if cfg!(windows) {
+    "Dictation isn't in Dray on Windows yet."
+} else {
+    "Pick a dictation model in Dray → Settings → Transcription."
+};
 /// How long news lights the pill's edge.
 const GLOW: Duration = Duration::from_secs(2);
+
+/// GPUI reports its own failures — a renderer that would not resize, a
+/// device lost — through `log`, which goes nowhere without a logger: its
+/// warnings and errors land in `island.log` with ours.
+struct StderrLog;
+
+impl log::Log for StderrLog {
+    fn enabled(&self, meta: &log::Metadata) -> bool {
+        meta.level() <= log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("island: {} {}: {}", record.level(), record.target(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
 
 enum Msg {
     Tap,
@@ -65,7 +99,7 @@ enum Msg {
     /// Dray's Settings changed a pick: read the prefs again and show it.
     Prefs,
     /// Esc or Super+⏎ under the done pill.
-    DoneKey(x11::DoneKey),
+    DoneKey(sys::DoneKey),
     /// Dray quit: the island does not outlive it.
     Quit,
 }
@@ -104,10 +138,10 @@ pub struct Island {
     sessions: Vec<Session>,
     placement: Placement,
     window: Option<WindowHandle<Panel>>,
-    /// The panel's X window, and whoever had the keyboard before it took it.
-    focus: Option<(u32, u32)>,
-    x_window: Option<u32>,
-    pill_x_window: Option<u32>,
+    /// The panel's native window, and whoever had the keyboard before it took it.
+    focus: Option<(sys::Wid, sys::Wid)>,
+    wid: Option<sys::Wid>,
+    pill_wid: Option<sys::Wid>,
     /// A compositor runs, so windows can be see-through and the card drawn
     /// in its Mac shape with its shadow. Read at each open.
     pub glass: bool,
@@ -154,7 +188,7 @@ pub struct Island {
     shot: Option<ShotRun>,
     /// Ink on the live screen while dictating, and its overlay.
     pub inking: Option<overlay::Inking>,
-    ink_window: Option<(WindowHandle<overlay::InkOverlay>, Option<u32>)>,
+    ink_window: Option<(WindowHandle<overlay::InkOverlay>, Option<sys::Wid>)>,
     /// The full screen the ink is drawn over where there is no compositor.
     ink_still: Option<image::RgbaImage>,
     /// The moment being drawn: the row held for it and the cut placing the
@@ -188,7 +222,7 @@ pub struct Island {
     /// This computer's bots, whose chats draw their face and name.
     pub bots: Vec<bots::Bot>,
     /// Esc and Super+⏎, held while the done pill is up.
-    done_keys: Option<x11::DoneKeys>,
+    done_keys: Option<sys::DoneKeys>,
     /// The sender the done pill's keys report through.
     tx: Option<mpsc::UnboundedSender<Msg>>,
     /// The panel stepped aside for a screenshot and comes back after it: not
@@ -221,9 +255,9 @@ struct ShotRun {
     recording: bool,
     was_open: bool,
     cut: Option<futures::channel::oneshot::Receiver<()>>,
-    window: Option<(WindowHandle<overlay::CaptureOverlay>, Option<u32>)>,
+    window: Option<(WindowHandle<overlay::CaptureOverlay>, Option<sys::Wid>)>,
     /// Whoever had the keyboard before the overlay took it.
-    focus_before: Option<u32>,
+    focus_before: Option<sys::Wid>,
 }
 
 struct Moment {
@@ -356,6 +390,9 @@ impl Island {
 }
 
 fn main() {
+    if log::set_logger(&StderrLog).is_ok() {
+        log::set_max_level(log::LevelFilter::Warn);
+    }
     // `--orb-png <dir>`: the orb's reference frames as PNGs, for setting the
     // port beside the Mac's captures. No window, no server.
     let args: Vec<String> = std::env::args().collect();
@@ -402,7 +439,7 @@ fn main() {
         });
     }
     let (taps, shots, shift, keys_tx) = (tx.clone(), tx.clone(), tx.clone(), tx.clone());
-    x11::watch_taps(
+    sys::watch_taps(
         move || {
             let _ = taps.unbounded_send(Msg::Tap);
         },
@@ -500,7 +537,7 @@ fn asks_changed(island: &Entity<Island>, fresh: bool, had_cards: bool, cx: &mut 
 /// News reaching a shut panel: the pill's edge lit for a moment, and the
 /// chime unless Dray's own window is in front, which sounds its own.
 fn announce(island: &Entity<Island>, cx: &mut App) {
-    if !x11::dray_in_front() {
+    if !sys::dray_in_front() {
         sound::chime();
     }
     let clock = island.update(cx, |island, cx| {
@@ -550,7 +587,7 @@ fn sync_pill(island: &Entity<Island>, cx: &mut App) {
     };
     sync_done_keys(island, cx);
     if want && !has {
-        let glass = x11::compositing();
+        let glass = sys::compositing();
         island.update(cx, |island, _| island.glass = glass);
         let bounds = place(placement, PILL.0, PILL.1, glass, cx);
         let state = island.clone();
@@ -577,17 +614,17 @@ fn sync_pill(island: &Entity<Island>, cx: &mut App) {
             },
         );
         if let Ok(pill) = opened {
-            let xid = pill.update(cx, |_, window, _| x_window(window)).ok().flatten();
+            let xid = wid_of(&pill, false, cx);
             island.update(cx, |island, _| {
                 island.pill = Some(pill);
-                island.pill_x_window = xid;
+                island.pill_wid = xid;
             });
         }
     } else if !want && has {
         let pill = island.update(cx, |island, _| {
             island.pill_hovered = false;
             island.done_hovered = false;
-            island.pill_x_window = None;
+            island.pill_wid = None;
             island.pill.take()
         });
         if let Some(pill) = pill {
@@ -703,7 +740,7 @@ pub fn start_dictation(island: &Entity<Island>, cx: &mut App) {
             let refusal = match &answer {
                 Ok(serde_json::Value::Null) => None,
                 Ok(v) => Some(match v.get("kind").and_then(|k| k.as_str()) {
-                    Some("needsModel") => "Pick a dictation model in Dray → Settings → Transcription.".to_string(),
+                    Some("needsModel") => NEEDS_MODEL.to_string(),
                     _ => "Dray needs the microphone.".to_string(),
                 }),
                 Err(why) => Some(why.clone()),
@@ -911,7 +948,7 @@ fn place_words(island: &mut Island, answer: server::Reply, cx: &mut App) -> (boo
             (None, true)
         }
         Some("empty") => (Some("No words heard.".to_string()), true),
-        Some("needsModel") => (Some("Pick a dictation model in Dray → Settings → Transcription.".to_string()), false),
+        Some("needsModel") => (Some(NEEDS_MODEL.to_string()), false),
         Some("noAudio") => (Some("Dray heard nothing. Check the microphone.".to_string()), false),
         _ => (Some(value.get("message").and_then(|m| m.as_str()).unwrap_or("Dictation failed.").to_string()), false),
     };
@@ -1004,12 +1041,16 @@ pub fn open(island: &Entity<Island>, cx: &mut App) {
 /// With nothing picked, or a pick gone from the index: the session last
 /// used, else the newest, else a new task.
 fn settle_target(island: &Entity<Island>, cx: &mut App) {
+    // A project attached in Dray while the draft sat on a new task would
+    // otherwise never reach the bar: its lists are read again at each open.
+    if island.read(cx).draft().target == Some(Target::New) {
+        return load_picks(island, cx);
+    }
     let target = {
         let i = island.read(cx);
         let ok = match &i.draft().target {
             Some(Target::Session(id)) => i.session(id).is_some(),
-            Some(Target::New) => true,
-            None => false,
+            Some(Target::New) | None => false,
         };
         if ok {
             return;
@@ -1044,7 +1085,7 @@ fn show(island: &Entity<Island>, cx: &mut App) {
     // Read here, not on each frame: it names the key, which Dray's Settings can move.
     island.update(cx, |island, _| island.draft_mut().prompt = draft::placeholder());
     sync_card(island, cx);
-    let glass = x11::compositing();
+    let glass = sys::compositing();
     island.update(cx, |island, _| island.glass = glass);
     let placement = island.read(cx).placement;
     let bounds = place(placement, panel_width(glass), HEIGHT, glass, cx);
@@ -1055,6 +1096,7 @@ fn show(island: &Entity<Island>, cx: &mut App) {
             titlebar: None,
             // Override-redirect on X11: the window manager neither frames,
             // moves nor focuses it, and it sits over every managed window.
+            // A topmost tool window on Windows, off the taskbar and Alt+Tab.
             kind: WindowKind::PopUp,
             focus: true,
             is_movable: false,
@@ -1077,11 +1119,11 @@ fn show(island: &Entity<Island>, cx: &mut App) {
         eprintln!("island: could not open the panel");
         return;
     };
-    let ours = handle.update(cx, |_, window, _| x_window(window)).ok().flatten();
-    let focus = ours.and_then(|ours| Some((ours, x11::take_focus(ours)?)));
+    let ours = wid_of(&handle, true, cx);
+    let focus = ours.and_then(|ours| Some((ours, sys::take_focus(ours)?)));
     island.update(cx, |island, cx| {
         island.window = Some(handle);
-        island.x_window = ours;
+        island.wid = ours;
         island.focus = focus;
         island.menu = false;
         let field = if island.card_up(cx).is_some() { Field::Panel } else { Field::Typing };
@@ -1106,7 +1148,7 @@ pub fn close(island: &Entity<Island>, cx: &mut App) {
         island.flash = None;
         island.notice = None;
         island.ask_tab = None;
-        island.x_window = None;
+        island.wid = None;
         island.cards_first = false;
         let draft = island.draft_mut();
         draft.list_shown = false;
@@ -1117,7 +1159,7 @@ pub fn close(island: &Entity<Island>, cx: &mut App) {
     // Before the window goes, while the panel can still be asked whether it
     // holds the keyboard.
     if let Some((ours, before)) = focus {
-        x11::give_back(ours, before);
+        sys::give_back(ours, before);
     }
     if let Some(window) = window {
         let _ = window.update(cx, |_, window, _| window.remove_window());
@@ -1126,19 +1168,10 @@ pub fn close(island: &Entity<Island>, cx: &mut App) {
     sync_pill(island, cx);
 }
 
-/// The panel's X window id, which GPUI hands out only as a raw handle.
-fn x_window(window: &Window) -> Option<u32> {
-    match HasWindowHandle::window_handle(window).ok()?.as_raw() {
-        RawWindowHandle::Xcb(h) => Some(h.window.get()),
-        RawWindowHandle::Xlib(h) => u32::try_from(h.window).ok(),
-        _ => None,
-    }
-}
-
-/// X pixels per GPUI pixel: the work area is in the former, bounds in the latter.
+/// Device pixels per GPUI pixel: the work area is in the former, bounds in the latter.
 fn scale(cx: &App) -> f32 {
     let Some(display) = cx.primary_display() else { return 1. };
-    x11::screen_width().map_or(1., |w| w as f32 / display.bounds().size.width.as_f32())
+    sys::screen_width().map_or(1., |w| w as f32 / display.bounds().size.width.as_f32())
 }
 
 fn background(glass: bool) -> WindowBackgroundAppearance {
@@ -1160,7 +1193,7 @@ fn place(placement: Placement, width: f32, height: f32, glass: bool, cx: &App) -
     };
     let screen = display.bounds();
     let scale = scale(cx);
-    let (top, bottom) = match x11::work_area() {
+    let (top, bottom) = match sys::work_area() {
         Some((_, y, _, h)) => (
             px(y as f32 / scale).max(screen.top()),
             px((y + h) as f32 / scale).min(screen.bottom()),
@@ -1181,20 +1214,20 @@ fn place(placement: Placement, width: f32, height: f32, glass: bool, cx: &App) -
 pub fn fit(island: &Entity<Island>, pill: bool, width: f32, height: f32, cx: &mut App) {
     let (xid, placement, glass) = {
         let i = island.read(cx);
-        (if pill { i.pill_x_window } else { i.x_window }, i.placement, i.glass)
+        (if pill { i.pill_wid } else { i.wid }, i.placement, i.glass)
     };
     let Some(xid) = xid else { return };
     let height = height.min(work_height(cx));
     let bounds = place(placement, width, height, glass, cx);
     let s = scale(cx);
     let at = |p: Pixels| (p.as_f32() * s).round() as i32;
-    x11::configure(xid, at(bounds.origin.x), at(bounds.origin.y), at(bounds.size.width), at(bounds.size.height));
+    sys::configure(xid, at(bounds.origin.x), at(bounds.origin.y), at(bounds.size.width), at(bounds.size.height));
 }
 
 /// The work area's height in GPUI pixels, which a window never outgrows.
 pub fn work_height(cx: &App) -> f32 {
     let screen = cx.primary_display().map(|d| d.bounds().size.height.as_f32()).unwrap_or(f32::MAX);
-    x11::work_area().map_or(screen, |(_, _, _, h)| (h as f32 / scale(cx)).min(screen))
+    sys::work_area().map_or(screen, |(_, _, _, h)| (h as f32 / scale(cx)).min(screen))
 }
 
 /// Moves an open panel to the reader's pick, and keeps the pick.
@@ -1769,9 +1802,13 @@ fn restore(island: &Entity<Island>, rows: Vec<draft::RowData>, typing: String, t
     });
 }
 
-/// What one window of ours is in X: its id, read through the raw handle.
-fn x_of<V: 'static>(window: &WindowHandle<V>, cx: &mut App) -> Option<u32> {
-    window.update(cx, |_, window, _| x_window(window)).ok().flatten()
+/// One window of ours as the platform names it, read through the raw handle,
+/// and made the island's: `takes_keys` false for a window that must never
+/// take the keyboard from the app being typed in, the pill's way.
+fn wid_of<V: 'static>(window: &WindowHandle<V>, takes_keys: bool, cx: &mut App) -> Option<sys::Wid> {
+    let id = window.update(cx, |_, window, _| sys::window_id(window)).ok().flatten()?;
+    sys::adopt(id, takes_keys);
+    Some(id)
 }
 
 /// The primary display's whole area, in GPUI's logical pixels.
@@ -1867,7 +1904,7 @@ pub fn start_capture(island: &Entity<Island>, cx: &mut App) {
     cx.spawn(async move |cx| {
         // The windows going away is a repaint for the apps under them.
         cx.background_executor().timer(Duration::from_millis(150)).await;
-        let still = x11::screen_size().and_then(|(w, h)| x11::capture(0, 0, w, h));
+        let still = sys::screen_size().and_then(|(w, h)| sys::capture(0, 0, w, h));
         cx.update(|cx| {
             show_own(&hidden);
             let Some(still) = still else {
@@ -1888,8 +1925,8 @@ pub fn start_capture(island: &Entity<Island>, cx: &mut App) {
             let Ok(handle) = opened else {
                 return end_capture(&island, None, cx);
             };
-            let xid = x_of(&handle, cx);
-            let before = xid.and_then(x11::take_focus);
+            let xid = wid_of(&handle, true, cx);
+            let before = xid.and_then(sys::take_focus);
             island.update(cx, |island, _| {
                 if let Some(run) = island.shot.as_mut() {
                     run.window = Some((handle, xid));
@@ -1897,8 +1934,8 @@ pub fn start_capture(island: &Entity<Island>, cx: &mut App) {
                 }
             });
             // Dictation stays in sight and in reach, over the overlay.
-            if recording && let Some(id) = island.read(cx).x_window {
-                x11::raise(id);
+            if recording && let Some(id) = island.read(cx).wid {
+                sys::raise(id);
             }
         });
     })
@@ -1906,15 +1943,15 @@ pub fn start_capture(island: &Entity<Island>, cx: &mut App) {
 }
 
 /// The island's own windows taken off the screen for a read of it: the
-/// Mac's capture leaves its app's windows out, X11 cannot. Answers what to
+/// Mac's capture leaves its app's windows out, X11 and GDI cannot. Answers what to
 /// put back.
 fn hide_own(island: &Entity<Island>, recording: bool, open: bool, cx: &mut App) -> Hidden {
     let mut ids = Vec::new();
     if recording || !open {
         let i = island.read(cx);
-        ids.extend(i.x_window);
+        ids.extend(i.wid);
         ids.extend(i.ink_window.as_ref().and_then(|w| w.1));
-        ids.extend(i.pill_x_window);
+        ids.extend(i.pill_wid);
     } else {
         island.update(cx, |island, _| island.stepped_aside = true);
         close(island, cx);
@@ -1924,15 +1961,15 @@ fn hide_own(island: &Entity<Island>, recording: bool, open: bool, cx: &mut App) 
 
 /// Our windows off the screen for a read of it, and which held the keyboard.
 struct Hidden {
-    ids: Vec<u32>,
-    focused: Option<u32>,
+    ids: Vec<sys::Wid>,
+    focused: Option<sys::Wid>,
 }
 
-fn unmap_own(ids: Vec<u32>) -> Hidden {
-    let focus = x11::focus();
+fn unmap_own(ids: Vec<sys::Wid>) -> Hidden {
+    let focus = sys::focus();
     let focused = focus.filter(|f| ids.contains(f));
     for id in &ids {
-        x11::unmap(*id);
+        sys::unmap(*id);
     }
     Hidden { ids, focused }
 }
@@ -1941,10 +1978,10 @@ fn unmap_own(ids: Vec<u32>) -> Hidden {
 /// under it, so the one that held it takes it back, or ⏎ goes to that app.
 fn show_own(hidden: &Hidden) {
     for id in &hidden.ids {
-        x11::map(*id);
+        sys::map(*id);
     }
     if let Some(id) = hidden.focused {
-        let _ = x11::take_focus(id);
+        let _ = sys::take_focus(id);
     }
 }
 
@@ -1969,13 +2006,13 @@ fn end_capture(island: &Entity<Island>, shot: Option<(image::RgbaImage, capture:
     }
     if run.recording {
         // The keys go back to the panel, which dictation is still in.
-        if let Some(id) = island.read(cx).x_window {
-            x11::raise(id);
-            let _ = x11::take_focus(id);
+        if let Some(id) = island.read(cx).wid {
+            sys::raise(id);
+            let _ = sys::take_focus(id);
         }
     } else {
         if let Some(before) = run.focus_before {
-            x11::refocus(before);
+            sys::refocus(before);
         }
         if run.was_open {
             show(island, cx);
@@ -2042,7 +2079,7 @@ async fn fly(island: &Entity<Island>, image: &image::RgbaImage, region: capture:
         cx.open_window(options, move |_, cx| cx.new(|_| overlay::Flight { image: rendered }))
     });
     let Ok(handle) = opened else { return };
-    let xid = cx.update(|cx| x_of(&handle, cx));
+    let xid = cx.update(|cx| wid_of(&handle, false, cx));
     let started = std::time::Instant::now();
     loop {
         let t = (started.elapsed().as_secs_f32() / 0.5).min(1.);
@@ -2053,7 +2090,7 @@ async fn fly(island: &Entity<Island>, image: &image::RgbaImage, region: capture:
         let y = (from.1 + from.3 / 2.) + (target.1 - (from.1 + from.3 / 2.)) * e - h / 2.;
         if let Some(id) = xid {
             let at = |v: f32| (v * scale).round() as i32;
-            x11::configure(id, at(x), at(y), at(w).max(1), at(h).max(1));
+            sys::configure(id, at(x), at(y), at(w).max(1), at(h).max(1));
         }
         if t >= 1. {
             break;
@@ -2086,7 +2123,7 @@ fn start_annotation(island: &Entity<Island>, cx: &mut App) {
     if island.read(cx).glass {
         open_ink(island, cx);
         // ⇧ may already be down from before the microphone opened.
-        if x11::shift_alone() {
+        if sys::shift_alone() {
             set_armed(island, true, cx);
         }
     }
@@ -2098,15 +2135,15 @@ fn open_ink(island: &Entity<Island>, cx: &mut App) {
     let Ok(handle) = cx.open_window(overlay_options(glass, false, cx), move |_, cx| cx.new(|_| overlay::InkOverlay { island: state })) else {
         return;
     };
-    let xid = x_of(&handle, cx);
+    let xid = wid_of(&handle, false, cx);
     if let Some(id) = xid {
         // The page under the ink keeps the mouse until the pen is armed.
         let armed = island.read(cx).inking.as_ref().is_some_and(|i| i.armed);
-        x11::pass_mouse(id, !armed);
+        sys::pass_mouse(id, !armed);
     }
     island.update(cx, |island, _| island.ink_window = Some((handle, xid)));
-    if let Some(id) = island.read(cx).x_window {
-        x11::raise(id);
+    if let Some(id) = island.read(cx).wid {
+        sys::raise(id);
     }
 }
 
@@ -2136,17 +2173,17 @@ fn set_armed(island: &Entity<Island>, armed: bool, cx: &mut App) {
         if let Some(id) = ink
             && !drawing
         {
-            x11::pass_mouse(id, !armed);
+            sys::pass_mouse(id, !armed);
         }
         return;
     }
     // No compositor: Shift freezes the screen to draw on.
     if armed && island.read(cx).ink_window.is_none() {
-        let hidden = unmap_own(island.read(cx).x_window.into_iter().chain(island.read(cx).pill_x_window).collect());
+        let hidden = unmap_own(island.read(cx).wid.into_iter().chain(island.read(cx).pill_wid).collect());
         let island = island.clone();
         cx.spawn(async move |cx| {
             cx.background_executor().timer(Duration::from_millis(120)).await;
-            let still = x11::screen_size().and_then(|(w, h)| x11::capture(0, 0, w, h));
+            let still = sys::screen_size().and_then(|(w, h)| sys::capture(0, 0, w, h));
             cx.update(|cx| {
                 show_own(&hidden);
                 let Some(still) = still else { return };
@@ -2210,7 +2247,7 @@ pub fn stroke_ended(island: &Entity<Island>, cx: &mut App) {
         (i.glass, i.ink_window.as_ref().and_then(|w| w.1), i.inking.as_ref().is_some_and(|s| s.armed))
     };
     if glass && let Some(id) = ink {
-        x11::pass_mouse(id, !armed);
+        sys::pass_mouse(id, !armed);
     }
     let clock = island.update(cx, |island, _| {
         island.rest_clock += 1;
@@ -2239,12 +2276,12 @@ fn take_moment(island: &Entity<Island>, cx: &mut App) {
         cx.notify();
         taken
     });
-    let area = x11::screen_size().and_then(|size| capture::moment_area(&marks, size));
+    let area = sys::screen_size().and_then(|size| capture::moment_area(&marks, size));
     let glass = island.read(cx).glass;
     let still = island.read(cx).ink_still.clone();
     let hidden = if glass && area.is_some() {
         let i = island.read(cx);
-        unmap_own(i.x_window.into_iter().chain(i.ink_window.as_ref().and_then(|w| w.1)).chain(i.pill_x_window).collect())
+        unmap_own(i.wid.into_iter().chain(i.ink_window.as_ref().and_then(|w| w.1)).chain(i.pill_wid).collect())
     } else {
         Hidden { ids: Vec::new(), focused: None }
     };
@@ -2253,7 +2290,7 @@ fn take_moment(island: &Entity<Island>, cx: &mut App) {
         let image = match (area, glass) {
             (Some(a), true) => {
                 cx.background_executor().timer(Duration::from_millis(120)).await;
-                let read = x11::capture(a.0 as i32, a.1 as i32, a.2 as u32, a.3 as u32);
+                let read = sys::capture(a.0 as i32, a.1 as i32, a.2 as u32, a.3 as u32);
                 read.map(|r| {
                     let local: Vec<capture::Mark> =
                         marks.iter().map(|m| capture::Mark { id: m.id, points: m.points.iter().map(|p| (p.0 - a.0, p.1 - a.1)).collect() }).collect();
@@ -2265,8 +2302,8 @@ fn take_moment(island: &Entity<Island>, cx: &mut App) {
         };
         cx.update(|cx| {
             show_own(&hidden);
-            if let Some(id) = island.read(cx).x_window {
-                x11::raise(id);
+            if let Some(id) = island.read(cx).wid {
+                sys::raise(id);
             }
             island.update(cx, |island, cx| {
                 if let Some(s) = island.inking.as_mut() {
@@ -2577,7 +2614,7 @@ fn sync_done_keys(island: &Entity<Island>, cx: &mut App) {
     };
     if want && !has {
         let Some(tx) = island.read(cx).tx.clone() else { return };
-        let keys = x11::grab_done_keys(move |key| {
+        let keys = sys::grab_done_keys(move |key| {
             let _ = tx.unbounded_send(Msg::DoneKey(key));
         });
         island.update(cx, |island, _| island.done_keys = keys);
@@ -2586,13 +2623,13 @@ fn sync_done_keys(island: &Entity<Island>, cx: &mut App) {
     }
 }
 
-fn done_key(island: &Entity<Island>, key: x11::DoneKey, cx: &mut App) {
+fn done_key(island: &Entity<Island>, key: sys::DoneKey, cx: &mut App) {
     if !done_pill_up(island.read(cx)) {
         return;
     }
     match key {
-        x11::DoneKey::Dismiss => clear_done(island, cx),
-        x11::DoneKey::OpenInApp => {
+        sys::DoneKey::Dismiss => clear_done(island, cx),
+        sys::DoneKey::OpenInApp => {
             if let Some(id) = island.read(cx).done.last().cloned() {
                 open_done_in_app(island, id, cx);
             }

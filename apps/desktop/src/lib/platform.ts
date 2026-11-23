@@ -16,6 +16,10 @@ export const IS_WINDOWS =
 /// are not drawn.
 export const HAS_DICTATION = IS_MAC || IS_LINUX;
 
+/// Dray Island: the Swift app on a Mac, `apps/island-linux`'s on Linux and
+/// Windows.
+export const HAS_ISLAND = IS_MAC || IS_LINUX || IS_WINDOWS;
+
 /// What copy calls the machine the app runs on: "this Mac" on a Mac, "this
 /// machine" anywhere else. One noun, so every sentence reads the same per platform.
 export const MACHINE = IS_MAC ? "Mac" : "machine";
