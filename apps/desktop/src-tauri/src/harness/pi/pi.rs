@@ -39,7 +39,7 @@ use crate::sink::Sink;
 use std::time::Duration;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::{Child, ChildStdout, Command},
+    process::{Child, ChildStdout},
     sync::Mutex,
 };
 
@@ -78,10 +78,11 @@ const PLAN_TOOLS: [&str; 4] = ["read", "grep", "find", "ls"];
 /// **The composer no longer offers `Plan`, and this stays anyway.** pi honours
 /// no stance now — its gate is an extension the reader installs and configures
 /// on disk, which nothing passed at spawn can reach, so a picker there could
-/// only have set something no extension reads. Two routes still reach `Plan`:
-/// an index entry written before it was withdrawn, and a spawned session
+/// only have set something no extension reads. Three routes still reach `Plan`:
+/// an index entry written before it was withdrawn, a task moved from a `plan`
+/// one (`taskStance`, `stance_on`), and a spawned session
 /// inheriting a `plan` parent, which `orchestration` deliberately does not
-/// clamp. Deleting this would run both of those ungated while their entry still
+/// clamp. Deleting this would run all three ungated while their entry still
 /// read `plan` — a restriction claimed and not carried, which is the alarming
 /// direction. Enforcement kept, control withdrawn.
 fn tools_for(mode: ApprovalPolicy) -> Option<Vec<&'static str>> {
@@ -104,7 +105,6 @@ pub async fn init(
     permission_mode: ApprovalPolicy,
     cwd: &str,
     session_cwd: &str,
-    is_new_session: bool,
     app: &Sink,
 ) -> Result<Session> {
     // The session *file*, not the session id, is pi's resume handle. pi mints
@@ -153,7 +153,7 @@ pub async fn init(
     args.push(crate::bots::system_prompt(APPEND_SYSTEM_PROMPT, session_id, session_cwd, crate::session::Harness::Pi).await);
 
     let bin = crate::binpath::pi().await;
-    let mut command = Command::new(&bin);
+    let mut command = crate::binpath::command(&bin);
 
     // Which app the agent's own `dray` calls reach. Dev and release builds
     // listen on different sockets and the CLI's default names the release one.
@@ -178,11 +178,9 @@ pub async fn init(
 
     let client = PiClient::new(stdin);
 
-    let seq_start: u64 = if is_new_session {
-        0
-    } else {
-        next_seq_by_session_id(session_id).await?
-    };
+    // Off the log even for a new conversation: one an agent switch starts
+    // (#1414) carries on this session's log, and a new session's has none.
+    let seq_start: u64 = next_seq_by_session_id(session_id).await?;
     let seq = Arc::new(AtomicU64::new(seq_start));
 
     let status: Arc<Mutex<StatusTracker>> = Arc::new(Mutex::new(StatusTracker::default()));
@@ -510,7 +508,7 @@ pub async fn shutdown(child: &mut Child, client: &PiClient) {
 /// spawn error.
 pub(super) async fn spawn_probe(cwd: Option<&str>, what: &str) -> Result<(Child, PiClient)> {
     let bin = crate::binpath::pi().await;
-    let mut command = Command::new(&bin);
+    let mut command = crate::binpath::command(&bin);
     command
         .args([
             "--mode",

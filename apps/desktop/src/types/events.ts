@@ -366,7 +366,12 @@ automatic: boolean, } | { "type": "permission_denied", toolName: string, toolUse
  * notice says it did. The session layer records it, so the composer
  * stops naming the model the CLI left.
  */
-model: ModelId | null, } | { "type": "task_started", taskId: string, title: string, } | { "type": "merge_card", taskId: string, title: string, 
+model: ModelId | null, } | { "type": "agent_switched", from: Harness, to: Harness, 
+/**
+ * `to` picks its own earlier conversation in this session back up,
+ * so it is handed only what happened since it left.
+ */
+resumed: boolean, } | { "type": "task_started", taskId: string, title: string, } | { "type": "merge_card", taskId: string, title: string, 
 /**
  * The repo root, what the sidebar's PR marks are keyed by. The task's
  * machine's path where `machine` is set.
@@ -646,10 +651,16 @@ greeting?: Array<string>, };
 export type BotAvatar = { shape: string, hue: number, };
 
 /**
- * A bot chat's inbox row: its last reply, and the replies since the reader
- * last wrote.
+ * A bot chat's inbox row: its newest line — the reader's own message, the
+ * bot's reaction to it, or its last reply — and the replies since the reader
+ * last wrote. Worded here so every client draws it as it is.
  */
-export type BotPreview = { text: string | null, replies: number, };
+export type BotPreview = { text: string | null, replies: number, 
+/**
+ * `text` is already one plain line, to draw as it is. A server from
+ * before this sends the raw reply, which the client still cleans.
+ */
+plain?: boolean, };
 
 /**
  * One bot's card, as `bot_stalls` answers and `bot_stalls_changed` carries it.

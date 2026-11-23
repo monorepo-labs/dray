@@ -23,7 +23,6 @@ export type BotItem =
   /// `botId` is the one the CLI printed, absent from a send made before it did.
   | { kind: "botSent"; key: string; bot: string; botId?: string; text: string; ts: string }
   /// Where the chat moved to another agent: one session ends and the next begins.
-  | { kind: "switch"; key: string; harness: Harness; ts: string }
   /// One file a turn changed in the bot's instructions, skills or memory, with
   /// whether the reader has since undone it.
   | { kind: "learned"; key: string; sessionId: string; commit: string; file: LearnedFile; undone: boolean; ts: string };
@@ -61,15 +60,10 @@ export function earlierTurns(events: readonly AgentEvent[], from: number, turns:
   return lastTurns(events.slice(0, from), turns);
 }
 
-/// The rows of a bot's whole chat, its sessions oldest first, with a line where
-/// the agent changed.
+/// The rows of a bot's whole chat, its sessions oldest first. An agent switch
+/// draws nothing: the reader just picked the agent (#1414).
 export function chatItems(segments: readonly BotSegment[]): BotItem[] {
-  return segments.flatMap((segment, i) => {
-    const items = botItems(segment.events);
-    if (i === 0 || segments[i - 1].harness === segment.harness) return items;
-    const ts = segment.events[0]?.ts ?? segment.created;
-    return [{ kind: "switch" as const, key: `switch:${segment.sessionId}`, harness: segment.harness, ts }, ...items];
-  });
+  return segments.flatMap((segment) => botItems(segment.events));
 }
 
 /// When an item happened, for the chat's time labels — never its order, which

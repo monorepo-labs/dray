@@ -199,8 +199,9 @@ struct Need {
 struct ModelArgs {
     /// The session, as printed by `dray session ls`.
     session_id: String,
-    /// A model alias its agent knows, like fable, opus or sonnet on
-    /// claude_code. Without it the model stays and only --effort moves.
+    /// A model alias, like fable, opus or sonnet on claude_code. Another
+    /// agent's model moves the session to that agent. Without it the model
+    /// stays and only --effort moves.
     model: Option<String>,
     /// low, medium, high, xhigh, max or ultra, where the model has it. Without
     /// it the session keeps its level if the new model has it, else takes the
@@ -1261,7 +1262,7 @@ fn update(args: Update) -> Result<(), String> {
 /// the server left behind. No `dray-serve` there is no pair to keep, so this
 /// binary's tag; one too old to say is reinstalled.
 fn serve_tag_beside(dir: &std::path::Path) -> Option<String> {
-    let serve = dir.join("dray-serve");
+    let serve = dir.join(format!("dray-serve{}", std::env::consts::EXE_SUFFIX));
     if !serve.exists() {
         return Some(current_tag());
     }
@@ -1390,8 +1391,62 @@ fn connect(endpoint: &str) -> std::io::Result<std::fs::File> {
                 tries += 1;
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
+            Ok(file) if !served_by_this_user(&file) => {
+                return Err(std::io::Error::other(
+                    "another account serves this pipe; nothing was sent",
+                ))
+            }
             other => return other,
         }
+    }
+}
+
+/// Whether the pipe's server process runs as this process's user. The pipe
+/// namespace is machine-wide and the name derivable, so another account can
+/// take it before Dray starts; on Unix the socket's `0700` directory rules
+/// that out. Anything unreadable answers no.
+#[cfg(windows)]
+fn served_by_this_user(pipe: &std::fs::File) -> bool {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{EqualSid, GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    /// The token user of `process`, in a buffer aligned for `TOKEN_USER`.
+    unsafe fn user_of(process: HANDLE) -> Option<Vec<u64>> {
+        let mut token: HANDLE = std::ptr::null_mut();
+        if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
+            return None;
+        }
+        let mut len = 0u32;
+        GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut len);
+        let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+        let read = GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), len, &mut len);
+        CloseHandle(token);
+        (read != 0).then_some(buf)
+    }
+
+    // SAFETY: every handle is checked and closed; each SID is read from a
+    // buffer the call that filled it sized.
+    unsafe {
+        let mut pid = 0u32;
+        if GetNamedPipeServerProcessId(pipe.as_raw_handle(), &mut pid) == 0 {
+            return false;
+        }
+        let server = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if server.is_null() {
+            return false;
+        }
+        let theirs = user_of(server);
+        CloseHandle(server);
+        let (Some(theirs), Some(ours)) = (theirs, user_of(GetCurrentProcess())) else {
+            return false;
+        };
+        let sid = |buf: &Vec<u64>| (*buf.as_ptr().cast::<TOKEN_USER>()).User.Sid;
+        EqualSid(sid(&theirs), sid(&ours)) != 0
     }
 }
 
@@ -1533,7 +1588,11 @@ fn repo_root(dir: &Path) -> Option<String> {
         return None;
     }
 
-    main_worktree(&String::from_utf8(output.stdout).ok()?)
+    let root = main_worktree(&String::from_utf8(output.stdout).ok()?)?;
+    // Git answers `C:/x/repo` on Windows; the spelling a reader types back.
+    #[cfg(windows)]
+    let root = root.replace('/', "\\");
+    Some(root)
 }
 
 /// The first record's path, or `None` for a bare repo — nothing is checked out
@@ -1943,6 +2002,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).ok()?;
         let dir = std::fs::canonicalize(&dir).ok()?;
+        // Windows' canonical form is `\\?\C:\…`, which git never prints.
+        #[cfg(windows)]
+        let dir = PathBuf::from(dir.to_string_lossy().trim_start_matches(r"\\?\"));
 
         if !git(&dir, &["init", "-q", "."]) {
             return None;

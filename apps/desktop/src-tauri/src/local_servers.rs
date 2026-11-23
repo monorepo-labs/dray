@@ -94,7 +94,12 @@ impl Processes {
     /// shell's `-zsh`.
     fn name(&self, pid: u32) -> &str {
         let first = self.args.get(&pid).and_then(|a| a.split_whitespace().next()).unwrap_or_default();
-        first.rsplit('/').next().unwrap_or_default().trim_start_matches('-')
+        let base = first.rsplit(['/', '\\']).next().unwrap_or_default().trim_start_matches('-');
+        // Windows names a process by its image, `bash.exe`.
+        match base.len().checked_sub(4).and_then(|at| Some((at, base.get(at..)?))) {
+            Some((at, ext)) if ext.eq_ignore_ascii_case(".exe") => &base[..at],
+            _ => base,
+        }
     }
 }
 
@@ -271,11 +276,16 @@ pub(crate) fn serving(roots: &[(u32, usize)]) -> Vec<Vec<u16>> {
 }
 
 fn serving_ports(procs: &Processes, ports_of: &HashMap<u32, Vec<u16>>, root: u32, shells: usize) -> Vec<u16> {
+    #[cfg(unix)]
     const SHELLS: &[&str] = &["bash", "zsh", "sh", "dash", "fish"];
+    // Claude's PowerShell tool runs PowerShell; Git Bash is still `bash`.
+    #[cfg(windows)]
+    const SHELLS: &[&str] = &["bash", "sh", "powershell", "pwsh", "cmd"];
     let mut ports = Vec::new();
     let mut listening = 0;
     for &child in procs.children.get(&root).into_iter().flatten() {
-        if !SHELLS.contains(&procs.name(child)) {
+        // Case-blind, since Windows images keep whatever case they ship in.
+        if !SHELLS.iter().any(|shell| shell.eq_ignore_ascii_case(procs.name(child))) {
             continue;
         }
         let tree = subtree(&procs.children, child);
@@ -399,19 +409,25 @@ fn listening() -> Vec<(u32, String, u16)> {
     };
     use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
 
-    /// The table for one family, read into a buffer sized by a first call.
+    /// The table for one family. A listener opening between the sizing call
+    /// and the read grows the table past the buffer, which the call answers
+    /// with the size it needs now, so it is asked again.
     fn table(family: u16) -> Vec<u8> {
+        const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+        let mut buf = Vec::new();
         let mut size = 0u32;
-        // SAFETY: the first call only reports the size; the second writes
-        // into a buffer of that size.
-        unsafe {
-            GetExtendedTcpTable(std::ptr::null_mut(), &mut size, 0, family.into(), TCP_TABLE_OWNER_PID_LISTENER, 0);
-            let mut buf = vec![0u8; size as usize];
-            if GetExtendedTcpTable(buf.as_mut_ptr().cast(), &mut size, 0, family.into(), TCP_TABLE_OWNER_PID_LISTENER, 0) != 0 {
-                return Vec::new();
+        for _ in 0..4 {
+            buf.resize(size as usize, 0);
+            let ptr = if buf.is_empty() { std::ptr::null_mut() } else { buf.as_mut_ptr().cast() };
+            // SAFETY: `size` is the buffer's length, which the call writes
+            // within or answers with the length it needs.
+            match unsafe { GetExtendedTcpTable(ptr, &mut size, 0, family.into(), TCP_TABLE_OWNER_PID_LISTENER, 0) } {
+                0 => return buf,
+                ERROR_INSUFFICIENT_BUFFER => size += 1024,
+                _ => return Vec::new(),
             }
-            buf
         }
+        Vec::new()
     }
 
     /// The rows after the table's leading `u32` count, aligned as the
@@ -568,6 +584,20 @@ mod tests {
         assert_eq!(p.children[&10], vec![11, 12]);
     }
 
+    /// Windows' process table names images, so a shell is `bash.exe` there and
+    /// must still count as one.
+    #[test]
+    fn names_a_windows_image_without_its_extension() {
+        let mut p = Processes::default();
+        for (pid, image) in [(1, "bash.exe"), (2, "NODE.EXE"), (3, r"C:\tools\zsh.exe"), (4, "exe")] {
+            p.args.insert(pid, image.to_string());
+        }
+        assert_eq!(p.name(1), "bash");
+        assert_eq!(p.name(2), "NODE");
+        assert_eq!(p.name(3), "zsh");
+        assert_eq!(p.name(4), "exe");
+    }
+
     #[test]
     fn tells_a_test_run_from_a_server() {
         for run in [
@@ -629,6 +659,16 @@ mod tests {
         assert!(serving_ports(&procs, &ports, 1, 2).is_empty(), "a build beside it keeps the agent working");
         let build_only = HashMap::from([(30, vec![9000])]);
         assert!(serving_ports(&procs, &build_only, 1, 1).is_empty(), "an MCP server's port is no shell's");
+    }
+
+    /// A dev server Claude's PowerShell tool started counts, as one under Git
+    /// Bash does.
+    #[test]
+    #[cfg(windows)]
+    fn a_powershell_serving_counts_on_windows() {
+        let procs = parse_ps("10 1 powershell.exe\n11 10 node.exe\n20 1 bash.exe\n21 20 node.exe\n");
+        let ports = HashMap::from([(11, vec![5173]), (21, vec![3000])]);
+        assert_eq!(serving_ports(&procs, &ports, 1, 2), vec![3000, 5173]);
     }
 
     /// The ToolHelp walk reaches a real child, which is what kill and settle

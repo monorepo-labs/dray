@@ -38,7 +38,7 @@ import { islandOn } from "@/lib/island";
 import { notifyOS } from "@/lib/notify";
 import { setCallReader, setOlderDropper, setOlderLoader } from "@/lib/olderPages";
 import { EMPTY_TASKS } from "@/lib/transcript";
-import { botStance, stanceFor } from "@/lib/permission";
+import { botStance, stanceFor, taskStance } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
 import { appendLive, mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
@@ -280,8 +280,7 @@ function apiRetryOf(session: SessionSnapshot | null, busy: boolean): ApiRetrySta
 }
 
 /// A composer pick made on a session and not yet sent — see `unsentPicks`.
-/// `harness` only ever differs from the session's own in a bot chat, where the
-/// next send moves the chat to that agent.
+/// A `harness` differing from the session's own moves it at the next send.
 type UnsentPick = Partial<Pick<SessionIndexItem, "harness" | "model" | "effort" | "permissionMode" | "fast">> & {
   efforts?: EffortByModel;
 };
@@ -567,8 +566,8 @@ const setHarness = (next: Harness) => {
   // read, which is the only one that can answer.
   const model = rememberedModel(prefs.modelByHarness, next);
   setModelId(model);
-  // Inside a session only a bot chat offers the switch, and the pick is that
-  // chat's until the next send carries it out.
+  // Inside a session the pick is that session's until the next send carries
+  // it out, moving it to that agent.
   if (selectedSessionId) rememberPick({ harness: next, model });
   else setPrefs({ harness: next });
 };
@@ -910,9 +909,16 @@ const handleSendMsg = async (
   // A bot chat picked onto another agent moves there now: a new session in the
   // bot's folder, which the backend hands the conversation so far. Each CLI
   // resumes only its own sessions, so this one cannot carry on.
-  const switching = !!selected && isBotPath(selected.cwd) && harness !== selected.harness;
-  if (switching && statusOf(selected.sessionId) === "in_progress") {
-    setError(`Wait for this turn to finish before moving the chat to ${AGENT_LABELS[harness]}.`);
+  // A task moves in place instead (#1414): the backend stops its agent and
+  // hands the next one the conversation.
+  // Judged against the index row, which `session_changed` keeps current,
+  // before the loaded transcript's copy: a move made by `dray session model`
+  // must still read as one when the reader picks the agent back.
+  const recorded = sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.harness ?? selected?.harness;
+  const moving = !!selected && harness !== recorded;
+  const switching = moving && isBotPath(selected.cwd);
+  if (moving && statusOf(selected.sessionId) === "in_progress") {
+    setError(`Wait for this turn to finish before switching to ${AGENT_LABELS[harness]}.`);
     return false;
   }
   if (switching) unsentPicks.current.delete(selected.sessionId);
@@ -978,7 +984,9 @@ const handleSendMsg = async (
   // A bot's folder is no project, and its chat runs in the folder itself. A
   // cloud task always gets a worktree, whatever the saved toggle says.
   const worktree = (useWorktree || placed !== null) && !isBotPath(cwd);
-  const stance = isBotPath(cwd) ? botStance(harness, permissionMode) : stanceFor(harness, permissionMode);
+  const stance = isBotPath(cwd)
+    ? botStance(harness, permissionMode)
+    : (isNewSession ? stanceFor : taskStance)(harness, permissionMode);
   if (!sessionId) {
     sessionId = crypto.randomUUID();
     // Before the selection moves, so the composer reads this server's models
@@ -1122,6 +1130,18 @@ const handleSendMsg = async (
         if (uploadsAhead.get(sessionId) === settled) uploadsAhead.delete(sessionId);
       }
     }
+    // A task moving agent moves ahead of its send, once its machine is awake,
+    // so a server from before #1414 refuses it rather than the old agent
+    // answering under the new one's name.
+    if (moving && !switching) {
+      await invoke("switch_agent", { sessionId, harness, model: modelId, effort, permissionMode: stance, fast }).catch(
+        (e) => {
+          throw String(e).includes("unknown command")
+            ? `Update this server to switch a task to ${AGENT_LABELS[harness]}.`
+            : e;
+        },
+      );
+    }
     // Nothing awaited between here and the dispatch, so a send queued behind
     // this one cannot overtake it.
     const outcome = await invoke<SendOutcome>("send_msg", {
@@ -1186,9 +1206,12 @@ const handleSendMsg = async (
         if (sentPick?.efforts) unsentPicks.current.set(sessionId, { efforts: sentPick.efforts });
         else unsentPicks.current.delete(sessionId);
       }
+      // Only onto the agent the row already names: the agent itself moves on
+      // the server's word (`session_changed`, `agent_switched`), never on this
+      // send's, which the server may have answered on another agent.
       setSessionIndexItems((prev) =>
         prev.map((i) =>
-          i.sessionId === sessionId
+          i.sessionId === sessionId && i.harness === harness
             ? { ...i, model: modelId, effort, permissionMode: stance, fast, aside: false, modified: new Date().toISOString() }
             : i,
         ),
@@ -1688,6 +1711,7 @@ const applyIndexItem = (updated: SessionIndexItem) => {
       s.sessionId === sessionId
         ? {
             ...s,
+            harness: updated.harness,
             archived: updated.archived,
             pinned: updated.pinned,
             hidden: updated.hidden,
@@ -2464,6 +2488,17 @@ useEffect(() => {
         if (agentEvent.payload.type === "repo_changed") {
           repoChanged.emit({ sessionId: agentEvent.sessionId, pullRequest: agentEvent.payload.pullRequest });
           return;
+        }
+
+        // A move made anywhere (`dray session model`, another window) lands
+        // here even where its `session_changed` was missed: logged, so a
+        // reconnect's catch-up carries it too.
+        if (agentEvent.payload.type === "agent_switched") {
+          const { to } = agentEvent.payload;
+          const moved = <T extends { sessionId: string; harness: Harness }>(s: T): T =>
+            s.sessionId === agentEvent.sessionId && s.harness !== to ? { ...s, harness: to } : s;
+          setSessions((prev) => prev.map(moved));
+          setSessionIndexItems((prev) => prev.map(moved));
         }
 
         if (agentEvent.payload.type != "delta") {
@@ -3763,7 +3798,7 @@ const followModelPickRef = useRef((_: SessionIndexItem) => {});
 followModelPickRef.current = (item: SessionIndexItem) => {
   const pick = unsentPicks.current.get(item.sessionId);
   if (pick) {
-    const { model: _model, effort: _effort, efforts: _efforts, ...rest } = pick;
+    const { harness: _harness, model: _model, effort: _effort, efforts: _efforts, ...rest } = pick;
     unsentPicks.current.set(item.sessionId, rest);
   }
   if (item.sessionId === selectedSessionIdRef.current) restoreSessionControls(item);

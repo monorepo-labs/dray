@@ -32,6 +32,13 @@ data class ProjectChoice(val name: String, val path: String?) {
     val label: String get() = path?.let { "$name — ${File(it).parentFile?.name.orEmpty()}" } ?: name
 }
 
+/** The model a task was last started on with `harness` here, else its default: where a task's agent pick starts. */
+fun rememberedModel(context: Context, harness: String): String {
+    val saved = context.getSharedPreferences("new", Context.MODE_PRIVATE).getString("models", null)
+    val picks = saved?.let { runCatching { wireJson.decodeFromString(MapSerializer(String.serializer(), String.serializer()), it) }.getOrNull() }
+    return picks?.get(harness) ?: Picks.defaultModel[harness].orEmpty()
+}
+
 /**
  * The new task's picks and the send that starts a task on them: the desktop composer's rules
  * (`Picks`), cut to what the phone offers — machine, project, worktree, agent, model, effort,
