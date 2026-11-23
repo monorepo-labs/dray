@@ -1,7 +1,7 @@
 import React, { useState, type ReactNode } from "react";
 import ReactDOM from "react-dom/client";
 
-import { ArrowRightIcon, CheckIcon, ChevronLeftIcon, SparklesIcon } from "@heroicons/react/16/solid";
+import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, ChevronLeftIcon, SparklesIcon } from "@heroicons/react/16/solid";
 
 import { changelogInline, changelogPlain } from "@/components/changelogText";
 import WhatsNewDialog from "@/components/WhatsNewDialog";
@@ -109,13 +109,13 @@ function TakeA({ hl, onAction, onClose }: TakeProps) {
 
 /// B — shipped, as `WhatsNewDialog` draws it: media edge to edge and rounded
 /// below, "New in Dray" on it, a larger title, the action as a link in the
-/// text, dots left and Skip · Back · Next right.
+/// text, Skip on the picture, dots left and Back · Next as arrows right.
 function TakeB({ hl, onAction, onClose }: TakeProps) {
   const p = usePager(hl.length);
   const { item } = hl[p.page];
   const action = item.highlight?.action;
   return (
-    <div className="w-[40rem] overflow-hidden rounded-xl border border-border bg-popover backdrop-blur-xl text-popover-foreground shadow-lg">
+    <div className="relative w-[40rem] overflow-hidden rounded-xl border border-border bg-popover backdrop-blur-xl text-popover-foreground shadow-lg">
       <div key={p.page} className="animate-in fade-in-0 [animation-duration:200ms]">
         <div className="relative aspect-video w-full overflow-hidden rounded-b-xl bg-muted">
           {item.media[0] ? (
@@ -150,21 +150,30 @@ function TakeB({ hl, onAction, onClose }: TakeProps) {
           </p>
         </div>
       </div>
+      {!p.last && (
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute top-3 right-3 cursor-pointer rounded-md bg-black/55 px-2 py-1 text-xs font-medium text-white backdrop-blur-md transition-colors hover:bg-black/75"
+        >
+          Skip
+        </button>
+      )}
       <footer className="flex items-center gap-1.5 px-7 pt-5 pb-6">
         <Dots count={hl.length} page={p.page} onPick={p.setPage} />
         <div className="ml-auto flex items-center gap-1.5">
-          {!p.last && (
-            <Button variant="ghost" className="text-muted-foreground" onClick={onClose}>
-              Skip
-            </Button>
-          )}
           {p.page > 0 && (
-            <Button variant="outline" onClick={() => p.step(-1)}>
-              Back
+            <Button variant="outline" size="icon" aria-label="Back" onClick={() => p.step(-1)}>
+              <ArrowLeftIcon className="size-4" aria-hidden />
             </Button>
           )}
-          <Button className="min-w-20" onClick={p.last ? onClose : () => p.step(1)}>
-            {p.last ? "Done" : "Next"}
+          <Button
+            size={p.last ? "default" : "icon"}
+            aria-label={p.last ? undefined : "Next"}
+            className={cn(p.last && "min-w-16")}
+            onClick={p.last ? onClose : () => p.step(1)}
+          >
+            {p.last ? "Done" : <ArrowRightIcon className="size-4" aria-hidden />}
           </Button>
         </div>
       </footer>
@@ -409,7 +418,7 @@ function TakeF({ hl, onAction, onClose }: TakeProps) {
 
 const TAKES: { id: string; name: string; Take: (props: TakeProps) => ReactNode }[] = [
   { id: "A", name: "First take: inset media, Skip · dots · Next", Take: TakeA },
-  { id: "B", name: "Shipped: full bleed, label on the picture, Back", Take: TakeB },
+  { id: "B", name: "Shipped: full bleed, label and Skip on the picture, arrows", Take: TakeB },
   { id: "C", name: "Side by side, count and Back", Take: TakeC },
   { id: "D", name: "Centred sheet, wide Next", Take: TakeD },
   { id: "E", name: "Cinematic: media is the card", Take: TakeE },

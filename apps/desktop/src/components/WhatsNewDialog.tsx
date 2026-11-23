@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 
-import { ArrowRightIcon, SparklesIcon } from "@heroicons/react/16/solid";
+import { ArrowLeftIcon, ArrowRightIcon, SparklesIcon } from "@heroicons/react/16/solid";
 
 import { changelogInline, changelogPlain } from "@/components/changelogText";
 import { Button } from "@/components/ui/button";
@@ -97,23 +97,46 @@ export default function WhatsNewDialog({
             )}
           </div>
         </div>
+        {/* Over the picture, outside the page's fade so neither blinks when the
+            page turns. Dark pills of their own rather than theme tokens: they
+            sit on the picture, whatever it is, not on the dialog. */}
+        <div className="pointer-events-none absolute inset-x-3 top-3 flex items-start justify-between">
+          <span className={cn(PILL, "flex items-center gap-1.5")}>
+            <SparklesIcon className="size-3.5 text-[#3DD68C]" aria-hidden />
+            New in Dray
+          </span>
+          {!last && (
+            <button
+              type="button"
+              onClick={onClose}
+              className={cn(
+                PILL,
+                "pointer-events-auto cursor-pointer transition-colors hover:bg-black/75 focus-visible:ring-[3px] focus-visible:ring-white/50 focus-visible:outline-none",
+              )}
+            >
+              Skip
+            </button>
+          )}
+        </div>
         <footer className="flex items-center gap-1.5 px-7 pt-5 pb-6">
           {count > 1 && <Dots count={count} page={page} onPick={setPage} />}
-          {/* Next is the rightmost and never moves; Back and Skip come and go
-              to its left. */}
+          {/* Next is the rightmost and never moves; Back comes and goes to its
+              left. Next and Done are one button, so focus and Enter carry on
+              through the last page. */}
           <div className="ml-auto flex items-center gap-1.5">
-            {!last && (
-              <Button variant="ghost" className="text-muted-foreground" onClick={onClose}>
-                Skip
-              </Button>
-            )}
             {page > 0 && (
-              <Button variant="outline" onClick={() => step(-1)}>
-                Back
+              <Button variant="outline" size="icon" aria-label="Back" onClick={() => step(-1)}>
+                <ArrowLeftIcon className="size-4" aria-hidden />
               </Button>
             )}
-            <Button ref={next} className="min-w-20" onClick={last ? onClose : () => step(1)}>
-              {last ? "Done" : "Next"}
+            <Button
+              ref={next}
+              size={last ? "default" : "icon"}
+              aria-label={last ? undefined : "Next"}
+              className={cn(last && "min-w-16")}
+              onClick={last ? onClose : () => step(1)}
+            >
+              {last ? "Done" : <ArrowRightIcon className="size-4" aria-hidden />}
             </Button>
           </div>
         </footer>
@@ -121,6 +144,8 @@ export default function WhatsNewDialog({
     </Dialog>
   );
 }
+
+const PILL = "rounded-md bg-black/55 px-2 py-1 text-xs font-medium text-white backdrop-blur-md";
 
 /// Edge to edge across the top, the dialog's own corners clipping it there,
 /// and rounded off below. A page with no media keeps the same box, so the
@@ -138,12 +163,6 @@ function Media({ media }: { media: ChangelogMedia | undefined }) {
           <SparklesIcon className="size-10 text-accent-add" aria-hidden />
         </div>
       )}
-      {/* Its own dark pill, not a theme token: it sits on the picture, not on
-          the dialog. */}
-      <span className="absolute top-3 left-3 flex items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 text-xs font-medium text-white backdrop-blur-md">
-        <SparklesIcon className="size-3.5 text-[#3DD68C]" aria-hidden />
-        New in Dray
-      </span>
     </div>
   );
 }
