@@ -61,7 +61,10 @@ background tasks running", Share in the image viewer.
 `app/google-services.json` the app builds, `FirebaseApp` never starts, and
 Settings → Notifications says push isn't set up. To light it up:
 
-1. The Firebase project is `dray-hq`, its Android app `com.yogesh.dray.android`.
+1. The Firebase project is `dray-hq`, its Android app `com.dray.app` (the
+   Play Store id; the Kotlin namespace stays `com.yogesh.dray`). The
+   google-services plugin fails the build when the file names no client for
+   that id, so a file downloaded for an older id must be replaced.
    Its `google-services.json` goes at `apps/android/app/google-services.json`
    and is **kept out of git** (gitignored). Download it from the Firebase
    console (Project settings → Your apps). A release build gets it the same
