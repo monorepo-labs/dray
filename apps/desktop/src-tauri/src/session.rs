@@ -1672,7 +1672,7 @@ impl SessionManager {
 
             // Before the send, so the index reflects intent even if writing to
             // the child fails — the prompt event is persisted ahead of stdin too.
-            touch_session_index_item(session_id, model.clone(), effort, permission_mode, fast).await?;
+            record_picks(session_id, model.clone(), effort, permission_mode, fast, app).await?;
 
             // Mid-turn only where the harness takes a live control while a
             // model call is open, verified against each CLI: Claude Code's and
@@ -1802,7 +1802,7 @@ impl SessionManager {
             });
         }
 
-        touch_session_index_item(session_id, model, effort, permission_mode, fast).await?;
+        record_picks(session_id, model, effort, permission_mode, fast, app).await?;
 
         // A fork that hasn't spawned yet. The app's half happened when the user
         // asked for it — log copied, entry written — and this is the spawn that
@@ -4364,12 +4364,13 @@ async fn apply_live_controls(
                     // adopted what fx answered, and every field written back
                     // is the session's own, since this returns before the
                     // effort, stance and fast arms run.
-                    touch_session_index_item(
+                    record_picks(
                         session_id,
                         s.model.clone(),
                         s.effort,
                         s.permission_mode,
                         s.fast,
+                        app,
                     )
                     .await?;
                     return Err(err);
@@ -4401,12 +4402,13 @@ async fn apply_live_controls(
             // the one that was asked for. Every other field is still
             // the pick: fast mode is applied below this block, so
             // recording the child's current value here would drop it.
-            touch_session_index_item(
+            record_picks(
                 session_id,
                 model.clone(),
                 s.effort,
                 permission_mode,
                 fast,
+                app,
             )
             .await?;
         }
@@ -4423,9 +4425,25 @@ async fn apply_live_controls(
                 return Err(err);
             }
             report_session_error(session_id, s.harness, &format!("{err:#}"), &s.seq, app).await;
-            touch_session_index_item(session_id, s.model.clone(), s.effort, s.permission_mode, s.fast)
-                .await?;
+            record_picks(session_id, s.model.clone(), s.effort, s.permission_mode, s.fast, app).await?;
         }
+    }
+    Ok(())
+}
+
+/// Records a send's picks on the index and tells every client where they
+/// changed: a phone's selector shows the index's model, and without this a
+/// pick sent from it fell back to the model the session had left.
+async fn record_picks(
+    session_id: &str,
+    model: ModelId,
+    effort: Option<Effort>,
+    permission_mode: ApprovalPolicy,
+    fast: bool,
+    app: &Sink,
+) -> Result<()> {
+    if let Some(item) = touch_session_index_item(session_id, model, effort, permission_mode, fast).await? {
+        app.emit(crate::orchestration::SESSION_CHANGED, &item).ok();
     }
     Ok(())
 }
