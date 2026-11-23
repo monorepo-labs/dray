@@ -36,7 +36,6 @@ export default function WhatsNewDialog({
   const action = item.highlight?.action ?? null;
   const run = action && actionFor(action.target);
   const described = Boolean(item.title && item.body);
-  const hasText = described || Boolean(run);
   const step = (by: number) => setPage((p) => Math.min(Math.max(p + by, 0), count - 1));
 
   return (
@@ -49,7 +48,7 @@ export default function WhatsNewDialog({
         onEscapeKeyDown={onClose}
         // Radix links a description itself; a one-line item has none, and
         // saying so is what keeps it from warning.
-        {...(!hasText && { "aria-describedby": undefined })}
+        {...(!described && { "aria-describedby": undefined })}
         className="max-w-[40rem] gap-0 overflow-hidden p-0"
         // Next, not Skip, takes focus: Enter walks the pages, and Done ends
         // on the same button, so focus never has to move.
@@ -70,30 +69,29 @@ export default function WhatsNewDialog({
           <Media media={media} />
           {/* Tall enough for a title, two lines and the action, so Next stays
               under the pointer from page to page. */}
-          <div className="flex min-h-36 flex-col gap-2 px-7 pt-6">
-            <DialogTitle className="text-xl font-semibold tracking-tight text-foreground">
+          <div className="flex min-h-42 flex-col gap-2 px-7 pt-6">
+            <DialogTitle className="text-xl font-medium tracking-tight text-foreground">
               {changelogPlain(item.title ?? item.body)}
             </DialogTitle>
-            {hasText && (
+            {described && (
               <DialogDescription className="text-chat leading-relaxed text-muted-foreground">
-                {described && changelogInline(item.body)}
-                {action && run && (
-                  <>
-                    {described && " "}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onClose();
-                        run();
-                      }}
-                      className="inline-flex cursor-pointer items-center gap-1 rounded-sm font-medium text-foreground underline-offset-4 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-                    >
-                      {action.label}
-                      <ArrowRightIcon className="size-3.5" aria-hidden />
-                    </button>
-                  </>
-                )}
+                {changelogInline(item.body)}
               </DialogDescription>
+            )}
+            {/* Its own line, apart from the text, so it reads as something to
+                do rather than the sentence's last words. */}
+            {action && run && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  run();
+                }}
+                className="mt-2 inline-flex cursor-pointer items-center gap-1 self-start rounded-sm text-chat font-medium text-foreground underline-offset-4 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+              >
+                {action.label}
+                <ArrowRightIcon className="size-3.5" aria-hidden />
+              </button>
             )}
           </div>
         </div>

@@ -130,24 +130,19 @@ function TakeB({ hl, onAction, onClose }: TakeProps) {
             New in Dray
           </span>
         </div>
-        <div className="flex min-h-36 flex-col gap-2 px-7 pt-6">
-          <p className="text-xl font-semibold tracking-tight text-foreground">{changelogPlain(item.title ?? item.body)}</p>
-          <p className="text-chat leading-relaxed text-muted-foreground">
-            {changelogInline(item.body)}
-            {action && (
-              <>
-                {" "}
-                <button
-                  type="button"
-                  onClick={() => onAction(action.label)}
-                  className="inline-flex cursor-pointer items-center gap-1 font-medium text-foreground underline-offset-4 hover:underline"
-                >
-                  {action.label}
-                  <ArrowRightIcon className="size-3.5" aria-hidden />
-                </button>
-              </>
-            )}
-          </p>
+        <div className="flex min-h-42 flex-col gap-2 px-7 pt-6">
+          <p className="text-xl font-medium tracking-tight text-foreground">{changelogPlain(item.title ?? item.body)}</p>
+          <p className="text-chat leading-relaxed text-muted-foreground">{changelogInline(item.body)}</p>
+          {action && (
+            <button
+              type="button"
+              onClick={() => onAction(action.label)}
+              className="mt-2 inline-flex cursor-pointer items-center gap-1 self-start text-chat font-medium text-foreground underline-offset-4 hover:underline"
+            >
+              {action.label}
+              <ArrowRightIcon className="size-3.5" aria-hidden />
+            </button>
+          )}
         </div>
       </div>
       {!p.last && (
