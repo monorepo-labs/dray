@@ -22,7 +22,7 @@ import "../App.css";
 /// over the whole window, as the app would; an action is logged in its row
 /// rather than run. `?takes=ACE` lists only those. F is the one picked.
 
-type TakeProps = { hl: Highlight[]; onAction: (label: string) => void; onClose: () => void; noMedia?: NoMedia };
+type TakeProps = { hl: Highlight[]; onAction: (label: string) => void; onClose: () => void };
 
 const title = (h: Highlight) => changelogPlain(h.item.title ?? h.item.body);
 
@@ -437,12 +437,6 @@ function TakeSpotlight({ hl, onAction, onClose }: TakeProps) {
   );
 }
 
-/// How a highlight with no picture or video stands on its own: `type` sets
-/// the title large across the card, `tiles` puts the brand's striped tiles
-/// where the picture would be, and `fit` lays it as a short card across both
-/// columns, as tall as its text.
-type NoMedia = "type" | "tiles" | "fit";
-
 function ActionMono({ h, onAction }: { h: Highlight; onAction: (label: string) => void }) {
   const action = h.item.highlight?.action;
   if (!action) return null;
@@ -464,36 +458,25 @@ function ActionMono({ h, onAction }: { h: Highlight; onAction: (label: string) =
 /// white at 10% over the blue, the picture or video on top, the title under
 /// it and any action as a small link. No description: the title is a
 /// sentence that says the whole thing, two lines at most.
-function LandingCard({ h, noMedia, onAction }: { h: Highlight; noMedia: NoMedia; onAction: (label: string) => void }) {
+///
+/// A highlight with no picture or video is text alone: the title at the top
+/// of a card the grid stretches to its neighbour's height, the action at its
+/// foot, rather than an empty box where a picture would be.
+function LandingCard({ h, onAction }: { h: Highlight; onAction: (label: string) => void }) {
   const media = h.item.media[0];
   const heading = (
     <h2 className="line-clamp-2 text-[20px] leading-7 tracking-[-0.01em] text-balance text-white">{title(h)}</h2>
   );
-  if (!media && noMedia === "type")
+  if (!media)
     return (
-      <article className="flex flex-col justify-between gap-8 bg-white/10 p-8">
-        <h2 className="line-clamp-3 text-[36px] leading-10 font-light tracking-[-0.03em] text-balance text-white">
-          {title(h)}
-        </h2>
-        <ActionMono h={h} onAction={onAction} />
-      </article>
-    );
-  if (!media && noMedia === "fit")
-    return (
-      <article className="col-span-2 flex items-center justify-between gap-8 bg-white/10 px-6 py-6">
+      <article className="flex flex-col justify-between gap-8 bg-white/10 p-6">
         {heading}
         <ActionMono h={h} onAction={onAction} />
       </article>
     );
   return (
     <article className="flex flex-col bg-white/10">
-      {media ? (
-        <Media media={media} className="aspect-video w-full bg-black/20" />
-      ) : (
-        <div className="relative aspect-video w-full overflow-hidden bg-black/10">
-          <GateTiles tone="blue" />
-        </div>
-      )}
+      <Media media={media} className="aspect-video w-full bg-black/20" />
       <div className="flex flex-col gap-3 p-6">
         {heading}
         <ActionMono h={h} onAction={onAction} />
@@ -544,11 +527,9 @@ function ContinueCard({ row, onClose }: { row: boolean; onClose: () => void }) {
 ///
 /// Two columns throughout. Continue fills the last row's empty slot when the
 /// count is odd and takes a row of its own when it is even, so no count leaves
-/// a hole; a `fit` card without media spans a row of its own, ahead of the rest.
-function TakeLanding({ hl, onAction, onClose, noMedia = "type" }: TakeProps) {
+/// a hole.
+function TakeLanding({ hl, onAction, onClose }: TakeProps) {
   const one = hl.length === 1;
-  const banners = noMedia === "fit" ? hl.filter((h) => !h.item.media[0]) : [];
-  const cards = noMedia === "fit" ? hl.filter((h) => h.item.media[0]) : hl;
   return (
     <Shell label="New in Dray" onClose={onClose} className="overflow-hidden bg-[#1612F8] text-white select-none">
       <GateTiles tone="blue" />
@@ -561,10 +542,10 @@ function TakeLanding({ hl, onAction, onClose, noMedia = "type" }: TakeProps) {
           {/* Backed by the blue itself, so the tiles never show through the
               2px gaps or the cards' 10% white. */}
           <div className="grid grid-cols-2 gap-[2px] bg-[#1612F8]">
-            {[...banners, ...cards].map((h, i) => (
-              <LandingCard key={i} h={h} noMedia={noMedia} onAction={onAction} />
+            {hl.map((h, i) => (
+              <LandingCard key={i} h={h} onAction={onAction} />
             ))}
-            <ContinueCard row={cards.length % 2 === 0} onClose={onClose} />
+            <ContinueCard row={hl.length % 2 === 0} onClose={onClose} />
           </div>
         </div>
       </main>
@@ -611,15 +592,7 @@ const TAKES: { id: string; name: string; what: string; Take: (props: TakeProps) 
   },
 ];
 
-/// F's ways to draw a highlight with no picture, for the page's switch and
-/// `?nomedia=`.
-const NO_MEDIA: [NoMedia, string][] = [
-  ["type", "Type"],
-  ["tiles", "Tiles"],
-  ["fit", "Fit"],
-];
-
-function Row({ id, name, what, Take, hl, noMedia }: (typeof TAKES)[number] & { hl: Highlight[]; noMedia: NoMedia }) {
+function Row({ id, name, what, Take, hl }: (typeof TAKES)[number] & { hl: Highlight[] }) {
   const [open, setOpen] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
   const done = (line: string) => {
@@ -638,7 +611,7 @@ function Row({ id, name, what, Take, hl, noMedia }: (typeof TAKES)[number] & { h
         Open
       </Button>
       {open && (
-        <Take hl={hl} noMedia={noMedia} onAction={(label) => done(`action: ${label}`)} onClose={() => done("closed, seen")} />
+        <Take hl={hl} onAction={(label) => done(`action: ${label}`)} onClose={() => done("closed, seen")} />
       )}
     </li>
   );
@@ -649,10 +622,6 @@ function Demo() {
   const only = params.get("takes");
   const [count, setCount] = useState(() => Math.min(Math.max(Number(params.get("n")) || 4, 1), PAGE_HIGHLIGHTS.length));
   const hl = PAGE_HIGHLIGHTS.slice(0, count);
-  const [noMedia, setNoMedia] = useState<NoMedia>(() => {
-    const asked = params.get("nomedia");
-    return NO_MEDIA.some(([look]) => look === asked) ? (asked as NoMedia) : "type";
-  });
   return (
     <TooltipProvider>
       <div className="mx-auto flex max-w-3xl flex-col gap-6 p-10">
@@ -679,27 +648,10 @@ function Demo() {
               ))}
             </div>
           </div>
-          <div className="flex items-center gap-3 text-ui">
-            <span className="text-muted-foreground">F, no picture</span>
-            <div role="radiogroup" aria-label="F, no picture" className="flex gap-1">
-              {NO_MEDIA.map(([look, label]) => (
-                <Button
-                  key={look}
-                  role="radio"
-                  aria-checked={noMedia === look}
-                  size="sm"
-                  variant={noMedia === look ? "default" : "outline"}
-                  onClick={() => setNoMedia(look)}
-                >
-                  {label}
-                </Button>
-              ))}
-            </div>
-          </div>
         </header>
         <ul className="flex flex-col border-t border-border">
           {TAKES.filter((t) => !only || only.includes(t.id)).map((t) => (
-            <Row key={t.id} {...t} hl={hl} noMedia={noMedia} />
+            <Row key={t.id} {...t} hl={hl} />
           ))}
         </ul>
       </div>
