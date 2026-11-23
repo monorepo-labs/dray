@@ -285,20 +285,24 @@ export default function Chat({
   // near it, or on `ALL_HELD`, where pages read from the log are drawn as they
   // land. Back at the bottom it slides again, and what was above goes. Keyed on
   // the session inside the state, so a switch draws the new session's tail on
-  // its very first commit.
-  const [drawn, setDrawn] = useState<{ sessionId: string | null; from: string | null }>({
+  // its very first commit. `turns` is how many the sliding window draws: more
+  // than `WINDOW_TURNS` where those fill less than a screen above the bottom.
+  const [drawn, setDrawn] = useState<{ sessionId: string | null; from: string | null; turns: number }>({
     sessionId: null,
     from: null,
+    turns: WINDOW_TURNS,
   });
-  const held = drawn.sessionId === session?.sessionId ? drawn.from : null;
+  const mine = drawn.sessionId === session?.sessionId;
+  const held = mine ? drawn.from : null;
+  const slideTurns = mine ? drawn.turns : WINDOW_TURNS;
   const holdWindow = (from: string | null) => {
-    if (held !== from) setDrawn({ sessionId: session?.sessionId ?? null, from });
+    if (held !== from) setDrawn({ sessionId: session?.sessionId ?? null, from, turns: WINDOW_TURNS });
   };
   const drawFrom = useMemo(() => {
     if (!session || held === ALL_HELD) return 0;
     const at = held ? session.events.findIndex((e) => e.id === held) : -1;
-    return at >= 0 ? at : lastTurns(session.events, WINDOW_TURNS);
-  }, [session?.events, held]);
+    return at >= 0 ? at : lastTurns(session.events, slideTurns);
+  }, [session?.events, held, slideTurns]);
   // Pages read above a sliding window are let go, so a chat read back and left
   // holds its tail again. Turns that landed live stay held, since only a page
   // read says where in the log it began.
@@ -491,10 +495,21 @@ export default function Chat({
   // pane must also hold a screen above the bottom, or a short tail leaves
   // nothing to scroll and nothing is ever asked for. What is already held is
   // drawn before the log is read further.
+  //
+  // A window still sliding grows rather than holding. Held, the pin's own
+  // scroll event read as the reader back at the bottom and let it go, and the
+  // short tail asked again: a bot chat whose last turns draw nothing, its
+  // replies to task reports, swapped its height every frame. It grows with a
+  // page it reads too, or the page lands above it and is let go at once.
   const askOlder = () => {
     const el = scrollRef.current;
     if (!el || !session || el.scrollTop >= el.clientHeight) return;
-    if (drawFrom > 0) {
+    // `followRef` as well: a scroll up holds the window in this same event,
+    // and `held` here is from before it.
+    if (held === null && followRef.current && (drawFrom > 0 || oldest?.olderBefore != null)) {
+      setDrawn({ sessionId: session.sessionId, from: null, turns: slideTurns + OLDER_TURNS });
+      if (drawFrom === 0) loadOlder(oldest!.sessionId);
+    } else if (drawFrom > 0) {
       const from = earlierTurns(session.events, drawFrom, OLDER_TURNS);
       holdWindow(from > 0 ? session.events[from].id : ALL_HELD);
     } else if (oldest?.olderBefore != null) {
