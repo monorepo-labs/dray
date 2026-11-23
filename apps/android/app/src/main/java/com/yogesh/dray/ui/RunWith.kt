@@ -245,7 +245,7 @@ fun ModelChips(models: List<Model>, harness: String, selected: String, pick: (St
 
 /** Every model the agent has, each switched on or off the shortlist. */
 @Composable
-private fun ModelLibrary(models: List<Model>, harness: String, back: () -> Unit) {
+fun ModelLibrary(models: List<Model>, harness: String, back: () -> Unit) {
     val context = LocalContext.current
     var list by remember(harness) { mutableStateOf(shortlist(context, harness)) }
     PickSheet("Models", back = back) {

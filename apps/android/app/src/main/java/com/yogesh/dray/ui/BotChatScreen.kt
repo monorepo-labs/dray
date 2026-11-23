@@ -99,12 +99,8 @@ fun BotChatScreen(opened: SessionKey, bot: Bot, back: () -> Unit, openTask: (Ses
     }
     val hidden = chat.indexOf(segments[0]).let { if (it > 0) chat[it - 1] else null }
     val complete = store.transcripts[segments[0]]?.olderBefore == null && hidden == null
-    val items = segments.flatMapIndexed { i, segment ->
-        val events = store.transcripts[segment]?.events.orEmpty()
-        val drawn = botItems(events)
-        if (i == 0) drawn
-        else listOf(BotItem.SwitchTo("switch:${segment.id}", store.items[segment]?.harness, events.firstOrNull()?.ts ?: store.items[segment]?.created)) + drawn
-    }
+    // An agent switch draws nothing between them: the reader just picked the agent (#1417).
+    val items = segments.flatMap { botItems(store.transcripts[it]?.events.orEmpty()) }
     val rows = botRows(items)
 
     // Where unread replies begin, settled once so reading the chat never moves it.
