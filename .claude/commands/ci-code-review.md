@@ -3,7 +3,8 @@
 # c905cd8f), run by .github/workflows/claude-code-review.yml. The plugin
 # skips any PR Claude has commented on, so fix pushes went unreviewed; this
 # copy re-reviews each push instead. Changes: step 1, "Re-review mode", the
-# sha marker in step 7's comment, and `gh api` in allowed-tools.
+# sha marker in step 7's comment, `gh api` in allowed-tools, and the
+# foreground-agents rule.
 allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh api:*), mcp__github_inline_comment__create_inline_comment
 description: Code review a pull request, re-reviewing what changed on each push
 disable-model-invocation: false
@@ -14,6 +15,8 @@ Provide a code review for the given pull request.
 **Agent assumptions (applies to all agents and subagents):**
 - All tools are functional and will work without error. Do not test tools or make exploratory calls. Make sure this is clear to every subagent that is launched.
 - Only call a tool if it is required to complete the task. Every tool call should have a clear purpose.
+
+**Run every agent in the foreground and wait for its result.** Never end a reply while an agent is still running: this runs headless, and the run ends at your first final reply, so a reply saying you are waiting ends the review with nothing posted.
 
 To do this, follow these steps precisely:
 
