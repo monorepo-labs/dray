@@ -116,6 +116,7 @@ dependencies = [
  "dray-proto",
  "qrcode",
  "serde_json",
+ "windows-sys",
 ]
 
 [[package]]
