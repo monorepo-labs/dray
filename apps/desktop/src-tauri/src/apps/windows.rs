@@ -114,11 +114,16 @@ fn exe_name(exe: &Path) -> String {
 /// How a terminal is started *at* a directory: its argv after the program,
 /// and whether it needs a console of its own. The cwd is set as well, for
 /// the ones that read nothing else.
+///
+/// **Windows Terminal and PowerShell never see the path**, only `.` or the
+/// cwd: `wt` splits its whole command line on `;`, quoted or not, and NTFS
+/// allows `;` in a folder name, so `-d C:\work\x;calc` opened a second tab
+/// running `calc`.
 fn terminal_args(exe: &Path, dir: &Path) -> (Vec<String>, bool) {
     let dir = dir.to_string_lossy().into_owned();
     match exe_name(exe).as_str() {
-        "wt.exe" => (vec!["-d".into(), dir], false),
-        "pwsh.exe" => (vec!["-NoExit".into(), "-WorkingDirectory".into(), dir], true),
+        "wt.exe" => (vec!["-d".into(), ".".into()], false),
+        "pwsh.exe" => (vec!["-NoExit".into()], true),
         "powershell.exe" => (vec!["-NoExit".into()], true),
         "cmd.exe" => (vec!["/K".into()], true),
         "git-bash.exe" => (vec![format!("--cd={dir}")], false),
@@ -453,8 +458,18 @@ mod tests {
     #[test]
     fn terminals_start_in_the_directory() {
         let dir = Path::new("C:\\work\\repo");
-        assert_eq!(terminal_args(Path::new("C:\\x\\wt.exe"), dir).0, ["-d", "C:\\work\\repo"]);
+        assert_eq!(terminal_args(Path::new("C:\\x\\wt.exe"), dir).0, ["-d", "."]);
         assert_eq!(terminal_args(Path::new("C:\\Git\\git-bash.exe"), dir).0, ["--cd=C:\\work\\repo"]);
         assert!(terminal_args(Path::new("C:\\Windows\\System32\\cmd.exe"), dir).1);
+    }
+
+    /// `wt` reads `;` as a command separator anywhere on its command line.
+    #[test]
+    fn a_folder_name_never_reaches_windows_terminal_or_powershell() {
+        let dir = Path::new("C:\\work\\x;calc");
+        for exe in ["C:\\x\\wt.exe", "C:\\x\\pwsh.exe", "C:\\x\\powershell.exe", "C:\\x\\cmd.exe"] {
+            let (args, _) = terminal_args(Path::new(exe), dir);
+            assert!(args.iter().all(|a| !a.contains(';')), "{exe}: {args:?}");
+        }
     }
 }
