@@ -1,0 +1,521 @@
+import React, { useState, type KeyboardEvent, type ReactNode } from "react";
+import ReactDOM from "react-dom/client";
+
+import { ArrowLeftIcon, ArrowRightIcon, SparklesIcon, XMarkIcon } from "@heroicons/react/16/solid";
+
+import { changelogInline, changelogPlain } from "@/components/changelogText";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import DemoThemeBar from "@/demo/ThemeBar";
+import { PAGE_HIGHLIGHTS } from "@/demo/whatsNewData";
+import type { ChangelogMedia, Highlight } from "@/lib/changelog";
+import { cn } from "@/lib/utils";
+import "../App.css";
+
+/// Full-window takes on What's New, for a release with highlights: the whole
+/// window, the way an Apple release page reads, rather than a carousel in a
+/// dialog. Every take reads the same four highlights (a video, two pictures,
+/// one with none) and leaves by Continue, the close cross or Escape. Open
+/// raises a take over the whole window, as the app would; an action is logged
+/// in its row rather than run. `?takes=ACE` lists only those.
+
+type TakeProps = { hl: Highlight[]; onAction: (label: string) => void; onClose: () => void };
+
+const title = (h: Highlight) => changelogPlain(h.item.title ?? h.item.body);
+
+/// The whole window, through the shared dialog so Escape, focus and the
+/// portal behave as every other dialog's do. Focus lands on the element
+/// marked `data-autofocus`, the take's way forward, rather than on the cross,
+/// and without scrolling to it: a take whose Continue sits at the end of a long
+/// page must still open at its top.
+function Shell({
+  label,
+  onClose,
+  onKeyDown,
+  onEscapeKeyDown,
+  className,
+  children,
+}: {
+  label: string;
+  onClose: () => void;
+  onKeyDown?: (e: KeyboardEvent<HTMLDivElement>) => void;
+  onEscapeKeyDown?: (e: globalThis.KeyboardEvent) => void;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent
+        showClose={false}
+        aria-describedby={undefined}
+        onOpenAutoFocus={(e) => {
+          const target = (e.currentTarget as HTMLElement).querySelector<HTMLElement>("[data-autofocus]");
+          if (!target) return;
+          e.preventDefault();
+          target.focus({ preventScroll: true });
+        }}
+        onKeyDown={onKeyDown}
+        onEscapeKeyDown={onEscapeKeyDown}
+        className={cn(
+          "top-0 left-0 flex h-full w-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-0 bg-background p-0 text-foreground shadow-none backdrop-blur-none",
+          className,
+        )}
+      >
+        <DialogTitle className="sr-only">{label}</DialogTitle>
+        {children}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function NewInDray({ className }: { className?: string }) {
+  return (
+    <span className={cn("flex items-center gap-1.5 text-ui font-medium", className)}>
+      <SparklesIcon className="size-3.5 text-accent-add" aria-hidden />
+      New in Dray
+    </span>
+  );
+}
+
+function Close({ onClose, className }: { onClose: () => void; className?: string }) {
+  return (
+    <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={onClose} className={className}>
+      <XMarkIcon className="size-4" />
+    </Button>
+  );
+}
+
+function TopBar({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="flex h-12 shrink-0 items-center justify-between px-5">
+      <NewInDray />
+      <Close onClose={onClose} />
+    </div>
+  );
+}
+
+/// A highlight's picture or video; with none, a quiet tile carrying the mark,
+/// so a layout built around media still has something in the slot.
+function Media({ media, className }: { media: ChangelogMedia | undefined; className?: string }) {
+  if (!media)
+    return (
+      <div className={cn("flex items-center justify-center bg-muted", className)}>
+        <SparklesIcon className="size-10 text-accent-add" aria-hidden />
+      </div>
+    );
+  return media.kind === "video" ? (
+    <video
+      src={media.url}
+      aria-label={media.alt || undefined}
+      autoPlay
+      muted
+      loop
+      playsInline
+      className={cn("bg-muted object-cover", className)}
+    />
+  ) : (
+    <img src={media.url} alt={media.alt} className={cn("bg-muted object-cover", className)} />
+  );
+}
+
+function ActionLink({ h, onAction, className }: { h: Highlight; onAction: (label: string) => void; className?: string }) {
+  const action = h.item.highlight?.action;
+  if (!action) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => onAction(action.label)}
+      className={cn(
+        "inline-flex cursor-pointer items-center gap-1 font-medium text-foreground underline-offset-4 hover:underline",
+        className,
+      )}
+    >
+      {action.label}
+      <ArrowRightIcon className="size-3.5" aria-hidden />
+    </button>
+  );
+}
+
+/// A — hero: the first highlight as a headline over a large video, the rest a
+/// row beneath it, Continue pinned at the foot.
+function TakeHero({ hl, onAction, onClose }: TakeProps) {
+  const [hero, ...rest] = hl;
+  return (
+    <Shell label="What's new in Dray" onClose={onClose}>
+      <TopBar onClose={onClose} />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex max-w-5xl flex-col items-center px-10 pb-16">
+          <h1 className="mt-6 text-center text-5xl font-medium tracking-tight text-balance">{title(hero)}</h1>
+          <p className="mt-4 max-w-2xl text-center text-lg leading-relaxed text-balance text-muted-foreground">
+            {changelogInline(hero.item.body)}
+          </p>
+          <ActionLink h={hero} onAction={onAction} className="mt-4 text-chat" />
+          <Media media={hero.item.media[0]} className="mt-10 aspect-[16/10] w-full rounded-2xl border border-border shadow-xl" />
+          <div className="mt-16 grid w-full grid-cols-3 gap-8 border-t border-border pt-10">
+            {rest.map((h, i) => (
+              <div key={i} className="flex flex-col gap-2">
+                <Media media={h.item.media[0]} className="mb-2 aspect-video w-full rounded-lg border border-border" />
+                <p className="text-base font-medium">{title(h)}</p>
+                <p className="text-ui leading-relaxed text-muted-foreground">{changelogInline(h.item.body)}</p>
+                <ActionLink h={h} onAction={onAction} className="mt-1 self-start text-ui" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <footer className="flex shrink-0 justify-center border-t border-border py-4">
+        <Button data-autofocus className="h-9 min-w-32 px-6" onClick={onClose}>
+          Continue
+        </Button>
+      </footer>
+    </Shell>
+  );
+}
+
+/// B — story: one large section a feature, media and text trading sides as
+/// the page scrolls, Continue waiting at the end.
+function TakeStory({ hl, onAction, onClose }: TakeProps) {
+  return (
+    <Shell label="What's new in Dray" onClose={onClose}>
+      <TopBar onClose={onClose} />
+      <div className="min-h-0 flex-1 snap-y snap-proximity overflow-y-auto">
+        <header className="mx-auto flex max-w-6xl snap-start flex-col items-start px-12 pt-10 pb-6">
+          <h1 className="text-6xl font-medium tracking-tight">
+            {hl.length} new things
+            <br />
+            <span className="text-muted-foreground">in Dray.</span>
+          </h1>
+        </header>
+        {hl.map((h, i) => (
+          <section
+            key={i}
+            className="mx-auto grid min-h-[75vh] max-w-6xl snap-start grid-cols-2 items-center gap-16 border-t border-border px-12 py-16"
+          >
+            <Media
+              media={h.item.media[0]}
+              className={cn("aspect-[4/3] w-full rounded-2xl border border-border", i % 2 === 1 && "order-last")}
+            />
+            <div className="flex flex-col gap-4">
+              <span className="font-mono text-xs text-muted-foreground tabular-nums">0{i + 1}</span>
+              <h2 className="text-4xl font-medium tracking-tight">{title(h)}</h2>
+              <p className="text-lg leading-relaxed text-muted-foreground">{changelogInline(h.item.body)}</p>
+              <ActionLink h={h} onAction={onAction} className="mt-2 self-start text-chat" />
+            </div>
+          </section>
+        ))}
+        <footer className="flex flex-col items-center gap-4 border-t border-border py-20">
+          <p className="text-muted-foreground">That's everything new.</p>
+          <Button className="h-9 min-w-32 px-6" onClick={onClose}>
+            Continue
+          </Button>
+        </footer>
+      </div>
+    </Shell>
+  );
+}
+
+/// C — split: every feature listed on the left, the picked one large on the
+/// right; ↑ ↓ walk the list.
+function TakeSplit({ hl, onAction, onClose }: TakeProps) {
+  const [pick, setPick] = useState(0);
+  const h = hl[pick];
+  return (
+    <Shell
+      label="What's new in Dray"
+      onClose={onClose}
+      onKeyDown={(e) => {
+        const by = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+        if (!by) return;
+        e.preventDefault();
+        setPick((p) => Math.min(Math.max(p + by, 0), hl.length - 1));
+      }}
+      className="grid grid-cols-[22rem_1fr]"
+    >
+      <aside className="flex min-h-0 flex-col border-r border-border bg-muted/40 p-4">
+        <NewInDray className="px-2 pt-1" />
+        <h1 className="mt-3 px-2 text-3xl font-medium tracking-tight">What's new</h1>
+        <nav className="mt-6 flex flex-col gap-1">
+          {hl.map((x, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => setPick(i)}
+              className={cn(
+                "flex cursor-pointer gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
+                i === pick ? "bg-background shadow-sm" : "hover:bg-background/60",
+              )}
+            >
+              <span className="mt-0.5 font-mono text-xs text-muted-foreground tabular-nums">0{i + 1}</span>
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <span className={cn("text-ui font-medium", i !== pick && "text-muted-foreground")}>{title(x)}</span>
+                <span className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                  {changelogPlain(x.item.body)}
+                </span>
+              </span>
+            </button>
+          ))}
+        </nav>
+        <div className="mt-auto flex flex-col gap-2 px-2">
+          <Button data-autofocus className="h-9 w-full" onClick={onClose}>
+            Continue
+          </Button>
+          <span className="text-center text-xs text-muted-foreground">↑ ↓ to move · Esc to close</span>
+        </div>
+      </aside>
+      <main className="relative flex min-h-0 flex-col items-center justify-center overflow-y-auto px-16 py-12">
+        <Close onClose={onClose} className="absolute top-3 right-4" />
+        <div key={pick} className="flex w-full max-w-4xl flex-col animate-in fade-in-0 [animation-duration:200ms]">
+          <Media media={h.item.media[0]} className="aspect-video w-full rounded-2xl border border-border shadow-lg" />
+          <h2 className="mt-8 text-3xl font-medium tracking-tight">{title(h)}</h2>
+          <p className="mt-3 max-w-2xl text-lg leading-relaxed text-muted-foreground">{changelogInline(h.item.body)}</p>
+          <ActionLink h={h} onAction={onAction} className="mt-4 self-start text-chat" />
+        </div>
+      </main>
+    </Shell>
+  );
+}
+
+/// D — grid: a card a feature, each opening into its own detail with a way
+/// back to all of them.
+function TakeGrid({ hl, onAction, onClose }: TakeProps) {
+  const [open, setOpen] = useState<number | null>(null);
+  const h = open === null ? null : hl[open];
+  return (
+    <Shell
+      label="What's new in Dray"
+      onClose={onClose}
+      // Escape steps out of a detail before it closes the page.
+      onEscapeKeyDown={(e) => {
+        if (open === null) return;
+        e.preventDefault();
+        setOpen(null);
+      }}
+    >
+      <TopBar onClose={onClose} />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {h ? (
+          <div key={open} className="mx-auto flex max-w-4xl flex-col px-10 pt-2 pb-16 animate-in fade-in-0 [animation-duration:200ms]">
+            <Button variant="ghost" size="sm" className="-ml-2.5 self-start" onClick={() => setOpen(null)}>
+              <ArrowLeftIcon className="size-3.5" />
+              All features
+            </Button>
+            <Media media={h.item.media[0]} className="mt-4 aspect-video w-full rounded-2xl border border-border shadow-lg" />
+            <h2 className="mt-8 text-4xl font-medium tracking-tight">{title(h)}</h2>
+            <p className="mt-3 max-w-2xl text-lg leading-relaxed text-muted-foreground">{changelogInline(h.item.body)}</p>
+            <ActionLink h={h} onAction={onAction} className="mt-4 self-start text-chat" />
+          </div>
+        ) : (
+          <div className="mx-auto flex max-w-5xl flex-col px-10 pt-4 pb-16 animate-in fade-in-0 [animation-duration:200ms]">
+            <h1 className="text-5xl font-medium tracking-tight">What's new</h1>
+            <p className="mt-3 text-lg text-muted-foreground">{hl.length} new things. Pick one to see more.</p>
+            <div className="mt-10 grid grid-cols-2 gap-5">
+              {hl.map((x, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setOpen(i)}
+                  className="group flex cursor-pointer flex-col overflow-hidden rounded-2xl border border-border bg-muted/30 text-left transition-colors hover:border-foreground/20 hover:bg-muted/60"
+                >
+                  <Media media={x.item.media[0]} className="aspect-video w-full" />
+                  <span className="flex flex-col gap-1.5 p-5">
+                    <span className="flex items-center justify-between gap-2 text-lg font-medium">
+                      {title(x)}
+                      <ArrowRightIcon className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" aria-hidden />
+                    </span>
+                    <span className="line-clamp-2 text-ui leading-relaxed text-muted-foreground">{changelogPlain(x.item.body)}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+      <footer className="flex shrink-0 justify-center border-t border-border py-4">
+        <Button data-autofocus className="h-9 min-w-32 px-6" onClick={onClose}>
+          Continue
+        </Button>
+      </footer>
+    </Shell>
+  );
+}
+
+/// E — spotlight: one feature fills the window at a time, the picture large in
+/// the middle over a blurred wash of itself, a filmstrip to jump between them.
+/// Dark in both modes, as a stage is. ← → move.
+function TakeSpotlight({ hl, onAction, onClose }: TakeProps) {
+  const [pick, setPick] = useState(0);
+  const h = hl[pick];
+  const media = h.item.media[0];
+  const last = pick === hl.length - 1;
+  const step = (by: number) => setPick((p) => Math.min(Math.max(p + by, 0), hl.length - 1));
+  return (
+    <Shell
+      label="What's new in Dray"
+      onClose={onClose}
+      onKeyDown={(e) => {
+        const by = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+        if (!by) return;
+        e.preventDefault();
+        step(by);
+      }}
+      className="dark overflow-hidden bg-neutral-950 text-white"
+    >
+      {/* The wash: the same picture, blown up and blurred, so the stage takes
+          its colour from whatever is on it. */}
+      <div key={`wash${pick}`} className="absolute inset-0 animate-in fade-in-0 [animation-duration:500ms]">
+        {media?.kind === "image" ? (
+          <img src={media.url} alt="" className="size-full scale-125 object-cover opacity-40 blur-3xl" />
+        ) : (
+          <div className="size-full bg-[radial-gradient(circle_at_30%_20%,oklch(0.45_0.15_160/0.6),transparent_55%),radial-gradient(circle_at_75%_70%,oklch(0.42_0.2_265/0.6),transparent_55%)]" />
+        )}
+        <div className="absolute inset-0 bg-linear-to-t from-black/80 via-black/20 to-black/50" />
+      </div>
+      <div className="relative flex h-12 shrink-0 items-center justify-between px-5">
+        <NewInDray className="text-white" />
+        <Close onClose={onClose} className="text-white/80 hover:bg-white/10 hover:text-white" />
+      </div>
+      <div key={pick} className="relative flex min-h-0 flex-1 items-center justify-center px-16 animate-in fade-in-0 zoom-in-[0.98] [animation-duration:400ms]">
+        {media ? (
+          <Media media={media} className="max-h-full w-auto max-w-5xl rounded-xl shadow-2xl ring-1 ring-white/10" />
+        ) : (
+          <Media media={undefined} className="aspect-video h-full max-h-[28rem] rounded-xl bg-white/10 ring-1 ring-white/10" />
+        )}
+      </div>
+      <div className="relative flex shrink-0 items-end gap-10 px-12 pt-8 pb-10">
+        <div key={`t${pick}`} className="flex max-w-xl min-w-0 flex-1 flex-col gap-3 animate-in fade-in-0 slide-in-from-bottom-1 [animation-duration:400ms]">
+          <span className="font-mono text-xs text-white/50 tabular-nums">
+            0{pick + 1} / 0{hl.length}
+          </span>
+          <h2 className="text-5xl font-medium tracking-tight">{title(h)}</h2>
+          <p className="text-lg leading-relaxed text-white/70">{changelogPlain(h.item.body)}</p>
+          <ActionLink h={h} onAction={onAction} className="mt-1 self-start text-chat text-white" />
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-4">
+          <div className="flex gap-2">
+            {hl.map((x, i) => (
+              <button
+                key={i}
+                type="button"
+                aria-label={title(x)}
+                onClick={() => setPick(i)}
+                className={cn(
+                  "w-24 cursor-pointer overflow-hidden rounded-md ring-2 transition-all",
+                  i === pick ? "opacity-100 ring-white" : "opacity-50 ring-transparent hover:opacity-80",
+                )}
+              >
+                <Media media={x.item.media[0]} className="pointer-events-none aspect-video w-full bg-white/10 [&_svg]:size-5" />
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            {pick > 0 && (
+              <button
+                type="button"
+                aria-label="Back"
+                onClick={() => step(-1)}
+                className="flex size-9 cursor-pointer items-center justify-center rounded-lg bg-white/10 transition-colors hover:bg-white/20"
+              >
+                <ArrowLeftIcon className="size-4" />
+              </button>
+            )}
+            <button
+              type="button"
+              data-autofocus
+              onClick={last ? onClose : () => step(1)}
+              className="flex h-9 min-w-24 cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-white px-4 text-ui font-medium text-black transition-colors hover:bg-white/90"
+            >
+              {last ? "Continue" : "Next"}
+              {!last && <ArrowRightIcon className="size-4" aria-hidden />}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Shell>
+  );
+}
+
+const TAKES: { id: string; name: string; what: string; Take: (props: TakeProps) => ReactNode }[] = [
+  {
+    id: "A",
+    name: "Hero",
+    what: "The first highlight as a headline over a large video, the rest in a row beneath, Continue pinned at the foot.",
+    Take: TakeHero,
+  },
+  {
+    id: "B",
+    name: "Story",
+    what: "One large section a feature, media and text trading sides as you scroll, Continue at the end.",
+    Take: TakeStory,
+  },
+  {
+    id: "C",
+    name: "Split",
+    what: "Every feature listed on the left, the picked one large on the right. ↑ ↓ walk the list.",
+    Take: TakeSplit,
+  },
+  {
+    id: "D",
+    name: "Grid",
+    what: "A card a feature; each opens into its own detail with a way back to all of them.",
+    Take: TakeGrid,
+  },
+  {
+    id: "E",
+    name: "Spotlight",
+    what: "One feature fills the window at a time over a blurred wash of its own picture, a filmstrip to jump. ← → move.",
+    Take: TakeSpotlight,
+  },
+];
+
+function Row({ id, name, what, Take }: (typeof TAKES)[number]) {
+  const [open, setOpen] = useState(false);
+  const [said, setSaid] = useState<string | null>(null);
+  const done = (line: string) => {
+    setSaid(line);
+    setOpen(false);
+  };
+  return (
+    <li className="flex items-center gap-4 border-b border-border py-4">
+      <span className="w-5 font-medium">{id}</span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="text-ui font-medium">{name}</span>
+        <span className="text-ui text-muted-foreground">{what}</span>
+      </span>
+      {said && <span className="font-mono text-xs text-muted-foreground">{said}</span>}
+      <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+        Open
+      </Button>
+      {open && <Take hl={PAGE_HIGHLIGHTS} onAction={(label) => done(`action: ${label}`)} onClose={() => done("closed, seen")} />}
+    </li>
+  );
+}
+
+function Demo() {
+  const only = new URLSearchParams(location.search).get("takes");
+  return (
+    <TooltipProvider>
+      <div className="mx-auto flex max-w-3xl flex-col gap-6 p-10">
+        <header className="flex flex-col gap-2">
+          <h1 className="text-lg font-medium">What's new: full-page takes</h1>
+          <p className="text-ui text-muted-foreground">
+            Five ways to give a release's highlights the whole window. Open covers the window as the app would. Each
+            leaves by Continue, the cross or Escape.
+          </p>
+        </header>
+        <ul className="flex flex-col border-t border-border">
+          {TAKES.filter((t) => !only || only.includes(t.id)).map((t) => (
+            <Row key={t.id} {...t} />
+          ))}
+        </ul>
+      </div>
+      <DemoThemeBar />
+    </TooltipProvider>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+  <React.StrictMode>
+    <Demo />
+  </React.StrictMode>,
+);
