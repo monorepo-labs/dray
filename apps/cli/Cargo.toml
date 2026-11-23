@@ -17,6 +17,17 @@ clap_complete = "4"
 serde_json = "1"
 qrcode = { version = "0.14.1", default-features = false }
 
+# Who serves the orchestration pipe (main.rs `served_by_this_user`). Already
+# in the lock.
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+]
+
 [profile.release]
 strip = true
 opt-level = "z"

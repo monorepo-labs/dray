@@ -1401,17 +1401,10 @@ fn lock_owner_pid(reason: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
-/// `kill(pid, 0)` — the signal number that checks for a process without
-/// sending anything. `EPERM` counts as alive: a process owned by another user
-/// is still a process holding that lock.
+/// Whether the process holding a worktree lock still lives. A process owned
+/// by another user is still a process holding that lock.
 fn pid_is_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-    // SAFETY: signal 0 delivers nothing; it only performs the existence and
-    // permission check that gives this function its answer.
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    crate::platform::pid_alive(pid)
 }
 
 /// The `locked` reason git records for `worktree_path`, if any.
@@ -1442,7 +1435,7 @@ fn parse_lock_reason(porcelain: &str, worktree_path: &Path) -> Option<String> {
 /// this is usable on a tree that has already been deleted, and in tests over
 /// paths that were never on disk.
 pub(crate) fn resolved(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Whether this path is a worktree **Dray created**, which is the only kind it

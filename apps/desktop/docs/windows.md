@@ -1,0 +1,32 @@
+# Windows
+
+**The app, `dray` and `dray-serve` build with MSVC and run on Windows 10/11 and Server 2025** (#1425). The server is the app's child, as on Linux (`launchd::as_child`), home `~/.dray` (`%USERPROFILE%\.dray`). What differs from Unix lives in [platform.rs](../src-tauri/src/platform.rs) where it is more than a line.
+
+## What is different
+
+- **The orchestration socket is a named pipe.** tokio has no unix sockets on Windows. `dray_proto::pipe_name` turns the socket path into `\\.\pipe\dray-<hash>`, so `DRAY_ENDPOINT` stays a path on every platform and each home keeps its own channel. The server makes the first instance with `first_pipe_instance`, which is what refuses a second Dray on one home; there is no file to heal. Every instance carries an owner-only descriptor (`platform::OwnerOnly`, this user's SID alone), since the default ACL also lets Everyone read. **That covers only Dray's own instances, so it is no `0700` directory**: the pipe namespace is machine-wide and the name derivable, so another account could take it before Dray starts. The CLI therefore sends nothing until the pipe's server process is found running as its own user (`served_by_this_user` in the CLI), and refuses otherwise. A connect that fails, as one a caller opened and dropped does, gets a fresh instance after a pause, or the loop spins on the broken one; a create that fails is retried, never the end of the loop. At startup, every instance busy counts as a server already living here.
+- **One hidden console for the whole app** (`platform::hidden_console`). A release build is a GUI binary, so without it every `git`, `gh` and agent the app or its server started opened a console window — Windows Terminal, where it is the default terminal. `AllocConsoleWithOptions(NO_WINDOW)` where Windows has it (11 24H2, Server 2025), else `AllocConsole` hidden at once, which can flash. A dev build is a console binary and needs none.
+- **No signals.** A server stop kills its whole tree (`platform::kill_tree`), and only where the pid in `serve-port` still runs this binary, since that file outlives a dead server and the pid can be another app's by then: agents get no 3s to exit, but none outlives it to be resumed twice. Ctrl-C reaches a server run in a console. The tree is walked while its root lives, so a routine's check keeps its root alive past a timeout (`kill_on_drop(false)`) until the walk has it.
+- **The process tree comes from ToolHelp, listeners from `GetExtendedTcpTable`** ([local_servers.rs](../src-tauri/src/local_servers.rs)). Windows keeps a dead parent's pid on its children and reuses pids, so a parent link counts only where the parent is older than the child — the walk's result is killed. A process is named by its image, `bash.exe`, and `Processes::name` drops the extension so shells still read as shells; PowerShell and cmd count as shells there, since Claude's PowerShell tool starts dev servers too. Only the image is read, not the command line, so a test run is not told from a server there. A process's working directory is out of reach, so only listeners under the agent count as a session's dev servers.
+- **Paths.** `canonicalize` goes through `dunce`, since std's answers `\\?\C:\…` and matches nothing git or the reader writes. Binaries resolve as `name.exe`, then npm's `name.cmd`, never the bare name: npm leaves a `sh` script of that name beside the shim. **An agent is never run through its `.cmd`**: cmd.exe cannot carry an argument with a newline, which Claude's `--append-system-prompt` has. `binpath::command` reads the shim and runs its target, the `.exe` npm's Claude ships or `node` on a script, and every agent spawn goes through it. `PATH` is re-read from the registry where a login shell would be asked.
+- **Git for Windows sets `core.autocrlf`.** Anything that reads back what git restored turns it off for its own calls, as the bots' folder does. `.gitattributes` keeps working trees LF, bar `.bat` and `.cmd`, which cmd.exe needs CRLF in.
+- **Git's `sh` is put on every child's `PATH`** (`<Git>\bin`): the installer adds only `<Git>\cmd`, and a routine's check runs through `sh -c`.
+- **The session index's cache stamp carries NTFS's file id** (`platform::file_id`): the mtime clock ticks every ~15.6ms, and creation time is carried onto a file renamed over another, which is how the index is written.
+- **Window chrome is Linux's**: undecorated, opaque, drawn controls, flat surfaces (`tauri.windows.conf.json`, `useGlass`).
+- **Agents run through Git Bash.** Claude Code finds it on its own; it has a PowerShell tool besides, which anything denying Bash must deny too (`title.rs`).
+
+## Not on Windows yet
+
+- The in-app browser (CEF builds for Mac and Linux only) and `dray browser`'s headless Chromium, whose DevTools pipe rides fds 3 and 4.
+- Dictation (hidden: `HAS_DICTATION`), Dray Island, Open in (apps list is empty), the dock badge.
+- The CLI ships in no Windows bundle and nothing copies it onto `PATH`, so an agent in the release app has no `dray`. `dray server install|start` and `dray update` are systemd/launchd and `install.sh`.
+- `release.yml` has no Windows job, no code signing (SmartScreen warns) and no updater manifest entry.
+- A refused upload reads as a reset connection, not 401: the server answers before reading the body and Windows resets a socket closed with unread data.
+
+## Building and testing on a VM
+
+- Toolchain: Git, rustup (MSVC), Visual Studio Build Tools with the C++ workload, Node, pnpm, CMake and LLVM (transcribe-cpp's ggml). WebView2 ships with Windows.
+- `pnpm tauri dev` works as everywhere. `pnpm tauri build` makes the MSI and NSIS installers; without the updater key, pass a `--config` file holding `{"bundle":{"createUpdaterArtifacts":false}}`.
+- `cargo test --no-default-features --features serve --lib` passes on Windows; tests that spawn `sh`, `cat` or `sleep`, or build `/`-paths, are `#[cfg(unix)]`.
+- **A GUI started over SSH has no desktop.** Run it in the logged-in RDP session through a scheduled task with an interactive principal (`New-ScheduledTaskPrincipal -LogonType Interactive`), and screenshot the same way (`CopyFromScreen`).
+- **Driving the dev app**: Tauri's own WebView2 arguments override `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, so the dev shim passes that variable on; set it to `--remote-debugging-port=9222` and DevTools' protocol on that port clicks, types and screenshots the webview.

@@ -5060,6 +5060,7 @@ mod tests {
     }
 
     /// A live child over `cat`, its tracker as given.
+    #[cfg(unix)]
     async fn child_with(manager: &SessionManager, id: &str, tracker: StatusTracker) -> Slot {
         let mut child = tokio::process::Command::new("cat")
             .stdin(std::process::Stdio::piped())
@@ -5088,6 +5089,7 @@ mod tests {
     /// A task's report waits in the bot's queue unseen: no client draws it,
     /// and Esc takes back the reader's own prompt from under it.
     #[tokio::test]
+    #[cfg(unix)]
     async fn a_relayed_message_is_held_but_never_shown_or_cancelled() {
         let manager = SessionManager::default();
         let slot = child_with(&manager, "bot", StatusTracker::default()).await;
@@ -5118,6 +5120,7 @@ mod tests {
     /// leave the queue empty for the direct send. While the turn still runs it
     /// queues, and the turn-end flush that follows drains it.
     #[tokio::test]
+    #[cfg(unix)]
     async fn a_prompt_is_never_queued_behind_a_turn_that_ended() {
         let manager = SessionManager::default();
         let mut running = StatusTracker::default();
@@ -5141,6 +5144,7 @@ mod tests {
     /// Only a child with nothing running and nothing waiting on it is stopped,
     /// and its slot left empty for the next send to resume into.
     #[tokio::test]
+    #[cfg(unix)]
     async fn the_idle_sweep_stops_only_a_quiet_child() {
         let manager = SessionManager::default();
         let done = || {

@@ -382,6 +382,7 @@ Detail per subsystem lives in [apps/desktop/docs/](apps/desktop/docs/). **Read t
 - [harnesses.md](apps/desktop/docs/harnesses.md) — Codex, fx and grok: what runs, wire quirks, MCP, effort ladders, plan mode, todos.
 - [MCP-PLAN.md](apps/desktop/MCP-PLAN.md) — Remote MCP: `/mcp` on every server for Grok Bot, Claude and ChatGPT, OAuth with pairing codes, the tools. **Off in release builds** until Dray accounts land; [MCP-HELD.md](apps/desktop/MCP-HELD.md) is how to turn it back on.
 - [boat.md](apps/desktop/docs/boat.md) — Boat sandboxes: detecting, stopped rows, resume and send, repointing the SSH alias, the auto-stop warning.
+- [windows.md](apps/desktop/docs/windows.md) — Windows: named-pipe socket, hidden console, process tree, paths, what is not there yet, testing on a VM.
 - [cloud.md](apps/desktop/docs/cloud.md) — Dray Cloud: one machine per task as a hidden connection, the Settings row, the Cloud pick, delete on settle, kept transcripts.
 
 ## Known issues

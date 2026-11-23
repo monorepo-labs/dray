@@ -4724,7 +4724,8 @@ function App() {
                 Changes auto-saved
               </span>
             ) : (
-              draftChord && `${formatChords([draftChord])[0].join("")} to save as draft`
+              // "⌘S" on a Mac, "Ctrl+S" elsewhere, where the word runs into the key.
+              draftChord && `${formatChords([draftChord])[0].join(IS_MAC ? "" : "+")} to save as draft`
             )
           }
           agentUpdate={

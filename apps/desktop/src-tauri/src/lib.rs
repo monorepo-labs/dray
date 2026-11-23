@@ -48,6 +48,7 @@ pub mod headless;
 #[cfg_attr(not(any(feature = "cef", feature = "serve")), allow(dead_code))]
 pub mod recording;
 mod local_servers;
+pub mod platform;
 pub mod docs;
 pub mod download;
 #[path = "events/events.rs"]
@@ -1037,7 +1038,7 @@ pub fn run() {
             // `WindowControls` draws its buttons. tauri.linux.conf.json already
             // says so; this is for the window-state plugin, which restores a
             // `decorated` flag saved by a build that still had the bar.
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows))]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.remove_menu();
                 let _ = window.set_decorations(false);

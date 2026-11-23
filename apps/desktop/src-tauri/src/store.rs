@@ -334,8 +334,10 @@ pub async fn config_dir() -> Result<PathBuf> {
 /// The `<name>` of a path under `.claude/worktrees/<name>/`, the innermost
 /// where worktrees nest.
 fn worktree_name(dir: &str) -> Option<&str> {
-    let (_, rest) = dir.rsplit_once("/.claude/worktrees/")?;
-    rest.split('/').next().filter(|name| !name.is_empty())
+    let (_, rest) = dir
+        .rsplit_once("/.claude/worktrees/")
+        .or_else(|| dir.rsplit_once("\\.claude\\worktrees\\"))?;
+    rest.split(['/', '\\']).next().filter(|name| !name.is_empty())
 }
 
 async fn make_home_app_dir() -> Result<PathBuf> {
@@ -376,9 +378,7 @@ async fn make_home_app_dir() -> Result<PathBuf> {
 /// Best-effort: a directory that cannot be narrowed is worth carrying on with,
 /// since the alternative is an app that refuses to start.
 pub(crate) async fn restrict_to_owner(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    if let Err(e) = fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await {
+    if let Err(e) = crate::platform::set_mode(path, 0o700) {
         eprintln!("[app dir permissions err] {e}");
     }
 }
@@ -483,9 +483,19 @@ struct IndexStamp {
 }
 
 impl IndexStamp {
-    fn of(meta: &std::fs::Metadata) -> Option<Self> {
-        use std::os::unix::fs::MetadataExt;
-        Some(Self { dev: meta.dev(), ino: meta.ino(), mtime: meta.modified().ok()?, len: meta.len() })
+    async fn at(path: &Path) -> Option<Self> {
+        let meta = fs::metadata(path).await.ok()?;
+        #[cfg(unix)]
+        let (dev, ino) = {
+            use std::os::unix::fs::MetadataExt;
+            (meta.dev(), meta.ino())
+        };
+        // NTFS's file id, as std gives none there. Not mtime alone: its clock
+        // ticks every ~15.6ms, so two writes can share one, and not creation
+        // time, which NTFS carries onto a file renamed over another.
+        #[cfg(windows)]
+        let (dev, ino) = crate::platform::file_id(path)?;
+        Some(Self { dev, ino, mtime: meta.modified().ok()?, len: meta.len() })
     }
 }
 
@@ -508,7 +518,7 @@ async fn cached_index() -> Result<Arc<Vec<SessionIndexItem>>> {
 async fn cached_index_at(path: &Path) -> Result<Arc<Vec<SessionIndexItem>>> {
     // Stamped before the read, so a file replaced between the two is cached
     // under the older stamp — which costs a re-read, never a stale answer.
-    let stamp = fs::metadata(path).await.ok().and_then(|m| IndexStamp::of(&m));
+    let stamp = IndexStamp::at(path).await;
     if let Some(stamp) = stamp {
         if let Some((cached, items)) = &*INDEX_CACHE.lock().unwrap() {
             if *cached == stamp {
@@ -555,8 +565,7 @@ pub async fn lock_across_processes(name: &str) -> Option<std::fs::File> {
     let path = config_dir().await.ok()?.join(format!("{name}.lock"));
     tokio::task::spawn_blocking(move || {
         let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path).ok()?;
-        let locked = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX) } == 0;
-        locked.then_some(file)
+        file.lock().is_ok().then_some(file)
     })
     .await
     .ok()
@@ -610,7 +619,7 @@ async fn write_atomic_stamped(path: &Path, contents: impl AsRef<[u8]>) -> Result
     fs::write(&tmp, contents)
         .await
         .with_context(|| format!("could not write {}", tmp.display()))?;
-    let stamp = fs::metadata(&tmp).await.ok().and_then(|m| IndexStamp::of(&m));
+    let stamp = IndexStamp::at(&tmp).await;
 
     if let Err(e) = fs::rename(&tmp, path).await {
         // Or the next write inherits a stale temp file it never wrote.
@@ -3551,6 +3560,7 @@ mod tests {
             .collect();
         assert!(prefixes.len() > 1, "only drew {prefixes:?}");
     }
+    #[cfg_attr(windows, allow(unused_imports))]
     use crate::events::{AgentEventPayload, ImageRef, ToolResult};
 
     /// A field a *newer* build wrote has to survive being read and written back
@@ -4215,6 +4225,7 @@ mod tests {
     /// under two session ids, and an image still pointing into its attachment
     /// directory goes blank the moment the parent is deleted.
     #[test]
+    #[cfg(unix)]
     fn a_copied_log_belongs_to_the_fork_that_replays_it() {
         let from_dir = Path::new("/home/.dray/attachments/parent");
         let to_dir = Path::new("/home/.dray/attachments/child");
@@ -4461,6 +4472,7 @@ mod tests {
     /// A fork into a new tree is indexed before the tree exists, and a server
     /// restart in between must not read that as a tree someone deleted.
     #[test]
+    #[cfg(unix)]
     fn a_fork_whose_tree_is_not_made_yet_keeps_its_worktree() {
         let parent = SessionIndexItem::new(
             "parent",
