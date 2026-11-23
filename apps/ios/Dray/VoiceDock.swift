@@ -534,6 +534,9 @@ struct TextSheet: View {
         .presentationDragIndicator(.visible)
         .presentationBackground(Theme.card)
         .onAppear { focused = true }
+        // A swipe down the short sheet only ever takes the keyboard: the text's interactive dismissal
+        // and the sheet's own drag both stop there. Without it the short sheet has no use, so it goes too.
+        .onChange(of: focused) { if !focused, !full { dismiss() } }
     }
 
     private var done: some View {
