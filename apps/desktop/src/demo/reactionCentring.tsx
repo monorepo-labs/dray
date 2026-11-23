@@ -17,7 +17,7 @@ import "../App.css";
 /// browser or Android's for Noto.
 
 const RAW =
-  "flex size-10 items-center justify-center rounded-full border border-border bg-(--reaction) text-[18px] shadow-[0_0_0_3px_var(--reaction)] leading-none select-none";
+  "flex size-8 items-center justify-center rounded-full border border-border bg-(--reaction) text-[14px] shadow-[0_0_0_3px_var(--reaction)] leading-none select-none";
 
 /// The nudge the badge beside it applied, read off its glyph once it settled.
 function Readout({ at }: { at: React.RefObject<HTMLDivElement | null> }) {
@@ -36,8 +36,8 @@ function Blown({ emoji, raw }: { emoji: string; raw: boolean }) {
   const at = useRef<HTMLDivElement>(null);
   return (
     <div className="flex flex-col gap-2">
-      <div ref={at} className="relative size-40">
-        <div className="relative size-10 origin-top-left scale-400">
+      <div ref={at} className="relative size-32">
+        <div className="relative size-8 origin-top-left scale-400">
           {raw ? <span className={RAW}>{emoji}</span> : <ReactionBadge emoji={emoji} />}
         </div>
       </div>
@@ -52,7 +52,7 @@ function Row({ label, raw }: { label: string; raw: boolean }) {
       <p className="text-[13px] text-muted-foreground">{label}</p>
       <div className="flex gap-6">
         {REACTIONS.map((emoji) => (
-          <div key={emoji} className="relative size-10">
+          <div key={emoji} className="relative size-8">
             {raw ? <span className={RAW}>{emoji}</span> : <ReactionBadge emoji={emoji} />}
           </div>
         ))}

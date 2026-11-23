@@ -31,7 +31,7 @@ import type { Bot, ImageRef, IssueRef, MessageSender } from "@/types/events";
 /// Where a bot's reaction sits: out to the side of the top corner, in the 15% no
 /// bubble reaches and inside the bubble's own height, so it lands without
 /// moving the message or anything after it — see `Reactable`.
-const BADGE_CORNER = "absolute top-0 -left-8";
+const BADGE_CORNER = "absolute top-0 -left-6";
 
 /// The user's own text, echoed from the event log rather than local state — the
 /// backend synthesizes and persists it, so this renders the same live or replayed.
@@ -163,7 +163,7 @@ export default function UserMessage({
         <div className="relative max-w-full">
           <ImageRow images={images} variant="sent" />
           {/* Further onto a picture, which can fill the column and has no text to cover. */}
-          {reaction && !body && <ReactionBadge emoji={reaction} className="absolute top-0 -left-4" />}
+          {reaction && !body && <ReactionBadge emoji={reaction} className="absolute top-0 -left-3" />}
         </div>
       )}
 

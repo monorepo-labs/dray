@@ -32,7 +32,7 @@ export function ReactionBadge({ emoji, mine = false, className }: { emoji: strin
       role="img"
       aria-label={`${mine ? "You" : "Bot"} reacted: ${REACTION_LABELS[emoji] ?? emoji}`}
       className={cn(
-        "flex size-10 items-center justify-center rounded-full border border-border bg-(--reaction) text-[18px] shadow-[0_0_0_3px_var(--reaction)] leading-none select-none",
+        "flex size-8 items-center justify-center rounded-full border border-border bg-(--reaction) text-[14px] shadow-[0_0_0_3px_var(--reaction)] leading-none select-none",
         "motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:fade-in motion-safe:duration-200",
         className,
       )}
@@ -78,7 +78,7 @@ export function Reactable({ event, className, children }: { event: AgentEvent; c
     <div className={cn("group/react flex max-w-[85%] items-center gap-1 self-start", className)}>
       <div className="relative min-w-0">
         {children}
-        {reaction && <ReactionBadge emoji={reaction} mine className="absolute -right-8 bottom-0" />}
+        {reaction && <ReactionBadge emoji={reaction} mine className="absolute -right-6 bottom-0" />}
       </div>
       {react && !event.subagent && <ReactButton current={reaction} onPick={(emoji) => react(event, emoji)} />}
     </div>
@@ -100,7 +100,7 @@ function ReactButton({ current, onPick }: { current: string | undefined; onPick:
                 "flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-0 transition-[opacity,color] outline-none group-hover/react:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring/50 data-[state=open]:opacity-100",
                 // Past the badge, which sits where the button rests. A transform,
                 // since a margin would narrow the bubble and rewrap it.
-                current && "translate-x-9",
+                current && "translate-x-7",
               )}
             >
               <SmilePlus className="size-4" />
