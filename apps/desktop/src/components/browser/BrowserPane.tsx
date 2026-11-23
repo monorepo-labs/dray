@@ -79,6 +79,7 @@ import {
   type LocalServer,
   type StoppedServer,
   type Viewport,
+  tint,
 } from "@/lib/browser";
 import { seededAvatar } from "@/lib/botAvatar";
 import { chromiumBusy, chromiumPercent, describeChromium } from "@/lib/chromium";
@@ -684,19 +685,6 @@ function DeviceMenu({ sessionId, disabled }: { sessionId: string; disabled: bool
       <TooltipContent side={TIP_SIDE}>Device size</TooltipContent>
     </Tooltip>
   );
-}
-
-/// The URL row painted in the page's colour, with the ink tokens flipped to
-/// suit it — a black page in light mode would otherwise draw grey on black.
-function tint(background: string): React.CSSProperties {
-  const [r, g, b] = background.match(/\d+/g)?.map(Number) ?? [255, 255, 255];
-  const dark = 0.2126 * r + 0.7152 * g + 0.0722 * b < 140;
-  return {
-    background,
-    ["--card" as string]: background,
-    ["--foreground" as string]: dark ? "white" : "black",
-    ["--muted-foreground" as string]: dark ? "rgb(255 255 255 / 0.6)" : "rgb(0 0 0 / 0.55)",
-  };
 }
 
 const BAR = "flex h-8 shrink-0 items-center gap-1.5 border-b border-border bg-card px-2 text-ui";

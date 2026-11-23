@@ -3,7 +3,9 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -276,8 +278,14 @@ pub(crate) fn app_ships_this_cli() -> bool {
         return false;
     };
     std::fs::read(home.join(APPIMAGE_RECORD)).is_ok_and(|image| {
-        use std::os::unix::ffi::OsStrExt;
-        !image.is_empty() && Path::new(std::ffi::OsStr::from_bytes(&image)).is_file()
+        #[cfg(unix)]
+        let image = {
+            use std::os::unix::ffi::OsStrExt;
+            std::ffi::OsStr::from_bytes(&image).to_os_string()
+        };
+        #[cfg(not(unix))]
+        let image = std::ffi::OsString::from(String::from_utf8_lossy(&image).into_owned());
+        !image.is_empty() && Path::new(&image).is_file()
     })
 }
 
@@ -396,8 +404,27 @@ fn find(bin: &str) -> Option<PathBuf> {
     let home = std::env::home_dir();
     std::env::split_paths(&path)
         .chain(home.iter().flat_map(|h| HOME_BIN_DIRS.map(|d| h.join(d))))
-        .map(|dir| dir.join(bin))
-        .find(|p| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
+        .flat_map(|dir| EXE_SUFFIXES.map(|suffix| dir.join(format!("{bin}{suffix}"))))
+        .find(|p| p.metadata().is_ok_and(|m| m.is_file() && executable(&m)))
+}
+
+/// What a bare name is found under: itself, or on Windows the launchers npm
+/// and the installers leave (`claude.exe`, `codex.cmd`). Never the bare name
+/// there: npm leaves a `sh` script of that name beside the shim.
+#[cfg(unix)]
+const EXE_SUFFIXES: [&str; 1] = [""];
+#[cfg(windows)]
+const EXE_SUFFIXES: [&str; 2] = [".exe", ".cmd"];
+
+#[cfg(unix)]
+fn executable(meta: &std::fs::Metadata) -> bool {
+    meta.permissions().mode() & 0o111 != 0
+}
+
+/// Windows has no execute bit; the suffix said it already.
+#[cfg(windows)]
+fn executable(_: &std::fs::Metadata) -> bool {
+    true
 }
 
 pub fn setup(args: Install) -> Result<(), String> {
@@ -650,13 +677,25 @@ fn output(cmd: &str, args: &[&str]) -> Option<String> {
 pub fn serve(args: Run) -> Result<(), String> {
     may_serve()?;
     let bin = beside("dray-serve")?;
-    let err = Command::new(&bin).args(args.args).exec();
-    Err(format!("could not run {}: {err}", bin.display()))
+    #[cfg(unix)]
+    {
+        let err = Command::new(&bin).args(args.args).exec();
+        Err(format!("could not run {}: {err}", bin.display()))
+    }
+    // No exec on Windows: wait on the server and leave with its code.
+    #[cfg(windows)]
+    {
+        let status = Command::new(&bin)
+            .args(args.args)
+            .status()
+            .map_err(|e| format!("could not run {}: {e}", bin.display()))?;
+        std::process::exit(status.code().unwrap_or(1))
+    }
 }
 
 fn beside(name: &str) -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("could not find the running dray binary: {e}"))?;
-    let bin = exe.with_file_name(name);
+    let bin = exe.with_file_name(format!("{name}{}", std::env::consts::EXE_SUFFIX));
     if bin.is_file() {
         Ok(bin)
     } else {
@@ -1029,10 +1068,11 @@ fn agent_start() -> Result<String, String> {
     let home = std::path::absolute(dray_home()?).map_err(|e| format!("could not resolve DRAY_HOME: {e}"))?;
     // 0700, which the server's orchestration socket insists on. launchd opens
     // the log in it before the server could make it.
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&home)
+    let mut dir = std::fs::DirBuilder::new();
+    dir.recursive(true);
+    #[cfg(unix)]
+    dir.mode(0o700);
+    dir.create(&home)
         .map_err(|e| format!("could not create {}: {e}", home.display()))?;
     let log = home.join("server.log");
     let mut env = vec![("PATH", unit_env_path(&serve)?)];
@@ -1198,6 +1238,7 @@ mod tests {
     /// Runs the browser script against a fake apt that knows only the old
     /// spellings plus `libasound2t64`, and reads back what it installed.
     #[test]
+    #[cfg(unix)]
     fn browser_script_picks_names_after_updating() {
         use std::os::unix::fs::PermissionsExt;
         let script = super::browser_script();
@@ -1227,6 +1268,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_quoted_path_reaches_sh_as_one_word() {
         let path = "/Users/a b'c/x.plist";
         let out = std::process::Command::new("sh")

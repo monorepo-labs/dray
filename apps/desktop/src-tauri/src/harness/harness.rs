@@ -237,6 +237,7 @@ mod path_tests {
     /// `PATH`, ahead of every other harness's cached dir — so its `env node`
     /// lands on the node it was installed beside.
     #[test]
+    #[cfg(unix)]
     fn the_spawned_binary_dir_leads_the_additions() {
         let bin = std::path::Path::new("/home/u/.fnm/node-versions/v22/installation/bin/pi");
         let inherited: Vec<std::path::PathBuf> =

@@ -22,17 +22,32 @@ phone reads and drives it over the same WebSocket the desktop uses
   the words show as the bubble they will send as, the keyboard edits them
   in a sheet that can also send, and Cancel asks first. A swipe up from the
   resting orb or under it opens that sheet too, on every dock (#1302);
-  "Swipe up to type" sits over the orb until the reader has done it three times. The model chip and
+  "Swipe up to type" sits over the orb until the reader has done it three times.
+  The sheet opens short over the keyboard, as Android's does, and a drag up
+  its header takes it to full height (#1415): one detent at a time, since a
+  sheet offered both goes to the larger as soon as the keyboard is up. In a
+  bot's chat a swipe in from the right edge opens its Tasks sheet, the button
+  being a reach to the top of the screen. The model chip and
   "···" open **This task**: the session's model, effort, fast mode and
   stance for the next reply, each locked mid-turn where the harness can't
   carry it onto a queued prompt (`liveControls.ts`, restated in
   `Picks.lockedMidTurn`). Nothing there reaches the session until a reply
-  goes out, since `send_msg` is what carries it. **Stop** sits at the end of
+  goes out, since `send_msg` is what carries it. Its agent row moves the
+  session to another agent at that send (#1439), as the desktop does: a task
+  calls `switch_agent` first and continues in place, so a server from before
+  it refuses and nothing goes out; a bot chat starts a new session in its
+  folder. Neither draws a line in the chat, and `agent_switched` moves the
+  picker when the switch was made elsewhere. **Stop** sits at the end of
   the picks while a turn runs. The top bar names the project and machine,
   never the branch.
 - **Permission and question cards**, answered in place. A hidden task's card,
   a bot's above all, draws at the foot of the chat that started it under the
   task's title, on whichever machine the task runs, and lights the bot's face.
+- **Reactions in a bot's chat** (#1416), never a task's: a long press on the
+  bot's message opens the seven emoji and nothing else, so its words cannot be
+  copied there while the chat is open (`react_to_message`). The pick is a badge
+  beside the bubble's bottom corner; the bot's own sits beside the top corner
+  of the reader's. Both are overlays, so neither moves a row.
 - **New task by voice**, from a dock under the list: hold the orb to talk,
   and the recording runs hands-free until Done or Cancel. The words land as
   the task's text; holding again adds to them, the keyboard edits them in a

@@ -26,7 +26,7 @@ use std::sync::Arc;
 use crate::sink::Sink;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::{ChildStdout, Command},
+    process::ChildStdout,
     sync::Mutex,
 };
 
@@ -256,14 +256,12 @@ pub async fn init(
     let mut settings = TurnSettings::new(model, effort, permission_mode, fast);
     settings.developer_instructions =
         crate::bots::system_prompt(DEVELOPER_INSTRUCTIONS, session_id, session_cwd, crate::session::Harness::Codex).await;
-    let seq_start = if is_new_session {
-        0
-    } else {
-        next_seq_by_session_id(session_id).await?
-    };
+    // Off the log even for a new conversation: one an agent switch starts
+    // (#1414) carries on this session's log, and a new session's has none.
+    let seq_start = next_seq_by_session_id(session_id).await?;
 
     let bin = crate::binpath::codex().await;
-    let mut command = Command::new(&bin);
+    let mut command = crate::binpath::command(&bin);
 
     if let Some(endpoint) = crate::orchestration::child_endpoint() {
         command.env("DRAY_ENDPOINT", endpoint);
@@ -1741,7 +1739,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs codex installed and logged in"]
     async fn handshake_against_a_live_server() {
-        let mut child = Command::new(crate::binpath::codex().await)
+        let mut child = crate::binpath::command(&crate::binpath::codex().await)
             .arg("app-server")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

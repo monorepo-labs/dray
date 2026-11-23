@@ -120,7 +120,7 @@ struct BotSheet: View {
     /// When an edit's pick lands: with the next message, another agent moving the chat.
     private var pickNote: String? {
         guard let editing, let item = chat(of: editing).flatMap({ store.items[$0] }) else { return nil }
-        if harness != item.harness { return "Your next message moves the chat to \(Picks.agentLabels[harness] ?? harness)." }
+        if harness != item.harness { return "Your next message goes to \(Picks.agentLabels[harness] ?? harness)." }
         return modelId != item.model ? "Goes with your next message." : nil
     }
 

@@ -325,6 +325,7 @@ mod tests {
     /// pi — what is being pinned is that [`PiClient::close`] closes stdin, and
     /// a reader that ends on EOF is the only witness to that.
     #[tokio::test]
+    #[cfg(unix)]
     async fn close_ends_the_child_rather_than_leaving_it_running() {
         let mut child = tokio::process::Command::new("/bin/cat")
             .stdin(std::process::Stdio::piped())

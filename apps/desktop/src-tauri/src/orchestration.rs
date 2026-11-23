@@ -30,10 +30,9 @@ use dray_proto::{
     Response, SendMessage, SendToBot, SessionSummary, SetAside, MAX_LINE, OLDEST_SPOKEN, PROTOCOL_VERSION,
 };
 use std::path::Path;
-use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    net::{UnixListener, UnixStream},
-};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+#[cfg(unix)]
+use tokio::net::{UnixListener, UnixStream};
 
 /// Emitted when a session is created by something other than the composer, so
 /// the sidebar gains the row without a refetch.
@@ -116,6 +115,7 @@ pub fn child_endpoint() -> Option<String> {
 /// Errors are logged and swallowed by the caller: orchestration is a side
 /// channel, and an app that refuses to start because a socket is in use would
 /// be trading the whole product for a feature.
+#[cfg(unix)]
 pub async fn serve(app: Sink) -> Result<()> {
     let path = socket_path().context("could not resolve the socket path")?;
 
@@ -164,15 +164,89 @@ pub async fn serve(app: Sink) -> Result<()> {
     }
 }
 
+/// Windows serves a named pipe in the socket's place, named after the socket
+/// path (`dray_proto::pipe_name`), so each home still keeps its own channel.
+/// A pipe is no file: nothing can unlink or replace it, so there is nothing to
+/// heal. `first_pipe_instance` refuses a name another live process already
+/// serves, which is the "a Dray already lives here" answer the unix bind gets
+/// from its connect check.
+#[cfg(windows)]
+pub async fn serve(app: Sink) -> Result<()> {
+    use tokio::net::windows::named_pipe::ServerOptions;
+
+    let path = socket_path().context("could not resolve the socket path")?;
+    store::get_home_app_dir().await?;
+    let name = dray_proto::pipe_name(&path.to_string_lossy());
+    let owner = crate::platform::OwnerOnly::new().context("could not make the pipe's security descriptor")?;
+    let create = |first: bool| {
+        let mut attributes = owner.attributes();
+        // SAFETY: the attributes point at `owner`'s descriptor, which outlives
+        // every instance made here.
+        unsafe {
+            ServerOptions::new()
+                .first_pipe_instance(first)
+                .create_with_security_attributes_raw(&name, (&raw mut attributes).cast())
+        }
+        .with_context(|| format!("could not create {name} for {}", path.display()))
+    };
+
+    let mut server = create(true)?;
+    loop {
+        // A caller that opens and drops the pipe before this sees it (the
+        // server's own startup probe does) leaves the instance broken, and
+        // `connect` on it fails at once forever after. A fresh one, after a
+        // pause so a failure that does repeat cannot spin a core.
+        if let Err(e) = server.connect().await {
+            eprintln!("[orchestration accept err] {e}");
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            server = next_instance(&create).await;
+            continue;
+        }
+        let connected = server;
+        // The next instance before this one is served, or a caller arriving
+        // meanwhile finds no pipe and reads Dray as closed.
+        server = next_instance(&create).await;
+        let app = app.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handle(connected, &app).await {
+                eprintln!("[orchestration conn err] {e:#}");
+            }
+        });
+    }
+}
+
+/// A pipe instance, retried until one is made: a failed create ends nothing,
+/// as a failed accept ends nothing on Unix. Logged once per failing run.
+#[cfg(windows)]
+async fn next_instance(
+    create: &impl Fn(bool) -> Result<tokio::net::windows::named_pipe::NamedPipeServer>,
+) -> tokio::net::windows::named_pipe::NamedPipeServer {
+    let mut logged = false;
+    loop {
+        match create(false) {
+            Ok(server) => return server,
+            Err(e) if !logged => {
+                eprintln!("[orchestration] {e:#}; retrying");
+                logged = true;
+            }
+            Err(_) => {}
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
 /// How often the socket path is checked against the file this process bound.
 /// One `stat` a tick; a longer gap is that much longer of every `dray` call
 /// failing.
+#[cfg(unix)]
 const SOCKET_CHECK: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// `(dev, ino)`: what tells the socket this process bound apart from another
 /// file later put at the same path.
+#[cfg(unix)]
 type FileId = (u64, u64);
 
+#[cfg(unix)]
 fn file_id(path: &Path) -> std::io::Result<FileId> {
     use std::os::unix::fs::MetadataExt;
 
@@ -181,6 +255,7 @@ fn file_id(path: &Path) -> std::io::Result<FileId> {
 }
 
 /// What the socket path names on one check.
+#[cfg(unix)]
 #[derive(Debug, PartialEq, Eq)]
 enum PathState {
     Ours,
@@ -188,6 +263,7 @@ enum PathState {
     Other(FileId),
 }
 
+#[cfg(unix)]
 fn path_state(bound: FileId, seen: std::io::Result<FileId>) -> PathState {
     match seen {
         Ok(id) if id == bound => PathState::Ours,
@@ -206,6 +282,7 @@ fn path_state(bound: FileId, seen: std::io::Result<FileId>) -> PathState {
 /// it as Dray not running. Deleting `~/.dray` does it; so did a sandbox
 /// restored from a snapshot, whose disk was swapped under a running server and
 /// left a copied socket file behind (#801). [`Socket::heal`] binds again.
+#[cfg(unix)]
 struct Socket {
     listener: UnixListener,
     id: FileId,
@@ -216,6 +293,7 @@ struct Socket {
     failing: bool,
 }
 
+#[cfg(unix)]
 impl Socket {
     /// Binds the path, unlinking whatever stale file holds it, and narrows the
     /// socket to `0600`.
@@ -305,6 +383,7 @@ impl Socket {
 /// never notice the directory was deleted. The narrowing is not redundant with
 /// creating at `0700`: a session's log write can recreate the directory first,
 /// under the umask, and a check alone would then refuse it forever.
+#[cfg(unix)]
 async fn rebind(path: &Path) -> Result<Socket> {
     let dir = path.parent().context("the socket path has no directory")?;
     tokio::fs::create_dir_all(dir)
@@ -327,6 +406,7 @@ async fn rebind(path: &Path) -> Result<Socket> {
 /// Refusing costs orchestration and nothing else, which is the bargain this
 /// whole module already makes: the caller logs and drops the error, and the
 /// app carries on without a side channel.
+#[cfg(unix)]
 async fn check_private(dir: &Path) -> Result<()> {
     let mode = owner_bits(dir).await?;
     if mode & 0o077 != 0 {
@@ -341,6 +421,7 @@ async fn check_private(dir: &Path) -> Result<()> {
 }
 
 /// The permission bits on a directory, for the check above.
+#[cfg(unix)]
 async fn owner_bits(path: &Path) -> Result<u32> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -354,6 +435,7 @@ async fn owner_bits(path: &Path) -> Result<u32> {
 /// `0600` on the socket itself. Defence in depth behind the `0700` directory,
 /// which is the boundary that holds from before the socket exists — this one
 /// cannot, because `bind` has already applied the umask by the time it runs.
+#[cfg(unix)]
 fn restrict(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -392,8 +474,8 @@ fn refusal(line: &str) -> Option<String> {
 
 /// Reads one request, answers it, closes. A connection carries one command so
 /// that a client crashing mid-line costs nothing but itself.
-async fn handle(stream: UnixStream, app: &Sink) -> Result<()> {
-    let (read_half, mut write_half) = stream.into_split();
+async fn handle<S: AsyncRead + AsyncWrite>(stream: S, app: &Sink) -> Result<()> {
+    let (read_half, mut write_half) = tokio::io::split(stream);
 
     let mut line = String::new();
     BufReader::new(read_half.take(MAX_LINE))
@@ -1696,14 +1778,36 @@ async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
     let item = store::get_session_index_item(&set.session_id)
         .await?
         .with_context(|| format!("no session {}", set.session_id))?;
-    let harness = item.harness;
+    let mut harness = item.harness;
     if !harness.names_a_cli() {
         bail!("this build cannot run that session's agent, {}", harness.label());
     }
     let model = match set.model.as_deref() {
-        Some(alias) => resolve_model(Some(alias), None, harness).await?,
+        Some(alias) => {
+            let here = resolve_model(Some(alias), None, harness).await;
+            let listed = match &here {
+                Ok(model) => matches!(crate::session::model_spec(harness, model).await, Ok(Some(_))),
+                Err(_) => false,
+            };
+            // Another agent's model moves the task there (#1414). pi, grok and
+            // fx take any name, so one only another agent lists is that agent's
+            // — once this agent has said what it lists: a probe not answered
+            // yet lists nothing, and a move would kill the task's dev server
+            // over a name it does serve.
+            match listed || !lists_models(harness).await {
+                true => here?,
+                false => match other_agent_model(alias, harness).await {
+                    Some((other, model)) => {
+                        harness = other;
+                        model
+                    }
+                    None => here?,
+                },
+            }
+        }
         None => item.model.clone(),
     };
+    let switching = harness != item.harness;
     let spec = crate::session::model_spec(harness, &model).await?;
     if set.model.is_some() && harness == Harness::Codex && spec.is_none() {
         bail!("{model} is not a Codex model");
@@ -1715,11 +1819,27 @@ async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
     let effort = match asked {
         true => {
             let requested = resolve_effort(set.effort.as_deref(), None, harness)?;
-            effort_for(spec.as_ref(), requested, item.effort, &label, harness)?
+            // Another agent's ladder means something else by the same names.
+            let current = item.effort.filter(|_| !switching);
+            effort_for(spec.as_ref(), requested, current, &label, harness)?
         }
         false => item.effort,
     };
-    let changed = model != item.model || effort != item.effort;
+    let changed = switching || model != item.model || effort != item.effort;
+    let label = match switching {
+        true => format!("{label} on {}", harness.label()),
+        false => label,
+    };
+    let item = match switching {
+        true => {
+            // Fast mode never carries to another agent (`resolve_fast`'s rule),
+            // and the stance narrows to one the agent honours.
+            let permission_mode = stance_on(harness, item.permission_mode);
+            let pick = store::AgentPick { model: model.clone(), effort, permission_mode, fast: false };
+            manager().switch_agent(&item.session_id, harness, pick, app).await?
+        }
+        false => item,
+    };
     let item = match changed {
         true => {
             let item = store::set_session_pick(&item.session_id, model, effort)
@@ -1738,6 +1858,47 @@ async fn set_model(set: dray_proto::SetModel, app: &Sink) -> Result<Response> {
         effort: effort.map(|e| e.as_arg().to_string()),
         changed,
     })
+}
+
+/// The stance `harness` runs when handed `mode`: `stanceFor` in the app's
+/// `permission.ts`, whose comments say why each falls where it does. `plan`
+/// always narrows, so a task moved by the CLI never comes out freer.
+fn stance_on(harness: Harness, mode: ApprovalPolicy) -> ApprovalPolicy {
+    use ApprovalPolicy as A;
+    match (harness, mode) {
+        // pi.rs still runs a `plan` session read-only.
+        (Harness::Pi, A::Plan) => A::Plan,
+        (Harness::Pi, _) => A::BypassPermissions,
+        (Harness::Codex | Harness::Fx | Harness::Grok, A::Plan) => A::Manual,
+        (Harness::Codex | Harness::Fx, A::DontAsk) => A::Auto,
+        (Harness::Grok, A::DontAsk) => A::BypassPermissions,
+        _ => mode,
+    }
+}
+
+/// Whether `harness` has said which models it serves: Claude Code's are a
+/// table, the rest a probe that lists nothing until it answers.
+async fn lists_models(harness: Harness) -> bool {
+    use crate::harness::{codex, fx, grok, pi};
+    match harness {
+        Harness::Pi => !pi::models::list().await.is_empty(),
+        Harness::Fx => !fx::models::list().await.is_empty(),
+        Harness::Grok => !grok::models::list().await.is_empty(),
+        Harness::Codex => !codex::models::list().await.is_empty(),
+        _ => true,
+    }
+}
+
+/// The first other installed agent whose list holds `alias`, with its model.
+async fn other_agent_model(alias: &str, current: Harness) -> Option<(Harness, ModelId)> {
+    for harness in Harness::ALL.into_iter().filter(|h| *h != current) {
+        let Ok(model) = resolve_model(Some(alias), None, harness).await else { continue };
+        let listed = matches!(crate::session::model_spec(harness, &model).await, Ok(Some(_)));
+        if listed && crate::binpath::agent_available(harness).await {
+            return Some((harness, model));
+        }
+    }
+    None
 }
 
 /// The level a session runs at once `spec` replaces its model. A level the
@@ -3206,7 +3367,7 @@ fn expand_home(path: &str) -> String {
         },
     };
     match std::env::home_dir() {
-        Some(home) => home.join(rest).to_string_lossy().trim_end_matches('/').to_string(),
+        Some(home) => home.join(rest).to_string_lossy().trim_end_matches(['/', '\\']).to_string(),
         None => path.to_string(),
     }
 }
@@ -3224,7 +3385,7 @@ fn project_from(requested: Option<&str>, parent: Option<&SessionIndexItem>) -> O
     let raw = requested.or_else(|| parent.map(|p| p.project_path.as_str()))?;
 
     Some(
-        std::fs::canonicalize(raw)
+        dunce::canonicalize(raw)
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| raw.to_string()),
     )
@@ -3311,9 +3472,9 @@ mod tests {
     /// A forwarded `'~'` is the home of the machine that runs the task.
     #[test]
     fn a_leading_tilde_is_this_machines_home() {
-        let home = std::env::home_dir().unwrap().to_string_lossy().into_owned();
-        assert_eq!(expand_home("~"), home);
-        assert_eq!(expand_home("~/work"), format!("{home}/work"));
+        let home = std::env::home_dir().unwrap();
+        assert_eq!(expand_home("~"), home.to_string_lossy());
+        assert_eq!(expand_home("~/work"), home.join("work").to_string_lossy());
         assert_eq!(expand_home("~bob"), "~bob");
         assert_eq!(expand_home("/srv/x"), "/srv/x");
     }
@@ -3576,6 +3737,7 @@ mod tests {
 
     /// A private dir of its own per test, short enough for a socket path's
     /// 108-byte limit.
+    #[cfg(unix)]
     fn socket_dir(name: &str) -> std::path::PathBuf {
         use std::os::unix::fs::DirBuilderExt;
 
@@ -3586,12 +3748,14 @@ mod tests {
     }
 
     /// A connection reaching the listener, proven by the accept landing.
+    #[cfg(unix)]
     async fn reaches(socket: &Socket, path: &Path) {
         let client = UnixStream::connect(path).await.expect("connect");
         socket.listener.accept().await.expect("accept");
         drop(client);
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_path_state_follows_the_inode() {
         let missing = || Err(std::io::Error::from(std::io::ErrorKind::NotFound));
@@ -3604,6 +3768,7 @@ mod tests {
         assert_eq!(path_state((1, 2), denied()), PathState::Ours);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_socket_still_in_place_is_left_alone() {
         let dir = socket_dir("kept");
@@ -3615,6 +3780,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_deleted_socket_is_bound_again() {
         let dir = socket_dir("deleted");
@@ -3631,6 +3797,7 @@ mod tests {
 
     /// `rm -rf ~/.dray` takes the directory too, and the rebind brings it back
     /// private.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_deleted_directory_is_made_again_private() {
         use std::os::unix::fs::PermissionsExt;
@@ -3652,6 +3819,7 @@ mod tests {
 
     /// A session's log write can recreate the directory before the check runs,
     /// under a `022` umask. The rebind narrows it rather than refusing it.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_directory_recreated_open_is_narrowed_and_bound() {
         use std::os::unix::fs::PermissionsExt;
@@ -3671,6 +3839,7 @@ mod tests {
     }
 
     /// The case seen live (#801): a copied socket file with nothing behind it.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_dead_socket_file_in_its_place_is_replaced() {
         let dir = socket_dir("dead");
@@ -3688,6 +3857,7 @@ mod tests {
     }
 
     /// Two processes on one path must not take it from each other in turn.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_live_socket_in_its_place_is_left_to_its_owner() {
         let dir = socket_dir("live");

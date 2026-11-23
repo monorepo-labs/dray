@@ -85,6 +85,15 @@ export function stanceFor(harness: Harness, mode: ApprovalPolicy): ApprovalPolic
   return FALLBACK[harness]?.(mode) ?? "bypassPermissions";
 }
 
+/// [`stanceFor`] for a send to a task that already exists. A pi task recorded
+/// `plan` keeps it: pi.rs runs it read-only, and it got there by moving from a
+/// `plan` task, which must not come out able to write. A new pi task never
+/// takes `plan` from the saved default, since pi draws no stance control to
+/// leave it by.
+export function taskStance(harness: Harness, mode: ApprovalPolicy): ApprovalPolicy {
+  return harness === "pi" && mode === "plan" ? "plan" : stanceFor(harness, mode);
+}
+
 /// The stance a bot chat runs on: always Auto, so the reader never picks one
 /// for a chat that is talked to like a person. The composer's pick counts only
 /// on a harness with no Auto.

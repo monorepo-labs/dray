@@ -618,6 +618,48 @@
   --surface-sheet: transparent;
 }
 
+/* Every light palette's main sheet and lit tab, shadows and frame alike; dark
+   ones keep the ring alone. The frame takes the sheet's own colour, opaque, so
+   the page and the card are one surface and the shadows alone draw the card:
+   each palette's page colour, which its sheet already showed through. Default
+   light names its own white for both. */
+[data-mode="light"] {
+  --surface-frame: var(--background);
+  --surface-sheet: var(--background);
+
+  /* The sheet wears the composer's shadow: its 6% ring is the sheet's edge, its
+     three short drops the lift, all round, plus one softer drop along the top
+     alone (`sheet-glow`). The lit tab wears the same: the ring as its border
+     over the strip, the soft drop as a `drop-shadow`, which follows its flared
+     feet, and the composer's drops as a box-shadow, since a drop-shadow's blur
+     rounds below 1px in WebKit and the composer's 1px drops lost their side
+     there. Unmatched, the first tab's side stepped out of line with the
+     sheet's. */
+  --sheet-ring: 0 0 0 1px oklch(0 0 0 / 6%);
+  --sheet-foot: 0 1px 1px oklch(0 0 0 / 8%), 0 1px 1px oklch(0 0 0 / 10%), 0 1px 2px oklch(0 0 0 / 8%);
+  --shadow-sheet: var(--sheet-ring), var(--sheet-foot);
+  --sheet-glow: 0 1px 3px oklch(0 0 0 / 10%);
+  /* The lit tab wears the soft drop all round (`drop-shadow`, which follows its
+     flared feet) and the sheet's side under it: the composer's drops cast from
+     inside the border, as the sheet's are from inside its ring, and what they
+     lay on the ring laid on the border's two sides instead. */
+  /* A 3px blur at 10%, as two halves: WebKit rounds a drop-shadow's blur to
+     whole pixels, and 1px and 2px read as a box-shadow's 2px and 4px. Measured
+     against the Gaussian a 3px box-shadow draws, within a level. */
+  --tab-shadow: drop-shadow(0 0 1px oklch(0 0 0 / 5%)) drop-shadow(0 0 2px oklch(0 0 0 / 5%));
+  --tab-drops: 0 1px 1px -1px oklch(0 0 0 / 8%), 0 1px 1px -1px oklch(0 0 0 / 10%), 0 1px 2px -1px oklch(0 0 0 / 8%);
+  --tab-side-out: color-mix(in srgb, var(--surface-frame), black 8%);
+  --tab-side-in: color-mix(in srgb, var(--surface-frame), black 13%);
+  --tab-sides: linear-gradient(to right, var(--tab-side-out) 0.5px, var(--tab-side-in) 0.5px 1px, transparent 1px calc(100% - 1px), var(--tab-side-in) calc(100% - 1px) calc(100% - 0.5px), var(--tab-side-out) calc(100% - 0.5px)) border-box;
+
+  .tab-strip {
+    --tab-edge-top: oklch(0 0 0 / 12%);
+    --tab-edge-side: oklch(0 0 0 / 6%);
+    --tab-edge-foot: oklch(0 0 0 / 6%);
+    --tab-under: linear-gradient(var(--surface-frame) 0 0) border-box;
+  }
+}
+
 [data-theme="default"][data-mode="light"] {
   --background: oklch(0.965 0 0);
   --surface-raised: oklch(0.94 0 0);
@@ -648,11 +690,13 @@
   --accent-mention: oklch(0.55 0.16 245);
   --accent-thinking: oklch(0.55 0.05 264);
   --surface-selected: oklch(0.9 0 0);
-  /* Opaque, so the sidebar and titlebar strip read as this exact grey rather
+  /* Opaque, so the sidebar and titlebar strip read as this exact white rather
      than a scrim over the glass. */
-  --surface-frame: #f7f7f7;
+  --surface-frame: #ffffff;
   --surface-sheet: #ffffff;
-  --sidebar-selected: #e5e5e5;
+  /* `--fill-soft`, below: #e5e5e5 was tuned on the old #f7f7f7 frame and read
+     a step heavier on white. */
+  --sidebar-selected: var(--fill-soft);
   /* The composer's hairline ring over the card's own drop, for the same reason. */
   --shadow-raised-card: 0 0 0 1px oklch(0 0 0 / 6%), var(--shadow-card);
   --card-edge: transparent;
@@ -1275,7 +1319,7 @@
        dev conf, whose window list replaces it whole) is
        half of this plus 2 (the lights are 14pt, laid 9pt up from the inset's
        floor), so the two move together or the lights leave the row's centre. */
-    --titlebar-h: 40px;
+    --titlebar-h: 36px;
     /* Horizontal clearance for those same lights, needed only when a pane
        reaches the window's left edge — i.e. with the sidebar collapsed. */
     --traffic-lights-w: 78px;
@@ -1562,4 +1606,272 @@
 body.session-drag,
 body.session-drag * {
   cursor: grabbing !important;
+}
+
+/* A tab in the titlebar strip, drawn the way a browser draws its own. At rest
+   it is flat on the frame, and hover lays the sidebar row's hover fill behind
+   it as a pill, inset off the strip's floor so it never reads as lit.
+
+   Lit, it is a piece of the sheet: the sheet's colour under a rounded top,
+   running down into the sheet below, with a concave flare at each foot. The
+   fill is opaque because the frame under it is a scrim, and nothing painted on
+   a scrim lifts it back off; `--background` under the sheet's veil is what the
+   sheet composites to wherever the body is opaque, so only a glass window's
+   wallpaper tint is missing.
+
+   Its edge is a 1px border, top and sides only, every tab carrying it
+   transparent so lighting one moves nothing. Light draws the sheet's hairline
+   round it, feet included, so the two run together. Dark lights it from above
+   as a browser's tab is: brightest along the top, dimmer down the sides, gone
+   before the feet — Chromium's dark tab, sampled at 23% and 10% white, then
+   taken down to 18% and 8%; nothing on the curves. A line round the feet
+   read as an outline drawn on, not an edge catching light. */
+/* The sheet's drops, in two boxes 8px past the sheet's so each mask covers its
+   shadow too; a mask clips at the border box, and the shadow sits outside it.
+   The top one is cast from the ring's outer edge, 1px out, as the lit tab's
+   drop-shadow is: from the sheet's own edge it lands on the ring and darkens it
+   past the tab's border. */
+.sheet-glow,
+.sheet-foot {
+  position: absolute;
+  inset: -8px;
+  z-index: 21;
+  pointer-events: none;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 8px;
+    border-radius: 8px;
+  }
+}
+
+/* The top: the lit tab's drop, matched to it (`--tab-shadow`), handing over
+   to the composer's down the sides. */
+.sheet-glow {
+  /* Along the top edge alone: cut at the ring's outer edge on either side, so
+     the sides carry the composer's drops and nothing else. */
+  mask-image: linear-gradient(black 12%, transparent 22%),
+    linear-gradient(to right, transparent 7px, black 7px calc(100% - 7px), transparent calc(100% - 7px));
+  mask-composite: intersect;
+
+  &::before {
+    --tl: var(--sheet-tl, 8px);
+    inset: var(--glow-top, 7px) 7px 7px;
+    border-radius: 9px;
+    --tr: var(--sheet-tr, 8px);
+    border-top-left-radius: calc(var(--tl) + min(var(--tl), 1px));
+    border-top-right-radius: calc(var(--tr) + min(var(--tr), 1px));
+    box-shadow: var(--sheet-glow, none);
+  }
+}
+
+/* The rest: the composer's drops as they are, cast from the sheet's edge. */
+.sheet-foot {
+  /* Nothing above the ring but at the left, where `--foot-top` raises the box
+     under the first tab so its side shadow reaches the join at full strength. */
+  mask-image: linear-gradient(transparent 7px, black 7px), linear-gradient(to right, black 7px, transparent 7px);
+  mask-composite: add;
+
+  &::before {
+    top: var(--foot-top, 8px);
+    border-top-left-radius: var(--sheet-tl, 8px);
+    border-top-right-radius: var(--sheet-tr, 8px);
+    box-shadow: var(--sheet-foot, none);
+  }
+}
+
+.tab-strip {
+  --tab-r: 10px;
+  --tab-under: linear-gradient(var(--tab-fill, var(--surface-sheet)) 0 0) border-box,
+    linear-gradient(var(--background) 0 0) border-box;
+  --tab-edge-top: var(--hairline);
+  --tab-edge-side: var(--hairline);
+  --tab-edge-foot: var(--hairline);
+  border: 1px solid transparent;
+  border-bottom-width: 0;
+  /* The tab runs down to the strip's floor, below the strip's other controls;
+     this lifts its label onto their centre line, 1px above the tab's own. */
+  padding-bottom: 3px;
+  isolation: isolate;
+}
+
+.dark .tab-strip {
+  --tab-edge-top: oklch(1 0 0 / 18%);
+  --tab-edge-side: oklch(1 0 0 / 8%);
+  --tab-edge-foot: transparent;
+}
+
+.tab-strip::before {
+  content: "";
+  position: absolute;
+  /* 28px, the strip's other hover pills, on its centre line with the label,
+     4px clear of the floor. 2px in from the border box, the border being the
+     first of them. */
+  inset: 1px 1px 4px;
+  z-index: -1;
+  /* The lit tab's curve less the 2px inset, so the two read as one shape. */
+  border-radius: calc(var(--tab-r) - 2px);
+  pointer-events: none;
+  transition: background-color 150ms ease-out;
+}
+
+.tab-strip:not([data-lit]):is(:hover, [data-held])::before {
+  background: color-mix(in oklab, var(--sidebar-accent) 50%, transparent);
+}
+
+/* A split group keeps the outline that says its members travel together. */
+.tab-strip[data-group]:not([data-lit])::before {
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+}
+
+.tab-strip[data-lit] {
+  z-index: 10;
+  filter: var(--tab-shadow, none);
+  box-shadow: var(--tab-drops, none);
+  border-radius: var(--tab-r) var(--tab-r) 0 0;
+  /* Fill, then the edge, then fill again under the border: where the edge
+     fades out, the border must still be tab and not the strip showing through. */
+  background:
+    var(--tab-sides, linear-gradient(transparent 0 0)),
+    linear-gradient(var(--tab-fill, var(--surface-sheet)) 0 0) padding-box,
+    linear-gradient(var(--background) 0 0) padding-box,
+    linear-gradient(var(--tab-edge-top), var(--tab-edge-side) 45%, var(--tab-edge-foot) 72%) border-box,
+    var(--tab-under);
+}
+
+/* The flares: a square outside each foot holding a quarter circle of frame,
+   edged in the hairline, the rest the tab's fill. Two layers, as the tab's own
+   fill is, so a translucent sheet still has its floor under it. A browser tab
+   sets `--tab-fill` to its page's colour, as its URL row wears it (`tint`). */
+.tab-strip[data-lit]::before,
+.tab-strip[data-lit]::after {
+  content: "";
+  position: absolute;
+  inset: auto;
+  bottom: 0;
+  z-index: 0;
+  width: var(--tab-r);
+  height: var(--tab-r);
+  border-radius: 0;
+  pointer-events: none;
+  --edge: transparent calc(var(--tab-r) - 1.5px), var(--tab-edge-foot) calc(var(--tab-r) - 1px),
+    var(--tab-edge-foot) calc(var(--tab-r) - 0.5px), var(--tab-fill, var(--surface-sheet)) var(--tab-r);
+  --floor: transparent calc(var(--tab-r) - 0.5px), var(--background) var(--tab-r);
+}
+
+/* Off the padding box, so each arc's line lands in the border's own column
+   and the square covers that column below it: the side runs into the curve
+   rather than on down past it. */
+.tab-strip[data-lit]::before {
+  right: 100%;
+  background:
+    radial-gradient(circle at 0 0, var(--edge)),
+    radial-gradient(circle at 0 0, var(--floor));
+}
+
+/* The first tab sits on the sheet's left edge, so lit it runs straight down
+   into it: no flare that side, and the sheet gives up its rounded corner. A
+   drag grows both back from its first pixel, `--first-flare` and
+   `--first-corner` set off the drag's own travel in `ViewTabs`. Only where
+   the row lines up with the main sheet (`data-flush`, set by `ViewTabs`) and
+   that sheet is the leftmost card (`data-flush-left`, set by `AppShell`): a
+   left panel or a split pane before it puts another card under the tab. */
+[data-shell]:has([data-main-sheet][data-flush-left]) [role="tablist"][data-flush] {
+  /* The tab's soft drop stops at its border, beside a sheet side with none. */
+  clip-path: inset(0 0 0 3px);
+
+  > .tab-strip[data-lit]:first-child::before {
+    --tab-r: var(--first-flare, 0px);
+  }
+}
+
+[data-shell]:has([role="tablist"][data-flush] > .tab-strip[data-lit]:first-child) [data-main-sheet][data-flush-left] {
+  --sheet-tl: var(--first-corner, 0px);
+  /* The tab covers the ring's top row: the top drop starts under it rather
+     than overlapping it, and the side drops start above it, so they reach the
+     join at full strength rather than fading in there. */
+  --glow-top: 8px;
+  --foot-top: 6px;
+}
+
+/* After the toggle the row starts 10px early to hold the first tab's left foot (`ViewTabs`); that strip shows the foot alone, so nothing else lands on the toggle. */
+[role="tablist"][data-after-toggle] {
+  clip-path: polygon(10px 0, 100% 0, 100% 100%, 0 100%, 0 calc(100% - 10px), 10px calc(100% - 10px));
+}
+
+/* The frame's fill outside the sheet's top-left curve, at whatever radius. */
+[data-sheet-tl] {
+  width: var(--sheet-tl, 8px);
+  height: var(--sheet-tl, 8px);
+  background: radial-gradient(
+    circle at 100% 100%,
+    transparent var(--sheet-tl, 8px),
+    var(--surface-frame) calc(var(--sheet-tl, 8px) + 0.5px)
+  );
+}
+
+.tab-strip[data-lit]::after {
+  left: 100%;
+  background:
+    radial-gradient(circle at 100% 0, var(--edge)),
+    radial-gradient(circle at 100% 0, var(--floor));
+}
+
+/* The top-right twin of `[data-sheet-tl]`: a page's tab squares it (`--sheet-tr`). */
+[data-sheet-tr] {
+  width: var(--sheet-tr, 8px);
+  height: var(--sheet-tr, 8px);
+  background: radial-gradient(
+    circle at 0 100%,
+    transparent var(--sheet-tr, 8px),
+    var(--surface-frame) calc(var(--sheet-tr, 8px) + 0.5px)
+  );
+}
+
+/* A tabless page with the sidebar shut wears one lit tab over its leftmost card, its right side running straight into the card's: the flush first tab mirrored. */
+[data-notch] {
+  --sheet-tr: 0px;
+
+  /* The right side alone rises 2px under the tab's join, so its drop starts there at full strength; the left corner stays round. */
+  > .sheet-foot {
+    mask-image: linear-gradient(transparent 7px, black 7px), linear-gradient(to right, black 7px, transparent 7px),
+      linear-gradient(to left, black 7px, transparent 7px);
+
+    &::before {
+      clip-path: inset(-8px 0 -8px -8px);
+    }
+
+    &::after {
+      content: "";
+      position: absolute;
+      inset: 6px 8px 8px;
+      border-radius: 8px 0 8px 8px;
+      box-shadow: var(--sheet-foot, none);
+      clip-path: inset(0 -8px -8px 100%);
+    }
+  }
+}
+
+.tab-strip.page-tab {
+  position: absolute;
+  top: calc(2px - var(--titlebar-h));
+  height: calc(var(--titlebar-h) - 2px);
+  /* Where a task view's first tab starts, less the 8px of frame left of the card. */
+  left: calc(var(--tabs-lead) - 0.25rem - 0.5rem);
+  right: -1px;
+  z-index: 22;
+  padding: 0;
+  pointer-events: none;
+  visibility: hidden;
+  /* Cut at the card's top and its right border, or its drops draw lines across the card. */
+  clip-path: inset(-12px 0 0 -12px);
+
+  &::after {
+    --tab-r: 0px;
+  }
+
+  [data-notch] > & {
+    visibility: visible;
+  }
 }

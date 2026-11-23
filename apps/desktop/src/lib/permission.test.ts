@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { botPicksStance, botStance, honoursMode, stanceFor } from "./permission";
+import { botPicksStance, botStance, honoursMode, stanceFor, taskStance } from "./permission";
 
 describe("botStance", () => {
   it("holds a bot chat on Auto wherever the agent has one", () => {
@@ -67,6 +67,14 @@ describe("stanceFor", () => {
     for (const mode of ["plan", "manual", "auto", "bypassPermissions"] as const) {
       expect(stanceFor("pi", mode)).toBe("bypassPermissions");
     }
+  });
+
+  /// A pi task moved there from a `plan` one stays read-only; anything else is
+  /// `stanceFor`.
+  it("keeps plan on an existing pi task alone", () => {
+    expect(taskStance("pi", "plan")).toBe("plan");
+    expect(taskStance("pi", "auto")).toBe("bypassPermissions");
+    expect(taskStance("codex", "plan")).toBe("manual");
   });
 
   /// A session can arrive on a stance its harness never offered — a spawned one

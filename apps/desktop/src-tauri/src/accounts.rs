@@ -28,7 +28,6 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 use ts_rs::TS;
 
 /// How long any one probe may take before its row reads as unknown.
@@ -543,7 +542,7 @@ impl Said {
 /// all, which is the half of the row worth having.
 async fn run(harness: Harness, args: &[&str], cwd: &str) -> anyhow::Result<Said> {
     let bin = binpath::agent_binary(harness).await;
-    let mut command = Command::new(&bin);
+    let mut command = binpath::command(&bin);
     command
         .args(args)
         .env("PATH", agent_path(&bin))
@@ -1119,7 +1118,7 @@ pub async fn add_agent_account(
 /// nothing before doing it.
 async fn codex_set_key(key: &str) -> Result<(), String> {
     let bin = binpath::agent_binary(Harness::Codex).await;
-    let mut child = Command::new(&bin)
+    let mut child = binpath::command(&bin)
         .args(["login", "--with-api-key"])
         .env("PATH", agent_path(&bin))
         .stdin(Stdio::piped())

@@ -44,11 +44,13 @@ export default function Window({
       aria-hidden={!interactive}
       data-app-window
       className={cx(
-        "app-frame relative flex flex-col overflow-hidden rounded-xl border border-border text-foreground shadow-window select-none",
+        "app-frame relative isolate flex flex-col overflow-hidden rounded-xl border border-border text-foreground shadow-window select-none",
         className,
       )}
     >
-      <header className="flex h-(--titlebar-h) shrink-0 items-center pr-3">
+      {/* Over the sheet, so the lit tab covers the ring's top row and runs
+          down into it. */}
+      <header className="relative z-30 flex h-(--titlebar-h) shrink-0 items-center pr-3">
         {/* Over the sidebar: the traffic lights, the toggle beside them, and
             the gear at the sidebar's far end. */}
         <div className="flex shrink-0 items-center" style={{ width: sidebarWidth }}>
@@ -60,19 +62,23 @@ export default function Window({
             <Settings className="size-4" />
           </span>
         </div>
-        <div className="flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden">
+        {/* `-ml-1 pl-[3px]` puts the first tab's border in the column the
+            sheet's ring takes, just outside the sheet's left edge. */}
+        <div data-tab-row className="-ml-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden pr-1 pl-[3px]">
           {tabs}
         </div>
         {headerEnd && <div className="flex shrink-0 items-center gap-3 pl-3">{headerEnd}</div>}
       </header>
 
       <div className="flex min-h-0 flex-1 pr-2 pb-2">
-        {sidebar}
+        <div data-sidebar className="flex shrink-0">
+          {sidebar}
+        </div>
         <div className="flex min-w-0 flex-1 gap-1.5">
           {/* `min-w-0` is load-bearing: without it a wide row in the
               transcript sets the flex item's floor and pushes the sidebar
               off-screen. */}
-          <Sheet className="flex-1">
+          <Sheet className="flex-1" main>
             <div className="flex min-w-0 flex-1 flex-col">{main}</div>
             {crew}
           </Sheet>
@@ -83,17 +89,22 @@ export default function Window({
   );
 }
 
-/// A raised card on the frame: an 8px corner, a hairline ring, its contents
-/// clipped to that radius.
-function Sheet({ children, className }: { children: ReactNode; className?: string }) {
+/// A raised card on the frame: an 8px corner, a ring and the app's drops as
+/// boxes of their own over it (`sheet-glow`, `sheet-foot`), its contents
+/// clipped to that radius. The main one squares its top-left corner under a
+/// lit first tab.
+function Sheet({ children, className, main = false }: { children: ReactNode; className?: string; main?: boolean }) {
   return (
-    <div
-      className={cx(
-        "app-sheet relative flex min-h-0 min-w-0 overflow-hidden rounded-[8px] shadow-[0_0_0_1px_var(--color-hairline)]",
-        className,
-      )}
-    >
-      {children}
+    <div className={cx("relative flex min-h-0 min-w-0", className)} data-main-sheet={main ? "" : undefined}>
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 z-21 rounded-[8px] rounded-tl-(--sheet-tl,8px) shadow-[var(--sheet-ring,0_0_0_1px_var(--color-hairline))]"
+      />
+      <span aria-hidden className="sheet-glow" />
+      <span aria-hidden className="sheet-foot" />
+      <div className="app-sheet flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-[8px] rounded-tl-(--sheet-tl,8px)">
+        {children}
+      </div>
     </div>
   );
 }

@@ -56,6 +56,7 @@ import {
   useParkedTabs,
   usePendingTab,
   useRecordedTab,
+  tint,
   type BrowserTab,
 } from "@/lib/browser";
 
@@ -110,6 +111,9 @@ export type ViewTab = (typeof VIEW_TABS)[number] | "pick" | "subagent";
 /// The pointer crosses this row on its way to everything below it, so a
 /// tooltip waits for a hover that means it — the crew's own delay.
 const TIP_DELAY = 700;
+/// How far the first tab travels from the sheet's edge before its left foot is
+/// whole: the sheet's 8px corner and a 10px flare (`--tab-r`), side by side.
+const FIRST_CURVE = 18;
 
 /// Where a fresh session's row starts.
 const DEFAULT_ORDER: TabKey[] = ["chat", "changes", "files"];
@@ -241,6 +245,8 @@ type Item = {
   prefetch?: string;
   /// A split group, drawn as one tab: its members, lead first.
   group?: Member[];
+  /// A browser page's own colour, which its tab wears while lit.
+  fill?: string;
 };
 
 /// The titlebar as a browser's tab strip.
@@ -263,6 +269,7 @@ export default function ViewTabs({
   branch,
   cwd,
   alignX = 0,
+  afterToggle = false,
   rename,
   machine,
   working = false,
@@ -289,6 +296,8 @@ export default function ViewTabs({
   cwd?: string;
   /// Where the sheet starts, from the header's left. The row lines up with it.
   alignX?: number;
+  /// The row follows the sidebar toggle directly: sidebar shut, no breadcrumb.
+  afterToggle?: boolean;
   /// The chat's tab, which stands for the session: `project / title`.
   title: string;
   /// Which machine the session runs on. This Mac is never named: no name is
@@ -368,7 +377,8 @@ export default function ViewTabs({
       icon: <Favicon tab={page} />,
       label: pageLabel(page, browserId),
       active: own === "browser" && page.active && !pending,
-      overlay: <AgentBeam tab={page.id} />,
+      overlay: <AgentBeam tab={page.id} top />,
+      fill: page.background ?? undefined,
       locked: page.id === recorded,
       pick: () => {
         onChange("browser");
@@ -663,17 +673,43 @@ export default function ViewTabs({
   // out in CSS from what sits before the row — the header names that as
   // `--tabs-lead` — rather than measured: a layout read on every render forced
   // a full layout each time, and switching sessions renders many times over.
-  // The row's `px-1` puts the tab 4px in from its edge; `-mx-1` is the floor.
+  // The row's `-mx-1` is the floor; its `pl-[3px]` puts the first tab on the
+  // sheet's left edge.
   // Every row, not a lone title alone: aligned only when alone, the row slid
   // across on every switch between one tab and several.
   const lone = drag.shown.length === 1;
-  const align = {
-    marginLeft:
-      alignX > 0 ? `max(-0.25rem, calc(${alignX}px - 0.25rem - var(--tabs-lead)))` : "-0.25rem",
-    // Here rather than as classes so `duration-300` does not also ease the
-    // margin at entrance speed.
-    animation: "enter 300ms ease-out 150ms backwards",
-  };
+  // Flush with the sheet at rest, the first tab grows its left foot as soon as
+  // a drag moves it: by its own travel, or whole when it steps aside for
+  // another tab taking its place. Read off the drag, never a measured gap.
+  // The sheet's corner and the flare share the travel 8:10, so the two
+  // curves always meet at the floor; both are whole from 18px on.
+  const firstOut = !drag.drag
+    ? 0
+    : drag.drag.from === 0
+      ? Math.max(0, drag.drag.d)
+      : drag.drag.to === 0
+        ? FIRST_CURVE
+        : 0;
+  useLayoutEffect(() => {
+    const k = Math.min(firstOut, FIRST_CURVE) / FIRST_CURVE;
+    const root = document.documentElement.style;
+    root.setProperty("--first-corner", `${8 * k}px`);
+    root.setProperty("--first-flare", `${10 * k}px`);
+    return () => {
+      root.removeProperty("--first-corner");
+      root.removeProperty("--first-flare");
+    };
+  }, [firstOut]);
+  // No entrance: the row is simply there when a task opens, as a browser's is.
+  // Right after the sidebar toggle, the first tab sits 3px off it: the same
+  // gap the toggle keeps to the sheet's top edge below it. The row starts a
+  // further 10px early, padded back, to hold its lit left foot (App.css).
+  const align = afterToggle
+    ? { marginLeft: "calc(-0.25rem - 13px)", paddingLeft: "13px" }
+    : {
+        marginLeft:
+          alignX > 0 ? `max(-0.25rem, calc(${alignX}px - 0.25rem - var(--tabs-lead)))` : "-0.25rem",
+      };
 
   // The browser view with nothing in the row lit for it — its tab shut by ⌘W
   // or by the agent, leaving only new tabs nobody is on, or nothing at all —
@@ -843,13 +879,19 @@ export default function ViewTabs({
   return (
     // Clips rather than scrolls: past every tab's icon floor there is nothing
     // left to give, and a scrolling row hides tabs the reader cannot see.
-    // Full height and inset, so the clip lands past the active tab's shadow
-    // and ring rather than on them.
+    // Full height and inset, so the clip lands past the lit tab's flares and
+    // ring rather than on them. The first tab sits on the sheet's left edge,
+    // which runs straight up into it while it is lit (`tab-strip`): `pl-[3px]`
+    // puts its border, drawn inside the box, in the column the sheet's ring
+    // takes just outside the sheet. `data-flush` says the row is lined up
+    // with it, which the first tab's flush corner in App.css waits on.
     <div
       ref={drag.list}
       role="tablist"
-      className="-mx-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden px-1 fade-in slide-in-from-left-3"
+      className="-mx-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden pr-1 pl-[3px]"
       style={align}
+      data-flush={alignX > 0 ? "" : undefined}
+      data-after-toggle={afterToggle ? "" : undefined}
     >
       {drag.shown.map((item, i) =>
         item.group ? (
@@ -871,12 +913,11 @@ export default function ViewTabs({
           />
         ) : (
         <ItemTab
-          // Remounted when the chat turns between a lone title and a tab, or
-          // its min-width eases across the change and the switch drags.
-          // Per session too, so a rename left open does not follow the reader.
-          key={item.key === "chat" ? `chat:${lone}:${sessionId}` : item.key}
+          // Per session, so a rename left open does not follow the reader.
+          key={item.key === "chat" ? `chat:${sessionId}` : item.key}
           icon={item.icon}
           overlay={item.overlay}
+          fill={item.fill}
           label={item.label}
           active={item.active}
           locked={item.locked}
@@ -891,9 +932,8 @@ export default function ViewTabs({
           transform={drag.offset(i)}
           held={drag.drag?.from === i}
           gliding={!!drag.drag && drag.drag.from !== i}
-          // The chat alone is a title, not a tab: nothing beside it to pick
-          // between, so no pill to say which is picked.
-          plain={lone}
+          // A tab even alone, the way a browser draws one page.
+          strip
         />
         ),
       )}
@@ -1007,12 +1047,14 @@ function GroupTab({
       onPointerDown={onPointerDown}
       // A member's share of what one tab takes, at every width.
       style={{ transform, flexBasis: `${11 * n}rem`, minWidth: active ? `${7 * n}rem` : `${1.75 * n}rem` }}
+      data-lit={active ? "" : undefined}
+      data-held={held ? "" : undefined}
+      // Its outline, at rest, is drawn round the hover pill: `tab-strip`.
+      data-group=""
       className={cn(
-        "relative flex h-7 cursor-default items-center rounded-md text-ui select-none",
+        "tab-strip relative flex h-8.5 cursor-default items-center self-end text-ui select-none",
         "transition-[color,background-color,min-width] duration-150 ease-out",
-        active || held
-          ? "bg-surface-thumb text-foreground shadow-(--shadow-button) ring-1 ring-hairline dark:shadow-none"
-          : "text-muted-foreground ring-1 ring-hairline-strong ring-inset hover:text-foreground",
+        active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
         held && "z-10",
         gliding && "transition-[color,background-color,min-width,transform]",
       )}
@@ -1118,9 +1160,11 @@ export function ItemTab({
   gliding = false,
   fixed = false,
   plain = false,
+  strip = false,
   hint,
   rename,
   overlay,
+  fill,
   machine,
   prefetch,
 }: {
@@ -1131,6 +1175,8 @@ export function ItemTab({
   prefetch?: string;
   /// Drawn over the whole tab, out of the row's flow: the agent's beam.
   overlay?: React.ReactNode;
+  /// Worn while lit in the strip, so the tab runs into its page's URL row.
+  fill?: string;
   label: string;
   active: boolean;
   /// Not closed, while a recording films it.
@@ -1151,6 +1197,9 @@ export function ItemTab({
   hint?: React.ReactNode;
   /// Drawn as its icon and label alone, with no pill and sized to its label.
   plain?: boolean;
+  /// Drawn as a browser's tab in the titlebar strip: lit, it runs down into the
+  /// sheet. Off, it is the pill it is elsewhere, the PR toggle's.
+  strip?: boolean;
   /// Double-click, or Enter on the active tab, edits this in place of the label.
   rename?: Rename;
 }) {
@@ -1161,6 +1210,8 @@ export function ItemTab({
   // Closed by the tab going inactive, not only by blur: the drag hook cancels
   // the press on another tab, so focus never leaves the field.
   if (renaming && !active) setRenaming(false);
+  // A lone title is no tab, in the strip or out of it.
+  const browserTab = strip && !plain;
   // A div rather than a button, since the close control sits inside it.
   const tab = (
     <ContextMenuTrigger asChild disabled={!onDuplicate || locked}>
@@ -1199,9 +1250,15 @@ export function ItemTab({
         hover.onPointerDown();
         onPointerDown?.(e);
       }}
-      style={{ transform }}
+      // Its ink and `--tab-fill` alone: the fill is drawn by `tab-strip`,
+      // under the edge its border carries.
+      style={{ transform, ...(browserTab && active && fill ? { ...tint(fill), background: undefined } : null) }}
+      data-lit={browserTab && active ? "" : undefined}
+      data-held={browserTab && held ? "" : undefined}
       className={cn(
-        "group relative flex cursor-default items-center gap-1.5 h-7 rounded-md pl-2 text-ui select-none",
+        "group relative flex cursor-default items-center gap-1.5 pl-2 text-ui select-none",
+        // Down to the strip's floor, so the lit one meets the sheet.
+        browserTab ? "tab-strip h-8.5 self-end" : "h-7 rounded-md",
         "transition-[color,background-color,min-width] duration-150 ease-out",
         onClose ? "pr-1" : "pr-2",
         fixed || plain
@@ -1214,11 +1271,11 @@ export function ItemTab({
         // Only a tab sized by the row; a container's width ignores its
         // content, which would collapse a fixed one to its padding.
         onClose && !fixed && "@container",
-        // Raised out of the darker strip, the way a browser's active tab is:
-        // the segmented control's thumb, which is that same picture small.
-        plain
+        // Off the strip, raised out of it as the segmented control's thumb is:
+        // the browser tab's picture small.
+        plain || (browserTab && active)
           ? "text-foreground"
-          : active || held
+          : !browserTab && (active || held)
           ? "bg-surface-thumb text-foreground shadow-(--shadow-button) ring-1 ring-hairline dark:shadow-none"
           : "text-muted-foreground hover:text-foreground",
         held && "z-10",
@@ -1256,9 +1313,9 @@ export function ItemTab({
           }}
           className={cn(
             "shrink-0 cursor-pointer rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-foreground @max-[100px]:hidden",
-            // Always on the active tab, on hover elsewhere: a row of
-            // crosses is a row of things to press by accident.
-            active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+            // On hover alone, the lit tab's too: a row of crosses is a row of
+            // things to press by accident.
+            "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
           )}
         >
           <X className="size-3" strokeWidth={2} />

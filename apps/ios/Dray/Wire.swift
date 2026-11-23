@@ -146,7 +146,8 @@ struct Welcome: Decodable {
 /// newer server adding some costs nothing.
 struct SessionItem: Codable, Hashable {
     let sessionId: String
-    let harness: String
+    /// Moves with `agent_switched` (#1414).
+    var harness: String
     let cwd: String
     let projectPath: String
     var title: String
@@ -199,10 +200,12 @@ struct Bot: Codable, Hashable {
     var greeting: [String]? = nil
 }
 
-/// `bot_previews`' answer per chat: its newest reply and how many came since the reader last wrote.
+/// `bot_previews`' answer per chat: its row's line, worded by the server ("You: …", "Reacted 👍 to …", or the newest reply), and how many replies came since the reader last wrote.
 struct BotPreview: Codable, Hashable {
     let text: String?
     let replies: Int
+    /// `text` is one plain line already, drawn as it is; absent from a server that sends the raw reply.
+    let plain: Bool?
 }
 
 /// One branch's pull request, as `pr_marks` answers it. Only `OPEN` and
@@ -508,8 +511,10 @@ enum Payload: Decodable {
     /// Lessons a bot turn filed, one per file, and one taken back.
     case learned(commit: String, files: [Lesson])
     case learnedUndone(commit: String, path: String)
-    /// A bot's emoji on a message the user typed, in place of a reply.
-    case reaction(messageId: String, emoji: String)
+    /// An emoji on a message: a bot's on one the user typed, or with `byUser` the user's on the bot's.
+    case reaction(messageId: String, emoji: String, byUser: Bool = false)
+    /// The task moved to another agent (#1414). Draws nothing: the reader picked it.
+    case agentSwitched(to: String)
     case error(String)
     case other(String)
 
@@ -583,7 +588,10 @@ enum Payload: Decodable {
                                       path: try c.decode(String.self, forKey: "path"))
             case "reaction":
                 self = .reaction(messageId: try c.decode(String.self, forKey: "messageId"),
-                                 emoji: try c.decode(String.self, forKey: "emoji"))
+                                 emoji: try c.decode(String.self, forKey: "emoji"),
+                                 byUser: (try? c.decode(Bool.self, forKey: "byUser")) ?? false)
+            case "agent_switched":
+                self = .agentSwitched(to: try c.decode(String.self, forKey: "to"))
             default:
                 self = .other(type)
             }

@@ -272,7 +272,7 @@ fn holds_mp4(path: &Path) -> bool {
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {
-    matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+    matches!((dunce::canonicalize(a), dunce::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
 }
 
 /// macOS converts what AVFoundation reads and turns to ffmpeg, where there is

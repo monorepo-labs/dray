@@ -774,6 +774,7 @@ final class Store {
     }
 
     private func merged(_ key: SessionKey, _ read: SessionItem) -> SessionItem {
+        dropStalePick(key, read)
         var item = read
         if let s = statuses[key], let m = s.modified, m >= item.modified {
             item.status = s.status
@@ -1084,8 +1085,9 @@ final class Store {
     /// held copy sent back would undo its change.
     /// `model`, `effort`, `stance` and `fast` are what the reader moved for this reply; each nil keeps
     /// the session's as just re-read, so a change another client made is never undone.
-    /// Sends a reply, answering the session it went to. Another `harness`, in a bot chat, is
-    /// an agent switch: a new session in the bot's folder, which the server hands the chat so far.
+    /// Sends a reply, answering the session it went to. Another `harness` is an agent switch: in a
+    /// bot chat a new session in the bot's folder, in a task the same session (`switch_agent`, #1414),
+    /// the server handing the new agent the conversation so far either way.
     @discardableResult
     func send(_ key: SessionKey, _ text: String, attachments: [String] = [], harness: String? = nil,
               model: String? = nil, effort: String? = nil, stance: String? = nil, fast: Bool? = nil) async -> SessionKey? {
@@ -1095,9 +1097,14 @@ final class Store {
             guard let item = fresh else { throw DrayError("Session not found") }
             store(key, item)
             let moving = harness.map { $0 != item.harness } ?? false
+            let agent = harness ?? item.harness
+            let label = Picks.agentLabels[agent] ?? agent
+            // The desktop's rule: the old agent's turn would be cut off by the switch.
+            if moving, item.busy { throw DrayError("Wait for this turn to finish before switching to \(label).") }
+            let inBot = bot(key) != nil
             var to = key
             var isNew = false
-            if moving {
+            if moving, inBot {
                 // One id per switch, kept across retries: a switch whose reply was lost already
                 // made its session, and a second would stop the first and send the words twice.
                 to = switches[key] ?? SessionKey(server: key.server, id: UUID().uuidString.lowercased())
@@ -1116,32 +1123,40 @@ final class Store {
                     // Still starting: the first send may yet land, and a second session would run it twice.
                     if made.busy { throw DrayError("The switch is still starting. Try again in a moment.") }
                     // Its agent never started, and Codex cannot resume a thread it never made: a new one.
-                    // ponytail: the empty session stays in the chat as one more "Switched to" line;
+                    // ponytail: the empty session stays in the chat, drawing nothing;
                     // delete_session would tell the bot the reader deleted a task.
                     to = SessionKey(server: key.server, id: UUID().uuidString.lowercased())
                     switches[key] = to
                 }
-                // The desktop's rule: the old agent's turn would be cut off by the switch.
-                if item.busy { throw DrayError("Wait for this turn to end to switch agent.") }
                 isNew = true
             }
-            let agent = harness ?? item.harness
-            let outcome: SendOutcome = try await c.call("send_msg", [
-                "sessionId": .string(to.id),
-                "prompt": .string(text),
-                "attachmentPaths": .array(attachments.map { .string($0) }),
+            let picks: [String: JSON] = [
                 "harness": .string(agent),
                 "model": .string(model ?? (moving ? Picks.defaultModel[agent] ?? "" : item.model)),
                 "effort": JSON(moving ? effort : effort ?? item.effort),
-                "permissionMode": .string(Picks.stanceFor(agent, stance ?? item.permissionMode)),
+                "permissionMode": .string((isNew ? Picks.stanceFor : Picks.taskStance)(agent, stance ?? item.permissionMode)),
                 "fast": .bool(fast ?? item.fast ?? false),
+            ]
+            // Its own command ahead of the send, so a server from before it refuses and nothing goes out,
+            // rather than the old agent answering under the new one's name.
+            if moving, !inBot {
+                do {
+                    _ = try await c.call("switch_agent", picks.merging(["sessionId": .string(key.id)]) { $1 }, as: JSON.self)
+                } catch where error.localizedDescription.contains("unknown command") {
+                    throw DrayError("Update this server to switch a task to \(label).")
+                }
+            }
+            let outcome: SendOutcome = try await c.call("send_msg", picks.merging([
+                "sessionId": .string(to.id),
+                "prompt": .string(text),
+                "attachmentPaths": .array(attachments.map { .string($0) }),
                 "cwd": .string(item.cwd),
                 "branch": nil,
                 "useWorktree": false,
                 "worktreeName": nil,
                 "baseRef": nil,
                 "isNewSession": .bool(isNew),
-            ])
+            ]) { $1 })
             if let snapshot = outcome.snapshot { created(key.server, snapshot) }
             unsent[key] = nil
             switches[key] = nil
@@ -1152,6 +1167,16 @@ final class Store {
         } catch {
             lastError = error.localizedDescription
             return nil
+        }
+    }
+
+    /// The reader's emoji on a bot's message, in the session it was said in. The badge and the bot's answer come back as events.
+    func react(_ key: SessionKey, _ messageId: String, _ emoji: String) async {
+        do {
+            _ = try await call(key.server, "react_to_message",
+                               ["sessionId": .string(key.id), "messageId": .string(messageId), "emoji": .string(emoji)], as: JSON.self)
+        } catch {
+            lastError = error.localizedDescription
         }
     }
 
@@ -1273,6 +1298,7 @@ final class Store {
         case "session_created", "session_changed":
             guard let item = try? decoder.decode(EventFrame<SessionItem>.self, from: data).payload,
                   !deleted.contains(SessionKey(server: server, id: item.sessionId)) else { return }
+            dropStalePick(SessionKey(server: server, id: item.sessionId), item)
             items[SessionKey(server: server, id: item.sessionId)] = item
             Task { await loadMarks(server, force: false, only: [item.projectPath]) }
             // `bots_changed` comes from the CLI alone, and a bot the app made is first seen as its chat.
@@ -1313,10 +1339,21 @@ final class Store {
             if list.isEmpty && items[key]?.busy != true { strand(key) }
         case .userMessage(let text, _, _, _, _, _, _):
             queued[key]?.removeAll { $0.text == text }
+        case .agentSwitched(let to):
+            // A move made anywhere, even where its `session_changed` was missed: the picker follows it.
+            items[key]?.harness = to
+            if unsent[key]?.harness == to { unsent[key] = nil }
         default:
             break
         }
         if !e.payload.isTransient, transcripts[key] != nil { transcripts[key]?.append(e) }
+    }
+
+    /// A pick naming the agent the session already runs moves nothing, and kept it would move the
+    /// session back unasked once it ran elsewhere: the move that answered it was missed. A bot
+    /// sheet's pick of another model on the same agent stays.
+    private func dropStalePick(_ key: SessionKey, _ item: SessionItem) {
+        if let p = unsent[key], p.harness == item.harness, bot(key) == nil || p.model == item.model { unsent[key] = nil }
     }
 
     /// Drops a session's cards once nothing could answer them: no turn

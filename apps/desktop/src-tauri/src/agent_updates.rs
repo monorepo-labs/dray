@@ -128,7 +128,7 @@ fn update_args(harness: Harness) -> &'static [&'static str] {
 }
 
 fn command(bin: &std::path::Path) -> Command {
-    let mut command = Command::new(bin);
+    let mut command = crate::binpath::command(bin);
     // `agent_path` because pi is a `node` script and its updater runs npm, and
     // a Dock-launched bundle has neither on launchd's `PATH`.
     command

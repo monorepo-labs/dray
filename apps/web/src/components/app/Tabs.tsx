@@ -16,15 +16,16 @@ export function ChatIcon({ className = "size-4" }: { className?: string }) {
   );
 }
 
-/// One tab of the titlebar strip. The active one is raised out of the darker
-/// strip the way a browser's is — the segmented control's thumb, which is
-/// that same picture small. A lone chat is a title rather than a tab: nothing
-/// beside it to pick between, so no pill to say which is picked.
+/// One tab. In the titlebar strip (`strip`) it is a browser's: flat on the
+/// frame, and lit, a piece of the sheet running down into it (`tab-strip` in
+/// globals.css). Off the strip, the PR toggle's, the active one is raised as
+/// the segmented control's thumb is.
 export function ItemTab({
   icon,
   label,
   active = false,
   plain = false,
+  strip = false,
   fixed = false,
   trailing,
   onClick,
@@ -33,6 +34,8 @@ export function ItemTab({
   label: ReactNode;
   active?: boolean;
   plain?: boolean;
+  /// A browser's tab in the titlebar strip, even alone, as the app draws one.
+  strip?: boolean;
   /// Sized by its own label rather than by the row.
   fixed?: boolean;
   /// After the label: the server mark on a task running on another machine.
@@ -42,14 +45,18 @@ export function ItemTab({
   onClick?: () => void;
 }) {
   const Tab = onClick ? "button" : "span";
+  const browserTab = strip && !plain;
   return (
     <Tab
       {...(onClick && { type: "button" as const, onClick, "aria-current": active || undefined })}
+      data-lit={browserTab && active ? "" : undefined}
       className={cx(
-        "flex h-7 items-center gap-1.5 rounded-md px-2 text-left text-ui",
+        "relative flex items-center gap-1.5 px-2 text-left text-ui",
+        // Down to the strip's floor, so the lit one meets the sheet.
+        browserTab ? "tab-strip h-8.5 self-end" : "h-7 rounded-md",
         onClick && "transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
         fixed || plain ? "shrink-0" : cx("min-w-0 basis-44", active ? "min-w-44" : "min-w-[100px]"),
-        plain
+        plain || (browserTab && active)
           ? "text-foreground"
           : active
             ? "bg-surface-thumb text-foreground ring-1 ring-hairline"

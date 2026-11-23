@@ -1214,6 +1214,23 @@ pub fn socket_path() -> Option<PathBuf> {
     Some(home.join(SOCKET_NAME))
 }
 
+/// The named pipe that stands in for `socket` on Windows, where tokio serves
+/// no unix sockets. Derived from the path, so each home keeps a channel of its
+/// own and `DRAY_ENDPOINT` stays a path on every platform. A pipe name passes
+/// through as it is.
+pub fn pipe_name(socket: &str) -> String {
+    const PREFIX: &str = r"\\.\pipe\";
+    if socket.starts_with(PREFIX) {
+        return socket.to_string();
+    }
+    // FNV-1a over the path as Windows compares it: either slash, any case.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in socket.replace('/', "\\").to_lowercase().bytes() {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{PREFIX}dray-{hash:016x}")
+}
+
 /// One request or response as it goes on the wire. Newline-delimited JSON, the
 /// same framing the harness pipe uses, so no second convention enters either
 /// codebase.
@@ -1544,6 +1561,17 @@ mod tests {
         let named = CreateDraft { base: Some("feature".into()), base_as_branch: true, ..Default::default() };
         let back: CreateDraft = serde_json::from_str(&serde_json::to_string(&named).unwrap()).unwrap();
         assert!(back.base_as_branch);
+    }
+
+    /// One home is one pipe however its path is spelled, and two homes never
+    /// share one.
+    #[test]
+    fn a_socket_path_names_one_pipe() {
+        let name = pipe_name(r"C:\Users\me\.dray\dray.sock");
+        assert!(name.starts_with(r"\\.\pipe\dray-"), "{name}");
+        assert_eq!(name, pipe_name("c:/users/ME/.dray/dray.sock"));
+        assert_ne!(name, pipe_name(r"C:\Users\me\.dray-dev\dray.sock"));
+        assert_eq!(pipe_name(&name), name);
     }
 
     #[test]

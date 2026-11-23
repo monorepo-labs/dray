@@ -19,6 +19,11 @@ struct TranscriptView: View {
     @State private var bannerHeight: CGFloat = 0
     /// Whether new rows scroll into view: dropped by the reader scrolling up (`FollowsBottom`).
     @State private var following = true
+    /// The row "Load earlier" holds on screen, and its top in the content (`HoldsPlace`).
+    @State private var held: String?
+    @State private var heldTop: CGFloat?
+    /// Pages being read for "Load earlier", counted since a tap can overlap a Retry.
+    @State private var loads = 0
     /// A bot chat opened unread, its read done.
     @State private var openedUnread = false
     /// The last item it held once read, bounding the NEW divider.
@@ -46,7 +51,8 @@ struct TranscriptView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
-                    if !complete { older(bot, segments) }
+                    // Never a run of sends: one folds into the run above it once that page lands, under a new id.
+                    if !complete { older(bot, segments, first: bot == nil ? turns.first?.id : botRows(chat).first { if case .item = $0 { true } else { false } }?.id) }
                     if transcript == nil {
                         placeholder
                     } else if bot == nil && turns.isEmpty && !busy && (store.queued[key] ?? []).isEmpty {
@@ -57,7 +63,7 @@ struct TranscriptView: View {
                         .frame(minHeight: 420)
                     }
                     if bot != nil { BotChatRows(key: key, items: chat, newFrom: newFrom ?? nil) }
-                    ForEach(turns) { TurnView(turn: $0) }
+                    ForEach(turns) { TurnView(turn: $0).heldRow($0.id) }
                     ForEach(store.queued[key] ?? [], id: \.id) { q in
                         UserBubble(text: q.text, from: nil, queued: true)
                     }
@@ -109,6 +115,8 @@ struct TranscriptView: View {
                 }
                 .padding(.horizontal, Theme.Space.l)
                 .padding(.top, Theme.Space.m)
+                .coordinateSpace(.named(HoldsPlace.space))
+                .environment(\.heldRow, held.map { id in HeldRow(id: id) { heldTop = $0 } })
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
             }
@@ -118,6 +126,7 @@ struct TranscriptView: View {
             // to its end by estimate, and when the read replaced what the cache drew with
             // less, the view sat past the new end, blank until the reader swiped.
             .defaultScrollAnchor(.bottom)
+            .modifier(HoldsPlace(top: heldTop, following: following, loading: loads > 0) { held = nil; heldTop = nil })
             .modifier(FollowsBottom(following: $following) { proxy.scrollTo("bottom", anchor: .bottom) })
             // Before iOS 18 nothing reads the content's size, so the newest row is the cue.
             // The row, not the count, or loading earlier turns would jump to the end.
@@ -130,6 +139,8 @@ struct TranscriptView: View {
             }
         }
         .page()
+        // The Tasks button is a reach to the top of the screen; a swipe in from the right edge is not.
+        .background { if bot != nil { HostPan(start: .rightEdge) { _ in showingTasks = true } } }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
         .environment(\.imageServer, store.connection(key.server))
         .environment(\.callSession, key)
@@ -263,16 +274,10 @@ struct TranscriptView: View {
         }
     }
 
-    /// The bot chat's items across its sessions on screen, a line where each later one begins.
-    /// The desktop's `chatItems`.
+    /// The bot chat's items across its sessions on screen. An agent switch draws nothing: the
+    /// reader just picked the agent (#1414). The desktop's `chatItems`.
     private func chatItems(_ segments: [SessionKey]) -> [BotItem] {
-        segments.enumerated().flatMap { i, segment in
-            let events = store.transcripts[segment]?.events ?? []
-            let items = botItems(events)
-            guard i > 0 else { return items }
-            let ts = events.first?.ts ?? store.items[segment]?.created
-            return [.switchTo(id: "switch:\(segment.id)", harness: store.items[segment]?.harness, ts: ts)] + items
-        }
+        segments.flatMap { botItems(store.transcripts[$0]?.events ?? []) }
     }
 
     private func chat(_ bot: Bot?) -> [BotItem] { bot == nil ? [] : chatItems(segments(bot)) }
@@ -332,7 +337,10 @@ struct TranscriptView: View {
 
     /// Reads what sits above the top: the page above, or past the top session's start, the
     /// session before it, held once read, which is what draws it (`segments`).
-    private func loadEarlier(_ bot: Bot?, _ segments: [SessionKey]) async {
+    private func loadEarlier(_ bot: Bot?, _ segments: [SessionKey], first: String?) async {
+        if held != first { held = first; heldTop = nil }
+        loads += 1
+        defer { loads -= 1 }
         let top = segments[0]
         if store.transcripts[top]?.olderBefore != nil {
             await store.loadOlder(top)
@@ -343,7 +351,7 @@ struct TranscriptView: View {
 
     /// Earlier turns are paged in by asking, so the screen never jumps under a reader mid-sentence:
     /// the button, a spinner while the page reads, or why it failed and Retry.
-    @ViewBuilder private func older(_ bot: Bot?, _ segments: [SessionKey]) -> some View {
+    @ViewBuilder private func older(_ bot: Bot?, _ segments: [SessionKey], first: String?) -> some View {
         let top = segments[0]
         HStack {
             if let error = store.olderErrors[top] {
@@ -355,7 +363,7 @@ struct TranscriptView: View {
                 ProgressView().accessibilityIdentifier("loadingEarlier")
             } else {
                 Button(store.olderErrors[top] == nil ? "Load earlier" : "Retry") {
-                    Task { await loadEarlier(bot, segments) }
+                    Task { await loadEarlier(bot, segments, first: first) }
                 }
                     .font(Theme.Font.footnoteStrong)
                     .foregroundStyle(Theme.secondary)
@@ -578,7 +586,7 @@ struct UserBubble: View {
     var images: [ImageRef] = []
     /// Typed into a running turn and not yet read by it: held back, dimmed.
     var queued = false
-    /// A bot's emoji on this message, drawn on the bubble's corner.
+    /// A bot's emoji on this message, beside the bubble's top corner.
     var reaction: String? = nil
 
     var body: some View {
@@ -587,7 +595,8 @@ struct UserBubble: View {
                 Label("From \(from)", systemImage: "arrow.turn.down.right")
                     .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
             }
-            if !images.isEmpty { Thumbnails(images: images) }
+            // A message of pictures alone has no bubble, so the badge rides the first one.
+            if !images.isEmpty { Thumbnails(images: images, reaction: text.isEmpty ? reaction : nil) }
             if !text.isEmpty {
                 Text(text)
                     .font(Theme.Font.body)
@@ -596,11 +605,8 @@ struct UserBubble: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(Theme.sent, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
-                    .overlay(alignment: .topLeading) {
-                        if let reaction { ReactionBadge(emoji: reaction).offset(x: -12, y: -16) }
-                    }
-                    .padding(.top, reaction == nil ? 0 : 12)
-            } else if let reaction {
+                    .reaction(reaction)
+            } else if images.isEmpty, let reaction {
                 ReactionBadge(emoji: reaction)
             }
             if queued {
@@ -613,36 +619,25 @@ struct UserBubble: View {
     }
 }
 
-/// A bot's reaction, as a messenger draws one: a round chip a step lighter than the
-/// page, with a hairline edge. The desktop's `ReactionBadge`.
-struct ReactionBadge: View {
-    let emoji: String
-
-    var body: some View {
-        let labels = ["👀": "Seen", "✅": "Done", "🎉": "Celebrating", "👍": "Like", "❤️": "Love", "😂": "Laughing", "😢": "Sad"]
-        Text(emoji)
-            .font(.system(size: 15))
-            .frame(width: 28, height: 28)
-            .background(Theme.lifted, in: .circle)
-            .overlay(Circle().strokeBorder(Theme.border, lineWidth: 0.5))
-            .accessibilityLabel("Bot reacted: \(labels[emoji] ?? emoji)")
-    }
-}
-
 /// Square thumbnails, each opening full screen on tap.
 struct Thumbnails: View {
     let images: [ImageRef]
+    /// A bot's emoji on the message, by the first picture's corner.
+    var reaction: String? = nil
 
     var body: some View {
         ThumbnailRow(spacing: Theme.Space.xs) {
-            ForEach(Array(images.enumerated()), id: \.offset) { _, ref in
+            ForEach(Array(images.enumerated()), id: \.offset) { i, ref in
                 ImageButton(ref: ref) {
                     RemoteImage(ref: ref, fill: true)
                         .frame(width: 72, height: 72)
                         .clipShape(.rect(cornerRadius: Theme.Radius.md, style: .continuous))
                 }
+                .reaction(i == 0 ? reaction : nil)
             }
         }
+        // The badge hangs past the row's edge, where a row too long to fit scrolls and would cut it.
+        .scrollClipDisabled(reaction != nil)
     }
 }
 
@@ -834,6 +829,8 @@ struct GroupRow: View {
 /// here and drawn as the blocks they are.
 struct MarkdownText: View {
     let text: String
+    /// Off where a long press reacts instead, or the same press raises Copy under the emoji.
+    var selectable = true
 
     var body: some View {
         let recordings = recordingPaths(in: text)
@@ -888,7 +885,14 @@ struct MarkdownText: View {
             }
         }
         .tint(Theme.link)
-        .textSelection(.enabled)
+        .selectable(selectable)
+    }
+}
+
+private extension View {
+    /// `textSelection` takes a type per answer, so the choice is two branches.
+    @ViewBuilder func selectable(_ on: Bool) -> some View {
+        if on { textSelection(.enabled) } else { textSelection(.disabled) }
     }
 }
 
@@ -975,6 +979,107 @@ struct FollowsBottom: ViewModifier {
                 }
         } else {
             content
+        }
+    }
+}
+
+/// Keeps the row first at a "Load earlier" tap still on screen as pages land above it, since a scroll
+/// view holds its offset from the top (#1422); iOS 17 reads no scroll geometry, so there it still jumps.
+struct HoldsPlace: ViewModifier {
+    static let space = "transcript"
+    /// The held row's top in the content; nil while nothing is held, or before it is first read.
+    let top: CGFloat?
+    let following: Bool
+    let loading: Bool
+    let release: () -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content.modifier(Held(top: top, following: following, loading: loading, release: release))
+        } else {
+            content
+        }
+    }
+
+    @available(iOS 18, *)
+    private struct Held: ViewModifier {
+        let top: CGFloat?
+        let following: Bool
+        let loading: Bool
+        let release: () -> Void
+        @State private var position = ScrollPosition()
+        @State private var visible: CGRect = .zero
+        /// From the content's top, as `scrollTo(y:)` takes it; `contentOffset` counts the inset above it too.
+        @State private var offset: CGFloat = 0
+        @State private var phase: ScrollPhase = .idle
+        /// Held back while a finger or a fling has the view, since moving it then kills the fling.
+        @State private var owed: CGFloat = 0
+
+        func body(content: Content) -> some View {
+            content
+                .scrollPosition($position)
+                .onScrollGeometryChange(for: CGRect.self) { $0.visibleRect } action: { visible = $1 }
+                .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { offset = $1 }
+                .onChange(of: top) { old, new in
+                    guard let old, let new, !following else { return }
+                    // Below the screen, what moves it is in view, so it is the reader's to see.
+                    if visible.height > 0, old > visible.maxY { return end() }
+                    owed += new - old
+                    if phase == .idle { settle() }
+                }
+                .onScrollPhaseChange { old, new in
+                    phase = new
+                    if new == .idle { settle() }
+                    // Any scroll of the reader's own ends it: a drag, or a status-bar tap or VoiceOver landing.
+                    let theirs = new == .interacting || (old == .animating && new == .idle)
+                    if theirs, !loading, owed == 0 { end() }
+                }
+                // So a send's scroll to the end can't land on an old target.
+                .onChange(of: following) { if following { position = ScrollPosition() } }
+        }
+
+        private func settle() {
+            guard owed != 0 else { return }
+            // Read back only on the next scroll report, so two moves before it must add up.
+            offset += owed
+            visible.origin.y += owed
+            position.scrollTo(y: offset)
+            owed = 0
+        }
+
+        private func end() {
+            release()
+            owed = 0
+            position = ScrollPosition()
+        }
+    }
+}
+
+/// The row a "Load earlier" holds still, and where its top is told (`HoldsPlace`).
+struct HeldRow {
+    let id: String
+    let moved: (CGFloat) -> Void
+}
+
+extension EnvironmentValues {
+    @Entry var heldRow: HeldRow?
+}
+
+extension View {
+    /// Tells this row's top in the transcript while "Load earlier" holds it still (`HoldsPlace`).
+    func heldRow(_ id: String) -> some View { modifier(HeldRowMark(id: id)) }
+}
+
+private struct HeldRowMark: ViewModifier {
+    @Environment(\.heldRow) private var held
+    let id: String
+
+    func body(content: Content) -> some View {
+        // In the background, so holding a row never changes its identity and resets its folds.
+        content.background {
+            if let held, held.id == id {
+                Color.clear.onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(HoldsPlace.space)).minY } action: { held.moved($0) }
+            }
         }
     }
 }

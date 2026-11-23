@@ -983,6 +983,7 @@ mod tests {
     /// A key pinned in the second `UserKnownHostsFile` is removed from there,
     /// and the line really removes it: the real `ssh-keygen`, both ways.
     #[tokio::test]
+    #[cfg(unix)]
     async fn the_copied_line_clears_the_file_holding_the_key() {
         let dir = std::env::temp_dir().join(format!("dray-known-hosts-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();

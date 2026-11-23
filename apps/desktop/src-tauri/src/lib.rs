@@ -48,6 +48,7 @@ pub mod headless;
 #[cfg_attr(not(any(feature = "cef", feature = "serve")), allow(dead_code))]
 pub mod recording;
 mod local_servers;
+pub mod platform;
 pub mod docs;
 pub mod download;
 #[path = "events/events.rs"]
@@ -884,6 +885,30 @@ async fn stop_task(
     Ok(manager().stop_task(session_id, task_id).await?)
 }
 
+/// Moves a task onto another agent ahead of the send that picked it (#1414).
+/// Its own command so a server from before the switch answers `unknown
+/// command` and the app sends nothing, rather than the old agent answering.
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn switch_agent(
+    session_id: &str,
+    harness: Harness,
+    model: ModelId,
+    effort: Option<Effort>,
+    permission_mode: ApprovalPolicy,
+    fast: bool,
+    sink: Sink,
+) -> Result<(), Fail> {
+    let item = store::get_session_index_item(session_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no session {session_id}"))?;
+    if item.harness != harness {
+        session::runnable_model_spec(harness, &model).await?;
+        let pick = store::AgentPick { model, effort, permission_mode, fast };
+        manager().switch_agent(&item.session_id, harness, pick, &sink).await?;
+    }
+    Ok(())
+}
+
 /// Takes back the newest prompt still held for a running turn, returning its
 /// text so the composer can restore it. `None` once the flush has written it —
 /// past that point the CLI owns the prompt and there is no way to retract it.
@@ -1017,7 +1042,7 @@ pub fn run() {
             // `WindowControls` draws its buttons. tauri.linux.conf.json already
             // says so; this is for the window-state plugin, which restores a
             // `decorated` flag saved by a build that still had the bar.
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows))]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.remove_menu();
                 let _ = window.set_decorations(false);

@@ -275,7 +275,7 @@ fun BotSheet(editing: Pair<String, Bot>?, close: () -> Unit, started: (SessionKe
 private fun pickNote(editing: Pair<String, Bot>?, chat: SessionKey?, harness: String, model: String): String? {
     val item = chat?.let { LocalStore.current.items[it] } ?: return null
     editing ?: return null
-    if (harness != item.harness) return "Your next message moves the chat to ${Picks.agentLabels[harness] ?: harness}."
+    if (harness != item.harness) return "Your next message goes to ${Picks.agentLabels[harness] ?: harness}."
     return if (model != item.model) "Goes with your next message." else null
 }
 
