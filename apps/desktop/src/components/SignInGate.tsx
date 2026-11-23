@@ -291,7 +291,7 @@ function pts(list: string, fill: string): [number, number, string][] {
 
 // The page's frame, shared with What's New so the brand's two full-window
 // pages read as one family.
-export { Heading as GateHeading, Label as GateLabel, Tiles as GateTiles };
+export { Heading as GateHeading, Tiles as GateTiles };
 
 function Tiles() {
   return (

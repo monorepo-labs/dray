@@ -5,7 +5,7 @@ import { ArrowLeftIcon, ArrowRightIcon, SparklesIcon, XMarkIcon } from "@heroico
 
 import { changelogInline, changelogPlain } from "@/components/changelogText";
 import WindowControls from "@/components/layout/WindowControls";
-import { GateHeading, GateLabel, GateTiles } from "@/components/SignInGate";
+import { GateHeading, GateTiles } from "@/components/SignInGate";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -438,19 +438,24 @@ function TakeSpotlight({ hl, onAction, onClose }: TakeProps) {
 }
 
 /// One feature, as the sign-in gate draws a way in: a square #1C1C1C card,
-/// here with the picture or video on top, the title and a short line under it,
-/// and any action as a small link. `wide` lays the picture beside the text
-/// instead, for a card alone or one spanning both columns.
+/// here with the picture or video on top, the title under it and any action as
+/// a small link. No description: the title is a sentence that says the whole
+/// thing, two lines at most. `wide` lays the picture beside the text instead,
+/// for a card alone or one spanning both columns.
 function LandingCard({ h, wide, span, onAction }: { h: Highlight; wide: boolean; span: boolean; onAction: (label: string) => void }) {
   const action = h.item.highlight?.action;
   return (
     <article className={cn("bg-[#1C1C1C]", wide ? "grid grid-cols-[3fr_2fr]" : "flex flex-col", span && "col-span-2")}>
       <Media media={h.item.media[0]} className="aspect-video w-full bg-[#141414] [&_svg]:text-white/60" />
-      <div className={cn("flex flex-col gap-2 p-6", wide && "justify-center p-8")}>
-        <h2 className={cn("tracking-[-0.01em] text-white", wide ? "text-[24px] leading-8" : "text-[19px] leading-7")}>
+      <div className={cn("flex flex-col gap-3 p-6", wide && "justify-center p-8")}>
+        <h2
+          className={cn(
+            "line-clamp-2 tracking-[-0.01em] text-balance text-white",
+            wide ? "text-[26px] leading-9" : "text-[20px] leading-7",
+          )}
+        >
           {title(h)}
         </h2>
-        <p className="text-[14px] leading-[22px] text-white/50">{changelogPlain(h.item.body)}</p>
         {action && (
           <button
             type="button"
@@ -469,10 +474,10 @@ function LandingCard({ h, wide, span, onAction }: { h: Highlight; wide: boolean;
 }
 
 /// F — landing, in the sign-in gate's own frame (#1277): black whatever the
-/// theme, the site's striped tiles along the bottom, the mono label and light
-/// heading, and the features as the gate's square cards, 2px apart. "New in
-/// Dray" is the page's title, nothing opens and nothing is picked: the reader
-/// scans the cards and leaves by Continue at the foot, or Escape.
+/// theme, the site's striped tiles along the bottom, the light heading, and
+/// the features as the gate's square cards, 2px apart. The heading is the
+/// title, counting what is new; nothing opens and nothing is picked: the
+/// reader scans the cards and leaves by Continue under them, or Escape.
 ///
 /// Two columns, and an odd count leads with a card across both, so one to six
 /// never leaves a hole in the grid; a card alone lies wide, picture beside text,
@@ -486,25 +491,19 @@ function TakeLanding({ hl, onAction, onClose }: TakeProps) {
       <header data-tauri-drag-region="deep" className="relative flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">
         <WindowControls />
       </header>
-      <main className="relative min-h-0 flex-1 overflow-y-auto px-10 pb-10 [mask-image:linear-gradient(to_bottom,black_calc(100%-40px),transparent)]">
+      <main className="relative min-h-0 flex-1 overflow-y-auto px-10 pb-12">
         <div className="mx-auto flex w-full max-w-[1120px] flex-col pt-6">
-          <GateLabel>New in Dray</GateLabel>
-          <GateHeading>{one ? "One thing worth knowing." : `${hl.length} things worth knowing.`}</GateHeading>
-          <div className={cn("grid gap-[2px]", one ? "grid-cols-1" : "grid-cols-2")}>
+          <GateHeading>{one ? "New in Dray." : `${hl.length} new things in Dray.`}</GateHeading>
+          <div className={cn("grid gap-[2px] bg-black", one ? "grid-cols-1" : "grid-cols-2")}>
             {hl.map((h, i) => (
               <LandingCard key={i} h={h} wide={one || (lead && i === 0)} span={lead && i === 0} onAction={onAction} />
             ))}
           </div>
-        </div>
-      </main>
-      {/* Over the tiles, like the gate's cards: the page's one way on. */}
-      <footer className="relative flex shrink-0 justify-center px-10 pt-4 pb-8">
-        <div className="flex w-full max-w-[1120px] justify-end">
           <button
             type="button"
             data-autofocus
             onClick={onClose}
-            className="flex h-12 min-w-56 cursor-pointer items-center justify-between gap-6 bg-white px-5 text-[15px] text-black outline-none transition-colors hover:bg-white/90 focus-visible:ring-2 focus-visible:ring-white/50 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
+            className="mt-8 flex h-12 min-w-56 cursor-pointer items-center justify-between gap-6 self-end bg-white px-5 text-[15px] text-black outline-none transition-colors hover:bg-white/90 focus-visible:ring-2 focus-visible:ring-white/50 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
           >
             Continue
             <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
@@ -512,7 +511,7 @@ function TakeLanding({ hl, onAction, onClose }: TakeProps) {
             </svg>
           </button>
         </div>
-      </footer>
+      </main>
     </Shell>
   );
 }
@@ -521,7 +520,7 @@ const TAKES: { id: string; name: string; what: string; Take: (props: TakeProps) 
   {
     id: "F",
     name: "Landing (picked)",
-    what: "A landing page's feature section in the sign-in gate's own frame: 'New in Dray' as the title, every highlight a large card, nothing to open. Continue at the foot, or Escape.",
+    what: "A landing page's feature section in the sign-in gate's own frame: the count as the title, every highlight a large card its title alone explains, nothing to open. Continue under the cards, or Escape.",
     Take: TakeLanding,
   },
   {

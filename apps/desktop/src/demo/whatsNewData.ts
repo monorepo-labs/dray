@@ -60,34 +60,34 @@ const page = (
 /// screenshots and kept beside the demo.
 export const PAGE_HIGHLIGHTS: Highlight[] = [
   page(
-    "Merge from the task",
+    "Merge a pull request without leaving its task",
     "The PR panel follows checks and reviews as they land, with Squash and merge right beside them. No browser tab needed.",
     [{ kind: "video", url: "/demo/whats-new/pr-panel.webm", alt: "The PR panel beside a task" }],
     { label: "Start a task", target: "new-task" },
   ),
   page(
-    "Dray Island",
+    "Dray Island shows every task at the top of your screen",
     "A small panel at the top of your screen shows what every task is doing, and tells you the moment one needs you.",
     [{ kind: "image", url: `${SITE}/dray-island.png`, alt: "Dray Island at the top of the screen" }],
   ),
   page(
-    "Break reminders",
+    "Dray reminds you to take a break",
     "Dray nudges you to stand up after a long stretch, with a short exercise to follow.",
     [{ kind: "image", url: `${SITE}/break-reminder.png`, alt: "A break reminder card" }],
     { label: "Open Breaks settings", target: "settings/breaks" },
   ),
   page(
-    "Bots learn from corrections",
+    "Bots learn from your corrections",
     "Correct a bot and it writes the lesson down where it will use it next time: a rule, a skill or a memory.",
     [],
   ),
   page(
-    "Search every task",
+    "⌘F searches every task, in every project",
     "⌘F finds any task by its title or by what was said in it, across every project.",
     [{ kind: "image", url: "/demo/whats-new/sidebar.webp", alt: "The sidebar with Search" }],
   ),
   page(
-    "Follow-ups while it works",
+    "Send follow-ups while an agent is working",
     "Send a follow-up mid-turn and it waits its turn, or steers the agent where the harness allows.",
     [{ kind: "image", url: "/demo/whats-new/composer.webp", alt: "The composer" }],
   ),
