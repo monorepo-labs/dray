@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
-import { PAGE_HIGHLIGHTS } from "@/demo/whatsNewData";
+import { NEXT_RELEASE, PAGE_HIGHLIGHTS } from "@/demo/whatsNewData";
 import { Stripes } from "@/demo/whatsNewStripes";
 import type { ChangelogMedia, Highlight } from "@/lib/changelog";
 import { cn } from "@/lib/utils";
@@ -18,8 +18,9 @@ import "../App.css";
 
 /// Full-window takes on What's New, for a release with highlights: the whole
 /// window, the way an Apple release page reads, rather than a carousel in a
-/// dialog. Every take reads the same highlights, one to six as the page's
-/// switch or `?n=` picks, and leaves by Continue or Escape. Open raises a take
+/// dialog. Every take reads the same highlights: the next release's own two by
+/// default, or one to six samples as the page's switch or `?n=` picks. Each
+/// leaves by Continue or Escape. Open raises a take
 /// over the whole window, as the app would; an action is logged in its row
 /// rather than run. `?takes=ACE` lists only those. F is the one picked.
 
@@ -625,8 +626,9 @@ function Row({ id, name, what, Take, hl }: (typeof TAKES)[number] & { hl: Highli
 function Demo() {
   const params = new URLSearchParams(location.search);
   const only = params.get("takes");
-  const [count, setCount] = useState(() => Math.min(Math.max(Number(params.get("n")) || 4, 1), PAGE_HIGHLIGHTS.length));
-  const hl = PAGE_HIGHLIGHTS.slice(0, count);
+  // 0 is the next release's own highlights; 1 to 6 are samples.
+  const [count, setCount] = useState(() => Math.min(Math.max(Number(params.get("n")) || 0, 0), PAGE_HIGHLIGHTS.length));
+  const hl = count === 0 ? NEXT_RELEASE : PAGE_HIGHLIGHTS.slice(0, count);
   return (
     <TooltipProvider>
       <div className="mx-auto flex max-w-3xl flex-col gap-6 p-10">
@@ -639,6 +641,15 @@ function Demo() {
           <div className="mt-2 flex items-center gap-3 text-ui">
             <span className="text-muted-foreground">Highlights</span>
             <div role="radiogroup" aria-label="Highlights" className="flex gap-1">
+              <Button
+                role="radio"
+                aria-checked={count === 0}
+                size="sm"
+                variant={count === 0 ? "default" : "outline"}
+                onClick={() => setCount(0)}
+              >
+                Next release
+              </Button>
               {PAGE_HIGHLIGHTS.map((_, i) => (
                 <Button
                   key={i}

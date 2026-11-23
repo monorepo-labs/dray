@@ -92,3 +92,20 @@ export const PAGE_HIGHLIGHTS: Highlight[] = [
     [{ kind: "image", url: "/demo/whats-new/composer.webp", alt: "The composer" }],
   ),
 ];
+
+/// The next release's two highlights. Their pictures are drawn in code
+/// ([whatsNewIllustrations.tsx](whatsNewIllustrations.tsx)) and captured at
+/// 1280×720; for the release itself they move to apps/web/public/changelog/.
+export const NEXT_RELEASE: Highlight[] = [
+  page(
+    "Switch a task's agent mid-session and keep the whole conversation",
+    "Pick another agent in the composer and your next message moves the task there, with everything said so far.",
+    [{ kind: "image", url: "/demo/whats-new/agent-switch.png", alt: "The agent picker moving a task from Claude Code to Codex" }],
+  ),
+  page(
+    "Dray is on iPhone: follow your tasks and answer them from anywhere",
+    "Every task on every machine, with questions to answer, permissions to allow and alerts when one is ready to merge.",
+    [{ kind: "image", url: "/demo/whats-new/iphone.png", alt: "Dray's task list on an iPhone beside a Ready to merge alert" }],
+    { label: "Get it on the App Store", target: "https://apps.apple.com/app/id6824145317" },
+  ),
+];
