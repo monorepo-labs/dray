@@ -306,8 +306,9 @@ async fn move_agent(
     crate::bots::drop_task_handover(id);
     // Only an agent that took part has a conversation here to go back to.
     let remember = crate::bots::agent_joined(&item).await;
-    // Codex and fx keep one thread id on the index, so they always start fresh.
-    let resumed = item.other_agents.contains(&to) && !matches!(to, Harness::Codex | Harness::Fx);
+    // Codex, fx and OpenCode keep one thread id on the index, so they always
+    // start fresh.
+    let resumed = item.other_agents.contains(&to) && !matches!(to, Harness::Codex | Harness::Fx | Harness::OpenCode);
     let payload = AgentEventPayload::AgentSwitched { from: item.harness, to, resumed };
     let event = AgentEvent::mint(id.clone(), to, seq, None, None, payload);
     // The marker before the index: a marker whose agent the index never took
