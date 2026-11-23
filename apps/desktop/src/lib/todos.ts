@@ -8,15 +8,15 @@ export type Todo = {
   id?: string;
 };
 
-/// Whether a call is a task list write at all. Claude Code's `TodoWrite` and
-/// grok's `todo_write` are the same tool under two spellings.
+/// Whether a call is a task list write at all. Claude Code's `TodoWrite`,
+/// grok's `todo_write` and OpenCode's `todowrite` are one tool, three spellings.
 ///
 /// Asked separately from reading the list, because a *merge* update carries no
 /// item text at all — so "is this a todo call" and "does this call draw a
 /// checklist" are two questions, and the row's arguments have to be dropped on
 /// the first rather than the second or a merge expands onto its own JSON.
 export function isTodoCall(toolName: string): boolean {
-  return toolName === "TodoWrite" || toolName === "todo_write";
+  return toolName === "TodoWrite" || toolName === "todo_write" || toolName === "todowrite";
 }
 
 type Written = { merge: boolean; items: { id?: string; content?: string; status: Todo["status"] }[] };

@@ -11,7 +11,7 @@ Dray is a Mac app, with a Linux version in beta. It runs the coding agent CLIs y
 
 - On a Mac: macOS 11 or later, Apple silicon or Intel. There is one universal download for both. Dray Island, the panel you can open over any app, needs macOS 15.
 - On Linux (beta): x64 or arm64. The `.deb` needs Ubuntu 22.04 or later, or Debian 12 or later. The AppImage runs on other distros with glibc 2.35 or later (most released since 2022) and needs no extra packages.
-- At least one agent CLI: Claude Code, Codex, pi, fx or Grok Build. See [Agents](/using-dray/agents).
+- At least one agent CLI: Claude Code, Codex, pi, fx, Grok Build or OpenCode. See [Agents](/using-dray/agents).
 - git, for branches and worktrees. A folder that is not a git repository still works, without those two.
 - Optional: the GitHub CLI (`gh`), signed in. Dray uses it to list your repositories when you attach a project, and for the pull request tab.
 
@@ -62,6 +62,7 @@ Dray never runs the installer for you. These are the commands it offers:
 | pi | `curl -fsSL https://pi.dev/install.sh \| sh` |
 | fx | `curl -fsSL https://fx.sh/setup.sh \| bash` |
 | Grok Build | `curl -fsSL https://x.ai/cli/install.sh \| bash` |
+| OpenCode | `curl -fsSL https://opencode.ai/install \| bash` |
 
 Then sign in to the agent. [Agents](/using-dray/agents#signing-in) says how, and [Accounts](/settings/accounts) shows who each agent runs as.
 

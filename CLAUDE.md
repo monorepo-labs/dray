@@ -379,7 +379,7 @@ Detail per subsystem lives in [apps/desktop/docs/](apps/desktop/docs/). **Read t
 - [notifications.md](apps/desktop/docs/notifications.md) — Notice channels, PR-ready cards, rail marks, dock badge, desktop banner.
 - [rendering-code.md](apps/desktop/docs/rendering-code.md) — Shiki/@pierre/diffs, WASM engine, worker pool, transcript backfill and paging.
 - [composer.md](apps/desktop/docs/composer.md) — Composer: drafts, slash commands per harness, @file index, attachments, contenteditable editor.
-- [harnesses.md](apps/desktop/docs/harnesses.md) — Codex, fx and grok: what runs, wire quirks, MCP, effort ladders, plan mode, todos.
+- [harnesses.md](apps/desktop/docs/harnesses.md) — Codex, fx, grok and OpenCode: what runs, wire quirks, MCP, effort ladders, plan mode, todos.
 - [MCP-PLAN.md](apps/desktop/MCP-PLAN.md) — Remote MCP: `/mcp` on every server for Grok Bot, Claude and ChatGPT, OAuth with pairing codes, the tools. **Off in release builds** until Dray accounts land; [MCP-HELD.md](apps/desktop/MCP-HELD.md) is how to turn it back on.
 - [boat.md](apps/desktop/docs/boat.md) — Boat sandboxes: detecting, stopped rows, resume and send, repointing the SSH alias, the auto-stop warning.
 - [cloud.md](apps/desktop/docs/cloud.md) — Dray Cloud: one machine per task as a hidden connection, the Settings row, the Cloud pick, delete on settle, kept transcripts.

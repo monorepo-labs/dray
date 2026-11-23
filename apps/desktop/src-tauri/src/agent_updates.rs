@@ -122,6 +122,7 @@ fn update_args(harness: Harness) -> &'static [&'static str] {
         Harness::Pi => &["update", "--self"],
         Harness::Fx => &["upgrade"],
         Harness::Grok => &["update"],
+        Harness::OpenCode => &["upgrade"],
         Harness::Other(_) => &[],
     }
 }
@@ -196,6 +197,7 @@ async fn versions(harness: Harness, bin: &std::path::Path) -> Option<(String, St
         Harness::Codex => json_version("https://registry.npmjs.org/@openai/codex/latest").await?,
         Harness::Pi => json_version("https://pi.dev/api/latest-version").await?,
         Harness::Fx => get("https://releases.fx.sh/latest.txt").await?,
+        Harness::OpenCode => json_version("https://registry.npmjs.org/opencode-ai/latest").await?,
         _ => return None,
     };
     Some((current, version_in(&latest)?))

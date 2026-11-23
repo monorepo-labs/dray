@@ -255,7 +255,7 @@ struct New {
     #[arg(long)]
     effort: Option<String>,
 
-    /// Which agent runs it: claude_code, codex, pi, fx or grok.
+    /// Which agent runs it: claude_code, codex, pi, fx, grok or opencode.
     #[arg(long)]
     harness: Option<String>,
 

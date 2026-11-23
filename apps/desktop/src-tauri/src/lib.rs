@@ -520,6 +520,7 @@ async fn list_models(sink: Sink, harness: Option<harness::Harness>) -> Vec<Model
             harness::fx::models::list().await
         }
         harness::Harness::Grok => harness::grok::models::list().await,
+        harness::Harness::OpenCode => harness::opencode::models::list().await,
         harness::Harness::Codex => harness::codex::models::list().await,
         harness::Harness::ClaudeCode => harness::claude_code::models::list(&sink).await,
         other => models::models_for(other),
@@ -540,6 +541,7 @@ async fn refresh_models() {
     // grok's is one `initialize` on a throwaway child, so the next read simply
     // asks again.
     harness::grok::models::forget();
+    harness::opencode::models::forget();
     harness::codex::models::forget();
     harness::claude_code::models::forget();
 }
@@ -632,6 +634,8 @@ async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCom
         // probe that has not landed: the menu stays shut rather than claiming
         // grok has no commands. See `harness/grok/commands.rs`.
         Harness::Grok => harness::grok::commands::list_commands(cwd).await?,
+        // grok's shape: the wire's list, cached once a session opens.
+        Harness::OpenCode => harness::opencode::commands::list_commands(cwd).await?,
         Harness::Other(_) => Vec::new(),
     })
 }

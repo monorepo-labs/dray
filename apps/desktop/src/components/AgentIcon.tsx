@@ -132,9 +132,28 @@ export default function AgentIcon({
       // component rather than two: it names xAI's model either way, and a
       // second copy is a second thing to redraw when the logo moves.
       return <GrokIcon className={className} />;
+    case "opencode":
+      return <OpenCodeIcon className={className} />;
     default:
       return <ClaudeIcon className={cn(brand && CLAUDE_RUST, className)} />;
   }
+}
+
+/// OpenCode's block letter: a tall frame with the lower half of its counter
+/// filled in a lighter shade. Monochrome, so it stays on `currentColor`.
+function OpenCodeIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={cn("size-4 shrink-0", className)}
+      fill="currentColor"
+      role="img"
+      aria-label="OpenCode"
+    >
+      <path fillRule="evenodd" d="M4 1h16v22H4Zm4 4v14h8V5Z" />
+      <path d="M8 12h8v7H8Z" opacity="0.45" />
+    </svg>
+  );
 }
 
 /// Vercel's triangle, for fx's gateway provider.

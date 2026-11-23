@@ -1027,7 +1027,7 @@ path: string | null, };
  *
  * [`SessionIndexItem.unknown`]: crate::store::SessionIndexItem
  */
-export type Harness = "claude_code" | "codex" | "pi" | "fx" | "grok";
+export type Harness = "claude_code" | "codex" | "pi" | "fx" | "grok" | "opencode";
 
 export type ImageRef = { path: string | null, url: string | null, mimeType: string | null, };
 

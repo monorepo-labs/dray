@@ -240,6 +240,9 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
         // the probe that discovers the list lands. `models.rs` says why there
         // is no constant to reach for here.
         Harness::Pi => bail!("pi has no cheap model to title with yet"),
+        // pi's reason: OpenCode's models are the reader's providers', so there
+        // is no cheap one this build can name.
+        Harness::OpenCode => bail!("OpenCode has no cheap model to title with yet"),
         // **grok titles itself, for free, and this is not a gap.** Its own
         // title is written by the model out of band and arrives as
         // `session_info_update` mid-turn — measured at 0.22–0.24s from the last

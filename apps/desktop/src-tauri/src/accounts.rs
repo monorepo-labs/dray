@@ -337,8 +337,9 @@ pub fn providers_of(harness: Harness) -> Vec<ProviderChoice> {
             .filter(|entry| entry.oauth || entry.api_key)
             .map(|entry| choice(entry.id, entry.label))
             .collect(),
-        // One credential, so there is nothing to pick between.
-        Harness::ClaudeCode | Harness::Codex | Harness::Grok | Harness::Other(_) => Vec::new(),
+        // One credential, so there is nothing to pick between. OpenCode serves
+        // dozens of providers and its own login asks which.
+        Harness::ClaudeCode | Harness::Codex | Harness::Grok | Harness::OpenCode | Harness::Other(_) => Vec::new(),
     }
 }
 
@@ -478,6 +479,14 @@ fn options(harness: Harness, provider: Option<&str>, headless: bool) -> Vec<Auth
                 Some("For a machine with no browser. Finish the sign-in elsewhere."),
             ),
         ],
+        // `-p` skips OpenCode's provider picker; without a provider it asks.
+        Harness::OpenCode => {
+            let command = match provider.filter(|provider| plausible_provider(provider)) {
+                Some(provider) => format!("opencode auth login -p {provider}"),
+                None => "opencode auth login".to_string(),
+            };
+            vec![option("oauth", "Sign in", Some(&command), Some("OpenCode asks for a key or opens a sign-in."))]
+        }
         Harness::Other(_) => Vec::new(),
     }
 }
@@ -489,6 +498,7 @@ async fn probe(harness: Harness, cwd: &str) -> anyhow::Result<Vec<Account>> {
         Harness::Pi => pi(cwd).await,
         Harness::Fx => fx(cwd).await,
         Harness::Grok => grok().await,
+        Harness::OpenCode => opencode().await,
         // Nothing to ask: this build cannot name the CLI, let alone drive it.
         Harness::Other(_) => Ok(Vec::new()),
     }
@@ -1156,6 +1166,58 @@ struct GrokCredential {
     auth_mode: Option<String>,
 }
 
+/// OpenCode's providers, read off its credential file rather than asked: one
+/// row per provider it holds a credential for, never the credential itself.
+/// A key OpenCode takes from the environment is not listed.
+async fn opencode() -> anyhow::Result<Vec<Account>> {
+    let data = match std::env::var_os("XDG_DATA_HOME").filter(|dir| !dir.is_empty()) {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => std::env::home_dir()
+            .ok_or_else(|| anyhow::anyhow!("no home directory to look for OpenCode's data in"))?
+            .join(".local/share"),
+    };
+    let raw = match tokio::fs::read_to_string(data.join("opencode/auth.json")).await {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::from("{}"),
+        Err(err) => return Err(err.into()),
+    };
+    let held: HashMap<String, serde_json::Value> =
+        serde_json::from_str(&raw).map_err(|err| anyhow::anyhow!("couldn't read OpenCode's credential file: {err}"))?;
+
+    if held.is_empty() {
+        return Ok(vec![Account {
+            provider: None,
+            label: "OpenCode".to_string(),
+            state: AccountState::LoggedOut,
+            detail: None,
+            auth_type: None,
+            can_sign_out: false,
+            can_change_method: false,
+            signs_in_elsewhere: false,
+        }]);
+    }
+    let mut rows: Vec<Account> = held
+        .into_iter()
+        .map(|(provider, credential)| Account {
+            label: provider.clone(),
+            provider: Some(provider),
+            state: AccountState::LoggedIn,
+            detail: None,
+            auth_type: Some(match credential.get("type").and_then(|t| t.as_str()) {
+                Some("api") => "API key".to_string(),
+                Some("oauth") => "OAuth".to_string(),
+                Some(other) => other.to_string(),
+                None => "Credential".to_string(),
+            }),
+            can_sign_out: false,
+            can_change_method: false,
+            signs_in_elsewhere: false,
+        })
+        .collect();
+    rows.sort_by(|a, b| a.label.cmp(&b.label));
+    Ok(rows)
+}
+
 /// grok, read off its own credential file rather than asked.
 ///
 /// **There is no `grok auth status`**, and the two routes that could answer both
@@ -1275,6 +1337,8 @@ pub async fn sign_out_agent(harness: Harness, provider: Option<String>) -> Resul
             }
             vec!["auth", "logout", provider]
         }
+        // Unmeasured, so not offered: `can_sign_out` is false on every row.
+        Harness::OpenCode => return Err("Sign out in a terminal: opencode auth logout".to_string()),
         Harness::Other(_) => return Err("Dray cannot drive that agent.".to_string()),
     };
 

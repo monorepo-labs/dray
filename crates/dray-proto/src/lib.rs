@@ -1235,7 +1235,7 @@ pub struct Agent {
     pub login: &'static str,
 }
 
-pub const AGENTS: [Agent; 5] = [
+pub const AGENTS: [Agent; 6] = [
     Agent {
         id: "claude_code",
         name: "Claude Code",
@@ -1270,6 +1270,13 @@ pub const AGENTS: [Agent; 5] = [
         bin: "grok",
         install: "curl -fsSL https://x.ai/cli/install.sh | bash",
         login: "grok login",
+    },
+    Agent {
+        id: "opencode",
+        name: "OpenCode",
+        bin: "opencode",
+        install: "curl -fsSL https://opencode.ai/install | bash",
+        login: "opencode auth login",
     },
 ];
 

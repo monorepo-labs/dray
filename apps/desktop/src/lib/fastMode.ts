@@ -12,7 +12,7 @@ import type { AgentEvent, Harness, Model, ModelId } from "@/types/events";
 /// - `in-place` — Claude Code's `apply_flag_settings`, fx's `fast` config
 ///   option, grok's model twin and Codex's `serviceTier` on the next
 ///   `turn/start`. Each moves a running child.
-/// - `none` — pi, which has no route to one.
+/// - `none` — pi and OpenCode, which have no route to one.
 export type FastModeSupport = "none" | "in-place";
 
 export const FAST_MODE_BY_HARNESS: Record<Harness, FastModeSupport> = {
@@ -25,6 +25,7 @@ export const FAST_MODE_BY_HARNESS: Record<Harness, FastModeSupport> = {
   // child. The twin is hidden from the picker, or the same model would be
   // offered twice, once as a row and once as a mode.
   grok: "in-place",
+  opencode: "none",
 };
 
 /// Whether a harness's fast mode stands even with no model picked.

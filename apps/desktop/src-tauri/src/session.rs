@@ -194,6 +194,7 @@ pub async fn model_spec(harness: Harness, model: &ModelId) -> Result<Option<Mode
         Harness::Pi => crate::harness::pi::models::find(model).await,
         Harness::Fx => crate::harness::fx::models::find(model).await,
         Harness::Grok => crate::harness::grok::models::find(model).await,
+        Harness::OpenCode => crate::harness::opencode::models::find(model).await,
         Harness::Codex => crate::harness::codex::models::find(model).await,
         _ => Some(find_model(model).with_context(|| format!("unknown model {model}"))?),
     })
@@ -1583,13 +1584,13 @@ impl SessionManager {
             // Mid-turn only where the harness takes a live control while a
             // model call is open, verified against each CLI: Claude Code's and
             // pi's next call inside the turn runs on the new model, and grok
-            // takes the option. fx refuses ("Prompt already in progress"), so
+            // and OpenCode take the option. fx refuses ("Prompt already in progress"), so
             // its pick is deferred to the flush that opens the queued turn.
             // Codex steers a queued prompt into the running turn and ignores
             // its model, so nothing can move it — the composer locks those
             // controls mid-turn instead.
             let applied = !turn_in_flight
-                || matches!(s.harness, Harness::ClaudeCode | Harness::Grok | Harness::Pi);
+                || matches!(s.harness, Harness::ClaudeCode | Harness::Grok | Harness::Pi | Harness::OpenCode);
             if applied {
                 apply_live_controls(s, session_id, &model, model_spec.as_ref(), effort, permission_mode, fast, app)
                     .await?;
@@ -2018,7 +2019,9 @@ impl SessionManager {
         let spec = model_spec(s.harness, model).await?;
         match &s.stdin {
             Transport::Fx(fx) => fx.defer_controls(DeferredControls { model: spec, effort, mode, fast }),
-            _ if s.harness == Harness::ClaudeCode => {
+            // OpenCode queues like fx but takes a config option mid-prompt, so
+            // the pick goes out now rather than at the flush.
+            _ if matches!(s.harness, Harness::ClaudeCode | Harness::OpenCode) => {
                 apply_live_controls(s, session_id, model, spec.as_ref(), effort, mode, fast, app).await?
             }
             // pi and grok steer a prompt into the running turn rather than
@@ -2407,6 +2410,9 @@ pub enum Transport {
     /// chose — grok honours `_meta.sessionId`, so there is no minted id to
     /// carry. See [`GrokSession`](crate::harness::grok::GrokSession).
     Grok(crate::harness::grok::GrokSession),
+    /// OpenCode's connection: ACP, addressed to the session OpenCode minted.
+    /// See [`OpenCodeSession`](crate::harness::opencode::OpenCodeSession).
+    OpenCode(crate::harness::opencode::OpenCodeSession),
 }
 
 impl Transport {
@@ -2426,8 +2432,11 @@ impl Transport {
     /// [`flush_one_per_turn`]. Every other transport has a tool boundary to hand
     /// a batch over at, seconds away, which is why this is a question about the
     /// transport rather than a flag on the session.
+    ///
+    /// OpenCode is here for fx's reason: a second `session/prompt` is refused,
+    /// and it has no interject.
     pub fn one_prompt_per_turn(&self) -> bool {
-        matches!(self, Transport::Fx(_))
+        matches!(self, Transport::Fx(_) | Transport::OpenCode(_))
     }
 
     /// Opens a turn with one prompt, for the transports that take it as a
@@ -2444,6 +2453,9 @@ impl Transport {
             Transport::Grok(session) => {
                 Some(crate::harness::grok::start_turn(session, text, images).await)
             }
+            Transport::OpenCode(session) => {
+                Some(crate::harness::opencode::start_turn(session, text, images).await)
+            }
             _ => None,
         }
     }
@@ -2457,7 +2469,7 @@ impl Transport {
     pub fn lines(&self) -> Result<&Arc<Mutex<ChildStdin>>> {
         match self {
             Transport::Lines(stdin) => Ok(stdin),
-            Transport::Rpc(_) | Transport::Pi(_) | Transport::Fx(_) | Transport::Grok(_) => {
+            Transport::Rpc(_) | Transport::Pi(_) | Transport::Fx(_) | Transport::Grok(_) | Transport::OpenCode(_) => {
                 bail!("this control is not wired for this harness")
             }
         }
@@ -2641,6 +2653,28 @@ impl Session {
                     session_cwd,
                     is_new_session,
                     fork_from,
+                    app,
+                )
+                .await
+            }
+            Harness::OpenCode => {
+                // No `-w` and no fork yet, so the tree is made before this and
+                // a fork never reaches it.
+                if worktree_name.is_some() {
+                    bail!("OpenCode cannot create a worktree — it has to be made first");
+                }
+                if fork_from.is_some() {
+                    bail!("an OpenCode session cannot be forked yet");
+                }
+
+                crate::harness::opencode::init(
+                    session_id,
+                    model,
+                    effort,
+                    permission_mode,
+                    cwd,
+                    session_cwd,
+                    is_new_session,
                     app,
                 )
                 .await
@@ -2941,6 +2975,12 @@ impl Session {
             return Ok(());
         }
 
+        if let Transport::OpenCode(session) = &self.stdin {
+            crate::harness::opencode::set_model(session, model).await?;
+            self.model = model.id.clone();
+            return Ok(());
+        }
+
         // Codex takes it on the next `turn/start`, which sticks to the thread.
         if let Transport::Rpc(thread) = &self.stdin {
             thread.update(|settings| settings.set_model(model));
@@ -3026,6 +3066,15 @@ impl Session {
             return Ok(());
         }
 
+        // OpenCode's `effort` option. `None` is OpenCode's own default.
+        if let Transport::OpenCode(session) = &self.stdin {
+            if let Some(effort) = effort {
+                crate::harness::opencode::set_effort(session, effort).await?;
+            }
+            self.effort = effort;
+            return Ok(());
+        }
+
         // pi's `set_thinking_level`. `None` is pi's own default, which nothing
         // here can spell, so it is recorded and left to the next respawn.
         if let Transport::Pi(client) = &self.stdin {
@@ -3084,6 +3133,11 @@ impl Session {
         // it, which is settle's problem rather than Stop's.
         if let Transport::Grok(session) = &self.stdin {
             return crate::harness::grok::cancel(session);
+        }
+
+        // The same notification; OpenCode aborts the running tool itself.
+        if let Transport::OpenCode(session) = &self.stdin {
+            return crate::harness::opencode::cancel(session);
         }
 
         // pi never reaches here: its Stop goes through
@@ -3221,6 +3275,14 @@ impl Session {
             // a `selected` wrapper — so the button's payload goes back as it was
             // built and nothing here composes one.
             (Transport::Grok(session), Reply::Rpc(rpc_id)) => {
+                let outcome = chosen
+                    .decision
+                    .clone()
+                    .context("this option carries no outcome to send")?;
+                session.client.respond(*rpc_id, outcome)?;
+            }
+            // ACP's outcome envelope again, built by the button.
+            (Transport::OpenCode(session), Reply::Rpc(rpc_id)) => {
                 let outcome = chosen
                     .decision
                     .clone()
@@ -3367,6 +3429,13 @@ impl Session {
         // fx holds a `session.lock` per session, released on a clean exit.
         if let Transport::Fx(session) = &self.stdin {
             crate::harness::fx::shutdown(&mut self.child, session).await;
+            return Ok(());
+        }
+
+        // OpenCode's language and MCP servers are its children, and would
+        // outlive a kill of the parent alone.
+        if let Transport::OpenCode(_) = &self.stdin {
+            crate::harness::opencode::kill_tree(&mut self.child).await;
             return Ok(());
         }
 

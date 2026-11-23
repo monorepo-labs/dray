@@ -207,6 +207,14 @@ pub async fn grok() -> PathBuf {
     cached(&GROK_PATH, or_bare("grok")).await
 }
 
+static OPENCODE_PATH: OnceCell<PathBuf> = OnceCell::const_new();
+
+/// Where `opencode` is, or the bare name as a last resort — [`claude`]'s shape.
+/// Its installer puts it in `~/.opencode/bin`, one of the known dirs.
+pub async fn opencode() -> PathBuf {
+    cached(&OPENCODE_PATH, or_bare("opencode")).await
+}
+
 #[cfg(test)]
 mod pi_resolution_tests {
     /// Prints what the resolver found rather than asserting about this machine,
@@ -268,6 +276,7 @@ pub async fn agent_binary(harness: Harness) -> PathBuf {
         Harness::Pi => pi().await,
         Harness::Fx => fx().await,
         Harness::Grok => grok().await,
+        Harness::OpenCode => opencode().await,
         // A harness only some other build knows. Its own spelling, which is
         // relative and so reads as "not installed" — the refusal has to happen
         // here rather than by falling back to Claude Code, which would run the
@@ -345,6 +354,8 @@ fn known_dirs() -> Vec<PathBuf> {
         home.join(".claude/local"),
         home.join(".bun/bin"),
         home.join(".npm-global/bin"),
+        // OpenCode's own installer, which adds it to `PATH` from `.zshrc` alone.
+        home.join(".opencode/bin"),
         // Managers whose shims run on their own, found by absolute path. asdf's
         // and mise's do not — one is a script calling `asdf`, the other refuses
         // a tool pinned in no config — so those are globbed by install below.

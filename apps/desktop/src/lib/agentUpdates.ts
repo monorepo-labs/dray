@@ -1,10 +1,10 @@
 import type { AgentUpdate, Harness, SessionIndexItem, SessionStatus } from "@/types/events";
 
 /// Whether this agent's updater overwrites files a live child reads. The other
-/// three install beside the running binary, so only these two wait on a turn
-/// and hold Send.
+/// three install beside the running binary, so only these wait on a turn and
+/// hold Send. `opencode upgrade` rewrites its one binary in `~/.opencode/bin`.
 export function overwritesInPlace(harness: Harness): boolean {
-  return harness === "pi" || harness === "fx";
+  return harness === "pi" || harness === "fx" || harness === "opencode";
 }
 
 /// Whether a turn may be running on this agent.

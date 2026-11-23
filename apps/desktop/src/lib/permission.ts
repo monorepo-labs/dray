@@ -33,6 +33,9 @@ const HONOURED: Partial<Record<Harness, ApprovalPolicy[]>> = {
   // that it enters by asking (`_x.ai/exit_plan_mode` raises the card), which is
   // the model's decision rather than a stance the composer can set it to.
   grok: ["manual", "auto", "bypassPermissions"],
+  // Four, as OpenCode permission rules set at spawn: Plan is its `plan` agent,
+  // Auto lets edits through and asks for shell and web. No `dontAsk`.
+  opencode: ["manual", "auto", "plan", "bypassPermissions"],
 };
 
 /// The stance a harness actually runs when handed one it does not honour.
@@ -53,6 +56,8 @@ const FALLBACK: Partial<Record<Harness, (mode: ApprovalPolicy) => ApprovalPolicy
   // session inherits its parent's stance, so a `plan` parent landing on
   // `bypassPermissions` would come out ungated by inheriting a narrower one.
   grok: (mode) => (mode === "plan" ? "manual" : "bypassPermissions"),
+  // `dontAsk` is the only one missing, and opencode.rs runs it as Auto.
+  opencode: () => "auto",
 };
 
 /// Whether this harness honours this stance.

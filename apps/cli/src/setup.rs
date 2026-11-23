@@ -13,7 +13,7 @@ use clap::{Args, Subcommand};
 #[derive(Args)]
 pub struct Install {
     /// Install these without asking, which is how a run with no terminal
-    /// installs anything: git, gh, claude_code, codex, pi, fx, grok, and on
+    /// installs anything: git, gh, claude_code, codex, pi, fx, grok, opencode, and on
     /// Linux browser and ffmpeg.
     #[arg(long, alias = "install", value_delimiter = ',', value_name = "TOOL")]
     tools: Vec<String>,
@@ -387,8 +387,9 @@ fn browser_script() -> String {
 /// Where vendor installers put a binary, reaching `PATH` only through
 /// `.bashrc`: which this process never read, and nor does the login shell the
 /// server falls back to, since Ubuntu's `.bashrc` stops for a non-interactive
-/// shell. Grok and pi land in their own dirs, the rest in `~/.local/bin`.
-const HOME_BIN_DIRS: [&str; 5] = [".local/bin", ".grok/bin", ".pi/agent/bin", ".bun/bin", ".npm-global/bin"];
+/// shell. Grok, pi and OpenCode land in their own dirs, the rest in `~/.local/bin`.
+const HOME_BIN_DIRS: [&str; 6] =
+    [".local/bin", ".grok/bin", ".pi/agent/bin", ".opencode/bin", ".bun/bin", ".npm-global/bin"];
 
 fn find(bin: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH").unwrap_or_default();
@@ -567,7 +568,7 @@ mkdir -p "$HOME/.local/bin" && mv "$t/$n/bin/gh" "$HOME/.local/bin/gh"
 "#;
 
 /// Logins still to do, as commands. Asked where a CLI answers by exit code;
-/// pi, fx and grok have no such question, so they are listed whenever present.
+/// pi, fx, grok and opencode have no such question, so they are listed whenever present.
 fn logins_to_do() -> Vec<String> {
     let signed_in = |bin: &PathBuf, args: &[&str]| {
         Command::new(bin).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())

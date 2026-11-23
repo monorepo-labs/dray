@@ -31,7 +31,7 @@ pub struct NewDraft {
     /// low, medium, high, xhigh, max or ultra.
     #[arg(long)]
     effort: Option<String>,
-    /// claude_code, codex, pi, fx or grok.
+    /// claude_code, codex, pi, fx, grok or opencode.
     #[arg(long)]
     harness: Option<String>,
     /// Run at the agent's faster tier once started.
