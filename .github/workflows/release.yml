@@ -867,23 +867,27 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $bundle = "$env:BUNDLE"
-          $nsis = Get-ChildItem "$bundle/nsis/*-setup.exe"
-          $msi = Get-ChildItem "$bundle/msi/*.msi" -ErrorAction SilentlyContinue
-          foreach ($f in @($nsis) + @($msi)) { if (-not (Test-Path "$($f.FullName).sig")) { throw "$($f.Name) has no .sig" } }
+          $nsis = @(Get-ChildItem "$bundle/nsis/*-setup.exe")
+          if ($nsis.Count -ne 1) { throw "expected one NSIS installer, found $($nsis.Count)" }
+          # Always a list: a beta builds no MSI, and a bare lookup's nothing
+          # must never become a $null entry below.
+          $msi = @(Get-ChildItem "$bundle/msi/*.msi" -ErrorAction SilentlyContinue)
+          $installers = $nsis + $msi
+          foreach ($f in $installers) { if (-not (Test-Path "$($f.FullName).sig")) { throw "$($f.Name) has no .sig" } }
           # Backslashes: msiexec reads a `/` in TARGETDIR as nothing to extract to.
           $root = Join-Path $env:RUNNER_TEMP unpacked
-          & 7z x -y "-o$root/nsis" $nsis.FullName | Out-Null
+          & 7z x -y "-o$root/nsis" $nsis[0].FullName | Out-Null
           $cli = Get-ChildItem -Recurse "$root/nsis" -Filter dray-cli.exe | Select-Object -First 1
           $app = Get-ChildItem -Recurse "$root/nsis" -Filter dray-app.exe | Select-Object -First 1
           if (-not $cli -or -not $app) { throw "the NSIS installer lacks dray-cli.exe or dray-app.exe" }
           & $cli.FullName --version
           if ($LASTEXITCODE) { throw "dray-cli.exe --version failed" }
-          if ($msi) {
-            $p = Start-Process msiexec -Wait -PassThru -ArgumentList '/a', "`"$($msi.FullName)`"", '/qn', "TARGETDIR=`"$root\msi`""
+          foreach ($m in $msi) {
+            $p = Start-Process msiexec -Wait -PassThru -ArgumentList '/a', "`"$($m.FullName)`"", '/qn', "TARGETDIR=`"$root\msi`""
             if ($p.ExitCode) { throw "msiexec /a failed with $($p.ExitCode)" }
             if (-not (Get-ChildItem -Recurse "$root/msi" -Filter dray-cli.exe)) { throw "the MSI carries no dray-cli.exe" }
           }
-          $signed = @($nsis) + @($msi) + @($app, $cli)
+          $signed = $installers + @($app, $cli)
           foreach ($f in $signed) {
             $s = Get-AuthenticodeSignature $f.FullName
             "{0}: {1}" -f $f.Name, $s.Status
