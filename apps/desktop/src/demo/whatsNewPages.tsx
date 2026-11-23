@@ -5,7 +5,7 @@ import { ArrowLeftIcon, ArrowRightIcon, SparklesIcon, XMarkIcon } from "@heroico
 
 import { changelogInline, changelogPlain } from "@/components/changelogText";
 import WindowControls from "@/components/layout/WindowControls";
-import { GateHeading, GateTiles } from "@/components/SignInGate";
+import { GateHeading } from "@/components/SignInGate";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -520,8 +520,55 @@ function ContinueCard({ row, onClose }: { row: boolean; onClose: () => void }) {
   );
 }
 
+/// The gate's striped tiles over the whole window rather than a strip along
+/// its foot: the same 60px grid, the same four greys and stripes, a cell
+/// filled or not by a fixed hash so the field never changes between opens.
+/// It thins toward the top, so the title sits on calm ground, and its few
+/// brand-blue tiles sit where the cards never cover them and the title never
+/// crosses them. 2400×1500, centred on the window's width, covers any window
+/// the app opens at.
+const FIELD_FILLS = ["#0C0C0C", "#121212", "#181818", "#1F1F1F"];
+const FIELD_BLUE = new Set(["16,0", "27,1", "9,4", "30,6", "10,11", "29,13", "11,18", "28,21"]);
+
+function cellHash(c: number, r: number, salt: number) {
+  let h = (c * 374761393 + r * 668265263 + salt * 2246822519) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+function TileField() {
+  const cells: [number, number, string][] = [];
+  for (let r = 0; r < 25; r++)
+    for (let c = 0; c < 40; c++) {
+      if (FIELD_BLUE.has(`${c},${r}`)) cells.push([c, r, "#1612F8"]);
+      else if (cellHash(c, r, 1) < 0.14 + 0.4 * (r / 24))
+        cells.push([c, r, FIELD_FILLS[Math.floor(cellHash(c, r, 2) * FIELD_FILLS.length)]]);
+    }
+  return (
+    <svg
+      aria-hidden
+      width="2400"
+      height="1500"
+      viewBox="0 0 2400 1500"
+      className="pointer-events-none absolute top-0 left-1/2 -translate-x-1/2"
+    >
+      <defs>
+        <pattern id="field-stripes" width="6" height="60" patternUnits="userSpaceOnUse">
+          <rect width="2" height="60" fill="#00000080" />
+        </pattern>
+      </defs>
+      {cells.map(([c, r, fill]) => (
+        <g key={`${c},${r}`}>
+          <rect x={c * 60} y={r * 60} width="60" height="60" fill={fill} />
+          <rect x={c * 60} y={r * 60} width="60" height="60" fill="url(#field-stripes)" />
+        </g>
+      ))}
+    </svg>
+  );
+}
+
 /// F — landing, in the sign-in gate's own frame (#1277): black whatever the
-/// theme, the site's striped tiles along the bottom, the light heading
+/// theme, the site's striped tiles over the whole page, the light heading
 /// counting what is new, and the features as the gate's square cards 2px
 /// apart. The brand blue was tried and read too intense. Nothing opens and
 /// nothing is picked: the reader scans the cards and leaves by Continue, the
@@ -534,7 +581,7 @@ function TakeLanding({ hl, onAction, onClose }: TakeProps) {
   const one = hl.length === 1;
   return (
     <Shell label="New in Dray" onClose={onClose} className="overflow-hidden bg-black text-white select-none">
-      <GateTiles accent />
+      <TileField />
       <header data-tauri-drag-region="deep" className="relative flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">
         <WindowControls />
       </header>

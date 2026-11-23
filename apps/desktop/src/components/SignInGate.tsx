@@ -289,15 +289,11 @@ function pts(list: string, fill: string): [number, number, string][] {
   });
 }
 
-// The page's frame, shared with What's New so the brand's two full-window
-// pages read as one family.
-export { Heading as GateHeading, Tiles as GateTiles };
+// Shared with What's New so the brand's two full-window pages read as one
+// family.
+export { Heading as GateHeading };
 
-/// Tiles drawn in the brand blue (#1612F8) when `accent` is on: a few, spread
-/// along the strip, never all, so the blue reads as an accent on the black.
-const ACCENT = new Set(["360,60", "720,120", "1140,120", "1260,60"]);
-
-function Tiles({ accent = false }: { accent?: boolean }) {
+function Tiles() {
   return (
     <svg
       aria-hidden
@@ -313,7 +309,7 @@ function Tiles({ accent = false }: { accent?: boolean }) {
       </defs>
       {TILES.map(([x, y, fill]) => (
         <g key={`${x},${y}`}>
-          <rect x={x} y={y} width="60" height="60" fill={accent && ACCENT.has(`${x},${y}`) ? "#1612F8" : fill} />
+          <rect x={x} y={y} width="60" height="60" fill={fill} />
           <rect x={x} y={y} width="60" height="60" fill="url(#gate-stripes)" />
         </g>
       ))}
