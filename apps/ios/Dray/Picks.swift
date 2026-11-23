@@ -117,6 +117,12 @@ enum Picks {
         }
     }
 
+    /// `taskStance`: a send to a task that exists. A pi task recorded `plan` keeps it, since it got
+    /// there by moving from a `plan` task, which must not come out able to write.
+    static func taskStance(_ harness: String, _ mode: String) -> String {
+        harness == "pi" && mode == "plan" ? "plan" : stanceFor(harness, mode)
+    }
+
     /// `liveControls.ts`'s table: what each harness carries onto a prompt sent while a turn runs.
     /// Stated a third time beside the desktop and `send_msg`'s gate; change all three together.
     private static let live: [String: Set<String>] = [
