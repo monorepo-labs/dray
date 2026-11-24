@@ -4,6 +4,7 @@ import ReactDOM from "react-dom/client";
 import AgentIcon from "@/components/AgentIcon";
 import type { Harness } from "@/types/events";
 import { cn } from "@/lib/utils";
+import DemoThemeBar from "@/demo/ThemeBar";
 import { APP_STORE_QR } from "./appStoreQr";
 import "../App.css";
 
@@ -466,6 +467,8 @@ function Demo() {
           </div>
         </section>
       ))}
+      {/* The listing alone: a `?art=` frame is a capture and must hold nothing else. */}
+      <DemoThemeBar />
     </div>
   );
 }
