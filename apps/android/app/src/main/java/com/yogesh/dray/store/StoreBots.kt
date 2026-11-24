@@ -160,6 +160,18 @@ suspend fun Store.mergeTask(server: String, taskId: String, cwd: String, number:
 }
 
 /**
+ * Hands issue `number` of the issue card `cardId` to the chat's agent (`approve_issue`). The server
+ * logs `issue_approved` once the agent is told, which is what turns the tile to Started. Answers
+ * why it could not, or null.
+ */
+suspend fun Store.approveIssue(key: SessionKey, cardId: String, number: Int): String? = try {
+    call(key.server, "approve_issue", jsonOf("sessionId" to key.id, "cardId" to cardId, "number" to number))
+    null
+} catch (e: Exception) {
+    e.message ?: "The server didn't answer."
+}
+
+/**
  * A bot chat's reply. Another `harness` than the chat runs is an agent switch: a new session in
  * the bot's folder, which the server hands the chat so far. Answers the session it went to.
  */

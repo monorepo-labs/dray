@@ -150,8 +150,8 @@ mod tests {
         assert_eq!(list["result"]["tools"][0]["name"], TOOL);
         assert_eq!(list["result"]["tools"][1]["name"], REACT);
         let offered = &list["result"]["tools"][1]["inputSchema"]["properties"]["emoji"]["enum"];
-        assert_eq!(offered.as_array().map(Vec::len), Some(7));
-        assert_eq!(offered[4], "❤️");
+        assert_eq!(offered.as_array().map(Vec::len), Some(8));
+        assert_eq!(offered[5], "❤️");
         assert_eq!(format!("mcp__{SERVER}__{TOOL}"), TOOL_NAME);
         assert_eq!(format!("mcp__{SERVER}__{REACT}"), REACT_NAME);
         assert_eq!(TOOL_NAMES, format!("{TOOL_NAME},{REACT_NAME}"));

@@ -18,7 +18,7 @@ mod setup;
 mod upload;
 use draft::DraftCommand;
 use dray_proto::{
-    encode_line, AddVideo, AttachSession, BrowserAction, MergeCard, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
+    encode_line, AddVideo, AttachSession, BrowserAction, MergeCard, IssueCard, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
     LinkIssues, ListSessions, Locator, OnMachine, RenameSession, Request, Response, SendMessage, SessionRef,
     React, SessionSummary, SetAside, SetModel, SetNeed, SettleSession, ShareAction, ShareRequest,
 };
@@ -160,6 +160,10 @@ enum SessionCommand {
     /// Post a card in this session's chat for a task's open pull request, so
     /// the user can merge it from the chat.
     MergeCard(SessionArg),
+    /// Post a card in this session's chat showing GitHub issues, one or
+    /// several. The user opens each in Dray, or presses Work on it, which
+    /// tells you to start on that issue.
+    IssueCard(IssueCardArgs),
     /// Say in one line what a stalled task needs from the user, for the "Waiting
     /// on you" card in this bot's chat. Cleared when the task moves; no text
     /// clears it now.
@@ -172,9 +176,22 @@ enum SessionCommand {
 
 #[derive(Args)]
 struct ReactArgs {
-    /// 👀 ✅ 🎉 👍 ❤️ 😂 😢, or its word: seen, done, celebrate, like, love,
-    /// laugh, sad.
+    /// 👀 ✅ 🎉 👍 👎 ❤️ 😂 😢, or its word: seen, done, celebrate, like,
+    /// dislike, love, laugh, sad.
     emoji: String,
+}
+
+#[derive(Args)]
+struct IssueCardArgs {
+    /// The repository, as owner/name.
+    repo: String,
+    /// Issue numbers, in the order to list them: 12 15 #18.
+    #[arg(required = true, value_parser = issue_number)]
+    numbers: Vec<u64>,
+}
+
+fn issue_number(said: &str) -> Result<u64, String> {
+    said.trim_start_matches('#').parse().map_err(|_| format!("\"{said}\" is not an issue number"))
 }
 
 #[derive(Args)]
@@ -573,6 +590,7 @@ fn session(command: SessionCommand) -> Result<(), String> {
         SessionCommand::Ls(args) => return ls(args),
         SessionCommand::Send(args) => return send_message(args),
         SessionCommand::MergeCard(args) => return merge_card(args),
+        SessionCommand::IssueCard(args) => return issue_card(args),
         SessionCommand::React(args) => return react(args),
         SessionCommand::Model(args) => return set_model(args),
         SessionCommand::Rename(args) => (
@@ -803,6 +821,22 @@ fn merge_card(args: SessionArg) -> Result<(), String> {
     match send(request)? {
         Response::MergeCard { number, url, title } => {
             eprintln!("Posted a merge card for #{number} \"{title}\": {url}");
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(other)),
+    }
+}
+
+fn issue_card(args: IssueCardArgs) -> Result<(), String> {
+    let session_id = parent_session_id().ok_or("run this from inside a Dray session: the card goes in its chat.")?;
+    let request = Request::IssueCard(IssueCard { session_id, repo: args.repo, numbers: args.numbers, title: None });
+    match send(request)? {
+        Response::IssueCard { issues } => {
+            eprintln!("Posted an issue card:");
+            for issue in issues {
+                eprintln!("  {issue}");
+            }
             Ok(())
         }
         Response::Error { message } => Err(message),

@@ -3,6 +3,7 @@ import Reasoning from "@/components/chat/Reasoning";
 import ToolCall from "@/components/chat/ToolCall";
 import UserMessage from "@/components/chat/UserMessage";
 import FileEdits from "@/components/chat/FileEdits";
+import IssueCard from "@/components/chat/IssueCard";
 import MergeCard from "@/components/chat/MergeCard";
 import { compactTokens, resetTime } from "@/lib/format";
 import { drawsFailure } from "@/lib/transcript";
@@ -158,6 +159,9 @@ export default function EventRow({
 
     case "merge_card":
       return <MergeCard event={event} />;
+
+    case "issue_card":
+      return <IssueCard event={event} />;
 
     // The harness's own sentence — a refusal, a safeguard notice — as written.
     case "notice":

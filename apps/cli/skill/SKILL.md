@@ -365,6 +365,21 @@ title, the PR number, its live status, a Merge button and an Open on GitHub
 link. It is refused when the task's branch has no open pull request, and while
 the task is still mid-turn.
 
+## Showing the user GitHub issues
+
+```bash
+dray session issue-card owner/repo 12              # one issue
+dray session issue-card owner/repo 12 15 18
+```
+
+Whenever you show the user GitHub issues, one or several, post them as a card
+instead of writing them out. It lands in your own chat: each issue's number,
+purple once closed, its title and its labels, in the order given, 20 at
+most. The user opens an issue in Dray from the card, or presses Work on it,
+which reaches you as a message of its own naming the issue: start on it then.
+Don't restate the card in your reply; say only what it can't, such as why
+these issues.
+
 ```bash
 dray upload before.png after.png demo.mp4   # one markdown line per file
 ```
@@ -388,7 +403,7 @@ row in the "Waiting on you" card at the foot of your chat, and it clears as soon
 as the task moves.
 
 ```bash
-dray session react 👀   # or ✅ 🎉 👍 ❤️ 😂 😢; also seen, done, celebrate, like, love, laugh, sad
+dray session react 👀   # or ✅ 🎉 👍 👎 ❤️ 😂 😢; also seen, done, celebrate, like, dislike, love, laugh, sad
 ```
 
 A bot only. Puts the emoji on the user's newest message in your chat, in place

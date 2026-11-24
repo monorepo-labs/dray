@@ -21,6 +21,8 @@
 //! session, recorded on its index entry, and it is what draws the panel's tab
 //! and what a tag resolves to.
 
+#[path = "card.rs"]
+pub mod card;
 #[path = "github.rs"]
 pub mod github;
 #[path = "linear.rs"]
