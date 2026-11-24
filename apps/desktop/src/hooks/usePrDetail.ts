@@ -18,8 +18,10 @@ export type PrDetailRead = ReturnType<typeof usePrDetail>;
 /// one would spend a point of the GitHub budget every agent shares on an
 /// answer that rarely changes.
 export function usePrDetail(pr: { cwd: string; number: number; url: string; updatedAt: string } | null) {
-  const [detail, setDetail] = useState<PrDetail | null>(null);
-  const [error, setError] = useState<PrUnavailable | null>(null);
+  // Each answer carries the url it is for. The hook lives in `App` across
+  // picks, so a plain value would draw the last PR's description under the
+  // new one's header for the frame before the effect below runs.
+  const [read, setRead] = useState<{ url: string; detail?: PrDetail; error?: PrUnavailable } | null>(null);
   const [loading, setLoading] = useState(false);
   const [generation, setGeneration] = useState(0);
   const honoured = useRef(0);
@@ -30,17 +32,15 @@ export function usePrDetail(pr: { cwd: string; number: number; url: string; upda
     honoured.current = generation;
     if (!url) return;
     const cached = cache.get(url);
-    setDetail(cached?.detail ?? null);
-    setError(null);
     if (!forced && cached?.at === updatedAt) return;
     let gone = false;
     setLoading(true);
     invoke<PrDetail>("pr_detail", { cwd, number })
       .then((answer) => {
         cache.set(url, { at: updatedAt, detail: answer });
-        if (!gone) setDetail(answer);
+        if (!gone) setRead({ url, detail: answer });
       })
-      .catch((e) => !gone && setError(asUnavailable(e)))
+      .catch((e) => !gone && setRead({ url, error: asUnavailable(e) }))
       .finally(() => !gone && setLoading(false));
     return () => {
       gone = true;
@@ -49,5 +49,13 @@ export function usePrDetail(pr: { cwd: string; number: number; url: string; upda
   }, [cwd, number, url, updatedAt, generation]);
 
   const refresh = useCallback(() => setGeneration((n) => n + 1), []);
-  return { detail, error, loading, refresh };
+  const own = read?.url === url ? read : null;
+  return {
+    // A fresh answer, else the cached one: a refresh that failed keeps
+    // what was already read on screen beside its error.
+    detail: own?.detail ?? (url ? (cache.get(url)?.detail ?? null) : null),
+    error: own?.error ?? null,
+    loading,
+    refresh,
+  };
 }
