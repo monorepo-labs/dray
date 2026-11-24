@@ -22,11 +22,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -37,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -45,7 +44,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -145,7 +144,6 @@ class PullDetailModel(private val target: PullTarget) : PrSource(target.server) 
 @Composable
 fun PullDetailScreen(target: PullTarget, back: () -> Unit, openSession: (SessionKey) -> Unit) {
     val store = LocalStore.current
-    val uri = LocalUriHandler.current
     val model = remember(target) { PullDetailModel(target) }
     val connected = store.serverState[target.server] == ConnState.Connected
     val scope = rememberCoroutineScope()
@@ -167,15 +165,15 @@ fun PullDetailScreen(target: PullTarget, back: () -> Unit, openSession: (Session
         PrListing(isCrossRepository = pr?.isCrossRepository ?: false),
     )
     val tasks = tasks(store, row)
-    var picked by remember(target) { mutableStateOf(setOf<String>()) }
+    var text by rememberSaveable(target.url) { mutableStateOf("") }
+    var starting by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     var gallery by remember { mutableStateOf<ImageRef?>(null) }
     CompositionLocalProvider(LocalOpenImage provides { ref: ImageRef -> gallery = ref }) {
     Column(Modifier.fillMaxSize().background(Dray.page).statusBarsPadding().navigationBarsPadding()) {
         Bar("#${target.number} · ${target.repo.substringAfterLast('/')}", back) {
-            IconButton({ runCatching { uri.openUri(target.url) } }) {
-                Icon(Icons.AutoMirrored.Filled.CallMade, "Open on GitHub", Modifier.size(20.dp), tint = Dray.text)
-            }
+            StartActions(share = { shareLink(context, pr?.let { "#${it.number} ${it.title}" } ?: "#${target.number}", target.url) }) { starting = true }
         }
         PullToRefreshBox(
             isRefreshing = refreshing,
@@ -225,14 +223,14 @@ fun PullDetailScreen(target: PullTarget, back: () -> Unit, openSession: (Session
                     }
                 }
                 if (pr.checks.isNotEmpty()) item("checks") { PrChecks(pr) }
-                // A fork's branch takes no task, so its comments have nothing to be quoted into.
-                if (pr.comments.isNotEmpty()) item("comments") { PrComments(pr, picked.takeUnless { pr.isCrossRepository }) { picked = it } }
-                item("start") {
-                    PrStartBox(row, pr, picked, tasks.firstOrNull()?.let { store.items[it] }) { picked = emptySet() }
-                }
+                if (pr.comments.isNotEmpty()) item("comments") { PrComments(pr) }
             }
         }
     }
+    }
+    if (starting) StartSheet("Start a task", { starting = false }) {
+        if (pr == null) Text("Reading the pull request…", Modifier.shimmer(), style = Dray.Font.subhead.copy(color = Dray.secondary))
+        else PrStartBox(row, pr, text, { text = it }, tasks.firstOrNull()?.let { store.items[it] }) { starting = false }
     }
     gallery?.let { ref -> ImageViewer(listOf(Shot(ref, "Image", ref.url)), 0) { gallery = null } }
 }
@@ -356,7 +354,7 @@ private fun Reviewers(reviewers: List<PrReviewer>) {
 
 /** The PR's tasks, newest first. A settled one still opens: its work and conversation are there. */
 @Composable
-private fun TaskList(tasks: List<SessionKey>, open: (SessionKey) -> Unit) {
+internal fun TaskList(tasks: List<SessionKey>, open: (SessionKey) -> Unit) {
     val store = LocalStore.current
     Column(verticalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
         Text(if (tasks.size == 1) "Task" else "Tasks", Modifier.padding(horizontal = Dray.Space.xs), style = Dray.Font.footnote.copy(color = Dray.tertiary))

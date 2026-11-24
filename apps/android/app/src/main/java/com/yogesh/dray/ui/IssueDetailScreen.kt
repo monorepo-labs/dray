@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.UnfoldMore
 import androidx.compose.material3.CircularProgressIndicator
@@ -27,7 +26,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -36,12 +34,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.yogesh.dray.model.Issue
@@ -50,27 +49,39 @@ import com.yogesh.dray.model.IssueDetail
 import com.yogesh.dray.model.IssuePerson
 import com.yogesh.dray.model.IssueUnavailable
 import com.yogesh.dray.model.Shot
-import com.yogesh.dray.model.issueTag
+import com.yogesh.dray.model.Picks
+import com.yogesh.dray.model.SessionKey
+import com.yogesh.dray.model.issueInitial
+import com.yogesh.dray.model.issueMachines
+import com.yogesh.dray.model.issuePrompt
+import com.yogesh.dray.model.issueRepo
 import com.yogesh.dray.model.priorities
 import com.yogesh.dray.model.priorityLabels
 import com.yogesh.dray.net.ConnState
+import com.yogesh.dray.store.Store
+import com.yogesh.dray.store.botChat
+import com.yogesh.dray.wire.SessionItem
+import com.yogesh.dray.wire.decodeOrNull
+import com.yogesh.dray.wire.get
+import com.yogesh.dray.wire.sentFrom
 import com.yogesh.dray.wire.ImageRef
 import com.yogesh.dray.wire.jsonOf
 import com.yogesh.dray.wire.parseDate
 import com.yogesh.dray.wire.shortAge
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 /**
  * An opened issue: its status and priority, which move from here, its people and labels, its
- * description and conversation, and Work on it, which carries its tag to the new-task dock.
+ * description and conversation, the tasks it has had, and Play, which starts one right here.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun IssueDetailScreen(server: String, id: String, identifier: String, back: () -> Unit, workOn: (String) -> Unit) {
+fun IssueDetailScreen(server: String, id: String, identifier: String, back: () -> Unit, openSession: (SessionKey) -> Unit) {
     val store = LocalStore.current
     val model = store.issues
-    val uri = LocalUriHandler.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val detail = model.details[id]
     val shown = detail?.issue ?: model.issue(id)
@@ -78,6 +89,9 @@ fun IssueDetailScreen(server: String, id: String, identifier: String, back: () -
     var saving by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
     var gallery by remember { mutableStateOf<ImageRef?>(null) }
+    var starting by remember { mutableStateOf(false) }
+    var text by rememberSaveable(id) { mutableStateOf("") }
+    val tasks = shown?.let { i -> issueTasks(store, i.identifier) }.orEmpty()
     val connected = store.serverState[server] == ConnState.Connected
 
     suspend fun read() {
@@ -118,11 +132,8 @@ fun IssueDetailScreen(server: String, id: String, identifier: String, back: () -
     CompositionLocalProvider(LocalOpenImage provides { ref: ImageRef -> gallery = ref }) {
         Column(Modifier.fillMaxSize().background(Dray.page).statusBarsPadding().navigationBarsPadding()) {
             Bar(shown?.short ?: identifier, back) {
-                shown?.url?.takeIf { it.isNotEmpty() }?.let { url ->
-                    IconButton({ runCatching { uri.openUri(url) } }) {
-                        Icon(Icons.AutoMirrored.Filled.CallMade, "Open in the tracker", Modifier.size(20.dp), tint = Dray.text)
-                    }
-                }
+                val share = shown?.takeIf { it.url.isNotEmpty() }?.let { i -> { shareLink(context, "${i.identifier} ${i.title}".trim(), i.url) } }
+                StartActions(share) { starting = true }
             }
             PullToRefreshBox(
                 isRefreshing = refreshing,
@@ -166,6 +177,7 @@ fun IssueDetailScreen(server: String, id: String, identifier: String, back: () -
                             }
                         }
                     }
+                    if (tasks.isNotEmpty()) item("tasks") { TaskList(tasks, openSession) }
                     failure?.let { f -> item("failure") { Text(sentence(f), style = Dray.Font.footnote.copy(color = Dray.destructive)) } }
                     if (detail != null) {
                         item("description") {
@@ -180,14 +192,84 @@ fun IssueDetailScreen(server: String, id: String, identifier: String, back: () -
                             }
                         }
                     } else if (failure == null) item("reading") { Reading("Reading the issue…") }
-                    item("work") {
-                        CapsuleButton("Work on it", light = true) { workOn(issueTag(shown.identifier, shown.title)) }
-                    }
                 }
             }
         }
     }
+    if (starting) StartSheet("Start a task", { starting = false }) {
+        if (shown == null) Reading("Reading the issue…")
+        else IssueStartBox(server, shown, detail?.description, text, { text = it }, tasks.firstOrNull()?.let { store.items[it] }) { pick ->
+            starting = false
+            // A bot takes the issue in its chat, where its answer and the task it starts land.
+            pick.bot?.let { b -> store.botChat(pick.server, b).lastOrNull()?.let(openSession) }
+        }
+    }
     gallery?.let { ref -> ImageViewer(listOf(Shot(ref, "Image", ref.url)), 0) { gallery = null } }
+}
+
+/** Tasks started on or tagged with the issue, newest first; a bot's own chat it was sent to is not one. */
+private fun issueTasks(store: Store, identifier: String): List<SessionKey> =
+    store.items.filter { (k, v) -> v.issues.any { it.identifier == identifier } && store.bot(k) == null }
+        .entries.sortedByDescending { it.value.created ?: it.value.modified }.map { it.key }
+
+/**
+ * A task for the issue, started in place: the reader's own in a checkout of its repo (a clone
+ * where a machine has none) or any project for Linear, on its tag, link and body with the note
+ * last; or a bot's, sent the issue to start once free. The desktop's `startIssueTask` and `sendIssueToBot`.
+ */
+@Composable
+private fun IssueStartBox(
+    server: String, issue: Issue, body: String?, text: String, setText: (String) -> Unit, latest: SessionItem?, started: (StartPick) -> Unit,
+) {
+    val store = LocalStore.current
+    val connected = store.live.filter { store.serverState[it.id] == ConnState.Connected }.map { it.id }
+    val machines = issueMachines(issue, connected) { store.projects[it].orEmpty() }
+    val repo = issueRepo(issue)
+    StartBox(
+        prefsKey = "issue", text = text, setText = setText,
+        placeholder = "Anything to add for the agent?",
+        placeLabel = if (repo != null) "Machine" else "Project",
+        machines = machines, initial = issueInitial(server, machines),
+        clone = repo?.let { it to "github.com/$it".lowercase() },
+        bots = connected.flatMap { s -> store.bots[s].orEmpty().map { s to it } },
+        botCheckout = false,
+        latest = latest,
+        worktreeSwitch = true,
+        note = {
+            Text("The agent gets ${issue.short}'s title, link and description, then your words.",
+                Modifier.padding(horizontal = Dray.Space.xs), style = Dray.Font.footnote.copy(color = Dray.secondary))
+        },
+        run = { p ->
+            val bot = p.bot
+            if (bot != null) {
+                try {
+                    store.call(p.server, "send_issue_to_bot", jsonOf(
+                        "botId" to bot.id,
+                        "issue" to mapOf("tracker" to issue.tracker, "id" to issue.id, "identifier" to issue.identifier, "title" to issue.title, "url" to issue.url),
+                        "note" to p.text.trim().ifEmpty { null },
+                    ))
+                } catch (e: Exception) {
+                    if (e.message?.contains("unknown command") == true) throw IllegalStateException("Update ${store.name(p.server)} to send ${bot.name} issues.")
+                    throw e
+                }
+            } else {
+                val reply = store.call(p.server, "send_msg", jsonOf(
+                    "sessionId" to UUID.randomUUID().toString().lowercase(),
+                    "prompt" to issuePrompt(issue, body, p.text),
+                    "attachmentPaths" to emptyList<String>(),
+                    "harness" to p.harness, "model" to p.model, "effort" to p.effort,
+                    "permissionMode" to Picks.stanceFor(p.harness, "auto"),
+                    "fast" to p.fast, "cwd" to p.cwd, "branch" to null,
+                    "useWorktree" to p.worktree, "worktreeName" to null, "baseRef" to null,
+                    "isNewSession" to true,
+                    "issueIds" to listOf(issue.identifier),
+                    *sentFrom(),
+                ))
+                decodeOrNull<SessionItem>(reply["snapshot"])?.let { store.created(p.server, it) }
+            }
+        },
+        started = started,
+    )
 }
 
 @Composable

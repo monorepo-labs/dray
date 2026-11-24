@@ -22,8 +22,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CheckBox
-import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -46,6 +44,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -60,7 +59,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -80,9 +78,9 @@ import com.yogesh.dray.model.PrUnavailable
 import com.yogesh.dray.model.PullRequest
 import com.yogesh.dray.model.SessionKey
 import com.yogesh.dray.model.WorkStatus
+import com.yogesh.dray.model.commentMarkdown
 import com.yogesh.dray.model.commentText
 import com.yogesh.dray.model.readiness
-import com.yogesh.dray.model.unresolvedKeys
 import com.yogesh.dray.model.sessionBranch
 import com.yogesh.dray.net.ConnState
 import com.yogesh.dray.store.Store
@@ -91,6 +89,8 @@ import com.yogesh.dray.wire.bool
 import com.yogesh.dray.wire.decodeList
 import com.yogesh.dray.wire.decodeOrNull
 import com.yogesh.dray.wire.jsonOf
+import com.yogesh.dray.wire.parseDate
+import com.yogesh.dray.wire.shortAge
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -308,30 +308,11 @@ fun PrChecks(pr: PullRequest) {
 
 /** Comments, reviews and threads, oldest first. Nothing where there are none. */
 @Composable
-fun PrComments(pr: PullRequest, picked: Set<String>? = null, pick: (Set<String>) -> Unit = {}) {
+fun PrComments(pr: PullRequest) {
     if (pr.comments.isEmpty()) return
     Column(verticalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
-        Row(Modifier.padding(horizontal = Dray.Space.xs), verticalAlignment = Alignment.CenterVertically) {
-            Text("Comments", Modifier.weight(1f), style = Dray.Font.footnote.copy(color = Dray.tertiary))
-            // Select unresolved while nothing is picked, Clear once something is.
-            if (picked != null) {
-                val unresolved = unresolvedKeys(pr.comments)
-                val (label, next) = when {
-                    picked.isNotEmpty() -> "Clear ${picked.size}" to emptySet()
-                    unresolved.isNotEmpty() -> "Select unresolved (${unresolved.size})" to unresolved.toSet()
-                    else -> null to null
-                }
-                if (label != null && next != null) {
-                    Text(label, Modifier.clip(RoundedCornerShape(Dray.Radius.sm)).clickable { pick(next) }.padding(horizontal = 6.dp, vertical = 4.dp),
-                        style = Dray.Font.footnote.copy(color = Dray.secondary))
-                }
-            }
-        }
-        for (c in pr.comments) {
-            CommentCard(c, picked, pick)
-            // Picking reaches into a review: each inline thread is a unit of its own.
-            if (picked != null) for (t in c.threads) Box(Modifier.padding(start = Dray.Space.xl)) { CommentCard(t, picked, pick) }
-        }
+        Text("Comments", Modifier.padding(horizontal = Dray.Space.xs), style = Dray.Font.footnote.copy(color = Dray.tertiary))
+        for (c in pr.comments) CommentCard(c)
     }
 }
 
@@ -487,40 +468,56 @@ fun OutArrow() {
     Icon(Icons.AutoMirrored.Filled.CallMade, null, Modifier.size(14.dp), tint = Dray.tertiary)
 }
 
-/** A comment or review as a card; tapping it opens the thread on GitHub, since the sheet reads and never replies. */
+/**
+ * A comment or review as a card: three lines of it, and a tap opens it whole in place with its
+ * replies and inline threads, since the page reads and never replies. Another tap folds it.
+ */
 @Composable
-fun CommentCard(comment: PrComment, picked: Set<String>? = null, pick: (Set<String>) -> Unit = {}) {
-    val uri = LocalUriHandler.current
-    Row(horizontalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
-        if (picked != null) {
-            val on = comment.key in picked
-            Icon(
-                if (on) Icons.Filled.CheckBox else Icons.Outlined.CheckBoxOutlineBlank, "Quote ${comment.author}'s comment",
-                Modifier.padding(top = 10.dp).size(28.dp).clip(RoundedCornerShape(6.dp))
-                    .clickable { pick(if (on) picked - comment.key else picked + comment.key) }.padding(2.dp),
-                tint = if (on) Dray.text else Dray.tertiary,
-            )
-        }
-        Column(
-            Modifier.weight(1f).prGroup(0.dp).clickable { runCatching { uri.openUri(comment.url) } }.padding(14.dp).alpha(if (comment.resolved) 0.6f else 1f),
-            verticalArrangement = Arrangement.spacedBy(Dray.Space.s),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
-                Box(Modifier.size(20.dp).clip(CircleShape).background(Dray.tile)) {
-                    comment.avatar?.let { RemoteImage(ImageRef(url = it), Modifier.size(20.dp), contentScale = ContentScale.Crop) }
-                }
-                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
-                    Text(comment.author, Modifier.weight(1f, fill = false), style = Dray.Font.subhead, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    verb(comment.kind)?.let { (v, c) -> Text(v, style = Dray.Font.subhead.copy(color = c), maxLines = 1) }
-                }
-                if (comment.resolved) Text("Resolved", style = Dray.Font.subhead.copy(color = Dray.tertiary))
-                OutArrow()
-            }
-            comment.path?.let { Text(it.substringAfterLast('/'), style = Dray.Font.footnote.copy(color = Dray.tertiary)) }
+fun CommentCard(comment: PrComment) {
+    var open by rememberSaveable(comment.id) { mutableStateOf(false) }
+    Column(
+        Modifier.prGroup(0.dp).clickable { open = !open }.padding(14.dp).alpha(if (comment.resolved && !open) 0.6f else 1f),
+        verticalArrangement = Arrangement.spacedBy(Dray.Space.s),
+    ) {
+        CommentHead(comment)
+        comment.path?.let { Text(if (open) it else it.substringAfterLast('/'), style = Dray.Font.footnote.copy(color = Dray.tertiary)) }
+        if (open) {
+            val body = remember(comment.body) { commentMarkdown(comment.body) }
+            if (body.isNotEmpty()) MarkdownText(body, style = Dray.Font.subhead)
+            for (r in comment.replies) Reply(r)
+        } else {
             val text = remember(comment.body) { commentText(comment.body) }
-            // Plain: markdown would set inline code in monospace, which nothing here draws.
+            // Plain while folded: three lines of markdown would cut a table or a fence mid-way.
             if (text.isNotEmpty()) Text(text, style = Dray.Font.subhead.copy(color = Dray.secondary), maxLines = 3, overflow = TextOverflow.Ellipsis)
             if (comment.replies.isNotEmpty()) Text("${comment.replies.size} more", style = Dray.Font.footnote.copy(color = Dray.tertiary))
+        }
+    }
+}
+
+@Composable
+private fun CommentHead(comment: PrComment) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
+        Avatar(comment.avatar, 20, comment.author)
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
+            Text(comment.author, Modifier.weight(1f, fill = false), style = Dray.Font.subhead, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            verb(comment.kind)?.let { (v, c) -> Text(v, style = Dray.Font.subhead.copy(color = c), maxLines = 1) }
+        }
+        if (comment.resolved) Text("Resolved", style = Dray.Font.subhead.copy(color = Dray.tertiary))
+        parseDate(comment.createdAt)?.let { Text(shortAge(it), style = Dray.Font.subhead.copy(color = Dray.tertiary)) }
+    }
+}
+
+/** A reply or inline thread in an opened comment, under a hairline; a thread's own replies step in. */
+@Composable
+private fun Reply(reply: PrComment) {
+    Column(verticalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Dray.hairline))
+        CommentHead(reply)
+        reply.path?.let { Text(it, style = Dray.Font.footnote.copy(color = Dray.tertiary)) }
+        val body = remember(reply.body) { commentMarkdown(reply.body) }
+        if (body.isNotEmpty()) MarkdownText(body, style = Dray.Font.subhead)
+        if (reply.replies.isNotEmpty()) Column(Modifier.padding(start = Dray.Space.m), verticalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
+            for (r in reply.replies) Reply(r)
         }
     }
 }

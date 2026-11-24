@@ -123,6 +123,43 @@ val priorities = listOf("urgent", "high", "medium", "low", "none")
 /** The tag a prompt names an issue by: `issueTag`, which the server resolves on send. */
 fun issueTag(identifier: String, title: String) = if (title.isEmpty()) "#$identifier" else "#$identifier $title"
 
+/** A GitHub issue's `owner/name`, off its `owner/name#12` identifier; null for Linear, which names no repository. `issueRepo`. */
+fun issueRepo(issue: Issue): String? {
+    if (issue.tracker != "github") return null
+    val at = issue.identifier.lastIndexOf('#')
+    return if (at > 0) issue.identifier.substring(0, at) else null
+}
+
+/**
+ * Where a task for [issue] can run. A GitHub issue's: every checkout of its repo on a connected
+ * machine, then a clone on each machine with none. A Linear issue names no repo, so every project.
+ */
+fun issueMachines(issue: Issue, connected: List<String>, projects: (String) -> List<com.yogesh.dray.wire.Project>): List<PrCheckout> {
+    val repo = issueRepo(issue) ?: return connected.flatMap { s ->
+        projects(s).sortedByDescending { it.lastSelected }.map { PrCheckout(PrCheckout.Kind.Here, s, it.path) }
+    }
+    // `Project.remote` is the server's `repo_key`: host and path, lowercased.
+    val key = "github.com/$repo".lowercase()
+    val real = connected.flatMap { s ->
+        projects(s).filter { it.remote == key }.sortedByDescending { it.lastSelected }.map { PrCheckout(PrCheckout.Kind.Here, s, it.path) }
+    }
+    val name = repo.substringAfterLast('/')
+    return real + connected.filter { s -> real.none { it.server == s } }.map { PrCheckout(PrCheckout.Kind.Clone, it, "~/dray/$name") }
+}
+
+/** The checkout an issue's task takes unless another is picked: one on the machine it was read on, else any, else a clone. */
+fun issueInitial(server: String, all: List<PrCheckout>): PrCheckout? =
+    all.firstOrNull { it.server == server && it.kind == PrCheckout.Kind.Here }
+        ?: all.firstOrNull { it.kind == PrCheckout.Kind.Here }
+        ?: all.firstOrNull { it.server == server }
+        ?: all.firstOrNull()
+
+/** A task for an issue starts on its tag (which links it), its link, its body, then the reader's note. `issuePrompt`. */
+fun issuePrompt(issue: Issue, body: String?, note: String): String {
+    val head = listOf(issueTag(issue.identifier, issue.title), issue.url).filter { it.isNotEmpty() }.joinToString("\n")
+    return listOfNotNull(head, body?.trim(), note.trim()).filter { it.isNotEmpty() }.joinToString("\n\n")
+}
+
 /**
  * Whether a held row answers the search box while the tracker's own search is still out: every
  * word in its title, identifier, assignee or author.

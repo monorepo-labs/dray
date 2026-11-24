@@ -188,12 +188,7 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
                 }
                 is Route.Pull -> PullDetailScreen(route.target, ::pop) { push(Route.Session(it)) }
                 Route.Issues -> IssuesScreen(::pop) { server, issue -> push(Route.Issue(server, issue.id, issue.identifier)) }
-                is Route.Issue -> IssueDetailScreen(route.server, route.id, route.identifier, ::pop) { tag ->
-                    // The tag lands in the dock's words, where project and agent are still to pick: the desktop's Work on.
-                    task.text = if (task.hasText) "${task.text} $tag " else "$tag "
-                    forward.value = false
-                    stack.removeAll { it != Route.List }
-                }
+                is Route.Issue -> IssueDetailScreen(route.server, route.id, route.identifier, ::pop) { push(Route.Session(it)) }
             } }
         }
         Box(Modifier.align(Alignment.TopCenter).statusBarsPadding()) { ErrorToast() }
