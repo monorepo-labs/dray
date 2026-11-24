@@ -246,7 +246,7 @@ export function IssueComposer({ issue }: { issue: IssueRef }) {
   };
 
   return (
-    <div className="flex shrink-0 flex-col gap-2 border-t border-border px-3 pt-2.5 pb-3">
+    <div className="flex shrink-0 flex-col gap-2 px-3 pt-2 pb-3">
       <StartBox
         bots={ctx.bots}
         server={server}
@@ -285,17 +285,17 @@ export function IssueComposer({ issue }: { issue: IssueRef }) {
                 go();
               }
             }}
-            className="block max-h-48 min-h-14 w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-ui outline-none placeholder:text-muted-foreground field-sizing-content"
+            className="block max-h-48 min-h-14 w-full resize-none bg-transparent px-3 pt-3 pb-1 text-ui outline-none placeholder:text-muted-foreground field-sizing-content"
           />
         )}
       </StartBox>
       {cloning !== null && (
-        <p className="truncate text-ui text-muted-foreground tabular-nums">
+        <p className="truncate px-3 text-ui text-muted-foreground tabular-nums">
           Cloning {issueRepo(issue)}
           {cloning ? ` · ${cloning}` : "…"}
         </p>
       )}
-      {said && <p className={cn("text-ui", said.failed ? "text-destructive" : "text-muted-foreground")}>{said.text}</p>}
+      {said && <p className={cn("px-3 text-ui", said.failed ? "text-destructive" : "text-muted-foreground")}>{said.text}</p>}
     </div>
   );
 }

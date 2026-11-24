@@ -142,8 +142,8 @@ export default function PullDetail({
       </CommentPickContext>
 
       {pr && (
-        <div className="flex shrink-0 flex-col gap-2 border-t border-border px-3 pt-2.5 pb-3">
-          <div className="flex min-h-6 items-center gap-1.5 text-ui text-muted-foreground">
+        <div className="flex shrink-0 flex-col gap-2 px-3 pt-2 pb-3">
+          <div className="flex min-h-6 items-center gap-1.5 px-3 text-ui text-muted-foreground">
             {!writable ? (
               <span>Read only. This branch lives in a fork, so an agent here can't push to it.</span>
             ) : (
@@ -184,27 +184,27 @@ export default function PullDetail({
                         go();
                       }
                     }}
-                    className="block max-h-48 min-h-14 w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-ui outline-none placeholder:text-muted-foreground field-sizing-content"
+                    className="block max-h-48 min-h-14 w-full resize-none bg-transparent px-3 pt-3 pb-1 text-ui outline-none placeholder:text-muted-foreground field-sizing-content"
                   />
                 )}
               </StartBox>
               {/* A clone goes unsaid: where the copy comes from is not the
                   reader's concern here, only that the task starts. */}
               {cloning !== null && (
-                <p className="truncate text-ui text-muted-foreground tabular-nums">
+                <p className="truncate px-3 text-ui text-muted-foreground tabular-nums">
                   Cloning {row.repo.split("/").slice(-2).join("/")}
                   {cloning ? ` · ${cloning}` : "…"}
                 </p>
               )}
               {checkout.kind === "attach" && (
-                <p className="text-ui text-muted-foreground">
+                <p className="px-3 text-ui text-muted-foreground">
                   Attaches {checkout.path} first, the checkout a task of this repo already uses.
                 </p>
               )}
             </>
           )}
 
-          {error && <p className="text-ui text-destructive">{error}</p>}
+          {error && <p className="px-3 text-ui text-destructive">{error}</p>}
         </div>
       )}
     </div>
@@ -351,11 +351,13 @@ export function StartBox({
   };
 
   return (
-    <div className="rounded-2xl bg-composer">
+    // The chat composer's own card: in light the shadow draws it and the
+    // edge is clear, in dark the edge draws it and there is no shadow.
+    <div className="rounded-2xl border border-edge-surface bg-composer shadow-[var(--shadow-composer,var(--shadow-surface))] backdrop-blur-xl">
       {children(start)}
       {/* One row, never two: the pickers shrink and truncate rather than push
           the arrow onto a line of its own. */}
-      <div className="flex min-w-0 items-center gap-1 px-2 pb-2">
+      <div className="flex min-w-0 items-center gap-1 px-3 pb-3">
         {bot && (
           <Segmented
             className="shrink-0"
