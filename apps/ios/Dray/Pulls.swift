@@ -225,6 +225,21 @@ final class PullsModel {
         Cache.write(Self.file) { try JSONEncoder().encode(kept) }
     }
 
+    /// Drops everything read through `servers`, freshness stamps included.
+    func forget(_ servers: Set<UUID>) {
+        // `readAt` and `searches` keys lead with their server, then `|` or `:`.
+        func theirs(_ key: String) -> Bool { UUID(uuidString: String(key.prefix(36))).map(servers.contains) ?? false }
+        guard marks.keys.contains(where: { servers.contains($0.server) }) || searches.keys.contains(where: theirs)
+                || checkouts.values.contains(where: { servers.contains($0.server) }) || home.map(servers.contains) == true else { return }
+        marks = marks.filter { !servers.contains($0.key.server) }
+        markErrors = markErrors.filter { !servers.contains($0.key.server) }
+        searches = searches.filter { !theirs($0.key) }
+        checkouts = checkouts.filter { !servers.contains($0.value.server) }
+        readAt = readAt.filter { !theirs($0.key) }
+        if home.map(servers.contains) == true { home = nil }
+        keep()
+    }
+
     /// A repo's marks, fresh for a minute unless forced; every key at once.
     func loadMarks(_ store: Store, _ keys: [ProjectKey], force: Bool) async {
         let due = keys.filter { force || Date().timeIntervalSince(readAt["\($0.server)|\($0.path)"] ?? .distantPast) > 60 }
