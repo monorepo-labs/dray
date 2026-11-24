@@ -66,8 +66,8 @@ private val tileFill = Dray.raised.copy(alpha = 0.55f)
 fun IssueCardView(server: String, item: BotItem.Issues, settled: Boolean) {
     val uri = LocalUriHandler.current
     val shape = RoundedCornerShape(Dray.Radius.group)
-    // One width for every action slot on the card, so the titles end in one column.
-    val slot = if (item.started.isNotEmpty()) 92.dp else 48.dp
+    // One width for every action slot on the card, so the titles end in one column: the play button's, which the ✓ fits.
+    val slot = 48.dp
     Column(
         Modifier.fillMaxWidth().clip(shape).background(Dray.card).border(1.dp, Dray.hairline, shape).padding(4.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -137,13 +137,8 @@ private fun hexColor(hex: String): Color? =
 
 @Composable
 private fun Started() {
-    Row(
-        Modifier.padding(end = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Icon(Icons.Filled.Check, null, Modifier.size(15.dp), tint = Dray.add)
-        Text("Started", style = Dray.Font.footnote.copy(color = Dray.secondary))
+    Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+        Icon(Icons.Filled.Check, "Started", Modifier.size(18.dp), tint = Dray.add)
     }
 }
 
