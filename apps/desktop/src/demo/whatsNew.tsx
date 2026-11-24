@@ -13,7 +13,7 @@ import "../App.css";
 /// release without any still gets. An action logs what it would have done
 /// instead of doing it.
 ///
-/// Two sets: the next release's own two, on the white-tile pictures drawn for
+/// Two sets: the next release's own three, on the white-tile pictures drawn for
 /// white cards, and three samples (an action, a picture from the site, no
 /// media) for an odd count.
 
