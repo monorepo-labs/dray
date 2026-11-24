@@ -1997,10 +1997,11 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             permission_mode: ApprovalPolicy, fast: bool, cwd: String,
             branch: Option<String>, use_worktree: bool, worktree_name: Option<String>,
             base_ref: Option<String>, is_new_session: bool, issue_ids: Option<Vec<String>>,
+            device: Option<crate::session::Device>, sent_at: Option<String>,
         ) => crate::send_msg(
             &session_id, &prompt, attachment_paths, harness, model, effort,
             permission_mode, fast, &cwd, branch.as_deref(), use_worktree,
-            worktree_name.as_deref(), base_ref.as_deref(), is_new_session, issue_ids, sink,
+            worktree_name.as_deref(), base_ref.as_deref(), is_new_session, issue_ids, device, sent_at, sink,
         ).await;
         start_pr_session(
             session_id: String, prompt: String, harness: Harness, model: ModelId,

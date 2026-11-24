@@ -1,5 +1,31 @@
 import Foundation
 
+/// The device `send_msg` names to the agent beside the reader's prompt. This file
+/// is compiled into Dray Island too, which is the only macOS build of it.
+#if os(macOS)
+let sendingDevice = "island"
+#else
+/// Read off the model identifier rather than `UIDevice`, which is main-actor
+/// only and absent from the island's build.
+let sendingDevice: String = {
+    var size = 0
+    sysctlbyname("hw.machine", nil, &size, nil, 0)
+    var machine = [CChar](repeating: 0, count: max(size, 1))
+    sysctlbyname("hw.machine", &machine, &size, nil, 0)
+    // A simulator reports the Mac's architecture there and names the device it plays here.
+    let model = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] ?? String(cString: machine)
+    return model.hasPrefix("iPad") ? "ipad" : "iphone"
+}()
+#endif
+
+/// This device's wall clock with its UTC offset, as `send_msg`'s `sentAt`: a bot
+/// is told the reader's own time, not its server's.
+func sentAt() -> JSON {
+    let format = ISO8601DateFormatter()
+    format.timeZone = .current
+    return .string(format.string(from: Date()))
+}
+
 /// Any JSON value. Tool inputs are free-form, and call arguments go out as these.
 enum JSON: Codable, Hashable {
     case null, bool(Bool), number(Double), string(String), array([JSON]), object([String: JSON])

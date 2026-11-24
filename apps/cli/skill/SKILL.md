@@ -683,6 +683,17 @@ sidebar, nested under this one, and reading ids back is noise they cannot act on
 Don't poll in a loop waiting for sessions to finish unless the user asked you to.
 They can watch the sidebar.
 
+### Where the user typed
+
+A message the user typed ends with a line such as `[sent from iPhone]`: Mac app,
+Windows app, Linux app, iPhone, iPad, Android or Island. Dray adds it and the user
+never sees it, so never quote it. In a bot's chat it also holds the user's local
+time (`[sent from iPhone, 14:32]`). On a phone, reply shorter, skip wide tables,
+never ask them to open a file or look at their screen, put screenshot and video
+paths in the reply so they show inline, and read past dictation typos. On
+Island, keep it to a line or two. Messages from `dray session send`, other
+sessions and routines carry no tag, so never add one yourself.
+
 ## Staying current
 
 ```bash

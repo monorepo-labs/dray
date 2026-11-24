@@ -120,7 +120,7 @@ import {
 } from "@/lib/groups";
 import ComposerToolbar from "@/components/composer/ComposerToolbar";
 import DictateControl from "@/components/composer/DictateControl";
-import { HAS_DICTATION, IS_MAC } from "@/lib/platform";
+import { DEVICE, HAS_DICTATION, IS_MAC, localNow } from "@/lib/platform";
 import AppShell from "@/components/layout/AppShell";
 import WindowControls from "@/components/layout/WindowControls";
 import { offersFast } from "@/lib/fastMode";
@@ -3255,6 +3255,8 @@ function App() {
       baseRef: null,
       isNewSession: true,
       issueIds: [issue.identifier],
+      device: DEVICE,
+      sentAt: localNow(),
     });
   };
   /// Sends `issue` to `bot`, which is told in a hidden prompt, with the

@@ -41,6 +41,7 @@ import com.yogesh.dray.wire.decodeList
 import com.yogesh.dray.wire.decodeOrNull
 import com.yogesh.dray.wire.get
 import com.yogesh.dray.wire.jsonOf
+import com.yogesh.dray.wire.sentFrom
 import com.yogesh.dray.wire.wireJson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -906,6 +907,7 @@ class Store(private val context: Context) {
                     "worktreeName" to null,
                     "baseRef" to null,
                     "isNewSession" to false,
+                    *sentFrom(),
                 ),
             ).ok
             decodeOrNull<SessionItem>(reply["snapshot"])?.let { setItem(SessionKey(key.server, it.sessionId), it) }

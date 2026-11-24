@@ -1701,6 +1701,8 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
             args["baseRef"] = serde_json::Value::Null;
             args["attachmentPaths"] = json!(files);
             args["isNewSession"] = json!(true);
+            args["device"] = json!("island");
+            args["sentAt"] = json!(chrono::Local::now().to_rfc3339());
             server(cx, "send_msg", args).map(|reply| (id, reply))
         }
         Target::Session(_) => None,
@@ -1718,7 +1720,8 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
                                 "harness": s.harness, "model": s.model, "effort": s.effort,
                                 "permissionMode": s.permission_mode, "fast": s.fast.unwrap_or(false),
                                 "cwd": s.cwd, "branch": null, "useWorktree": false,
-                                "worktreeName": null, "baseRef": null, "isNewSession": false,
+                                "worktreeName": null, "baseRef": null, "isNewSession": false, "device": "island",
+                                "sentAt": chrono::Local::now().to_rfc3339(),
                             });
                             match cx.update(|cx| state.read(cx).server.as_ref().map(|s| s.call("send_msg", args))) {
                                 Some(reply) => wait(reply, cx).await.map(|_| id.clone()),
