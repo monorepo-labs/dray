@@ -60,8 +60,8 @@ const NUMBERED = 9;
 ///
 /// **A `span`, not a `button`.** Both rows it sits in are divs carrying
 /// `role="button"`, and a real `button` inside one is invalid nesting — the
-/// same bargain `FileLink` makes, and the reason the "Work on it" control
-/// beside this is a span too.
+/// same bargain `FileLink` makes, and the reason the row's Start task and Send
+/// to bot are spans too.
 ///
 /// Two containment rules, and they are not the same rule twice:
 ///

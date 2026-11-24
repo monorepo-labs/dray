@@ -352,6 +352,16 @@ pub async fn update_issue(identifier: &str, state_id: &str) -> Result<(), IssueU
         .map(|_| ())
 }
 
+/// One issue as a list row reads it, with its description.
+pub async fn get_row(repo: &str, number: u64) -> Result<(Issue, Option<String>), IssueUnavailable> {
+    let dir = neutral_dir().await?;
+    let fields = format!("{LIST_FIELDS},body");
+    let out = run_json(&dir, &["issue", "view", &number.to_string(), "-R", repo], &fields).await?;
+    let node = parse(&out)?;
+    let issue = map_issue(&node, repo).ok_or_else(|| IssueUnavailable::Other(format!("Could not read {repo}#{number}")))?;
+    Ok((issue, optional(&node, "body")))
+}
+
 /// The filter row's options: the repositories, the statuses each offers, and
 /// the labels of the one being read.
 ///
@@ -589,13 +599,7 @@ fn map_issue(node: &Value, repo: &str) -> Option<Issue> {
         // is the same reading the PR panel takes of a review.
         assignee: array(node, "assignees").first().and_then(map_person),
         author: node.get("author").and_then(map_person),
-        labels: array(node, "labels")
-            .iter()
-            .map(|label| IssueLabel {
-                name: text(label, "name"),
-                color: map_label_color(label),
-            })
-            .collect(),
+        labels: map_labels(node),
         // The repository, which is what the identifier is built from and what
         // the page joins a row to its status menu on.
         team: Some(repo.to_string()),
@@ -605,6 +609,13 @@ fn map_issue(node: &Value, repo: &str) -> Option<Issue> {
         pull_requests: pull_requests(node),
         issue_type: node.get("issueType").and_then(map_issue_type),
     })
+}
+
+fn map_labels(node: &Value) -> Vec<IssueLabel> {
+    array(node, "labels")
+        .iter()
+        .map(|label| IssueLabel { name: text(label, "name"), color: map_label_color(label) })
+        .collect()
 }
 
 /// Linked pull requests, by number.

@@ -70,6 +70,8 @@ When you pass a task the user's feedback or a request, send what the user asked 
 
 When a task says its pull request is ready to merge, Dray puts a merge card in this chat. Merging there settles the task for you. The card already shows the pull request and whether it can merge, so your reply is the one-line "done" above. Never restate the card, its checks or its review ("#951 is ready to merge, Greptile 5/5"). Never announce that flow before it lands either: a push or review started, a wait on checks, a card to come ("It's in review now, a merge card will show when it passes"). So once you pass the user's go-ahead on to a task, end your turn without writing anything, and stay silent through its reports until one holds something the user can act on.
 
+Whenever you show the user GitHub issues, one or several, post them with `dray session issue-card <owner/repo> <numbers…>` instead of writing them out, and don't restate the card. The user can press Work on it on an issue there, which reaches you as a message from Dray naming it; start on it then.
+
 A message starting "Stall nudge:" comes from Dray, not the task, about a task that has sat untouched. It gets no chat reply. Then:
 
 - When the fix is not the user's call, such as failing checks, merge conflicts or a branch behind its base, tell the task to fix it with `dray session send <id>`.
