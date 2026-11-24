@@ -631,9 +631,16 @@ impl Mapper {
                     })
                     .into_iter()
                     .collect();
-                // `usageLimitExceeded` is the one failure the schema names; its
-                // tag is the most a reader can be told.
-                let text = failure.as_ref().map(error_kind).unwrap_or_default();
+                // Internally tagged (`{"type": "usageLimitExceeded", …}`), so
+                // the tag is read by name; `error_kind`'s first-key reading
+                // would name a field. The tag is the most a reader can be told.
+                let text = failure
+                    .as_ref()
+                    .map(|f| match f.get("type").and_then(|t| t.as_str()) {
+                        Some(kind) => kind.to_string(),
+                        None => error_kind(f),
+                    })
+                    .unwrap_or_default();
                 out.extend(self.closed(id, ToolResult { images, ..result(text, failed) }));
                 out
             }
@@ -1534,7 +1541,8 @@ mod tests {
             "failure": {"type": "usageLimitExceeded", "limitId": "images"}}}));
         assert!(matches!(&refused[0].payload,
             AgentEventPayload::ToolCallCompleted { result, .. }
-                if result.is_error && result.images.is_empty()));
+                if result.is_error && result.images.is_empty()
+                    && result.text == "usageLimitExceeded"));
     }
 
     /// A plugin's tool reads like an MCP call: its own name, its text answer.
