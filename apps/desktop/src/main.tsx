@@ -5,6 +5,7 @@ import App from "./App";
 import AccountGate from "@/components/AccountGate";
 import CrashScreen from "@/components/CrashScreen";
 import { trackActiveDay } from "@/lib/analytics";
+import { copyChipText } from "@/lib/chipCopy";
 import { onFocusChange } from "@/lib/focus";
 import { cancelsWindow, runUnhandledEscape } from "@/lib/escape";
 import { applyIsland } from "@/lib/island";
@@ -27,6 +28,8 @@ onFocusChange((focused) => {
 void startSurveys();
 startAgentUpdateChecks();
 void applyIsland();
+// A path drawn as an `@name` chip copies as the path, wherever it is selected.
+document.addEventListener("copy", copyChipText);
 // The webview opens at 100% whatever the reader left it at.
 applyZoom();
 // An Escape or ⌘. nothing handled is passed on to the window, which macOS reads

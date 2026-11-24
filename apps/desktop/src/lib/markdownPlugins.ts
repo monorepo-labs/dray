@@ -141,12 +141,14 @@ type HastNode = {
 /// Not prose, so not searched. `pre` covers a fenced block and its `code` with
 /// it, since nothing descends into a skipped element — a path inside one is
 /// already being drawn by the highlighter, and splitting its text would break
-/// the tokens. `a` is here too, and checked *after* `anchorToFile`: a link whose
+/// the tokens. Inline `code` is a command or a literal the reader copies, so it
+/// stays as written: a path there drawn as `@name` copied as `@name` (#1487).
+/// `a` is here too, and checked *after* `anchorToFile`: a link whose
 /// href names a file becomes one of ours, and any other link is left whole. A
 /// path sitting in a real link's own label therefore stays plain, which it must
 /// — that text already belongs to a link, and nesting a second one inside it
 /// would fire both on one click.
-const NOT_PROSE = new Set(["pre", "a", "script", "style"]);
+const NOT_PROSE = new Set(["pre", "code", "a", "script", "style"]);
 
 function marked(path: string, children: HastNode[], wasLink = false, line?: number): HastNode {
   return {

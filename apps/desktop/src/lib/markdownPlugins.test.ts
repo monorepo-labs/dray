@@ -280,19 +280,36 @@ describe("rehypeFilePaths", () => {
     expect(marked(tree)).toEqual([]);
   });
 
-  /// Where an agent puts a path most of the time.
-  it("marks a path inside inline code", () => {
+  /// Inline code is copied as a command, so a path in it drawn as `@fx` was
+  /// copied as `@fx` and the command failed (#1487).
+  it("leaves a path inside inline code as written", () => {
+    const command = "! boat ssh bx_r2n3rxr7 -t /home/user/.local/bin/fx login grok";
     const tree = paragraph([
       {
         type: "element",
         tagName: "code",
         properties: {},
-        children: [{ type: "text", value: "/a/b.ts" }],
+        children: [{ type: "text", value: command }],
       },
     ]);
     walk(tree);
 
-    expect(marked(tree)[0].children).toEqual([{ type: "text", value: "/a/b.ts" }]);
+    expect(marked(tree)).toEqual([]);
+    expect(tree.children![0].children![0].children).toEqual([{ type: "text", value: command }]);
+  });
+
+  /// Through Streamdown, since what reaches the walk as inline code is its call.
+  it("marks a path in prose and leaves one in code as written", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        Streamdown,
+        { mode: "static", rehypePlugins: REHYPE_PLUGINS_WITH_FILE_PATHS },
+        "See /a/b.ts, then run `fx -t /home/user/.local/bin/fx login`.\n\n```sh\ncat /a/c.ts\n```",
+      ),
+    );
+    const titles = [...html.matchAll(new RegExp(`class="${FILE_PATH_CLASS}" title="([^"]*)"`, "g"))];
+    expect(titles.map((m) => m[1])).toEqual(["/a/b.ts"]);
+    expect(html).toContain("fx -t /home/user/.local/bin/fx login</code>");
   });
 
   it("leaves a tree with no path in it untouched", () => {

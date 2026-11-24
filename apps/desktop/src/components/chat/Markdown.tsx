@@ -314,9 +314,15 @@ function FilePathSpan({
     const locator = label?.startsWith(title) ? label.slice(title.length) : "";
     const name = basename(title);
     const body = written ? children : `@${name}${locator}`;
+    // The face is not what was written, so a copy reads the text it replaced.
+    const copy = written ? undefined : (label ?? title);
     if (!path) {
       return (
-        <span className={written ? undefined : SEGMENT_COLOR.mention} title={title}>
+        <span
+          className={written ? undefined : SEGMENT_COLOR.mention}
+          title={title}
+          data-copy={copy}
+        >
           {body}
         </span>
       );
@@ -326,6 +332,7 @@ function FilePathSpan({
         path={path}
         line={Number.isInteger(line) && line > 0 ? line : undefined}
         writtenAsLink={written}
+        copy={copy}
         className={written ? undefined : SEGMENT_COLOR.mention}
       >
         {body}

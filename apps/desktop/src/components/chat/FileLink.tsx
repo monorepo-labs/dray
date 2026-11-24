@@ -28,6 +28,7 @@ export default function FileLink({
   line,
   title,
   writtenAsLink = false,
+  copy,
   className,
   children,
 }: {
@@ -43,6 +44,9 @@ export default function FileLink({
   title?: string;
   /// This was a markdown link before it was a file link, so draw it as one.
   writtenAsLink?: boolean;
+  /// The text this stands for, where it is drawn as something shorter — an
+  /// `@name` chip — so a copy carries the path and not the face.
+  copy?: string;
   className?: string;
   children?: ReactNode;
 }) {
@@ -70,6 +74,7 @@ export default function FileLink({
       role="link"
       tabIndex={0}
       title={title ?? displayPath(path)}
+      data-copy={copy}
       onClick={open}
       onKeyDown={(e) => {
         if (e.key !== "Enter" && e.key !== " ") return;
