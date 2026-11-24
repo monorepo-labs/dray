@@ -3,13 +3,14 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 
 import SignInGate, { type GateView } from "@/components/SignInGate";
 import { useLocalServer } from "@/lib/servers";
+import { ONBOARDED } from "@/lib/signInGate";
 import { invoke, listen, LOCAL } from "@/lib/transport";
 import type { DrayAccountState, SignInMethod, SignInStarted } from "@/types/events";
 
 /// Set while this app has been signed in, so the next launch draws the app at
 /// once rather than the gate, and a sign-in that later vanishes reads as
 /// "You've been signed out" rather than a first visit.
-const SIGNED_IN = "dray.signedIn";
+export const SIGNED_IN = "dray.signedIn";
 /// The way in this app last signed in with, for the gate's "Last used" tag.
 /// Here and not on the server: it describes this app's reader, not the account.
 const LAST_METHOD = "dray.lastSignInMethod";
@@ -102,6 +103,7 @@ export default function AccountGate({ children }: { children: ReactNode }) {
     if (account.user) {
       everSignedIn.current = true;
       localStorage.setItem(SIGNED_IN, "1");
+      localStorage.setItem(ONBOARDED, "1");
       readerSignedOut = false;
       setSkipped(false);
     } else if (readerSignedOut) {

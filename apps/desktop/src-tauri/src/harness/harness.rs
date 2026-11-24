@@ -879,7 +879,8 @@ impl Harness {
         }
     }
 
-    /// The command that installs it, for a reader to copy into a terminal.
+    /// The command that installs it: run by onboarding's Install, or copied into
+    /// a terminal by the reader.
     ///
     /// Each vendor's own installer, not npm: it is the one route that needs
     /// nothing already on the machine (no Node, no package manager) and it is
@@ -887,10 +888,8 @@ impl Harness {
     /// update`'s pattern for itself — already points at. Both verified live
     /// (`curl -fsSL … | sh -n`, a dry parse, not a run) before landing here.
     ///
-    /// Dray never runs this. Choosing the method for somebody installs a
-    /// second copy beside one they may already have, and a failure inside our
-    /// installer is ours to debug where a failure on the vendor's page is
-    /// theirs to follow.
+    /// Run only for an agent that is not on the machine at all, so it never puts
+    /// a second copy beside one the reader installed some other way.
     pub fn install_command(self) -> &'static str {
         match self {
             Harness::ClaudeCode => "curl -fsSL https://claude.ai/install.sh | bash",

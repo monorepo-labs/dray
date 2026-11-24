@@ -125,7 +125,7 @@ function Media({ media }: { media: ChangelogMedia }) {
 /// starting where the heading's ink does: GateHeading's 102px indent, and 2px
 /// more for the "C"'s side bearing against the heading's digit, measured off
 /// the pixels. The arrow slides on hover, unless motion is reduced.
-function Continue({ row, onClose }: { row: boolean; onClose: () => void }) {
+export function Continue({ row, onClose, className }: { row: boolean; onClose: () => void; className?: string }) {
   const arrow = (
     <svg
       width="20"
@@ -146,6 +146,7 @@ function Continue({ row, onClose }: { row: boolean; onClose: () => void }) {
         row
           ? "col-span-2 h-24 items-center justify-between pr-8 pl-[104px] max-lg:pl-0"
           : "min-h-48 flex-col justify-between border border-white/40 p-8",
+        className,
       )}
     >
       {row ? (

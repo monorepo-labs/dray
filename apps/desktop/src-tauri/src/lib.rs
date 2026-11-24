@@ -1270,6 +1270,7 @@ pub fn run() {
             apps::open_login_terminal,
             accounts::run_agent_login,
             agent_updates::update_agent_in_terminal,
+            agent_updates::install_agent_in_terminal,
             transcription::transcription_status,
             transcription::download_transcription_model,
             transcription::cancel_transcription_download,
