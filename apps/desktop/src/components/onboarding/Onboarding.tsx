@@ -235,12 +235,15 @@ function MeetBot({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }
             <BotAvatar seed={bot?.id ?? "dray"} avatar={bot?.avatar} follow className="size-12" />
             <h1 className="text-[36px] leading-10 font-light tracking-[-0.03em]">Meet Dray Bot.</h1>
           </div>
-          <div className="ob-in flex max-w-[440px] flex-col gap-2 pt-1" style={{ animationDelay: "60ms" }}>
+          <div className="ob-in relative flex max-w-[440px] flex-col gap-2 pt-1" style={{ animationDelay: "60ms" }}>
+            <span aria-hidden className="absolute -top-5 -left-14 font-serif text-[104px] leading-none text-white/40">
+              “
+            </span>
             <p className="text-[15px] leading-6 text-white/70">
               Dray Bot is how I work these days. I tell it what I want, and it starts the tasks, keeps them moving and only
               comes back when it needs me. Far calmer than watching every task myself.
             </p>
-            <p className="text-[13px] leading-[18px] text-white/40">Yogesh, who makes Dray</p>
+            <p className="text-[13px] leading-[18px] text-white/40">Yogesh, Founder of Dray</p>
           </div>
         </div>
         <div className="ob-in mt-8" style={{ animationDelay: "120ms" }}>
