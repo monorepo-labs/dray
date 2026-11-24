@@ -9,8 +9,15 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import com.yogesh.dray.store.OpenIntoBot
+import com.yogesh.dray.store.allBots
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material.icons.outlined.SmartToy
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -122,6 +129,7 @@ fun SettingsScreen(focus: String?, back: () -> Unit, dictation: () -> Unit = {},
                 SettingsRow("Dictation", icon = { Icon(Icons.Outlined.Mic, null, Modifier.size(20.dp), tint = Dray.secondary) }, onClick = dictation)
                 SettingsRow("Notifications", icon = { Icon(Icons.Outlined.Notifications, null, Modifier.size(20.dp), tint = Dray.secondary) },
                     value = if (com.yogesh.dray.push.Push.enabled && com.yogesh.dray.push.Push.available) "On" else "Off", onClick = notifications)
+                OpenBotRow()
             }
             About()
         }
@@ -129,6 +137,43 @@ fun SettingsScreen(focus: String?, back: () -> Unit, dictation: () -> Unit = {},
             ServerCards(null, open = { pages.add(Page.Server(it)) }, all = {}, add = add)
         }
         is Page.Server -> ServerDetail(page.id, ::pop)
+    }
+}
+
+/** "Open bot at launch": one row saying Off or the bot, its menu picking either. */
+@Composable
+private fun OpenBotRow() {
+    val store = LocalStore.current
+    val bots = store.allBots
+    val target = OpenIntoBot.target(bots)?.takeIf { OpenIntoBot.on }
+    var open by remember { mutableStateOf(false) }
+    Box {
+        SettingsRow(
+            "Open bot at launch", icon = { Icon(Icons.Outlined.SmartToy, null, Modifier.size(20.dp), tint = Dray.secondary) },
+            value = target?.second?.name ?: "Off",
+        ) { open = true }
+        DropdownMenu(open, { open = false }, Modifier.widthIn(min = 220.dp), offset = DpOffset(16.dp, 0.dp), containerColor = Dray.raised) {
+            fun check(on: Boolean): (@Composable () -> Unit)? = if (on) ({ Icon(Icons.Filled.Check, "Chosen", Modifier.size(20.dp), tint = Dray.text) }) else null
+            DropdownMenuItem(
+                text = { Text("Off", style = Dray.Font.body) },
+                trailingIcon = check(target == null),
+                onClick = { OpenIntoBot.turn(false); open = false },
+            )
+            bots.forEach { (server, bot) ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(bot.name, style = Dray.Font.body, maxLines = 1)
+                            // Two servers can each hold a bot of one name.
+                            if (store.live.size > 1) Text(store.name(server), style = Dray.Font.footnote.copy(color = Dray.tertiary), maxLines = 1)
+                        }
+                    },
+                    leadingIcon = { BotFace(bot, 22.dp) },
+                    trailingIcon = check(target?.first == server && target.second.id == bot.id),
+                    onClick = { OpenIntoBot.pick(server, bot.id); OpenIntoBot.turn(true); open = false },
+                )
+            }
+        }
     }
 }
 

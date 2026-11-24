@@ -41,6 +41,12 @@ reads and drives it over the same WebSocket the desktop and iOS use
 - **Permission and question cards**, answered in place, in the transcript and
   under the row in the list.
 - **Servers** in Settings: state, on/off, Fix, remove, add.
+- **Open bot at launch** in Settings (#1517), Off unless a bot is picked: the
+  app opens on that bot's chat at launch (the first bot where the picked one
+  is gone), over the list so back lands there. Read off the cached list, the
+  chat is the launch's first frame; only a launch with no cache waits for the
+  server. An alert, a link or any move off the list first spends it. Nothing
+  else opens a bot unasked (`OpenIntoBot`).
 
 - **Dictation** (`voice/`, Dictation.swift): per draft, outliving the screen
   that started it. Two engines: Android's `SpeechRecognizer` on the phone

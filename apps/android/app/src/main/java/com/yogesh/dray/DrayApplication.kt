@@ -5,6 +5,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.yogesh.dray.push.Push
+import com.yogesh.dray.store.OpenIntoBot
 import com.yogesh.dray.store.Store
 import com.yogesh.dray.voice.Dictations
 import kotlinx.coroutines.Job
@@ -20,6 +21,7 @@ class DrayApplication : Application() {
         store = Store(this)
         Push.start(this, store)
         Dictations.start(this)
+        OpenIntoBot.start(this)
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             private var poll: Job? = null
 

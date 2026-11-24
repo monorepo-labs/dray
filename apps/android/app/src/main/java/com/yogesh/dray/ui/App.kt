@@ -15,6 +15,12 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import com.yogesh.dray.store.OpenIntoBot
+import com.yogesh.dray.store.allBots
+import com.yogesh.dray.store.botChat
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -26,6 +32,7 @@ import androidx.compose.ui.platform.LocalContext
 import com.yogesh.dray.model.SessionKey
 import com.yogesh.dray.net.PairLink
 import com.yogesh.dray.store.NewTask
+import com.yogesh.dray.store.Store
 import com.yogesh.dray.push.Push
 
 /** Where the app is: the list at the bottom of a stack, everything else pushed over it. */
@@ -93,7 +100,14 @@ sealed interface Route {
 /** The app's one navigation stack. A pairing link from outside pushes Add server, filled in. */
 @Composable
 fun App(incoming: PairLink?, consumed: () -> Unit) {
-    val stack = rememberSaveable(saver = Route.stackSaver) { mutableStateListOf<Route>(Route.List) }
+    val store = LocalStore.current
+    // "Open bot at launch" puts the bot under the first frame, so the list never shows before it.
+    // Only a fresh launch builds this; a restored one keeps the stack the reader left.
+    val stack = rememberSaveable(saver = Route.stackSaver) {
+        mutableStateListOf<Route>(Route.List).apply {
+            if (incoming == null && Push.opening == null) launchRoute(store)?.let(::add)
+        }
+    }
     val forward = remember { mutableStateOf(true) }
     fun push(r: Route) { forward.value = true; stack.add(r) }
     fun pop() { if (stack.size > 1) { forward.value = false; stack.removeAt(stack.lastIndex) } }
@@ -107,7 +121,6 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
         }
     }
     BackHandler(stack.size > 1) { pop() }
-    val store = LocalStore.current
     // A tapped alert opens its chat over the list, wherever the reader was.
     LaunchedEffect(Push.opening) {
         val key = Push.opening ?: return@LaunchedEffect
@@ -117,6 +130,17 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
         push(Route.Session(SessionKey(store.shownAs(key.server), key.id)))
     }
     LaunchedEffect(stack.last()) { Push.viewing = (stack.last() as? Route.Session)?.key }
+    // With no cached list to open from (a first launch), the bot opens once its server answers instead.
+    // Anything that leaves the list first — an alert, a link, the reader's own tap — spends it, as does a slow server.
+    var launchSpent by rememberSaveable { mutableStateOf(stack.size > 1) }
+    LaunchedEffect(stack.size) { if (stack.size > 1) launchSpent = true }
+    LaunchedEffect(Unit) { delay(10_000); launchSpent = true }
+    val late = if (!launchSpent && store.live.isNotEmpty() && store.live.all { store.known(it.id) }) launchRoute(store) else null
+    LaunchedEffect(late) {
+        val route = late ?: return@LaunchedEffect
+        launchSpent = true
+        push(route)
+    }
     NotificationAsk()
     val holder = rememberSaveableStateHolder()
     val context = LocalContext.current
@@ -174,4 +198,14 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
         }
         Box(Modifier.align(Alignment.TopCenter).statusBarsPadding()) { ErrorToast() }
     } }
+}
+
+/**
+ * Where "Open bot at launch" goes, read off the store as it stands: the picked bot's chat, or its
+ * start screen where it has none yet. The cached list answers this before any socket is up.
+ */
+private fun launchRoute(store: Store): Route? {
+    if (!OpenIntoBot.on) return null
+    val (server, bot) = OpenIntoBot.target(store.allBots) ?: return null
+    return store.botChat(server, bot).lastOrNull()?.let { Route.Session(it) } ?: Route.BotStart(server, bot.id)
 }
