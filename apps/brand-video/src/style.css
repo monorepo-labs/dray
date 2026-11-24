@@ -44,9 +44,9 @@ html, body { margin: 0; background: #0a0a0a; color: #fff; }
 .head .in svg { color: #fff; }
 
 .tool .in { display: flex; align-items: baseline; gap: 18px; padding: 0 0 10px 44px; }
-.tool .k { width: 64px; font-size: 14px; color: rgb(255 255 255 / 38%); }
-.tool .x { font-family: "Geist Mono Variable", monospace; font-size: 21px; color: rgb(255 255 255 / 62%); letter-spacing: -0.01em; }
-.tool .m { font-size: 14px; color: rgb(255 255 255 / 40%); }
+.tool .k { width: 68px; font-size: 16px; color: rgb(255 255 255 / 45%); }
+.tool .x { font-family: "Geist Mono Variable", monospace; font-size: 25px; color: rgb(255 255 255 / 80%); letter-spacing: -0.01em; }
+.tool .m { font-size: 16px; color: rgb(255 255 255 / 50%); }
 .tool.stopped .x, .tool.stopped .k { opacity: 0.5; }
 
 .text .in { padding: 8px 0 28px 44px; }

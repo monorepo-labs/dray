@@ -8,7 +8,7 @@ import { createServer } from "vite";
 
 const FPS = 60;
 const DUR = 15;
-const STILLS = [0.4, 2.0, 4.2, 5.8, 7.6, 8.4, 9.5, 12.2, 14.5];
+const STILLS = [3.8, 5.5, 8.2, 8.95, 11.9, 14.5];
 const root = new URL(".", import.meta.url).pathname;
 const out = `${root}out`;
 mkdirSync(`${out}/stills`, { recursive: true });

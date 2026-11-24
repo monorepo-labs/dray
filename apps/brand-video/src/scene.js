@@ -23,18 +23,17 @@ const ease = {
   outBack: (p) => 1 + 2.70158 * (p - 1) ** 3 + 1.70158 * (p - 1) ** 2,
 };
 
-// Every beat, in seconds. The wipe fully covers the frame between +0.52 and
-// +0.56, so the cut (camera jump, picker closing, chip swap) lands inside it.
+// Every beat, in seconds. The limit holds still for ~2.4s so it reads before
+// the cursor moves; `cut` is when the pick lands and the chat is Codex's.
 const T = {
-  limit: 5.4,
-  cursorIn: 6.1,
-  chipClick: 6.95,
-  pickerOpen: 7.0,
-  codexClick: 8.0,
-  wipe: 8.12,
+  limit: 4.4,
+  cursorIn: 6.6,
+  chipClick: 7.35,
+  pickerOpen: 7.4,
+  codexClick: 8.5,
   end: 12.6,
 };
-T.cut = T.wipe + 0.54;
+T.cut = T.codexClick + 0.3;
 
 const RED = "#FF6467";
 const GREEN = "#2EC58F";
@@ -42,64 +41,33 @@ const BLUES = ["#1612F8", "#0C0C9E", "#4A46FF", "#7F8CFF"];
 
 // What the reader types into the composer, and when it goes out as a bubble.
 const SENDS = [
-  { text: "The checkout test fails on CI about half the time. Can you fix it?", type: [0.55, 1.25], send: 1.4 },
-  { text: "Keep going.", type: [9.0, 9.4], send: 9.6 },
+  { text: "The checkout test fails on CI about half the time. Can you fix it?", type: [0.35, 1.15], send: 1.3 },
+  { text: "Keep going.", type: [9.3, 9.65], send: 9.8 },
 ];
 
 // The conversation, top to bottom. Each item grows in at `at`.
 const FEED = [
   { kind: "user", text: SENDS[0].text, at: SENDS[0].send + 0.04 },
-  { kind: "head", agent: "claude", at: 2.0 },
-  { kind: "tool", tool: "Read", target: "checkout.test.ts", meta: "48 lines", at: 2.35 },
-  { kind: "tool", tool: "Run", target: "pnpm test checkout", meta: "2 failed", tone: RED, at: 2.8 },
-  { kind: "text", text: "The total is rounded before tax is added, so some carts land a cent off. Fixing it in cart.ts.", at: 3.25, type: 1.0 },
-  { kind: "tool", tool: "Edit", target: "cart.ts", live: true, at: 4.55 },
+  { kind: "head", agent: "claude", at: 1.9 },
+  { kind: "text", text: "The total is rounded before tax is added, so some carts land a cent off. Fixing it in cart.ts.", at: 2.2, type: 0.95 },
+  { kind: "tool", tool: "Edit", target: "cart.ts", live: true, at: 3.35 },
   { kind: "limit", at: T.limit },
-  { kind: "divider", at: T.cut + 0.2 },
+  { kind: "divider", at: T.cut + 0.15 },
   { kind: "user", text: SENDS[1].text, at: SENDS[1].send + 0.04 },
-  { kind: "head", agent: "codex", at: 10.0 },
-  { kind: "tool", tool: "Edit", target: "cart.ts", meta: `<span style="color:${GREEN}">+4</span> <span style="color:${RED}">−2</span>`, at: 10.3 },
-  { kind: "tool", tool: "Run", target: "pnpm test checkout", meta: "12 passed", tone: GREEN, at: 10.7 },
-  { kind: "text", text: "Fixed: tax is added before rounding. All 12 tests pass.", at: 11.05, type: 0.7 },
+  { kind: "head", agent: "codex", at: 10.25 },
+  { kind: "tool", tool: "Edit", target: "cart.ts", meta: `<span style="color:${GREEN}">+4</span> <span style="color:${RED}">−2</span>`, at: 10.55 },
+  { kind: "text", text: "Fixed: tax is added before rounding. All 12 tests pass.", at: 10.95, type: 0.7 },
 ];
 
 // The window: header strip, feed, composer, 2px apart like the site's cards.
 const PANEL = { x: 300, w: 1320, head: [70, 100], feed: [172, 708], composer: [882, 108] };
 const CHIP = { x: 1262, y: 904, w: 250, h: 64 };
 
-// [t, x, y, scale, ease into this key]. The pair at the cut is a hard jump.
-const CAMERA = [
-  [0, 960, 560, 1.12],
-  [1.3, 960, 535, 1.0, "outQuint"],
-  [5.3, 960, 545, 1.02, "inOutCubic"],
-  [5.8, 1000, 610, 1.1, "outCubic"],
-  [6.15, 1010, 620, 1.11, "inOutCubic"],
-  [7.0, 1240, 760, 1.75, "inOutQuint"],
-  [T.cut, 1255, 765, 1.8, "inOutCubic"],
-  [T.cut + 0.001, 1020, 700, 1.3, "linear"],
-  [11.4, 960, 535, 1.0, "inOutCubic"],
-  [13.3, 960, 535, 0.95, "inOutCubic"],
-];
-
-function camera(t) {
-  let i = CAMERA.findIndex((k) => k[0] > t);
-  if (i === -1) i = CAMERA.length;
-  if (i === 0) return { x: CAMERA[0][1], y: CAMERA[0][2], s: CAMERA[0][3] };
-  const a = CAMERA[i - 1];
-  const b = CAMERA[i];
-  if (!b) return { x: a[1], y: a[2], s: a[3] };
-  const p = ease[b[4]](prog(t, a[0], b[0]));
-  return { x: lerp(a[1], b[1], p), y: lerp(a[2], b[2], p), s: lerp(a[3], b[3], p) };
-}
-
-// World point → screen point under a camera.
-const toScreen = (cam, x, y) => [(x - cam.x) * cam.s + W / 2, (y - cam.y) * cam.s + H / 2];
-
-/// The cursor's world position: in from the lower right to the composer's chip, then up to Codex.
+/// The cursor's position: in from the lower right to the composer's chip, then up to Codex.
 function cursorAt(t) {
   const legs = [
-    [T.cursorIn, 6.9, [1720, 1060], [CHIP.x + 132, CHIP.y + 28]],
-    [7.25, 7.9, [CHIP.x + 132, CHIP.y + 28], [1368, 770]],
+    [T.cursorIn, 7.3, [1720, 1060], [CHIP.x + 132, CHIP.y + 28]],
+    [7.75, 8.35, [CHIP.x + 132, CHIP.y + 28], [1368, 770]],
   ];
   let p = legs[0][2];
   for (const [a, b, from, to] of legs) {
@@ -229,11 +197,9 @@ export function mount(stage) {
   const $ = (s) => stage.querySelector(s);
   const bg = $("#bg").getContext("2d");
   const fx = $("#fx").getContext("2d");
-  const world = $("#world");
   const feed = $("#feed");
   const items = [...feed.children].map((el, i) => ({ it: FEED[i], el, inner: el.firstElementChild, h: 0 }));
   const endWords = [...stage.querySelectorAll("#end .wi")];
-  const cells = fieldCells();
   let measured = false;
 
   // Heights are read once, after fonts load, with every item at full text.
@@ -246,23 +212,15 @@ export function mount(stage) {
     measured = true;
   }
 
-  function drawBg(cam) {
-    bg.setTransform(1, 0, 0, 1, 0, 0);
-    bg.fillStyle = "#000";
-    bg.fillRect(0, 0, W, H);
-    // The field drifts at a fifth of the camera's move, for depth.
-    const k = 0.2;
-    const s = 1 + (cam.s - 1) * k;
-    const cx = W / 2 + (cam.x - W / 2) * k;
-    const cy = H / 2 + (cam.y - H / 2) * k;
-    bg.setTransform(s, 0, 0, s, W / 2 - cx * s, H / 2 - cy * s);
-    for (const c of cells) {
-      bg.fillStyle = c.fill;
-      bg.fillRect(c.x, c.y, 60, 60);
-    }
-    bg.fillStyle = "rgba(0,0,0,0.5)";
-    for (let x = -600; x < W + 600; x += 6) bg.fillRect(x, 400, 2, H + 400);
+  // The field never moves, so it is drawn once.
+  bg.fillStyle = "#000";
+  bg.fillRect(0, 0, W, H);
+  for (const c of fieldCells()) {
+    bg.fillStyle = c.fill;
+    bg.fillRect(c.x, c.y, 60, 60);
   }
+  bg.fillStyle = "rgba(0,0,0,0.5)";
+  for (let x = 0; x < W; x += 6) bg.fillRect(x, 400, 2, H);
 
   function stripes(ctx) {
     ctx.globalCompositeOperation = "source-atop";
@@ -286,25 +244,8 @@ export function mount(stage) {
     stripes(fx);
   }
 
-  function drawFx(t, origin) {
+  function drawFx(t) {
     fx.clearRect(0, 0, W, H);
-    const far = (ox, oy) => Math.max(...[[0, 0], [W, 0], [0, H], [W, H]].map(([x, y]) => Math.hypot(x - ox, y - oy)));
-    if (t < 1.2) {
-      // Opens on the closing band's blue, which breaks into tiles from the middle.
-      const maxD = far(W / 2, H / 2);
-      tiles((i, j, x, y) => {
-        const start = 0.12 + (Math.hypot(x + 30 - W / 2, y + 30 - H / 2) / maxD) * 0.45 + hash(i, j, 3) * 0.1;
-        return 60 * (1 - ease.inCubic(prog(t, start, start + 0.3)));
-      }, 17, (i, j, x, y) => 1 - prog(t, 0, 0.12 + (Math.hypot(x - W / 2, y - H / 2) / maxD) * 0.4));
-    }
-    if (t >= T.wipe && t < T.wipe + 1.2) {
-      const [ox, oy] = origin;
-      const maxD = far(ox, oy);
-      tiles((i, j, x, y) => {
-        const start = T.wipe + (Math.hypot(x + 30 - ox, y + 30 - oy) / maxD) * 0.32 + hash(i, j, 7) * 0.06;
-        return 60 * ease.outCubic(prog(t, start, start + 0.14)) * (1 - ease.inCubic(prog(t, start + 0.56, start + 0.72)));
-      }, 11);
-    }
     if (t >= T.end) {
       // The closing band rises from the foot, its lit tiles settling to blue.
       const start = (i, j, y) => T.end + ((H - y) / H) * 0.5 + hash(i, j, 5) * 0.12;
@@ -381,10 +322,11 @@ export function mount(stage) {
     $("#send").style.transform = `scale(${1 - press * 0.1})`;
   }
 
-  function renderSwitch(t, cam) {
+  function renderSwitch(t) {
     const after = t >= T.cut;
-    $("#chip-claude").style.opacity = after ? "0" : "1";
-    $("#chip-codex").style.opacity = after ? "1" : "0";
+    const swap = after ? 1 : 0;
+    $("#chip-claude").style.opacity = String(1 - swap);
+    $("#chip-codex").style.opacity = String(swap);
     const press = bump(prog(t, T.chipClick - 0.04, T.chipClick + 0.16));
     const open = !after && t >= T.chipClick;
     const chip = $("#chip");
@@ -392,16 +334,18 @@ export function mount(stage) {
     chip.style.transform = `scale(${1 - press * 0.04})`;
 
     const dot = $("#dot");
-    dot.style.transform = `scale(${after ? 0 : ease.outBack(prog(t, T.limit, T.limit + 0.35))})`;
+    dot.style.transform = `scale(${ease.outBack(prog(t, T.limit, T.limit + 0.35)) * (1 - swap)})`;
     const pulse = t > T.limit ? ((t - T.limit) % 1.1) / 1.1 : 0;
     dot.firstChild.style.transform = `scale(${1 + pulse * 2.2})`;
     dot.firstChild.style.opacity = String((1 - pulse) * 0.6);
 
     const picker = $("#picker");
     const p = ease.outExpo(prog(t, T.pickerOpen, T.pickerOpen + 0.5));
-    picker.style.visibility = after || p <= 0 ? "hidden" : "visible";
+    const shut = ease.outCubic(prog(t, T.cut - 0.04, T.cut + 0.16));
+    picker.style.visibility = shut >= 1 || p <= 0 ? "hidden" : "visible";
     picker.style.clipPath = `inset(${(1 - p) * 100}% 0 0 0)`;
-    picker.style.transform = `translateY(${(1 - p) * 14}px)`;
+    picker.style.opacity = String(1 - shut);
+    picker.style.transform = `translateY(${Math.max(1 - p, shut) * 12}px)`;
     ["#card-claude", "#card-codex"].forEach((s, i) => {
       const c = ease.outCubic(prog(t, T.pickerOpen + 0.1 + i * 0.07, T.pickerOpen + 0.5 + i * 0.07));
       $(s).firstElementChild.style.opacity = String(c);
@@ -418,23 +362,20 @@ export function mount(stage) {
     const cursor = $("#cursor");
     const [x, y] = cursorAt(t);
     const click = Math.max(bump(prog(t, T.chipClick - 0.06, T.chipClick + 0.12)), bump(prog(t, T.codexClick - 0.06, T.codexClick + 0.12)));
-    cursor.style.opacity = after ? "0" : String(ease.outCubic(prog(t, T.cursorIn, T.cursorIn + 0.25)));
+    cursor.style.opacity = String(ease.outCubic(prog(t, T.cursorIn, T.cursorIn + 0.25)) * (1 - prog(t, T.cut + 0.1, T.cut + 0.4)));
     cursor.style.transform = `translate(${x - 5}px, ${y - 5}px) scale(${1 - click * 0.14})`;
     const ripple = $("#ripple");
     const rp = [T.chipClick, T.codexClick].map((c) => prog(t, c, c + 0.5)).find((q) => q > 0 && q < 1) ?? 0;
-    ripple.style.opacity = after || !rp ? "0" : String((1 - rp) * 0.8);
+    ripple.style.opacity = rp ? String((1 - rp) * 0.8) : "0";
     ripple.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%) scale(${ease.outCubic(rp)})`;
-    return toScreen(cam, x, y);
   }
 
   function render(t) {
     if (!measured) measure();
-    const cam = camera(t);
-    world.style.transform = `translate(${W / 2}px, ${H / 2}px) scale(${cam.s}) translate(${-cam.x}px, ${-cam.y}px)`;
-    drawBg(cam);
     renderFeed(t);
     renderComposer(t);
-    drawFx(t, renderSwitch(t, cam));
+    renderSwitch(t);
+    drawFx(t);
 
     $("#end").style.visibility = t >= 13.3 ? "visible" : "hidden";
     endWords.forEach((el, i) => {
