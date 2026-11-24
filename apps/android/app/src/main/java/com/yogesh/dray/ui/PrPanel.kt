@@ -63,6 +63,8 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -93,20 +95,66 @@ import kotlinx.serialization.json.JsonObject
 
 // PrPanel.swift: a task's pull request, read and moved from the phone.
 
-/** What the server says about a session's pull requests. Lives with the task screen, so its button knows whether there is anything to open. */
+/**
+ * Pull requests read from one server, and the actions that move them: a task's PR sheet, or one
+ * PR's page on the pull requests list.
+ */
 @Stable
-class PrModel(val key: SessionKey) {
+abstract class PrSource(val server: String) {
     var prs by mutableStateOf(listOf<PullRequest>())
     var unavailable by mutableStateOf<PrUnavailable?>(null)
-    var branch by mutableStateOf<String?>(null)
     var acting by mutableStateOf(false)
     var actionError by mutableStateOf<String?>(null)
+
+    abstract suspend fun load(store: Store)
+
+    /** The checkout or `github:` slug an action runs against. */
+    protected abstract fun cwd(store: Store): String?
+
+    /** Brings what else shows this PR in line once an action lands. */
+    protected abstract suspend fun moved(store: Store)
+
+    /**
+     * Runs on the store's scope, not a composable's: the button that asked leaves the screen the
+     * moment Working… replaces it, and its own scope would cancel the read-back mid-flight.
+     */
+    fun act(store: Store, cmd: String, number: Int, extra: Map<String, Any?> = emptyMap(), done: (Boolean) -> Unit = {}) {
+        val cwd = cwd(store) ?: return
+        acting = true
+        actionError = null
+        store.scope.launch {
+            try {
+                store.call(server, cmd, JsonObject(jsonOf("cwd" to cwd, "number" to number) + jsonOf(*extra.toList().toTypedArray())))
+            } catch (e: CancellationException) {
+                acting = false
+                throw e
+            } catch (e: Exception) {
+                actionError = e.message ?: "Failed"
+            }
+            load(store)
+            moved(store)
+            acting = false
+            done(actionError == null)
+        }
+    }
+}
+
+/** What the server says about a session's pull requests. Lives with the task screen, so its button knows whether there is anything to open. */
+@Stable
+class PrModel(val key: SessionKey) : PrSource(key.server) {
+    var branch by mutableStateOf<String?>(null)
     private var generation = 0
 
     /** The button stays for the two states the reader can fix; every other error with no rows hides it, as the desktop's tab does. */
     val visible: Boolean get() = prs.isNotEmpty() || unavailable?.keepsButton == true
 
-    suspend fun load(store: Store) {
+    override fun cwd(store: Store) = store.items[key]?.cwd
+
+    override suspend fun moved(store: Store) {
+        store.items[key]?.let { store.refreshMarks(key.server, it.projectPath) }
+    }
+
+    override suspend fun load(store: Store) {
         val item = store.items[key] ?: return
         val gen = ++generation
         try {
@@ -126,30 +174,6 @@ class PrModel(val key: SessionKey) {
         } catch (e: Exception) {
             // Rows already on screen stay under the sentence, which says what failed to update.
             if (gen == generation) unavailable = PrUnavailable.from(e)
-        }
-    }
-
-    /**
-     * Runs on the store's scope, not a composable's: the button that asked leaves the screen the
-     * moment Working… replaces it, and its own scope would cancel the read-back mid-flight.
-     */
-    fun act(store: Store, cmd: String, number: Int, extra: Map<String, Any?> = emptyMap(), done: (Boolean) -> Unit = {}) {
-        val item = store.items[key] ?: return
-        acting = true
-        actionError = null
-        store.scope.launch {
-            try {
-                store.call(key.server, cmd, JsonObject(jsonOf("cwd" to item.cwd, "number" to number) + jsonOf(*extra.toList().toTypedArray())))
-            } catch (e: CancellationException) {
-                acting = false
-                throw e
-            } catch (e: Exception) {
-                actionError = e.message ?: "Failed"
-            }
-            load(store)
-            store.refreshMarks(key.server, item.projectPath)
-            acting = false
-            done(actionError == null)
         }
     }
 }
@@ -220,9 +244,8 @@ private fun PrSheet(model: PrModel, dismiss: () -> Unit) {
 
 /** One pull request: what it is, whether it can land and the one action that moves it, then its checks and what people said. */
 @Composable
-private fun PrSection(pr: PullRequest, model: PrModel) {
+private fun PrSection(pr: PullRequest, model: PrSource) {
     val uri = LocalUriHandler.current
-    val (label, detail) = readiness(pr)
     Column(verticalArrangement = Arrangement.spacedBy(28.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -238,42 +261,59 @@ private fun PrSection(pr: PullRequest, model: PrModel) {
                     Text("· ${pr.changedFiles} ${if (pr.changedFiles == 1) "file" else "files"}", style = foot.copy(color = Dray.secondary), maxLines = 1)
                 }
             }
-            Column(Modifier.prGroup(), verticalArrangement = Arrangement.spacedBy(Dray.Space.m)) {
-                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.Bottom) {
-                        Text(label, style = Dray.Font.subhead.copy(color = tone(pr)))
-                        if (pr.state == "OPEN") {
-                            Text("into ${pr.baseRefName}", style = Dray.Font.subhead.copy(color = Dray.tertiary), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    }
-                    detail?.let { Text(it, style = Dray.Font.footnote.copy(color = Dray.secondary)) }
-                }
-                Action(pr, model)
-            }
+            PrReadiness(pr, model)
         }
-        if (pr.checks.isNotEmpty()) {
-            Column(verticalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
-                Row(Modifier.padding(horizontal = Dray.Space.xs)) {
-                    Text("Checks", Modifier.weight(1f), style = Dray.Font.footnote.copy(color = Dray.tertiary))
-                    Text(checksSummary(pr), style = Dray.Font.footnote.copy(color = Dray.tertiary))
-                }
-                Column(Modifier.prGroup(0.dp).padding(vertical = Dray.Space.xs)) {
-                    // Failing first, then running: what the reader opened the sheet to find.
-                    val rank = mapOf("failure" to 0, "pending" to 1)
-                    for (c in pr.checks.withIndex().sortedWith(compareBy({ rank[it.value.state] ?: 2 }, { it.index })).map { it.value }) CheckRow(c)
+        PrChecks(pr)
+        PrComments(pr)
+    }
+}
+
+/** Whether the PR can land, why not, and the one action that moves it. */
+@Composable
+fun PrReadiness(pr: PullRequest, model: PrSource) {
+    val (label, detail) = readiness(pr)
+    Column(Modifier.prGroup(), verticalArrangement = Arrangement.spacedBy(Dray.Space.m)) {
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.Bottom) {
+                Text(label, style = Dray.Font.subhead.copy(color = tone(pr)))
+                if (pr.state == "OPEN") {
+                    Text("into ${pr.baseRefName}", style = Dray.Font.subhead.copy(color = Dray.tertiary), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
+            detail?.let { Text(it, style = Dray.Font.footnote.copy(color = Dray.secondary)) }
         }
-        if (pr.comments.isNotEmpty()) {
-            Column(verticalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
-                Text("Comments", Modifier.padding(horizontal = Dray.Space.xs), style = Dray.Font.footnote.copy(color = Dray.tertiary))
-                for (c in pr.comments) CommentCard(c)
-            }
+        Action(pr, model)
+    }
+}
+
+/** The tip commit's checks under their summary, failing first. Nothing where there are none. */
+@Composable
+fun PrChecks(pr: PullRequest) {
+    if (pr.checks.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
+        Row(Modifier.padding(horizontal = Dray.Space.xs)) {
+            Text("Checks", Modifier.weight(1f), style = Dray.Font.footnote.copy(color = Dray.tertiary))
+            Text(checksSummary(pr), style = Dray.Font.footnote.copy(color = Dray.tertiary))
+        }
+        Column(Modifier.prGroup(0.dp).padding(vertical = Dray.Space.xs)) {
+            // Failing first, then running: what the reader opened the sheet to find.
+            val rank = mapOf("failure" to 0, "pending" to 1)
+            for (c in pr.checks.withIndex().sortedWith(compareBy({ rank[it.value.state] ?: 2 }, { it.index })).map { it.value }) CheckRow(c)
         }
     }
 }
 
-private fun checksSummary(pr: PullRequest): String {
+/** Comments, reviews and threads, oldest first. Nothing where there are none. */
+@Composable
+fun PrComments(pr: PullRequest) {
+    if (pr.comments.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
+        Text("Comments", Modifier.padding(horizontal = Dray.Space.xs), style = Dray.Font.footnote.copy(color = Dray.tertiary))
+        for (c in pr.comments) CommentCard(c)
+    }
+}
+
+fun checksSummary(pr: PullRequest): String {
     val failing = pr.failingChecks
     if (failing > 0) return "$failing failing"
     val done = pr.checks.count { it.state != "pending" }
@@ -295,7 +335,7 @@ private fun tone(pr: PullRequest): Color {
 
 /** Reopen, mark ready, or merge — and no close or branch delete, as on the desktop. */
 @Composable
-private fun Action(pr: PullRequest, model: PrModel) {
+private fun Action(pr: PullRequest, model: PrSource) {
     val store = LocalStore.current
     when {
         model.acting -> Row(Modifier.heightIn(min = 44.dp), horizontalArrangement = Arrangement.spacedBy(Dray.Space.s), verticalAlignment = Alignment.CenterVertically) {
@@ -327,7 +367,7 @@ private fun savedMethod(context: Context): MergeMethod {
  * chevron picks how. The pick is kept on the phone.
  */
 @Composable
-private fun MergeButton(pr: PullRequest, model: PrModel) {
+private fun MergeButton(pr: PullRequest, model: PrSource) {
     val store = LocalStore.current
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
@@ -398,7 +438,7 @@ private fun MergeButton(pr: PullRequest, model: PrModel) {
 }
 
 @Composable
-private fun CheckRow(check: PrCheck) {
+fun CheckRow(check: PrCheck) {
     val uri = LocalUriHandler.current
     Row(
         Modifier.fillMaxWidth().height(44.dp)
@@ -421,13 +461,13 @@ private fun CheckRow(check: PrCheck) {
 
 /** "Opens on GitHub", trailing a row that does. */
 @Composable
-private fun OutArrow() {
+fun OutArrow() {
     Icon(Icons.AutoMirrored.Filled.CallMade, null, Modifier.size(14.dp), tint = Dray.tertiary)
 }
 
 /** A comment or review as a card; tapping it opens the thread on GitHub, since the sheet reads and never replies. */
 @Composable
-private fun CommentCard(comment: PrComment) {
+fun CommentCard(comment: PrComment) {
     val uri = LocalUriHandler.current
     Column(
         Modifier.prGroup(0.dp).clickable { runCatching { uri.openUri(comment.url) } }.padding(14.dp).alpha(if (comment.resolved) 0.6f else 1f),
@@ -461,7 +501,7 @@ private fun verb(kind: String): Pair<String, Color>? = when (kind) {
 
 /** `gh` missing or logged out on the server: the command to run there, and a way to look again once it has. The desktop's `MissingCli`. */
 @Composable
-private fun MissingCli(kind: String, model: PrModel) {
+fun MissingCli(kind: String, model: PrSource) {
     val store = LocalStore.current
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
@@ -470,7 +510,7 @@ private fun MissingCli(kind: String, model: PrModel) {
     var stillMissing by remember { mutableStateOf(false) }
     val installing = kind == "no_cli"
     val command = if (installing) "dray setup" else "gh auth login"
-    val server = store.name(model.key.server)
+    val server = store.name(model.server)
     Column(
         Modifier.fillMaxWidth().fillMaxHeight().padding(horizontal = 20.dp).padding(bottom = 120.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
@@ -499,7 +539,7 @@ private fun MissingCli(kind: String, model: PrModel) {
                     // Logging in moves nothing about where `gh` is, so that half only reads again;
                     // an install needs the server to drop its cached absence first.
                     if (installing) {
-                        val found = runCatching { store.call(model.key.server, "recheck_gh").bool }.getOrNull() == true
+                        val found = runCatching { store.call(model.server, "recheck_gh").bool }.getOrNull() == true
                         stillMissing = !found
                         if (!found) return@launch
                     }
@@ -514,8 +554,8 @@ private fun MissingCli(kind: String, model: PrModel) {
 
 /** The open-PR glyph in one tone: the title bar's button before a PR is read, and the notice's mark. */
 @Composable
-private fun PrOutline(tone: Color, size: Dp) {
-    Canvas(Modifier.size(size)) {
+fun PrOutline(tone: Color, size: Dp, label: String? = null) {
+    Canvas(Modifier.size(size).then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier)) {
         val p = Path().apply {
             addOval(Rect(3f, 3f, 9f, 9f))
             moveTo(6f, 9f); lineTo(6f, 21f)
@@ -531,5 +571,5 @@ private fun PrOutline(tone: Color, size: Dp) {
 }
 
 /** A raised group on the sheet: the readiness card, the checks, each comment. */
-private fun Modifier.prGroup(padding: Dp = Dray.Space.l): Modifier =
+fun Modifier.prGroup(padding: Dp = Dray.Space.l): Modifier =
     fillMaxWidth().clip(RoundedCornerShape(Dray.Radius.group)).background(Dray.raised).padding(padding)

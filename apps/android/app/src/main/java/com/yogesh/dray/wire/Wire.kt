@@ -108,6 +108,23 @@ data class PrMark(
     val mergeable: String? = null,
     val mergeStateStatus: String? = null,
     val reviewDecision: String? = null,
+    /** What a row on the pull requests page draws; only where the read asked for it. */
+    val listing: PrListing? = null,
+)
+
+/** `github.rs`'s `PrListing`. */
+@Serializable
+data class PrListing(
+    val title: String = "",
+    val author: String = "",
+    val authorAvatar: String? = null,
+    val updatedAt: String = "",
+    val additions: Int = 0,
+    val deletions: Int = 0,
+    val commentCount: Int = 0,
+    val isCrossRepository: Boolean = false,
+    val viewerDidAuthor: Boolean = false,
+    val reviewRequested: Boolean = false,
 )
 
 @Serializable
@@ -116,6 +133,7 @@ data class Project(
     val name: String,
     val lastSelected: String = "",
     val remote: String? = null,
+    val space: String? = null,
 )
 
 /** What `share_machines` answers and `machines_shared` carries (#847). */

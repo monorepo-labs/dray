@@ -41,6 +41,10 @@ sealed interface Route {
     data class ServerSettings(val id: String) : Route
     data object Notifications : Route
     data object Dictation : Route
+    data object Pulls : Route
+    data class Pull(val target: PullTarget) : Route
+    data object Issues : Route
+    data class Issue(val server: String, val id: String, val identifier: String) : Route
 
     /** A route as strings, for the saved state a rotation restores the stack from. */
     fun save(): kotlin.collections.List<String> = when (this) {
@@ -54,6 +58,10 @@ sealed interface Route {
         is ServerSettings -> listOf("server-settings", id)
         Notifications -> listOf("notifications")
         Dictation -> listOf("dictation")
+        Pulls -> listOf("pulls")
+        is Pull -> with(target) { listOf("pull", server, key, repo, number.toString(), url, branch) }
+        Issues -> listOf("issues")
+        is Issue -> listOf("issue", server, id, identifier)
     }
 
     companion object {
@@ -67,6 +75,10 @@ sealed interface Route {
             "server-settings" -> ServerSettings(s[1])
             "notifications" -> Notifications
             "dictation" -> Dictation
+            "pulls" -> Pulls
+            "pull" -> Pull(PullTarget(s[1], s[2], s[3], s[4].toInt(), s[5], s[6]))
+            "issues" -> Issues
+            "issue" -> Issue(s[1], s[2], s[3])
             else -> null
         }
 
@@ -126,6 +138,8 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
                     openSettings = { push(it?.let(Route::ServerSettings) ?: Route.Settings) },
                     addServer = { push(Route.Add(scan = it)) },
                     startBot = { server, bot -> push(Route.BotStart(server, bot)) },
+                    openPulls = { push(Route.Pulls) },
+                    openIssues = { push(Route.Issues) },
                 )
                 is Route.Session -> {
                     val bot = store.bot(route.key)
@@ -145,6 +159,17 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
                 is Route.ServerSettings -> SettingsScreen(route.id, ::pop, { push(Route.Dictation) }, { push(Route.Notifications) }) { push(Route.Add()) }
                 Route.Notifications -> NotificationSettings(::pop)
                 Route.Dictation -> DictationSettings(::pop)
+                Route.Pulls -> PullsScreen(::pop) { row ->
+                    push(Route.Pull(PullTarget(row.server, row.key, row.repoName, row.mark.number, row.id, row.mark.headRefName)))
+                }
+                is Route.Pull -> PullDetailScreen(route.target, ::pop) { push(Route.Session(it)) }
+                Route.Issues -> IssuesScreen(::pop) { server, issue -> push(Route.Issue(server, issue.id, issue.identifier)) }
+                is Route.Issue -> IssueDetailScreen(route.server, route.id, route.identifier, ::pop) { tag ->
+                    // The tag lands in the dock's words, where project and agent are still to pick: the desktop's Work on.
+                    task.text = if (task.hasText) "${task.text} $tag " else "$tag "
+                    forward.value = false
+                    stack.removeAll { it != Route.List }
+                }
             } }
         }
         Box(Modifier.align(Alignment.TopCenter).statusBarsPadding()) { ErrorToast() }

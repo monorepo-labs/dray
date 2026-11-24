@@ -61,6 +61,16 @@ reads and drives it over the same WebSocket the desktop and iOS use
   one of its own, with no app coming forward. A tap opens the chat (`open`
   where a bot's task alerts). Settings → Notifications holds the switches.
 
+- **Pull requests and Issues pages** (Pulls.swift, PullDetail.swift,
+  Issues.swift): beside Settings on the list. Each draws its last read at
+  once, from `page-pulls.json` and `page-issues.json` in the cache dir on a
+  fresh launch, and reads behind it (`store/Pulls.kt`, `store/Issues.kt`).
+  The PR list's search box narrows by title, number, author or branch on the
+  phone; the issues one asks the tracker. A PR's page reads it through
+  `prs_for_branch` and its description, labels and reviewers through
+  `pr_detail` (#1511), and reuses the PR sheet's readiness, checks and
+  comments. Starting a task from a PR (iOS's start box) is not ported yet.
+
 Left for the tasks building on this: New task (Run with), bots and bot chat,
 Changes, the rest of Settings, the PR sheet, the runs sheet behind "N
 background tasks running", Share in the image viewer.

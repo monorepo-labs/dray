@@ -36,7 +36,6 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.Contrast
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material3.AlertDialog
@@ -98,13 +97,12 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
 import okhttp3.Request
 
-// Settings.swift: a card per server, then Appearance and about. Its pages stack inside this screen.
+// Settings.swift: a card per server, then Dictation, Notifications and about. Its pages stack inside this screen.
 
 private sealed interface Page {
     data object Root : Page
     data object Servers : Page
     data class Server(val id: String) : Page
-    data object Appearance : Page
 }
 
 /**
@@ -117,13 +115,10 @@ fun SettingsScreen(focus: String?, back: () -> Unit, dictation: () -> Unit = {},
     fun pop() = if (pages.size > 1) { pages.removeAt(pages.lastIndex); Unit } else back()
     BackHandler(onBack = ::pop)
     LaunchedEffect(Unit) { Releases.refresh() }
-    val store = LocalStore.current
     when (val page = pages.last()) {
         Page.Root -> SettingsPage("Settings", ::pop) {
             ServerCards(5, open = { pages.add(Page.Server(it)) }, all = { pages.add(Page.Servers) }, add = add)
             RowGroup {
-                SettingsRow("Appearance", icon = { Icon(Icons.Outlined.Contrast, null, Modifier.size(20.dp), tint = Dray.secondary) },
-                    value = if (store.hideSessions) "Bots only" else null) { pages.add(Page.Appearance) }
                 SettingsRow("Dictation", icon = { Icon(Icons.Outlined.Mic, null, Modifier.size(20.dp), tint = Dray.secondary) }, onClick = dictation)
                 SettingsRow("Notifications", icon = { Icon(Icons.Outlined.Notifications, null, Modifier.size(20.dp), tint = Dray.secondary) },
                     value = if (com.yogesh.dray.push.Push.enabled && com.yogesh.dray.push.Push.available) "On" else "Off", onClick = notifications)
@@ -134,12 +129,6 @@ fun SettingsScreen(focus: String?, back: () -> Unit, dictation: () -> Unit = {},
             ServerCards(null, open = { pages.add(Page.Server(it)) }, all = {}, add = add)
         }
         is Page.Server -> ServerDetail(page.id, ::pop)
-        Page.Appearance -> SettingsPage("Appearance", ::pop) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                RowGroup { SwitchRow("Hide sessions", store.hideSessions) { store.hideSessions = it } }
-                GroupLabel("Home shows your bots only: no sessions, project filter or settled.")
-            }
-        }
     }
 }
 
