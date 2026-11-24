@@ -1,6 +1,7 @@
 import { invoke } from "@/lib/transport";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
+import { SEARCH_DEBOUNCE_MS } from "@/hooks/useDebouncedSearch";
 import { pushNotice } from "@/hooks/useNotices";
 import {
   isSettled,
@@ -32,12 +33,6 @@ import type {
 /// asking for fewer rows would write a truncated answer under the key the page
 /// then paints from.
 export const ISSUE_LIST_LIMIT = 100;
-
-/// Typing in the page's search box reaches the network, so it is spaced out.
-/// Longer than the composer picker's 200ms: that one filters a menu somebody is
-/// mid-word in and wants to feel immediate, where this is a search box where a
-/// whole phrase gets typed before the answer is wanted.
-const DEBOUNCE_MS = 300;
 
 /// How long an answer counts as fresh. Leaving the page and coming back inside
 /// this window paints from the cache without a round trip, which is the trip
@@ -587,7 +582,8 @@ function useIssueList(query: IssueQuery, enabled: boolean, generation: number) {
     // nothing that mattered: each keystroke makes a key nothing is cached
     // under, so every one of them took the un-debounced path and fired its own
     // request — which is exactly the run this exists to collapse.
-    const timer = setTimeout(run, query.text ? DEBOUNCE_MS : 0);
+    // Typing in the page's search box reaches the network, so it is spaced out.
+    const timer = setTimeout(run, query.text ? SEARCH_DEBOUNCE_MS : 0);
     return () => {
       cancelled = true;
       clearTimeout(timer);

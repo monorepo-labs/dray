@@ -38,28 +38,23 @@ struct PullRequest: Decodable, Identifiable {
     }
 }
 
-/// `pr_detail`'s answer: what a PR's own page shows past `PullRequest`. Its own
-/// read, once per page, since adding it to the polled one costs GitHub a point more each time.
+/// `pr_detail`'s answer, `github.rs`'s `PrDetail`: what a PR's own page shows
+/// past `PullRequest`. Its own read, once per page, since adding it to the
+/// polled one costs GitHub a point more each time.
 struct PrDetail: Decodable {
     let body: String
     let createdAt: String
+    var authorAvatar: String? = nil
     /// `color` is `rrggbb`, which `Color(trackerHex:)` reads.
     let labels: [IssueLabel]
-    /// Asked and not answered yet: a person, a bot or a team.
-    let requested: [PrReviewer]
-    /// Each reviewer's latest verdict: `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED` or `DISMISSED`.
-    let reviews: [PrReviewer]
-
-    /// Who reviews, as GitHub's sidebar lists them: anyone asked again reads as waiting, whatever they said before.
-    var reviewers: [PrReviewer] {
-        requested + reviews.filter { r in !requested.contains { $0.name == r.name } }
-    }
+    /// One entry per person or team, a re-request already over its old verdict.
+    let reviewers: [PrReviewer]
 }
 
 struct PrReviewer: Decodable, Hashable {
     let name: String
     let avatar: String?
-    /// Empty for one asked and not answered yet.
+    /// `requested`, `approved`, `changes_requested` or `commented`; a new word reads as itself.
     let state: String
 }
 

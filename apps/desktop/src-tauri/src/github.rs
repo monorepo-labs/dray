@@ -1060,126 +1060,6 @@ pub(crate) fn unavailable(message: String) -> PrUnavailable {
     }
 }
 
-/// What a pull request's own page shows past [`PullRequest`]: its description,
-/// labels and who is asked to review or has.
-///
-/// Its own read, not more fields on [`QUERY`]: that one polls, and two more
-/// connections there take it from 2 points to 3 on every read; this one costs 1,
-/// once per opened page.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PrDetail {
-    pub body: String,
-    pub created_at: String,
-    pub labels: Vec<PrLabel>,
-    /// Asked and not yet answered: a person, a bot or a team.
-    pub requested: Vec<PrReviewer>,
-    /// Each reviewer's latest verdict, `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED` or `DISMISSED`.
-    pub reviews: Vec<PrReviewer>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PrLabel {
-    pub name: String,
-    /// `rrggbb`, no `#`.
-    pub color: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PrReviewer {
-    pub name: String,
-    pub avatar: Option<String>,
-    /// Empty for a request.
-    pub state: String,
-}
-
-const QUERY_DETAIL: &str = r#"
-query($owner:String!,$repo:String!,$number:Int!){
- repository(owner:$owner,name:$repo){
-  pullRequest(number:$number){
-   body createdAt
-   labels(first:20){nodes{name color}}
-   reviewRequests(first:20){nodes{requestedReviewer{__typename ... on User{login avatarUrl} ... on Team{name avatarUrl} ... on Bot{login avatarUrl} ... on Mannequin{login avatarUrl}}}}
-   latestReviews(first:20){nodes{author{login avatarUrl} state}}
- }}}
-"#;
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DetailRepository {
-    pull_request: Option<RawDetail>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawDetail {
-    #[serde(default)]
-    body: String,
-    #[serde(default)]
-    created_at: String,
-    labels: Option<Nodes<PrLabel>>,
-    review_requests: Option<Nodes<RawRequest>>,
-    latest_reviews: Option<Nodes<RawLatestReview>>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawRequest {
-    /// Null for a reviewer this token cannot see.
-    requested_reviewer: Option<RawReviewer>,
-}
-
-/// A user, bot or mannequin answers `login`; a team answers `name`.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawReviewer {
-    login: Option<String>,
-    name: Option<String>,
-    avatar_url: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct RawLatestReview {
-    author: Option<RawAuthor>,
-    #[serde(default)]
-    state: String,
-}
-
-/// One pull request's [`PrDetail`], by number, in the repo `cwd` names.
-pub async fn pr_detail(cwd: String, number: u64) -> Result<PrDetail, PrUnavailable> {
-    pr_detail_inner(&cwd, number).await.map_err(unavailable)
-}
-
-async fn pr_detail_inner(cwd: &str, number: u64) -> Result<PrDetail, String> {
-    let (owner, repo) = repo_slug(cwd).await?;
-    let (owner, repo) = (format!("owner={owner}"), format!("repo={repo}"));
-    let (query, number) = (format!("query={QUERY_DETAIL}"), format!("number={number}"));
-    // `-F`, not `-f`: the query takes an `Int!`, and `-f` sends a string.
-    read_detail(&gh(cwd, &["api", "graphql", "-f", &owner, "-f", &repo, "-f", &query, "-F", &number]).await?)
-}
-
-fn read_detail(out: &str) -> Result<PrDetail, String> {
-    let raw = Response::<DetailRepository>::repository(out)?
-        .and_then(|r| r.pull_request)
-        .ok_or("GitHub has no such pull request")?;
-    Ok(PrDetail {
-        body: raw.body,
-        created_at: raw.created_at,
-        labels: Nodes::take(raw.labels),
-        requested: Nodes::take(raw.review_requests)
-            .into_iter()
-            .filter_map(|r| r.requested_reviewer)
-            .filter_map(|r| {
-                Some(PrReviewer { name: r.login.or(r.name)?, avatar: r.avatar_url, state: String::new() })
-            })
-            .collect(),
-        reviews: Nodes::take(raw.latest_reviews)
-            .into_iter()
-            .map(|r| PrReviewer { name: login(&r.author), avatar: avatar(&r.author), state: r.state })
-            .collect(),
-    })
-}
-
 async fn prs_for_branch_inner(cwd: &str, branch: &str) -> Result<Vec<PullRequest>, String> {
     read_prs(&graphql(cwd, QUERY, Some(branch)).await?)
 }
@@ -1816,6 +1696,169 @@ pub async fn mark_pr_ready(cwd: String, number: u64) -> Result<(), String> {
     gh(&cwd, &["pr", "ready", &number.to_string()]).await.map(|_| ())
 }
 
+/// What the pull requests page's details pane draws beyond the panel's read:
+/// one PR's own words, labels and reviewers, by number.
+///
+/// **Its own query, not more fields on [`QUERY`].** That one sits at 2 points
+/// and even `labels(first:5)` on its fragment tips it to 3, on a read every PR
+/// tab polls; this one is measured at 1 and runs only when a PR is opened on
+/// the page or moves.
+const QUERY_DETAIL: &str = r#"
+query($owner:String!,$repo:String!,$number:Int!){
+ repository(owner:$owner,name:$repo){pullRequest(number:$number){
+  body createdAt author{login avatarUrl}
+  labels(first:20){nodes{name color}}
+  reviewRequests(first:20){nodes{requestedReviewer{__typename
+   ... on User{login avatarUrl} ... on Bot{login avatarUrl} ... on Mannequin{login avatarUrl} ... on Team{name avatarUrl}}}}
+  latestReviews(first:20){nodes{state author{login avatarUrl}}}
+ }}}
+"#;
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct PrDetail {
+    /// The description as GitHub stores it: markdown, images as links.
+    pub body: String,
+    pub created_at: String,
+    pub author_avatar: Option<String>,
+    pub labels: Vec<crate::issues::IssueLabel>,
+    /// Asked and answered, one entry per person or team.
+    pub reviewers: Vec<PrReviewer>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct PrReviewer {
+    /// A login, or a team's name.
+    pub name: String,
+    pub avatar: Option<String>,
+    pub state: ReviewerState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewerState {
+    /// Asked and not yet answered, or asked again after answering.
+    Requested,
+    Approved,
+    ChangesRequested,
+    Commented,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DetailRepository {
+    pull_request: Option<RawDetail>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawDetail {
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    created_at: String,
+    author: Option<RawAuthor>,
+    labels: Option<Nodes<RawLabel>>,
+    review_requests: Option<Nodes<RawReviewRequest>>,
+    latest_reviews: Option<Nodes<RawLatestReview>>,
+}
+
+#[derive(Deserialize)]
+struct RawLabel {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    color: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawReviewRequest {
+    requested_reviewer: Option<RawRequested>,
+}
+
+/// A user, bot and mannequin carry a login; a team carries a name. Both
+/// optional so one shape reads all four.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawRequested {
+    login: Option<String>,
+    name: Option<String>,
+    avatar_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawLatestReview {
+    #[serde(default)]
+    state: String,
+    author: Option<RawAuthor>,
+}
+
+/// One pull request's description, labels and reviewers — see [`QUERY_DETAIL`].
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn pr_detail(cwd: String, number: u64) -> Result<PrDetail, PrUnavailable> {
+    pr_detail_inner(&cwd, number).await.map_err(unavailable)
+}
+
+async fn pr_detail_inner(cwd: &str, number: u64) -> Result<PrDetail, String> {
+    let (owner, repo) = repo_slug(cwd).await?;
+    let (owner, repo) = (format!("owner={owner}"), format!("repo={repo}"));
+    let query = format!("query={QUERY_DETAIL}");
+    // `-F`, not `-f`: the variable is an `Int!` and `-f` sends a string.
+    let number = format!("number={number}");
+    let args = ["api", "graphql", "-f", &owner, "-f", &repo, "-f", &query, "-F", &number];
+    read_pr_detail(&gh(cwd, &args).await?)
+}
+
+/// Splits parsing off the spawn, like [`read_prs`].
+fn read_pr_detail(out: &str) -> Result<PrDetail, String> {
+    let raw = Response::<DetailRepository>::repository(out)?
+        .and_then(|r| r.pull_request)
+        .ok_or("GitHub did not find this pull request.")?;
+
+    // Answered first, then asked: a request standing beside a review is a
+    // re-request, which is the newer fact, so it replaces the verdict.
+    let mut reviewers: Vec<PrReviewer> = Nodes::take(raw.latest_reviews)
+        .into_iter()
+        .filter_map(|r| {
+            let state = match r.state.as_str() {
+                "APPROVED" => ReviewerState::Approved,
+                "CHANGES_REQUESTED" => ReviewerState::ChangesRequested,
+                "COMMENTED" => ReviewerState::Commented,
+                // Pending is the viewer's own unsent draft; dismissed is no
+                // longer a verdict.
+                _ => return None,
+            };
+            Some(PrReviewer { name: login(&r.author), avatar: avatar(&r.author), state })
+        })
+        .collect();
+    for request in Nodes::take(raw.review_requests) {
+        let Some(who) = request.requested_reviewer else { continue };
+        let Some(name) = who.login.or(who.name).filter(|n| !n.is_empty()) else { continue };
+        let asked = PrReviewer { name, avatar: who.avatar_url, state: ReviewerState::Requested };
+        match reviewers.iter_mut().find(|r| r.name == asked.name) {
+            Some(existing) => *existing = asked,
+            None => reviewers.push(asked),
+        }
+    }
+
+    Ok(PrDetail {
+        body: raw.body,
+        created_at: raw.created_at,
+        author_avatar: avatar(&raw.author),
+        labels: Nodes::take(raw.labels)
+            .into_iter()
+            // GitHub's colour is bare hex; the issues page's labels carry `#`.
+            .map(|l| crate::issues::IssueLabel { name: l.name, color: format!("#{}", l.color) })
+            .collect(),
+        reviewers,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1829,23 +1872,6 @@ mod tests {
 
     fn parse() -> PullRequest {
         read_prs(FIXTURE).expect("fixture parses").pop().expect("one PR")
-    }
-
-    /// A team asked by name, a reviewer the token cannot see as null, and a
-    /// PR the repo does not have as an error rather than an empty page.
-    #[test]
-    fn reads_pr_detail() {
-        let out = r#"{"data":{"repository":{"pullRequest":{"body":"hi","createdAt":"2026-11-20T10:00:00Z",
-            "labels":{"nodes":[{"name":"bug","color":"d73a4a"}]},
-            "reviewRequests":{"nodes":[{"requestedReviewer":{"__typename":"User","login":"a","avatarUrl":"u"}},
-              {"requestedReviewer":{"__typename":"Team","name":"core","avatarUrl":null}},{"requestedReviewer":null}]},
-            "latestReviews":{"nodes":[{"author":{"login":"b","avatarUrl":null},"state":"APPROVED"}]}}}}}"#;
-        let d = read_detail(out).unwrap();
-        assert_eq!(d.body, "hi");
-        assert_eq!(d.labels[0].color, "d73a4a");
-        assert_eq!(d.requested.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["a", "core"]);
-        assert_eq!((d.reviews[0].name.as_str(), d.reviews[0].state.as_str()), ("b", "APPROVED"));
-        assert!(read_detail(r#"{"data":{"repository":{"pullRequest":null}}}"#).is_err());
     }
 
     #[test]
@@ -2148,6 +2174,41 @@ mod tests {
         let out = r#"{"headRefName":"feature","isCrossRepository":true}"#;
         let err = head_ref_to_delete(out).expect_err("a fork branch is refused");
         assert!(err.contains("fork"), "{err}");
+    }
+
+    #[test]
+    fn pr_detail_reads_labels_and_reviewers() {
+        // A real capture: two labels, a review request whose reviewer GitHub
+        // hides from this viewer (null), one to a person, and a bot's review.
+        let detail = read_pr_detail(include_str!("fixtures/pr_detail.json")).expect("parses");
+        assert!(!detail.body.is_empty());
+        assert_eq!(detail.created_at, "2026-11-20T01:54:00Z");
+        assert!(detail.author_avatar.is_some());
+        let labels: Vec<_> = detail.labels.iter().map(|l| (l.name.as_str(), l.color.as_str())).collect();
+        assert_eq!(labels, [("external", "#2700AF"), ("ready-for-review", "#39d965")]);
+        let reviewers: Vec<_> = detail.reviewers.iter().map(|r| (r.name.as_str(), r.state)).collect();
+        assert_eq!(
+            reviewers,
+            [("copilot-pull-request-reviewer", ReviewerState::Commented), ("sergiou87", ReviewerState::Requested)]
+        );
+    }
+
+    #[test]
+    fn a_re_request_replaces_the_earlier_verdict() {
+        let out = r#"{"data":{"repository":{"pullRequest":{"body":"","createdAt":"",
+            "reviewRequests":{"nodes":[{"requestedReviewer":{"__typename":"Team","name":"core","avatarUrl":null}},
+                                       {"requestedReviewer":{"__typename":"User","login":"ann","avatarUrl":null}}]},
+            "latestReviews":{"nodes":[{"state":"APPROVED","author":{"login":"ann"}},
+                                      {"state":"DISMISSED","author":{"login":"bob"}},
+                                      {"state":"PENDING","author":{"login":"cy"}}]}}}}}"#;
+        let detail = read_pr_detail(out).expect("parses");
+        let reviewers: Vec<_> = detail.reviewers.iter().map(|r| (r.name.as_str(), r.state)).collect();
+        assert_eq!(reviewers, [("ann", ReviewerState::Requested), ("core", ReviewerState::Requested)]);
+    }
+
+    #[test]
+    fn a_missing_pr_detail_is_an_error() {
+        assert!(read_pr_detail(r#"{"data":{"repository":{"pullRequest":null}}}"#).is_err());
     }
 
     /// Both halves fail closed. An answer we could not parse, or one missing

@@ -114,7 +114,7 @@ struct PullDetailView: View {
         let updated = parseDate(pr?.updatedAt ?? l.updatedAt).map { "Updated \(ago($0))" }
         let files = pr.map { "\($0.changedFiles) \($0.changedFiles == 1 ? "file" : "files")" }
         return VStack(alignment: .leading, spacing: Theme.Space.s) {
-            PersonLine(avatar: l.authorAvatar) { Text("\(pr?.author ?? l.author) opened this\(opened)") }
+            PersonLine(avatar: l.authorAvatar ?? detail?.authorAvatar) { Text("\(pr?.author ?? l.author) opened this\(opened)") }
             HStack(spacing: 6) {
                 Image(systemName: "arrow.triangle.branch").foregroundStyle(Theme.tertiary)
                 // Base is read with the PR; until then the head alone.
@@ -140,7 +140,7 @@ struct PullDetailView: View {
 
     /// Each reviewer and where they stand, under the review decision GitHub holds the PR to.
     private func reviewers(_ list: [PrReviewer], decision: String?) -> some View {
-        let said = ["APPROVED": "approved", "CHANGES_REQUESTED": "requested changes", "COMMENTED": "commented", "DISMISSED": "dismissed"]
+        let said = ["requested": "awaiting review", "approved": "approved", "changes_requested": "requested changes", "commented": "commented"]
         return VStack(alignment: .leading, spacing: Theme.Space.s) {
             HStack {
                 GroupLabel("Reviewers")
@@ -154,8 +154,8 @@ struct PullDetailView: View {
                 PersonLine(avatar: r.avatar) {
                     HStack(spacing: 4) {
                         Text(r.name).foregroundStyle(Theme.text)
-                        Text(r.state.isEmpty ? "awaiting review" : said[r.state] ?? r.state.lowercased())
-                            .foregroundStyle(r.state == "APPROVED" ? Theme.add : r.state == "CHANGES_REQUESTED" ? Theme.destructive : Theme.tertiary)
+                        Text(said[r.state] ?? r.state.replacingOccurrences(of: "_", with: " "))
+                            .foregroundStyle(r.state == "approved" ? Theme.add : r.state == "changes_requested" ? Theme.destructive : Theme.tertiary)
                     }
                     .lineLimit(1)
                 }

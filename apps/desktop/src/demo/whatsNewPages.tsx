@@ -18,7 +18,7 @@ import "../App.css";
 
 /// Full-window takes on What's New, for a release with highlights: the whole
 /// window, the way an Apple release page reads, rather than a carousel in a
-/// dialog. Every take reads the same highlights: the next release's own two by
+/// dialog. Every take reads the same highlights: the next release's own three by
 /// default, or one to six samples as the page's switch or `?n=` picks. Each
 /// leaves by Continue or Escape. Open raises a take
 /// over the whole window, as the app would; an action is logged in its row

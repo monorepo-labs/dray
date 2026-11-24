@@ -4,6 +4,7 @@ import {
   commentKey,
   inboxRows,
   inboxSection,
+  matchesPullSearch,
   pickableKeys,
   pullsReads,
   plainComment,
@@ -97,6 +98,42 @@ describe("inboxRows", () => {
   it("skips merged marks and marks from a server with no listing", () => {
     const rows = inboxRows(["/p"], () => [mark({ state: "MERGED" }), mark({ listing: undefined })]);
     expect(rows).toEqual([]);
+  });
+});
+
+describe("matchesPullSearch", () => {
+  const pr = row({
+    number: 1234,
+    headRefName: "worktree-dusky-denim",
+    listing: listing({ title: "Bump Vite to v12", author: "Yogesh" }),
+  });
+
+  it("matches title, author and branch, case aside", () => {
+    expect(matchesPullSearch(pr, "vite")).toBe(true);
+    expect(matchesPullSearch(pr, "yogesh")).toBe(true);
+    expect(matchesPullSearch(pr, "DUSKY")).toBe(true);
+    expect(matchesPullSearch(pr, "nothing")).toBe(false);
+  });
+
+  it("needs every word, each anywhere", () => {
+    expect(matchesPullSearch(pr, "bump denim")).toBe(true);
+    expect(matchesPullSearch(pr, "bump nothing")).toBe(false);
+  });
+
+  it("takes a number whole, with or without #", () => {
+    expect(matchesPullSearch(pr, "1234")).toBe(true);
+    expect(matchesPullSearch(pr, "#1234")).toBe(true);
+    expect(matchesPullSearch(pr, "#123")).toBe(false);
+    expect(matchesPullSearch(pr, "123")).toBe(false);
+  });
+
+  it("finds a bare number in the text, never a # one", () => {
+    expect(matchesPullSearch(pr, "12")).toBe(true);
+    expect(matchesPullSearch(pr, "#12")).toBe(false);
+  });
+
+  it("lets an empty query through", () => {
+    expect(matchesPullSearch(pr, "  ")).toBe(true);
   });
 });
 

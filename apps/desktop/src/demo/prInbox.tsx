@@ -278,6 +278,21 @@ function Demo() {
                 key={picked.mark.url}
                 row={picked}
                 data={{ prs: [pr], error: null, loading: false, acting: null, act: async () => {}, refresh: () => {} }}
+                detail={{
+                  detail: {
+                    body: "## What\n\nA demo description, drawn as markdown.\n\n- one\n- two",
+                    createdAt: ago(60 * 26),
+                    authorAvatar: null,
+                    labels: [{ name: "needs-review", color: "#d4c5f9" }],
+                    reviewers: [
+                      { name: "ada", avatar: null, state: "approved" },
+                      { name: "bo", avatar: null, state: "requested" },
+                    ],
+                  },
+                  error: null,
+                  loading: false,
+                  refresh: () => {},
+                }}
                 sessions={sessionsFor(picked)}
                 bots={[]}
                 botOf={() => undefined}
