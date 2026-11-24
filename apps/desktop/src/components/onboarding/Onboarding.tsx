@@ -19,7 +19,9 @@ import {
   replayOnboarding,
   setFreshMachine,
   setWelcomeSound,
+  setOnboardingMusic,
   setWelcomeVoice,
+  useOnboardingMusic,
   useWelcomeVoice,
   WELCOME_VOICES,
   type WelcomeVoice,
@@ -27,7 +29,7 @@ import {
   useOnboarding,
   useWelcomeSound,
 } from "./state";
-import { playWelcomeSound, startOnboardingMusic, WELCOME_SOUNDS } from "./welcomeSounds";
+import { MUSIC_TRACKS, playWelcomeSound, startOnboardingMusic, WELCOME_SOUNDS } from "./welcomeSounds";
 import "./onboarding.css";
 
 /// How long a finished setup stays on screen before the flow moves on by itself.
@@ -64,6 +66,7 @@ function Flow({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }) {
   const github = useGithubSetup();
   const sound = useWelcomeSound();
   const voicePick = useWelcomeVoice();
+  const musicPick = useOnboardingMusic();
   // With the welcome line: the welcome said aloud once, the music low under it
   // and up once it ends, playing on over every step. Leaving fades it out.
   useEffect(() => {
@@ -72,7 +75,7 @@ function Flow({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }) {
     let voice: HTMLAudioElement | undefined;
     const lift = () => music?.lift();
     const timer = setTimeout(() => {
-      music = startOnboardingMusic();
+      music = startOnboardingMusic(musicPick);
       voice = playVoice(voicePick, lift);
     }, MUSIC_AT);
     return () => {
@@ -296,6 +299,7 @@ function playVoice(id: WelcomeVoice, onDone?: () => void): HTMLAudioElement {
 }
 
 let preview: HTMLAudioElement | undefined;
+let previewMusic: (() => void) | undefined;
 
 /// ⌘⇧O: play onboarding from the start or turn it off, and pick its sound.
 function DevSwitch() {
@@ -304,6 +308,7 @@ function DevSwitch() {
   const fresh = useFreshMachine();
   const sound = useWelcomeSound();
   const voice = useWelcomeVoice();
+  const music = useOnboardingMusic();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -399,6 +404,33 @@ function DevSwitch() {
               )}
             >
               {v.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="mt-1 flex flex-col gap-1.5 border-t border-hairline px-2 pt-2 pb-1">
+        <span className="text-xs text-muted-foreground">Music · click to hear 8s</span>
+        <div className="flex flex-wrap gap-1">
+          {MUSIC_TRACKS.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => {
+                setOnboardingMusic(m.id);
+                previewMusic?.();
+                const { stop } = startOnboardingMusic(m.id, true);
+                const timer = setTimeout(stop, 8000);
+                previewMusic = () => {
+                  clearTimeout(timer);
+                  stop();
+                };
+              }}
+              className={cn(
+                "h-7 cursor-pointer rounded-md px-2.5 text-ui",
+                music === m.id ? "bg-foreground text-background" : "bg-muted hover:bg-muted/70",
+              )}
+            >
+              {m.label}
             </button>
           ))}
         </div>

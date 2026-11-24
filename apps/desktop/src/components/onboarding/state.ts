@@ -6,7 +6,7 @@ import cleanUrl from "@/assets/welcome-voice.m4a";
 import pilotUrl from "@/assets/welcome-voice-pilot.m4a";
 import radioUrl from "@/assets/welcome-voice-radio.m4a";
 
-import { WELCOME_SOUNDS, type WelcomeSound } from "./welcomeSounds";
+import { MUSIC_TRACKS, type MusicTrack, WELCOME_SOUNDS, type WelcomeSound } from "./welcomeSounds";
 
 /// Onboarding on trial (#1421). Dev builds only, played from the dev switch; a
 /// release never shows it until it is wired to first launch.
@@ -65,6 +65,20 @@ export function useWelcomeSound(): WelcomeSound {
 export function setWelcomeSound(id: WelcomeSound) {
   sound = id;
   localStorage.setItem(SOUND, id);
+  changed.emit();
+}
+
+const MUSIC = "dray.dev.onboarding.music";
+let music: MusicTrack = MUSIC_TRACKS.find((m) => m.id === localStorage.getItem(MUSIC))?.id ?? "arcade";
+
+/// The background music track picked by ear in the dev switch.
+export function useOnboardingMusic(): MusicTrack {
+  return useSyncExternalStore(changed.subscribe, () => music);
+}
+
+export function setOnboardingMusic(id: MusicTrack) {
+  music = id;
+  localStorage.setItem(MUSIC, id);
   changed.emit();
 }
 
