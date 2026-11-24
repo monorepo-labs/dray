@@ -26,12 +26,14 @@ import "../App.css";
 
 type Backdrop = "black" | "blue";
 type Cards = "dark" | "white";
+type Layout = "gaps" | "borders";
 type TakeProps = {
   hl: Highlight[];
   onAction: (label: string) => void;
   onClose: () => void;
   backdrop?: Backdrop;
   cards?: Cards;
+  layout?: Layout;
 };
 
 const title = (h: Highlight) => changelogPlain(h.item.title ?? h.item.body);
@@ -560,7 +562,7 @@ function ContinueCard({ row, onClose, white }: { row: boolean; onClose: () => vo
 /// Two columns throughout. Continue fills the last row's empty slot when the
 /// count is odd and takes a row of its own when it is even, so no count leaves
 /// a hole.
-function TakeLanding({ hl, onAction, onClose, backdrop = "black", cards = "dark" }: TakeProps) {
+function TakeLanding({ hl, onAction, onClose, backdrop = "blue", cards = "white", layout = "gaps" }: TakeProps) {
   const one = hl.length === 1;
   const blue = backdrop === "blue";
   const white = cards === "white";
@@ -578,9 +580,16 @@ function TakeLanding({ hl, onAction, onClose, backdrop = "black", cards = "dark"
       <main className="relative min-h-0 flex-1 overflow-y-auto px-10 pb-12">
         <div className="mx-auto flex w-full max-w-[1120px] flex-col pt-6">
           <GateHeading>{one ? "New in Dray." : `${hl.length} new things in Dray.`}</GateHeading>
-          {/* Backed by the page's own colour, so the stripes never show
-              through the 2px gaps as a dotted line. */}
-          <div className={cn("grid grid-cols-2 gap-[2px]", blue ? "bg-[#1612F8]" : "bg-black")}>
+          {/* Gaps: 16px of the page between cards, stripes and all. Borders:
+              cards edge to edge, a hairline between and around them, as the
+              site's "Ticket to merge" grid draws its columns; the line is the
+              grid's own fill showing through 1px gaps and a 1px pad. */}
+          <div
+            className={cn(
+              "grid grid-cols-2",
+              layout === "gaps" ? "gap-4" : cn("gap-px p-px", white ? "bg-[#D4D4D8]" : "bg-[#3A3A3A]"),
+            )}
+          >
             {hl.map((h, i) => (
               <LandingCard key={i} h={white ? onWhite(h) : h} onAction={onAction} white={white} />
             ))}
@@ -639,7 +648,8 @@ function Row({
   hl,
   backdrop,
   cards,
-}: (typeof TAKES)[number] & { hl: Highlight[]; backdrop: Backdrop; cards: Cards }) {
+  layout,
+}: (typeof TAKES)[number] & { hl: Highlight[]; backdrop: Backdrop; cards: Cards; layout: Layout }) {
   const [open, setOpen] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
   const done = (line: string) => {
@@ -662,6 +672,7 @@ function Row({
           hl={hl}
           backdrop={backdrop}
           cards={cards}
+          layout={layout}
           onAction={(label) => done(`action: ${label}`)}
           onClose={() => done("closed, seen")}
         />
@@ -676,8 +687,9 @@ function Demo() {
   // 0 is the next release's own highlights; 1 to 6 are samples.
   const [count, setCount] = useState(() => Math.min(Math.max(Number(params.get("n")) || 0, 0), PAGE_HIGHLIGHTS.length));
   const hl = count === 0 ? NEXT_RELEASE : PAGE_HIGHLIGHTS.slice(0, count);
-  const [backdrop, setBackdrop] = useState<Backdrop>(() => (params.get("bg") === "blue" ? "blue" : "black"));
-  const [cards, setCards] = useState<Cards>(() => (params.get("cards") === "white" ? "white" : "dark"));
+  const [backdrop, setBackdrop] = useState<Backdrop>(() => (params.get("bg") === "black" ? "black" : "blue"));
+  const [cards, setCards] = useState<Cards>(() => (params.get("cards") === "dark" ? "dark" : "white"));
+  const [layout, setLayout] = useState<Layout>(() => (params.get("layout") === "borders" ? "borders" : "gaps"));
   return (
     <TooltipProvider>
       <div className="mx-auto flex max-w-3xl flex-col gap-6 p-10">
@@ -744,11 +756,26 @@ function Demo() {
                 </Button>
               ))}
             </div>
+            <span className="ml-3 text-muted-foreground">Layout</span>
+            <div role="radiogroup" aria-label="F layout" className="flex gap-1">
+              {(["gaps", "borders"] as const).map((l) => (
+                <Button
+                  key={l}
+                  role="radio"
+                  aria-checked={layout === l}
+                  size="sm"
+                  variant={layout === l ? "default" : "outline"}
+                  onClick={() => setLayout(l)}
+                >
+                  {l === "gaps" ? "Gaps" : "Borders"}
+                </Button>
+              ))}
+            </div>
           </div>
         </header>
         <ul className="flex flex-col border-t border-border">
           {TAKES.filter((t) => !only || only.includes(t.id)).map((t) => (
-            <Row key={t.id} {...t} hl={hl} backdrop={backdrop} cards={cards} />
+            <Row key={t.id} {...t} hl={hl} backdrop={backdrop} cards={cards} layout={layout} />
           ))}
         </ul>
       </div>
