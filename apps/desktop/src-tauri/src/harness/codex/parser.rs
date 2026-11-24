@@ -218,7 +218,8 @@ pub enum ThreadItem {
     /// A subagent Codex started, and what it is doing.
     ///
     /// `agent_path` is the agent's own name (`/root/count_to_three`), not a
-    /// filesystem path.
+    /// filesystem path. `model` and `reasoning_effort` ride `started` alone
+    /// (0.172); the effort stays a `Value` because a custom one may be a number.
     #[serde(rename_all = "camelCase")]
     SubAgentActivity {
         id: String,
@@ -228,6 +229,50 @@ pub enum ThreadItem {
         agent_thread_id: Option<String>,
         #[serde(default)]
         agent_path: Option<String>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        reasoning_effort: Option<Value>,
+    },
+    /// The model paused on its `clock.sleep` tool.
+    #[serde(rename_all = "camelCase")]
+    Sleep {
+        id: String,
+        #[serde(default)]
+        duration_ms: Option<u64>,
+    },
+    /// An image the model made. `saved_path` is where Codex wrote it, and
+    /// `failure` is a tagged union (`usageLimitExceeded` today) kept whole.
+    #[serde(rename_all = "camelCase")]
+    ImageGeneration {
+        id: String,
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        revised_prompt: Option<String>,
+        #[serde(default)]
+        saved_path: Option<String>,
+        #[serde(default)]
+        failure: Option<Value>,
+    },
+    /// A tool the client or a plugin registered rather than one Codex ships.
+    #[serde(rename_all = "camelCase")]
+    DynamicToolCall {
+        id: String,
+        #[serde(default)]
+        namespace: Option<String>,
+        #[serde(default)]
+        tool: String,
+        #[serde(default)]
+        arguments: Option<Value>,
+        #[serde(default)]
+        status: ItemStatus,
+        #[serde(default)]
+        success: Option<bool>,
+        #[serde(default, deserialize_with = "crate::harness::null_as_default")]
+        content_items: Vec<Value>,
+        #[serde(default)]
+        duration_ms: Option<u64>,
     },
     /// The calls that drive subagents — `spawn_agent`, `send_message`, `wait`,
     /// `list_agents`, `interrupt_agent`, `followup_task`.
@@ -474,6 +519,18 @@ pub fn parse_notification(method: &str, params: Value) -> Result<CodexEvent, ser
         | "thread/settings/updated"
         | "thread/environment/connected"
         | "thread/environment/disconnected"
+        // Fires on every ordinary turn (captured on 0.172): the server's own
+        // unread marker, which Dray keeps itself.
+        | "thread/readState/changed"
+        // Deprecated twin of the `contextCompaction` item, which already draws.
+        | "thread/compacted"
+        // A generated image saved as an attachment; the item carries the path.
+        | "thread/attachment/updated"
+        | "thread/prediction/updated"
+        | "app/list/updated"
+        | "modelProvider/authRecoveryStarted"
+        | "modelProvider/authRecoveryCompleted"
+        | "windows/worldWritableWarning"
         | "turn/diff/updated"
         | "turn/moderationMetadata"
         | "hook/started"
@@ -598,12 +655,12 @@ mod tests {
     /// the turn around it still has to draw.
     #[test]
     fn unmodelled_item_kind_degrades() {
-        // `imageGeneration` is in the server's own variant list and Dray draws
+        // `hookPrompt` is in the server's own variant list and Dray draws
         // nothing for it. Pick a kind from that list rather than an invented
         // one, so this keeps testing the case that actually happens.
         let params = json!({
             "threadId": "t", "turnId": "u",
-            "item": {"type": "imageGeneration", "id": "ig_1", "prompt": "a cat"}
+            "item": {"type": "hookPrompt", "id": "hp_1", "fragments": []}
         });
 
         let CodexEvent::ItemStarted(started) =

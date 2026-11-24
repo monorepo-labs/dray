@@ -1711,6 +1711,7 @@ mod tests {
     const COMMAND_APPROVAL: &str = include_str!("fixtures/command_approval.jsonl");
     const TOOL_KINDS: &str = include_str!("fixtures/tool_kinds.jsonl");
     const PLAN_UPDATED: &str = include_str!("fixtures/plan_updated.jsonl");
+    const SUBAGENT_SLEEP: &str = include_str!("fixtures/subagent_sleep.jsonl");
 
     const FIXTURES: &[(&str, &str)] = &[
         ("simple_turn", SIMPLE_TURN),
@@ -1718,7 +1719,43 @@ mod tests {
         ("command_approval", COMMAND_APPROVAL),
         ("tool_kinds", TOOL_KINDS),
         ("plan_updated", PLAN_UPDATED),
+        ("subagent_sleep", SUBAGENT_SLEEP),
     ];
+
+    /// 0.172: the spawn names the child's model and effort, and `clock.sleep`
+    /// has an item of its own. Both drew nothing before.
+    #[test]
+    fn a_spawn_names_its_model_and_a_sleep_draws() {
+        let (events, _) = replay(SUBAGENT_SLEEP);
+        let started = |want: &str| {
+            events
+                .iter()
+                .find_map(|e| match &e.payload {
+                    crate::events::AgentEventPayload::ToolCallStarted {
+                        name, input, title, ..
+                    } if name == want => Some((input.clone(), title.clone())),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{want} drew no row"))
+        };
+
+        let (spawn, _) = started("spawn_agent");
+        assert_eq!(spawn["model"], "gpt-6-luna");
+        assert_eq!(spawn["effort"], "low");
+
+        let (_, title) = started("sleep");
+        assert_eq!(title.as_deref(), Some("2s"));
+
+        // One close for the main thread; the child's own is dropped.
+        let closes = events
+            .iter()
+            .filter(|e| {
+                e.subagent.is_none()
+                    && matches!(e.payload, crate::events::AgentEventPayload::TurnCompleted { .. })
+            })
+            .count();
+        assert_eq!(closes, 1);
+    }
 
     /// Drives a real `codex app-server` through this module's own client.
     ///

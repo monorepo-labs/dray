@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { groupLabel, isRoutineError, mcpCall, skillBrief, streamingLabel, subagentBrief, toolLabel, toolSummary, verbName } from "./tools";
+import { groupLabel, isRoutineError, mcpCall, runSettings, skillBrief, streamingLabel, subagentBrief, toolLabel, toolSummary, verbName } from "./tools";
+
+// Codex 0.172's spawn row, as the mapper writes it, beside fx's nested one.
+describe("runSettings", () => {
+  it("reads a Codex spawn and an fx request the same way", () => {
+    expect(runSettings({ description: "Say words", model: "gpt-6-luna", effort: "low" })).toBe(
+      "gpt 6 luna low",
+    );
+    expect(runSettings({ request: { task: "x", model: "gpt-5.6-luna", effort: "high" } })).toBe(
+      "gpt 5.6 luna high",
+    );
+    expect(runSettings({ description: "Say words", model: null, effort: null })).toBe("");
+  });
+});
 
 // Every input here is a real `Skill` call taken out of `~/.dray/sessions`. The
 // harness classifies the tool as `other` and leaves `title` null, so the name

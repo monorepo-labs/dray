@@ -142,6 +142,8 @@ const TOOL_VERBS: Record<string, Verbs> = {
   apply_patch: ["Editing", "Edited", "file"],
   web_search: ["Searching web", "Searched web", "query"],
   view_image: ["Viewing", "Viewed", "image"],
+  image_generation: ["Generating image", "Generated image", "image"],
+  sleep: ["Waiting", "Waited", "pause"],
 
   // pi's own, which are its Unix namesakes in lowercase. `find` is what pi
   // calls the tool every other harness spells `Glob`, so it takes Glob's verbs
@@ -252,6 +254,16 @@ export function subagentBrief(
   return { task, model: field(input, "model"), effort: field(input, "effort"), agent: field(input, "agent") };
 }
 
+/// The model and effort a delegated child runs on, as words in the row's own
+/// sentence — "gpt 6 luna low". fx nests them under `request` or puts them at
+/// the top; Codex puts them at the top. Empty where the call names neither.
+export function runSettings(input: JsonValue): string {
+  const request = nested(input, "request") ?? input;
+  return [field(request, "model")?.replace(/-/g, " "), field(request, "effort")]
+    .filter(Boolean)
+    .join(" ");
+}
+
 /// The brief a `Skill` call was given — the sentence the model wrote for the
 /// skill, not an argument to it. Null where the model named a skill and left it
 /// to read its own instructions, which is the common case.
@@ -292,6 +304,7 @@ const GROUP_VERBS: Record<string, [running: string, done: string]> = {
   WebSearch: ["Searching", "Searched"],
   shell: ["Running", "Ran"],
   web_search: ["Searching", "Searched"],
+  image_generation: ["Generating", "Generated"],
   // The row's verb carries the noun ("Read Skill pdf"), which a count would
   // then say a second time — "Read Skill 2 skills". The group drops it.
   Skill: ["Reading", "Read"],
