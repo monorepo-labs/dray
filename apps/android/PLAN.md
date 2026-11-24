@@ -75,7 +75,14 @@ reads and drives it over the same WebSocket the desktop and iOS use
   phone; the issues one asks the tracker. A PR's page reads it through
   `prs_for_branch` and its description, labels and reviewers through
   `pr_detail` (#1511), and reuses the PR sheet's readiness, checks and
-  comments. Starting a task from a PR (iOS's start box) is not ported yet.
+  comments. A comment opens whole in place, replies and threads with it.
+  **Play and Share sit at the right of both detail pages' bars** (#1534):
+  Play opens a sheet holding the start box (`StartSheet.kt`), a bot or the
+  reader's own task, its place, agent, model, effort and fast mode. A PR's task
+  goes through `start_pr_session` on the PR's branch; an issue's through
+  `send_msg` with its tag, link and body and `issueIds`, or
+  `send_issue_to_bot`, so nothing is handed to the list's dock. Share is the
+  system share sheet with the title and link; neither page opens a browser.
 
 Left for the tasks building on this: New task (Run with), bots and bot chat,
 Changes, the rest of Settings, the PR sheet, the runs sheet behind "N

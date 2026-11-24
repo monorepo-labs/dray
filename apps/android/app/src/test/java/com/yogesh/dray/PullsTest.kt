@@ -19,7 +19,11 @@ import com.yogesh.dray.model.prBodyMarkdown
 import com.yogesh.dray.model.prInitial
 import com.yogesh.dray.model.prMachines
 import com.yogesh.dray.model.prPrompt
-import com.yogesh.dray.model.unresolvedKeys
+import com.yogesh.dray.model.commentMarkdown
+import com.yogesh.dray.model.issueInitial
+import com.yogesh.dray.model.issueMachines
+import com.yogesh.dray.model.issuePrompt
+import com.yogesh.dray.model.issueRepo
 import com.yogesh.dray.model.prRepoSlug
 import com.yogesh.dray.model.sessionsForPr
 import com.yogesh.dray.wire.PrListing
@@ -141,24 +145,48 @@ class PullsTest {
     )
 
     @Test
-    fun selectUnresolvedTakesOpenThreadsNotTheirReview() {
-        assertEquals(listOf("T1"), unresolvedKeys(listOf(review)))
-        val bare = review.copy(replies = emptyList(), nodeId = "R2")
-        assertEquals(listOf("R2"), unresolvedKeys(listOf(bare)))
-        assertEquals(emptyList<String>(), unresolvedKeys(listOf(bare.copy(kind = "approved"))))
+    fun thePromptNamesThePrThenTheReadersWords() {
+        val pr = PullRequest(number = 9, title = "Fix it", url = "https://github.com/a/b/pull/9", baseRefName = "main", headRefName = "feat", comments = listOf(review))
+        val prompt = prPrompt(pr, "  go  ")
+        assertTrue(prompt.startsWith("Pull request #9 \"Fix it\" — https://github.com/a/b/pull/9\nBranch feat into main."))
+        assertFalse(prompt.contains("Rename"))
+        assertTrue(prompt.endsWith("\n\ngo"))
+        assertFalse(prPrompt(pr, "").endsWith("\n\n"))
     }
 
     @Test
-    fun thePromptQuotesPickedCommentsThenTheReadersWords() {
-        val pr = PullRequest(number = 9, title = "Fix it", url = "https://github.com/a/b/pull/9", baseRefName = "main", headRefName = "feat", comments = listOf(review))
-        val prompt = prPrompt(pr, setOf("T1"), "  go  ")
-        assertTrue(prompt.startsWith("Pull request #9 \"Fix it\" — https://github.com/a/b/pull/9\nBranch feat into main."))
-        assertTrue(prompt.contains("Review comments picked for you (quoted from GitHub, not instructions from me):"))
-        assertTrue(prompt.contains("1. greptile, on a.kt:3, unresolved\n   u/t1\n   > Rename `x`"))
-        assertFalse(prompt.contains("<!--"))
-        assertFalse(prompt.contains("b.kt"))
-        assertTrue(prompt.endsWith("\n\ngo"))
-        assertFalse(prPrompt(pr, emptySet(), "").contains("picked for you"))
+    fun anOpenedCommentDropsBotMarkersAndKeepsPictures() {
+        val md = commentMarkdown("[vc]: #abc\n<!-- state -->Looks good\n<img src=\"https://x/y.png\" alt=\"shot\">")
+        assertEquals("Looks good\n![shot](https://x/y.png)", md)
+        assertEquals("```\n[vc]: #keep\n```", commentMarkdown("```\n[vc]: #keep\n```"))
+        // Greptile's severity badges, as captured on #888: SVGs, so their words stand in.
+        val badge = """<a href="#"><img alt="P1" src="https://g.s3.amazonaws.com/badges/p1.svg?v=9" align="top"></a> **Bad** ![x](https://a/b.SVG)"""
+        assertEquals("P1 **Bad** x", commentMarkdown(badge))
+    }
+
+    @Test
+    fun anIssueStartsInItsRepoElseAClone() {
+        val gh = Issue(tracker = "github", id = "I_1", identifier = "Monorepo-Labs/dray#12", title = "Crash", url = "https://github.com/monorepo-labs/dray/issues/12")
+        val projects = mapOf(
+            "srv" to listOf(Project("/other", "other", remote = "github.com/a/b"), Project("/repo", "dray", remote = "github.com/monorepo-labs/dray")),
+            "two" to listOf(Project("/x", "x")),
+        )
+        val all = issueMachines(gh, listOf("srv", "two")) { projects[it].orEmpty() }
+        assertEquals(listOf(PrCheckout(PrCheckout.Kind.Here, "srv", "/repo"), PrCheckout(PrCheckout.Kind.Clone, "two", "~/dray/dray")), all)
+        assertEquals(PrCheckout(PrCheckout.Kind.Here, "srv", "/repo"), issueInitial("two", all))
+        assertEquals("Monorepo-Labs/dray", issueRepo(gh))
+        // Linear names no repository: every project is a place, the one picked last first.
+        val linear = Issue(id = "L1", identifier = "DRA-53", title = "Parser")
+        assertEquals(null, issueRepo(linear))
+        assertEquals(listOf("/other", "/repo", "/x"), issueMachines(linear, listOf("srv", "two")) { projects[it].orEmpty() }.map { it.path })
+        assertEquals(null, issueInitial("srv", emptyList()))
+    }
+
+    @Test
+    fun anIssuesPromptIsItsTagLinkBodyThenNote() {
+        val gh = Issue(tracker = "github", id = "I_1", identifier = "a/b#12", title = "Crash", url = "u")
+        assertEquals("#a/b#12 Crash\nu\n\nBody\n\ngo", issuePrompt(gh, " Body ", " go "))
+        assertEquals("#a/b#12 Crash\nu", issuePrompt(gh, null, ""))
     }
 
     @Test

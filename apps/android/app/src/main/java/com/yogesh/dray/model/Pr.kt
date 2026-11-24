@@ -201,6 +201,28 @@ fun commentText(body: String): String {
     return (out.toString() + prose(text.substring(last))).trim()
 }
 
+private val svgTag = Regex("""<img\b[^>]*?\bsrc\s*=\s*["'][^"']*\.svg(?:\?[^"']*)?["'][^>]*>""", RegexOption.IGNORE_CASE)
+private val svgMarkdown = Regex("""!\[([^\]]*)]\(<?[^)\s>]*\.svg(?:\?[^)\s>]*)?>?\)""", RegexOption.IGNORE_CASE)
+private val nowhereLink = Regex("""<a\s+href\s*=\s*["']#["']\s*>([\s\S]*?)</a>""", RegexOption.IGNORE_CASE)
+private val altText =Regex("""\balt\s*=\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+
+/**
+ * A comment body opened whole: its bot marker lines gone, then drawn as a PR description is,
+ * pictures and all. An SVG (a review bot's severity badge) is its alt text: the phone draws none,
+ * and each left a blank picture-sized gap.
+ */
+fun commentMarkdown(body: String): String {
+    var fenced = false
+    val text = body.replace("\r\n", "\n").split('\n').filter { line ->
+        if (line.startsWith("```")) fenced = !fenced
+        fenced || !markerLine.containsMatchIn(line)
+    }.joinToString("\n")
+        .replace(svgTag) { m -> altText.find(m.value)?.groupValues?.get(1).orEmpty() }
+        .replace(svgMarkdown) { it.groupValues[1] }
+        .replace(nowhereLink) { it.groupValues[1] }
+    return prBodyMarkdown(text)
+}
+
 private fun prose(text: String): String {
     var s = tag.replace(text, "")
     // `&amp;` last, or `&amp;lt;` would decode twice.
