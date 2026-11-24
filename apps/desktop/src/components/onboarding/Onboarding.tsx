@@ -236,7 +236,7 @@ function MeetBot({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }
             <h1 className="text-[36px] leading-10 font-light tracking-[-0.03em]">Meet Dray Bot.</h1>
           </div>
           <div className="ob-in relative flex max-w-[440px] flex-col gap-2 pt-1" style={{ animationDelay: "60ms" }}>
-            <svg aria-hidden width="30" height="26" viewBox="0 0 22 19" className="absolute top-1.5 -left-11 fill-white/30">
+            <svg aria-hidden width="30" height="26" viewBox="0 0 22 19" className="absolute top-1.5 -left-11 fill-white/15">
               <path d="M0 19V9.5L5 0h4L6 9.5h3V19ZM13 19V9.5L18 0h4l-3 9.5h3V19Z" />
             </svg>
             <p className="text-[15px] leading-6 text-white/70">
