@@ -46,6 +46,7 @@ import {
   openServer,
   shareReady,
   shareServer,
+  pageColour,
   stoppedServer,
   stopShare,
   trackBrowserOpen,
@@ -236,8 +237,7 @@ export default function BrowserPane({
     <div className="flex min-h-0 flex-1 flex-col">
       <Chrome
         sessionId={sessionId}
-        // Chromium's error page reports its own colour, which ours is not.
-        current={stopped && current ? { ...current, background: null } : current}
+        current={current && { ...current, background: pageColour(current, sessionId) }}
         pending={pending}
         tab={tab}
         onClose={onClose}

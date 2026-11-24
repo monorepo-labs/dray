@@ -49,6 +49,7 @@ import {
   closeBlankTab,
   closeTab,
   openInBrowser,
+  pageColour,
   setPendingTab,
   stoppedServer,
   useBlankTabs,
@@ -378,7 +379,7 @@ export default function ViewTabs({
       label: pageLabel(page, browserId),
       active: own === "browser" && page.active && !pending,
       overlay: <AgentBeam tab={page.id} top />,
-      fill: page.background ?? undefined,
+      fill: pageColour(page, browserId) ?? undefined,
       locked: page.id === recorded,
       pick: () => {
         onChange("browser");

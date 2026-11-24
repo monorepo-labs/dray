@@ -8,7 +8,7 @@ vi.mock("@/lib/transport", () => ({
   serverOfSession: (id: string) => (id === "remote" ? "vps" : "local"),
 }));
 
-const { reachableUrl, browserTarget, normalizeUrl, stoppedServer } = await import("@/lib/browser");
+const { reachableUrl, browserTarget, normalizeUrl, pageColour, stoppedServer } = await import("@/lib/browser");
 
 type Tab = Parameters<typeof stoppedServer>[0];
 const tab = (url: string, error: string | null, loading = false): Tab => ({
@@ -116,5 +116,13 @@ describe("stoppedServer", () => {
     expect(stoppedServer(tab("http://localhost:4001/", "net::ERR_EMPTY_RESPONSE"), "mine")).toBeNull();
     expect(stoppedServer(tab("https://example.com/", "net::ERR_CONNECTION_REFUSED"), "mine")).toBeNull();
     expect(stoppedServer(tab("http://localhost:4001/", null), "mine")).toBeNull();
+  });
+});
+
+describe("pageColour", () => {
+  it("drops the colour Chromium's error page reports under a stopped server's page", () => {
+    const white = "rgb(255, 255, 255)";
+    expect(pageColour({ ...tab("http://localhost:4002/", "net::ERR_CONNECTION_REFUSED"), background: white }, "mine")).toBeNull();
+    expect(pageColour({ ...tab("http://localhost:4002/", null), background: white }, "mine")).toBe(white);
   });
 });
