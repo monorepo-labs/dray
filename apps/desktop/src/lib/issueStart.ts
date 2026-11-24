@@ -4,7 +4,7 @@ import { rememberedModel, usableEffort, usableModel } from "@/lib/model";
 import { stanceFor } from "@/lib/permission";
 import type { PrPicks } from "@/lib/prInbox";
 import { invoke, LOCAL, serverOfPath, type ServerId } from "@/lib/transport";
-import type { IssueRef, Model, Project, SessionIndexItem } from "@/types/events";
+import type { IssueRef, Model, Project } from "@/types/events";
 
 /// What a task from the issues page runs on: a new task's picks.
 export type IssuePicks = PrPicks & { useWorktree: boolean };
@@ -59,17 +59,13 @@ export function projectForIssue(
 }
 
 /// The prompt a task for `issue` starts from: its tag, which chips in the
-/// transcript, the link, and the body as the tracker holds it.
-export function issuePrompt(issue: Pick<IssueRef, "identifier" | "title" | "url">, body: string | null): string {
+/// transcript, the link, the body as the tracker holds it, and the reader's
+/// note last.
+export function issuePrompt(
+  issue: Pick<IssueRef, "identifier" | "title" | "url">,
+  body: string | null,
+  note = "",
+): string {
   const head = [issueTag(issue.identifier, issue.title), issue.url].filter(Boolean).join("\n");
-  const text = body?.trim();
-  return text ? `${head}\n\n${text}` : head;
-}
-
-/// Tasks filed under `issue`, newest first, a bot's included: what the
-/// details pane lists.
-export function tasksForIssue(items: readonly SessionIndexItem[], issue: Pick<IssueRef, "identifier">) {
-  return items
-    .filter((i) => i.issues.some((r) => r.identifier === issue.identifier))
-    .sort((a, b) => b.created.localeCompare(a.created));
+  return [head, body?.trim(), note.trim()].filter(Boolean).join("\n\n");
 }

@@ -1,9 +1,9 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, ChevronDown, FolderGit2, Play } from "lucide-react";
+import { Check, ChevronDown, Play } from "lucide-react";
 
 import BotAvatar from "@/components/BotAvatar";
-import { SessionLink, TaskModelPicker } from "@/components/PullDetail";
-import SendButton from "@/components/composer/SendButton";
+import { StartBox } from "@/components/PullDetail";
+import ProjectSelector from "@/components/composer/ProjectSelector";
 import WorktreeToggle from "@/components/composer/WorktreeToggle";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -15,33 +15,34 @@ import {
 } from "@/components/ui/dropdown-menu";
 import Spinner from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { issuePrompt, issueRepo, lastTaskPicks, type IssuePicks } from "@/lib/issueStart";
-import { LOCAL, serverOfPath } from "@/lib/transport";
+import { issueRepo, lastTaskPicks, type IssuePicks } from "@/lib/issueStart";
+import type { PrMachines } from "@/lib/prInbox";
+import { LOCAL, serverOfPath, type ServerId } from "@/lib/transport";
 import { cn } from "@/lib/utils";
-import type { Bot, IssueDetail, IssueRef, Project, SessionIndexItem } from "@/types/events";
+import type { Bot, IssueRef, Project } from "@/types/events";
 
 /// What the issues page needs from `App` to start work on an issue in place.
 export type IssueStarter = {
-  /// The checkout a task for the issue runs in, if one is attached.
-  projectFor: (issue: IssueRef) => Project | undefined;
-  /// Tasks filed under the issue, newest first.
-  tasksFor: (issue: IssueRef) => SessionIndexItem[];
+  /// Where a GitHub issue's task can run, clone stand-ins included; null for
+  /// a Linear issue, whose project the reader picks.
+  machinesFor: (issue: IssueRef) => PrMachines | null;
+  /// Every attached project, for a Linear issue's picker.
+  projects: Project[];
+  onAttached: (server: ServerId, list: Project[]) => void;
   bots: Bot[];
-  botOf: (item: SessionIndexItem) => Bot | undefined;
-  onOpenTask: (item: SessionIndexItem) => void;
-  /// Starts a task for the issue. No prompt builds the issue's own, and no
-  /// picks takes the last ones a new task started on.
-  start: (issue: IssueRef, prompt?: string, picks?: IssuePicks) => Promise<void>;
-  give: (issue: IssueRef, bot: Bot) => Promise<void>;
+  /// Starts a task for the issue, its tag, link and body the prompt with
+  /// `note` last, in `where`, or the issue's own checkout, cloned if need be.
+  start: (
+    issue: IssueRef,
+    note?: string,
+    picks?: IssuePicks,
+    where?: string | null,
+    onCloning?: (line: string | null) => void,
+  ) => Promise<void>;
+  send: (issue: IssueRef, bot: Bot, note?: string) => Promise<void>;
 };
 
 export const IssueStartContext = createContext<IssueStarter | null>(null);
-
-/// What Start task says it cannot do where no project matches the issue.
-function noProject(issue: IssueRef): string {
-  const repo = issueRepo(issue);
-  return repo ? `No project here has ${repo} as its remote` : "A Linear issue names no repository to work in";
-}
 
 type Act = { state: "idle" } | { state: "busy" } | { state: "done"; said: string } | { state: "failed"; said: string };
 
@@ -66,26 +67,27 @@ function useAct() {
   return [act, run] as const;
 }
 
-/// Start task and Give to bot, on a list row's hover and in the details pane.
-/// `inRow` draws them as spans, since the row is itself a `role="button"`
-/// and a real button inside it is invalid nesting.
-export function IssueQuickActions({ issue, inRow }: { issue: IssueRef; inRow?: boolean }) {
+/// Start task and Send to bot on a list row's hover. Spans, since the row is
+/// itself a `role="button"` and a real button inside it is invalid nesting.
+export function IssueQuickActions({ issue }: { issue: IssueRef }) {
   const ctx = useContext(IssueStartContext);
   const [startAct, runStart] = useAct();
-  const [giveAct, runGive] = useAct();
+  const [sendAct, runSend] = useAct();
   if (!ctx) return null;
-  const project = ctx.projectFor(issue);
-  const give = (bot: Bot) => void runGive(() => ctx.give(issue, bot), `Given to ${bot.name}`);
-  const startHint = project
-    ? `Start a task in ${project.name} on your last settings`
-    : noProject(issue);
+  const machines = ctx.machinesFor(issue);
+  const cloning = !!machines && machines.clones.includes(machines.initial);
+  const send = (bot: Bot) => void runSend(() => ctx.send(issue, bot), `Sent to ${bot.name}`);
+  const startHint = !machines
+    ? "Open the issue to pick a project"
+    : cloning
+      ? `Clone ${issueRepo(issue)} into ~/dray and start a task`
+      : "Start a task on your last settings";
 
   return (
-    <span className={cn("flex shrink-0 items-center gap-1", inRow && (startAct.state !== "idle" || giveAct.state !== "idle") && "row-busy")}>
+    <span className={cn("flex shrink-0 items-center gap-1", (startAct.state !== "idle" || sendAct.state !== "idle") && "row-busy")}>
       <ActButton
-        inRow={inRow}
         act={startAct}
-        disabled={!project}
+        disabled={!machines}
         hint={startHint}
         onPress={() => void runStart(() => ctx.start(issue), "Started")}
         icon={<Play />}
@@ -94,26 +96,27 @@ export function IssueQuickActions({ issue, inRow }: { issue: IssueRef; inRow?: b
       </ActButton>
       {ctx.bots.length === 1 && (
         <ActButton
-          inRow={inRow}
-          act={giveAct}
-          hint={`Hand it to ${ctx.bots[0].name}, who starts it when free`}
-          onPress={() => give(ctx.bots[0])}
+          act={sendAct}
+          hint={`Send it to ${ctx.bots[0].name}, who starts it when free`}
+          onPress={() => send(ctx.bots[0])}
           icon={<BotAvatar seed={ctx.bots[0].id} avatar={ctx.bots[0].avatar} className="block size-3.5 scale-[1.18]" />}
         >
-          Give to bot
+          Send to bot
         </ActButton>
       )}
       {ctx.bots.length > 1 && (
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
-            <ActButton inRow={inRow} act={giveAct} hint="Hand it to a bot, who starts it when free" menu>
-              Give to bot
+            <ActButton act={sendAct} hint="Send it to a bot, who starts it when free" menu>
+              Send to bot
             </ActButton>
           </DropdownMenuTrigger>
+          {/* React events bubble through the portal to the row, which would
+              open the issue under the pick. */}
           <DropdownMenuContent align="end" className="w-52" onClick={(e) => e.stopPropagation()}>
-            <DropdownMenuLabel className="text-xs text-muted-foreground">Give to</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-xs text-muted-foreground">Send to</DropdownMenuLabel>
             {ctx.bots.map((bot) => (
-              <DropdownMenuItem key={bot.id} onSelect={() => give(bot)}>
+              <DropdownMenuItem key={bot.id} onSelect={() => send(bot)}>
                 <BotAvatar seed={bot.id} avatar={bot.avatar} className="block size-4 scale-[1.18]" />
                 <span className="min-w-0 flex-1 truncate">{bot.name}</span>
               </DropdownMenuItem>
@@ -125,9 +128,8 @@ export function IssueQuickActions({ issue, inRow }: { issue: IssueRef; inRow?: b
   );
 }
 
-/// One action. Its label gives way to the outcome while one is showing.
+/// One row action. Its label gives way to the outcome while one is showing.
 function ActButton({
-  inRow,
   act,
   disabled,
   hint,
@@ -137,7 +139,6 @@ function ActButton({
   children,
   ...trigger
 }: {
-  inRow?: boolean;
   act: Act;
   disabled?: boolean;
   hint: string;
@@ -170,138 +171,131 @@ function ActButton({
         {menu && <ChevronDown data-icon="inline-end" className="opacity-60" />}
       </>
     );
-  const className = cn(
-    buttonVariants({ variant: inRow ? "ghost" : "secondary", size: "xs" }),
-    disabled && "cursor-default opacity-50 hover:bg-transparent",
-    act.state === "failed" && "text-destructive",
-  );
-  const props = {
-    ...trigger,
-    "aria-disabled": disabled || undefined,
-    className,
-    onClick: menu
-      ? (e: React.MouseEvent<HTMLElement>) => {
-          e.stopPropagation();
-          trigger.onClick?.(e);
-        }
-      : press,
-    onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => {
-      if (menu) {
-        e.stopPropagation();
-        trigger.onKeyDown?.(e);
-        return;
-      }
-      if (e.key !== "Enter" && e.key !== " ") return;
-      e.preventDefault();
-      press(e);
-    },
-  };
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        {inRow ? (
-          <span role="button" tabIndex={0} {...props}>
-            {label}
-          </span>
-        ) : (
-          <button type="button" {...props}>
-            {label}
-          </button>
-        )}
+        <span
+          role="button"
+          tabIndex={0}
+          {...trigger}
+          aria-disabled={disabled || undefined}
+          className={cn(
+            buttonVariants({ variant: "ghost", size: "xs" }),
+            disabled && "cursor-default opacity-50 hover:bg-transparent",
+            act.state === "failed" && "text-destructive",
+          )}
+          onClick={(e) => {
+            if (!menu) return press(e);
+            e.stopPropagation();
+            trigger.onClick?.(e);
+          }}
+          onKeyDown={(e) => {
+            if (menu) {
+              e.stopPropagation();
+              trigger.onKeyDown?.(e);
+              return;
+            }
+            if (e.key !== "Enter" && e.key !== " ") return;
+            e.preventDefault();
+            press(e);
+          }}
+        >
+          {label}
+        </span>
       </TooltipTrigger>
       <TooltipContent>{act.state === "failed" ? act.said : hint}</TooltipContent>
     </Tooltip>
   );
 }
 
-/// The details pane's foot: the issue's tasks, and a composer prefilled with
-/// the issue that starts a task right here. Keyed per issue by its caller.
-export function IssueComposer({ issue, detail }: { issue: IssueRef; detail: IssueDetail | undefined }) {
+/// The details pane's foot: the pull requests page's own start box, its
+/// Bot | Task switch included. The box holds only the reader's note; the
+/// issue itself rides along unseen. Keyed per issue by its caller.
+export function IssueComposer({ issue }: { issue: IssueRef }) {
   const ctx = useContext(IssueStartContext);
-  const seed = issuePrompt(issue, detail?.description ?? null);
-  const [text, setText] = useState(seed);
-  const [touched, setTouched] = useState(false);
-  // The body lands after the pane opens; an untouched box takes it then.
-  useEffect(() => {
-    if (!touched) setText(seed);
-  }, [seed, touched]);
+  const [note, setNote] = useState("");
   const [picks, setPicks] = useState<IssuePicks>(lastTaskPicks);
+  const [where, setWhere] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [cloning, setCloning] = useState<string | null>(null);
+  const [said, setSaid] = useState<{ text: string; failed: boolean } | null>(null);
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
   if (!ctx) return null;
 
-  const project = ctx.projectFor(issue);
-  const tasks = ctx.tasksFor(issue);
-  const canStart = !!project && !starting && text.trim().length > 0;
-  const start = async () => {
-    if (!canStart) return;
+  const machines = ctx.machinesFor(issue);
+  const machine = machines ? (where && machines.projects.some((p) => p.path === where) ? where : machines.initial) : where;
+  const server = machine ? serverOfPath(machine) : LOCAL;
+
+  const start = async (bot: Bot | null) => {
     setStarting(true);
-    setError(null);
+    setSaid(null);
+    window.clearTimeout(timer.current);
     try {
-      await ctx.start(issue, text, picks);
-      setTouched(false);
-      setText(seed);
+      if (bot) await ctx.send(issue, bot, note);
+      else await ctx.start(issue, note, picks, machine, setCloning);
+      setNote("");
+      setSaid({ text: bot ? `Sent to ${bot.name}.` : "Task started.", failed: false });
+      timer.current = window.setTimeout(() => setSaid(null), 3000);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setSaid({ text: e instanceof Error ? e.message : String(e), failed: true });
     } finally {
       setStarting(false);
+      setCloning(null);
     }
   };
 
   return (
     <div className="flex shrink-0 flex-col gap-2 border-t border-border px-3 pt-2.5 pb-3">
-      {tasks.length > 0 && (
-        <div className="flex min-w-0 items-center gap-1.5 text-ui">
-          <span className="shrink-0 text-muted-foreground">Task</span>
-          <SessionLink item={tasks[0]} bot={ctx.botOf(tasks[0])} onOpen={() => ctx.onOpenTask(tasks[0])} />
-          {tasks.length > 1 && <span className="shrink-0 text-muted-foreground">+{tasks.length - 1} more</span>}
-        </div>
+      <StartBox
+        bots={ctx.bots}
+        server={server}
+        machines={machines?.projects ?? []}
+        machine={machine ?? ""}
+        onMachine={setWhere}
+        picks={picks}
+        onPicks={(next) => setPicks((prev) => ({ ...prev, ...next }))}
+        onRepairPicks={(next) => setPicks((prev) => ({ ...prev, ...next }))}
+        disabled={starting}
+        taskDisabled={!machine}
+        taskControls={
+          <>
+            {/* A Linear issue names no repository, so the reader picks one. */}
+            {!machines && (
+              <ProjectSelector projects={ctx.projects} value={where} onSelect={setWhere} onAttached={ctx.onAttached} />
+            )}
+            <WorktreeToggle on={picks.useWorktree} onToggle={() => setPicks((p) => ({ ...p, useWorktree: !p.useWorktree }))} />
+          </>
+        }
+        botTitle={(bot) => `Send to ${bot.name}`}
+        starting={starting}
+        cloning={cloning !== null}
+        onStart={(bot) => void start(bot)}
+      >
+        {(go) => (
+          <textarea
+            rows={2}
+            value={note}
+            aria-label="Note for the agent"
+            placeholder="Anything to add? The issue goes with it."
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                go();
+              }
+            }}
+            className="block max-h-48 min-h-14 w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-ui outline-none placeholder:text-muted-foreground field-sizing-content"
+          />
+        )}
+      </StartBox>
+      {cloning !== null && (
+        <p className="truncate text-ui text-muted-foreground tabular-nums">
+          Cloning {issueRepo(issue)}
+          {cloning ? ` · ${cloning}` : "…"}
+        </p>
       )}
-      <div className="flex min-h-6 min-w-0 items-center gap-1.5 text-ui text-muted-foreground">
-        <FolderGit2 className="size-3.5 shrink-0" />
-        <span className="truncate">
-          {project ? (
-            <>
-              New task in <span className="text-foreground">{project.name}</span>
-            </>
-          ) : (
-            `${noProject(issue)}.`
-          )}
-        </span>
-      </div>
-      <div className="rounded-2xl bg-composer">
-        <textarea
-          rows={3}
-          value={text}
-          aria-label="Prompt for the task"
-          onChange={(e) => {
-            setTouched(true);
-            setText(e.target.value);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              void start();
-            }
-          }}
-          className="block max-h-56 min-h-20 w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-ui outline-none placeholder:text-muted-foreground field-sizing-content"
-        />
-        <div className="flex min-w-0 items-center gap-1 px-2 pb-2">
-          <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden [&_button]:min-w-0 [&_button>span]:min-w-0 [&_button>span]:truncate">
-            <TaskModelPicker
-              server={project ? serverOfPath(project.path) : LOCAL}
-              picks={picks}
-              onChange={(next) => setPicks({ ...picks, ...next })}
-              onRepair={(next) => setPicks((prev) => ({ ...prev, ...next }))}
-            />
-            <WorktreeToggle on={picks.useWorktree} onToggle={() => setPicks({ ...picks, useWorktree: !picks.useWorktree })} />
-          </div>
-          <span className="shrink-0">
-            <SendButton disabled={!canStart} onClick={() => void start()} title={starting ? "Starting…" : "Start task"} />
-          </span>
-        </div>
-      </div>
-      {error && <p className="text-ui text-destructive">{error}</p>}
+      {said && <p className={cn("text-ui", said.failed ? "text-destructive" : "text-muted-foreground")}>{said.text}</p>}
     </div>
   );
 }

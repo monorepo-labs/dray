@@ -1035,9 +1035,10 @@ function FilterMenu({
 /// with. Linear is still one click away — the pane's own row carries the
 /// button — but it is the second thing offered rather than the first.
 ///
-/// Hover offers Start task and Give to bot ([IssueQuickActions]). The page is
-/// workspace-wide, so a task runs in the project whose git remote is the
-/// issue's repository, and Start task is off where none is.
+/// Hover offers Start task and Send to bot ([IssueQuickActions]). The page is
+/// workspace-wide, so a task runs in the checkout of the issue's repository,
+/// cloned into `~/dray` where there is none; a Linear issue names no
+/// repository, so its Start task waits for a project picked in the pane.
 function IssueRow({
   issue,
   picked,
@@ -1150,7 +1151,7 @@ function IssueRow({
           "has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100",
         )}
       >
-        <IssueQuickActions issue={issue} inRow />
+        <IssueQuickActions issue={issue} />
       </span>
 
       {/* Who filed it, GitHub's rows alone. It is the person field that always

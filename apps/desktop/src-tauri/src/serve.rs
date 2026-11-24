@@ -2032,8 +2032,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             crate::bots::react::react_to_message(session_id, message_id, emoji, sink).await;
         approve_issue(session_id: String, card_id: String, number: u64) =>
             crate::issues::card::approve_issue(session_id, card_id, number, sink).await;
-        give_issue_to_bot(bot_id: String, issue: crate::issues::IssueRef) =>
-            crate::issues::card::give_issue_to_bot(bot_id, issue, sink).await;
+        send_issue_to_bot(bot_id: String, issue: crate::issues::IssueRef, note: Option<String>) =>
+            crate::issues::card::send_issue_to_bot(bot_id, issue, note, sink).await;
         mark_session_read(session_id: String, read: bool) => crate::mark_session_read(&session_id, read, sink).await;
         set_session_flags(session_id: String, archived: Option<bool>, pinned: Option<bool>, hidden: Option<bool>, aside: Option<bool>) =>
             crate::bots::reader_did(

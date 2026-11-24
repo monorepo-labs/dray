@@ -298,7 +298,8 @@ const LAST_MODE_KEY = "dray.prStartMode";
 /// task and the reader's own, the plain task's model and machine, and the
 /// composer's own send arrow, which starts it. A bot's task runs on the bot's
 /// agent, where the bot is, so the pickers belong to the plain task alone.
-function StartBox({
+/// The issues page reuses it to start or send an issue.
+export function StartBox({
   bots,
   server,
   machines,
@@ -308,6 +309,9 @@ function StartBox({
   onPicks,
   onRepairPicks,
   disabled,
+  taskDisabled,
+  taskControls,
+  botTitle,
   starting,
   cloning,
   onStart,
@@ -323,6 +327,12 @@ function StartBox({
   /// The picker's own repair of a stale pick, which is not the reader choosing.
   onRepairPicks: (picks: PrPicks) => void;
   disabled: boolean;
+  /// Off on the Task side alone, where only a plain task needs a checkout.
+  taskDisabled?: boolean;
+  /// Drawn after the Task side's pickers.
+  taskControls?: React.ReactNode;
+  /// The arrow's hint on the Bot side.
+  botTitle?: (bot: Bot) => string;
   starting: boolean;
   cloning: boolean;
   onStart: (bot: Bot | null) => void;
@@ -333,8 +343,9 @@ function StartBox({
   const [mode, setMode] = useLocalStorage<"bot" | "task">(LAST_MODE_KEY, "bot");
   const bot = bots.find((b) => b.id === botId) ?? bots[0] ?? null;
   const toBot = !!bot && mode === "bot";
+  const off = disabled || (!toBot && !!taskDisabled);
   const start = () => {
-    if (disabled) return;
+    if (off) return;
     if (toBot) setBotId(bot.id);
     onStart(toBot ? bot : null);
   };
@@ -377,12 +388,21 @@ function StartBox({
           {/* The New Task page's own picker, over this repo's checkouts and a
               stand-in on each machine without one. */}
           {!toBot && <MachineSelector projects={machines} value={machine} onSelect={onMachine} />}
+          {!toBot && taskControls}
         </div>
         <span className="shrink-0">
           <SendButton
-            disabled={disabled}
+            disabled={off}
             onClick={start}
-            title={cloning ? "Cloning…" : starting ? "Starting…" : toBot ? `Start task in ${bot.name}` : "Start task"}
+            title={
+              cloning
+                ? "Cloning…"
+                : starting
+                  ? "Starting…"
+                  : toBot
+                    ? (botTitle?.(bot) ?? `Start task in ${bot.name}`)
+                    : "Start task"
+            }
           />
         </span>
       </div>
@@ -461,7 +481,7 @@ function useStartPicks(latest: SessionIndexItem | undefined) {
 /// The New Task composer's own model picker, on the page's picks: the agent
 /// row, models, effort and fast mode, read from the task's server. A bot's
 /// task never shows it, since it runs on the bot's own agent.
-export function TaskModelPicker({
+function TaskModelPicker({
   server,
   picks,
   onChange,

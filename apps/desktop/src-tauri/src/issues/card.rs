@@ -120,14 +120,14 @@ pub fn approval_prompt(repo: &str, row: &IssueCardRow) -> String {
     )
 }
 
-/// The reader handed `issue` to a bot from the issues page: the bot is told
+/// The reader sent `issue` to a bot from the issues page: the bot is told
 /// in a hidden prompt, as an approval tells it, and nothing is written to the
 /// tracker. A bot mid-turn takes it once that turn ends; a bot with no chat
 /// yet opens one on it.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn give_issue_to_bot(bot_id: String, issue: super::IssueRef, sink: Sink) -> Result<(), Fail> {
+pub async fn send_issue_to_bot(bot_id: String, issue: super::IssueRef, note: Option<String>, sink: Sink) -> Result<(), Fail> {
     let bot = crate::bots::find_bot(&bot_id).await?;
-    let prompt = handoff_prompt(&issue);
+    let prompt = handoff_prompt(&issue, note.as_deref());
     // Held until a new chat is on the index, as `dray bot send` holds it.
     let lock = crate::bots::first_chat_lock(&bot.id);
     let first = lock.lock().await;
@@ -145,15 +145,21 @@ pub async fn give_issue_to_bot(bot_id: String, issue: super::IssueRef, sink: Sin
     Ok(())
 }
 
-/// What a bot is told of an issue handed to it. Hidden, like an approval's.
-pub fn handoff_prompt(issue: &super::IssueRef) -> String {
+/// What a bot is told of an issue sent to it, with the reader's note last.
+/// Hidden, like an approval's.
+pub fn handoff_prompt(issue: &super::IssueRef, note: Option<&str>) -> String {
     let link = if issue.url.is_empty() { String::new() } else { format!(" ({})", issue.url) };
-    format!(
-        "Work on {id} \"{title}\"{link}. The user handed it to you from the issues page. \
+    let mut told = format!(
+        "Work on {id} \"{title}\"{link}. The user sent it to you from the issues page. \
          Start on it the way your instructions say to work an issue, once you are free.",
         id = issue.identifier,
         title = issue.title,
-    )
+    );
+    if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
+        told.push_str("\n\nTheir note:\n");
+        told.push_str(note);
+    }
+    told
 }
 
 #[cfg(test)]
@@ -169,9 +175,11 @@ mod tests {
             title: "Fix login".into(),
             url: "https://github.com/acme/app/issues/7".into(),
         };
-        let told = handoff_prompt(&issue);
+        let told = handoff_prompt(&issue, None);
         assert!(told.starts_with("Work on acme/app#7 \"Fix login\" (https://github.com/acme/app/issues/7)."));
         assert!(!told.contains("label"));
+        assert!(handoff_prompt(&issue, Some("  ship it today ")).ends_with("Their note:\nship it today"));
+        assert!(!handoff_prompt(&issue, Some("   ")).contains("note"));
     }
 
     #[test]

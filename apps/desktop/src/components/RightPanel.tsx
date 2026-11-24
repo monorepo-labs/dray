@@ -168,7 +168,7 @@ type RightPanelProps = {
   cwd?: string | null;
   /// Drawn at the far end of the top strip, ahead of Open and Refresh. For an
   /// action belonging to whatever the pane is showing rather than to one tab —
-  /// the issues page's Start task and Give to bot are the only ones today.
+  /// nothing passes one today.
   actions?: React.ReactNode;
   /// Keys the pane's width, so each session keeps the width it was dragged
   /// to and one never dragged opens at the default. Absent on the issues page,
