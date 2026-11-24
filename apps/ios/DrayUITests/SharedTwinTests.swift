@@ -18,7 +18,7 @@ final class SharedTwinTests: XCTestCase {
         }
         switchRoute(proxy, "up")
         let app = XCUIApplication()
-        app.launchArguments = ["-servers", "", "-list.hideSessions", "NO"]
+        app.launchArguments = ["-servers", ""]
         app.launch()
         link(app, url: mac, token: macToken, name: "Mac")
         app.buttons["Add"].tap()
@@ -31,7 +31,7 @@ final class SharedTwinTests: XCTestCase {
         snap(app, "2-both-paired")
 
         app.terminate()
-        app.launchArguments = ["-list.hideSessions", "NO"]
+        app.launchArguments = []
         app.launch()
         XCTAssertLessThanOrEqual(most(app, title, for: 12), 1, "a launch drew the VPS twice")
         XCTAssertEqual(rows(app, title).count, 1)
@@ -70,7 +70,7 @@ final class SharedTwinTests: XCTestCase {
         switchRoute(proxy, "down")
         defer { switchRoute(proxy, "up") }
         let app = XCUIApplication()
-        app.launchArguments = ["-servers", "", "-list.hideSessions", "NO"]
+        app.launchArguments = ["-servers", ""]
         app.launch()
         link(app, url: mac, token: macToken, name: "Mac")
         app.buttons["Add"].tap()

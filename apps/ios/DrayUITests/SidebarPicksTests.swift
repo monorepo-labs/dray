@@ -17,7 +17,7 @@ final class SidebarPicksTests: XCTestCase {
         }
         let sidebar = env["DRAY_SIDEBAR"] == "1"
         let app = XCUIApplication()
-        app.launchArguments = ["-servers", "", "-list.hideSessions", "NO"]
+        app.launchArguments = ["-servers", ""]
         app.launch()
         var link = URLComponents(string: "dray://connect")!
         link.queryItems = [.init(name: "url", value: url), .init(name: "token", value: token), .init(name: "name", value: "Test Mac")]

@@ -95,7 +95,7 @@ final class WaitingOnYouTests: XCTestCase {
         var link = URLComponents(string: "dray://connect")!
         link.queryItems = [.init(name: "url", value: url), .init(name: "token", value: token), .init(name: "name", value: "Test Mac")]
         let app = XCUIApplication()
-        app.launchArguments = ["-servers", "", "-list.hideSessions", "NO", "-bot.dismissedStalls", ""]
+        app.launchArguments = ["-servers", "", "-bot.dismissedStalls", ""]
         app.launch()
         app.open(link.url!)
         XCTAssertTrue(app.buttons["Add"].waitForExistence(timeout: 10), "the link opened no add sheet")
@@ -104,7 +104,7 @@ final class WaitingOnYouTests: XCTestCase {
         // The list's cache is written two seconds after it settles; a lone bot opens itself from it (#1169).
         sleep(3)
         app.terminate()
-        app.launchArguments = ["-list.hideSessions", "NO"]
+        app.launchArguments = []
         app.launch()
         XCTAssertTrue(app.buttons["Tasks"].waitForExistence(timeout: 15), "the bot's chat did not open")
         return app

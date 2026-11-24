@@ -3,7 +3,7 @@ import ThinkingOrbs
 
 // MARK: Wire
 
-struct IssueState: Decodable, Hashable {
+struct IssueState: Codable, Hashable {
     let id: String
     let name: String
     /// `triage`, `backlog`, `unstarted`, `started`, `completed`, `canceled` or `other`.
@@ -11,23 +11,23 @@ struct IssueState: Decodable, Hashable {
     let color: String
 }
 
-struct IssuePerson: Decodable, Hashable {
+struct IssuePerson: Codable, Hashable {
     let name: String
     let avatar: String?
 }
 
-struct IssueLabel: Decodable, Hashable {
+struct IssueLabel: Codable, Hashable {
     let name: String
     let color: String
 }
 
-struct IssueGroup: Decodable, Hashable {
+struct IssueGroup: Codable, Hashable {
     let id: String
     let name: String
 }
 
 /// One row of `list_issues`.
-struct Issue: Decodable, Hashable, Identifiable {
+struct Issue: Codable, Hashable, Identifiable {
     let tracker: String
     let id: String
     /// `DRA-53`, or `owner/name#12` on GitHub.
@@ -75,7 +75,7 @@ struct IssueDetail: Decodable {
     }
 }
 
-struct IssueFilters: Decodable {
+struct IssueFilters: Codable {
     /// Linear's teams; GitHub's repositories.
     let teams: [IssueGroup]
     let projects: [IssueGroup]
@@ -83,12 +83,12 @@ struct IssueFilters: Decodable {
     let issueTypes: [IssueLabel]
 }
 
-struct TrackerAccount: Decodable {
+struct TrackerAccount: Codable {
     let userName: String
     let orgName: String
 }
 
-struct Integrations: Decodable {
+struct Integrations: Codable {
     let linear: TrackerAccount?
     let github: TrackerAccount?
 }
@@ -140,6 +140,61 @@ extension Color {
     }
 }
 
+// MARK: Model
+
+/// What the issues page last read: which trackers each server holds, each
+/// repository's filters, and each query's list. Kept on disk, so the page draws
+/// its last answer at once, even on a cold launch before any server is up, and
+/// reads again behind it, as the desktop's `useIssues` cache does in memory.
+@MainActor @Observable
+final class IssuesModel {
+    static let shared = IssuesModel()
+
+    var integrations: [UUID: Integrations] = [:] { didSet { keep() } }
+    private(set) var filters: [String: IssueFilters] = [:]
+    private(set) var lists: [String: [Issue]] = [:]
+    /// The tracker server the last read went through, whose answers draw until one is up.
+    private(set) var home: UUID?
+    /// When each list last landed, this launch only: a kept list is drawn, then read again.
+    @ObservationIgnored private var listedAt: [String: Date] = [:]
+    /// A search's lists stay in memory: the next launch opens on the box empty.
+    @ObservationIgnored private var typed: Set<String> = []
+
+    private struct Kept: Codable {
+        var integrations: [UUID: Integrations]
+        var filters: [String: IssueFilters]
+        var lists: [String: [Issue]]
+        var home: UUID?
+    }
+
+    private static let file = Cache.root.appending(path: "issues.json")
+
+    private init() {
+        guard let data = try? Data(contentsOf: Self.file), let kept = try? JSONDecoder().decode(Kept.self, from: data) else { return }
+        (integrations, filters, lists, home) = (kept.integrations, kept.filters, kept.lists, kept.home)
+    }
+
+    private func keep() {
+        let kept = Kept(integrations: integrations, filters: filters, lists: lists.filter { !typed.contains($0.key) }, home: home)
+        Cache.write(Self.file) { try JSONEncoder().encode(kept) }
+    }
+
+    func fresh(_ key: String) -> Bool { Date().timeIntervalSince(listedAt[key] ?? .distantPast) < 60 }
+
+    func put(filters: IssueFilters, _ key: String) {
+        self.filters[key] = filters
+        keep()
+    }
+
+    func put(_ list: [Issue], _ key: String, server: UUID, typed: Bool, read: Bool = true) {
+        lists[key] = list
+        home = server
+        if typed { self.typed.insert(key) }
+        if read { listedAt[key] = Date() }
+        keep()
+    }
+}
+
 // MARK: The page
 
 /// Every issue the reader could pick up, GitHub's or Linear's: the desktop's
@@ -162,38 +217,47 @@ struct IssuesView: View {
     @State private var label: String?
     @State private var issueType: String?
     @State private var text = ""
-    @State private var integrations: Integrations?
+    @State private var searching = false
+    @State private var model = IssuesModel.shared
     @State private var integrationsFailed = false
-    @State private var issues: [Issue] = []
-    @State private var listedFor: String?
+    /// The last list drawn, held while a new query's first read is out.
+    @State private var stale: [Issue] = []
+    /// The query whose read failed, which then draws what it has under the sentence.
+    @State private var failedFor: String?
     @State private var loading = false
     @State private var unavailable: IssueUnavailable?
     @State private var settled: [Issue]?
     @State private var settledOpen = false
-    @State private var filters: IssueFilters?
+    /// The repository whose filters this page has read; a kept copy draws until then.
     @State private var filtersFor: String?
     @State private var picked: Issue?
 
     private var github: Bool { tracker == "github" }
     private var scope: String { github ? githubScope : linearScope }
-    private var server: UUID? { store.trackerServer }
+    /// The tracker server, else the last one, so kept answers draw before it is up.
+    private var server: UUID? {
+        store.trackerServer ?? model.home.flatMap { h in store.live.contains { $0.id == h } ? h : nil }
+    }
+    /// Reads wait on this: a server still connecting would only fail them.
+    private var online: Bool { server.map { store.serverState[$0] == .connected } ?? false }
+    private var integrations: Integrations? { server.flatMap { model.integrations[$0] } }
     private var connected: Bool? {
         integrations.map { github ? $0.github != nil : $0.linear != nil }
     }
+    private var filtersKey: String { "\(server?.uuidString ?? "")|\(tracker)|\(repo)" }
+    private var filters: IssueFilters? { model.filters[filtersKey] }
+    private var issues: [Issue] { model.lists[queryKey] ?? stale }
+    private var listed: Bool { model.lists[queryKey] != nil || failedFor == queryKey }
 
     var body: some View {
         List {
-            Picker("Tracker", selection: $tracker) {
-                Text("GitHub").tag("github")
-                Text("Linear").tag("linear")
+            if searching {
+                ListSearchField(prompt: "Search issues", text: $text, open: $searching).plainRow()
             }
-            .pickerStyle(.segmented)
-            .padding(.vertical, Theme.Space.s)
-            .plainRow()
             if server == nil {
                 note("Connect a server to read its issue trackers.")
             } else if connected == false {
-                ConnectTracker(tracker: tracker, server: server!) { integrations = $0 }
+                ConnectTracker(tracker: tracker, server: server!) { model.integrations[server!] = $0 }
                     .plainRow()
             } else if connected == nil {
                 if integrationsFailed { note("Could not read which trackers \(store.name(of: server!)) is connected to. Pull down to try again.") }
@@ -207,20 +271,22 @@ struct IssuesView: View {
         .themedList()
         .navigationTitle("Issues")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $text, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search issues")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) { CloseButton() }
-            ToolbarItem(placement: .primaryAction) { filterMenu }
+            ToolbarItemGroup(placement: .primaryAction) {
+                if connected == true { SearchButton(open: $searching) }
+                filterMenu
+            }
         }
         .refreshable {
-            if integrations == nil { await readIntegrations() }
+            await readIntegrations()
             await list(force: true)
         }
-        .task(id: server) { await readIntegrations() }
-        .task(id: "\(server?.uuidString ?? "")|\(tracker)|\(repo)|\(connected == true)") { await readFilters() }
+        .task(id: "\(server?.uuidString ?? "")|\(online)") { await readIntegrations() }
+        .task(id: "\(filtersKey)|\(connected == true)|\(online)") { await readFilters() }
         // Typing waits a beat, so a word is one read rather than one per letter.
-        .task(id: queryKey) {
-            if listedFor != nil, !text.isEmpty { try? await Task.sleep(for: .milliseconds(350)) }
+        .task(id: "\(queryKey)|\(online)") {
+            if !text.isEmpty { try? await Task.sleep(for: .milliseconds(350)) }
             if Task.isCancelled { return }
             await list(force: false)
         }
@@ -251,7 +317,7 @@ struct IssuesView: View {
                 PickChip(label: "Closed", selected: closed) { closed = true }
             }
         }
-        .padding(.bottom, Theme.Space.s)
+        .padding(.vertical, Theme.Space.s)
     }
 
     @ViewBuilder private var content: some View {
@@ -285,9 +351,9 @@ struct IssuesView: View {
             } else {
                 reading
             }
-        } else if listedFor != queryKey && issues.isEmpty && unavailable == nil {
+        } else if !listed && issues.isEmpty && unavailable == nil {
             reading
-        } else if issues.isEmpty && listedFor != nil {
+        } else if issues.isEmpty && listed {
             note(text.isEmpty ? emptyLine : "No issue matches that.")
         } else if github {
             ForEach(issues) { row($0) }
@@ -298,7 +364,7 @@ struct IssuesView: View {
             }
         }
         // Done and Cancelled are Linear's, start closed, and are read only once opened.
-        if !github && listedFor != nil {
+        if !github && listed {
             Button {
                 settledOpen.toggle()
                 if settledOpen && settled == nil { Task { await listSettled() } }
@@ -366,10 +432,16 @@ struct IssuesView: View {
             .sessionRow(selected: false)
     }
 
-    @ViewBuilder private var filterMenu: some View {
-        if connected == true, let filters {
-            let narrowed = github ? (!repo.isEmpty && (label != nil || issueType != nil)) : (team != nil || project != nil)
-            Menu {
+    /// The tracker leads, so it can move with nothing connected; the rest once its filters are read.
+    private var filterMenu: some View {
+        let narrowed = github ? (!repo.isEmpty && (label != nil || issueType != nil)) : (team != nil || project != nil)
+        return Menu {
+            Picker("Tracker", selection: $tracker) {
+                Text("GitHub").tag("github")
+                Text("Linear").tag("linear")
+            }
+            .pickerStyle(.menu)
+            if connected == true, let filters {
                 if github {
                     if !filters.teams.isEmpty {
                         Picker("Repository", selection: Binding(get: { repo }, set: { repo = $0; label = nil; issueType = nil })) {
@@ -407,11 +479,11 @@ struct IssuesView: View {
                         .pickerStyle(.menu)
                     }
                 }
-            } label: {
-                Image(systemName: narrowed ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
             }
-            .accessibilityLabel("Filters")
+        } label: {
+            Image(systemName: narrowed ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
         }
+        .accessibilityLabel("Filters")
     }
 
     // MARK: Reads
@@ -429,9 +501,9 @@ struct IssuesView: View {
     }
 
     private func readIntegrations() async {
-        guard let server else { return }
+        guard let server, online else { return }
         do {
-            integrations = try await store.call(server, "get_integrations")
+            model.integrations[server] = try await store.call(server, "get_integrations")
             integrationsFailed = false
         } catch {
             integrationsFailed = true
@@ -439,30 +511,28 @@ struct IssuesView: View {
     }
 
     private func readFilters() async {
-        guard let server, connected == true else { return }
-        let key = "\(server)|\(tracker)|\(repo)"
+        guard let server, online, connected == true else { return }
+        let key = filtersKey
         guard filtersFor != key else { return }
-        filters = nil
-        filtersFor = nil
         if let read: IssueFilters = try? await store.call(server, "list_issue_filters",
-                                                          ["tracker": .string(tracker), "repo": JSON(github && !repo.isEmpty ? repo : nil)]),
-           key == "\(self.server.map { "\($0)" } ?? "")|\(tracker)|\(repo)" {
-            filters = read
-            filtersFor = key
+                                                          ["tracker": .string(tracker), "repo": JSON(github && !repo.isEmpty ? repo : nil)]) {
+            model.put(filters: read, key)
+            if key == filtersKey { filtersFor = key }
         }
     }
 
     private func list(force: Bool) async {
-        guard let server, connected == true, !(github && repo.isEmpty) else { return }
+        guard let server, online, connected == true, !(github && repo.isEmpty) else { return }
         let key = queryKey
-        if !force && listedFor == key { return }
+        if !force && model.fresh(key) { return }
         loading = true
         defer { loading = false }
         do {
             let read: [Issue] = try await store.call(server, "list_issues", ["query": query(settled: github && closed), "limit": 100])
+            model.put(read, key, server: server, typed: !text.isEmpty)
             guard key == queryKey else { return }
-            issues = read
-            listedFor = key
+            stale = read
+            failedFor = nil
             unavailable = nil
             settled = nil
             if settledOpen { await listSettled() }
@@ -470,7 +540,7 @@ struct IssuesView: View {
             // What was on screen stays; the line above it says it is stale.
             guard key == queryKey else { return }
             unavailable = IssueUnavailable.from(error)
-            listedFor = key
+            failedFor = key
         }
     }
 
@@ -479,13 +549,15 @@ struct IssuesView: View {
         func put(_ list: inout [Issue]) {
             if let i = list.firstIndex(where: { $0.id == next.id }) { list[i] = next } else { list.append(next) }
         }
+        var shown = issues
         if !github && ["completed", "canceled"].contains(next.state.kind) {
-            issues.removeAll { $0.id == next.id }
+            shown.removeAll { $0.id == next.id }
             if settled != nil { put(&settled!) }
         } else {
             settled?.removeAll { $0.id == next.id }
-            put(&issues)
+            put(&shown)
         }
+        if let server { model.put(shown, queryKey, server: server, typed: !text.isEmpty, read: false) }
     }
 
     private func listSettled() async {
@@ -517,16 +589,20 @@ private struct IssueRowView: View {
                             Text(issue.pullRequests.map { "#\($0)" }.joined(separator: " "))
                         }
                     }
-                    if showAssignee, let a = issue.assignee { Text(a.name) }
                 }
                 .font(Theme.Font.footnote)
                 .foregroundStyle(Theme.tertiary)
                 .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if let at = parseDate(issue.updatedAt) {
-                Text(shortAge(at)).font(Theme.Font.footnote.font.monospacedDigit()).foregroundStyle(Theme.tertiary).padding(.top, 3)
+            // The assignee sits under the age, as a PR's author does.
+            VStack(alignment: .trailing, spacing: 6) {
+                if let at = parseDate(issue.updatedAt) {
+                    Text(shortAge(at)).font(Theme.Font.footnote.font.monospacedDigit()).foregroundStyle(Theme.tertiary)
+                }
+                if showAssignee, let a = issue.assignee { Avatar(url: a.avatar, name: a.name, size: 18) }
             }
+            .padding(.top, 3)
         }
         .padding(.vertical, 10)
         .padding(.leading, 14)
@@ -582,6 +658,59 @@ struct PriorityGlyph: View {
             }
         }
         .accessibilityLabel(priorityLabels[priority] ?? priority)
+    }
+}
+
+/// Labels as a sideways run of capsules: an issue's or a pull request's.
+struct LabelChips: View {
+    let labels: [IssueLabel]
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(labels, id: \.name) { l in
+                    LabelDot(label: l)
+                        .font(Theme.Font.footnote)
+                        .foregroundStyle(Theme.secondary)
+                        .padding(.horizontal, 10)
+                        .frame(height: 26)
+                        .background(Theme.raised, in: Capsule())
+                }
+            }
+        }
+    }
+}
+
+/// A person's avatar and a line about them, as a detail page's meta lists people.
+struct PersonLine<Line: View>: View {
+    let avatar: String?
+    @ViewBuilder let line: Line
+
+    var body: some View {
+        HStack(spacing: Theme.Space.s) {
+            Avatar(url: avatar, name: nil, size: 18)
+            line.font(Theme.Font.subhead).foregroundStyle(Theme.secondary)
+        }
+    }
+}
+
+/// Someone's picture in a circle; their initial on grey while it loads, or where there is none.
+struct Avatar: View {
+    let url: String?
+    let name: String?
+    var size: CGFloat = 16
+
+    var body: some View {
+        AsyncImage(url: url.flatMap(URL.init(string:))) { $0.resizable() } placeholder: {
+            Circle().fill(Theme.tile).overlay {
+                if let first = name?.first {
+                    Text(String(first).uppercased()).font(.system(size: size * 0.55, weight: .semibold)).foregroundStyle(Theme.secondary)
+                }
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .accessibilityLabel(name ?? "")
     }
 }
 
@@ -727,6 +856,8 @@ struct IssueDetailView: View {
                 Button { workOn(issueTag(shown.identifier, shown.title)) } label: { Text("Work on it") }
                     .buttonStyle(CapsuleButtonStyle(height: 48))
             }
+            // Full width whatever the content: a short line left the scroll view a narrow column (#1509).
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)
             .padding(.top, 14)
             .padding(.bottom, Theme.Space.xxl)
@@ -754,30 +885,12 @@ struct IssueDetailView: View {
             if !facts.isEmpty {
                 Text(facts.joined(separator: " · ")).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
             }
-            if !i.labels.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(i.labels, id: \.name) { l in
-                            LabelDot(label: l)
-                                .font(Theme.Font.footnote)
-                                .foregroundStyle(Theme.secondary)
-                                .padding(.horizontal, 10)
-                                .frame(height: 26)
-                                .background(Theme.raised, in: Capsule())
-                        }
-                    }
-                }
-            }
+            if !i.labels.isEmpty { LabelChips(labels: i.labels) }
         }
     }
 
     private func person(_ p: IssuePerson, _ line: String) -> some View {
-        HStack(spacing: Theme.Space.s) {
-            AsyncImage(url: p.avatar.flatMap(URL.init(string:))) { $0.resizable() } placeholder: { Circle().fill(Theme.tile) }
-                .frame(width: 18, height: 18)
-                .clipShape(Circle())
-            Text(line).font(Theme.Font.subhead).foregroundStyle(Theme.secondary)
-        }
+        PersonLine(avatar: p.avatar) { Text(line) }
     }
 
     private func comment(_ c: IssueComment) -> some View {

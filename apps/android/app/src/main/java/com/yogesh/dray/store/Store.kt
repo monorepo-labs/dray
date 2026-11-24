@@ -25,6 +25,7 @@ import com.yogesh.dray.net.socketUrl
 import com.yogesh.dray.wire.AgentEvent
 import com.yogesh.dray.wire.BackgroundTask
 import com.yogesh.dray.wire.Bot
+import com.yogesh.dray.wire.DeletedEvent
 import com.yogesh.dray.wire.DrayError
 import com.yogesh.dray.wire.Payload
 import com.yogesh.dray.wire.PrMark
@@ -166,6 +167,10 @@ class Store(private val context: Context) {
     /** Bot chats' previews, stall cards and pending agent picks: StoreBots.kt. */
     val botState = BotState()
 
+    /** The pull requests and issues pages' last reads, drawn at once when either opens. */
+    val pulls by lazy { PullsModel(this, cache) }
+    val issues by lazy { IssuesModel(this, cache) }
+
     /** A server came up: push hands it this phone's handle. */
     var onConnected: (String) -> Unit = {}
     /** A server is about to be removed, while its token can still be read. */
@@ -195,12 +200,6 @@ class Store(private val context: Context) {
     private val unreachable = mutableSetOf<String>()
     /** A held-back copy's id and the paired server shown in its place, both ways, so an alert tagged with either still lands. */
     private val standIns = mutableMapOf<String, String>()
-
-    /** Appearance's Hide sessions: home shows bots alone. */
-    var hideSessions: Boolean
-        get() = hideSessionsState
-        set(on) { hideSessionsState = on; prefs.edit().putBoolean("list.hideSessions", on).apply() }
-    private var hideSessionsState by mutableStateOf(prefs.getBoolean("list.hideSessions", false))
 
     fun read(id: String) = id in listed && id in botsRead
     fun known(id: String) = id in cached || read(id)
@@ -1046,6 +1045,7 @@ class Store(private val context: Context) {
                 val key = SessionKey(server, t.sessionId)
                 items[key]?.let { setItem(key, it.copy(title = t.title)) }
             }
+            "session_deleted" -> decodeOrNull<DeletedEvent>(payload)?.let { forget(SessionKey(server, it.sessionId)) }
             "bots_changed" -> scope.launch { loadBots(server) }
             // Any client saved or dropped a draft, the CLI included: the drafts view reads again.
             "drafts_changed" -> draftsRevision++
@@ -1155,6 +1155,11 @@ class Cache(private val root: File) {
         runCatching { wireJson.parseToJsonElement(transcriptFile(key).readText()) }.getOrNull()?.takeUnless { it is JsonNull }
 
     fun writeTranscript(key: SessionKey, raw: String) = write(transcriptFile(key), raw)
+
+    /** A page's last read across every server, by page name: the pull requests and issues lists. */
+    fun readPage(name: String): String? = runCatching { File(root, "page-$name.json").readText() }.getOrNull()
+
+    fun writePage(name: String, text: String) = write(File(root, "page-$name.json"), text)
 
     private fun write(file: File, text: String) {
         runCatching {

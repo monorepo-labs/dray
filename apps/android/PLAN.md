@@ -41,6 +41,12 @@ reads and drives it over the same WebSocket the desktop and iOS use
 - **Permission and question cards**, answered in place, in the transcript and
   under the row in the list.
 - **Servers** in Settings: state, on/off, Fix, remove, add.
+- **Open bot at launch** in Settings (#1517), Off unless a bot is picked: the
+  app opens on that bot's chat at launch (the first bot where the picked one
+  is gone), over the list so back lands there. Read off the cached list, the
+  chat is the launch's first frame; only a launch with no cache waits for the
+  server. An alert, a link or any move off the list first spends it. Nothing
+  else opens a bot unasked (`OpenIntoBot`).
 
 - **Dictation** (`voice/`, Dictation.swift): per draft, outliving the screen
   that started it. Two engines: Android's `SpeechRecognizer` on the phone
@@ -60,6 +66,16 @@ reads and drives it over the same WebSocket the desktop and iOS use
   none and the tap opens the app) and Reply, answered on the store's socket or
   one of its own, with no app coming forward. A tap opens the chat (`open`
   where a bot's task alerts). Settings → Notifications holds the switches.
+
+- **Pull requests and Issues pages** (Pulls.swift, PullDetail.swift,
+  Issues.swift): beside Settings on the list. Each draws its last read at
+  once, from `page-pulls.json` and `page-issues.json` in the cache dir on a
+  fresh launch, and reads behind it (`store/Pulls.kt`, `store/Issues.kt`).
+  The PR list's search box narrows by title, number, author or branch on the
+  phone; the issues one asks the tracker. A PR's page reads it through
+  `prs_for_branch` and its description, labels and reviewers through
+  `pr_detail` (#1511), and reuses the PR sheet's readiness, checks and
+  comments. Starting a task from a PR (iOS's start box) is not ported yet.
 
 Left for the tasks building on this: New task (Run with), bots and bot chat,
 Changes, the rest of Settings, the PR sheet, the runs sheet behind "N
@@ -125,9 +141,15 @@ library**, its Compose port from JitPack, pinned to a tag in
 `app/build.gradle.kts` as iOS pins the Swift package. `Orb.kt` only maps an
 `OrbKind` to its state and variant. Change the drawing there, not here.
 
+**The launcher icon is the iOS icon's layout as vectors**: `res/drawable/ic_launcher_*`
+hold the mark, tile and themed (monochrome) layer. The splash is the mark
+alone, white and 40dp wide (`splash_mark.xml`), with no tile. A vector draws no blur, so the mark's shadow and the legacy
+`ic_launcher.png`s are rendered by `scripts/launcher_icon.sh`; rerun it after
+moving the mark.
+
 ## Build and test
 
-JDK 17 and the Android SDK (`compileSdk 35`). From `apps/android`:
+JDK 17 and the Android SDK (platform `android-37.2`, which AndroidX needs to compile against; the app targets 36, what Play requires). AGP 9 compiles Kotlin itself, so there is no `kotlin-android` plugin: the compose plugin's version in `build.gradle.kts` is the Kotlin in use. From `apps/android`:
 
 ```bash
 ./gradlew assembleDebug        # app/build/outputs/apk/debug/app-debug.apk

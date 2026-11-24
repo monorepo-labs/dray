@@ -36,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.QrCodeScanner
+import androidx.compose.material.icons.outlined.RadioButtonChecked
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.WifiOff
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -68,6 +69,10 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.runtime.mutableFloatStateOf
 import com.yogesh.dray.model.ListRow
 import com.yogesh.dray.model.SessionKey
 import com.yogesh.dray.model.Stage
@@ -91,6 +96,8 @@ fun ListScreen(
     openSettings: (String?) -> Unit,
     addServer: (scan: Boolean) -> Unit,
     startBot: (server: String, botId: String) -> Unit = { _, _ -> },
+    openPulls: () -> Unit = {},
+    openIssues: () -> Unit = {},
 ) {
     val store = LocalStore.current
     val scope = rememberCoroutineScope()
@@ -105,15 +112,15 @@ fun ListScreen(
     val names = store.live.flatMap { store.projects[it.id].orEmpty() }.map { it.name }.distinct().sorted()
     // A picked project that leaves the list is ignored rather than showing nothing.
     val filter = project?.takeIf { it in names }
-    val hide = store.hideSessions
-    val runs = if (hide || drafts) emptyList() else store.runs(filter, settled)
+    val runs = if (drafts) emptyList() else store.runs(filter, settled)
     val hasSettled = store.items.values.any { it.archived == true && it.hidden != true }
     val connected = store.live.count { store.serverState[it.id] == ConnState.Connected }
 
     var newBot by remember { mutableStateOf(false) }
+    var listTop by remember { mutableFloatStateOf(0f) }
+    var botsFoot by remember { mutableFloatStateOf(0f) }
     // The row whose Delete is waiting on its confirm.
     var deleting by remember { mutableStateOf<ListRow?>(null) }
-    LoneBot(settled, openSession, startBot)
     // Read whatever the view, and again as servers come up: the Settled button shows only when there are some,
     // and an empty live list counts what was settled today.
     LaunchedEffect(settled, connected) { if (connected > 0) store.loadSettled() }
@@ -132,14 +139,17 @@ fun ListScreen(
         draftRows = all.sortedByDescending { it.second.created.orEmpty() }
         draftsError = failed
     }
-    // Hide sessions has no drafts or settled view to leave by, so it closes them.
-    LaunchedEffect(hide) { if (hide) { drafts = false; settled = false } }
 
     Column(Modifier.fillMaxSize().background(Dray.page).statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton({ openSettings(null) }) { Icon(Icons.Outlined.Settings, "Settings", tint = Dray.text) }
+            // The desktop's two pages beside Settings. Reachable with every server down: each draws its last read.
+            if (store.live.isNotEmpty()) {
+                IconButton(openPulls) { PrOutline(Dray.text, 22.dp, "Pull requests") }
+                IconButton(openIssues) { Icon(Icons.Outlined.RadioButtonChecked, "Issues", tint = Dray.text) }
+            }
             Spacer(Modifier.weight(1f))
-            if (!hide && (drafts || (anyConnected && draftRows.isNotEmpty()))) {
+            if (drafts || (anyConnected && draftRows.isNotEmpty())) {
                 Row(
                     Modifier.padding(end = 8.dp).clip(CircleShape).background(Dray.raised)
                         .clickable { drafts = !drafts; settled = false }.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -150,7 +160,7 @@ fun ListScreen(
                     Text("Drafts", style = Dray.Font.pill.copy(color = if (drafts) Dray.text else Dray.secondary))
                 }
             }
-            if (!hide && (settled || (anyConnected && hasSettled))) {
+            if (settled || (anyConnected && hasSettled)) {
                 Row(
                     Modifier.padding(end = 8.dp).clip(CircleShape).background(Dray.raised)
                         .clickable { settled = !settled; drafts = false }.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -179,8 +189,9 @@ fun ListScreen(
             modifier = Modifier.fillMaxSize(),
         ) {
             val rows = runs.flatMap { it.rows }
-            val empty = !settled && !drafts && runs.isEmpty() && store.allBots.isEmpty()
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 12.dp, bottom = 120.dp)) {
+            val empty = !settled && !drafts && runs.isEmpty()
+            val bots = if (settled || drafts) emptyList() else store.allBots
+            LazyColumn(Modifier.fillMaxSize().onGloballyPositioned { listTop = it.positionInWindow().y }, contentPadding = PaddingValues(top = 12.dp, bottom = 120.dp)) {
                 for (s in store.live) {
                     val h = store.health(s.id) ?: continue
                     if (store.serverState[s.id] != ConnState.Connected && !h.needsYou) continue
@@ -191,14 +202,16 @@ fun ListScreen(
                     }
                 }
                 // Bots lead the live list, as on the desktop: a bot belongs to no project, so no filter narrows them.
-                val bots = if (settled || drafts) emptyList() else store.allBots
-                bots.forEach { (server, bot) ->
+                bots.forEachIndexed { i, (server, bot) ->
                     item("bot-$server-${bot.id}") {
                         val chat = store.botChat(server, bot).lastOrNull()
-                        BotListRow(server, bot, chat) { if (chat != null) openSession(chat) else startBot(server, bot.id) }
+                        // The last bot's foot is where an empty list's screen starts, so it never draws over them.
+                        Box(if (i == bots.lastIndex) Modifier.onGloballyPositioned { botsFoot = it.positionInWindow().y + it.size.height } else Modifier) {
+                            BotListRow(server, bot, chat) { if (chat != null) openSession(chat) else startBot(server, bot.id) }
+                        }
                     }
                 }
-                if (!hide && names.size > 1 && (filter != null || rows.isNotEmpty())) {
+                if (names.size > 1 && (filter != null || rows.isNotEmpty())) {
                     item("projects") { ProjectStrip(names, filter) { project = it } }
                 } else if (bots.isNotEmpty() && rows.isNotEmpty()) item("bots-gap") { Spacer(Modifier.height(16.dp)) }
                 if (drafts) {
@@ -273,34 +286,16 @@ fun ListScreen(
                 }
                 if (shown < rows.size) item("more") { LaunchedEffect(Unit) { shown += PAGE }; Spacer(Modifier.height(1.dp)) }
             }
-            if (empty || (hide && store.bots.values.all { it.isEmpty() })) EmptyList(filter, addServer, openSettings)
+            if (empty) {
+                val above = if (bots.isEmpty()) 0.dp else with(LocalDensity.current) { (botsFoot - listTop).coerceAtLeast(0f).toDp() }
+                Box(Modifier.padding(top = above)) { EmptyList(filter, addServer, openSettings) }
+            }
         }
         if (!settled) NewTaskDock(openSession, Modifier.align(Alignment.BottomCenter))
         }
     }
     if (newBot) BotSheet(editing = null, close = { newBot = false }, started = openSession)
     deleting?.let { DeleteConfirm(it) { deleting = null } }
-}
-
-/**
- * Opens a lone bot's chat at launch, where it would be the list's only row: one bot across every
- * server and no task beside it. Waits until every server's list is known, from the cache or a
- * read, so one still coming up never counts as empty. Anything the reader does first spends it.
- */
-@Composable
-private fun LoneBot(settled: Boolean, openSession: (SessionKey) -> Unit, startBot: (String, String) -> Unit) {
-    val store = LocalStore.current
-    var chance by rememberSaveable { mutableStateOf(true) }
-    val lone = if (chance && !settled && store.live.isNotEmpty() && store.live.all { store.known(it.id) } &&
-        store.allBots.size == 1 && store.runs(null).isEmpty()) store.allBots.first() else null
-    LaunchedEffect(lone) {
-        val (server, bot) = lone ?: return@LaunchedEffect
-        chance = false
-        store.botChat(server, bot).lastOrNull()?.let(openSession) ?: startBot(server, bot.id)
-    }
-    LaunchedEffect(settled) { if (settled) chance = false }
-    // A server slower than this to answer never opens its bot.
-    LaunchedEffect(Unit) { delay(10_000); chance = false }
 }
 
 @Composable
@@ -422,7 +417,6 @@ private fun EmptyList(filter: String?, addServer: (Boolean) -> Unit, openSetting
                 .filter { isToday(it.second) }
             val last = today.maxByOrNull { it.second }
             when {
-                store.hideSessions -> EmptyScreen(EmptyArtKind.Tasks, "No bots yet", "Tap + to make one.")
                 last != null -> EmptyScreen({ SettledStack(last.first.item.title, shortAge(last.second)) }, "All clear",
                     if (today.size == 1) "1 settled today." else "${today.size} settled today.")
                 filter != null -> EmptyScreen(EmptyArtKind.Project, "Nothing in $filter", "Write one below to start it.")

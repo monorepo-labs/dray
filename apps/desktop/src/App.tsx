@@ -63,6 +63,7 @@ import { useWorkStatus } from "@/hooks/useWorkStatus";
 import HandoffRow from "@/components/composer/HandoffRow";
 import { trackFeature } from "@/lib/analytics";
 import { handoffActions } from "@/lib/handoff";
+import { usePrDetail } from "@/hooks/usePrDetail";
 import { prTabVisible, usePullRequest } from "@/hooks/usePullRequest";
 import RightPanel, {
   MountOnce,
@@ -1750,6 +1751,24 @@ function App() {
       if (pullsSearch) void prSearch.refresh();
     },
   );
+  // Keyed on the freshest `updatedAt` either read has, so a PR that moved is
+  // read again and one that did not costs nothing.
+  const pickedPrDetail = usePrDetail(
+    pullsOpen && pickedRow
+      ? {
+          cwd: pickedRow.key,
+          number: pickedRow.mark.number,
+          url: pickedRow.mark.url,
+          updatedAt:
+            pickedPrData.prs.find((p) => p.number === pickedRow.mark.number)?.updatedAt ??
+            pickedRow.listing.updatedAt,
+        }
+      : null,
+  );
+  const refreshPickedPr = () => {
+    pickedPrData.refresh();
+    pickedPrDetail.refresh();
+  };
   // Matching a PR to its session needs both sides of the index — a settled
   // session is what a new one takes its picks from, and a live one must never
   // be missed for the archived view being up — so the side the sidebar is not
@@ -3567,7 +3586,7 @@ function App() {
       if (pickedIssue) return pickedIssueData.refresh();
       return issuesRefreshRef.current?.();
     }
-    if (pullsOpen) return pickedRow ? pickedPrData.refresh() : refreshPulls();
+    if (pullsOpen) return pickedRow ? refreshPickedPr() : refreshPulls();
     if (fullBrowserOpen && browserSession) {
       if (!pendingBrowserTab && browserTabs?.some((tab) => tab.active)) {
         void navigate(browserSession, "reload");
@@ -4596,7 +4615,7 @@ function App() {
             heading="Details"
             tab="pr"
             onTabChange={() => {}}
-            refresh={{ onRefresh: pickedPrData.refresh, loading: pickedPrData.loading }}
+            refresh={{ onRefresh: refreshPickedPr, loading: pickedPrData.loading || pickedPrDetail.loading }}
           >
             {pickedRow && (
               // `MountOnce` is the Suspense boundary the lazy pane loads behind;
@@ -4608,6 +4627,7 @@ function App() {
                     key={pickedRow.mark.url}
                     row={pickedRow}
                     data={pickedPrData}
+                    detail={pickedPrDetail}
                     sessions={sessionsForRow(pickedRow)}
                     bots={botsForRow(pickedRow)}
                     botOf={botOfPrSession}

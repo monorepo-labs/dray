@@ -41,6 +41,10 @@ pub struct DrayUser {
     #[serde(default)]
     pub email: Option<String>,
     pub username: Option<String>,
+    /// The GitHub login the account signed up with, which GitHub names it
+    /// after where the profile has no name. Absent from a site older than it.
+    #[serde(default)]
+    pub github_login: Option<String>,
     /// The Google or GitHub picture, where the account has one.
     pub image: Option<String>,
     /// `github` and `google` sign-ins linked to the account, oldest first.

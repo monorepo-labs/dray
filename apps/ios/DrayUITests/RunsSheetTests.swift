@@ -60,7 +60,7 @@ final class RunsSheetTests: XCTestCase {
         var link = URLComponents(string: "dray://connect")!
         link.queryItems = [.init(name: "url", value: url), .init(name: "token", value: token), .init(name: "name", value: "Test Mac")]
         let app = XCUIApplication()
-        app.launchArguments = ["-servers", "", "-list.hideSessions", "NO"]
+        app.launchArguments = ["-servers", ""]
         app.launch()
         app.open(link.url!)
         XCTAssertTrue(app.buttons["Add"].waitForExistence(timeout: 10), "the link opened no add sheet")

@@ -846,7 +846,7 @@ async fn delete_session(
         },
         false => Vec::new(),
     };
-    let deleted = manager().delete(session_id, !keeps).await;
+    let deleted = manager().delete(session_id, !keeps, &sink).await;
     // A delete that failed before the entry went leaves the parent live, and
     // its children back under it. One that failed after keeps the adoption.
     let survived = deleted.is_err() && store::get_session_index_item(session_id).await.ok().flatten().is_some();
@@ -875,18 +875,30 @@ async fn delete_session(
 /// asked for rather than taken on trust.
 ///
 /// Returns what the fork replays — the parent's log, already copied — so the
-/// frontend can open it without a second read.
+/// frontend can open it without a second read. Other clients hear of it on
+/// `session_created`, as of any session they did not make.
 #[cfg_attr(feature = "desktop", tauri::command)]
 async fn fork_session(
     session_id: &str,
     fork_id: &str,
     worktree: bool,
+    sink: Sink,
 ) -> Result<SessionSnapshot, Fail> {
     let snapshot = manager().fork(session_id, fork_id, worktree).await?;
+    sink.emit(orchestration::SESSION_CREATED, &snapshot.index_item).ok();
 
     analytics::feature_used("fork");
 
     Ok(snapshot)
+}
+
+/// Cuts a session loose from its parent, and says so to every client.
+async fn detach_session(session_id: &str, sink: Sink) -> Result<Option<SessionIndexItem>, Fail> {
+    let item = store::detach_session(session_id).await?;
+    if let Some(item) = &item {
+        sink.emit(orchestration::SESSION_CHANGED, item).ok();
+    }
+    Ok(item)
 }
 
 /// Stops the in-flight turn without killing the session — the CLI aborts its
@@ -992,9 +1004,12 @@ async fn mark_session_read(
     sink: Sink,
 ) -> Result<Option<SessionStatus>, Fail> {
     let next = manager().mark_read(session_id, read).await?;
-    // The island and the phone keep their own unread marks and hear of a read
-    // only here. Unread is not echoed: the app's listener reads `completed` as a
-    // turn finishing and would announce it.
+    // Unread rides the entry, never `session_status`: every listener there
+    // reads `completed` as a turn finishing and would announce one.
+    if next == Some(SessionStatus::Completed) {
+        orchestration::announce_change(&[session_id.to_string()], &sink).await;
+    }
+    // The island keeps its own unread marks and hears of a read only here.
     if next == Some(SessionStatus::Idle) {
         let event = session::SessionStatusEvent {
             session_id: session_id.to_string(),

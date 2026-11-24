@@ -6,11 +6,15 @@ struct DrayApp: App {
     @UIApplicationDelegateAdaptor private var delegate: AppDelegate
     @State private var store: Store
     @State private var task: NewTask
+    /// Settings' Open bot at launch, read off the cached list before the first frame so the
+    /// list never shows first; a bot with no cached chat opens later, from the list.
+    private let launch: SessionKey?
 
     init() {
         let store = Store()
         _store = State(initialValue: store)
         _task = State(initialValue: NewTask(store: store))
+        launch = LaunchBot.bot(store).flatMap { store.botChat($0.server, $0.bot).last }
         // Before launch ends, so a tapped or answered alert that launched the app reaches it.
         Push.shared.start(store)
     }
@@ -18,7 +22,7 @@ struct DrayApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootView(launch: launch)
                 .environment(store)
                 .environment(task)
                 .preferredColorScheme(.dark)
@@ -56,16 +60,21 @@ struct RootView: View {
     /// Read outside the split view: a column inside one reports compact even beside the detail.
     @Environment(\.horizontalSizeClass) private var width
     @Environment(NewTask.self) private var task
-    @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
     @State private var selection: SessionKey?
     @State private var columns = NavigationSplitViewVisibility.automatic
     /// The main pane as wide as the window: a sidebar up now is laid over it rather than beside it.
     @State private var paneWidth: CGFloat = 0
     @State private var windowWidth: CGFloat = 0
     @State private var sheet: RootSheet?
-    @State private var autoOpen = true
+    @State private var autoOpen: Bool
     /// Tasks opened over a bot's chat, so Back walks back to the bot.
     @State private var opened: [SessionKey] = []
+
+    init(launch: SessionKey?) {
+        _selection = State(initialValue: launch)
+        // Opened already: the list must not open it again once Back leaves it.
+        _autoOpen = State(initialValue: launch == nil)
+    }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
@@ -86,7 +95,7 @@ struct RootView: View {
                     }
                     .environment(\.openTask) { opened.append($0) }
                     .environment(\.openSession) { self.selection = $0 }
-                } else if width == .regular && !store.live.isEmpty && !hideSessions {
+                } else if width == .regular && !store.live.isEmpty {
                     // The new task page: the phone's dock under its list, with the main pane to itself.
                     Color.clear
                         .overlay(alignment: .bottom) {

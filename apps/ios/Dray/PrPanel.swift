@@ -194,12 +194,14 @@ struct PrSection: View {
     let pr: PullRequest
     let model: PrModel
     var picked: Binding<Set<String>>? = nil
+    /// Off on the pull requests page, whose own head names the PR.
+    var header = true
 
     var body: some View {
         let ready = readiness(pr)
         VStack(alignment: .leading, spacing: 28) {
             VStack(alignment: .leading, spacing: 14) {
-                VStack(alignment: .leading, spacing: 6) {
+                if header { VStack(alignment: .leading, spacing: 6) {
                     Link(destination: URL(string: pr.url) ?? URL(string: "https://github.com")!) {
                         HStack(alignment: .top, spacing: 10) {
                             PrGlyph(mark: pr.mark, size: 20).padding(.top, 3)
@@ -218,7 +220,7 @@ struct PrSection: View {
                     .font(Theme.Font.footnote)
                     .lineLimit(1)
                     .padding(.leading, 30)
-                }
+                } }
 
                 VStack(alignment: .leading, spacing: Theme.Space.m) {
                     VStack(alignment: .leading, spacing: 3) {

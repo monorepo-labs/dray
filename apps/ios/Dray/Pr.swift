@@ -20,6 +20,7 @@ struct PullRequest: Decodable, Identifiable {
     let additions: Int
     let deletions: Int
     let changedFiles: Int
+    var updatedAt: String? = nil
 
     var id: Int { number }
     var verdict: MergeVerdict {
@@ -35,6 +36,35 @@ struct PullRequest: Decodable, Identifiable {
         state == "OPEN" && !isDraft && verdict != .conflict
             && (failingChecks > 0 || checks.contains { $0.state == "pending" })
     }
+}
+
+/// `pr_detail`'s answer, `github.rs`'s `PrDetail`: what a PR's own page shows
+/// past `PullRequest`. Its own read, once per page, since adding it to the
+/// polled one costs GitHub a point more each time.
+struct PrDetail: Decodable {
+    let body: String
+    let createdAt: String
+    var authorAvatar: String? = nil
+    /// `color` is `rrggbb`, which `Color(trackerHex:)` reads.
+    let labels: [IssueLabel]
+    /// One entry per person or team, a re-request already over its old verdict.
+    let reviewers: [PrReviewer]
+}
+
+struct PrReviewer: Decodable, Hashable {
+    let name: String
+    let avatar: String?
+    /// `requested`, `approved`, `changes_requested` or `commented`; a new word reads as itself.
+    let state: String
+}
+
+/// A PR description as markdown the app draws: an HTML `<img>` becomes an image
+/// line of its own, since GitHub's drag-in screenshots arrive as tags, then
+/// `commentText` drops the rest of the HTML and bot markers.
+func prBody(_ body: String) -> String {
+    let img = try! NSRegularExpression(pattern: #"<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["'][^>]*>"#, options: .caseInsensitive)
+    let swapped = img.stringByReplacingMatches(in: body, range: NSRange(body.startIndex..., in: body), withTemplate: "\n![]($1)\n")
+    return commentText(swapped)
 }
 
 struct PrCheck: Decodable, Hashable {

@@ -66,6 +66,7 @@ export type AppUser = {
   name: string;
   email: string;
   username: string | null;
+  githubLogin: string | null;
   image: string | null;
   providers: string[];
 };
@@ -77,7 +78,7 @@ export async function userForAppToken(
   db: { query: typeof pool.query } = pool,
 ): Promise<AppUser | null> {
   const { rows } = await db.query<AppUser>(
-    `select u.id, u.name, u.email, u.username, u.image,
+    `select u.id, u.name, u.email, u.username, u."githubLogin", u.image,
             array(select l."providerId" from "account" l
                    where l."userId" = u.id and l."providerId" in ('github', 'google')
                    order by l."createdAt") as providers

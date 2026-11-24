@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A vector draws no blur, so the soft shadow under the mark is a bitmap (scripts/launcher_icon.sh). -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/ic_launcher_shadow" />
+    <item android:drawable="@drawable/ic_launcher_mark" />
+</layer-list>

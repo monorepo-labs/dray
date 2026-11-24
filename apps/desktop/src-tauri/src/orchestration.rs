@@ -51,6 +51,18 @@ pub const SESSION_CREATED: &str = "session_created";
 /// the frontend made those writes and merges what they answered.
 pub const SESSION_CHANGED: &str = "session_changed";
 
+/// A session was deleted, from any client. Carries the id alone: the entry is
+/// gone, and a client drops the row and whatever it held for it.
+pub const SESSION_DELETED: &str = "session_deleted";
+
+/// The payload of [`SESSION_DELETED`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SessionDeletedEvent {
+    pub session_id: String,
+}
+
 /// `dray session model` moved a session's pick, carrying the entry as it now
 /// stands. Apart from [`SESSION_CHANGED`] because a composer showing that
 /// session has to take the new pick over its own, which no other change to

@@ -890,6 +890,11 @@ export type DrayUser = { id: string, name: string,
  */
 email: string | null, username: string | null, 
 /**
+ * The GitHub login the account signed up with, which GitHub names it
+ * after where the profile has no name. Absent from a site older than it.
+ */
+githubLogin: string | null, 
+/**
  * The Google or GitHub picture, where the account has one.
  */
 image: string | null, 
@@ -1722,6 +1727,16 @@ resolved: boolean,
  */
 replies: Array<PrComment>, };
 
+export type PrDetail = { 
+/**
+ * The description as GitHub stores it: markdown, images as links.
+ */
+body: string, createdAt: string, authorAvatar: string | null, labels: Array<IssueLabel>, 
+/**
+ * Asked and answered, one entry per person or team.
+ */
+reviewers: Array<PrReviewer>, };
+
 /**
  * A pull request's head as the pull requests page names it, for a session
  * started on it: the branch, and the repository as [`repo_key`] spells it.
@@ -1807,6 +1822,12 @@ listing?: PrListing, };
  * closed-without-merging is not asked for.
  */
 export type PrMarkState = "OPEN" | "MERGED";
+
+export type PrReviewer = { 
+/**
+ * A login, or a team's name.
+ */
+name: string, avatar: string | null, state: ReviewerState, };
 
 /**
  * What the pull requests page lists: the reader's open pull requests across
@@ -2030,6 +2051,8 @@ address: string | null,
  */
 error: string | null, };
 
+export type ReviewerState = "requested" | "approved" | "changes_requested" | "commented";
+
 export type Routine = { id: string, botId: string, name: string, prompt: string, schedule: Schedule, check?: string, paused: boolean, created: string, 
 /**
  * RFC3339. `None` while paused.
@@ -2158,6 +2181,11 @@ boat: BoatStatus | null,
 cloud: boolean, };
 
 export type ServerStatus = "connecting" | "connected" | "disconnected";
+
+/**
+ * The payload of [`SESSION_DELETED`].
+ */
+export type SessionDeletedEvent = { sessionId: string, };
 
 export type SessionIndexItem = { sessionId: string, harness: Harness, 
 /**

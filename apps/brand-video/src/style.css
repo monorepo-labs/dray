@@ -1,0 +1,139 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; background: #0a0a0a; color: #fff; }
+
+#stage {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  background: #000;
+  font-family: "Geist Variable", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  transform-origin: 0 0;
+}
+#stage canvas { position: absolute; inset: 0; }
+.mono { font-family: "Geist Mono Variable", monospace; text-transform: uppercase; letter-spacing: 0.06em; }
+.label { display: flex; align-items: center; gap: 10px; color: rgb(255 255 255 / 50%); }
+
+#world { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; }
+#panel { position: absolute; inset: 0; }
+
+/* The window: three strips 2px apart on black, the site's card grid. */
+.backing, .strip { position: absolute; left: 300px; width: 1320px; }
+.backing { background: #000; }
+.strip { background: #1c1c1c; }
+.head .label { position: absolute; left: 40px; top: 22px; font-size: 15px; line-height: 18px; }
+.head .title {
+  position: absolute; left: 40px; top: 44px;
+  font-family: "Inter Variable", sans-serif; font-weight: 350;
+  font-size: 38px; line-height: 44px; letter-spacing: -0.03em;
+}
+
+.feed { background: #141414; overflow: hidden; }
+.feed-in { position: absolute; left: 56px; right: 56px; top: 36px; }
+.item { overflow: hidden; height: 0; }
+
+.user .in { display: flex; justify-content: flex-end; padding: 10px 0 34px; }
+.bubble {
+  max-width: 900px; padding: 18px 26px;
+  background: #fff; color: #0a0a0a;
+  font-size: 27px; line-height: 38px; letter-spacing: -0.01em;
+}
+
+.head .in { display: flex; align-items: center; gap: 14px; padding-bottom: 14px; font-size: 16px; color: rgb(255 255 255 / 60%); }
+.head .in svg { color: #fff; }
+
+.tool .in { display: flex; align-items: baseline; gap: 18px; padding: 0 0 10px 44px; }
+.tool .k { width: 68px; font-size: 16px; color: rgb(255 255 255 / 45%); }
+.tool .x { font-family: "Geist Mono Variable", monospace; font-size: 25px; color: rgb(255 255 255 / 80%); letter-spacing: -0.01em; }
+.tool .m { font-size: 16px; color: rgb(255 255 255 / 50%); }
+.tool.stopped .x, .tool.stopped .k { opacity: 0.5; }
+
+.text .in { padding: 8px 0 28px 44px; }
+.text p { margin: 0; max-width: 1060px; font-size: 27px; line-height: 40px; letter-spacing: -0.01em; color: rgb(255 255 255 / 90%); }
+
+.limit .in { padding: 4px 0 32px 44px; }
+.alert {
+  padding: 18px 24px;
+  background: rgb(255 100 103 / 10%); box-shadow: inset 4px 0 0 #ff6467;
+}
+.alert .mono { display: flex; align-items: center; gap: 10px; font-size: 15px; color: #ff6467; }
+.alert p { margin: 8px 0 0; font-size: 26px; line-height: 36px; color: rgb(255 255 255 / 85%); }
+
+.divider .in { padding: 4px 0 30px; }
+.switched {
+  display: flex; align-items: center; gap: 14px; height: 56px; padding: 0 24px;
+  background: #1612f8 repeating-linear-gradient(90deg, rgb(0 0 0 / 12%) 0 2px, transparent 2px 6px);
+  font-size: 16px; color: #fff;
+}
+
+.shimmer {
+  background: linear-gradient(90deg, rgb(255 255 255 / 30%) 30%, #fff 50%, rgb(255 255 255 / 30%) 70%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.caret { display: inline-block; width: 12px; height: 26px; margin-left: 3px; vertical-align: -4px; background: rgb(255 255 255 / 70%); }
+
+.composer { display: flex; align-items: center; padding: 0 40px; }
+.field { flex: 1; font-size: 26px; letter-spacing: -0.01em; color: rgb(255 255 255 / 35%); white-space: nowrap; overflow: hidden; padding-right: 320px; }
+.field.typed { color: #fff; }
+.send {
+  position: absolute; right: 28px; top: 22px; width: 64px; height: 64px;
+  display: grid; place-items: center; background: #3a3a3a;
+}
+
+.chip { position: absolute; background: #2a2a2a; transform-origin: center; }
+.chip-in {
+  position: absolute; inset: 0; padding: 0 20px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 22px; letter-spacing: -0.01em; color: rgb(255 255 255 / 92%);
+}
+.chev { position: absolute; right: 20px; top: 24px; color: rgb(255 255 255 / 50%); }
+.dot { position: absolute; right: -6px; top: -6px; width: 14px; height: 14px; border-radius: 50%; background: #ff6467; }
+.dot i { position: absolute; inset: 0; border-radius: 50%; background: #ff6467; }
+
+.picker {
+  position: absolute; width: 606px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px;
+  background: #000;
+  box-shadow: 0 -30px 80px -20px rgb(0 0 0 / 85%), 0 0 0 1px rgb(255 255 255 / 6%);
+}
+.phead {
+  grid-column: span 2; height: 48px; padding: 0 22px;
+  display: flex; align-items: center; gap: 10px;
+  background: #1f1f1f; font-size: 14px; color: rgb(255 255 255 / 55%);
+}
+.card {
+  height: 230px; padding: 26px; background: #262626; color: #fff;
+  display: flex; flex-direction: column; justify-content: space-between;
+}
+.card > * { transform: translateY(var(--rise, 0)); }
+.card .top { display: flex; justify-content: space-between; align-items: flex-start; }
+.card .name { font-size: 27px; line-height: 32px; letter-spacing: -0.01em; }
+.card .tag { font-size: 12px; line-height: 14px; padding: 4px 7px; background: rgb(255 100 103 / 14%); color: #ff6467; white-space: nowrap; }
+#card-claude .top svg, #card-claude .name { filter: grayscale(0.4); opacity: 0.75; }
+
+.cursor { position: absolute; left: 0; top: 0; transform-origin: 5px 5px; filter: drop-shadow(0 6px 10px rgb(0 0 0 / 55%)); }
+.ripple { position: absolute; left: 0; top: 0; width: 96px; height: 96px; border-radius: 50%; border: 2px solid #fff; }
+
+.overlay { position: absolute; left: 240px; }
+#end { top: 300px; }
+#end h1 {
+  margin: 0; max-width: 1440px;
+  font-family: "Inter Variable", sans-serif; font-weight: 350;
+  font-size: 112px; line-height: 124px; letter-spacing: -0.035em;
+}
+#wm { top: 760px; color: #fff; }
+.w { display: inline-block; overflow: hidden; vertical-align: top; padding-bottom: 0.12em; margin-bottom: -0.12em; }
+.wi { display: inline-block; }
+
+/* Preview chrome; the render hides it. */
+#viewport { position: relative; overflow: hidden; margin: 16px auto 0; }
+#controls {
+  display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap;
+  padding: 14px; font: 13px "Geist Mono Variable", monospace; color: rgb(255 255 255 / 70%);
+}
+#controls button { font: inherit; color: #fff; background: #1c1c1c; border: 0; padding: 8px 12px; cursor: pointer; }
+#controls input[type="range"] { width: min(640px, 50vw); accent-color: #1612f8; }
+body.render #controls { display: none; }
+body.render #viewport { margin: 0; }

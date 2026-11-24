@@ -22,8 +22,8 @@ suspend fun Store.setFlags(key: SessionKey, flags: Map<String, Boolean>) {
 }
 
 /**
- * Takes a read, finished session's unread mark back. Not echoed by the server, so set here once
- * it agrees: set first, an offline phone showed a mark the next read took away.
+ * Takes a read, finished session's unread mark back, here once the server agrees: set first, an
+ * offline phone showed a mark the next read took away. Other clients hear it on `session_changed`.
  */
 suspend fun Store.markUnread(key: SessionKey) {
     try {
@@ -95,8 +95,8 @@ suspend fun Store.attach(key: SessionKey, bot: Bot): Boolean = try {
 }
 
 /**
- * Deletes a session for good, its hidden children with it; false where the server refused. No
- * event says so to other clients, so the row goes here once the server agrees.
+ * Deletes a session for good, its hidden children with it; false where the server refused. The row
+ * goes once the server agrees; `session_deleted` tells every other client.
  */
 suspend fun Store.delete(key: SessionKey): Boolean {
     try {
@@ -105,8 +105,13 @@ suspend fun Store.delete(key: SessionKey): Boolean {
         lastError = e.message
         return false
     }
+    forget(key)
+    return true
+}
+
+/** Drops a deleted session's row, here or from `session_deleted`. */
+fun Store.forget(key: SessionKey) {
     setItem(key, null)
     asks.remove(key)
     transcripts.remove(key)
-    return true
 }

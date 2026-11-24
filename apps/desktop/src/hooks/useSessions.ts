@@ -49,7 +49,7 @@ import { activeSpace, allowedInSpace, moveSpace, orderProjects, PROJECT_ORDER_KE
 import { FIRST_MOUNT } from "@/lib/turnWindow";
 import { forget, stopWaiting, upload, waitFor } from "@/lib/uploads";
 import type { Draft } from "./useDrafts";
-import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueueChangedEvent, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionServingEvent, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueueChangedEvent, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionDeletedEvent, SessionSnapshot, SessionStatus, SessionServingEvent, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
 
@@ -2087,7 +2087,8 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
   // unconditionally it would show up under the archived filter too. The ref,
   // since this runs after the fork's round trip.
   if (!showArchivedRef.current) {
-    setSessionIndexItems((prev) => [...prev, snapshot]);
+    // `session_created` can land before this answer does.
+    setSessionIndexItems((prev) => [...prev.filter((i) => i.sessionId !== snapshot.sessionId), snapshot]);
   }
   // Claimed like every other selection path, or an eviction tick landing
   // before this renders sees both selection refs on the parent and drops the
@@ -2142,6 +2143,26 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
   // running: the server decided, so each is asked for after the delete.
   const home = homeOf(sessionId);
   const children = hiddenChildren(sessionIndexItems, sessionId).filter((c) => homeOf(c.sessionId) === home);
+  forgetDeleted(sessionId);
+  await Promise.all(
+    children.map(async (c) => {
+      const kept = await invoke<SessionIndexItem | null>("session_index_item", { sessionId: c.sessionId }).catch(
+        () => undefined,
+      );
+      if (kept) applyIndexItem(kept);
+      else if (kept === null) await deleteSession(c.sessionId);
+    }),
+  );
+  await Promise.all(away.map((c) => deleteSession(c.sessionId)));
+  return true;
+};
+
+/// Lets go of everything held for a deleted session: its row, transcript and
+/// live state. Run by this app's own delete and by `session_deleted`, which
+/// says another client deleted it.
+const forgetDeleted = (sessionId: string) => {
+  // Its child dying is the last thing a deleted session says.
+  deletedRef.current.add(sessionId);
   setSessionIndexItems((prev) => prev.filter((i) => i.sessionId !== sessionId));
   setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
   retireStreamingBlock(sessionId);
@@ -2158,20 +2179,9 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
   forgetClosedTabs(sessionId);
   forgetParkedTabs(sessionId);
 
-  if (selectedSessionId === sessionId) {
+  if (selectedSessionIdRef.current === sessionId) {
     handleNewSession();
   }
-  await Promise.all(
-    children.map(async (c) => {
-      const kept = await invoke<SessionIndexItem | null>("session_index_item", { sessionId: c.sessionId }).catch(
-        () => undefined,
-      );
-      if (kept) applyIndexItem(kept);
-      else if (kept === null) await deleteSession(c.sessionId);
-    }),
-  );
-  await Promise.all(away.map((c) => deleteSession(c.sessionId)));
-  return true;
 };
 
 const homeOf = (sessionId: string) => {
@@ -3771,6 +3781,29 @@ useEffect(() => {
   };
 }, []);
 
+// Another client deleted a session: a phone's row menu, or `dray`.
+const forgetDeletedRef = useRef(forgetDeleted);
+forgetDeletedRef.current = forgetDeleted;
+useEffect(() => {
+  const listenerPromise = listen<SessionDeletedEvent>("session_deleted", ({ payload }) => {
+    forgetDeletedRef.current(payload.sessionId);
+  });
+  return () => {
+    listenerPromise.then((unlisten) => unlisten());
+  };
+}, []);
+
+/// A phone's Mark unread arrives as the entry, never as `session_status`,
+/// which reads `completed` as a turn finishing and announces it. Only the read
+/// mark's own move is taken: a turn's status still comes from `session_status`.
+const followReadMarkRef = useRef((_: SessionIndexItem) => {});
+followReadMarkRef.current = ({ sessionId, status }: SessionIndexItem) => {
+  const now = statusOf(sessionId);
+  if ((now === "idle" && status === "completed") || (now === "completed" && status === "idle")) {
+    setStatusBySession((prev) => ({ ...prev, [sessionId]: status }));
+  }
+};
+
 // `dray session settle`, `unsettle`, `set-aside` and their undoing, which reach
 // Rust over the orchestration socket, so the sidebar hears of them only here.
 const applyIndexItemRef = useRef(applyIndexItem);
@@ -3780,6 +3813,7 @@ reportWorktreeFailureRef.current = reportWorktreeFailure;
 useEffect(() => {
   const listenerPromise = listen<SessionIndexItem>("session_changed", (event) => {
     applyIndexItemRef.current(event.payload);
+    followReadMarkRef.current(event.payload);
   });
   // A held flag written once its server came back: the row as that server
   // answered, in case its own `session_changed` is still on the way.

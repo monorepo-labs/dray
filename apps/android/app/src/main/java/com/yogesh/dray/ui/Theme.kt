@@ -50,6 +50,8 @@ object Dray {
     val merged = Color(0xFFA855F7)
     val merge = Color(0xFF238636)
     val link = Color(0xFF5AD3FF)
+    /** Linear's urgent priority, and nothing else. */
+    val urgent = Color(0xFFF2994A)
     val claude = Color(0xFFD97757)
 
     object Radius {
