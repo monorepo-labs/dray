@@ -20,7 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -61,15 +61,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.io.File
 
-/** A detail page's top-bar actions: Share, then Play, the primary one, at the right end. */
+/** A detail page's top-bar actions: Share, then Play, the primary one, at the right end. Plain icons, as Back is. */
 @Composable
 fun StartActions(share: (() -> Unit)?, start: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Dray.Space.xs)) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
         share?.let { IconButton(it) { Icon(Icons.Filled.Share, "Share", Modifier.size(20.dp), tint = Dray.text) } }
-        Box(
-            Modifier.size(36.dp).clip(CircleShape).background(Dray.primary).clickable(onClick = start),
-            contentAlignment = Alignment.Center,
-        ) { Icon(Icons.Filled.PlayArrow, "Start a task", Modifier.size(22.dp), tint = Dray.onPrimary) }
+        // 26dp: the triangle fills less of its box than Share's glyph does, so this reads the same size.
+        IconButton(start) { Icon(Icons.Outlined.PlayArrow, "Start a task", Modifier.size(26.dp), tint = Dray.text) }
     }
 }
 
