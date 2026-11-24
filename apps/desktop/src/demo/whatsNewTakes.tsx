@@ -4,7 +4,7 @@ import ReactDOM from "react-dom/client";
 import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, ChevronLeftIcon, SparklesIcon } from "@heroicons/react/16/solid";
 
 import { changelogInline, changelogPlain } from "@/components/changelogText";
-import WhatsNewDialog from "@/components/WhatsNewDialog";
+import WhatsNewDialog from "@/demo/whatsNewDialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -107,7 +107,7 @@ function TakeA({ hl, onAction, onClose }: TakeProps) {
   );
 }
 
-/// B — shipped, as `WhatsNewDialog` draws it: media edge to edge and rounded
+/// B — the first cut shipped, as `WhatsNewDialog` draws it: media edge to edge and rounded
 /// below, "New in Dray" on it, a larger title, the action as a link in the
 /// text, Skip on the picture, dots left and Back · Next as arrows right.
 function TakeB({ hl, onAction, onClose }: TakeProps) {

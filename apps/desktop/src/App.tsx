@@ -173,7 +173,7 @@ import { dismissNotice, getNotices, pushNotice } from "@/hooks/useNotices";
 import { checkChangelog, markChangelogSeen, type Announcement } from "@/lib/changelog";
 import { isSettingsTab } from "@/lib/settingsTabs";
 import WhatsNewCard from "@/components/WhatsNewCard";
-import WhatsNewDialog from "@/components/WhatsNewDialog";
+import WhatsNewPage from "@/components/WhatsNewPage";
 import StarCard from "@/components/StarCard";
 import { noteMergeForStar, useStarPrompt } from "@/hooks/useStarPrompt";
 import { useIntegrations } from "@/hooks/useIntegrations";
@@ -857,7 +857,7 @@ function App() {
     setSettingsOpen(true);
   }, []);
   // Once a launch: highlights the reader runs and has not dismissed yet get the
-  // what's-new dialog, and failing those a release flagged `notify` gets the
+  // full-window What's New, and failing those a release flagged `notify` gets the
   // card.
   const [whatsNew, setWhatsNew] = useState<Announcement | null>(null);
   const starPrompt = useStarPrompt();
@@ -5026,7 +5026,7 @@ function App() {
       />
     )}
     {whatsNew?.kind === "highlights" && (
-      <WhatsNewDialog
+      <WhatsNewPage
         highlights={whatsNew.highlights}
         actionFor={highlightAction}
         onClose={() => closeWhatsNew(false)}

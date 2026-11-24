@@ -19,7 +19,7 @@ export type ChangelogItem = {
   media: ChangelogMedia[];
   highlight?: ChangelogHighlight | null;
 };
-/// One page of the what's-new dialog, with the release it shipped in.
+/// One card of What's New, with the release it shipped in.
 export type Highlight = { version: string; item: ChangelogItem };
 export type ChangelogSection = { kind: "new" | "improved" | "fixed"; items: ChangelogItem[] };
 export type Release = {

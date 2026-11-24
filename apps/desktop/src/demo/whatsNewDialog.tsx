@@ -8,6 +8,10 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import type { ChangelogMedia, Highlight } from "@/lib/changelog";
 import { cn } from "@/lib/utils";
 
+/// The paged dialog What's New first shipped as, take B in
+/// [whatsNewTakes.tsx](whatsNewTakes.tsx), kept for those takes once the
+/// full-window [WhatsNewPage](../components/WhatsNewPage.tsx) replaced it.
+///
 /// A release's bigger features after an update, a page each: the item's first
 /// image or video, its title and its text, and a link where the highlight
 /// names an action this build knows.

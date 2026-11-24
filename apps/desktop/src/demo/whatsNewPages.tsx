@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
 import { NEXT_RELEASE, onWhite, PAGE_HIGHLIGHTS } from "@/demo/whatsNewData";
-import { Stripes } from "@/demo/whatsNewStripes";
+import { Stripes } from "@/components/Stripes";
 import type { ChangelogMedia, Highlight } from "@/lib/changelog";
 import { cn } from "@/lib/utils";
 import "../App.css";
