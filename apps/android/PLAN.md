@@ -136,8 +136,8 @@ library**, its Compose port from JitPack, pinned to a tag in
 `OrbKind` to its state and variant. Change the drawing there, not here.
 
 **The launcher icon is the iOS icon's layout as vectors**: `res/drawable/ic_launcher_*`
-hold the mark, tile and themed (monochrome) layer, and the splash reuses the
-foreground. A vector draws no blur, so the mark's shadow and the legacy
+hold the mark, tile and themed (monochrome) layer. The splash is the mark
+alone, white and 40dp wide (`splash_mark.xml`), with no tile. A vector draws no blur, so the mark's shadow and the legacy
 `ic_launcher.png`s are rendered by `scripts/launcher_icon.sh`; rerun it after
 moving the mark.
 

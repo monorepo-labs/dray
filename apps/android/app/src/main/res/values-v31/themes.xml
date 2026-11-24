@@ -1,11 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- The splash shows the launcher icon's own foreground on its white tile, over the page the app opens on.
-         Its icon is 240dp inside a 160dp circle, the adaptive icon's 108dp and 72dp scaled, so the
-         foreground lands padded exactly as on the home screen. -->
+    <!-- The splash is the white mark alone on the page the app opens on; no icon background, so no tile. -->
     <style name="Theme.Dray" parent="Base.Theme.Dray">
         <item name="android:windowSplashScreenBackground">@color/page</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
-        <item name="android:windowSplashScreenIconBackgroundColor">@color/icon_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_mark</item>
     </style>
 </resources>
