@@ -44,6 +44,9 @@ pub struct Mapper {
     opening: HashMap<String, OpeningCall>,
     /// `task` calls whose run is open in the panel, by call id.
     runs: HashSet<String>,
+    /// The input of every drawn call still running, for a permission ask
+    /// that names none of its own — see [`Mapper::running_input`].
+    running: HashMap<String, Value>,
 }
 
 impl Mapper {
@@ -57,7 +60,16 @@ impl Mapper {
             occupancy: None,
             opening: HashMap::new(),
             runs: HashSet::new(),
+            running: HashMap::new(),
         }
+    }
+
+    /// The input a running call was drawn with. OpenCode's own asks from
+    /// inside a tool — a `.env` read, `doom_loop` — carry the bare tool name
+    /// and an empty `rawInput`, so this is the only place their card finds
+    /// what is being asked about.
+    pub fn running_input(&self, call_id: &str) -> Option<&Value> {
+        self.running.get(call_id)
     }
 
     pub fn map(&mut self, event: OpenCodeEvent) -> Vec<AgentEvent> {
@@ -107,6 +119,7 @@ impl Mapper {
                         let input = tool_input(raw_input);
                         let tool_type = tool_type(&call.name, kind);
                         let run = (tool_type == ToolType::SubagentSpawn).then(|| started_run(&input));
+                        self.running.insert(tool_call_id.clone(), input.clone());
                         out.push(self.event(AgentEventPayload::ToolCallStarted {
                             call_id: tool_call_id.clone(),
                             tool_type,
@@ -127,6 +140,7 @@ impl Mapper {
                 let Some(status) = status.filter(|s| s.is_final()) else {
                     return out;
                 };
+                self.running.remove(&tool_call_id);
 
                 let closing: String = content
                     .iter()
@@ -276,6 +290,7 @@ impl Mapper {
         // A run still open here never answered — a cancelled turn — and the
         // transcript's own stand-in closes its call.
         self.runs.clear();
+        self.running.clear();
         event
     }
 
@@ -690,5 +705,31 @@ mod tests {
         let input = tool_input(Some(json!({"filePath": "/a", "oldString": "x", "newString": "y", "other": 1})));
         assert_eq!(input, json!({"file_path": "/a", "old_string": "x", "new_string": "y", "other": 1}));
         assert_eq!(tool_input(None), json!({}));
+    }
+
+    /// A drawn call's input is held while it runs, for the `.env` ask OpenCode
+    /// raises from inside `read` with an empty `rawInput` (shapes as captured
+    /// on 1.19.5), and dropped when it closes.
+    #[test]
+    fn a_running_call_keeps_its_input_for_an_ask() {
+        fn feed(mapper: &mut Mapper, update: Value) {
+            let params = json!({"sessionId": "ses_1", "update": update});
+            let Ok(note) = super::super::parser::parse_notification("session/update", params) else {
+                panic!("the update did not parse");
+            };
+            mapper.map(OpenCodeEvent::Update(note.update));
+        }
+        let mut mapper = Mapper::new("s".into(), Arc::new(AtomicU64::new(0)));
+        feed(&mut mapper, json!({"sessionUpdate": "tool_call", "toolCallId": "c1", "title": "read",
+                                 "kind": "read", "status": "pending", "locations": [], "rawInput": {}}));
+        feed(&mut mapper, json!({"sessionUpdate": "tool_call_update", "toolCallId": "c1",
+                                 "status": "in_progress", "kind": "read", "title": ".env", "locations": [],
+                                 "rawInput": {"filePath": "/p/.env"}}));
+        assert_eq!(mapper.running_input("c1"), Some(&json!({"file_path": "/p/.env"})));
+
+        feed(&mut mapper, json!({"sessionUpdate": "tool_call_update", "toolCallId": "c1",
+                                 "status": "completed", "kind": "read", "content": [],
+                                 "rawOutput": {"output": "KEY=1"}}));
+        assert_eq!(mapper.running_input("c1"), None);
     }
 }
