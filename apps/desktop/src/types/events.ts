@@ -890,6 +890,11 @@ export type DrayUser = { id: string, name: string,
  */
 email: string | null, username: string | null, 
 /**
+ * The GitHub login the account signed up with, which GitHub names it
+ * after where the profile has no name. Absent from a site older than it.
+ */
+githubLogin: string | null, 
+/**
  * The Google or GitHub picture, where the account has one.
  */
 image: string | null, 

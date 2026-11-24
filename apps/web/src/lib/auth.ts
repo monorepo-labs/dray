@@ -63,6 +63,11 @@ export const auth = betterAuth({
       // Written only by `setUsername`, which checks the format and reports a
       // taken one; `input: false` keeps `updateUser` from going around it.
       username: { type: "string", required: false, unique: true, input: false },
+      // Taken from the GitHub profile at sign-up, so the app can tell a name
+      // that is only the login (a profile with no name) from one typed. Input
+      // stays on, or the provider's profile never reaches it; a reader setting
+      // their own changes nothing but whether their bots ask their name.
+      githubLogin: { type: "string", required: false },
     },
   },
   // Verified before it can sign in, so an address someone merely typed is
@@ -81,7 +86,11 @@ export const auth = betterAuth({
     },
     // Only where its OAuth app is configured, so a site without keys still starts.
     ...(process.env.GITHUB_CLIENT_ID && {
-      github: { clientId: process.env.GITHUB_CLIENT_ID, clientSecret: process.env.GITHUB_CLIENT_SECRET! },
+      github: {
+        clientId: process.env.GITHUB_CLIENT_ID,
+        clientSecret: process.env.GITHUB_CLIENT_SECRET!,
+        mapProfileToUser: (profile) => ({ githubLogin: profile.login }),
+      },
     }),
   },
   // The page trims the name too; this holds for a sign-up posted straight here.
