@@ -1,0 +1,20 @@
+{
+  "name": "@dray/upload-worker",
+  "private": true,
+  "license": "Apache-2.0",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --test-concurrency=1 'test/*.test.mjs'"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261123.1",
+    "@types/node": "^22.20.5",
+    "typescript": "~7.0.2",
+    "wrangler": "^4.166.0"
+  }
+}

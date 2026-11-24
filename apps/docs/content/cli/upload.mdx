@@ -1,40 +1,43 @@
 ---
 title: Upload
-description: Put screenshots in a pull request without a browser. dray upload stores an image and prints a markdown line for the PR body.
+description: Put screenshots and recordings in a pull request without a browser. dray upload stores a file and prints a markdown line for the PR body.
 sidebar:
   order: 9
 ---
 
-GitHub only takes images through its web editor. `dray upload` stores screenshots on drayhq.com and prints a markdown image line for each, ready to paste into a pull request body or comment. Agents can use it, and so can you.
+GitHub only takes uploads through its web editor. `dray upload` stores screenshots and screen recordings with Dray and prints a markdown line for each, ready to paste into a pull request body or comment. Agents can use it, and so can you.
 
 ```bash
-dray upload before.png after.png
+dray upload before.png after.png demo.mp4
 ```
 
 ```
 ![before](https://…/3f1c…9a.png)
 ![after](https://…/8b02…4e.png)
+[demo](https://…/c71d…02.mp4)
 ```
 
-The text in brackets is the file name without its extension.
+The text in brackets is the file name without its extension. An image prints as an image. A video prints as a plain link, because GitHub only plays videos uploaded through its own editor.
 
 ## What it takes
 
-- **PNG, JPEG, GIF or WebP**, up to 4 MB each. The site checks the file's bytes, not its name, so a renamed file of another kind is refused. SVG and video are not taken.
-- **A GitHub account.** `dray upload` reads `GITHUB_TOKEN` when it is set, and otherwise asks `gh auth token`, so being signed in to the GitHub CLI is enough. The site asks GitHub who the token belongs to and then forgets it. The token is never stored or logged. A GitHub Actions token is refused, since it belongs to no user.
+- **PNG, JPEG, GIF or WebP**, up to 20 MB each.
+- **MP4, WebM or MOV**, up to 100 MB each.
+- The file's bytes decide its type, not its name, so a renamed file of another kind is refused. SVG is not taken.
+- **A GitHub account.** `dray upload` reads `GITHUB_TOKEN` when it is set, and otherwise asks `gh auth token`, so being signed in to the GitHub CLI is enough. The upload service asks GitHub who the token belongs to and then forgets it. The token is never stored or logged. A GitHub Actions token is refused, since it belongs to no user.
 - **`curl`**, which macOS, Linux and Windows all ship.
 
 Each file uploads on its own. One that fails is reported and the rest still upload; the command exits non-zero if any failed.
 
-## Where the images live
+## Where the files live
 
-Each image gets a public address named after a hash of its bytes. Uploading the same file twice gives the same address, and nothing can replace an image already uploaded. Anyone with the address can open it, so upload only what you would put in a public PR.
+Each upload gets a public address with a random name. Uploading the same file twice gives two addresses, and nothing can replace a file already uploaded. Anyone with the address can open it, so upload only what you would put in a public PR.
 
 ## Limits
 
-- 4 MB per file.
+- 20 MB per image, 100 MB per video.
 - 30 uploads an hour and 200 a day per GitHub account.
-- There is no delete. Ask in an issue to have an image taken down.
+- There is no delete. Ask in an issue to have a file taken down.
 
 ## Without the CLI
 
@@ -42,7 +45,9 @@ The CLI calls one endpoint, and `curl` can call it directly. The body is the raw
 
 ```bash
 printf 'Authorization: Bearer %s' "$(gh auth token)" \
-  | curl -sS -H @- --data-binary @after.png https://www.drayhq.com/api/upload
+  | curl -sS -H @- --data-binary @after.png https://upload.drayhq.com/
 ```
 
-It answers `{"url": "…", "type": "image/png", "size": 48213}`. A refusal answers `401` for a missing or refused token, `413` for a file over 4 MB, `415` for a file that is not one of the four image types, and `429` past the rate limit.
+It answers `{"url": "…", "type": "image/png", "size": 48213}`. A refusal answers `401` for a missing or refused token, `411` for a body sent without a `Content-Length`, `413` for a file over its limit, `415` for a file that is not one of the seven types, and `429` past the rate limit.
+
+`DRAY_UPLOAD_URL` points `dray upload` somewhere else, such as a local `wrangler dev`.

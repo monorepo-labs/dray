@@ -56,7 +56,7 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 ## Repo layout
 
-pnpm workspace, three apps, no shared JS package yet — plus two native Swift apps, the Android app, the Linux island, the `dray` CLI and one shared Rust crate outside the workspace.
+pnpm workspace, four apps, no shared JS package yet — plus two native Swift apps, the Android app, the Linux island, the `dray` CLI and one shared Rust crate outside the workspace.
 
 ```
 apps/desktop/       the Tauri app — everything below this section describe it
@@ -68,6 +68,7 @@ apps/android/       Kotlin + Compose client of dray-serve, Gradle project — re
 apps/island/        Dray Island, the Mac companion panel: SwiftUI, XcodeGen — read apps/island/PLAN.md
 apps/island-linux/  Dray Island on Linux and Windows: Rust + GPUI, own crate — read apps/island-linux/PLAN.md
 apps/cli/           the `dray` CLI: own crate, own `cli-v*` release tag
+apps/upload-worker/ `dray upload`'s endpoint: a Cloudflare Worker writing to R2, deployed by hand with wrangler
 crates/dray-proto/  the CLI's socket protocol, compiled into the CLI and the app
 charts/             standalone benchmark chart pages, built by nothing
 ```

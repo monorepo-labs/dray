@@ -82,8 +82,8 @@ enum Command {
     /// live ones, or stop one.
     #[command(arg_required_else_help = true, args_conflicts_with_subcommands = true)]
     Share(ShareArgs),
-    /// Upload screenshots for a PR body and print a markdown image line for
-    /// each. Signs in with your GitHub token, from `gh auth token` or GITHUB_TOKEN.
+    /// Upload screenshots or recordings for a PR body and print a markdown
+    /// line for each. Signs in with your GitHub token, from `gh auth token` or GITHUB_TOKEN.
     #[command(arg_required_else_help = true)]
     Upload(upload::Upload),
     /// The machines this one reaches: add, list, rename, connect, remove.
