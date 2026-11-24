@@ -10,6 +10,8 @@ enum BotItem: Identifiable {
     /// A failed turn's sentence, or an error the harness raised.
     case notice(id: String, text: String, ts: String?)
     case card(id: String, MergeCard, ts: String?)
+    /// `sessionId`: the session it was posted in, which `approve_issue` names; `started`: its issues already handed back.
+    case issues(id: String, IssueCard, sessionId: String, started: Set<Int>, ts: String?)
     /// "Started a new task", from the server's `task_started`, or in an older
     /// log a `dray session new` and the id it printed.
     case task(id: String, sessionId: String, title: String?, ts: String?)
@@ -24,7 +26,7 @@ enum BotItem: Identifiable {
     var id: String {
         switch self {
         case .user(let id, _, _, _, _), .assistant(let id, _, _, _, _), .notice(let id, _, _), .card(let id, _, _),
-             .task(let id, _, _, _), .sent(let id, _, _), .botMessage(let id, _, _, _, _), .botSent(let id, _, _, _),
+             .issues(let id, _, _, _, _), .task(let id, _, _, _), .sent(let id, _, _), .botMessage(let id, _, _, _, _), .botSent(let id, _, _, _),
              .learned(let id, _, _, _, _): id
         }
     }
@@ -32,7 +34,7 @@ enum BotItem: Identifiable {
     var ts: String? {
         switch self {
         case .user(_, _, _, _, let ts), .assistant(_, _, _, _, let ts), .notice(_, _, let ts), .card(_, _, let ts),
-             .task(_, _, _, let ts), .sent(_, _, let ts), .botMessage(_, _, _, _, let ts), .botSent(_, _, _, let ts),
+             .issues(_, _, _, _, let ts), .task(_, _, _, let ts), .sent(_, _, let ts), .botMessage(_, _, _, _, let ts), .botSent(_, _, _, let ts),
              .learned(_, _, _, _, let ts): ts
         }
     }
@@ -75,6 +77,8 @@ func botItems(_ events: [AgentEvent]) -> [BotItem] {
     // as a log from before that event holds.
     var announced = Set<String>()
     for e in main { if case .taskStarted(let id, _) = e.payload { announced.insert(id.lowercased()) } }
+    var started: [String: Set<Int>] = [:]
+    for e in main { if case .issueApproved(let card, let n) = e.payload { started[card, default: []].insert(n) } }
 
     var items: [BotItem] = []
     var starts = Set<String>()
@@ -100,6 +104,8 @@ func botItems(_ events: [AgentEvent]) -> [BotItem] {
             items.append(.notice(id: e.id, text: message, ts: e.ts))
         case .mergeCard(let card):
             items.append(.card(id: e.id, card, ts: e.ts))
+        case .issueCard(let card):
+            items.append(.issues(id: e.id, card, sessionId: e.sessionId, started: started[e.id] ?? [], ts: e.ts))
         case .taskStarted(let taskId, let title):
             items.append(.task(id: e.id, sessionId: taskId.lowercased(), title: title, ts: e.ts))
         case .learned(let commit, let files):
