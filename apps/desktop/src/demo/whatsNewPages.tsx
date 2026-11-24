@@ -24,7 +24,9 @@ import "../App.css";
 /// over the whole window, as the app would; an action is logged in its row
 /// rather than run. `?takes=ACE` lists only those. F is the one picked.
 
-type Backdrop = "black" | "blue";
+type Backdrop = "black" | "blue" | "white";
+
+const PAGE: Record<Backdrop, string> = { black: "bg-black", blue: "bg-[#1612F8]", white: "bg-white" };
 type Cards = "dark" | "white";
 type Layout = "gaps" | "small" | "borders";
 type Exit = "card" | "bare" | "title";
@@ -489,6 +491,8 @@ function ActionMono({ h, onAction, white }: { h: Highlight; onAction: (label: st
 /// `white` is the white card, dark title, tried on the blue backdrop; its
 /// pictures are the `-white` captures, drawn on a white tile to match.
 ///
+/// `edged` draws a hairline round the card, for white cards on a white page.
+///
 /// `titleFirst` puts the title above the picture (left of it on a wide card),
 /// the picture held to the card's foot so a row's pictures line up.
 function LandingCard({
@@ -497,15 +501,17 @@ function LandingCard({
   white,
   wide,
   titleFirst,
+  edged,
 }: {
   h: Highlight;
   onAction: (label: string) => void;
   white?: boolean;
   wide?: boolean;
   titleFirst?: boolean;
+  edged?: boolean;
 }) {
   const media = h.item.media[0];
-  const fill = white ? "bg-white" : "bg-[#1C1C1C]";
+  const fill = cn(white ? "bg-white" : "bg-[#1C1C1C]", edged && "shadow-[0_0_0_1px_#0000001F]");
   const heading = (
     <h2
       className={cn(
@@ -525,7 +531,10 @@ function LandingCard({
     );
   return (
     <article className={cn(fill, wide ? "col-span-2 grid grid-cols-2" : "flex flex-col")}>
-      <Media media={media} className={cn("aspect-video w-full", fill, titleFirst && "order-last mt-auto")} />
+      <Media
+        media={media}
+        className={cn("aspect-video w-full", white ? "bg-white" : "bg-[#1C1C1C]", titleFirst && "order-last mt-auto")}
+      />
       <div className="flex flex-col gap-3 p-6">
         {heading}
         <ActionMono h={h} onAction={onAction} white={white} />
@@ -551,12 +560,14 @@ function ContinueCard({
   white,
   bare,
   page,
+  onLight,
 }: {
   row: boolean;
   onClose: () => void;
   white?: boolean;
   bare?: boolean;
   page?: string;
+  onLight?: boolean;
 }) {
   const arrow = (
     <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden>
@@ -571,7 +582,13 @@ function ContinueCard({
       className={cn(
         "flex cursor-pointer text-left outline-none transition-colors focus-visible:ring-1",
         bare
-          ? cn("text-white hover:bg-white/10 focus-visible:ring-white/50", !row && !page && "border border-white/40", page)
+          ? cn(
+              onLight
+                ? "text-[#0A0A0A] hover:bg-black/5 focus-visible:ring-black/40"
+                : "text-white hover:bg-white/10 focus-visible:ring-white/50",
+              !row && !page && (onLight ? "border border-black/20" : "border border-white/40"),
+              page,
+            )
           : white
             ? "bg-[#EDEDEF] text-[#0A0A0A] hover:bg-[#E2E2E5] focus-visible:ring-black/40"
             : "bg-[#242424] text-white hover:bg-[#2C2C2C] focus-visible:ring-white/40",
@@ -600,13 +617,18 @@ function ContinueCard({
 
 /// The way out, a ghost button at the far end of the heading's line, lined
 /// up with its 40px line box. It takes focus on open, so Enter leaves at once.
-function ContinueButton({ onClose }: { onClose: () => void }) {
+function ContinueButton({ onClose, onLight }: { onClose: () => void; onLight?: boolean }) {
   return (
     <button
       type="button"
       data-autofocus
       onClick={onClose}
-      className="mt-3.5 flex h-10 shrink-0 cursor-pointer items-center rounded-md px-4 text-[15px] text-white/80 outline-none transition-colors hover:bg-white/10 hover:text-white focus-visible:ring-1 focus-visible:ring-white/50"
+      className={cn(
+        "mt-3.5 flex h-10 shrink-0 cursor-pointer items-center rounded-md px-4 text-[15px] outline-none transition-colors focus-visible:ring-1",
+        onLight
+          ? "text-[#0A0A0A]/75 hover:bg-black/5 hover:text-[#0A0A0A] focus-visible:ring-black/40"
+          : "text-white/80 hover:bg-white/10 hover:text-white focus-visible:ring-white/50",
+      )}
     >
       Continue
     </button>
@@ -636,25 +658,27 @@ function TakeLanding({
   order = "picture",
 }: TakeProps) {
   const one = hl.length === 1;
-  const blue = backdrop === "blue";
+  const onLight = backdrop === "white";
   const white = cards === "white";
   const asCard = exit !== "title";
   return (
     <Shell
       label="New in Dray"
       onClose={onClose}
-      className={cn("overflow-hidden text-white select-none", blue ? "bg-[#1612F8]" : "bg-black")}
+      className={cn("overflow-hidden select-none", PAGE[backdrop], onLight ? "text-[#0A0A0A]" : "text-white")}
     >
-      {/* Blue is the site's closing band: its own black stripes at 12%. */}
-      <Stripes ink={blue ? "#0000001F" : "#FFFFFF14"} />
+      {/* Blue is the site's closing band: its own black stripes at 12%.
+          White takes them at 7%, just enough to show. */}
+      <Stripes ink={{ black: "#FFFFFF14", blue: "#0000001F", white: "#00000012" }[backdrop]} />
       <header data-tauri-drag-region="deep" className="relative flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">
         <WindowControls />
       </header>
       <main className="relative min-h-0 flex-1 overflow-y-auto px-10 pb-12">
         <div className="mx-auto flex w-full max-w-[1120px] flex-col pt-6">
-          <div className="flex items-start justify-between gap-6">
+          {/* GateHeading draws white; a white page needs it dark. */}
+          <div className={cn("flex items-start justify-between gap-6", onLight && "[&_h1]:text-[#0A0A0A]")}>
             <GateHeading>{one ? "New in Dray." : `${hl.length} new things in Dray.`}</GateHeading>
-            {!asCard && <ContinueButton onClose={onClose} />}
+            {!asCard && <ContinueButton onClose={onClose} onLight={onLight} />}
           </div>
           {/* Gaps and small gaps: 16px or 6px of the page between cards,
               stripes and all. Borders: cards edge to edge, a hairline
@@ -677,6 +701,7 @@ function TakeLanding({
                 white={white}
                 wide={!asCard && hl.length % 2 === 1 && i === hl.length - 1}
                 titleFirst={order === "title"}
+                edged={white && onLight && layout !== "borders"}
               />
             ))}
             {asCard && (
@@ -685,7 +710,8 @@ function TakeLanding({
                 onClose={onClose}
                 white={white}
                 bare={exit === "bare"}
-                page={layout === "borders" ? (blue ? "bg-[#1612F8]" : "bg-black") : undefined}
+                page={layout === "borders" ? PAGE[backdrop] : undefined}
+                onLight={onLight}
               />
             )}
           </div>
@@ -792,7 +818,10 @@ function Demo() {
   // 0 is the next release's own highlights; 1 to 6 are samples.
   const [count, setCount] = useState(() => Math.min(Math.max(Number(params.get("n")) || 0, 0), PAGE_HIGHLIGHTS.length));
   const hl = count === 0 ? NEXT_RELEASE : PAGE_HIGHLIGHTS.slice(0, count);
-  const [backdrop, setBackdrop] = useState<Backdrop>(() => (params.get("bg") === "black" ? "black" : "blue"));
+  const [backdrop, setBackdrop] = useState<Backdrop>(() => {
+    const b = params.get("bg");
+    return b === "black" || b === "white" ? b : "blue";
+  });
   const [cards, setCards] = useState<Cards>(() => (params.get("cards") === "dark" ? "dark" : "white"));
   const [layout, setLayout] = useState<Layout>(() => {
     const l = params.get("layout");
@@ -841,7 +870,7 @@ function Demo() {
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-ui">
             <span className="text-muted-foreground">F backdrop</span>
             <div role="radiogroup" aria-label="F backdrop" className="flex gap-1">
-              {(["black", "blue"] as const).map((b) => (
+              {(["black", "blue", "white"] as const).map((b) => (
                 <Button
                   key={b}
                   role="radio"
@@ -850,7 +879,7 @@ function Demo() {
                   variant={backdrop === b ? "default" : "outline"}
                   onClick={() => setBackdrop(b)}
                 >
-                  {b === "black" ? "Black" : "Blue"}
+                  {{ black: "Black", blue: "Blue", white: "White" }[b]}
                 </Button>
               ))}
             </div>
