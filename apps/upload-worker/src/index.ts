@@ -19,10 +19,10 @@ export interface Env {
 const DOCS = `https://github.com/${REPO}/blob/main/CONTRIBUTING.md#screenshots-and-videos`;
 const NOT_A_CONTRIBUTOR = `Uploads are for Dray contributors: collaborators of ${REPO}, members of its org, and authors of an open pull request there. Open your PR first, then upload.`;
 const ACCEPTED = ["png", "jpg", "gif", "webp", "mp4", "webm", "mov"];
-const PER_ADDRESS: Window[] = [{ max: 120, secs: 3600 }];
+const PER_ADDRESS: Window[] = [{ max: 600, secs: 3600 }];
 const PER_USER: Window[] = [
-  { max: 30, secs: 3600 },
-  { max: 200, secs: 86400 },
+  { max: 300, secs: 3600 },
+  { max: 2000, secs: 86400 },
 ];
 
 export default {

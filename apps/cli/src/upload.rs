@@ -145,7 +145,7 @@ fn read_reply(output: &str) -> Result<Stored, String> {
             None => "too large".into(),
         },
         ("415", _) => "not a png, jpg, gif, webp, mp4, webm or mov file".into(),
-        ("429", _) => "too many uploads; each GitHub user gets 30 an hour. Try again later".into(),
+        ("429", _) => "too many uploads; each GitHub user gets 300 an hour. Try again later".into(),
         ("503", _) => "uploads are not set up on this service".into(),
         (status, Some(error)) => format!("the upload service answered {status}: {error}"),
         (status, None) => format!("the upload service answered {status}"),
@@ -187,7 +187,7 @@ mod tests {
     fn says_each_refusal_plainly() {
         assert!(read_reply("{\"error\":\"github_token_invalid\"}\n401").err().unwrap().contains("gh auth login"));
         assert!(read_reply("{\"error\":\"not_accepted\"}\n415").err().unwrap().contains("mp4, webm or mov"));
-        assert!(read_reply("{\"error\":\"slow_down\"}\n429").err().unwrap().contains("30 an hour"));
+        assert!(read_reply("{\"error\":\"slow_down\"}\n429").err().unwrap().contains("300 an hour"));
         assert!(read_reply("{\"error\":\"not_a_contributor\"}\n403").err().unwrap().contains("Dray contributors"));
         assert_eq!(
             read_reply("{\"error\":\"too_large\",\"max_bytes\":20971520}\n413").err().unwrap(),

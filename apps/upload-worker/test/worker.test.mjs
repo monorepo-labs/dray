@@ -312,10 +312,10 @@ describe("the upload Worker", () => {
     assert.equal(res.status, 411);
   });
 
-  test("a GitHub user gets 30 an hour, then 429", async () => {
+  test("a GitHub user gets 300 an hour, then 429", async () => {
     const statuses = [];
-    for (let i = 0; i < 31; i++) statuses.push((await upload(png(`flood ${i}`), FLOOD)).status);
-    assert.deepEqual(statuses, [...Array(30).fill(200), 429]);
+    for (let i = 0; i < 301; i++) statuses.push((await upload(png(`flood ${i}`), FLOOD)).status);
+    assert.deepEqual(statuses, [...Array(300).fill(200), 429]);
     assert.equal((await upload(png("still fine"))).status, 200, "another user is not slowed");
   });
 
