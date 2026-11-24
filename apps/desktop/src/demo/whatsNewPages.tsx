@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
-import { IPHONE_TITLES, NEXT_RELEASE, PAGE_HIGHLIGHTS } from "@/demo/whatsNewData";
+import { NEXT_RELEASE, PAGE_HIGHLIGHTS } from "@/demo/whatsNewData";
 import { Stripes } from "@/demo/whatsNewStripes";
 import type { ChangelogMedia, Highlight } from "@/lib/changelog";
 import { cn } from "@/lib/utils";
@@ -628,11 +628,7 @@ function Demo() {
   const only = params.get("takes");
   // 0 is the next release's own highlights; 1 to 6 are samples.
   const [count, setCount] = useState(() => Math.min(Math.max(Number(params.get("n")) || 0, 0), PAGE_HIGHLIGHTS.length));
-  const [iphoneTitle, setIphoneTitle] = useState(() => Math.min(Number(params.get("title")) || 0, IPHONE_TITLES.length - 1));
-  const next = NEXT_RELEASE.map((h, i) =>
-    i === NEXT_RELEASE.length - 1 ? { ...h, item: { ...h.item, title: IPHONE_TITLES[iphoneTitle] } } : h,
-  );
-  const hl = count === 0 ? next : PAGE_HIGHLIGHTS.slice(0, count);
+  const hl = count === 0 ? NEXT_RELEASE : PAGE_HIGHLIGHTS.slice(0, count);
   return (
     <TooltipProvider>
       <div className="mx-auto flex max-w-3xl flex-col gap-6 p-10">
@@ -668,25 +664,6 @@ function Demo() {
               ))}
             </div>
           </div>
-          {count === 0 && (
-            <div className="flex items-start gap-3 text-ui">
-              <span className="mt-1.5 shrink-0 text-muted-foreground">iPhone title</span>
-              <div role="radiogroup" aria-label="iPhone title" className="flex flex-col items-start gap-1">
-                {IPHONE_TITLES.map((t, i) => (
-                  <Button
-                    key={t}
-                    role="radio"
-                    aria-checked={iphoneTitle === i}
-                    size="sm"
-                    variant={iphoneTitle === i ? "default" : "outline"}
-                    onClick={() => setIphoneTitle(i)}
-                  >
-                    {String.fromCharCode(65 + i)} · {t}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          )}
         </header>
         <ul className="flex flex-col border-t border-border">
           {TAKES.filter((t) => !only || only.includes(t.id)).map((t) => (

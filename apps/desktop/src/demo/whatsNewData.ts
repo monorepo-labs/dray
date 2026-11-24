@@ -104,17 +104,8 @@ export const NEXT_RELEASE: Highlight[] = [
     [{ kind: "image", url: "/demo/whats-new/harness-composer.png", alt: "A chat Claude Code answered, Codex picked in the composer for the next message" }],
   ),
   page(
-    "Dray is on iPhone. Answer your agents from anywhere.",
+    "Your agents, in your pocket. Dray is now on iPhone.",
     "Every task on every machine, with questions to answer, permissions to allow and alerts when one is ready to merge.",
     [{ kind: "image", url: "/demo/whats-new/iphone-app.png", alt: "Dray's bot chat on an iPhone, beside a QR code for the App Store" }],
   ),
-];
-
-/// Titles to try on the iPhone highlight, the first in NEXT_RELEASE: each
-/// says what the phone lets you do, since the QR beside it is the way in.
-export const IPHONE_TITLES = [
-  "Dray is on iPhone. Answer your agents from anywhere.",
-  "Answer, steer and merge your tasks from your iPhone.",
-  "Get pinged when a task needs you. Answer from your iPhone.",
-  "Your agents, in your pocket. Dray is now on iPhone.",
 ];
