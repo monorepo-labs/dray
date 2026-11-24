@@ -406,14 +406,14 @@ mod collect {
         for (id, answer) in collected.answers {
             let Some(asked) = mine.iter().find(|a| a.id == id && a.state == State::Waiting) else { continue };
             let Some(to) = asker_now(asked).await else {
-                if mark(&id, State::Undelivered).await {
+                if mark(&id, State::Waiting, State::Undelivered).await {
                     unlanded.push(id);
                 }
                 continue;
             };
             // On disk before the send: a crash between the two loses this
             // answer rather than delivering it twice.
-            if !mark(&id, State::Delivered).await {
+            if !mark(&id, State::Waiting, State::Delivered).await {
                 continue;
             }
             let from = MessageSender {
@@ -428,7 +428,7 @@ mod collect {
                 Ok(()) => told.push(id),
                 Err(e) => {
                     eprintln!("[remote asks deliver err] {e:#}");
-                    if mark(&id, State::Undelivered).await {
+                    if mark(&id, State::Delivered, State::Undelivered).await {
                         unlanded.push(id);
                     }
                 }
@@ -467,21 +467,25 @@ mod collect {
         serde_json::from_value(answer).map_err(|e| e.to_string())
     }
 
-    /// Moves question `id` to `state` on disk. False where it was not waiting
-    /// any more, or the write failed, so nothing is sent on unrecorded.
-    async fn mark(id: &str, state: State) -> bool {
-        let marked = edit(|list| match list.iter_mut().find(|a| a.id == id && a.state == State::Waiting) {
-            Some(asked) => {
-                asked.state = state;
-                true
-            }
-            None => false,
-        })
-        .await;
-        marked.unwrap_or_else(|e| {
+    /// Moves question `id` from `from` to `to` on disk. False where it was
+    /// not in `from` any more, or the write failed, so nothing is sent on
+    /// unrecorded.
+    async fn mark(id: &str, from: State, to: State) -> bool {
+        edit(|list| step(list, id, from, to)).await.unwrap_or_else(|e| {
             eprintln!("[remote asks err] {e:#}");
             false
         })
+    }
+
+    /// [`mark`]'s change to the list.
+    fn step(list: &mut [Asked], id: &str, from: State, to: State) -> bool {
+        match list.iter_mut().find(|a| a.id == id && a.state == from) {
+            Some(asked) => {
+                asked.state = to;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Stops tracking questions the far side has heard the end of.
@@ -544,6 +548,18 @@ mod collect {
             let list = [asked(&id, State::Waiting), asked(&id, State::Delivered)];
             assert!(expire(&list, made + WAIT_FOR - 1).is_empty());
             assert_eq!(expire(&list, made + WAIT_FOR), [&list[0]]);
+        }
+
+        /// Marked delivered before the send, a question whose send then fails
+        /// still moves on to undelivered, so the bot's chat hears of it; and a
+        /// delivered one is never marked delivered again.
+        #[test]
+        fn a_failed_send_moves_a_delivered_question_to_undelivered() {
+            let mut list = [asked("1", State::Waiting)];
+            assert!(step(&mut list, "1", State::Waiting, State::Delivered));
+            assert!(!step(&mut list, "1", State::Waiting, State::Delivered));
+            assert!(step(&mut list, "1", State::Delivered, State::Undelivered));
+            assert_eq!(list[0].state, State::Undelivered);
         }
 
         #[test]
