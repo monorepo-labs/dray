@@ -69,9 +69,17 @@ data class PrComment(
     val path: String? = null,
     val resolved: Boolean = false,
     val replies: List<PrComment> = emptyList(),
+    /** GitHub's node id; absent from an older server. */
+    @kotlinx.serialization.SerialName("id") val nodeId: String? = null,
 ) {
     /** Stable across polls, so a new reply or an edit keeps its row. Not the url alone: every review carries the PR's own. */
     val id: String get() = "$url|$createdAt|$author"
+
+    /** What a PR's page picks it by: `commentKey` in `prInbox.ts`. */
+    val key: String get() = nodeId?.takeIf { it.isNotEmpty() } ?: "$url\u0000$createdAt"
+
+    /** A review's inline threads, the replies carrying a file. */
+    val threads: List<PrComment> get() = if (kind == "comment") emptyList() else replies.filter { it.path != null }
 }
 
 /** Why the server could not ask GitHub: `{"kind":…,"detail":…}`. */

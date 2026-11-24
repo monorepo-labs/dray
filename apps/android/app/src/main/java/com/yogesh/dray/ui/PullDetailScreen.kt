@@ -55,6 +55,7 @@ import com.yogesh.dray.model.PullRequest
 import com.yogesh.dray.model.PullRow
 import com.yogesh.dray.model.SessionKey
 import com.yogesh.dray.model.Shot
+import com.yogesh.dray.model.marksRepo
 import com.yogesh.dray.model.prBodyMarkdown
 import com.yogesh.dray.model.trackerColor
 import com.yogesh.dray.net.ConnState
@@ -157,12 +158,14 @@ fun PullDetailScreen(target: PullTarget, back: () -> Unit, openSession: (Session
     }
     val pr = model.prs.firstOrNull()
     val detail = model.detail
-    val row = store.pulls.row(target.url)
-    val tasks = tasks(store, row ?: PullRow(
-        target.server, target.key, target.repo,
+    // A row no list holds any more, rebuilt from the route: `repo` in `marksRepo`'s spelling, as remotes compare.
+    val row = store.pulls.row(target.url) ?: PullRow(
+        target.server, target.key, marksRepo(target.url) ?: target.repo,
         PrMark(number = target.number, headRefName = target.branch, state = pr?.state ?: "OPEN", url = target.url),
         PrListing(isCrossRepository = pr?.isCrossRepository ?: false),
-    ))
+    )
+    val tasks = tasks(store, row)
+    var picked by remember(target) { mutableStateOf(setOf<String>()) }
 
     var gallery by remember { mutableStateOf<ImageRef?>(null) }
     CompositionLocalProvider(LocalOpenImage provides { ref: ImageRef -> gallery = ref }) {
@@ -219,8 +222,12 @@ fun PullDetailScreen(target: PullTarget, back: () -> Unit, openSession: (Session
                         }
                     }
                 }
-                item("checks") { PrChecks(pr) }
-                item("comments") { PrComments(pr) }
+                if (pr.checks.isNotEmpty()) item("checks") { PrChecks(pr) }
+                // A fork's branch takes no task, so its comments have nothing to be quoted into.
+                if (pr.comments.isNotEmpty()) item("comments") { PrComments(pr, picked.takeUnless { pr.isCrossRepository }) { picked = it } }
+                item("start") {
+                    PrStartBox(row, pr, picked, tasks.firstOrNull()?.let { store.items[it] }) { picked = emptySet() }
+                }
             }
         }
     }
