@@ -539,10 +539,12 @@ function LandingCard({
 /// in full white. Solid white was tried and glared on the black. `row` lays it
 /// across both columns.
 /// On white cards it is a step darker, #EDEDEF with dark type.
-/// `bare` has no fill: white type and arrow straight on the page, with a
-/// hairline in white to hold the card's shape where the page shows through
-/// the gaps around it. In the Borders layout the grid's own fill is the line,
-/// so a bare card there takes the page's colour instead of showing it.
+/// `bare` has no fill: white type and arrow straight on the page in the
+/// card's slot, a faint tint on hover. On its own row it has no border
+/// either; beside a card (an odd count) a white hairline keeps it reading as
+/// that row's second card. In the Borders layout the
+/// grid's own fill is the line, so a bare card there takes the page's colour
+/// (`page`) instead of showing it.
 function ContinueCard({
   row,
   onClose,
@@ -553,7 +555,7 @@ function ContinueCard({
   row: boolean;
   onClose: () => void;
   white?: boolean;
-  bare?: "outlined" | "flat";
+  bare?: boolean;
   page?: string;
 }) {
   const arrow = (
@@ -569,7 +571,7 @@ function ContinueCard({
       className={cn(
         "flex cursor-pointer text-left outline-none transition-colors focus-visible:ring-1",
         bare
-          ? cn("text-white hover:bg-white/10 focus-visible:ring-white/50", bare === "outlined" && "border border-white/40", page)
+          ? cn("text-white hover:bg-white/10 focus-visible:ring-white/50", !row && !page && "border border-white/40", page)
           : white
             ? "bg-[#EDEDEF] text-[#0A0A0A] hover:bg-[#E2E2E5] focus-visible:ring-black/40"
             : "bg-[#242424] text-white hover:bg-[#2C2C2C] focus-visible:ring-white/40",
@@ -677,7 +679,7 @@ function TakeLanding({
                 row={hl.length % 2 === 0}
                 onClose={onClose}
                 white={white}
-                bare={exit === "bare" ? (layout === "borders" ? "flat" : "outlined") : undefined}
+                bare={exit === "bare"}
                 page={layout === "borders" ? (blue ? "bg-[#1612F8]" : "bg-black") : undefined}
               />
             )}
