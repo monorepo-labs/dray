@@ -13,7 +13,6 @@ import {
   ChevronDown,
   GitPullRequest,
   RefreshCw,
-  Search,
   Shapes,
   SlidersHorizontal,
   Tag,
@@ -37,8 +36,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import PageSearch from "@/components/PageSearch";
 import ShortcutKeys from "@/components/ShortcutKeys";
-import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import GitHubIcon from "@/components/GitHubIcon";
 import IssueTrackerChips from "@/components/IssueTrackerChips";
@@ -62,16 +61,6 @@ import type {
   IssueState,
   IssueTracker,
 } from "@/types/events";
-
-/// The page's search field. Named so ⌘⇧F can reach it — the same trick the
-/// sidebar's own field uses, and for the same reason: the chord has to be able
-/// to *re-focus* a field already on screen, which a `ref` threaded up through
-/// the page would do no better.
-///
-/// **Shifted, where the sidebar's is not.** ⌘F belongs to the sidebar and is
-/// bound app-wide, so a second field claiming it would take the one search that
-/// works from anywhere and make it depend on which view is up.
-const ISSUE_SEARCH_INPUT_ID = "issues-search";
 
 /// Where a personal API key is made. Linked rather than described, because the
 /// path through Linear's own settings is theirs to change and a stale sentence
@@ -204,17 +193,6 @@ export default function IssuesView({
   }, [refreshRef, refresh]);
 
   const set = (patch: Partial<IssueQuery>) => setQuery({ ...query, ...patch });
-
-  // Bound here rather than in `App`, unlike ⌘F: this field only exists while
-  // the page does, and `enabled` unregisters the listener outright rather than
-  // leaving a chord claimed — `useHotkey` calls `preventDefault` on every match,
-  // so a binding left standing would eat ⌘⇧F from whatever *is* on screen.
-  // `select` rather than `focus`, so pressing it on a query replaces it.
-  useHotkey(
-    "issues.search",
-    () => document.querySelector<HTMLInputElement>(`#${ISSUE_SEARCH_INPUT_ID}`)?.select(),
-    { enabled: active && !needsConnecting },
-  );
 
   /// The workflow a row's status menu offers, which belongs to the issue's own
   /// team. Read once per connection with the filter options rather than per
@@ -449,43 +427,13 @@ export default function IssuesView({
         </div>
       </div>
 
-      {/* No fill and no border. A search box is the one control here that is
-          always in the same place, so it needs no edge to be found — and a
-          filled field above a borderless list draws a box round the least
-          interesting third of the page. The glyph does the work the border
-          was doing: it says "type here" without enclosing anything. */}
-      <div className="group flex h-11 shrink-0 items-center gap-2 px-3">
-        <Search className="size-4 shrink-0 text-muted-foreground" />
-        <Input
-          id={ISSUE_SEARCH_INPUT_ID}
-          value={query.text ?? ""}
-          placeholder="Search issues"
-          spellCheck={false}
-          // `dark:bg-transparent` as well as `bg-transparent`: the base input
-          // carries `dark:bg-input/30`, which is the more specific rule and
-          // wins — so the plain override read as removed here while leaving a
-          // fill on screen.
-          className="h-full rounded-none border-0 bg-transparent p-0 shadow-none focus-visible:ring-0 dark:bg-transparent"
-          onChange={(e) => set({ text: e.currentTarget.value || null })}
-          // Escape drops the query, the sidebar's rule. It does *not* blur:
-          // this field is always drawn, so there is nothing to close and a
-          // caret left where it was is a second search ready to be typed.
-          onKeyDown={(e) => {
-            if (e.key !== "Escape" || !query.text) return;
-            e.preventDefault();
-            set({ text: null });
-          }}
-        />
-
-        {/* The slot names whichever key does something here, and which one that
-            is turns on focus alone — the sidebar's rule, and the two fields
-            should not need learning twice. Escape reaches this input and
-            nothing else; ⌘⇧F is what brings focus back to a field left holding
-            a query. Esc is withheld over an empty field, the one state neither
-            key has anything to do in. */}
-        {query.text && <Kbd className="hidden group-focus-within:inline-flex">Esc</Kbd>}
-        <ShortcutKeys ids={["issues.search"]} className="group-focus-within:hidden" />
-      </div>
+      <PageSearch
+        id="issues-search"
+        active={active}
+        value={query.text ?? ""}
+        onChange={(text) => set({ text: text || null })}
+        placeholder="Search issues"
+      />
 
       {/* Under the header rather than over the rows: a failed refresh leaves
           what was already read on screen, and this says the answer is stale. */}

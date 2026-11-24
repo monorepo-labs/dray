@@ -75,6 +75,21 @@ export function pullsReads(
 /// `owner/name` for a row's label and the repo filter.
 export const rowRepoName = (row: InboxRow): string => prRepoSlug(row.mark.url) ?? row.repo;
 
+/// Whether a row answers the page's search: every word somewhere in its
+/// title, author or branch, case aside, or naming its number.
+///
+/// A number matches the PR's own whole — `12` is not `#1234` — and `#12`
+/// matches nothing else, while a bare `12` also finds `v12` in a title.
+export function matchesPullSearch(row: InboxRow, query: string): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const text = [row.listing.title, row.listing.author, row.mark.headRefName].map((f) => f.toLowerCase());
+  return words.every((word) => {
+    const number = word.match(/^#?(\d+)$/)?.[1];
+    if (number === String(row.mark.number)) return true;
+    return !word.startsWith("#") && text.some((f) => f.includes(word));
+  });
+}
+
 export type InboxSection = "needs_you" | "ready" | "running" | "waiting" | "draft";
 
 export const SECTIONS: readonly { key: InboxSection; label: string }[] = [

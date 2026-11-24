@@ -20,6 +20,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { readComposerPrefs } from "@/hooks/useComposerPrefs";
 import { useDraft } from "@/hooks/useDraft";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
+import type { PrDetailRead } from "@/hooks/usePrDetail";
 import type { usePullRequest } from "@/hooks/usePullRequest";
 import { rememberedModel, usableEffort, usableModel } from "@/lib/model";
 import { prPrompt, unresolvedKeys, type InboxRow, type PrCheckout, type PrMachines, type PrPicks } from "@/lib/prInbox";
@@ -36,6 +37,7 @@ import type { Bot, Model, Project, SessionIndexItem } from "@/types/events";
 export default function PullDetail({
   row,
   data,
+  detail,
   sessions,
   bots,
   botOf,
@@ -47,6 +49,8 @@ export default function PullDetail({
 }: {
   row: InboxRow;
   data: ReturnType<typeof usePullRequest>;
+  /// The PR's description, labels and reviewers, read apart from `data`.
+  detail: PrDetailRead;
   /// `sessionsForPr`'s answer: every task on the PR, newest first.
   sessions: SessionIndexItem[];
   /// The bots that can take this PR as a task: those on its checkout's server.
@@ -138,7 +142,7 @@ export default function PullDetail({
       )}
 
       <CommentPickContext value={pick}>
-        <PrPanel {...data} prs={prs} branch={row.mark.headRefName} cwd={row.key} />
+        <PrPanel {...data} prs={prs} branch={row.mark.headRefName} cwd={row.key} detail={detail} />
       </CommentPickContext>
 
       {pr && (

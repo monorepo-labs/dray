@@ -52,6 +52,12 @@ function isFailing(pr: PrStateOf): boolean {
   return pr.checksState === "FAILING" && pr.state !== "MERGED" && pr.state !== "CLOSED";
 }
 
+/// The state as a word in its glyph's colour, for a pane that spells it out.
+export function PrStateWord({ pr, className }: { pr: PrStateOf; className?: string }) {
+  const { tone, label } = STATES[keyOf(pr)];
+  return <span className={cn("font-medium", tone, className)}>{label}</span>;
+}
+
 /// The word the glyph stands for — the sidebar's `title` needs it in a sentence
 /// where the panel needs it on an `aria-label`.
 ///

@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ChevronDown, MessageSquare, RefreshCw } from "lucide-react";
 
 import Avatar from "@/components/Avatar";
+import PageSearch from "@/components/PageSearch";
 import TaskChip from "@/components/TaskChip";
 import { ListGroup, RepoMenu } from "@/components/ListGroup";
 import { MissingCli } from "@/components/PrPanel";
@@ -19,12 +20,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useDebouncedSearch } from "@/hooks/useDebouncedSearch";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { relativeTime } from "@/lib/format";
 import {
   SECTIONS,
   inboxSection,
+  matchesPullSearch,
   rowRepoName,
   type InboxRow,
   type PeopleFilter,
@@ -157,10 +160,13 @@ export default function PullsView({
   const repoShown = repo && repos.includes(repo) ? repo : null;
   // Owners on offer: those the search has met, and those of the rows here.
   const ownerList = [...new Set([...owners, ...rows.map((row) => rowRepoName(row).split("/")[0])])];
+  const [search, setSearch] = useState("");
+  const query = useDebouncedSearch(search.trim());
   const shown = rows.filter(
     (row) =>
       (!owner || rowRepoName(row).split("/")[0].toLowerCase() === owner.toLowerCase()) &&
-      (!repoShown || rowRepoName(row) === repoShown),
+      (!repoShown || rowRepoName(row) === repoShown) &&
+      matchesPullSearch(row, query),
   );
   const sections = SECTIONS.map((section) => ({
     ...section,
@@ -199,7 +205,7 @@ export default function PullsView({
     <div className="flex min-h-0 flex-1 flex-col">
       {/* The issues page's header: what the page is on the left, what narrows
           it on the right, wrapping rather than squeezing. */}
-      <div className="flex shrink-0 flex-wrap items-center gap-1.5 px-3 pt-3 pb-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5 px-3 pt-3">
         {PEOPLE.map((option) => (
           <button
             key={option.value}
@@ -259,6 +265,14 @@ export default function PullsView({
         </div>
       </div>
 
+      <PageSearch
+        id="pulls-search"
+        active={active}
+        value={search}
+        onChange={setSearch}
+        placeholder="Search pull requests"
+      />
+
       {offline.length > 0 && (
         <p className="px-3 pb-2 text-ui text-muted-foreground">
           {offline.join(", ")} {offline.length === 1 ? "is" : "are"} offline, so some pull requests may be missing.
@@ -280,7 +294,9 @@ export default function PullsView({
           <p className="px-3 py-2 text-ui text-muted-foreground">Reading…</p>
         ) : sections.length === 0 ? (
           <p className="px-3 py-4 text-ui text-muted-foreground">
-            {rows.length > 0
+            {query && rows.length > 0
+              ? `No pull request matches “${query}”.`
+              : rows.length > 0
               ? "No pull request matches these filters."
               : `No open pull requests${PEOPLE_EMPTY[people]}${scope === "space" ? " in this space" : ""}.`}
           </p>
