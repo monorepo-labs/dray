@@ -21,11 +21,26 @@ use std::sync::{OnceLock, RwLock};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
-/// One agent's resolved path. A lock rather than a `OnceCell` so [`forget_agent`]
-/// can empty it once Dray has installed that agent itself.
-type Slot = Mutex<Option<PathBuf>>;
+/// One agent's resolved path. Not a `OnceCell`, so [`forget_agent`] can empty it
+/// once Dray has installed that agent itself. The answer sits behind a std lock
+/// that never waits on a resolve, so [`resolved_bin_dirs`] always sees it; the
+/// async mutex only keeps two resolves of one agent from running at once.
+struct Slot {
+    path: RwLock<Option<PathBuf>>,
+    resolving: Mutex<()>,
+}
 
-static CLAUDE_PATH: Slot = Slot::const_new(None);
+impl Slot {
+    const fn new() -> Self {
+        Slot { path: RwLock::new(None), resolving: Mutex::const_new(()) }
+    }
+
+    fn get(&self) -> Option<PathBuf> {
+        self.path.read().unwrap().clone()
+    }
+}
+
+static CLAUDE_PATH: Slot = Slot::new();
 /// Not a [`Slot`] like the agents', because this one caches an
 /// *absence* and that absence is what the reader is being asked to fix — see
 /// [`forget_gh`].
@@ -33,7 +48,7 @@ static GH_PATH: RwLock<Option<Option<PathBuf>>> = RwLock::new(None);
 /// Bumped by every [`forget_gh`], so a probe already running when the reader
 /// installed `gh` cannot put its own miss back over the answer.
 static GH_GENERATION: AtomicU64 = AtomicU64::new(0);
-static CODEX_PATH: Slot = Slot::const_new(None);
+static CODEX_PATH: Slot = Slot::new();
 
 /// The `codex` shipped inside the ChatGPT desktop app.
 ///
@@ -59,12 +74,15 @@ pub async fn claude() -> PathBuf {
 /// launch asks for every agent from several places at once, and a miss ends in
 /// a login shell.
 async fn cached(slot: &'static Slot, resolve: impl Future<Output = PathBuf>) -> PathBuf {
-    let mut held = slot.lock().await;
-    if let Some(hit) = &*held {
-        return hit.clone();
+    if let Some(hit) = slot.get() {
+        return hit;
+    }
+    let _resolving = slot.resolving.lock().await;
+    if let Some(hit) = slot.get() {
+        return hit;
     }
     let found = resolve.await;
-    *held = Some(found.clone());
+    *slot.path.write().unwrap() = Some(found.clone());
     found
 }
 
@@ -81,7 +99,9 @@ pub async fn forget_agent(harness: Harness) {
         Harness::OpenCode => &OPENCODE_PATH,
         Harness::Other(_) => return,
     };
-    *slot.lock().await = None;
+    // Waits out a resolve already running, or its pre-install miss lands after this.
+    let _resolving = slot.resolving.lock().await;
+    *slot.path.write().unwrap() = None;
     LOGIN_PATH_STALE.store(true, Ordering::Release);
 }
 
@@ -197,7 +217,7 @@ async fn resolve_codex() -> PathBuf {
     PathBuf::from("codex")
 }
 
-static PI_PATH: Slot = Slot::const_new(None);
+static PI_PATH: Slot = Slot::new();
 
 /// Where `pi` is, or the bare name as a last resort — [`claude`]'s shape, and
 /// for its reason.
@@ -216,7 +236,7 @@ pub async fn pi() -> PathBuf {
     cached(&PI_PATH, or_bare("pi")).await
 }
 
-static FX_PATH: Slot = Slot::const_new(None);
+static FX_PATH: Slot = Slot::new();
 
 /// Where `fx` is, or the bare name as a last resort — [`claude`]'s shape.
 /// Vercel's installer puts it in `~/.local/bin`, one of the known dirs.
@@ -224,7 +244,7 @@ pub async fn fx() -> PathBuf {
     cached(&FX_PATH, or_bare("fx")).await
 }
 
-static GROK_PATH: Slot = Slot::const_new(None);
+static GROK_PATH: Slot = Slot::new();
 
 /// Where `grok` is, or the bare name as a last resort — [`claude`]'s shape.
 /// xAI's installer puts it in `~/.local/bin` and symlinks `~/.grok/bin/grok`
@@ -234,7 +254,7 @@ pub async fn grok() -> PathBuf {
     cached(&GROK_PATH, or_bare("grok")).await
 }
 
-static OPENCODE_PATH: Slot = Slot::const_new(None);
+static OPENCODE_PATH: Slot = Slot::new();
 
 /// Where `opencode` is, or the bare name as a last resort — [`claude`]'s shape.
 /// Its installer puts it in `~/.opencode/bin`, one of the known dirs.
@@ -534,9 +554,7 @@ pub fn resolved_bin_dirs() -> Vec<PathBuf> {
     let gh = GH_PATH.read().unwrap().clone().flatten();
     [&CLAUDE_PATH, &CODEX_PATH, &PI_PATH, &FX_PATH, &GROK_PATH]
         .into_iter()
-        // A slot locked mid-resolve is skipped: every spawn site resolves its
-        // own binary first, so the one it needs is never the locked one.
-        .filter_map(|slot| slot.try_lock().ok().and_then(|held| held.clone()))
+        .filter_map(Slot::get)
         .chain(gh)
         .filter(|path| path.is_absolute())
         .filter_map(|path| path.parent().map(Path::to_path_buf))

@@ -35,9 +35,15 @@ export function useAgentSetup(): AgentSetup {
       onFocusChange((focused) => {
         if (!focused) return;
         const pending = [...inTerminal.current];
-        inTerminal.current.clear();
         void Promise.all(pending.map((harness) => invoke<boolean>("recheck_agent", { harness }, LOCAL).catch(() => false))).then(
           (found) => {
+            // One still missing stays handed to Terminal, so its card never
+            // falls back to the in-app install that already failed.
+            pending.forEach((harness, i) => {
+              if (!found[i]) return;
+              inTerminal.current.delete(harness);
+              mark(harness, null);
+            });
             if (found.some(Boolean)) rereadAgentAvailability();
             void refresh();
           },
@@ -77,7 +83,7 @@ export function useAgentSetup(): AgentSetup {
     const row = rows.find((r) => r.harness === harness);
     if (!row) return;
     if (row.state === "signin" || row.state === "signing") void signIn(harness);
-    else if (row.state === "failed") {
+    else if (row.state === "failed" || (row.state === "install" && inTerminal.current.has(harness))) {
       inTerminal.current.add(harness);
       mark(harness, "install");
       void invoke("install_agent_in_terminal", { harness }, LOCAL).catch(() => {});
