@@ -146,10 +146,10 @@ pub const ASK_NAME: &str = "What should I call you?";
 /// What a bot may call the user, best source first (#1313).
 #[derive(Debug, Clone, PartialEq)]
 pub enum UserName {
-    /// Told to a bot, written in its [`USER_FILE`], or a real name off the account.
+    /// Told to a bot, written in its [`USER_FILE`], or the account's first name.
     Known(String),
-    /// The account's name reads as a handle or email prefix: offered back to
-    /// confirm, never used unasked.
+    /// The account's name is only its GitHub login: offered back to confirm,
+    /// never used unasked.
     Handle(String),
     Unknown,
 }
@@ -173,30 +173,17 @@ impl UserName {
     }
 }
 
-/// What the signed-in account's name gives the bots. GitHub falls back to the
-/// login where a profile has no name, and email sign-up names the account
-/// after the address's local part, so a name only counts as real where it
-/// reads like one: a capitalised word of letters, not the username.
+/// What the signed-in account's name gives the bots: its first word, as typed,
+/// since sign-up asks for a name. The exception is GitHub's fallback to the
+/// login where a profile has no name, which is offered back to confirm.
 fn account_name(user: &crate::dray_account::DrayUser) -> UserName {
     let Some(name) = clean_name(user.name.split('@').next().unwrap_or_default()) else {
         return UserName::Unknown;
     };
-    let first = name.split_whitespace().next().unwrap_or_default();
-    let joiner = |c: char| matches!(c, '-' | '\'' | '’');
-    let lead = first.chars().next().unwrap_or_default();
-    // An uncased script (CJK and the like) has no capital to look for.
-    let capital = lead.is_uppercase() || (lead.is_alphabetic() && !lead.is_lowercase());
-    // A capital mid-word reads as a handle ("YogeshArc"); after a hyphen it is a name ("Anne-Marie").
-    let lettered = first
-        .chars()
-        .zip(first.chars().skip(1))
-        .all(|(before, c)| joiner(c) || (c.is_alphabetic() && (!c.is_uppercase() || joiner(before))));
-    let handle = user.username.as_deref().is_some_and(|u| u.eq_ignore_ascii_case(&name));
-    if capital && lettered && !handle && !user.name.contains('@') {
-        UserName::Known(first.to_string())
-    } else {
-        UserName::Handle(name)
+    if user.github_login.as_deref().is_some_and(|login| login.eq_ignore_ascii_case(&name)) {
+        return UserName::Handle(name);
     }
+    UserName::Known(name.split_whitespace().next().unwrap_or_default().to_string())
 }
 
 /// What `bot` may call the user: a name told to any bot wins, then one in its
@@ -2794,31 +2781,30 @@ mod tests {
         assert!(!handle.contains("Call the user yogesharc"));
     }
 
-    fn account(name: &str, username: Option<&str>) -> crate::dray_account::DrayUser {
+    fn account(name: &str, github_login: Option<&str>) -> crate::dray_account::DrayUser {
         crate::dray_account::DrayUser {
             id: "u".into(),
             name: name.into(),
             email: None,
-            username: username.map(Into::into),
+            username: Some("sam".into()),
+            github_login: github_login.map(Into::into),
             image: None,
             providers: Vec::new(),
         }
     }
 
     #[test]
-    fn a_real_account_name_is_used_and_a_handle_is_offered_back() {
+    fn the_account_name_is_trusted_unless_it_is_the_github_login() {
         let known = |n: &str| UserName::Known(n.into());
-        let handle = |n: &str| UserName::Handle(n.into());
-        assert_eq!(account_name(&account("Yogesh Dhakal", Some("yogesh"))), known("Yogesh"));
+        assert_eq!(account_name(&account("Yogesh Dhakal", Some("yogesharc"))), known("Yogesh"));
+        assert_eq!(account_name(&account("yogesh dhakal", None)), known("yogesh"));
+        assert_eq!(account_name(&account("yogesh", None)), known("yogesh"));
+        assert_eq!(account_name(&account("YogeshArc", None)), known("YogeshArc"));
+        assert_eq!(account_name(&account("sam", None)), known("sam"));
         assert_eq!(account_name(&account("Anne-Marie O'Neil", None)), known("Anne-Marie"));
-        assert_eq!(account_name(&account("José", None)), known("José"));
         assert_eq!(account_name(&account("李明", None)), known("李明"));
-        // GitHub's login standing in for a missing name, and email sign-up's local part.
-        assert_eq!(account_name(&account("yogesharc", Some("yogesh"))), handle("yogesharc"));
-        assert_eq!(account_name(&account("YogeshArc", None)), handle("YogeshArc"));
-        assert_eq!(account_name(&account("sam_99", Some("sam_99"))), handle("sam_99"));
-        assert_eq!(account_name(&account("Sam", Some("sam"))), handle("Sam"));
-        assert_eq!(account_name(&account("sam@example.com", None)), handle("sam"));
+        // GitHub names the account after the login where the profile has no name.
+        assert_eq!(account_name(&account("yogesharc", Some("YogeshArc"))), UserName::Handle("yogesharc".into()));
         assert_eq!(account_name(&account("  ", None)), UserName::Unknown);
     }
 
