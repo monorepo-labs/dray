@@ -27,6 +27,54 @@ reads:
   to a line or two. A release with no highlights for an app gets the small
   card there instead, when it carries `notify`.
 
+## 0.34.0 · 2026-11-24 · notify
+
+### New
+
+- **OpenCode is now in Dray.** Pick OpenCode in the composer and run it
+  like any other agent, with your own models and providers.
+  ![OpenCode](changelog/opencode.png)
+  <!-- highlight: desktop -->
+- **Switch a task's agent mid-session.** Pick another agent's model in
+  the composer and your next message moves the task there, with
+  everything said so far.
+- **Onboarding.** A first launch opens on a short welcome, sets up an
+  agent and the GitHub CLI, installing them if they are missing, and
+  introduces Dray Bot, all before you sign in.
+- **Issue cards in bot chat.** Bots can show GitHub issues as cards in
+  their chat; click one to open it on the Issues page.
+- **Start work from the Issues page.** Start a task on an issue, or
+  send it to a bot, without leaving the page. Issue and PR rows show
+  which tasks are working on them.
+- **👎 reaction** on a bot's messages, right after 👍.
+
+### Improved
+
+- The Mac app opens in full screen on its first launch; later launches
+  restore the window as you left it.
+- **Pull requests page.** The details pane shows the PR itself: state,
+  author, branches, labels, reviewers and description. A search box
+  finds PRs by title, number, author or branch, ⌘E opens and closes
+  the pane, and filters are kept across restarts. A stopped machine no
+  longer shows errors, and "Read only" marks fork PRs alone.
+- Pinning, settling, deleting and other task actions on your phone
+  show in the desktop sidebar at once. Deleting a task answers at once.
+- A bot's row shows your own last message, or the bot's reaction to it.
+- Sending to a task on a stopped Boat machine resumes the machine, and
+  your message shows waiting until it is delivered.
+- New Codex sessions start on GPT-6.2 Sol, and a Codex subagent shows
+  its model and effort.
+
+### Fixed
+
+- Right-clicking a task in the folded sidebar opens its menu.
+- Images in a chat no longer fill the whole message: they sit in a
+  compact row and open full size on click.
+- A bot's chat no longer flickers at the bottom.
+- A browser tab over a stopped dev server keeps the theme's colour.
+- Paths inside inline code show as written.
+- An fx subagent that was stopped no longer spins forever.
+
 ## 0.33.0 · 2026-11-22 · notify
 
 ### New
