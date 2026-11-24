@@ -11,6 +11,9 @@ allowBuilds:
   # Next's image optimizer; without it `next build` warns and falls back to a
   # slower JS decoder.
   sharp: true
+  # The runtime under `wrangler dev` in apps/upload-worker; its postinstall
+  # checks the platform binary is in place.
+  workerd: true
 
 minimumReleaseAgeExclude:
   - '@pierre/diffs@1.6.1'

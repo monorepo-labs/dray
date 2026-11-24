@@ -365,6 +365,34 @@ title, the PR number, its live status, a Merge button and an Open on GitHub
 link. It is refused when the task's branch has no open pull request, and while
 the task is still mid-turn.
 
+## Showing the user GitHub issues
+
+```bash
+dray session issue-card owner/repo 12              # one issue
+dray session issue-card owner/repo 12 15 18
+```
+
+Whenever you show the user GitHub issues, one or several, post them as a card
+instead of writing them out. It lands in your own chat: each issue's number,
+purple once closed, its title and its labels, in the order given, 20 at
+most. The user opens an issue in Dray from the card, or presses Work on it,
+which reaches you as a message of its own naming the issue: start on it then.
+Don't restate the card in your reply; say only what it can't, such as why
+these issues.
+
+```bash
+dray upload before.png after.png demo.mp4   # one markdown line per file
+```
+
+Screenshots and recordings for a pull request body or comment. Paste the lines
+it prints into `gh pr create --body` or `gh pr edit --body`. It signs in with
+`GITHUB_TOKEN` or `gh auth token`. PNG, JPEG, GIF or WebP up to 20 MB; MP4,
+WebM or MOV up to 100 MB; 30 an hour per GitHub account. An image prints as
+`![name](url)`; a video prints as a plain `[name](url)` link, since GitHub
+plays only videos uploaded through its own editor. Everything uploaded is
+public, so upload only what belongs in the PR. This is for GitHub;
+`dray image add` and `dray video add` are what show media in your chat.
+
 ```bash
 dray session need <task-id> "Pick: keep the button or drop it"   # no text clears it
 ```
@@ -375,7 +403,7 @@ row in the "Waiting on you" card at the foot of your chat, and it clears as soon
 as the task moves.
 
 ```bash
-dray session react 👀   # or ✅ 🎉 👍 ❤️ 😂 😢; also seen, done, celebrate, like, love, laugh, sad
+dray session react 👀   # or ✅ 🎉 👍 👎 ❤️ 😂 😢; also seen, done, celebrate, like, dislike, love, laugh, sad
 ```
 
 A bot only. Puts the emoji on the user's newest message in your chat, in place
@@ -434,6 +462,12 @@ that turn ends: to a bot's chat, or to the task or routine run that asked.
 A bot's role is the first line of its `AGENTS.md`. `dray bot ls` shows each
 bot's role, whether it is working, and its open tasks. `dray session new` from
 a bot warns on stderr when other bots have open tasks in the same project.
+
+`dray --machine <name> bot …` acts on the bots of a machine from
+`dray machine ls`, every verb and routine alike. `--ask` works there too: the
+answer comes back to you once that machine's server is reachable from this one,
+usually within seconds of the bot's turn ending. `routine add` there needs
+`--bot`, since the calling bot is on this machine.
 
 Between bots, Dray stops an exchange after 4 messages back and forth, a
 message repeated within one exchange, or 20 messages between two bots in 5
@@ -600,7 +634,7 @@ dray session send <session-id> "Use the staging DB"   # finds the machine on its
 dray session model <session-id> sonnet                # so does every verb taking an id
 ```
 
-`--machine <name>` runs a `session`, `draft`, `issue`, `browser` or `share`
+`--machine <name>` runs a `session`, `draft`, `issue`, `browser`, `share` or `bot`
 command on a machine from `dray machine ls`, through this machine's Dray
 server — app open or not. A session id needs no `--machine`: one this machine
 has never heard of is looked for on every machine it reaches.
@@ -648,6 +682,17 @@ sidebar, nested under this one, and reading ids back is noise they cannot act on
 
 Don't poll in a loop waiting for sessions to finish unless the user asked you to.
 They can watch the sidebar.
+
+### Where the user typed
+
+A message the user typed ends with a line such as `[sent from iPhone]`: Mac app,
+Windows app, Linux app, iPhone, iPad, Android or Island. Dray adds it and the user
+never sees it, so never quote it. In a bot's chat it also holds the user's local
+time (`[sent from iPhone, 14:32]`). On a phone, reply shorter, skip wide tables,
+never ask them to open a file or look at their screen, put screenshot and video
+paths in the reply so they show inline, and read past dictation typos. On
+Island, keep it to a line or two. Messages from `dray session send`, other
+sessions and routines carry no tag, so never add one yourself.
 
 ## Staying current
 

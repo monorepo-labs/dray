@@ -815,6 +815,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
       - run: pnpm install --frozen-lockfile
 
+      # CEF's C++ wrapper builds with CMake's Ninja generator, and the runner
+      # has Ninja only inside Visual Studio. Nothing of CEF ships: Chromium
+      # downloads on the app's first launch, and libcef.dll is delay-loaded,
+      # which "Install and open" below proves by starting the app without it.
+      - name: Put Ninja on PATH
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $ninja = Join-Path $vs "Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja"
+          if (-not (Test-Path "$ninja\ninja.exe")) { throw "no ninja.exe under $vs" }
+          $ninja | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
       # The Mac's step: the CLI the overlay hands the bundler, which puts it
       # beside the app as dray-cli.exe.
       - name: Build the dray CLI
@@ -856,7 +868,7 @@ jobs:
           # TRANSCRIBE_CMAKE_ARGS, which .cargo/config.toml sets and the job
           # would replace; both are read.
           CMAKE_ARGS: -DTRANSCRIBE_X86_CONSERVATIVE=ON
-        run: pnpm tauri build --bundles ${{ steps.plan.outputs.bundles }} --config src-tauri/tauri.windows-release.conf.json ${{ steps.plan.outputs.sign }}
+        run: pnpm tauri build --bundles ${{ steps.plan.outputs.bundles }} --features cef --config src-tauri/tauri.windows-release.conf.json ${{ steps.plan.outputs.sign }}
 
       # What the app reads out of its own install: the CLI it copies to
       # ~/.local/bin (cli.rs), in every installer, answering `--version`. With

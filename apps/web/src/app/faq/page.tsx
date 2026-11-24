@@ -77,7 +77,7 @@ const GROUPS: { title: string; entries: FaqEntry[] }[] = [
     entries: [
       {
         q: "Which agents does Dray support?",
-        a: "Claude Code, Codex, pi, fx and Grok Build. Each session and each bot picks its own agent and model, so you can run several side by side.",
+        a: "Claude Code, Codex, pi, fx, Grok Build and OpenCode. Each session and each bot picks its own agent and model, so you can run several side by side.",
         link: { label: "Compare the agents", href: "/docs/using-dray/agents" },
       },
       {

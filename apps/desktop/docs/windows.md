@@ -15,11 +15,14 @@
 - **Window chrome is Linux's**: undecorated, opaque, drawn controls, flat surfaces (`tauri.windows.conf.json`, `useGlass`).
 - **Dray Island is the Linux island's binary**, `apps/island-linux` with `win.rs` in place of `x11.rs`, the app's child as on Linux (`island.rs`). Its Windows rules are in that crate's PLAN.md. A dev app finds it in the crate's `target\debug`; no bundle carries it yet.
 - **Agents run through Git Bash.** Claude Code finds it on its own; it has a PowerShell tool besides, which anything denying Bash must deny too (`title.rs`).
+- **The static CRT** (`+crt-static` in `.cargo/config.toml`, `CMAKE_MSVC_RUNTIME_LIBRARY` for transcribe's CMake). CEF's wrapper is built `/MT`, one binary cannot mix it with `/MD`, and the exe then needs no VC++ runtime.
+- **The browser is a child `HWND` per tab, libcef.dll delay-loaded**, and the headless Chromium's DevTools pipe rides two inherited handles named on its command line. See [browser.md](browser.md).
+- **Dictation runs on the CPU** (see _Releasing_ for the release's CPU floor); the mute is Core Audio's endpoint volume and sleep is the power manager's suspend notice. See [transcription.md](transcription.md).
+- **Open in finds apps at the paths installers write**, and starts console programs through `ShellExecuteExW`. See [file-opening.md](file-opening.md).
 
 ## Not on Windows yet
 
-- The in-app browser (CEF builds for Mac and Linux only) and `dray browser`'s headless Chromium, whose DevTools pipe rides fds 3 and 4.
-- Dictation (hidden: `HAS_DICTATION`), Open in (apps list is empty), the dock badge.
+- The dock badge.
 - `dray server install|start` and `dray update` are systemd/launchd and `install.sh`.
 - Authenticode. The release is unsigned, so SmartScreen warns on the download; the switch is under _Releasing_ below.
 - A Windows button on the site's downloads page.
@@ -34,16 +37,20 @@
 - **The server child is stopped before the installer runs** (`install` in updater.rs). NSIS stops every `dray-app.exe` by name; msiexec stops none, and a `--serve` child holding the exe open meant a reboot prompt or the old binary back at relaunch.
 - **Dictation's ggml is built for any x86 CPU**: `CMAKE_ARGS=-DTRANSCRIBE_X86_CONSERVATIVE=ON` in the job. Left alone it tunes to the runner's CPU; `GGML_NATIVE=OFF` alone still assumes AVX2, which Windows 11's Celerons and Pentiums (Gemini and Jasper Lake) lack. Conservative is SSE2 alone: slower, never a crash. Linux's runtime pick per CPU tier (`dynamic-backends`) is the faster shape, and wants the modules bundled beside the app. `CMAKE_ARGS` because `.cargo/config.toml` sets `TRANSCRIBE_CMAKE_ARGS` and the job would replace it; transcribe-cpp reads both.
 - **Windows never holds back Mac or Linux.** The job has a 35-minute cap, since `manifest` waits for it and release-cli's publish gate waits 45 minutes for `manifest`; and `manifest` writes the Windows entries to a copy, leaving Windows out with a warning where anything there fails.
+- **The release is built with `--features cef`**, so the installer carries the in-app browser and none of Chromium: libcef.dll is delay-loaded and downloads on first launch, and the job's _Install and open_ starts the app on a runner without it. CEF's wrapper builds with Ninja, which the runner has only inside Visual Studio; the job puts that one on `PATH`.
 - **The binary is `dray-app.exe`** (`mainBinaryName` in [tauri.windows-release.conf.json](../src-tauri/tauri.windows-release.conf.json)). The installer finds a running app by its exe's name before replacing it, and as `dray.exe` every running `dray` CLI would count.
 - **The CLI rides the bundle as `dray-cli.exe`**; the app copies it to `~/.local/bin/dray.exe` on launch and puts that folder on the user `PATH` ([orchestration.md](orchestration.md)).
 - **Authenticode is one switch**: the repo variable `WINDOWS_SIGN_COMMAND` becomes the bundler's `bundle.windows.signCommand` (`%1` is the file), which signs the app, the CLI and both installers before the updater signature is taken over them. Set, the job fails unless every one carries a valid signature; the secrets the command reads go in the build step's `env`. Unset, the job runs unsigned and says so.
 
 ## Building and testing on a VM
 
-- Toolchain: Git, rustup (MSVC), Visual Studio Build Tools with the C++ workload, Node, pnpm, CMake and LLVM (transcribe-cpp's ggml). WebView2 ships with Windows.
+- Toolchain: Git, rustup (MSVC), Visual Studio Build Tools with the C++ workload, Node, pnpm, CMake and LLVM (transcribe-cpp's ggml). WebView2 ships with Windows. `--features cef` also wants Ninja on `PATH`: Visual Studio's is under `Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja`.
+- `pnpm tauri dev` works as everywhere, `pnpm tauri dev --features cef` for the browser. A debug build with CEF takes ~25 GB of `target/`; a full disk shows up as `LNK1108` or `LNK1318`.
+- **Two dev builds on one machine need their own WebView2 profile**: WebView2 refuses a second instance on one data folder with other browser arguments (`0x8007139F`). Set `WEBVIEW2_USER_DATA_FOLDER`, and `DRAY_HOME` for the server's home.
 - `pnpm tauri dev` works as everywhere. `pnpm tauri build` makes the MSI and NSIS installers; without the updater key, pass a `--config` file holding `{"bundle":{"createUpdaterArtifacts":false}}`. The release's shape is `scripts/cli-sidecar.sh` under Git Bash, then `pnpm tauri build --config src-tauri/tauri.windows-release.conf.json`.
 - `cargo test --no-default-features --features serve --lib` passes on Windows; tests that spawn `sh`, `cat` or `sleep`, or build `/`-paths, are `#[cfg(unix)]`.
-- **A GUI started over SSH has no desktop.** Run it in the logged-in RDP session through a scheduled task with an interactive principal (`New-ScheduledTaskPrincipal -LogonType Interactive`), and screenshot the same way (`CopyFromScreen`).
+- **A GUI started over SSH has no desktop.** Run it in the logged-in RDP session through a scheduled task with an interactive principal (`New-ScheduledTaskPrincipal -LogonType Interactive`), and screenshot the same way (`CopyFromScreen`). Clicks and keys go the same way (`mouse_event`, `keybd_event`); a CEF tab is a native window, so DevTools on the webview cannot reach it. **Take a screenshot in the same task run as the click before it**: a new task's PowerShell takes the foreground for a moment, and that closes any open menu.
+- **An RDP session has no microphone** unless the client redirects one, so dictation's capture is untestable there; feed the engine a WAV instead (`retry_transcription` on a file in `<home>/recordings`, made with `System.Speech`).
 - **Testing an installer on a VM another task uses**: build it with a `--config` naming another `productName` and `identifier` (and a fresh `bundle.windows.wix.upgradeCode`), or it installs over theirs, and launch it with its own `DRAY_HOME`. **An update's relaunch drops that `DRAY_HOME`**: the installer starts the new app through Explorer, with Explorer's environment, so the relaunched test app lands on `~/.dray` and the two apps restart each other's server (#495). Quit it at once (`confirm_quit` through DevTools), or test updates on a VM of your own.
 - **Testing the updater locally**: sign with a throwaway key (`pnpm tauri signer generate`), put its public half and `dangerousInsecureTransportProtocol` in the test `--config`, and point `STABLE_MANIFEST` in updater.rs at a local `stable.json` in the test build alone. `check_update` then `install_update` through DevTools run the real path.
 - **Driving the dev app**: Tauri's own WebView2 arguments override `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, so the dev shim passes that variable on; set it to `--remote-debugging-port=9222` and DevTools' protocol on that port clicks, types and screenshots the webview.

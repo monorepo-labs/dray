@@ -94,7 +94,7 @@ object Alerts {
         // The phone's own switches decide last: a server unreachable when one was turned off, or a message
         // queued before it, still sends what this phone no longer wants.
         if (!Push.enabled || !Push.kindOn(a.kind)) return
-        if (Push.foreground && Push.viewing == a.key) return
+        if (Push.foreground && Push.viewing.let { it == a.key || it == Push.shownAs(a.key) }) return
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val open = Intent(context, MainActivity::class.java)

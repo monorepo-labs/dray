@@ -19,6 +19,16 @@ reads and drives it over the same WebSocket the desktop and iOS use
   row, and each server's trouble as a card with Retry or Fix. Shared machines
   (`share_machines`) join as servers of their own. The list draws from the
   last read's cache before any socket is up.
+- **A machine the phone also pairs directly shows once** (#1404, Store.swift's
+  rule with the iOS review applied). Every welcome carries `identity`, a hash
+  of the server's token a relay passes through; a shared machine's is learnt
+  on its first connect and kept (`copyIds`), so later launches hold the copy
+  back before it ever connects. It is held back only while the direct one is
+  on and not failing: refused, or down past `LOST_AFTER_MS`, brings the copy
+  back and hides the direct one's stale rows instead (`covered`). Removing a
+  server lets back only copies held for it. A dropped copy never unregisters
+  push — the server keeps one tag per handle, so its twin re-registers — and
+  an alert tagged with either id opens through `shownAs`.
 - **Transcript**, live: finished turns fold to prompt, summary and answer;
   runs of one tool group; a running turn keeps its newest five rows; `lite`
   reads with a call's body read whole on demand (`get_session_calls`);
@@ -61,7 +71,10 @@ background tasks running", Share in the image viewer.
 `app/google-services.json` the app builds, `FirebaseApp` never starts, and
 Settings → Notifications says push isn't set up. To light it up:
 
-1. The Firebase project is `dray-hq`, its Android app `com.yogesh.dray.android`.
+1. The Firebase project is `dray-hq`, its Android app `com.dray.app` (the
+   Play Store id; the Kotlin namespace stays `com.yogesh.dray`). The
+   google-services plugin fails the build when the file names no client for
+   that id, so a file downloaded for an older id must be replaced.
    Its `google-services.json` goes at `apps/android/app/google-services.json`
    and is **kept out of git** (gitignored). Download it from the Firebase
    console (Project settings → Your apps). A release build gets it the same

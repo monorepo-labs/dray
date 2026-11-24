@@ -289,6 +289,10 @@ function pts(list: string, fill: string): [number, number, string][] {
   });
 }
 
+// Shared with What's New so the brand's two full-window pages read as one
+// family.
+export { Heading as GateHeading };
+
 function Tiles() {
   return (
     <svg

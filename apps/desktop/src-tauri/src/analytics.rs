@@ -1,8 +1,8 @@
 //! Anonymous usage analytics over PostHog.
 //!
-//! Five events — a launch, a day the app was used, a session starting, a
-//! feature being used, and something breaking — carrying no content and no
-//! identity beyond a random id minted on this machine. What they answer is how many people run Dray, on which version,
+//! A launch, a day the app was used, a session starting, a feature being
+//! used, something breaking, a bot made and a routine set up — carrying no
+//! content and no identity beyond a random id minted on this machine. What they answer is how many people run Dray, on which version,
 //! whether they come back, which of the things built here anybody actually
 //! uses, and whether the build is failing under them in a way nothing else
 //! would ever tell us.
@@ -36,6 +36,7 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 use ts_rs::TS;
 
+use crate::harness::Harness;
 use crate::settings;
 use crate::store::SessionIndexItem;
 
@@ -270,9 +271,16 @@ pub fn client_counts() -> bool {
     CLIENT_COUNTS.try_with(|counts| *counts).unwrap_or(false)
 }
 
-/// Reports a session this process just wrote down, on this machine.
+/// Reports a session this process just wrote down, on this machine. Whether
+/// it is a bot's is a few file reads, so it is worked out in the spawned half
+/// rather than in front of the create.
 pub fn session_started(item: &SessionIndexItem) {
-    track("session_started", session_properties(item, None));
+    let item = item.clone();
+    crate::spawn(async move {
+        let bot = crate::bots::bot_at(&item.cwd).await.is_some();
+        let role = BotRole { bot, by_bot: !bot && crate::bots::in_bot_tree(&item).await };
+        send("session_started", None, session_properties(&item, role, None)).await;
+    });
 }
 
 /// Reports a session the reader's app just started on an external server.
@@ -281,15 +289,28 @@ pub fn session_started(item: &SessionIndexItem) {
 /// The app owns this count rather than the server: a Linux `dray-serve`
 /// carries no key and sends nothing, and a remote Mac would count it under
 /// its own install as a local session of somebody else.
-pub fn remote_session_started(item: &SessionIndexItem, os: Option<&str>) {
-    track("session_started", session_properties(item, Some(os)));
+///
+/// `bot` is whether it runs in one of that server's bot folders. The app only
+/// starts a session there from the composer or New bot, neither of which has
+/// a parent, so it is never `by_bot`.
+pub fn remote_session_started(item: &SessionIndexItem, os: Option<&str>, bot: bool) {
+    track("session_started", session_properties(item, BotRole { bot, by_bot: false }, Some(os)));
+}
+
+/// What a session is to bots.
+#[derive(Debug, Clone, Copy, Default)]
+struct BotRole {
+    /// Runs in a bot's folder: its chat, or a routine's run.
+    bot: bool,
+    /// Started under a bot's session, at any depth, as its tasks are.
+    by_bot: bool,
 }
 
 /// `session_started`'s properties. Read off the index entry, which is what was
 /// actually written down; nothing about the prompt, the path or the server,
 /// whose OS goes out only as a closed tag since the welcome is the server's
 /// own text.
-fn session_properties(item: &SessionIndexItem, remote: Option<Option<&str>>) -> Value {
+fn session_properties(item: &SessionIndexItem, role: BotRole, remote: Option<Option<&str>>) -> Value {
     let mut props = json!({
         "harness": item.harness,
         "model": item.model.as_str(),
@@ -298,6 +319,11 @@ fn session_properties(item: &SessionIndexItem, remote: Option<Option<&str>>) -> 
         "fast": item.fast,
         "worktree": item.worktree_name.is_some(),
         "spawned": item.parent_session_id.is_some(),
+        "bot": role.bot,
+        "by_bot": role.by_bot,
+        // A routine's run is a bot's session too; without this, a routine on a
+        // short schedule would drown out the chats people actually open.
+        "routine": item.routine_run.is_some(),
         "location": if remote.is_some() { "remote" } else { "local" },
     });
     if let Some(os) = remote {
@@ -310,6 +336,37 @@ fn session_properties(item: &SessionIndexItem, remote: Option<Option<&str>>) -> 
         .into();
     }
     props
+}
+
+/// Reports a bot made: `via` `app` from New bot (desktop or phone), `cli`
+/// from `dray bot new`. The harness rides only where it is known: a bot made
+/// from the CLI gets its agent at its first message, and that chat's
+/// `session_started` (`bot: true`) says which.
+pub fn bot_created(harness: Option<Harness>, via: &'static str) {
+    let mut props = json!({ "via": via });
+    if let Some(harness) = harness {
+        props["harness"] = json!(harness);
+    }
+    track("bot_created", props);
+}
+
+/// Reports `bot_message` where `session_id` is a bot's chat. Called from the
+/// `send_msg` command alone, which only somebody pressing send reaches; a
+/// bot's message to another bot, a task's report and a routine's prompt all
+/// reach the session manager directly.
+pub fn message_sent(session_id: String) {
+    crate::spawn(async move {
+        let Ok(Some(item)) = crate::store::get_session_index_item(&session_id).await else { return };
+        if item.routine_run.is_none() && crate::bots::bot_at(&item.cwd).await.is_some() {
+            send("feature_used", None, json!({ "feature": "bot_message" })).await;
+        }
+    });
+}
+
+/// Reports a routine a bot just set up: which kind of schedule, never its
+/// times, and whether it has a check.
+pub fn routine_added(every: bool, check: bool) {
+    track("routine_added", json!({ "schedule": if every { "every" } else { "at" }, "check": check }));
 }
 
 /// Reports something that broke, by **where** it broke and never by what it
@@ -522,17 +579,44 @@ mod tests {
     /// The server's OS is its own text, so only closed tags leave the machine.
     #[test]
     fn location_is_closed_tags() {
-        let local = session_properties(&item(), None);
+        let none = BotRole::default();
+        let local = session_properties(&item(), none, None);
         assert_eq!(local["location"], json!("local"));
         assert!(local.get("remote_os").is_none());
         assert_eq!(local["harness"], json!("claude_code"));
 
-        let tag = |os| session_properties(&item(), Some(os))["remote_os"].clone();
+        let tag = |os| session_properties(&item(), none, Some(os))["remote_os"].clone();
         assert_eq!(tag(Some("linux")), json!("linux"));
         assert_eq!(tag(Some("macos")), json!("macos"));
         assert_eq!(tag(Some("my-hostname")), json!("other"));
         assert_eq!(tag(None), json!("unknown"));
-        assert_eq!(session_properties(&item(), Some(None))["location"], json!("remote"));
+        assert_eq!(session_properties(&item(), none, Some(None))["location"], json!("remote"));
+    }
+
+    /// A bot's chat, a routine's run and a bot's task each read apart, and an
+    /// ordinary session reads as none of them.
+    #[test]
+    fn a_session_says_what_it_is_to_bots() {
+        let flags = |props: Value| (props["bot"].clone(), props["by_bot"].clone(), props["routine"].clone());
+        let (no, yes) = (json!(false), json!(true));
+
+        let plain = session_properties(&item(), BotRole::default(), None);
+        assert_eq!(flags(plain), (no.clone(), no.clone(), no.clone()));
+
+        let chat = session_properties(&item(), BotRole { bot: true, by_bot: false }, None);
+        assert_eq!(flags(chat), (yes.clone(), no.clone(), no.clone()));
+
+        let mut run = item();
+        run.routine_run = Some("r1".into());
+        let run = session_properties(&run, BotRole { bot: true, by_bot: false }, None);
+        assert_eq!(flags(run), (yes.clone(), no.clone(), yes.clone()));
+
+        let task = session_properties(&item(), BotRole { bot: false, by_bot: true }, None);
+        assert_eq!(flags(task), (no.clone(), yes.clone(), no.clone()));
+
+        let remote = session_properties(&item(), BotRole { bot: true, by_bot: false }, Some(Some("linux")));
+        assert_eq!(remote["location"], json!("remote"));
+        assert_eq!(flags(remote), (yes, no.clone(), no));
     }
 
     /// The kind is what the breakdown is read by, so a call site's own

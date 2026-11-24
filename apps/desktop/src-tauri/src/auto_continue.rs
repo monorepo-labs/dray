@@ -93,7 +93,7 @@ fn arm(session_id: String, at: String, sink: Sink) {
             .send_msg(
                 &item.session_id, PROMPT, &[], &[], item.harness, item.model, item.effort,
                 item.permission_mode, item.fast, &item.cwd, None, false, None, None, false,
-                None, false, None, None, Some(&at), &sink,
+                None, false, None, None, None, Some(&at), &sink,
             )
             .await;
         if let Err(e) = sent {

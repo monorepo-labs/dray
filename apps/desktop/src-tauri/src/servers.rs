@@ -557,7 +557,7 @@ async fn admit(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
 /// This Mac's own server, which may call back into the app: browser steps go
 /// to the app's Chromium where this build has one.
 async fn admit_as_host(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
-    let browser = cfg!(all(feature = "cef", any(target_os = "macos", target_os = "linux")));
+    let browser = cfg!(feature = "cef");
     admit_with(url, json!({ "v": PROTOCOL, "token": token, "host": { "browser": browser } })).await
 }
 
@@ -2250,6 +2250,8 @@ pub async fn server_invoke(server: String, cmd: String, args: Value, ticket: Opt
     if counts {
         crate::analytics::track_active_day();
     }
+    let counted = (server != LOCAL && (cmd == "send_msg" || cmd == "start_bot"))
+        .then(|| (cmd.clone(), args["cwd"].as_str().map(str::to_string)));
     let call = NEXT_CALL.fetch_add(1, Ordering::Relaxed);
     let (reply, answer) = oneshot::channel();
     let ticket = {
@@ -2278,24 +2280,68 @@ pub async fn server_invoke(server: String, cmd: String, args: Value, ticket: Opt
         .await
         .unwrap_or_else(|_| Err(json!("the connection closed before the server answered")));
     drop(ticket);
-    // A created session answers with its snapshot, `null` otherwise. One the
-    // server wrote in a shape this build cannot read goes uncounted.
-    if let Some(id) = created {
-        let item = match &answer {
-            Ok(ok) => store::SessionIndexItem::deserialize(&ok["snapshot"]).ok(),
-            // The row is written before the spawn, so a create failing after
-            // it still started a session — the rule the local count follows.
-            Err(_) => Box::pin(server_invoke(server.clone(), "session_index_item".into(), json!({ "sessionId": id }), None))
-                .await
-                .ok()
-                .and_then(|row| store::SessionIndexItem::deserialize(&row).ok()),
-        };
-        if let Some(item) = item {
-            let os = conns().iter().find(|c| c.saved.id == server).and_then(|c| c.met.as_ref()?.os.clone());
-            crate::analytics::remote_session_started(&item, os.as_deref());
-        }
+    if let Some((cmd, cwd)) = counted {
+        crate::spawn(count_remote(server, cmd, cwd, answer.clone(), created));
     }
     answer
+}
+
+/// Counts what a call this app made to an external server did there, since
+/// that server skips it for this app. Spawned: telling a bot's chat apart is
+/// another round trip, and the webview waits on the answer, not on this.
+///
+/// A created session answers with its snapshot, `null` otherwise. One the
+/// server wrote in a shape this build cannot read goes uncounted.
+async fn count_remote(server: String, cmd: String, cwd: Option<String>, answer: Result<Value, Value>, created: Option<String>) {
+    let os = || conns().iter().find(|c| c.saved.id == server).and_then(|c| c.met.as_ref()?.os.clone());
+    if cmd == "start_bot" {
+        if let Some(item) = answer.ok().and_then(|ok| store::SessionIndexItem::deserialize(&ok).ok()) {
+            crate::analytics::bot_created(Some(item.harness), "app");
+            crate::analytics::remote_session_started(&item, os().as_deref(), true);
+        }
+        return;
+    }
+    let to_bot = match &cwd {
+        Some(cwd) => runs_in_bot_folder(&server, cwd).await,
+        None => false,
+    };
+    if to_bot && answer.is_ok() {
+        crate::analytics::feature_used("bot_message");
+    }
+    let Some(id) = created else { return };
+    let item = match &answer {
+        Ok(ok) => store::SessionIndexItem::deserialize(&ok["snapshot"]).ok(),
+        // The row is written before the spawn, so a create failing after
+        // it still started a session — the rule the local count follows.
+        Err(_) => invoke_from_spawn(server.clone(), "session_index_item", json!({ "sessionId": id }))
+            .await
+            .ok()
+            .and_then(|row| store::SessionIndexItem::deserialize(&row).ok()),
+    };
+    if let Some(item) = item {
+        crate::analytics::remote_session_started(&item, os().as_deref(), to_bot);
+    }
+}
+
+/// [`server_invoke`] typed as `Send` outright: [`count_remote`] is spawned
+/// from inside it, and the compiler cannot prove a future `Send` through that
+/// cycle.
+fn invoke_from_spawn(
+    server: String,
+    cmd: &str,
+    args: Value,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, Value>> + Send>> {
+    Box::pin(server_invoke(server, cmd.into(), args, None))
+}
+
+/// Whether `cwd` is one of `server`'s bot folders. A server too old to have
+/// bots answers `unknown command`, which reads as no.
+async fn runs_in_bot_folder(server: &str, cwd: &str) -> bool {
+    let Ok(bots) = invoke_from_spawn(server.into(), "list_bots", json!({})).await else {
+        return false;
+    };
+    bots.as_array()
+        .is_some_and(|bots| bots.iter().any(|b| b["path"].as_str().is_some_and(|p| crate::bots::same_folder(p, cwd))))
 }
 
 /// Asks `server` to update itself on its own channel. Answers `"restarting"` —

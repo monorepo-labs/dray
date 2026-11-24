@@ -41,6 +41,8 @@ data class Welcome(
     val version: String? = null,
     val release: String? = null,
     val dev: Boolean? = null,
+    /** A hash of the server's token, so one machine reached two ways is one (`serverId`). */
+    val identity: String? = null,
 ) {
     /** Dray on a Mac, whose server follows the app's own updates. */
     val macApp: Boolean get() = dictation == true && release == null && dev != true
@@ -204,6 +206,10 @@ sealed interface Payload {
     data class Error(val message: String) : Payload
     /** `dray session merge-card`'s card in a bot's chat. */
     data class MergeCardPosted(val card: MergeCard) : Payload
+    /** `dray session issue-card`'s card in a chat. */
+    data class IssueCardPosted(val card: IssueCard) : Payload
+    /** The reader handed issue `number` of card `cardId` to the agent: drawn on its tile as started. */
+    data class IssueApproved(val cardId: String, val number: Int) : Payload
     /** A task a bot started, which the server logs in the bot's chat. */
     data class TaskStarted(val taskId: String, val title: String?) : Payload
     data class Learned(val commit: String, val files: List<Lesson>) : Payload
@@ -268,6 +274,8 @@ sealed interface Payload {
             "subagent_completed" -> SubagentCompleted(o["agentId"].str ?: "")
             "error" -> Error(o["message"].str ?: return null)
             "merge_card" -> MergeCardPosted(wireJson.decodeFromJsonElement(MergeCard.serializer(), o))
+            "issue_card" -> IssueCardPosted(wireJson.decodeFromJsonElement(IssueCard.serializer(), o))
+            "issue_approved" -> IssueApproved(o["cardId"].str ?: return null, o["number"].int ?: return null)
             "task_started" -> TaskStarted(o["taskId"].str ?: return null, o["title"].str)
             "learned" -> Learned(o["commit"].str ?: return null, decodeList(o["files"]))
             "learned_undone" -> LearnedUndone(o["commit"].str ?: return null, o["path"].str ?: return null)

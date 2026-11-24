@@ -159,7 +159,7 @@ export default function SplitView({
                   {/* A pane its server has not answered for yet; the
                       reconnect loads it. */}
                   {!paneState(item.sessionId).session && shownOffline(serverOfSession(item.sessionId)) ? (
-                    <TranscriptSkeleton still={serverStatus(serverOfSession(item.sessionId)) !== "connecting"} />
+                    <TranscriptSkeleton still={serverStatus(serverOfSession(item.sessionId)) !== "connecting"} sessionId={item.sessionId} />
                   ) : (
                     <Chat
                       {...paneState(item.sessionId)}

@@ -318,6 +318,28 @@ The name comes off `agentPath` (`/root/count_to_three`), which is the agent's
 own name and not a filesystem path — `/root` is the namespace they all share, so
 the last segment is the name.
 
+**The spawn names the child's model and effort** (0.172, `subagent_sleep.jsonl`):
+`started` carries `model` and `reasoningEffort`, `completed` carries nulls. They
+go on the spawn row's input as `model`/`effort`, fx's keys, so the chat's run
+row and the panel's draw them beside the name ("gpt 6 luna low"). The spawn still
+carries no brief, and still arrives as the activity alone.
+
+## Item kinds added since 0.164
+
+`sleep` (`clock.sleep`) draws "Waited 2s". `imageGeneration` draws the prompt
+Codex rewrote and the picture it saved under `~/.codex/generated_images`, copied
+into the session's attachments like any result image; a `failure`
+(`usageLimitExceeded`) is the row's error. `dynamicToolCall` draws like an MCP
+call, `namespace · tool` with its text answer. The last two are written against
+the schema: the account the captures came from has no image tool, and Dray
+registers no dynamic tools. `plan`, `hookPrompt`, `functionCallOutput` and the
+review-mode pair still draw nothing — each comes only from a surface Dray never
+opens (plan mode, hooks, client tool output, `review/start`).
+
+`thread/readState/changed` was missing from the ignore list, and it fires on
+every ordinary turn (captured on 0.172), so each turn filed a coverage gap. It
+is ignored now, with the other enum entries an ordinary session can meet.
+
 ## Fork and images
 
 **A fork is `thread/fork`**, made on the fork's first send — the instruction

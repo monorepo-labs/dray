@@ -1,6 +1,6 @@
 # Dray
 
-> Dray is a free, open-source app for running coding agents, on macOS and (in beta) Linux: Claude Code, Codex, pi, fx and Grok Build. It runs the official agent CLIs on your existing subscriptions, many sessions at once, on your computer or on remote machines.
+> Dray is a free, open-source app for running coding agents, on macOS and (in beta) Linux: Claude Code, Codex, pi, fx, Grok Build and OpenCode. It runs the official agent CLIs on your existing subscriptions, many sessions at once, on your computer or on remote machines.
 
 ## Features
 

@@ -137,6 +137,10 @@ object Push {
         if (granted) ask() else Log.i(TAG, "notifications not allowed")
     }
 
+    /** An alert's chat as the list holds it now, its server maybe standing in for a copy held back (#1404). */
+    fun shownAs(key: SessionKey): SessionKey =
+        if (::store.isInitialized) SessionKey(store.shownAs(key.server), key.id) else key
+
     /** A server came up: it gets the handle, or the first one starts the asking. */
     private fun connected(server: String) {
         if (!enabled || !available) return
@@ -213,7 +217,7 @@ object Push {
     suspend fun answer(server: String, cmd: String, args: JsonObject) {
         var found: Server? = null
         for (i in 0 until 20) {
-            found = store.servers.firstOrNull { it.id == server }
+            found = store.servers.firstOrNull { it.id == store.shownAs(server) }
             if (found != null) break
             kotlinx.coroutines.delay(250)
         }

@@ -51,6 +51,25 @@ class BotTest {
         ev(id, """{"type":"tool_call_completed","callId":"$call","result":{"text":${q(text)},"isError":false}}""")
 
     @Test
+    fun anIssueCardKnowsWhatWasStartedFromIt() {
+        val card = """{"type":"issue_card","repo":"acme/app","issues":[
+            {"number":1,"title":"Fix login","url":"u1","closed":false,"labels":[{"name":"bug","color":"d73a4a"}],"excerpt":"Nothing happens."},
+            {"number":2,"title":"Old","url":"u2","closed":true,"labels":[],"author":{"name":"a","avatar":null}}]}"""
+        val items = botItems(listOf(
+            ev("c1", card),
+            ev("x1", """{"type":"issue_approved","cardId":"c1","number":1}"""),
+            ev("x2", """{"type":"issue_approved","cardId":"other","number":2}"""),
+        ))
+        val issues = items.single() as BotItem.Issues
+        assertEquals("acme/app", issues.card.repo)
+        assertEquals(listOf(1, 2), issues.card.issues.map { it.number })
+        assertEquals("d73a4a", issues.card.issues[0].labels.single().color)
+        assertTrue(issues.card.issues[1].closed)
+        assertEquals(setOf(1), issues.started)
+        assertEquals("s", issues.sessionId)
+    }
+
+    @Test
     fun drawsTheConversationAndNotTheWork() {
         val items = botItems(listOf(
             user("u1", "Kick off", kickoff = true),

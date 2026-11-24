@@ -1,5 +1,8 @@
 package com.yogesh.dray.wire
 
+import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -34,6 +37,12 @@ val JsonElement?.obj: JsonObject? get() = this as? JsonObject
 
 /** An error reply is usually a sentence and occasionally an object. */
 val JsonElement.message: String get() = str ?: toString()
+
+/** What `send_msg` tells the agent beside the reader's prompt: this phone, and its wall clock with its UTC offset, since a bot is told the reader's own time. Seconds always printed: `toString` drops `:00`, which RFC 3339 refuses. */
+fun sentFrom(): Array<Pair<String, Any?>> = arrayOf(
+    "device" to "android",
+    "sentAt" to OffsetDateTime.now().truncatedTo(ChronoUnit.SECONDS).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+)
 
 fun jsonOf(vararg pairs: Pair<String, Any?>): JsonObject = JsonObject(pairs.associate { (k, v) -> k to toJson(v) })
 

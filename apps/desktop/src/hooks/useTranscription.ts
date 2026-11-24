@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { invoke, listen } from "@/lib/transport";
 
-import { IS_MAC } from "@/lib/platform";
+import { IS_MAC, IS_WINDOWS } from "@/lib/platform";
 import { playDictationSound } from "@/lib/sound";
 import type { DownloadProgress, TranscribeOutcome, TranscriptionStatus } from "@/types/events";
 
@@ -308,9 +308,12 @@ export function useRecorder<T>({
         handlers.current.onMessage(
           IS_MAC
             ? "No sound was recorded. Check microphone access in System Settings › Privacy & Security › Microphone."
-            // Linux gates no app's microphone, so silence there is a muted
-            // or missing input, which the sound settings show.
-            : "No sound was recorded. Check the microphone is connected and not muted in your sound settings.",
+            // Windows hands a denied desktop app a silent stream, as a Mac does.
+            : IS_WINDOWS
+              ? "No sound was recorded. Check that desktop apps may use the microphone in Settings › Privacy & security › Microphone."
+              // Linux gates no app's microphone, so silence there is a muted
+              // or missing input, which the sound settings show.
+              : "No sound was recorded. Check the microphone is connected and not muted in your sound settings.",
         );
         break;
       case "empty":

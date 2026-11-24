@@ -462,6 +462,24 @@ pub enum AgentEventPayload {
         repo: Option<String>,
     },
 
+    /// GitHub issues the agent showed the reader with `dray session
+    /// issue-card`, each opened in the issues view or handed back to the agent
+    /// to work on from its row. The rows are as GitHub had them when posted.
+    IssueCard {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        title: Option<String>,
+        /// `owner/name`.
+        repo: String,
+        issues: Vec<IssueCardRow>,
+    },
+    /// The reader asked the agent to work on one of an issue card's issues,
+    /// and the agent was told. Drawn on the card's row as started.
+    IssueApproved {
+        card_id: String,
+        number: u64,
+    },
+
     /// What a bot's turn changed in its instructions, skills or memory, read
     /// off the commit Dray made of its folder. Drawn as "Learned" rows with
     /// View diff and Undo, so a lesson the bot gave itself is never silent.
@@ -797,6 +815,29 @@ pub struct ToolResult {
     pub images: Vec<ImageRef>,
 }
 
+/// One issue on an [`IssueCard`](AgentEventPayload::IssueCard). Open or
+/// closed as a bool, never the issues page's state enum, so the logged line
+/// cannot fail a reader whose enum lacks a kind.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCardRow {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    #[serde(default)]
+    pub closed: bool,
+    #[serde(default)]
+    pub labels: Vec<crate::issues::IssueLabel>,
+    /// The description's opening, flattened to one paragraph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub excerpt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub author: Option<crate::issues::IssuePerson>,
+}
+
 /// One file a bot's turn changed under its instructions, skills or memory.
 /// `kind` and `change` are plain strings, never enums, so a kind a later build
 /// adds cannot fail an older reader's whole line.
@@ -861,6 +902,11 @@ pub struct MessageSender {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub reply: Option<bool>,
+    /// An `--ask` from another machine: the id its server collects the answer
+    /// by (#1463). Held in memory only, from the send to the turn it arms.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub ask_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

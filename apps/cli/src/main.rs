@@ -15,9 +15,10 @@ mod draft;
 mod machine;
 mod routine;
 mod setup;
+mod upload;
 use draft::DraftCommand;
 use dray_proto::{
-    encode_line, AddVideo, AttachSession, BrowserAction, MergeCard, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
+    encode_line, AddVideo, AttachSession, BrowserAction, MergeCard, IssueCard, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
     LinkIssues, ListSessions, Locator, OnMachine, RenameSession, Request, Response, SendMessage, SessionRef,
     React, SessionSummary, SetAside, SetModel, SetNeed, SettleSession, ShareAction, ShareRequest,
 };
@@ -81,6 +82,10 @@ enum Command {
     /// live ones, or stop one.
     #[command(arg_required_else_help = true, args_conflicts_with_subcommands = true)]
     Share(ShareArgs),
+    /// Upload screenshots or recordings for a PR body and print a markdown
+    /// line for each. Signs in with your GitHub token, from `gh auth token` or GITHUB_TOKEN.
+    #[command(arg_required_else_help = true)]
+    Upload(upload::Upload),
     /// The machines this one reaches: add, list, rename, connect, remove.
     #[command(subcommand, arg_required_else_help = true)]
     Machine(machine::MachineCommand),
@@ -155,6 +160,10 @@ enum SessionCommand {
     /// Post a card in this session's chat for a task's open pull request, so
     /// the user can merge it from the chat.
     MergeCard(SessionArg),
+    /// Post a card in this session's chat showing GitHub issues, one or
+    /// several. The user opens each in Dray, or presses Work on it, which
+    /// tells you to start on that issue.
+    IssueCard(IssueCardArgs),
     /// Say in one line what a stalled task needs from the user, for the "Waiting
     /// on you" card in this bot's chat. Cleared when the task moves; no text
     /// clears it now.
@@ -167,9 +176,22 @@ enum SessionCommand {
 
 #[derive(Args)]
 struct ReactArgs {
-    /// 👀 ✅ 🎉 👍 ❤️ 😂 😢, or its word: seen, done, celebrate, like, love,
-    /// laugh, sad.
+    /// 👀 ✅ 🎉 👍 👎 ❤️ 😂 😢, or its word: seen, done, celebrate, like,
+    /// dislike, love, laugh, sad.
     emoji: String,
+}
+
+#[derive(Args)]
+struct IssueCardArgs {
+    /// The repository, as owner/name.
+    repo: String,
+    /// Issue numbers, in the order to list them: 12 15 #18.
+    #[arg(required = true, value_parser = issue_number)]
+    numbers: Vec<u64>,
+}
+
+fn issue_number(said: &str) -> Result<u64, String> {
+    said.trim_start_matches('#').parse().map_err(|_| format!("\"{said}\" is not an issue number"))
 }
 
 #[derive(Args)]
@@ -255,7 +277,7 @@ struct New {
     #[arg(long)]
     effort: Option<String>,
 
-    /// Which agent runs it: claude_code, codex, pi, fx or grok.
+    /// Which agent runs it: claude_code, codex, pi, fx, grok or opencode.
     #[arg(long)]
     harness: Option<String>,
 
@@ -509,19 +531,8 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
     if let Some(machine) = cli.machine {
-        // These act on this machine, or on nothing a server answers.
-        if !matches!(
-            cli.command,
-            Command::Session(_)
-                | Command::Issue(_)
-                | Command::Draft(_)
-                | Command::Browser(_)
-                | Command::Share(_)
-                | Command::New(_)
-                | Command::Ls(_)
-                | Command::Send(_)
-        ) {
-            return Err("--machine takes session, draft, issue, browser and share commands".into());
+        if let Some(refusal) = machine_refusal(&cli.command) {
+            return Err(refusal);
         }
         let _ = MACHINE.set(machine);
     }
@@ -535,6 +546,7 @@ fn run() -> Result<(), String> {
         Command::Video(VideoCommand::Add(args)) => add_media(args.file, args.name, args.session, false),
         Command::Image(ImageCommand::Add(args)) => add_media(args.file, args.name, args.session, true),
         Command::Share(args) => share(args),
+        Command::Upload(args) => upload::run(args),
         Command::Machine(command) => machine::run(command),
         Command::Server(command) => setup::server(command),
         Command::Login => setup::login(),
@@ -555,12 +567,30 @@ fn run() -> Result<(), String> {
     }
 }
 
+/// Why `--machine` cannot carry `command`, or `None` where it can.
+fn machine_refusal(command: &Command) -> Option<String> {
+    match command {
+        Command::Session(_)
+        | Command::Issue(_)
+        | Command::Draft(_)
+        | Command::Browser(_)
+        | Command::Share(_)
+        | Command::New(_)
+        | Command::Ls(_)
+        | Command::Send(_) => None,
+        Command::Bot(command) => bot::machine_refusal(command),
+        // These act on this machine, or on nothing a server answers.
+        _ => Some("--machine takes session, draft, issue, browser, share and bot commands".into()),
+    }
+}
+
 fn session(command: SessionCommand) -> Result<(), String> {
     let (request, said) = match command {
         SessionCommand::New(args) => return new(args),
         SessionCommand::Ls(args) => return ls(args),
         SessionCommand::Send(args) => return send_message(args),
         SessionCommand::MergeCard(args) => return merge_card(args),
+        SessionCommand::IssueCard(args) => return issue_card(args),
         SessionCommand::React(args) => return react(args),
         SessionCommand::Model(args) => return set_model(args),
         SessionCommand::Rename(args) => (
@@ -791,6 +821,22 @@ fn merge_card(args: SessionArg) -> Result<(), String> {
     match send(request)? {
         Response::MergeCard { number, url, title } => {
             eprintln!("Posted a merge card for #{number} \"{title}\": {url}");
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(other)),
+    }
+}
+
+fn issue_card(args: IssueCardArgs) -> Result<(), String> {
+    let session_id = parent_session_id().ok_or("run this from inside a Dray session: the card goes in its chat.")?;
+    let request = Request::IssueCard(IssueCard { session_id, repo: args.repo, numbers: args.numbers, title: None });
+    match send(request)? {
+        Response::IssueCard { issues } => {
+            eprintln!("Posted an issue card:");
+            for issue in issues {
+                eprintln!("  {issue}");
+            }
             Ok(())
         }
         Response::Error { message } => Err(message),
@@ -1926,6 +1972,37 @@ mod tests {
             let cli = Cli::try_parse_from(argv).unwrap();
             assert_eq!(cli.machine.as_deref(), Some("vps"), "{argv:?}");
         }
+    }
+
+    /// Every bot verb rides `--machine` to that machine's server, `--ask`
+    /// included (#1463), bar a routine whose default bot is this one's (#1461).
+    #[test]
+    fn machine_takes_bot_commands() {
+        let refusal = |argv: &[&str]| {
+            let cli = Cli::try_parse_from(argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+            assert_eq!(cli.machine.as_deref(), Some("vps"), "{argv:?}");
+            machine_refusal(&cli.command)
+        };
+        for argv in [
+            &["dray", "--machine", "vps", "bot", "ls"][..],
+            &["dray", "bot", "ls", "--json", "--machine", "vps"],
+            &["dray", "--machine", "vps", "bot", "new", "Ops", "--colour", "teal"],
+            &["dray", "--machine", "vps", "bot", "send", "Ops", "hi"],
+            &["dray", "--machine", "vps", "bot", "send", "--ask", "Ops", "hi"],
+            &["dray", "--machine", "vps", "bot", "rename", "Ops", "Release"],
+            &["dray", "--machine", "vps", "bot", "rm", "Ops"],
+            &["dray", "--machine", "vps", "bot", "routine", "add", "PR", "look", "--every", "2h", "--bot", "Ops"],
+            &["dray", "--machine", "vps", "bot", "routine", "ls"],
+            &["dray", "--machine", "vps", "bot", "routine", "pause", "PR"],
+            &["dray", "--machine", "vps", "bot", "routine", "resume", "PR"],
+            &["dray", "--machine", "vps", "bot", "routine", "run", "PR"],
+            &["dray", "--machine", "vps", "bot", "routine", "rm", "PR"],
+        ] {
+            assert_eq!(refusal(argv), None, "{argv:?}");
+        }
+        let add = refusal(&["dray", "--machine", "vps", "bot", "routine", "add", "PR", "look", "--every", "2h"]).unwrap();
+        assert!(add.contains("--bot"), "{add}");
+        assert!(refusal(&["dray", "--machine", "vps", "skill", "install"]).unwrap().contains("bot"));
     }
 
     #[test]

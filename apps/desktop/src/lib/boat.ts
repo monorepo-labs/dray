@@ -71,26 +71,39 @@ export function useBoatPrefs(): Prefs {
 }
 
 const HELD = "ade.boatHeld";
-type Held = { id: string; key: string | null; message: string };
+export type Held = { id: string; key: string | null; message: string };
+let held = readLocalStorage<Held[]>(HELD, []);
+const heldChanged = channel<void>();
+
+function setHeld(next: Held[]) {
+  held = next;
+  writeLocalStorage(HELD, next);
+  heldChanged.emit();
+}
 
 /// Keeps a prompt on disk while its sandbox wakes, which takes minutes: the send
 /// is in memory until then, and a quit would lose it. Answers what lets it go.
 export function holdThroughResume(key: string | null, message: string): () => void {
   const id = crypto.randomUUID();
-  writeLocalStorage<Held[]>(HELD, [...readLocalStorage<Held[]>(HELD, []), { id, key, message }]);
-  return () => writeLocalStorage<Held[]>(HELD, readLocalStorage<Held[]>(HELD, []).filter((h) => h.id !== id));
+  setHeld([...held, { id, key, message }]);
+  return () => setHeld(held.filter((h) => h.id !== id));
+}
+
+/// What `holdThroughResume` holds, for drawing while the transcript it goes
+/// to cannot load.
+export function useHeldThroughResume(): Held[] {
+  return useSyncExternalStore(heldChanged.subscribe, () => held);
 }
 
 /// Puts back what a quit interrupted, as text in its composer. Never sent on its
 /// own: nothing says how long ago that was, or whether it reached the server.
 export function restoreHeld() {
-  const held = readLocalStorage<Held[]>(HELD, []);
   if (!held.length) return;
   for (const { key, message } of held) {
     const there = readDraft(key);
     writeDraft(key, there ? `${there}\n\n${message}` : message);
   }
-  writeLocalStorage<Held[]>(HELD, []);
+  setHeld([]);
 }
 
 /// "03:12" left before `stopsAt`, counted from `now`.

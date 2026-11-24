@@ -7,7 +7,20 @@ import type { UpdateChannel } from "@/types/events";
 /// site. Stated again here because the two apps share no code; the site's
 /// [changelog.ts](../../../web/src/lib/changelog.ts) is the one to change first.
 export type ChangelogMedia = { kind: "image" | "video"; url: string; alt: string };
-export type ChangelogItem = { title: string | null; body: string; media: ChangelogMedia[] };
+export type ChangelogApp = "desktop" | "ios" | "android";
+export type ChangelogHighlight = {
+  apps: ChangelogApp[];
+  action: { label: string; target: string } | null;
+};
+/// `highlight` is absent in a feed built before highlights existed.
+export type ChangelogItem = {
+  title: string | null;
+  body: string;
+  media: ChangelogMedia[];
+  highlight?: ChangelogHighlight | null;
+};
+/// One card of What's New, with the release it shipped in.
+export type Highlight = { version: string; item: ChangelogItem };
 export type ChangelogSection = { kind: "new" | "improved" | "fixed"; items: ChangelogItem[] };
 export type Release = {
   version: string;
@@ -19,7 +32,9 @@ export type Release = {
 
 /// `www`, not the apex: the apex answers with a redirect, and a redirect
 /// carries no CORS header for the webview to pass.
-const URL = "https://www.drayhq.com/changelog.json";
+const URL =
+  (import.meta.env.DEV && import.meta.env.VITE_DRAY_CHANGELOG_URL) ||
+  "https://www.drayhq.com/changelog.json";
 
 /// The newest release the reader has been told about, or skipped past.
 const SEEN_KEY = "ade.changelogSeen";
@@ -71,44 +86,68 @@ export function forChannel(releases: Release[], channel: UpdateChannel): Release
   return releases.filter((r) => channel === "beta" || !r.beta);
 }
 
-/// The release a card should announce, and the version to record as seen.
+/// The release's items flagged as highlights for this app, in file order.
+export function desktopHighlights(release: Release): Highlight[] {
+  return release.sections.flatMap((s) =>
+    s.items
+      .filter((item) => item.highlight?.apps.includes("desktop"))
+      .map((item) => ({ version: release.version, item })),
+  );
+}
+
+/// What to announce, and the version to record as seen.
+///
+/// Highlights win: every desktop one from a release past `seen` gets a page,
+/// newest release first, so one shipped in a release the reader updated
+/// straight past still gets its page. With none, the newest `notify` release
+/// past `seen` gets the small card.
 ///
 /// Only a release the reader is already running counts: a post published ahead
 /// of its build would otherwise advertise something they cannot use yet.
-/// `seen` null is an install from before this feature, which gets the newest
-/// flagged release; a fresh one was given its own version at load.
+/// `seen` null is an install from before this feature, which hears of the
+/// newest flagged release alone; a fresh one was given its own version at load.
 export function announcement(
   releases: Release[],
   running: string,
   seen: string | null,
-): { release: Release | null; seen: string | null } {
+): { release: Release | null; highlights: Highlight[]; seen: string | null } {
   const runnable = releases
     .filter((r) => compareVersions(r.version, running) <= 0)
     .sort((a, b) => compareVersions(b.version, a.version));
   const newest = runnable[0]?.version;
-  if (!newest) return { release: null, seen };
-  const floor = seen ?? "0.0.0";
-  const release =
-    runnable.find((r) => r.notify && compareVersions(r.version, floor) > 0) ?? null;
-  return { release, seen: seen && compareVersions(seen, newest) >= 0 ? seen : newest };
+  if (!newest) return { release: null, highlights: [], seen };
+  const fresh = runnable.filter((r) => compareVersions(r.version, seen ?? "0.0.0") > 0);
+  const release = fresh.find((r) => r.notify) ?? null;
+  const highlights = (seen ? fresh : fresh.slice(0, 1)).flatMap(desktopHighlights);
+  return {
+    release: highlights.length ? null : release,
+    highlights,
+    seen: seen && compareVersions(seen, newest) >= 0 ? seen : newest,
+  };
 }
 
-/// Asks the feed once and answers the release worth a card, with the version
-/// to record once the reader has dealt with it. With no card to show, that is
+export type Announcement =
+  | { kind: "card"; release: Release; seen: string }
+  | { kind: "highlights"; highlights: Highlight[]; seen: string };
+
+/// Asks the feed once and answers what is worth announcing, with the version
+/// to record once the reader has dealt with it. With nothing to show, that is
 /// recorded here. Every failure is silence: a changelog that cannot be reached
 /// is not news.
-export async function checkChangelog(): Promise<{ release: Release; seen: string } | null> {
+export async function checkChangelog(): Promise<Announcement | null> {
   const channel = readLocalStorage<UpdateChannel>("ade.updateChannel", "stable");
   const all = forChannel(await fetchChangelog(), channel);
   const seen = readLocalStorage<string | null>(SEEN_KEY, null);
   const next = announcement(all, APP_VERSION, seen);
-  if (next.release && next.seen) return { release: next.release, seen: next.seen };
+  if (next.seen && next.highlights.length)
+    return { kind: "highlights", highlights: next.highlights, seen: next.seen };
+  if (next.seen && next.release) return { kind: "card", release: next.release, seen: next.seen };
   if (next.seen !== seen) writeLocalStorage(SEEN_KEY, next.seen);
   return null;
 }
 
-/// Recorded on the card's dismissal rather than on its showing, so a reader
-/// who quits without touching it gets it again next launch.
+/// Recorded on dismissal rather than on showing, so a reader who quits without
+/// touching the card or dialog gets it again next launch.
 export function markChangelogSeen(version: string) {
   writeLocalStorage(SEEN_KEY, version);
 }

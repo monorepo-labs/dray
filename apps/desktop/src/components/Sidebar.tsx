@@ -1387,6 +1387,10 @@ export default function Sidebar({
       )}
       style={{ ...style, "--rail": towardRail } as React.CSSProperties}
       ref={asideRef}
+      // The rail holds no text field and no link, so WebKit's own menu there
+      // only ever offers Reload and Inspect. A row's menu has already taken
+      // the event by the time it bubbles here.
+      onContextMenu={iconOnly ? (e) => e.preventDefault() : undefined}
     >
       {handle}
       {/* All three buttons are drawn as session rows: `/80` text and `--sidebar-accent`
@@ -1536,9 +1540,10 @@ export default function Sidebar({
                     label={draftTitle(draft)}
                     active={draft.id === openDraftId}
                     onOpen={() => onOpenDraft(draft.id)}
+                    menu={(trigger) => <DraftMenu onDelete={() => onDeleteDraft(draft.id)}>{trigger}</DraftMenu>}
                   />
                 ))
-              : group.rows.map(({ item }) => {
+              : group.rows.map(({ item, depth }) => {
                   const status = statusBySession[item.sessionId] ?? item.status;
                   const aside = !archivedShown && ((group.kind === "stage" && group.state === "aside") || item.aside);
                   const gone = offline(item.cwd);
@@ -1554,6 +1559,24 @@ export default function Sidebar({
                       active={item.sessionId === selectedSessionId}
                       dim={aside ? "opacity-30" : ((archivedShown && !isToday(item.modified)) || gone) ? "opacity-50" : undefined}
                       onOpen={() => void onSelect(item.sessionId)}
+                      menu={(trigger) => (
+                        <SessionMenu
+                          item={item}
+                          status={status}
+                          aside={aside}
+                          nested={isNested(item, items)}
+                          inheritsPin={group.kind === "pinned" && depth > 0 && !item.pinned}
+                          onSetFlags={onSetFlags}
+                          onFork={onFork}
+                          onDelete={onDelete}
+                          onDetach={onDetach}
+                          attachBots={onAttach && attachTargets(bots, item)}
+                          onAttach={onAttach}
+                          onMarkUnread={onMarkUnread}
+                        >
+                          {trigger}
+                        </SessionMenu>
+                      )}
                     />
                   );
                 })),
@@ -2226,7 +2249,7 @@ function Initial({ name }: { name: string }) {
 }
 
 /// A task on the rail: a status dot in a bot row's box, the title in the
-/// tooltip.
+/// tooltip, and the full row's right-click menu through `menu`.
 function RailTask({
   sessionId,
   label,
@@ -2235,7 +2258,11 @@ function RailTask({
   active,
   dim,
   onOpen,
+  menu,
 }: {
+  /// Wraps the dot in the row's menu, `SessionMenu` or `DraftMenu`. A render
+  /// prop because the menu's trigger has to sit inside the tooltip's root.
+  menu: (trigger: React.ReactElement) => React.ReactNode;
   /// Absent on a draft, which has no transcript to warm or digit to answer.
   sessionId?: string;
   label: string;
@@ -2255,7 +2282,9 @@ function RailTask({
   const working = status === "in_progress" && !asking;
 
   return (
-    <RailTip on label={label}>
+    <Tooltip>
+      {menu(
+      <TooltipTrigger asChild>
       <button
         ref={ref}
         type="button"
@@ -2269,7 +2298,10 @@ function RailTask({
           "transition-[color,background-color,opacity] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
           active
             ? "bg-sidebar-accent text-sidebar-accent-foreground"
-            : cn("text-sidebar-foreground/80 hover:bg-sidebar-accent/50", dim && cn(dim, "hover:opacity-100")),
+            : cn(
+                "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 data-[state=open]:bg-sidebar-accent/50",
+                dim && cn(dim, "hover:opacity-100 data-[state=open]:opacity-100"),
+              ),
         )}
       >
         {/* One dot that is the status: the full row's yellow and green for
@@ -2294,7 +2326,10 @@ function RailTask({
         </span>
         {digit && <Kbd className="absolute top-1/2 left-1/2 -translate-1/2">{digit}</Kbd>}
       </button>
-    </RailTip>
+      </TooltipTrigger>,
+      )}
+      <TooltipContent side="right">{label}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -3028,15 +3063,13 @@ function DraftRow({
   onOpen: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
-  const [confirming, setConfirming] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (active) ref.current?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
   return (
-    <ContextMenu onOpenChange={(open) => open && setConfirming(false)}>
-      <ContextMenuTrigger asChild>
+    <DraftMenu onDelete={() => onDelete(draft.id)}>
       <div
         ref={ref}
         role="button"
@@ -3062,7 +3095,17 @@ function DraftRow({
           {relativeTime(draft.created)}
         </span>
       </div>
-      </ContextMenuTrigger>
+    </DraftMenu>
+  );
+}
+
+/// A draft's right-click menu: Delete, asking first. Shared by the drafts
+/// view's row and the rail's dot.
+function DraftMenu({ onDelete, children }: { onDelete: () => void; children: React.ReactNode }) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <ContextMenu onOpenChange={(open) => open && setConfirming(false)}>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent className="w-40">
         {confirming ? (
           <>
@@ -3071,7 +3114,7 @@ function DraftRow({
               <ContextMenuItem className="flex-1 justify-center text-ui">Cancel</ContextMenuItem>
               <ContextMenuItem
                 variant="destructive"
-                onSelect={() => onDelete(draft.id)}
+                onSelect={onDelete}
                 className="flex-1 justify-center bg-destructive/10 text-ui"
               >
                 Delete
@@ -3093,6 +3136,91 @@ function DraftRow({
         )}
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+/// A session's right-click menu, worked out from the row's own state. One
+/// place for the full row and the rail's dot, so the two can never offer
+/// different verbs on the same session.
+function SessionMenu({
+  item,
+  status,
+  aside,
+  nested,
+  inheritsPin,
+  onSetFlags,
+  onFork,
+  onDelete,
+  onDetach,
+  attachBots,
+  onAttach,
+  onMarkUnread,
+  children,
+}: Pick<
+  React.ComponentProps<typeof SessionRow>,
+  | "item"
+  | "status"
+  | "aside"
+  | "nested"
+  | "inheritsPin"
+  | "onSetFlags"
+  | "onFork"
+  | "onDelete"
+  | "onDetach"
+  | "attachBots"
+  | "onAttach"
+  | "onMarkUnread"
+> & { children: React.ReactNode }) {
+  return (
+    <RowMenu
+      onFork={(worktree) => void onFork(item.sessionId, worktree)}
+      forkDisabled={status === "in_progress"}
+      onDelete={() => void onDelete(item.sessionId)}
+      onDetach={nested ? () => void onDetach(item.sessionId) : undefined}
+      attachBots={attachBots}
+      onAttach={onAttach && ((bot) => void onAttach(item.sessionId, bot))}
+      // Never on a settled row, whose list draws no aside run.
+      aside={item.archived ? undefined : aside}
+      onSetAside={(v) =>
+        // Setting aside unpins, or the row would stay up in Pinned.
+        void onSetFlags(item.sessionId, v ? { aside: true, pinned: false } : { aside: false })
+      }
+      // Only a read, finished session can take the mark back: a settled one
+      // has left the live list the Completed run lives in, and anything but
+      // `idle` is either already unread or still working.
+      //
+      // `forkFrom` is the third: a fork is lazy, so its row sits at `idle`
+      // holding a copied conversation the CLI has not carried out yet and no
+      // turn of its own. An unread mark there would put a session that has
+      // never run into the Completed run and onto the dock badge. The flag is
+      // cleared by the first send, which is also the first turn there is
+      // anything to read. Known ceiling: a session whose spawn failed outright
+      // sits at `idle` having run nothing either, and the index says nothing
+      // that tells it from one that has run and been read.
+      onMarkUnread={
+        status === "idle" && !item.archived && !item.forkFrom
+          ? () => onMarkUnread(item.sessionId)
+          : undefined
+      }
+      // Absent on a row that follows a pinned ancestor: it sits in Pinned
+      // whichever way its own flag reads, so the verb would move nothing and
+      // leave a flag behind. Absent on a settled row too, where the list draws
+      // no Pinned group.
+      pin={
+        inheritsPin || item.archived
+          ? undefined
+          : {
+              pinned: !!item.pinned,
+              toggle: () =>
+                onSetFlags(
+                  item.sessionId,
+                  item.aside && !item.pinned ? { pinned: true, aside: false } : { pinned: !item.pinned },
+                ),
+            }
+      }
+    >
+      {children}
+    </RowMenu>
   );
 }
 
@@ -3192,52 +3320,19 @@ function SessionRow({
   const digit = useJumpDigit(item.sessionId);
 
   return (
-    <RowMenu
-      onFork={(worktree) => void onFork(item.sessionId, worktree)}
-      forkDisabled={status === "in_progress"}
-      onDelete={() => void onDelete(item.sessionId)}
-      onDetach={nested ? () => void onDetach(item.sessionId) : undefined}
+    <SessionMenu
+      item={item}
+      status={status}
+      aside={aside}
+      nested={nested}
+      inheritsPin={inheritsPin}
+      onSetFlags={onSetFlags}
+      onFork={onFork}
+      onDelete={onDelete}
+      onDetach={onDetach}
       attachBots={attachBots}
-      onAttach={onAttach && ((bot) => void onAttach(item.sessionId, bot))}
-      // Never on a settled row, whose list draws no aside run.
-      aside={item.archived ? undefined : aside}
-      onSetAside={(v) =>
-        // Setting aside unpins, or the row would stay up in Pinned.
-        void onSetFlags(item.sessionId, v ? { aside: true, pinned: false } : { aside: false })
-      }
-      // Only a read, finished session can take the mark back: a settled one
-      // has left the live list the Completed run lives in, and anything but
-      // `idle` is either already unread or still working.
-      //
-      // `forkFrom` is the third: a fork is lazy, so its row sits at `idle`
-      // holding a copied conversation the CLI has not carried out yet and no
-      // turn of its own. An unread mark there would put a session that has
-      // never run into the Completed run and onto the dock badge. The flag is
-      // cleared by the first send, which is also the first turn there is
-      // anything to read. Known ceiling: a session whose spawn failed outright
-      // sits at `idle` having run nothing either, and the index says nothing
-      // that tells it from one that has run and been read.
-      onMarkUnread={
-        status === "idle" && !item.archived && !item.forkFrom
-          ? () => onMarkUnread(item.sessionId)
-          : undefined
-      }
-      // Absent on a row that follows a pinned ancestor: it sits in Pinned
-      // whichever way its own flag reads, so the verb would move nothing and
-      // leave a flag behind. Absent on a settled row too, where the list draws
-      // no Pinned group.
-      pin={
-        inheritsPin || item.archived
-          ? undefined
-          : {
-              pinned: !!item.pinned,
-              toggle: () =>
-                onSetFlags(
-                  item.sessionId,
-                  item.aside && !item.pinned ? { pinned: true, aside: false } : { pinned: !item.pinned },
-                ),
-            }
-      }
+      onAttach={onAttach}
+      onMarkUnread={onMarkUnread}
     >
       {/* A button can't nest a button, so the row is a div with a click handler
           and the pin/settle controls are the only real buttons inside it. */}
@@ -3550,6 +3645,6 @@ function SessionRow({
           </div>
         </div>
       </div>
-    </RowMenu>
+    </SessionMenu>
   );
 }

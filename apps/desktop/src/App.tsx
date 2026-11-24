@@ -2,10 +2,9 @@ import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 
 import { invoke, listen, LOCAL, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { CircleDashed, Plus } from "lucide-react";
+import { CircleDashed } from "lucide-react";
 import PrStateIcon from "@/components/PrStateIcon";
 
-import { Button } from "@/components/ui/button";
 
 import "./App.css";
 import Chat from "@/components/Chat";
@@ -17,7 +16,7 @@ import { useBreakDue } from "@/lib/breaks";
 import { askToFixConflicts } from "@/lib/fixConflicts";
 import LinkDialog from "@/components/chat/LinkDialog";
 import QuitDialog from "@/components/QuitDialog";
-import type { SettingsTab } from "@/components/SettingsPage";
+import type { SettingsTab } from "@/lib/settingsTabs";
 import WorktreeDialog, { type WorktreePrompt } from "@/components/WorktreeDialog";
 import { useInstallWithServers } from "@/components/ServerUpdateDialog";
 import MorePanel from "@/components/MorePanel";
@@ -123,7 +122,7 @@ import {
 } from "@/lib/groups";
 import ComposerToolbar from "@/components/composer/ComposerToolbar";
 import DictateControl from "@/components/composer/DictateControl";
-import { HAS_DICTATION, IS_MAC } from "@/lib/platform";
+import { DEVICE, HAS_DICTATION, IS_MAC, localNow } from "@/lib/platform";
 import AppShell from "@/components/layout/AppShell";
 import WindowControls from "@/components/layout/WindowControls";
 import { offersFast } from "@/lib/fastMode";
@@ -172,12 +171,15 @@ import {
   showJumpBadges,
 } from "@/lib/digitChords";
 import { dismissNotice, getNotices, pushNotice } from "@/hooks/useNotices";
-import { checkChangelog, markChangelogSeen, type Release } from "@/lib/changelog";
+import { checkChangelog, markChangelogSeen, type Announcement } from "@/lib/changelog";
+import { isSettingsTab } from "@/lib/settingsTabs";
 import WhatsNewCard from "@/components/WhatsNewCard";
+import WhatsNewPage from "@/components/WhatsNewPage";
 import StarCard from "@/components/StarCard";
 import { noteMergeForStar, useStarPrompt } from "@/hooks/useStarPrompt";
 import { useIntegrations } from "@/hooks/useIntegrations";
-import { useSessionIssues } from "@/hooks/useIssues";
+import { readIssueDetail, useSessionIssues } from "@/hooks/useIssues";
+import { IssueComposer, IssueStartContext, IssueTasks, type IssueStarter } from "@/components/IssueStart";
 import { sessionsAnswered, useSessions } from "@/hooks/useSessions";
 import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailability";
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
@@ -203,10 +205,12 @@ import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
 import { appendToDraft, onDraftWrite, readDraft, writeDraft } from "@/hooks/useDraft";
 import { draftKey, useDrafts } from "@/hooks/useDrafts";
-import { issueTag, rememberIssueTitle, setIssueOpener } from "@/lib/issue";
+import { setIssueOpener } from "@/lib/issue";
+import { issuePrompt, issueRepo, lastTaskPicks, projectForIssue, tasksForIssue, usablePicks, type IssuePicks } from "@/lib/issueStart";
+import { readIssueTracker, setIssueRepo, setIssueTracker } from "@/lib/issueTracker";
 import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
-import { focusComposer, focusComposerEnd } from "@/lib/composerFocus";
+import { focusComposer } from "@/lib/composerFocus";
 import { changeRange, lastToolResult, writingTurns } from "@/lib/changes";
 import { useOlderWrites } from "@/hooks/useOlderWrites";
 import { usePlan } from "@/lib/plan";
@@ -856,9 +860,10 @@ function App() {
     setSettingsTab("changelog");
     setSettingsOpen(true);
   }, []);
-  // Once a launch: a release flagged `notify` that the reader runs and has not
-  // dismissed yet gets the what's-new card.
-  const [whatsNew, setWhatsNew] = useState<{ release: Release; seen: string } | null>(null);
+  // Once a launch: highlights the reader runs and has not dismissed yet get the
+  // full-window What's New, and failing those a release flagged `notify` gets the
+  // card.
+  const [whatsNew, setWhatsNew] = useState<Announcement | null>(null);
   const starPrompt = useStarPrompt();
   useEffect(() => {
     checkChangelog().then(setWhatsNew, () => {});
@@ -1792,22 +1797,32 @@ function App() {
   };
   /// Where a PR's task runs: its checkout's server, This Mac for a clone.
   const prServer = (plan: PrCheckout) => (plan.kind === "clone" ? (plan.server ?? LOCAL) : serverOfPath(plan.path));
-  /// The machines Start Task offers for a plain task: every checkout of the
-  /// PR's repo (its `remote`, git's own spelling of the repo), then a stand-in
-  /// on each connected machine with none, never a Dray Cloud one. The pick
-  /// starts on the checkout the PR would use anyway.
-  const prMachines = (row: InboxRow): PrMachines => {
-    const name = row.repo.split("/").pop() ?? row.repo;
-    const plan = prCheckoutPlan(row);
-    const real = projects.filter(
-      (p) => !cloudServer(serverOfPath(p.path)) && (p.remote === row.repo || p.path === row.key || (plan.kind !== "clone" && p.path === plan.path)),
-    );
+  /// The machines a plain task for `repo` (git's own spelling, `remote`) can
+  /// run on: every checkout of it, or one `also` names, then a stand-in at
+  /// `~/dray/<name>` on each connected machine with none, never a Dray Cloud
+  /// one, which a start there clones first.
+  const repoMachines = (
+    repo: string,
+    also: (p: Project) => boolean,
+    initial: (real: Project[], clones: Project[]) => string,
+  ): PrMachines => {
+    const name = repo.split("/").pop() ?? repo;
+    const real = projects.filter((p) => !cloudServer(serverOfPath(p.path)) && (p.remote === repo || also(p)));
     const servers = [LOCAL, ...allServers.map((s) => s.id).filter((id) => id !== LOCAL && serverConnected(id) && !cloudServer(id))];
     const clones = servers
       .filter((server) => !real.some((p) => serverOfPath(p.path) === server))
-      .map((server): Project => ({ path: qualify(`/~/dray/${name}`, server), name, space: null, remote: row.repo, lastSelected: "" }));
-    const initial = plan.kind === "clone" ? (clones[0]?.path ?? "") : plan.path;
-    return { projects: [...real, ...clones], clones: clones.map((c) => c.path), initial };
+      .map((server): Project => ({ path: qualify(`/~/dray/${name}`, server), name, space: null, remote: repo, lastSelected: "" }));
+    return { projects: [...real, ...clones], clones: clones.map((c) => c.path), initial: initial(real, clones) };
+  };
+  /// The machines Start Task offers for a PR. The pick starts on the checkout
+  /// the PR would use anyway.
+  const prMachines = (row: InboxRow): PrMachines => {
+    const plan = prCheckoutPlan(row);
+    return repoMachines(
+      row.repo,
+      (p) => p.path === row.key || (plan.kind !== "clone" && p.path === plan.path),
+      (_, clones) => (plan.kind === "clone" ? (clones[0]?.path ?? "") : plan.path),
+    );
   };
   /// The bots a PR can go to: those on the server its task runs on, the only
   /// ones whose task can be made in that checkout.
@@ -1827,6 +1842,60 @@ function App() {
       setTaskTabs((prev) => openTaskTab(prev, bot.id, { sessionId: item.sessionId, title: item.title }));
       pickTaskTab(bot.id, item.sessionId);
     });
+  };
+  /// Makes the checkout `plan` names where it is not one already: attaches a
+  /// checkout on disk, or clones `repo` into `~/dray`, git's lines going to
+  /// `onCloning`. Run only at a start, so opening a PR or an issue changes
+  /// nothing on disk.
+  const makeCheckout = async (
+    plan: PrCheckout,
+    repo: string,
+    onCloning: (line: string | null) => void,
+  ): Promise<{ path: string } | { error: string }> => {
+    if (plan.kind === "here") return { path: plan.path };
+    const server = prServer(plan);
+    // git's own progress lines, while a clone runs, for the pane to show.
+    const listening =
+      plan.kind === "clone"
+        ? listen<CloneProgress>("clone_progress", ({ payload, server: from }) => {
+            // git's "Cloning into '<staging path>'" names a folder the reader never sees.
+            if (from === server && payload.slug === plan.slug && !payload.line.startsWith("Cloning into")) {
+              onCloning(payload.line);
+            }
+          })
+        : null;
+    if (plan.kind === "clone") onCloning("");
+    try {
+      const list = await invoke<Project[]>(
+        plan.kind === "clone" ? "clone_github_repo" : "add_project",
+        plan.kind === "clone" ? { slug: plan.slug } : { path: plan.path },
+        server,
+      );
+      handleAttachProject(server, list);
+      // By full path, never by folder name: the list is every project on
+      // that server, and two checkouts can share a name. An attach names its
+      // path; a clone is the one entry that server did not list before,
+      // else the one whose remote is the repo.
+      const before = new Set(projects.filter((p) => serverOfPath(p.path) === server).map((p) => p.path));
+      const made =
+        plan.kind === "attach"
+          ? list.find((p) => p.path === plan.path)
+          : (list.find((p) => !before.has(p.path) && p.remote === repo) ?? list.find((p) => p.remote === repo));
+      if (!made) return { error: "The checkout was made but is not in the project list." };
+      void prMarks.refreshRepos([made.path]);
+      return { path: made.path };
+    } catch (e) {
+      const said = e instanceof Error ? e.message : String(e);
+      return {
+        error:
+          plan.kind === "clone"
+            ? `Could not clone ${plan.slug} into ~/dray: ${said}`
+            : `Could not attach ${plan.path}: ${said}`,
+      };
+    } finally {
+      onCloning(null);
+      void listening?.then((unlisten) => unlisten());
+    }
   };
   /// Start Task from the page: a new worktree on the PR's own branch, the
   /// reader's own task or `bot`'s, whatever tasks the PR already has — the new
@@ -1849,57 +1918,9 @@ function App() {
           ? { kind: "here", path: machine }
           : prCheckoutPlan(row);
     const server = prServer(plan);
-    // git's own progress lines, while a clone runs, for the pane to show.
-    const listening =
-      plan.kind === "clone"
-        ? listen<CloneProgress>("clone_progress", ({ payload, server: from }) => {
-            // git's "Cloning into '<staging path>'" names a folder the reader never sees.
-            if (from === server && payload.slug === plan.slug && !payload.line.startsWith("Cloning into")) {
-              onCloning(payload.line);
-            }
-          })
-        : null;
-    if (plan.kind === "clone") onCloning("");
-    // Attached or cloned only now, at the start, so opening a PR changes
-    // nothing on disk; done before the duplicate check above could not see a
-    // checkout it had to make.
-    let projectPath: string;
-    try {
-      if (plan.kind === "here") projectPath = plan.path;
-      else {
-        const list = await invoke<Project[]>(
-          plan.kind === "clone" ? "clone_github_repo" : "add_project",
-          plan.kind === "clone" ? { slug: plan.slug } : { path: plan.path },
-          server,
-        );
-        handleAttachProject(server, list);
-        // By full path, never by folder name: the list is every project on
-        // that server, and two checkouts can share a name. An attach names its
-        // path; a clone is the one entry that server did not list before,
-        // else the one whose remote is the PR's repo.
-        const before = new Set(projects.filter((p) => serverOfPath(p.path) === server).map((p) => p.path));
-        const made =
-          plan.kind === "attach"
-            ? list.find((p) => p.path === plan.path)
-            : (list.find((p) => !before.has(p.path) && p.remote === row.repo) ??
-              list.find((p) => p.remote === row.repo));
-        if (!made) return { error: "The checkout was made but is not in the project list." };
-        projectPath = made.path;
-        void prMarks.refreshRepos([projectPath]);
-      }
-    } catch (e) {
-      const said = e instanceof Error ? e.message : String(e);
-      onCloning(null);
-      void listening?.then((unlisten) => unlisten());
-      return {
-        error:
-          plan.kind === "clone"
-            ? `Could not clone ${plan.slug} into ~/dray: ${said}`
-            : `Could not attach ${plan.path}: ${said}`,
-      };
-    }
-    onCloning(null);
-    void listening?.then((unlisten) => unlisten());
+    const made = await makeCheckout(plan, row.repo, onCloning);
+    if ("error" in made) return made;
+    const projectPath = made.path;
     try {
       const started = await invoke<SessionIndexItem>(
         "start_pr_session",
@@ -2768,6 +2789,13 @@ function App() {
     setIssueOpener((issue) => {
       // A pull request tagged from the `#` menu is no issue to open here.
       if (prRepoSlug(issue.url)) return openLink(issue.url);
+      // A GitHub issue opened from the Linear list would sit beside a list
+      // about something else: the page moves to the issue's own repo.
+      const repo = issue.tracker === "github" ? issue.identifier.split("#")[0] : null;
+      if (repo && readIssueTracker() !== "github") {
+        setIssueRepo(repo);
+        setIssueTracker("github");
+      }
       setPickedIssue(issue);
       setPage("issues");
     });
@@ -3178,30 +3206,91 @@ function App() {
     setSettingsOpen(true);
   };
 
-  /// Leaves the issues page for the empty composer, with the issue tagged in
-  /// the draft.
-  ///
-  /// The tag alone is the whole handoff: `expand_tags` resolves it out of the
-  /// prompt text on send, so nothing is linked here. It lands in the composer
-  /// rather than starting a session, which is what leaves the project, the
-  /// model and the harness still to be picked.
-  const workOnIssue = (issue: { identifier: string; title: string }) => {
-    goToSession(handleNewSession);
-    // The same two things the `#` picker's own pick does, and the draft reads
-    // as prose without either. **The title is remembered**, since nothing
-    // closes an issue tag and the chip cannot find its end otherwise — so the
-    // Linear tag chipped as the bare identifier with its title left beside it
-    // in plain text. **And a space follows it**, since a chip only forms once
-    // the caret has left the word: dropped straight in, the caret sat at the
-    // tag's end and the whole run stayed drawn as raw text.
-    rememberIssueTitle(issue.identifier, issue.title);
-    appendToDraft(null, issueTag(issue.identifier, issue.title));
-    // A space after it, which `appendToDraft` trims off — its rule is
-    // dictation's, where whatever the model padded its words with is noise. A
-    // tag wants one: a chip only forms once the caret has left the word, so
-    // without it the whole run stayed drawn as raw text.
-    writeDraft(null, `${readDraft(null)} `);
-    focusComposerEnd();
+  /// Where a task for a GitHub `issue` can run: its repo's checkouts, then a
+  /// clone stand-in on each machine with none. Null for a Linear issue, which
+  /// names no repository, so the reader picks a project.
+  const issueMachines = (issue: IssueRef): PrMachines | null => {
+    const repo = issueRepo(issue);
+    if (!repo) return null;
+    return repoMachines(
+      `github.com/${repo}`.toLowerCase(),
+      () => false,
+      (real, clones) => projectForIssue(real, issue)?.path ?? clones[0]?.path ?? "",
+    );
+  };
+  /// Starts a task for `issue` from the issues page without leaving it. It
+  /// runs in `where` (a checkout or a clone stand-in), else the issue's own
+  /// checkout, cloned into `~/dray` where there is none. The prompt is the
+  /// issue's tag, link and body, with the reader's note last; the task is
+  /// linked to the issue and lands in the sidebar on `session_created`.
+  const startIssueTask = async (
+    issue: IssueRef,
+    note = "",
+    picks?: IssuePicks,
+    where?: string | null,
+    onCloning: (line: string | null) => void = () => {},
+  ) => {
+    const machines = issueMachines(issue);
+    const pick = machines
+      ? where && machines.projects.some((p) => p.path === where)
+        ? where
+        : machines.initial
+      : where;
+    if (!pick) throw new Error("Pick a project for this issue first.");
+    const repo = issueRepo(issue);
+    const made =
+      machines?.clones.includes(pick) && repo
+        ? await makeCheckout({ kind: "clone", slug: repo, server: serverOfPath(pick) }, `github.com/${repo}`.toLowerCase(), onCloning)
+        : { path: pick };
+    if ("error" in made) throw new Error(made.error);
+    const body = await readIssueDetail(issue).then((d) => d.description, () => null);
+    const { useWorktree: worktree, ...rest } = await usablePicks(serverOfPath(made.path), picks ?? lastTaskPicks());
+    await invoke("send_msg", {
+      sessionId: crypto.randomUUID(),
+      prompt: issuePrompt(issue, body, note),
+      attachmentPaths: [],
+      ...rest,
+      cwd: made.path,
+      branch: null,
+      useWorktree: worktree,
+      worktreeName: null,
+      baseRef: null,
+      isNewSession: true,
+      issueIds: [issue.identifier],
+      device: DEVICE,
+      sentAt: localNow(),
+    });
+  };
+  /// Sends `issue` to `bot`, which is told in a hidden prompt, with the
+  /// reader's note, and starts it once free, as an issue card's hand-off does.
+  const sendIssueToBot = async (issue: IssueRef, bot: Bot, note = "") => {
+    const { tracker, id, identifier, title, url } = issue;
+    const ref = { tracker, id, identifier, title, url };
+    await invoke("send_issue_to_bot", { botId: bot.id, issue: ref, note: note.trim() || null }, serverOfBot(bot)).catch(
+      (e) => {
+        throw String(e).includes("unknown command") ? new Error(`Update ${bot.name}'s server to send it issues.`) : e;
+      },
+    );
+  };
+  const issueStarter: IssueStarter = {
+    machinesFor: issueMachines,
+    projects,
+    onAttached: handleAttachProject,
+    bots,
+    start: startIssueTask,
+    send: sendIssueToBot,
+    // A bot's own chat can link the issue it was sent; its task is the work.
+    tasksFor: (issue) =>
+      tasksForIssue([...sessionIndexItems, ...otherIndexSide], issue).filter((i) => !botAt(bots, i.cwd)),
+    botOf: botOfPrSession,
+    onOpenTask: openPrSession,
+    statusOf: (item) => {
+      if (item.archived) return "Settled";
+      if (askingSessions.has(item.sessionId)) return "Waiting on you";
+      const status = statusBySession[item.sessionId] ?? item.status;
+      return status === "in_progress" ? "Working" : status === "completed" ? "Done" : "Idle";
+    },
+    onShowTasks: (issue) => setPickedIssue(issue),
   };
 
   /// Writes a session's settled or pinned flag and takes the sidebar wherever
@@ -4005,9 +4094,31 @@ function App() {
   // Pages with no tabs for the strip: the sheet reaches up behind the header.
   const tallSheet = pageOpen || !shownSession;
 
+  /// What a highlight's action target does here; the vocabulary is written
+  /// down in CHANGELOG.md's own header. Null draws no button.
+  const highlightAction = (target: string): (() => void) | null => {
+    if (target === "new-task") return () => goToSession(handleNewSession);
+    if (target === "new-bot")
+      return () => {
+        goToSession(handleNewSession);
+        setBotServer(LOCAL);
+        setBotToEdit(null);
+        setNewBotOpen(true);
+      };
+    if (target.startsWith("https://")) return () => void openUrl(target).catch(console.error);
+    const tab = /^settings\/(.+)$/.exec(target)?.[1];
+    if (tab && isSettingsTab(tab))
+      return () => {
+        setSettingsTab(tab);
+        setSettingsOpen(true);
+      };
+    return null;
+  };
+
   return (
     <TooltipProvider>
     <MergeCardHostContext value={mergeCardHost}>
+    <IssueStartContext value={issueStarter}>
     <DiffWorkerPool pair={codeThemePair}>
     {/* Hidden, not unmounted, while settings take the window: transcripts,
         scroll pins and drafts wait here. `display: none` is also what takes
@@ -4431,17 +4542,10 @@ function App() {
             // In the strip rather than on the issue's own row, beside Refresh:
             // it acts on the issue the pane is showing, which is the pane's
             // whole subject — the same slot Open takes for a session.
-            actions={
-              pickedIssue && (
-                <Button variant="secondary" size="xs" onClick={() => workOnIssue(pickedIssue)}>
-                  Work on it
-                  <Plus data-icon="inline-end" />
-                </Button>
-              )
-            }
           >
             <TabBody active>
               <MountOnce when>
+              {pickedIssue && <IssueTasks issue={pickedIssue} />}
               <IssuePanel
                 // No session, so no link to remove — the row draws its open-in-
                 // tracker button and nothing else.
@@ -4452,6 +4556,9 @@ function App() {
                 loading={pickedIssueData.loading}
                 unavailable={pickedIssueData.unavailable}
               />
+              {pickedIssue && (
+                <IssueComposer key={pickedIssue.identifier} issue={pickedIssue} />
+              )}
               </MountOnce>
             </TabBody>
           </RightPanel>
@@ -4820,7 +4927,6 @@ function App() {
           active={issuesOpen}
           picked={pickedIssue}
           onPick={setPickedIssue}
-          onWorkOn={workOnIssue}
           refreshRef={issuesRefreshRef}
           connected={integrations.connected}
           onConnect={integrations.connect}
@@ -4893,7 +4999,7 @@ function App() {
         {/* A transcript its server has not answered for yet; the reconnect
             loads it. One already loaded keeps drawing what it has. */}
         {offlineServer && !selectedSession ? (
-          <TranscriptSkeleton still={offlineServer.status !== "connecting"} />
+          <TranscriptSkeleton still={offlineServer.status !== "connecting"} sessionId={selectedSessionId} />
         ) : onboardingChat ? (
           <OnboardingChat welcome={drayBot && greetingOf(drayBot)[0]} onAsk={askBot} onMore={openAgentSettings} />
         ) : welcomeBot && !selectedSessionId ? (
@@ -5023,11 +5129,18 @@ function App() {
       }
       onDeleteWorktree={(id) => removeWorktree(id)}
     />
-    {whatsNew && (
+    {whatsNew?.kind === "card" && (
       <WhatsNewCard
         release={whatsNew.release}
         onDismiss={() => closeWhatsNew(false)}
         onView={() => closeWhatsNew(true)}
+      />
+    )}
+    {whatsNew?.kind === "highlights" && (
+      <WhatsNewPage
+        highlights={whatsNew.highlights}
+        actionFor={highlightAction}
+        onClose={() => closeWhatsNew(false)}
       />
     )}
     <Onboarding
@@ -5161,6 +5274,7 @@ function App() {
       </AlertDialogContent>
     </AlertDialog>
     </DiffWorkerPool>
+    </IssueStartContext>
     </MergeCardHostContext>
     </TooltipProvider>
   );

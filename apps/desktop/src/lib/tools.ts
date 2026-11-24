@@ -47,7 +47,15 @@ export function toolSummary(
   // fx's own skill tool, whose only field is an opaque location ending in the
   // skill's name — `skill:68130a4a3e6c5614:0/find-skills`. Tool-keyed for the
   // same reason: `location` names a skill on this tool and nothing else.
-  if (name === "skill") return field(input, "location")?.split("/").pop() ?? null;
+  // OpenCode's takes the skill's `name` instead.
+  if (name === "skill") return field(input, "location")?.split("/").pop() ?? field(input, "name");
+  // fx 0.0.17's toolbox takes what it acts on under the action's own key.
+  if (name === "toolbox") return field(input, "search") ?? field(input, "open");
+  // fx 0.0.17's subagent actions besides a delegation name the child they act
+  // on. A wait takes any child's report, so its agent says nothing.
+  if (name === "subagent" && toolType !== "subagent_spawn" && field(input, "action") !== "wait") {
+    return field(input, "agent");
+  }
 
   // grok's MCP dispatcher: every server's tool arrives as one `use_tool` call
   // whose own name says nothing, with the real one under `tool_name` and that
@@ -141,6 +149,8 @@ const TOOL_VERBS: Record<string, Verbs> = {
   apply_patch: ["Editing", "Edited", "file"],
   web_search: ["Searching web", "Searched web", "query"],
   view_image: ["Viewing", "Viewed", "image"],
+  image_generation: ["Generating image", "Generated image", "image"],
+  sleep: ["Waiting", "Waited", "pause"],
 
   // pi's own, which are its Unix namesakes in lowercase. `find` is what pi
   // calls the tool every other harness spells `Glob`, so it takes Glob's verbs
@@ -170,8 +180,16 @@ const TOOL_VERBS: Record<string, Verbs> = {
   // a noun — the row says what happened, and the task sits beside it.
   subagent: ["Delegating", "Delegated", "task"],
   subagent_wait: ["Waiting for subagents", "Waited for subagents", "wait"],
-  // What the agent can reach: skills and MCP tools matching a query.
+  subagent_message: ["Messaging", "Messaged", "subagent"],
+  subagent_status: ["Checking", "Checked", "subagent"],
+  subagent_stop: ["Stopping", "Stopped", "subagent"],
+  subagent_close: ["Closing", "Closed", "subagent"],
+  // What the agent can reach: skills and MCP tools matching a query. fx ≤0.0.16
+  // spelled it `capability_search`; 0.0.17 folds it into `toolbox`.
   capability_search: ["Searching", "Searched", "capability"],
+  toolbox: ["Using toolbox", "Used toolbox", "call"],
+  toolbox_search: ["Searching tools", "Searched tools", "search"],
+  toolbox_open: ["Opening", "Opened", "entry"],
   // fx truncates a long tool result and hands the model a handle to query for
   // the rest, so this is the agent going back for what it was not shown.
   read_tool_result: ["Reading output", "Read output", "result"],
@@ -214,6 +232,16 @@ const TOOL_VERBS: Record<string, Verbs> = {
   // itself arrives on `_x.ai/exit_plan_mode` for the card to draw.
   enter_plan_mode: ["Entering plan mode", "Entered plan mode", "plan"],
   exit_plan_mode: ["Presenting plan", "Presented plan", "plan"],
+
+  // OpenCode's own, lowercase. `bash`, `read`, `write`, `edit`, `grep` and
+  // `skill` are above and shared deliberately — one act, one label.
+  glob: ["Searching", "Searched", "pattern"],
+  list: ["Listing", "Listed", "directory"],
+  patch: ["Editing", "Edited", "file"],
+  webfetch: ["Fetching", "Fetched", "page"],
+  websearch: ["Searching web", "Searched web", "query"],
+  todowrite: ["Todo", "Todo", "todo list"],
+  task: ["Delegating", "Delegated", "task"],
 };
 
 /// What a delegated run was asked to do, and what it was asked to do it with.
@@ -241,6 +269,16 @@ export function subagentBrief(
   return { task, model: field(input, "model"), effort: field(input, "effort"), agent: field(input, "agent") };
 }
 
+/// The model and effort a delegated child runs on, as words in the row's own
+/// sentence — "gpt 6 luna low". fx nests them under `request` or puts them at
+/// the top; Codex puts them at the top. Empty where the call names neither.
+export function runSettings(input: JsonValue): string {
+  const request = nested(input, "request") ?? input;
+  return [field(request, "model")?.replace(/-/g, " "), field(request, "effort")]
+    .filter(Boolean)
+    .join(" ");
+}
+
 /// The brief a `Skill` call was given — the sentence the model wrote for the
 /// skill, not an argument to it. Null where the model named a skill and left it
 /// to read its own instructions, which is the common case.
@@ -252,9 +290,15 @@ export function skillBrief(input: JsonValue): string | null {
 /// The label for a single tool-call row. `pending` picks the tense — a live call
 /// reads "Reading", a settled one "Read".
 /// The name a row's verb is looked up by. fx 0.0.17's `subagent` tool also
-/// waits on its children, and only a message delegates, so the other actions
-/// are named for what they do rather than drawn as "Delegated".
+/// waits on, checks, stops and closes its children, and only a message that
+/// starts work delegates, so the other actions are named for what they do
+/// rather than drawn as "Delegated". Its `toolbox` is one tool for three acts.
 export function verbName(name: string, toolType: string, input: JsonValue): string {
+  // fx 0.0.17's toolbox searches, or opens a skill or an MCP tool's schema.
+  if (name === "toolbox") {
+    if (field(input, "search")) return "toolbox_search";
+    return field(input, "kind") === "skill" ? "skill" : "toolbox_open";
+  }
   if (name !== "subagent" || toolType === "subagent_spawn") return name;
   const action = field(input, "action");
   return action ? `subagent_${action}` : name;
@@ -281,6 +325,7 @@ const GROUP_VERBS: Record<string, [running: string, done: string]> = {
   WebSearch: ["Searching", "Searched"],
   shell: ["Running", "Ran"],
   web_search: ["Searching", "Searched"],
+  image_generation: ["Generating", "Generated"],
   // The row's verb carries the noun ("Read Skill pdf"), which a count would
   // then say a second time — "Read Skill 2 skills". The group drops it.
   Skill: ["Reading", "Read"],

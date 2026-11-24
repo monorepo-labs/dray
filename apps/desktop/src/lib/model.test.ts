@@ -64,12 +64,12 @@ describe("rememberedModel", () => {
 
   it("defaults a harness nobody has picked in", () => {
     expect(rememberedModel({ codex: "gpt55" }, "claude_code")).toBe("opus");
-    expect(rememberedModel({}, "codex")).toBe("gpt-6.1-sol");
+    expect(rememberedModel({}, "codex")).toBe("gpt-6.2-sol");
   });
 
   /// A pick under one harness must not reach the other's default.
   it("does not let one harness's pick answer for the other", () => {
-    expect(rememberedModel({ claude_code: "haiku" }, "codex")).toBe("gpt-6.1-sol");
+    expect(rememberedModel({ claude_code: "haiku" }, "codex")).toBe("gpt-6.2-sol");
   });
 });
 
@@ -217,12 +217,13 @@ describe("nextHarness", () => {
   /// Toggling between two was written when there were two, and silently never
   /// reached the third. The chord steps the picker's own row instead.
   it("steps through every harness in the picker's order and wraps", () => {
-    expect(HARNESS_ORDER).toEqual(["claude_code", "codex", "pi", "fx", "grok"]);
+    expect(HARNESS_ORDER).toEqual(["claude_code", "codex", "pi", "fx", "grok", "opencode"]);
     expect(nextHarness("claude_code")).toBe("codex");
     expect(nextHarness("codex")).toBe("pi");
     expect(nextHarness("pi")).toBe("fx");
     expect(nextHarness("fx")).toBe("grok");
-    expect(nextHarness("grok")).toBe("claude_code");
+    expect(nextHarness("grok")).toBe("opencode");
+    expect(nextHarness("opencode")).toBe("claude_code");
   });
 
   it("parks an unknown harness on the first", () => {

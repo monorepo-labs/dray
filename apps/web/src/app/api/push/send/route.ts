@@ -1,5 +1,6 @@
 import { deliverFcm, fcmTokenGone } from "@/lib/fcm";
-import { apnsPayload, callerOf, deliver, overLimit, pushReady, readAlert, tokenGone, unseal } from "@/lib/push";
+import { apnsPayload, deliver, pushReady, readAlert, tokenGone, unseal } from "@/lib/push";
+import { callerOf, overLimit } from "@/lib/rate";
 
 /// A Dray server sends one alert to one phone. The text passes straight
 /// through to APNs or FCM and is never stored or logged.

@@ -37,6 +37,28 @@ data class MergeCard(
     val prPath: String get() = repo?.let { "github:$it" } ?: projectPath
 }
 
+/** `dray session issue-card`'s card: GitHub issues the bot showed the reader, as GitHub had them when posted. */
+@Serializable
+data class IssueCard(
+    /** `owner/name`. */
+    val repo: String,
+    val issues: List<IssueCardRow> = emptyList(),
+)
+
+/** One issue on an [IssueCard]. `closed` is a bool, never a state enum, so a state an older build cannot spell fails nothing. */
+@Serializable
+data class IssueCardRow(
+    val number: Int,
+    val title: String = "",
+    val url: String = "",
+    val closed: Boolean = false,
+    val labels: List<IssueLabel> = emptyList(),
+)
+
+/** A label in the colour GitHub gave it: six hex digits, no `#`. */
+@Serializable
+data class IssueLabel(val name: String, val color: String = "")
+
 /** One file a bot's turn changed under its instructions, skills or memory. */
 @Serializable
 data class Lesson(

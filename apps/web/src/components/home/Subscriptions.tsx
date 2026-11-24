@@ -3,6 +3,7 @@ import { ClaudeGlyph } from "@/components/ClaudeGlyph";
 import { FxGlyph } from "@/components/FxGlyph";
 import { GrokGlyph } from "@/components/GrokGlyph";
 import { OpenAIGlyph } from "@/components/OpenAIGlyph";
+import { OpenCodeGlyph } from "@/components/OpenCodeGlyph";
 import { PiGlyph } from "@/components/PiGlyph";
 import { CARD, CARD_TEXT, GRID, Section, Title } from "@/components/home/Section";
 
@@ -12,6 +13,7 @@ const AGENTS: [string, ReactNode][] = [
   ["pi", <PiGlyph key="pi" className="size-10" />],
   ["fx", <FxGlyph key="fx" className="size-10 opacity-80" />],
   ["Grok", <GrokGlyph key="grok" className="size-10 opacity-80" />],
+  ["OpenCode", <OpenCodeGlyph key="opencode" className="size-10 opacity-80" />],
 ];
 
 /// The agents a reader already pays for: a title, one row of logo cards, and
@@ -21,7 +23,7 @@ export function Subscriptions() {
     <Section id="subscriptions" className="py-20">
       <PixelField viewBox="0 0 480 300" className="pointer-events-none absolute top-0 left-[720px] h-[300px] w-[480px] max-lg:hidden" />
       <Title lead="Bring your own agent subscription." />
-      <div className={`relative grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 ${GRID}`}>
+      <div className={`relative grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 ${GRID}`}>
         {AGENTS.map(([name, glyph]) => (
           <div
             key={name}
@@ -31,11 +33,6 @@ export function Subscriptions() {
             <span className={CARD_TEXT}>{name}</span>
           </div>
         ))}
-        {/* Below lg there is no room off the column, so the heart takes the
-            grid's empty last slot instead, cropped to its own pixels. */}
-        <div className={`relative lg:hidden ${CARD}`}>
-          <PixelField viewBox="80 0 360 280" className="absolute inset-0 size-full p-4" />
-        </div>
       </div>
     </Section>
   );

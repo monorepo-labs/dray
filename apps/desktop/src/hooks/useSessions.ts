@@ -36,6 +36,7 @@ import { lockedMidTurn } from "@/lib/liveControls";
 import { AGENT_LABELS, DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
 import { islandOn } from "@/lib/island";
 import { notifyOS } from "@/lib/notify";
+import { DEVICE, localNow } from "@/lib/platform";
 import { setCallReader, setOlderDropper, setOlderLoader } from "@/lib/olderPages";
 import { EMPTY_TASKS } from "@/lib/transcript";
 import { botStance, stanceFor, taskStance } from "@/lib/permission";
@@ -940,7 +941,10 @@ const handleSendMsg = async (
   }
   const sentAt = Date.now();
 
-  const existing = sessionId ? selected : undefined;
+  // Its row when the transcript is not loaded, as on a machine that is down:
+  // the picked project's path would send it to the wrong server, or past the
+  // resume a stopped sandbox needs.
+  const existing = sessionId ? (selected ?? sessionIndexItems.find((i) => i.sessionId === sessionId)) : undefined;
   // The backend reads the recorded cwd on resume, so this only has to be right
   // for a new session.
   let cwd = switching ? selected.cwd : isNewSession ? projectPath : existing?.cwd ?? projectPath;
@@ -1172,6 +1176,8 @@ const handleSendMsg = async (
       // Placed sessions are a server's own picks, never this picker's.
       baseRef: isNewSession && worktree ? (baseRef ?? (placed ? null : worktreeBranch)) : null,
       isNewSession,
+      device: DEVICE,
+      sentAt: localNow(),
     });
     if (heldAtSend) {
       void settleAfterSend(heldAtSend, sentAt).catch((e) => console.error("could not settle a held flag", e));

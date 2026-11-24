@@ -16,6 +16,7 @@ import com.yogesh.dray.model.stageRuns
 import com.yogesh.dray.model.stripSender
 import com.yogesh.dray.model.summaryLabel
 import com.yogesh.dray.net.parseConnectLine
+import com.yogesh.dray.store.serverId
 import com.yogesh.dray.wire.AgentEvent
 import com.yogesh.dray.wire.Payload
 import com.yogesh.dray.wire.SessionItem
@@ -186,6 +187,10 @@ class LogicTest {
         val text = "Saved it to /tmp/shot.png for you.\n`/tmp/x.png`"
         assertEquals(listOf("/tmp/shot.png", "/tmp/x.png"), imagePaths(text))
         assertEquals("Saved it to for you.", hiding(listOf("/tmp/shot.png", "/tmp/x.png"), text))
+        assertEquals(
+            "Run `open /tmp/a.png -a Preview` to see.",
+            hiding(listOf("/tmp/a.png"), "Run `open /tmp/a.png -a Preview` to see /tmp/a.png."),
+        )
     }
 
     @Test
@@ -195,5 +200,11 @@ class LogicTest {
         val token = "a".repeat(64)
         assertEquals("wss://x.example" to token, parseConnectLine("wss://x.example $token"))
         assertNull(parseConnectLine("wss://x.example short"))
+    }
+
+    /** A relayed welcome's `identity` is matched against this hash of the token the phone holds (#1404). Pinned to serve.rs's value. */
+    @Test
+    fun serverIdIsTheServersOwnHash() {
+        assertEquals("4b3f3d0f73afd9cc", serverId("test-token"))
     }
 }

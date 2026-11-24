@@ -32,7 +32,7 @@ data class CloneProgress(val slug: String, val line: String = "")
  */
 object Picks {
     /** `DEFAULT_MODEL_FOR`. Empty is "let the harness decide". */
-    val defaultModel = mapOf("claude_code" to "opus", "codex" to "gpt-6.1-sol", "pi" to "", "fx" to "", "grok" to "grok-4.7")
+    val defaultModel = mapOf("claude_code" to "opus", "codex" to "gpt-6.2-sol", "pi" to "", "fx" to "", "grok" to "grok-4.7")
     const val DEFAULT_EFFORT = "high"
     val agentLabels = mapOf("claude_code" to "Claude Code", "codex" to "Codex", "pi" to "pi", "fx" to "fx", "grok" to "Grok")
     val effortLabels = mapOf("low" to "Low", "medium" to "Medium", "high" to "High", "xhigh" to "Extra High", "max" to "Max", "ultra" to "Ultra")

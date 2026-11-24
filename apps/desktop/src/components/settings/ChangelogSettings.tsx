@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { ArrowUpCircleIcon, SparklesIcon, WrenchIcon } from "@heroicons/react/16/solid";
-import { openUrl } from "@tauri-apps/plugin-opener";
 
+import { changelogInline } from "@/components/changelogText";
 import { Button } from "@/components/ui/button";
 import Spinner from "@/components/ui/spinner";
 import {
@@ -23,38 +23,6 @@ const CATEGORY = {
   fixed: { label: "Fixed", Icon: WrenchIcon, color: "text-accent-issue" },
 } as const;
 
-/// Code, bold and links — the only marks a changelog line uses. Not
-/// `Markdown`: a Streamdown per item is a few hundred of them on one tab.
-function inline(text: string): ReactNode[] {
-  return text.split(/(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)\s]+\))/g).map((part, i) => {
-    if (part.startsWith("`") && part.endsWith("`"))
-      return (
-        <code key={i} className="rounded bg-muted px-1 font-mono text-[0.9em]">
-          {part.slice(1, -1)}
-        </code>
-      );
-    if (part.startsWith("**") && part.endsWith("**"))
-      return (
-        <strong key={i} className="font-medium text-foreground">
-          {part.slice(2, -2)}
-        </strong>
-      );
-    const link = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(part);
-    if (link)
-      return (
-        <button
-          key={i}
-          type="button"
-          onClick={() => void openUrl(link[2])}
-          className="cursor-pointer text-foreground underline underline-offset-4"
-        >
-          {link[1]}
-        </button>
-      );
-    return part;
-  });
-}
-
 function Item({ item }: { item: ChangelogItem }) {
   return (
     <li className="flex gap-2.5">
@@ -64,8 +32,8 @@ function Item({ item }: { item: ChangelogItem }) {
         <span className="size-[5px] rounded-full bg-muted-foreground/60" />
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-        {item.title && <p className="font-medium text-foreground">{inline(item.title)}</p>}
-        {item.body.split("\n\n").map((p, i) => p && <p key={i}>{inline(p)}</p>)}
+        {item.title && <p className="font-medium text-foreground">{changelogInline(item.title)}</p>}
+        {item.body.split("\n\n").map((p, i) => p && <p key={i}>{changelogInline(p)}</p>)}
         {item.media.map((m) =>
           m.kind === "video" ? (
             <Video key={m.url} url={m.url} alt={m.alt} />

@@ -111,6 +111,77 @@ pub struct QueuedMessage {
     /// it back, as its logged event draws nothing either.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// Where it was typed, for the tag the flush hands the agent. Held here
+    /// only: no client draws it.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub origin: Option<Origin>,
+}
+
+/// The device a reader typed a prompt on, named to the agent so it can fit its
+/// reply to the screen. Each client sends its own with `send_msg`; Dray's own
+/// prompts, relays and the CLI send none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Device {
+    Mac,
+    Windows,
+    Linux,
+    Iphone,
+    Ipad,
+    Android,
+    Island,
+    /// A name from a newer client. Read as no device rather than failing the send.
+    #[serde(other)]
+    Other,
+}
+
+impl Device {
+    fn name(self) -> Option<&'static str> {
+        Some(match self {
+            Device::Mac => "Mac app",
+            Device::Windows => "Windows app",
+            Device::Linux => "Linux app",
+            Device::Iphone => "iPhone",
+            Device::Ipad => "iPad",
+            Device::Android => "Android",
+            Device::Island => "Island",
+            Device::Other => return None,
+        })
+    }
+}
+
+/// Where a reader typed a prompt and, in a bot's chat, their local time then,
+/// told to the agent in one tag after the prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Origin {
+    pub device: Device,
+    /// `14:32`, or `Nov 25 09:10` where the reader's date is not `today`.
+    pub time: Option<String>,
+}
+
+impl Origin {
+    /// `sent_at` is the client's own clock with its offset (RFC 3339), so the
+    /// time is the reader's wall clock, not the server's. `today` is the date
+    /// the harness has, the server's: the reader's is named only where it differs.
+    pub fn new(device: Device, sent_at: Option<&str>, today: chrono::NaiveDate) -> Origin {
+        let time = sent_at.and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok()).map(|at| {
+            match at.date_naive() == today {
+                true => at.format("%H:%M").to_string(),
+                false => at.format("%b %-d %H:%M").to_string(),
+            }
+        });
+        Origin { device, time }
+    }
+
+    /// The line the agent is given after the prompt, or `None` for an unknown device.
+    pub fn tag(&self) -> Option<String> {
+        let name = self.device.name()?;
+        Some(match &self.time {
+            Some(time) => format!("[sent from {name}, {time}]"),
+            None => format!("[sent from {name}]"),
+        })
+    }
 }
 
 impl QueuedMessage {
@@ -194,6 +265,7 @@ pub async fn model_spec(harness: Harness, model: &ModelId) -> Result<Option<Mode
         Harness::Pi => crate::harness::pi::models::find(model).await,
         Harness::Fx => crate::harness::fx::models::find(model).await,
         Harness::Grok => crate::harness::grok::models::find(model).await,
+        Harness::OpenCode => crate::harness::opencode::models::find(model).await,
         Harness::Codex => crate::harness::codex::models::find(model).await,
         _ => Some(find_model(model).with_context(|| format!("unknown model {model}"))?),
     })
@@ -305,8 +377,9 @@ async fn move_agent(
     crate::bots::drop_task_handover(id);
     // Only an agent that took part has a conversation here to go back to.
     let remember = crate::bots::agent_joined(&item).await;
-    // Codex and fx keep one thread id on the index, so they always start fresh.
-    let resumed = item.other_agents.contains(&to) && !matches!(to, Harness::Codex | Harness::Fx);
+    // Codex, fx and OpenCode keep one thread id on the index, so they always
+    // start fresh.
+    let resumed = item.other_agents.contains(&to) && !matches!(to, Harness::Codex | Harness::Fx | Harness::OpenCode);
     let payload = AgentEventPayload::AgentSwitched { from: item.harness, to, resumed };
     let event = AgentEvent::mint(id.clone(), to, seq, None, None, payload);
     // The marker before the index: a marker whose agent the index never took
@@ -1157,6 +1230,10 @@ impl SessionManager {
         // are the user's own, and a `user_message` with a sender is drawn
         // differently.
         from: Option<MessageSender>,
+        // The client's device, and in a bot's chat its time, named to the agent
+        // beside the prompt. Only the `send_msg` command sets it: a relay, a
+        // routine or Dray's own prompt was typed on nothing.
+        origin: Option<Origin>,
         // Set by the auto-continue timer alone: the schedule it fires for. It
         // is claimed under this session's lock below, the lock a user's send
         // holds while it drops the schedule, so whichever goes first wins and
@@ -1477,7 +1554,7 @@ impl SessionManager {
                 None => prompt.to_string(),
             };
             if let Err(error) = session
-                .send_msg(&sent, attachment_paths, issues, baseline, from, app)
+                .send_msg(&sent, attachment_paths, issues, baseline, from, origin, app)
                 .await
             {
                 // Nothing has this session yet — it is inserted below — so
@@ -1672,18 +1749,18 @@ impl SessionManager {
 
             // Before the send, so the index reflects intent even if writing to
             // the child fails — the prompt event is persisted ahead of stdin too.
-            touch_session_index_item(session_id, model.clone(), effort, permission_mode, fast).await?;
+            record_picks(session_id, model.clone(), effort, permission_mode, fast, app).await?;
 
             // Mid-turn only where the harness takes a live control while a
             // model call is open, verified against each CLI: Claude Code's and
             // pi's next call inside the turn runs on the new model, and grok
-            // takes the option. fx refuses ("Prompt already in progress"), so
+            // and OpenCode take the option. fx refuses ("Prompt already in progress"), so
             // its pick is deferred to the flush that opens the queued turn.
             // Codex steers a queued prompt into the running turn and ignores
             // its model, so nothing can move it — the composer locks those
             // controls mid-turn instead.
             let applied = !turn_in_flight
-                || matches!(s.harness, Harness::ClaudeCode | Harness::Grok | Harness::Pi);
+                || matches!(s.harness, Harness::ClaudeCode | Harness::Grok | Harness::Pi | Harness::OpenCode);
             if applied {
                 apply_live_controls(s, session_id, &model, model_spec.as_ref(), effort, permission_mode, fast, app)
                     .await?;
@@ -1715,7 +1792,7 @@ impl SessionManager {
                 // nothing for Dray's queue to do here and no boundary for it to
                 // race for — whether or not a tool happens to be running now.
                 if matches!(s.stdin, Transport::Pi(_) | Transport::Grok(_)) {
-                    s.steer(prompt, attachment_paths, issues, from, app).await?;
+                    s.steer(prompt, attachment_paths, issues, from, origin, app).await?;
                     return Ok(SendOutcome {
                         issues: linked,
                         ..Default::default()
@@ -1745,7 +1822,7 @@ impl SessionManager {
                         });
                     }
                     if let Some(queued) = s
-                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone(), app)
+                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone(), origin.clone(), app)
                         .await
                     {
                         return Ok(SendOutcome {
@@ -1765,7 +1842,7 @@ impl SessionManager {
                     }
                 } else {
                     if tool_in_flight {
-                        s.queue_and_flush(prompt, attachment_paths, issues, from, app)
+                        s.queue_and_flush(prompt, attachment_paths, issues, from, origin, app)
                             .await;
                         return Ok(SendOutcome {
                             issues: linked,
@@ -1778,7 +1855,7 @@ impl SessionManager {
                     // between has already run its flush. Queued then, the
                     // prompt waited on a boundary that never came.
                     if let Some(queued) = s
-                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone(), app)
+                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone(), origin.clone(), app)
                         .await
                     {
                         return Ok(SendOutcome {
@@ -1794,7 +1871,7 @@ impl SessionManager {
             // but alive, so the narrower the gap the less of the user's own
             // editing lands on the turn's side of the diff.
             let baseline = git::snapshot_tree(&session_cwd).await;
-            s.send_msg(prompt, attachment_paths, issues, baseline, from, app)
+            s.send_msg(prompt, attachment_paths, issues, baseline, from, origin, app)
                 .await?;
             return Ok(SendOutcome {
                 issues: linked,
@@ -1802,7 +1879,7 @@ impl SessionManager {
             });
         }
 
-        touch_session_index_item(session_id, model, effort, permission_mode, fast).await?;
+        record_picks(session_id, model, effort, permission_mode, fast, app).await?;
 
         // A fork that hasn't spawned yet. The app's half happened when the user
         // asked for it — log copied, entry written — and this is the spawn that
@@ -1909,7 +1986,7 @@ impl SessionManager {
         }
 
         if let Err(error) = session
-            .send_msg(prompt, attachment_paths, issues, baseline, from, app)
+            .send_msg(prompt, attachment_paths, issues, baseline, from, origin, app)
             .await
         {
             // Same reason as the creation path above: the insert is below, so
@@ -2018,8 +2095,18 @@ impl SessionManager {
         // `thread/fork` and `session recover` both name the parent's own id, so
         // a Codex or fx parent that never got one has nothing to fork — refused
         // before a row exists.
-        if matches!(parent.harness, Harness::Codex | Harness::Fx) && parent.thread_id.is_none() {
+        if matches!(parent.harness, Harness::Codex | Harness::Fx | Harness::OpenCode) && parent.thread_id.is_none() {
             bail!("this {} session has no conversation to fork yet", parent.harness.label());
+        }
+
+        // OpenCode files a session under the folder it was made in, and a fork
+        // or resume naming another `cwd` still runs in that one — measured, so a
+        // fork into a worktree would edit the parent's checkout.
+        if worktree && parent.harness == Harness::OpenCode {
+            bail!(
+                "OpenCode keeps a session in the folder it started in, so a fork can't move to a new \
+                 worktree. Fork it in place instead."
+            );
         }
 
         // Resolved against the project rather than the parent's own name, so a
@@ -2074,7 +2161,7 @@ impl SessionManager {
         // first send: a parent deleted in between would otherwise leave a fork
         // that fails every send. Safe while `fork_from` stands, since that is
         // what makes the first spawn fork this thread instead of resuming it.
-        if parent.harness == Harness::Codex {
+        if matches!(parent.harness, Harness::Codex | Harness::OpenCode) {
             item.thread_id = parent.thread_id.clone();
         }
         append_session_index_item(item.clone()).await?;
@@ -2119,7 +2206,9 @@ impl SessionManager {
         let spec = model_spec(s.harness, model).await?;
         match &s.stdin {
             Transport::Fx(fx) => fx.defer_controls(DeferredControls { model: spec, effort, mode, fast }),
-            _ if s.harness == Harness::ClaudeCode => {
+            // OpenCode queues like fx but takes a config option mid-prompt, so
+            // the pick goes out now rather than at the flush.
+            _ if matches!(s.harness, Harness::ClaudeCode | Harness::OpenCode) => {
                 apply_live_controls(s, session_id, model, spec.as_ref(), effort, mode, fast, app).await?
             }
             // pi and grok steer a prompt into the running turn rather than
@@ -2380,7 +2469,7 @@ impl SessionManager {
             Some(session) => session.kill_tree().await,
             None => Ok(()),
         };
-        #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+        #[cfg(feature = "cef")]
         if !crate::is_server() {
             crate::cef::close_session(session_id);
         }
@@ -2395,7 +2484,7 @@ impl SessionManager {
         crate::share::close_session(session_id);
         // Settled is done with, so the profile goes too: an unsettled session's
         // browser starts signed out. Both, whichever browser made one.
-        #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+        #[cfg(feature = "cef")]
         crate::cef::automation::delete_profile(session_id);
         #[cfg(any(feature = "serve", feature = "desktop"))]
         crate::headless::automation::delete_profile(session_id);
@@ -2453,7 +2542,7 @@ impl SessionManager {
         }
         // Files on this disk whichever browser made them, so both are swept
         // whether or not the app that filmed one is open.
-        #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+        #[cfg(feature = "cef")]
         crate::cef::automation::delete_recordings(session_id);
         #[cfg(any(feature = "serve", feature = "desktop"))]
         crate::headless::automation::delete_recordings(session_id);
@@ -2530,6 +2619,9 @@ pub enum Transport {
     /// chose — grok honours `_meta.sessionId`, so there is no minted id to
     /// carry. See [`GrokSession`](crate::harness::grok::GrokSession).
     Grok(crate::harness::grok::GrokSession),
+    /// OpenCode's connection: ACP, addressed to the session OpenCode minted.
+    /// See [`OpenCodeSession`](crate::harness::opencode::OpenCodeSession).
+    OpenCode(crate::harness::opencode::OpenCodeSession),
 }
 
 impl Transport {
@@ -2549,8 +2641,11 @@ impl Transport {
     /// [`flush_one_per_turn`]. Every other transport has a tool boundary to hand
     /// a batch over at, seconds away, which is why this is a question about the
     /// transport rather than a flag on the session.
+    ///
+    /// OpenCode is here for fx's reason: a second `session/prompt` is refused,
+    /// and it has no interject.
     pub fn one_prompt_per_turn(&self) -> bool {
-        matches!(self, Transport::Fx(_))
+        matches!(self, Transport::Fx(_) | Transport::OpenCode(_))
     }
 
     /// Opens a turn with one prompt, for the transports that take it as a
@@ -2567,6 +2662,9 @@ impl Transport {
             Transport::Grok(session) => {
                 Some(crate::harness::grok::start_turn(session, text, images).await)
             }
+            Transport::OpenCode(session) => {
+                Some(crate::harness::opencode::start_turn(session, text, images).await)
+            }
             _ => None,
         }
     }
@@ -2580,7 +2678,7 @@ impl Transport {
     pub fn lines(&self) -> Result<&Arc<Mutex<ChildStdin>>> {
         match self {
             Transport::Lines(stdin) => Ok(stdin),
-            Transport::Rpc(_) | Transport::Pi(_) | Transport::Fx(_) | Transport::Grok(_) => {
+            Transport::Rpc(_) | Transport::Pi(_) | Transport::Fx(_) | Transport::Grok(_) | Transport::OpenCode(_) => {
                 bail!("this control is not wired for this harness")
             }
         }
@@ -2767,6 +2865,26 @@ impl Session {
                 )
                 .await
             }
+            Harness::OpenCode => {
+                // No `-w`, so the tree is made before this. A fork's first send
+                // carries `fork_from`, and the spawn makes the copy.
+                if worktree_name.is_some() {
+                    bail!("OpenCode cannot create a worktree — it has to be made first");
+                }
+
+                crate::harness::opencode::init(
+                    session_id,
+                    model,
+                    effort,
+                    permission_mode,
+                    cwd,
+                    session_cwd,
+                    is_new_session,
+                    fork_from,
+                    app,
+                )
+                .await
+            }
             // A session some newer build wrote into the shared index. Its
             // transcript still reads and its row still draws — that is what the
             // tolerant read bought — but there is no CLI here to carry it on,
@@ -2792,6 +2910,7 @@ impl Session {
         issues: &[IssueRef],
         baseline: Option<String>,
         from: Option<MessageSender>,
+        origin: Option<Origin>,
         app: &Sink,
     ) -> Result<()> {
         let (_, runs) = deliver_prompt(
@@ -2805,6 +2924,7 @@ impl Session {
             crate::harness::pi::Delivery::WhenIdle,
             true,
             from,
+            origin,
             &self.seq,
             &self.stdin,
             app,
@@ -2861,6 +2981,7 @@ impl Session {
         attachment_paths: &[String],
         issues: &[IssueRef],
         from: Option<MessageSender>,
+        origin: Option<Origin>,
         app: &Sink,
     ) -> QueuedMessage {
         let message = QueuedMessage {
@@ -2873,6 +2994,7 @@ impl Session {
             // Peeked, not taken: the flush that logs it takes the mark, and
             // logs it as a kickoff that draws nothing.
             hidden: crate::bots::is_dray_prompt(&self.id, prompt),
+            origin,
         };
         self.queued.lock().await.push(message.clone());
         publish_queue(&self.id, &self.queued, app).await;
@@ -2903,13 +3025,14 @@ impl Session {
         attachment_paths: &[String],
         issues: &[IssueRef],
         from: Option<MessageSender>,
+        origin: Option<Origin>,
         app: &Sink,
     ) -> Option<QueuedMessage> {
         let _turn = self.status.lock().await;
         if !_turn.turn_in_flight() {
             return None;
         }
-        Some(self.queue_msg(prompt, attachment_paths, issues, from, app).await)
+        Some(self.queue_msg(prompt, attachment_paths, issues, from, origin, app).await)
     }
 
     /// Takes back the newest held prompt, newest-first because that is the one
@@ -2956,6 +3079,7 @@ impl Session {
         attachment_paths: &[String],
         issues: &[IssueRef],
         from: Option<MessageSender>,
+        origin: Option<Origin>,
         app: &Sink,
     ) -> Result<()> {
         let sent = deliver_prompt(
@@ -2974,6 +3098,7 @@ impl Session {
             crate::harness::pi::Delivery::Steer,
             true,
             from,
+            origin,
             &self.seq,
             &self.stdin,
             app,
@@ -3005,9 +3130,10 @@ impl Session {
         attachment_paths: &[String],
         issues: &[IssueRef],
         from: Option<MessageSender>,
+        origin: Option<Origin>,
         app: &Sink,
     ) {
-        self.queue_msg(prompt, attachment_paths, issues, from, app).await;
+        self.queue_msg(prompt, attachment_paths, issues, from, origin, app).await;
         flush_queued(
             &self.id,
             self.harness,
@@ -3059,6 +3185,14 @@ impl Session {
 
         if let Transport::Pi(client) = &self.stdin {
             crate::harness::pi::set_model(client, model).await?;
+            self.model = model.id.clone();
+            return Ok(());
+        }
+
+        // OpenCode drops effort on a model change and this sends it again, so
+        // the effort arm after this compares against what the child is on.
+        if let Transport::OpenCode(session) = &self.stdin {
+            self.effort = crate::harness::opencode::set_model(session, model, self.effort).await?;
             self.model = model.id.clone();
             return Ok(());
         }
@@ -3148,6 +3282,15 @@ impl Session {
             return Ok(());
         }
 
+        // OpenCode's `effort` option. `None` is OpenCode's own default.
+        if let Transport::OpenCode(session) = &self.stdin {
+            if let Some(effort) = effort {
+                crate::harness::opencode::set_effort(session, effort).await?;
+            }
+            self.effort = effort;
+            return Ok(());
+        }
+
         // pi's `set_thinking_level`. `None` is pi's own default, which nothing
         // here can spell, so it is recorded and left to the next respawn.
         if let Transport::Pi(client) = &self.stdin {
@@ -3206,6 +3349,11 @@ impl Session {
         // it, which is settle's problem rather than Stop's.
         if let Transport::Grok(session) = &self.stdin {
             return crate::harness::grok::cancel(session);
+        }
+
+        // The same notification; OpenCode aborts the running tool itself.
+        if let Transport::OpenCode(session) = &self.stdin {
+            return crate::harness::opencode::cancel(session);
         }
 
         // pi never reaches here: its Stop goes through
@@ -3343,6 +3491,14 @@ impl Session {
             // a `selected` wrapper — so the button's payload goes back as it was
             // built and nothing here composes one.
             (Transport::Grok(session), Reply::Rpc(rpc_id)) => {
+                let outcome = chosen
+                    .decision
+                    .clone()
+                    .context("this option carries no outcome to send")?;
+                session.client.respond(*rpc_id, outcome)?;
+            }
+            // ACP's outcome envelope again, built by the button.
+            (Transport::OpenCode(session), Reply::Rpc(rpc_id)) => {
                 let outcome = chosen
                     .decision
                     .clone()
@@ -3489,6 +3645,13 @@ impl Session {
         // fx holds a `session.lock` per session, released on a clean exit.
         if let Transport::Fx(session) = &self.stdin {
             crate::harness::fx::shutdown(&mut self.child, session).await;
+            return Ok(());
+        }
+
+        // OpenCode's language and MCP servers are its children, and would
+        // outlive a kill of the parent alone.
+        if let Transport::OpenCode(_) = &self.stdin {
+            crate::harness::opencode::kill_tree(&mut self.child).await;
             return Ok(());
         }
 
@@ -3669,6 +3832,7 @@ async fn deliver_prompt(
     // per turn. No other transport is written to answer it, and none passes it.
     send: bool,
     from: Option<MessageSender>,
+    origin: Option<Origin>,
     seq: &Arc<AtomicU64>,
     transport: &Transport,
     app: &Sink,
@@ -3695,6 +3859,17 @@ async fn deliver_prompt(
     // joins whichever turn takes it, and that turn is the one that answers.
     handover.ask = crate::bots::talk::delivered(session_id, from.as_ref());
     let given = lead_in_around(handover.text.as_deref(), &text, slash && fx);
+    // After the prompt and never logged, so no transcript draws it and a resend
+    // of the logged text cannot carry it twice. Not on a slash command, whose
+    // arguments it would join, nor on a prompt nobody typed.
+    let tag = origin
+        .filter(|_| from.is_none() && !slash && !crate::bots::is_dray_prompt(session_id, prompt))
+        .and_then(|origin| origin.tag());
+    let given = match &tag {
+        Some(tag) if given.is_empty() => tag.clone(),
+        Some(tag) => format!("{given}\n\n{tag}"),
+        None => given,
+    };
 
     // Ahead of the event for a second reason, and this one is about failure
     // rather than content. Codex resolves a leading `/skill` by asking its own
@@ -3710,6 +3885,9 @@ async fn deliver_prompt(
             if let (Some(hidden), Some(items)) = (&handover.text, input.as_array_mut()) {
                 let at = usize::from(items.first().is_some_and(|i| i["type"] != "text"));
                 items.insert(at, json!({"type": "text", "text": hidden}));
+            }
+            if let (Some(tag), Some(items)) = (&tag, input.as_array_mut()) {
+                items.push(json!({"type": "text", "text": tag}));
             }
             Some((thread, input))
         }
@@ -4345,6 +4523,12 @@ async fn apply_live_controls(
     // the two cannot disagree: a pick neither respawns for nor applies would
     // be recorded in the index and never reach the child.
     let caps = s.harness.caps();
+    // fx carries the old model's level across a switch and lists it among the
+    // new one's, so the ladder it teaches leaves that level out until fx is
+    // seen taking it. Re-sent, fx either takes it, which teaches the ladder, or
+    // refuses it, which is reported. Left alone, the next send judged the
+    // level unsupported and dropped it from the index (#1492).
+    let reapply_effort = matches!(s.stdin, Transport::Fx(_)) && s.model != *model && model_spec.is_some();
 
     if caps.applies_model_in_place && s.model != *model {
         // Claude Code names a default, so the spec is there by
@@ -4364,12 +4548,13 @@ async fn apply_live_controls(
                     // adopted what fx answered, and every field written back
                     // is the session's own, since this returns before the
                     // effort, stance and fast arms run.
-                    touch_session_index_item(
+                    record_picks(
                         session_id,
                         s.model.clone(),
                         s.effort,
                         s.permission_mode,
                         s.fast,
+                        app,
                     )
                     .await?;
                     return Err(err);
@@ -4379,7 +4564,7 @@ async fn apply_live_controls(
             None => bail!("no model to switch the session to"),
         }
     }
-    if caps.applies_effort_in_place && s.effort != effort {
+    if caps.applies_effort_in_place && (s.effort != effort || (reapply_effort && effort.is_some())) {
         // A declined effort must not take the prompt down with it. fx
         // refuses one on a model that does no reasoning, and losing the
         // message over a level is a far worse answer than running the
@@ -4401,12 +4586,13 @@ async fn apply_live_controls(
             // the one that was asked for. Every other field is still
             // the pick: fast mode is applied below this block, so
             // recording the child's current value here would drop it.
-            touch_session_index_item(
+            record_picks(
                 session_id,
                 model.clone(),
                 s.effort,
                 permission_mode,
                 fast,
+                app,
             )
             .await?;
         }
@@ -4423,9 +4609,25 @@ async fn apply_live_controls(
                 return Err(err);
             }
             report_session_error(session_id, s.harness, &format!("{err:#}"), &s.seq, app).await;
-            touch_session_index_item(session_id, s.model.clone(), s.effort, s.permission_mode, s.fast)
-                .await?;
+            record_picks(session_id, s.model.clone(), s.effort, s.permission_mode, s.fast, app).await?;
         }
+    }
+    Ok(())
+}
+
+/// Records a send's picks on the index and tells every client where they
+/// changed: a phone's selector shows the index's model, and without this a
+/// pick sent from it fell back to the model the session had left.
+async fn record_picks(
+    session_id: &str,
+    model: ModelId,
+    effort: Option<Effort>,
+    permission_mode: ApprovalPolicy,
+    fast: bool,
+    app: &Sink,
+) -> Result<()> {
+    if let Some(item) = touch_session_index_item(session_id, model, effort, permission_mode, fast).await? {
+        app.emit(crate::orchestration::SESSION_CHANGED, &item).ok();
     }
     Ok(())
 }
@@ -4635,6 +4837,7 @@ async fn flush_one_per_turn(
                 crate::harness::pi::Delivery::WhenIdle,
                 false,
                 message.from,
+                message.origin,
                 seq,
                 transport,
                 app,
@@ -4712,6 +4915,7 @@ async fn deliver_batch(
             crate::harness::pi::Delivery::WhenIdle,
             true,
             message.from,
+            message.origin,
             seq,
             transport,
             app,
@@ -5003,6 +5207,7 @@ mod tests {
             from: None,
             issues: vec![],
             hidden,
+            origin: None,
         };
         assert!(held(false).typed());
         assert!(!held(true).typed());
@@ -5086,6 +5291,74 @@ mod tests {
         slot
     }
 
+    /// The device tag reaches the agent after the prompt and never the logged
+    /// event, and is left off a relay, a slash command and an unknown device.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn the_device_tag_reaches_the_agent_and_not_the_transcript() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let mut child = tokio::process::Command::new("cat")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let transport = Transport::Lines(Arc::new(Mutex::new(child.stdin.take().unwrap())));
+        let mut echoed = BufReader::new(child.stdout.take().unwrap()).lines();
+        let logged = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let sink = {
+            let logged = logged.clone();
+            Sink::new(move |_, event| logged.lock().unwrap().extend(event["payload"]["text"].as_str().map(String::from)))
+        };
+        let id = format!("device-tag-{}", Uuid::now_v7());
+        let seq = Arc::new(AtomicU64::new(0));
+        let relay = MessageSender { session_id: "t".into(), title: "T".into(), ..Default::default() };
+        let on = |device| Some(Origin { device, time: None });
+        let timed = Some(Origin { device: Device::Iphone, time: Some("14:32".into()) });
+        let sends = [
+            ("hi", None, on(Device::Iphone), "hi\n\n[sent from iPhone]"),
+            ("hi", None, on(Device::Mac), "hi\n\n[sent from Mac app]"),
+            ("hi", None, timed, "hi\n\n[sent from iPhone, 14:32]"),
+            ("done", Some(relay), on(Device::Android), "done"),
+            ("/compact", None, on(Device::Island), "/compact"),
+            ("hi", None, on(Device::Other), "hi"),
+            ("hi", None, None, "hi"),
+        ];
+        for (prompt, from, origin, given) in sends {
+            deliver_prompt(
+                &id, Harness::ClaudeCode, prompt, &[], &[], None, false,
+                crate::harness::pi::Delivery::WhenIdle, true, from, origin, &seq, &transport, &sink,
+            )
+            .await
+            .unwrap();
+            let line: serde_json::Value = serde_json::from_str(&echoed.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(line["message"]["content"], given);
+            assert_eq!(logged.lock().unwrap().last().unwrap(), prompt, "the transcript keeps the text as typed");
+        }
+        let log = crate::store::get_home_app_dir().await.unwrap().join("sessions").join(format!("{id}.jsonl"));
+        assert!(!std::fs::read_to_string(&log).unwrap().contains("sent from"));
+        let _ = std::fs::remove_file(log);
+    }
+
+    #[test]
+    fn a_device_from_a_newer_client_is_no_device() {
+        assert_eq!(serde_json::from_value::<Device>(json!("iphone")).unwrap(), Device::Iphone);
+        assert_eq!(Origin { device: Device::Ipad, time: None }.tag().unwrap(), "[sent from iPad]");
+        assert_eq!(serde_json::from_value::<Device>(json!("vision_pro")).unwrap(), Device::Other);
+        assert_eq!(Origin { device: Device::Other, time: None }.tag(), None);
+    }
+
+    /// The reader's own wall clock, and their date only where it is not the
+    /// harness's.
+    #[test]
+    fn a_bot_chat_tag_carries_the_readers_time() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 24).unwrap();
+        let at = |sent| Origin::new(Device::Mac, Some(sent), today).tag().unwrap();
+        assert_eq!(at("2026-11-24T14:32:10+05:45"), "[sent from Mac app, 14:32]");
+        assert_eq!(at("2026-11-25T09:10:00-08:00"), "[sent from Mac app, Nov 25 09:10]");
+        assert_eq!(Origin::new(Device::Mac, Some("soon"), today).tag().unwrap(), "[sent from Mac app]");
+    }
+
     /// A task's report waits in the bot's queue unseen: no client draws it,
     /// and Esc takes back the reader's own prompt from under it.
     #[tokio::test]
@@ -5101,8 +5374,8 @@ mod tests {
         let guard = slot.lock().await;
         let session = guard.as_ref().unwrap();
         let report = MessageSender { session_id: "t".into(), title: "T".into(), machine: None, bot_id: None, routine: None, ..Default::default() };
-        session.queue_msg("mine", &[], &[], None, &sink).await;
-        session.queue_msg("done", &[], &[], Some(report), &sink).await;
+        session.queue_msg("mine", &[], &[], None, None, &sink).await;
+        session.queue_msg("done", &[], &[], Some(report), None, &sink).await;
 
         let last = shown.lock().unwrap().last().unwrap().clone();
         assert_eq!(last.as_array().unwrap().len(), 1);
@@ -5132,12 +5405,12 @@ mod tests {
 
         let stale = session.status.lock().await.turn_in_flight();
         assert!(stale, "the send's first read sees the turn running");
-        assert!(session.queue_if_in_flight("early", &[], &[], None, &sink).await.is_some());
+        assert!(session.queue_if_in_flight("early", &[], &[], None, None, &sink).await.is_some());
         assert_eq!(session.queued.lock().await.len(), 1, "held for the turn-end flush");
         session.queued.lock().await.clear();
 
         session.status.lock().await.on_event(&turn_completed());
-        assert!(session.queue_if_in_flight("late", &[], &[], None, &sink).await.is_none());
+        assert!(session.queue_if_in_flight("late", &[], &[], None, None, &sink).await.is_none());
         assert!(session.queued.lock().await.is_empty(), "nothing left for a flush that already ran");
     }
 
@@ -5188,6 +5461,7 @@ mod tests {
             from: None,
             issues: vec![],
             hidden: false,
+            origin: None,
         });
 
         manager.reap_idle(Instant::now()).await;

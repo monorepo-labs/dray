@@ -18,6 +18,7 @@ import {
   namedParts,
   isRoutineError,
   skillBrief,
+  runSettings,
   subagentBrief,
   verbName,
   toolLabel,
@@ -280,9 +281,7 @@ export default function ToolCall({
   // sentence the row already is — "Delegating gpt 5.6 luna high Reply with…".
   // An id punctuated for a machine, or a `·` between two words, both frame this
   // as a field rather than as part of the line.
-  const settings = [delegated?.model?.replace(/-/g, " "), delegated?.effort]
-    .filter(Boolean)
-    .join(" ");
+  const settings = delegated ? runSettings(input) : "";
 
   const omit = sides
     ? EDIT_FIELDS

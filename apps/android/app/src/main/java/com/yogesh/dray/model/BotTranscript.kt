@@ -2,6 +2,7 @@ package com.yogesh.dray.model
 
 import com.yogesh.dray.wire.AgentEvent
 import com.yogesh.dray.wire.ImageRef
+import com.yogesh.dray.wire.IssueCard
 import com.yogesh.dray.wire.Lesson
 import com.yogesh.dray.wire.MergeCard
 import com.yogesh.dray.wire.Payload
@@ -33,6 +34,8 @@ sealed interface BotItem {
     /** A failed turn's sentence, or an error the harness raised. */
     data class Notice(override val id: String, val text: String, override val ts: String?) : BotItem
     data class Card(override val id: String, val card: MergeCard, override val ts: String?) : BotItem
+    /** `started`: the card's issues the reader already handed to the agent. */
+    data class Issues(override val id: String, val sessionId: String, val card: IssueCard, val started: Set<Int>, override val ts: String?) : BotItem
     /** "Started a new task", from the server's `task_started`, or in an older log a `dray session new` and the id it printed. */
     data class Task(override val id: String, val sessionId: String, val title: String?, override val ts: String?) : BotItem
     /** "Messaged", from a `dray session send`; consecutive ones fold into one row. */
@@ -65,10 +68,12 @@ fun botItems(events: List<AgentEvent>): List<BotItem> {
     val mine = mutableMapOf<String, String>()
     // Tasks the server logged; a bot's call is read only for an id none names, as a log from before that event holds.
     val announced = mutableSetOf<String>()
+    val started = mutableMapOf<String, MutableSet<Int>>()
     for (e in main) when (val p = e.payload) {
         is Payload.LearnedUndone -> undone += "${p.commit}\u0000${p.path}"
         is Payload.Reaction -> if (p.byUser) mine[p.messageId] = p.emoji else reactions[p.messageId] = p.emoji
         is Payload.TaskStarted -> announced += p.taskId.lowercase()
+        is Payload.IssueApproved -> started.getOrPut(p.cardId) { mutableSetOf() } += p.number
         else -> {}
     }
 
@@ -91,6 +96,7 @@ fun botItems(events: List<AgentEvent>): List<BotItem> {
             is Payload.AssistantText -> if (p.text.isNotBlank() && !review) items += BotItem.Assistant(e.id, p.text, e.ts, mine[e.id], e.sessionId)
             is Payload.Error -> items += BotItem.Notice(e.id, p.message, e.ts)
             is Payload.MergeCardPosted -> items += BotItem.Card(e.id, p.card, e.ts)
+            is Payload.IssueCardPosted -> items += BotItem.Issues(e.id, e.sessionId, p.card, started[e.id].orEmpty(), e.ts)
             is Payload.TaskStarted -> items += BotItem.Task(e.id, p.taskId.lowercase(), p.title, e.ts)
             is Payload.Learned -> for (f in p.files) {
                 items += BotItem.Learned("${e.id}:${f.path}", f, p.commit, "${p.commit}\u0000${f.path}" in undone, e.ts)

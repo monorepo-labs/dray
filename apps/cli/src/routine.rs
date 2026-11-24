@@ -62,6 +62,18 @@ pub struct RoutineArg {
     routine: String,
 }
 
+/// Why `--machine` cannot carry `command`, or `None` where it can.
+pub fn machine_refusal(command: &RoutineCommand) -> Option<String> {
+    match command {
+        RoutineCommand::Add(add) if add.bot.is_none() => Some(
+            "routine add with --machine needs --bot: without it the routine goes to the calling bot, which is on \
+             this machine"
+                .into(),
+        ),
+        _ => None,
+    }
+}
+
 pub fn run(command: RoutineCommand) -> Result<(), String> {
     let from_session_id = parent_session_id();
     let one = |routine: String| RoutineRef { routine, from_session_id: from_session_id.clone() };

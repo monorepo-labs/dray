@@ -116,8 +116,8 @@ fn resolve(id: &ModelId, discovered: &[Model]) -> Option<Model> {
 /// table's default is a model this build knows and the *installed* Codex may
 /// not, and one it does not list is a create that fails at the spawn for a
 /// choice nobody made. So it is taken only where Codex answers for it, and the
-/// table's own top level stands in otherwise — GPT-6.1 Sol is the default, and a
-/// Codex not yet updated to list it lands on 6 Astra rather than on whatever
+/// table's own top level stands in otherwise — GPT-6.2 Sol is the default, and a
+/// Codex not yet updated to list it lands on 6.1 Sol rather than on whatever
 /// [`fold`] draws first, which may be a model this build has never heard of. A probe that cannot run falls back to the table
 /// through [`list`], so the old answer is still the answer where there is
 /// nothing better.
@@ -436,6 +436,24 @@ mod tests {
         serde_json::from_str(include_str!("fixtures/model_list_0164.json")).expect("fixture json")
     }
 
+    /// Off `codex-cli 0.172.0` on a free ChatGPT plan: Luna and Terra only, no
+    /// fast tier, and 6 Luna marked `isDefault`.
+    fn captured_0172_free() -> Value {
+        serde_json::from_str(include_str!("fixtures/model_list_0172_free.json"))
+            .expect("fixture json")
+    }
+
+    /// 0.172's bundled catalog in its own order (`models-manager/models.json`
+    /// at `rust-v0.172.0`). Ids only: no paid account was at hand to capture
+    /// the real answer, and the order is what the fold reads.
+    fn catalog_0172() -> Value {
+        let ids = [
+            "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra",
+            "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+        ];
+        json!({"data": ids.iter().map(|id| json!({"id": id})).collect::<Vec<_>>()})
+    }
+
     fn cycled(models: &[Model]) -> Vec<&str> {
         models
             .iter()
@@ -463,14 +481,16 @@ mod tests {
         let models = read_rows(&captured());
 
         assert!(!models.iter().any(|m| m.arg == "gpt-6-sol"));
-        assert_eq!(cycled(&models), ["6 Astra"]);
+        assert!(cycled(&models).is_empty());
     }
 
-    /// The default is GPT-6.1 Sol only where Codex lists it; an older one lands
+    /// The default is GPT-6.2 Sol only where Codex lists it; an older one lands
     /// on the table's next top-level row, never on a model it cannot run.
     #[test]
     fn the_default_is_a_model_the_installed_codex_lists() {
+        assert_eq!(pick_default(&read_rows(&catalog_0172())).as_str(), "gpt-6.2-sol");
         assert_eq!(pick_default(&read_rows(&captured_0164())).as_str(), "gpt-6.1-sol");
+        assert_eq!(pick_default(&read_rows(&captured_0172_free())).as_str(), "gpt-6-luna");
         assert_eq!(pick_default(&read_rows(&captured_gpt6())).as_str(), "gpt6_astra");
         assert_eq!(pick_default(&read_rows(&captured())).as_str(), "gpt6_astra");
     }
@@ -523,14 +543,14 @@ mod tests {
     /// everything else starts off — including a generation the hand-written
     /// list had retired outright.
     #[test]
-    fn the_newest_sol_astra_and_6_sol_are_the_cycle() {
-        let models = read_rows(&captured_0164());
+    fn the_6_2_pair_and_6_1_sol_are_the_cycle() {
+        let models = read_rows(&catalog_0172());
 
-        assert_eq!(cycled(&models), ["6.1 Sol", "6 Astra", "6 Sol"]);
+        assert_eq!(cycled(&models), ["6.2 Sol", "6.2 Astra", "6.1 Sol"]);
         assert!(models.iter().filter(|m| m.secondary).count() >= 2);
 
-        // A Codex from before 6.1 Sol draws the two the table still names.
-        assert_eq!(cycled(&read_rows(&captured_gpt6())), ["6 Astra", "6 Sol"]);
+        // A Codex from before 6.2 draws the one the table still names on top.
+        assert_eq!(cycled(&read_rows(&captured_0164())), ["6.1 Sol"]);
     }
 
     /// The wire's order is Codex's own recommendation, not the tier, so the
@@ -551,7 +571,7 @@ mod tests {
         let labels: Vec<&str> = models.iter().map(|m| m.label.as_str()).collect();
 
         assert_eq!(labels, ["gpt-7-nova", "6 Astra", "6 Sol", "5.6 Sol", "GPT-5.5"]);
-        assert_eq!(cycled(&models), ["gpt-7-nova", "6 Astra", "6 Sol"]);
+        assert_eq!(cycled(&models), ["gpt-7-nova"]);
     }
 
     /// `ultra` is per model and Codex says which: Sol reports it, Luna stops at

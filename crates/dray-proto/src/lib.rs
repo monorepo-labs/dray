@@ -51,8 +51,8 @@ use std::path::PathBuf;
 /// routine verbs. v24 added `ask` on a bot send: an older app delivers the
 /// message and passes no answer back, so the asking bot waits on nothing.
 /// v25 added `detach_session`, which an older app reads as a broken CLI, and
-/// v26 `attach_session`.
-pub const PROTOCOL_VERSION: u32 = 26;
+/// v26 `attach_session`, v27 `issue_card`.
+pub const PROTOCOL_VERSION: u32 = 27;
 
 /// Remote MCP (#863), held out of release builds until Dray accounts (#874)
 /// land (#900). Gates `/mcp`, the assistant commands and the CLI's `assistant`
@@ -148,6 +148,7 @@ impl Request {
             | Request::RunRoutine(_) => 23,
             Request::DetachSession(_) => 25,
             Request::AttachSession(_) => 26,
+            Request::IssueCard(_) => 27,
         }
     }
 }
@@ -206,6 +207,7 @@ pub enum Request {
     DetachSession(SessionRef),
     /// Hands a task to a bot, the sidebar's Attach to bot: detach's reverse.
     AttachSession(AttachSession),
+    IssueCard(IssueCard),
 }
 
 /// `dray session attach`: the task, and the bot by id or name.
@@ -325,14 +327,29 @@ pub struct SetNeed {
     pub need: String,
 }
 
+/// A card listing a repository's GitHub issues, posted into `session_id`'s
+/// chat for the reader to open each one and approve it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCard {
+    /// The chat the card goes in: the calling session.
+    pub session_id: String,
+    /// `owner/name`.
+    pub repo: String,
+    pub numbers: Vec<u64>,
+    /// A short heading over the rows, like "Ready for review".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
 /// A bot's emoji on the user's newest message in its chat, in place of a reply.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct React {
     /// The bot's chat: the calling session.
     pub session_id: String,
-    /// 👀 ✅ 🎉 👍 ❤️ 😂 😢, or the word for one: seen, done, celebrate, like,
-    /// love, laugh, sad.
+    /// 👀 ✅ 🎉 👍 👎 ❤️ 😂 😢, or the word for one: seen, done, celebrate,
+    /// like, dislike, love, laugh, sad.
     pub emoji: String,
 }
 
@@ -1076,6 +1093,8 @@ pub enum Response {
     MergeCard { number: u64, url: String, title: String },
     /// The emoji a reaction put on the user's message.
     Reacted { emoji: String },
+    /// The issues an issue card lists, as `#number title`, in its order.
+    IssueCard { issues: Vec<String> },
     /// The model and effort a session runs its next turn on, by label.
     /// `changed` is false for a read, or a pick it already had.
     Model { session: SessionSummary, model: String, effort: Option<String>, changed: bool },
@@ -1252,7 +1271,7 @@ pub struct Agent {
     pub login: &'static str,
 }
 
-pub const AGENTS: [Agent; 5] = [
+pub const AGENTS: [Agent; 6] = [
     Agent {
         id: "claude_code",
         name: "Claude Code",
@@ -1287,6 +1306,13 @@ pub const AGENTS: [Agent; 5] = [
         bin: "grok",
         install: "curl -fsSL https://x.ai/cli/install.sh | bash",
         login: "grok login",
+    },
+    Agent {
+        id: "opencode",
+        name: "OpenCode",
+        bin: "opencode",
+        install: "curl -fsSL https://opencode.ai/install | bash",
+        login: "opencode auth login",
     },
 ];
 
@@ -1503,6 +1529,8 @@ mod tests {
         assert_eq!(Envelope::new(detach.clone()).v, 25);
         let attach = Request::AttachSession(Default::default());
         assert_eq!(Envelope::new(attach.clone()).v, 26);
+        let issues = Request::IssueCard(Default::default());
+        assert_eq!(Envelope::new(issues.clone()).v, 27);
         let newest = old
             .iter()
             .chain(&drafts)
@@ -1515,7 +1543,7 @@ mod tests {
             .chain(&bots)
             .chain([&card, &need, &react, &image, &model])
             .chain(&routines)
-            .chain([&ask, &detach, &attach])
+            .chain([&ask, &detach, &attach, &issues])
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));

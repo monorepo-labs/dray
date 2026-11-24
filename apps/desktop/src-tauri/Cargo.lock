@@ -1436,6 +1436,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "opentunnel",
+ "png",
  "qrcode",
  "reqwest",
  "rubato",
@@ -1458,6 +1459,7 @@ dependencies = [
  "ts-rs",
  "unicode-segmentation",
  "uuid",
+ "windows",
  "windows-sys 0.61.2",
  "x11",
  "zbus",
@@ -3797,12 +3799,13 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "opentunnel"
-version = "0.5.5"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a0f33fa9d356e5a9105b2619bc3ef0726ec36986a8be3975ed562a17170808c"
+checksum = "9fe519d5eff593d1ea11a86ab58c395f507de2eecdce9e6fc412f23281c04949"
 dependencies = [
  "futures-util",
  "humantime",
+ "hyper-util",
  "rand 0.10.3",
  "rcgen",
  "reqwest",

@@ -128,6 +128,10 @@ export const FILE_PATH_CLASS = "dray-file-path";
 /// this opens anything.
 export const FILE_LINK_CLASS = "dray-file-path-link";
 
+/// Set beside [FILE_PATH_CLASS] on inline code that is a path and nothing
+/// else: it opens, and its text is drawn as written rather than as `@name`.
+export const FILE_CODE_CLASS = "dray-file-path-code";
+
 /// Enough of hast to walk it. Typed here rather than pulled from `@types/hast`,
 /// which is not a dependency and would be one for four fields.
 type HastNode = {
@@ -141,12 +145,29 @@ type HastNode = {
 /// Not prose, so not searched. `pre` covers a fenced block and its `code` with
 /// it, since nothing descends into a skipped element — a path inside one is
 /// already being drawn by the highlighter, and splitting its text would break
-/// the tokens. `a` is here too, and checked *after* `anchorToFile`: a link whose
+/// the tokens. Inline `code` is a command or a literal the reader copies, so its
+/// text stays as written: a path there drawn as `@name` copied as `@name`
+/// (#1487). One holding a path and nothing else still opens, through
+/// [codePath]. `a` is here too, and checked *after* `anchorToFile`: a link whose
 /// href names a file becomes one of ours, and any other link is left whole. A
 /// path sitting in a real link's own label therefore stays plain, which it must
 /// — that text already belongs to a link, and nesting a second one inside it
 /// would fire both on one click.
-const NOT_PROSE = new Set(["pre", "a", "script", "style"]);
+const NOT_PROSE = new Set(["pre", "code", "a", "script", "style"]);
+
+/// Inline code whose whole text is one path, with that text marked to open.
+/// A command holding a path is left alone: the path is not what it says.
+function codePath(node: HastNode): HastNode | null {
+  if (node.tagName !== "code" || node.children?.length !== 1) return null;
+  const value = node.children[0].type === "text" ? node.children[0].value : undefined;
+  const matches = value ? findPromptPaths(value) : [];
+  if (!value || matches.length !== 1) return null;
+  const { start, end, path, line } = matches[0];
+  if (start !== 0 || end !== value.length) return null;
+  const span = marked(path, node.children, false, line);
+  (span.properties!.className as string[]).push(FILE_CODE_CLASS);
+  return { ...node, children: [span] };
+}
 
 function marked(path: string, children: HastNode[], wasLink = false, line?: number): HastNode {
   return {
@@ -269,7 +290,7 @@ export function walk(node: HastNode) {
     const child = children[i];
 
     if (child.type === "element") {
-      const link = anchorToFile(child);
+      const link = anchorToFile(child) ?? codePath(child);
       if (link) {
         next ??= children.slice(0, i);
         next.push(link);

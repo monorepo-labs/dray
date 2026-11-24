@@ -4,6 +4,7 @@ import { ArrowDown } from "lucide-react";
 import AssistantMessage from "@/components/chat/AssistantMessage";
 import BotTranscript, { type BotTask } from "@/components/chat/BotTranscript";
 import BackgroundTasksIndicator from "@/components/chat/BackgroundTasksIndicator";
+import { IssueCardChatContext } from "@/components/chat/IssueCard";
 import { MergeCardChatContext } from "@/components/chat/MergeCard";
 import ApiRetryIndicator from "@/components/chat/ApiRetryIndicator";
 import PermissionRequest from "@/components/chat/PermissionRequest";
@@ -34,6 +35,7 @@ import { readerMessagesAfter } from "@/lib/mergeCard";
 import { isProvisional } from "@/lib/provisional";
 import { dropOlder, loadOlder } from "@/lib/olderPages";
 import { readerReactions } from "@/lib/reactions";
+import { issueStarts, startsKey } from "@/lib/issueCard";
 import { invoke } from "@/lib/transport";
 import type { Bot, SessionSnapshot } from "@/types/events";
 
@@ -754,9 +756,15 @@ export default function Chat({
     [reactionKey, closed],
   );
 
+  // Rebuilt only when a hand-off lands, like the reactions above.
+  const starts = issueStarts(segments.flatMap((s) => s.events));
+  const startedKey = startsKey(starts);
+  const settled = !!session?.archived;
+  const issueCards = useMemo(() => ({ starts, closed: settled }), [startedKey, settled]);
+
   if (!session) return null;
 
-  // fx alone: it takes one prompt per turn, so a held message waits out the
+  // fx and OpenCode alone: each takes one prompt per turn, so a held message waits out the
   // whole turn on screen. Every other harness hands its queue over at the next
   // tool boundary, seconds away, where stopping the turn to save that wait
   // costs more than the wait.
@@ -768,7 +776,7 @@ export default function Chat({
   const queued = (
     <QueuedMessages
       messages={queuedMessages}
-      onSendNow={session.harness === "fx" && active ? onSendNow : undefined}
+      onSendNow={(session.harness === "fx" || session.harness === "opencode") && active ? onSendNow : undefined}
       active={active}
     />
   );
@@ -778,6 +786,7 @@ export default function Chat({
     // `@mention` and a file link, several components down. See `useChatSession`.
     <ChatSessionContext value={chatSession}>
       <MergeCardChatContext value={cardChat}>
+      <IssueCardChatContext value={issueCards}>
       <ReactionsContext value={reactions}>
       <div className="relative h-full">
         <div
@@ -934,6 +943,7 @@ export default function Chat({
 
       </div>
       </ReactionsContext>
+      </IssueCardChatContext>
       </MergeCardChatContext>
     </ChatSessionContext>
   );

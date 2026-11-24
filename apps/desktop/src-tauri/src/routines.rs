@@ -698,6 +698,9 @@ async fn fire(
         set_run_session(&routine.id, None, false).await;
         return Err(e);
     }
+    // A run is a session started, never a check that found nothing new: a
+    // five-minute check would otherwise report 288 times a day.
+    crate::analytics::feature_used("routine_run");
     let cap = run_cap(&routine.schedule);
     let sink = sink.clone();
     tokio::spawn(async move {

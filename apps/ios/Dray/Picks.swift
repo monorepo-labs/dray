@@ -83,7 +83,7 @@ struct AgentPick: Hashable {
 enum Picks {
     /// `DEFAULT_MODEL_FOR`. Empty is "let the harness decide", which pi and fx
     /// answer from their own settings.
-    static let defaultModel = ["claude_code": "opus", "codex": "gpt-6.1-sol", "pi": "", "fx": "", "grok": "grok-4.7"]
+    static let defaultModel = ["claude_code": "opus", "codex": "gpt-6.2-sol", "pi": "", "fx": "", "grok": "grok-4.7"]
     static let defaultEffort = "high"
     /// `AGENT_LABELS`.
     static let agentLabels = ["claude_code": "Claude Code", "codex": "Codex", "pi": "pi", "fx": "fx", "grok": "Grok"]

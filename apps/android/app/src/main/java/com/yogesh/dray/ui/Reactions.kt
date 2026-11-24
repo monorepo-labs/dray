@@ -50,9 +50,9 @@ import com.yogesh.dray.model.SessionKey
 import kotlin.math.ceil
 
 /** The reactions there are, the bot's and the reader's alike: `EMOJI` in react.rs, which refuses any other. */
-val reactions = listOf("👍", "❤️", "😂", "🎉", "✅", "👀", "😢")
+val reactions = listOf("👍", "👎", "❤️", "😂", "🎉", "✅", "👀", "😢")
 
-private val reactionLabels = mapOf("👀" to "Seen", "✅" to "Done", "🎉" to "Celebrating", "👍" to "Like", "❤️" to "Love", "😂" to "Laughing", "😢" to "Sad")
+private val reactionLabels = mapOf("👀" to "Seen", "✅" to "Done", "🎉" to "Celebrating", "👍" to "Like", "👎" to "Dislike", "❤️" to "Love", "😂" to "Laughing", "😢" to "Sad")
 
 /** A reaction's emoji as its badge draws it. */
 val reactionStyle = Dray.Font.body.copy(fontSize = 18.sp, lineHeight = 20.sp)
