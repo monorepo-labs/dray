@@ -162,6 +162,10 @@ class PullsTest {
         // Greptile's severity badges, as captured on #888: SVGs, so their words stand in.
         val badge = """<a href="#"><img alt="P1" src="https://g.s3.amazonaws.com/badges/p1.svg?v=9" align="top"></a> **Bad** ![x](https://a/b.SVG)"""
         assertEquals("P1 **Bad** x", commentMarkdown(badge))
+        // Vercel's project logo at 16px; a real screenshot keeps its picture.
+        assertEquals("| dray |", commentMarkdown("""| <a href="https://vercel.com/a/dray"><sup><img src="https://vercel.com/api/www/avatar?s=32" width="16" height="16" alt="" /></sup></a> [dray](https://vercel.com/a/dray) |""")
+            .replace(Regex("\\[(dray)]\\([^)]*\\)"), "$1"))
+        assertEquals("![](https://x/shot.png)", commentMarkdown("""<img src="https://x/shot.png" width="800">"""))
     }
 
     @Test
