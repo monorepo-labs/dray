@@ -104,6 +104,7 @@ pub async fn init(
     let rules = write_rules(session_id, session_cwd).await?;
 
     let bin = crate::binpath::opencode().await;
+    let agents = agents_refusing_edits(&bin, permission_mode, cwd, session_cwd).await;
     let mut command = Command::new(&bin);
     if let Some(endpoint) = crate::orchestration::child_endpoint() {
         command.env("DRAY_ENDPOINT", endpoint);
@@ -114,8 +115,11 @@ pub async fn init(
         .current_dir(cwd)
         .env("DRAY_SESSION_ID", session_id)
         .env("PATH", crate::harness::agent_path(&bin))
-        .env("OPENCODE_PERMISSION", global_rules(permission_mode).to_string())
-        .env("OPENCODE_CONFIG_CONTENT", stance_config(&rules, permission_mode).to_string())
+        .env("OPENCODE_PERMISSION", global_rules(permission_mode, agents.as_deref()).to_string())
+        .env(
+            "OPENCODE_CONFIG_CONTENT",
+            stance_config(&rules, permission_mode, agents.as_deref()).to_string(),
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -241,40 +245,107 @@ fn refusing(rules: &Value) -> Value {
     }
 }
 
+/// Whether this stance asks before an edit, which no subagent can do.
+fn asks_for_edits(mode: ApprovalPolicy) -> bool {
+    permission_rules(mode)["edit"] == "ask"
+}
+
 /// `OPENCODE_PERMISSION`, which every agent gets: the stance refused, minus
 /// `edit`.
 ///
 /// OpenCode appends these after each agent's own rules and the last match
 /// wins, so an `edit` here overrode them: `explore` refuses edits itself and
 /// gained them under Auto, and `plan` allows its own plan files and lost them
-/// under Plan. Edits are granted per agent in [`stance_config`] instead.
-fn global_rules(mode: ApprovalPolicy) -> Value {
+/// under Plan. Edits are refused per agent in [`stance_config`] instead.
+/// `agents` is `None` where OpenCode could not name its agents; edits are then
+/// refused here, for every agent, at the cost of `plan`'s plan files.
+fn global_rules(mode: ApprovalPolicy, agents: Option<&[String]>) -> Value {
     let mut rules = refusing(&permission_rules(mode));
     if let Some(map) = rules.as_object_mut() {
-        map.remove("edit");
+        if agents.is_some() || !asks_for_edits(mode) {
+            map.remove("edit");
+        }
     }
     rules
 }
 
 /// `OPENCODE_CONFIG_CONTENT`: Dray's rules file, the stance whole for `build`
-/// and `plan` over [`global_rules`], and `general`'s edits refused where they
-/// would ask.
+/// and `plan` over [`global_rules`], and edits refused for every other agent
+/// in `agents`.
 ///
 /// `plan` takes no `edit` key, so its own refusal of edits, and its plan
-/// files, stand. Merged over the reader's config, and `instructions` is a list
-/// OpenCode concatenates, so their own instruction files stay.
-fn stance_config(rules_path: &str, mode: ApprovalPolicy) -> Value {
+/// files, stand. Merged deep over the reader's config — an agent of theirs
+/// keeps its prompt and mode and loses only `edit` — and `instructions` is a
+/// list OpenCode concatenates, so their own instruction files stay.
+fn stance_config(rules_path: &str, mode: ApprovalPolicy, agents: Option<&[String]>) -> Value {
     let build = permission_rules(mode);
     let mut plan = build.clone();
-    let edit = plan.as_object_mut().and_then(|map| map.remove("edit")).unwrap_or(json!("ask"));
-    json!({
+    if let Some(map) = plan.as_object_mut() {
+        map.remove("edit");
+    }
+    let mut config = json!({
         "instructions": [rules_path],
-        "agent": {
-            "build": {"permission": build},
-            "plan": {"permission": plan},
-            "general": {"permission": {"edit": refusing(&edit)}},
-        },
-    })
+        "agent": {"build": {"permission": build}, "plan": {"permission": plan}},
+    });
+    let listed = if asks_for_edits(mode) { agents.unwrap_or_default() } else { &[] };
+    for name in listed.iter().filter(|name| !matches!(name.as_str(), "build" | "plan")) {
+        config["agent"][name] = json!({"permission": {"edit": "deny"}});
+    }
+    config
+}
+
+/// Every agent OpenCode will run here, when the stance asks before edits:
+/// those are the agents whose edits must be refused by name.
+///
+/// Read from `opencode agent list`, which names the built-ins, the reader's
+/// own from `opencode.json` and `.opencode/agent/`, and any a plugin adds.
+/// Empty where nothing needs refusing, so Auto and Bypass skip the call, about
+/// a second; `None` where OpenCode could not answer, which [`global_rules`]
+/// covers.
+async fn agents_refusing_edits(
+    bin: &std::path::Path,
+    mode: ApprovalPolicy,
+    cwd: &str,
+    session_cwd: &str,
+) -> Option<Vec<String>> {
+    if !asks_for_edits(mode) {
+        return Some(Vec::new());
+    }
+    // The folder OpenCode opens the session in decides which project config
+    // it reads; a worktree not made yet falls back to where the child starts.
+    let dir = if std::path::Path::new(session_cwd).is_dir() { session_cwd } else { cwd };
+    let listed = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        Command::new(bin)
+            .args(["agent", "list"])
+            .current_dir(dir)
+            .env("PATH", crate::harness::agent_path(bin))
+            // Null, never a pipe: an OpenCode command with an open stdin and
+            // no TTY can wait on it for good.
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await;
+    let reason = match listed {
+        Ok(Ok(out)) if out.status.success() => return Some(parse_agent_list(&String::from_utf8_lossy(&out.stdout))),
+        Ok(Ok(out)) => format!("{}: {}", out.status, String::from_utf8_lossy(&out.stderr).trim()),
+        Ok(Err(err)) => err.to_string(),
+        Err(_) => "timed out".to_string(),
+    };
+    eprintln!("[opencode] couldn't list agents, so edits are refused to every agent: {reason}");
+    None
+}
+
+/// Reads `opencode agent list`: a `name (mode)` line per agent, each followed
+/// by its rules indented beneath it.
+fn parse_agent_list(out: &str) -> Vec<String> {
+    out.lines()
+        .filter(|line| !line.starts_with(char::is_whitespace))
+        .filter_map(|line| line.trim_end().strip_suffix(')')?.rsplit_once(" (").map(|(name, _)| name))
+        .filter(|name| !name.is_empty() && !name.contains(char::is_whitespace))
+        .map(str::to_string)
+        .collect()
 }
 
 /// The agent a stance runs as: `plan` for Plan, `build` for the rest. Always
@@ -827,7 +898,7 @@ mod tests {
     fn subagents_are_refused_what_they_cannot_ask_for() {
         // OpenCode's own default asks are refused too: a child reading `.env`
         // or tripping `doom_loop` hung the turn with no card.
-        let global = global_rules(ApprovalPolicy::Auto);
+        let global = global_rules(ApprovalPolicy::Auto, Some(&[]));
         assert_eq!(
             global,
             json!({
@@ -839,39 +910,69 @@ mod tests {
         let patterns: Vec<&String> = global["read"].as_object().unwrap().keys().collect();
         assert_eq!(patterns, ["*.env", "*.env.*", "*.env.example"]);
 
-        let config = stance_config("/r.md", ApprovalPolicy::Auto);
+        let config = stance_config("/r.md", ApprovalPolicy::Auto, Some(&[]));
         assert_eq!(config["instructions"], json!(["/r.md"]));
         assert_eq!(config["agent"]["build"]["permission"], permission_rules(ApprovalPolicy::Auto));
         assert_eq!(config["agent"]["build"]["permission"]["read"]["*.env"], "ask");
-        assert_eq!(config["agent"]["general"]["permission"], json!({"edit": "allow"}));
 
         // Bypass asks nothing, `.env` and loops included.
-        let bypass = global_rules(ApprovalPolicy::BypassPermissions);
+        let bypass = global_rules(ApprovalPolicy::BypassPermissions, Some(&[]));
         assert_eq!(bypass["doom_loop"], "allow");
         assert_eq!(bypass["read"]["*.env"], "allow");
     }
 
-    /// `edit` is never global: OpenCode puts the global rules after each
-    /// agent's own, so one there overrode `explore`'s refusal under Auto and
-    /// `plan`'s own plan files under Plan.
+    /// `edit` is never global while OpenCode can name its agents: it puts the
+    /// global rules after each agent's own, so one there overrode `explore`'s
+    /// refusal under Auto and `plan`'s own plan files under Plan.
     #[test]
-    fn edits_are_granted_per_agent() {
+    fn edits_are_refused_per_agent() {
+        let agents: Vec<String> = ["build", "plan", "general", "explore", "scribe"].map(String::from).into();
         for mode in [
             ApprovalPolicy::Plan,
             ApprovalPolicy::Manual,
             ApprovalPolicy::Auto,
             ApprovalPolicy::BypassPermissions,
         ] {
-            assert!(global_rules(mode).get("edit").is_none(), "{mode:?}");
-            assert!(stance_config("/r.md", mode)["agent"]["plan"]["permission"].get("edit").is_none());
+            assert!(global_rules(mode, Some(&agents)).get("edit").is_none(), "{mode:?}");
+            let config = stance_config("/r.md", mode, Some(&agents));
+            assert!(config["agent"]["plan"]["permission"].get("edit").is_none(), "{mode:?}");
         }
-        let manual = stance_config("/r.md", ApprovalPolicy::Manual);
+
+        // Where the stance asks before an edit, every agent but the two Dray
+        // runs is refused, the reader's own included: none of them can ask.
+        let manual = stance_config("/r.md", ApprovalPolicy::Manual, Some(&agents));
         assert_eq!(manual["agent"]["build"]["permission"]["edit"], "ask");
-        // A general child cannot ask, so where editing would ask it is refused.
-        assert_eq!(manual["agent"]["general"]["permission"]["edit"], "deny");
-        let bypass = stance_config("/r.md", ApprovalPolicy::BypassPermissions);
-        assert_eq!(bypass["agent"]["build"]["permission"]["edit"], "allow");
-        assert_eq!(bypass["agent"]["general"]["permission"]["edit"], "allow");
+        for name in ["general", "explore", "scribe"] {
+            assert_eq!(manual["agent"][name], json!({"permission": {"edit": "deny"}}), "{name}");
+        }
+
+        // Where edits go through, an agent keeps its own rule — `explore`'s
+        // refusal above all.
+        let auto = stance_config("/r.md", ApprovalPolicy::Auto, Some(&agents));
+        assert_eq!(auto["agent"]["build"]["permission"]["edit"], "allow");
+        assert!(auto["agent"].get("explore").is_none());
+        assert!(auto["agent"].get("scribe").is_none());
+    }
+
+    /// No list, no names: edits are then refused for every agent at once,
+    /// which costs `plan` its plan files but lets nothing edit unasked.
+    #[test]
+    fn an_unknown_agent_list_refuses_edits_globally() {
+        assert_eq!(global_rules(ApprovalPolicy::Plan, None)["edit"], "deny");
+        assert_eq!(global_rules(ApprovalPolicy::Manual, None)["edit"], "deny");
+        assert!(global_rules(ApprovalPolicy::Auto, None).get("edit").is_none());
+        let manual = stance_config("/r.md", ApprovalPolicy::Manual, None);
+        assert_eq!(manual["agent"]["build"]["permission"]["edit"], "ask");
+    }
+
+    /// `opencode agent list` as 1.19.5 prints it: a `name (mode)` line, then
+    /// the agent's rules indented beneath.
+    #[test]
+    fn the_agent_list_names_every_agent() {
+        let out = "build (primary)\n  [\n  {\n    \"permission\": \"*\",\n    \"action\": \"allow\"\n  }\n]\n\
+                   explore (subagent)\n  [\n]\nmdhelper (subagent)\n  [\n]\nscribe (all)\n  [\n]\n";
+        assert_eq!(parse_agent_list(out), ["build", "explore", "mdhelper", "scribe"]);
+        assert!(parse_agent_list("").is_empty());
     }
 
     /// OpenCode's ask for a `.env` read carries `rawInput: {}`, so the card
