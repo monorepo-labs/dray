@@ -41,6 +41,8 @@ data class Welcome(
     val version: String? = null,
     val release: String? = null,
     val dev: Boolean? = null,
+    /** A hash of the server's token, so one machine reached two ways is one (`serverId`). */
+    val identity: String? = null,
 ) {
     /** Dray on a Mac, whose server follows the app's own updates. */
     val macApp: Boolean get() = dictation == true && release == null && dev != true
