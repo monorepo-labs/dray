@@ -86,8 +86,8 @@ screenshot or recording for the PR.
    that posts no comment is a broken review, not a clean one.
 5. **Squash merge.** One commit per PR on `main`, titled with its number.
 
-A PR that touches only markdown, images or video runs no review, so a
-maintainer merges it.
+A PR that touches only markdown, images or video is not reviewed: the check
+passes on its own.
 
 ### Screenshots and videos
 

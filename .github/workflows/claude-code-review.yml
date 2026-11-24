@@ -3,20 +3,6 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    # Skipped only when every changed file matches; code under apps/docs and
-    # apps/web is still reviewed.
-    paths-ignore:
-      - "**/*.md"
-      - "**/*.mdx"
-      - "**/*.png"
-      - "**/*.jpg"
-      - "**/*.jpeg"
-      - "**/*.gif"
-      - "**/*.svg"
-      - "**/*.webp"
-      - "**/*.ico"
-      - "**/*.mp4"
-      - "**/*.mov"
 
 jobs:
   claude-review:
@@ -30,12 +16,32 @@ jobs:
       id-token: write
 
     steps:
+      # Not a `paths-ignore` filter: that leaves no run at all, so the required
+      # `claude-review` check sat pending on every docs-only PR. Skipping here
+      # lets the check pass. Code under apps/docs and apps/web is still reviewed.
+      - name: Check for files worth reviewing
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          files=$(gh api --paginate "repos/${{ github.repository }}/pulls/$PR/files" --jq '.[].filename')
+          code=$(printf '%s\n' "$files" | grep -viE '\.(md|mdx|png|jpe?g|gif|svg|webp|ico|mp4|mov)$' | grep -v '^$' || true)
+          if [ -n "$code" ]; then
+            echo "review=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "review=false" >> "$GITHUB_OUTPUT"
+            echo "Only markdown, images or video changed; no review needed." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Checkout repository
+        if: steps.scope.outputs.review == 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Run Claude Code Review
+        if: steps.scope.outputs.review == 'true'
         id: claude-review
         uses: anthropics/claude-code-action@v1
         # The action stops at Claude's first final reply, and a background
