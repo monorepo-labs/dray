@@ -204,7 +204,7 @@ private suspend fun branchCommits(store: Store, key: SessionKey, cwd: String): L
 }
 
 @Composable
-private fun Bar(title: String, back: () -> Unit, trailing: @Composable () -> Unit = {}) {
+fun Bar(title: String, back: () -> Unit, trailing: @Composable () -> Unit = {}) {
     Row(Modifier.fillMaxWidth().height(56.dp).padding(end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Dray.text) }
         Text(title, Modifier.weight(1f), style = Dray.Font.headline, maxLines = 1, overflow = TextOverflow.Ellipsis)

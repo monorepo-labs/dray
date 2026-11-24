@@ -153,7 +153,8 @@ fun RemoteImage(
     var failed by remember(ref, server) { mutableStateOf(false) }
     val up = server?.let { store.serverState[it] } == ConnState.Connected
     LaunchedEffect(ref, server, up) {
-        if (bitmap != null) return@LaunchedEffect
+        // A cache hit is a load too: callers size or reveal themselves off this.
+        bitmap?.let { onLoaded(it); return@LaunchedEffect }
         for (wait in listOf(0L, 2000L, 5000L, 15000L)) {
             delay(wait)
             val got = ImageLoader.load(store, server, ref)

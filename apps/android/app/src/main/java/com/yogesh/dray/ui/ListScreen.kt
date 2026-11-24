@@ -36,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.QrCodeScanner
+import androidx.compose.material.icons.outlined.RadioButtonChecked
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.WifiOff
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -91,6 +92,8 @@ fun ListScreen(
     openSettings: (String?) -> Unit,
     addServer: (scan: Boolean) -> Unit,
     startBot: (server: String, botId: String) -> Unit = { _, _ -> },
+    openPulls: () -> Unit = {},
+    openIssues: () -> Unit = {},
 ) {
     val store = LocalStore.current
     val scope = rememberCoroutineScope()
@@ -105,8 +108,7 @@ fun ListScreen(
     val names = store.live.flatMap { store.projects[it.id].orEmpty() }.map { it.name }.distinct().sorted()
     // A picked project that leaves the list is ignored rather than showing nothing.
     val filter = project?.takeIf { it in names }
-    val hide = store.hideSessions
-    val runs = if (hide || drafts) emptyList() else store.runs(filter, settled)
+    val runs = if (drafts) emptyList() else store.runs(filter, settled)
     val hasSettled = store.items.values.any { it.archived == true && it.hidden != true }
     val connected = store.live.count { store.serverState[it.id] == ConnState.Connected }
 
@@ -132,14 +134,17 @@ fun ListScreen(
         draftRows = all.sortedByDescending { it.second.created.orEmpty() }
         draftsError = failed
     }
-    // Hide sessions has no drafts or settled view to leave by, so it closes them.
-    LaunchedEffect(hide) { if (hide) { drafts = false; settled = false } }
 
     Column(Modifier.fillMaxSize().background(Dray.page).statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton({ openSettings(null) }) { Icon(Icons.Outlined.Settings, "Settings", tint = Dray.text) }
+            // The desktop's two pages beside Settings. Reachable with every server down: each draws its last read.
+            if (store.live.isNotEmpty()) {
+                IconButton(openPulls) { PrOutline(Dray.text, 22.dp, "Pull requests") }
+                IconButton(openIssues) { Icon(Icons.Outlined.RadioButtonChecked, "Issues", tint = Dray.text) }
+            }
             Spacer(Modifier.weight(1f))
-            if (!hide && (drafts || (anyConnected && draftRows.isNotEmpty()))) {
+            if (drafts || (anyConnected && draftRows.isNotEmpty())) {
                 Row(
                     Modifier.padding(end = 8.dp).clip(CircleShape).background(Dray.raised)
                         .clickable { drafts = !drafts; settled = false }.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -150,7 +155,7 @@ fun ListScreen(
                     Text("Drafts", style = Dray.Font.pill.copy(color = if (drafts) Dray.text else Dray.secondary))
                 }
             }
-            if (!hide && (settled || (anyConnected && hasSettled))) {
+            if (settled || (anyConnected && hasSettled)) {
                 Row(
                     Modifier.padding(end = 8.dp).clip(CircleShape).background(Dray.raised)
                         .clickable { settled = !settled; drafts = false }.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -198,7 +203,7 @@ fun ListScreen(
                         BotListRow(server, bot, chat) { if (chat != null) openSession(chat) else startBot(server, bot.id) }
                     }
                 }
-                if (!hide && names.size > 1 && (filter != null || rows.isNotEmpty())) {
+                if (names.size > 1 && (filter != null || rows.isNotEmpty())) {
                     item("projects") { ProjectStrip(names, filter) { project = it } }
                 } else if (bots.isNotEmpty() && rows.isNotEmpty()) item("bots-gap") { Spacer(Modifier.height(16.dp)) }
                 if (drafts) {
@@ -273,7 +278,7 @@ fun ListScreen(
                 }
                 if (shown < rows.size) item("more") { LaunchedEffect(Unit) { shown += PAGE }; Spacer(Modifier.height(1.dp)) }
             }
-            if (empty || (hide && store.bots.values.all { it.isEmpty() })) EmptyList(filter, addServer, openSettings)
+            if (empty) EmptyList(filter, addServer, openSettings)
         }
         if (!settled) NewTaskDock(openSession, Modifier.align(Alignment.BottomCenter))
         }
@@ -422,7 +427,6 @@ private fun EmptyList(filter: String?, addServer: (Boolean) -> Unit, openSetting
                 .filter { isToday(it.second) }
             val last = today.maxByOrNull { it.second }
             when {
-                store.hideSessions -> EmptyScreen(EmptyArtKind.Tasks, "No bots yet", "Tap + to make one.")
                 last != null -> EmptyScreen({ SettledStack(last.first.item.title, shortAge(last.second)) }, "All clear",
                     if (today.size == 1) "1 settled today." else "${today.size} settled today.")
                 filter != null -> EmptyScreen(EmptyArtKind.Project, "Nothing in $filter", "Write one below to start it.")
