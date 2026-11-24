@@ -160,7 +160,6 @@ type Kit = {
   pluck: (hz: number, t: number, type: OscillatorType, level: number, decay: number, cutoff: number, send?: number) => void;
   hit: (t: number, type: BiquadFilterType, hz: number, level: number, decay: number, send?: number) => void;
   kick: (t: number, level?: number) => void;
-  pad: (hz: number[], t: number, length: number, level: number, cutoff: number) => void;
 };
 /// One sixteenth: `bar` and `i` place it in the four-bar loop; `intro` is the
 /// first bar, before the loop, which plays under the voice's opening.
@@ -168,122 +167,126 @@ type Step = { intro: boolean; bar: number; i: number };
 /// `gain` evens a track out against Arcade, measured off their renders.
 type Track = { bpm: number; gain?: number; play: (k: Kit, s: Step, t: number) => void };
 
+/// One track in Arcade's mould: a triangle arpeggio climbing an octave halfway
+/// through each bar, four on the floor, an octave-pumping saw bass and a
+/// square-wave hook in eighths (0 rests). `sparkle` rings a high bell on each
+/// bar's first beat; `openHat` lets the off-beat hat ring longer.
+function arcade(spec: {
+  bpm: number;
+  gain?: number;
+  chords: number[][];
+  roots: number[];
+  lead: number[][];
+  arp?: number[];
+  leadDecay?: number;
+  sparkle?: boolean;
+  openHat?: boolean;
+}): Track {
+  const arp = spec.arp ?? [0, 1, 2, 3, 1, 2, 3, 2];
+  return {
+    bpm: spec.bpm,
+    gain: spec.gain,
+    play(k, { intro, bar, i }, t) {
+      const chord = spec.chords[bar];
+      k.pluck(chord[arp[i % 8]] * (i >= 8 ? 2 : 1), t, "triangle", 0.07, 0.2, 5000, 0.4);
+      if (spec.sparkle && i === 0) k.pluck(chord[3] * 4, t, "sine", 0.025, 1.2, 9000, 0.8);
+      if (intro) return;
+      if (i % 4 === 0) k.kick(t);
+      if (i % 4 === 2) k.hit(t, "highpass", 7000, spec.openHat ? 0.1 : 0.12, spec.openHat ? 0.14 : 0.05);
+      if (i === 4 || i === 12) k.hit(t, "bandpass", 1600, 0.35, 0.14);
+      if (i % 2 === 0) k.pluck(spec.roots[bar] * (i % 4 === 2 ? 2 : 1), t, "sawtooth", 0.14, 0.16, 1100);
+      const note = i % 2 === 0 ? spec.lead[bar][i / 2] : 0;
+      if (note) k.pluck(note, t, "square", 0.045, spec.leadDecay ?? 0.22, 3200, 0.5);
+    },
+  };
+}
+
 // Every voice stays above ~140Hz or leans on harmonics, since a laptop's
 // speakers drop anything lower.
 
-/// The first one: bright arpeggios, four on the floor, a chirpy hook. D A Bm G.
-const ARCADE: Track = {
+/// The first one. D A Bm G.
+const ARCADE = arcade({
   bpm: 124,
-  play(k, { intro, bar, i }, t) {
-    const chords = [
-      [293.66, 369.99, 440, 587.33],
-      [277.18, 329.63, 440, 554.37],
-      [293.66, 369.99, 493.88, 587.33],
-      [293.66, 392, 493.88, 587.33],
-    ];
-    const roots = [146.83, 110, 123.47, 98];
-    const arp = [0, 1, 2, 3, 1, 2, 3, 2];
-    const lead = [
-      [880, 0, 739.99, 880, 1174.66, 0, 880, 0],
-      [1108.73, 0, 880, 659.25, 880, 0, 1108.73, 0],
-      [987.77, 0, 739.99, 987.77, 1174.66, 0, 1108.73, 987.77],
-      [880, 0, 783.99, 0, 987.77, 0, 880, 0],
-    ];
-    k.pluck(chords[bar][arp[i % 8]] * (i >= 8 ? 2 : 1), t, "triangle", 0.07, 0.2, 5000, 0.4);
-    if (intro) return;
-    if (i % 4 === 0) k.kick(t);
-    if (i % 4 === 2) k.hit(t, "highpass", 7000, 0.12, 0.05);
-    if (i === 4 || i === 12) k.hit(t, "bandpass", 1600, 0.35, 0.14);
-    if (i % 2 === 0) k.pluck(roots[bar] * (i % 4 === 2 ? 2 : 1), t, "sawtooth", 0.14, 0.16, 1100);
-    const note = i % 2 === 0 ? lead[bar][i / 2] : 0;
-    if (note) k.pluck(note, t, "square", 0.045, 0.22, 3200, 0.5);
-  },
-};
+  chords: [
+    [293.66, 369.99, 440, 587.33],
+    [277.18, 329.63, 440, 554.37],
+    [293.66, 369.99, 493.88, 587.33],
+    [293.66, 392, 493.88, 587.33],
+  ],
+  roots: [146.83, 110, 123.47, 98],
+  lead: [
+    [880, 0, 739.99, 880, 1174.66, 0, 880, 0],
+    [1108.73, 0, 880, 659.25, 880, 0, 1108.73, 0],
+    [987.77, 0, 739.99, 987.77, 1174.66, 0, 1108.73, 987.77],
+    [880, 0, 783.99, 0, 987.77, 0, 880, 0],
+  ],
+});
 
-/// Night drive: wide saw pads, a running arpeggio, a big reverb snare. Am F C G.
-const SYNTHWAVE: Track = {
-  bpm: 100,
-  gain: 1.75,
-  play(k, { intro, bar, i }, t) {
-    const chords = [
-      [220, 261.63, 329.63],
-      [174.61, 220, 261.63],
-      [196, 261.63, 329.63],
-      [196, 246.94, 293.66],
-    ];
-    const roots = [220, 174.61, 261.63, 196];
-    const barLen = (16 * 60) / 100 / 4;
-    if (i === 0) k.pad(chords[bar], t, barLen, 0.045, 1600);
-    k.pluck(chords[bar][[0, 1, 2, 1][i % 4]] * 2, t, "sawtooth", 0.035, 0.18, 2400, 0.5);
-    if (intro) return;
-    if (i === 0 || i === 8) k.kick(t);
-    if (i === 4 || i === 12) k.hit(t, "bandpass", 1800, 0.4, 0.22, 0.8);
-    if (i % 2 === 1) k.hit(t, "highpass", 8000, 0.05, 0.03);
-    if (i % 2 === 0) k.pluck(roots[bar] * (i % 4 === 2 ? 1 : 0.5), t, "sawtooth", 0.12, 0.2, 900);
-    if (i === 0) k.pluck(chords[bar][2] * 4, t, "square", 0.03, 1.6, 2600, 0.7);
-  },
-};
+/// Brighter and a touch quicker, the hook up high, a bell on each bar. E B C#m A.
+const LEVEL_UP = arcade({
+  bpm: 128,
+  sparkle: true,
+  arp: [0, 2, 1, 3, 0, 2, 1, 3],
+  chords: [
+    [329.63, 415.3, 493.88, 659.25],
+    [311.13, 369.99, 493.88, 622.25],
+    [277.18, 329.63, 415.3, 554.37],
+    [277.18, 329.63, 440, 554.37],
+  ],
+  roots: [164.81, 123.47, 138.59, 110],
+  lead: [
+    [1318.51, 0, 987.77, 0, 1318.51, 1479.98, 1318.51, 0],
+    [1244.51, 0, 987.77, 0, 1244.51, 1318.51, 1244.51, 0],
+    [1108.73, 0, 830.61, 0, 1108.73, 1244.51, 1108.73, 987.77],
+    [880, 0, 1108.73, 0, 1318.51, 0, 1479.98, 0],
+  ],
+});
 
-/// Eight-bit: square-wave melody, pulse bass, noise drums, quick. C Am F G.
-const CHIP: Track = {
-  bpm: 140,
-  gain: 1.3,
-  play(k, { intro, bar, i }, t) {
-    const chords = [
-      [523.25, 659.25, 783.99],
-      [440, 523.25, 659.25],
-      [349.23, 440, 523.25],
-      [392, 493.88, 587.33],
-    ];
-    const roots = [130.81, 110, 174.61, 196];
-    const lead = [
-      [1046.5, 0, 783.99, 659.25, 783.99, 0, 1046.5, 0],
-      [880, 0, 659.25, 523.25, 659.25, 0, 880, 0],
-      [698.46, 0, 880, 1046.5, 880, 0, 698.46, 0],
-      [783.99, 0, 987.77, 1174.66, 987.77, 783.99, 1174.66, 0],
-    ];
-    k.pluck(chords[bar][[0, 1, 2, 1][i % 4]], t, "square", 0.03, 0.07, 6000);
-    if (intro) return;
-    if (i % 2 === 0) k.pluck(roots[bar] * (i % 4 === 2 ? 2 : 1), t, "triangle", 0.22, 0.11, 4000);
-    if (i % 4 === 0) k.kick(t, 0.6);
-    if (i % 2 === 1) k.hit(t, "highpass", 9000, 0.06, 0.02);
-    if (i === 4 || i === 12) k.hit(t, "highpass", 1200, 0.3, 0.09);
-    const note = i % 2 === 0 ? lead[bar][i / 2] : 0;
-    if (note) k.pluck(note, t, "square", 0.05, 0.13, 6000, 0.2);
-  },
-};
+/// The fastest: a busy bouncing hook and an open hat. F Dm Bb C.
+const BONUS_ROUND = arcade({
+  bpm: 132,
+  openHat: true,
+  leadDecay: 0.16,
+  chords: [
+    [349.23, 440, 523.25, 698.46],
+    [293.66, 349.23, 440, 587.33],
+    [293.66, 349.23, 466.16, 587.33],
+    [329.63, 392, 523.25, 659.25],
+  ],
+  roots: [174.61, 146.83, 116.54, 130.81],
+  lead: [
+    [1046.5, 880, 698.46, 880, 1046.5, 0, 1396.91, 0],
+    [1174.66, 880, 698.46, 880, 1174.66, 0, 1046.5, 0],
+    [1174.66, 932.33, 698.46, 932.33, 1174.66, 0, 1396.91, 0],
+    [1318.51, 0, 1046.5, 0, 1567.98, 0, 1318.51, 0],
+  ],
+});
 
-/// Lo-fi: soft electric-piano sevenths, lazy drums, a shaker. Fmaj7 Em7 Dm7 Cmaj7.
-const CHILL: Track = {
-  bpm: 86,
-  gain: 2,
-  play(k, { intro, bar, i }, t) {
-    const chords = [
-      [349.23, 440, 523.25, 659.25],
-      [329.63, 392, 493.88, 587.33],
-      [293.66, 349.23, 440, 523.25],
-      [261.63, 329.63, 392, 493.88],
-    ];
-    const roots = [174.61, 164.81, 146.83, 130.81];
-    if (i === 0 || i === 6) {
-      chords[bar].forEach((hz, n) => {
-        k.pluck(hz, t + n * 0.012, "triangle", 0.045, 1.4, 1800, 0.5);
-        k.pluck(hz * 2, t + n * 0.012, "sine", 0.012, 0.6, 3000);
-      });
-    }
-    if (intro) return;
-    if (i === 0 || i === 10) k.pluck(roots[bar], t, "triangle", 0.22, 0.55, 700);
-    if (i === 0 || i === 7 || i === 10) k.kick(t, 0.55);
-    if (i === 4 || i === 12) k.hit(t, "bandpass", 2400, 0.25, 0.1, 0.4);
-    k.hit(t, "highpass", 8000, i % 2 ? 0.025 : 0.045, 0.04);
-  },
-};
+/// The anthem: a slower, singing hook with held notes, and the bell. C D Bm Em.
+const HIGH_SCORE = arcade({
+  bpm: 118,
+  sparkle: true,
+  leadDecay: 0.45,
+  chords: [
+    [261.63, 329.63, 392, 523.25],
+    [293.66, 369.99, 440, 587.33],
+    [246.94, 293.66, 369.99, 493.88],
+    [246.94, 329.63, 392, 493.88],
+  ],
+  roots: [130.81, 146.83, 123.47, 164.81],
+  lead: [
+    [783.99, 0, 0, 880, 987.77, 0, 880, 0],
+    [880, 0, 0, 987.77, 1174.66, 0, 987.77, 0],
+    [987.77, 0, 0, 880, 739.99, 0, 783.99, 0],
+    [659.25, 0, 0, 739.99, 783.99, 0, 987.77, 0],
+  ],
+});
 
 export const MUSIC_TRACKS = [
   { id: "arcade", label: "Arcade", track: ARCADE },
-  { id: "synthwave", label: "Synthwave", track: SYNTHWAVE },
-  { id: "chip", label: "Chip", track: CHIP },
-  { id: "chill", label: "Chill", track: CHILL },
+  { id: "levelup", label: "Level up", track: LEVEL_UP },
+  { id: "bonus", label: "Bonus round", track: BONUS_ROUND },
+  { id: "highscore", label: "High score", track: HIGH_SCORE },
 ] as const;
 export type MusicTrack = (typeof MUSIC_TRACKS)[number]["id"];
 
@@ -428,17 +431,6 @@ function renderSteps(track: Track, from: number, to: number, tail: number): Prom
       osc.start(t);
       osc.stop(t + 0.3);
       kit.hit(t, "highpass", 3000, level * 0.28, 0.015);
-    },
-    pad(hz, t, length, level, cutoff) {
-      const lp = filter(ctx, "lowpass", cutoff);
-      const env = ctx.createGain();
-      env.gain.setValueAtTime(0.0001, t);
-      env.gain.linearRampToValueAtTime(level, t + 0.15);
-      env.gain.setValueAtTime(level, t + length - 0.1);
-      env.gain.linearRampToValueAtTime(0.0001, t + length + 0.3);
-      lp.connect(env).connect(master);
-      send(env, 0.6);
-      for (const f of hz) for (const cents of [-8, 8]) voice(ctx, lp, f, "sawtooth", cents, t, t + length + 0.35, 0.5);
     },
   };
 
