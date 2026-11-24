@@ -254,6 +254,8 @@ function Demo() {
               hasRepos
               missing={null}
               errors={scope === "all" ? [{ name: "site", error: { kind: "other", detail: "API rate limit exceeded" } }] : []}
+              offline={scope === "space" ? ["sandbox"] : []}
+              active
               people={people}
               onPeople={setPeople}
               scope={scope}

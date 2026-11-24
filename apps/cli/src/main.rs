@@ -82,9 +82,11 @@ enum Command {
     /// live ones, or stop one.
     #[command(arg_required_else_help = true, args_conflicts_with_subcommands = true)]
     Share(ShareArgs),
-    /// Upload screenshots or recordings for a PR body and print a markdown
-    /// line for each. Signs in with your GitHub token, from `gh auth token` or GITHUB_TOKEN.
-    #[command(arg_required_else_help = true)]
+    // Hidden: it serves Dray's own contributors (#1501), and CONTRIBUTING.md is its doc.
+    /// Upload screenshots or recordings for a Dray pull request and print a
+    /// markdown line for each. For Dray contributors only. Signs in with
+    /// `gh auth token` or GITHUB_TOKEN.
+    #[command(arg_required_else_help = true, hide = true)]
     Upload(upload::Upload),
     /// The machines this one reaches: add, list, rename, connect, remove.
     #[command(subcommand, arg_required_else_help = true)]
@@ -554,7 +556,7 @@ fn run() -> Result<(), String> {
         Command::Update(args) => update(args),
         Command::Skill(SkillCommand::Install) => install_skill(),
         Command::Completion { shell } => {
-            clap_complete::generate(shell, &mut Cli::command(), "dray", &mut std::io::stdout());
+            clap_complete::generate(shell, &mut completion_command(), "dray", &mut std::io::stdout());
             Ok(())
         }
         Command::New(args) => new(args),
@@ -1660,6 +1662,18 @@ fn main_worktree(porcelain: &str) -> Option<String> {
     (!path.is_empty()).then(|| path.to_string())
 }
 
+/// The CLI as completion scripts see it. clap_complete still lists hidden
+/// commands, so theirs go in with no description, as bare names.
+fn completion_command() -> clap::Command {
+    let mut cmd = Cli::command();
+    let hidden: Vec<String> =
+        cmd.get_subcommands().filter(|c| c.is_hide_set()).map(|c| c.get_name().to_string()).collect();
+    for name in hidden {
+        cmd = cmd.mut_subcommand(name, |c| c.about(None).long_about(None));
+    }
+    cmd
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1972,6 +1986,21 @@ mod tests {
             let cli = Cli::try_parse_from(argv).unwrap();
             assert_eq!(cli.machine.as_deref(), Some("vps"), "{argv:?}");
         }
+    }
+
+    /// `upload` is for Dray's own contributors (#1501): it runs, but neither
+    /// `--help` nor a completion's description offers it.
+    #[test]
+    fn upload_runs_but_is_not_offered() {
+        assert!(matches!(
+            Cli::try_parse_from(["dray", "upload", "shot.png"]),
+            Ok(Cli { command: Command::Upload(_), .. })
+        ));
+        let help = Cli::command().render_help().to_string();
+        assert!(!help.contains("upload"), "{help}");
+        let mut zsh = Vec::new();
+        clap_complete::generate(clap_complete::Shell::Zsh, &mut completion_command(), "dray", &mut zsh);
+        assert!(!String::from_utf8(zsh).unwrap().contains("Upload screenshots"));
     }
 
     /// Every bot verb rides `--machine` to that machine's server, `--ask`

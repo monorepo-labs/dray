@@ -1,3 +1,4 @@
+import { contributes, REPO } from "./contributor";
 import { bearer, HEAD_BYTES, keyFor, MAX_BYTES, sniff } from "./files";
 import { Limiter, type Window } from "./limiter";
 
@@ -10,9 +11,13 @@ export interface Env {
   PUBLIC_URL: string;
   /// A stand-in for api.github.com, for tests. Unset in production.
   GITHUB_API_ORIGIN?: string;
+  /// Dray's own token, a secret, for asking GitHub whether a caller
+  /// contributes. Unset, nobody can upload.
+  GITHUB_LOOKUP_TOKEN?: string;
 }
 
-const DOCS = "https://www.drayhq.com/docs/cli/upload";
+const DOCS = `https://github.com/${REPO}/blob/main/CONTRIBUTING.md#screenshots-and-videos`;
+const NOT_A_CONTRIBUTOR = `Uploads are for Dray contributors: collaborators of ${REPO}, members of its org, and authors of an open pull request there. Open your PR first, then upload.`;
 const ACCEPTED = ["png", "jpg", "gif", "webp", "mp4", "webm", "mov"];
 const PER_ADDRESS: Window[] = [{ max: 120, secs: 3600 }];
 const PER_USER: Window[] = [
@@ -21,13 +26,15 @@ const PER_USER: Window[] = [
 ];
 
 export default {
-  /// One file for a PR body (#1477, #1479), sent as the raw request body with
-  /// the caller's GitHub token as a bearer. The token is checked against
-  /// GitHub and dropped: never stored, logged or passed anywhere else.
+  /// One file for a Dray PR body (#1477, #1479), sent as the raw request body
+  /// with the caller's GitHub token as a bearer. The token only says who is
+  /// calling and is then dropped: never stored, logged or passed anywhere
+  /// else. Whether they contribute is asked with Dray's own token (#1501).
   /// Answers the public URL.
   ///
-  /// 401 a token GitHub refuses, 411 no Content-Length, 413 too big, 415 not
-  /// a type taken, 429 the rate limit, 503 no public URL configured.
+  /// 401 a token GitHub refuses, 403 not a Dray contributor, 411 no
+  /// Content-Length, 413 too big, 415 not a type taken, 429 the rate limit,
+  /// 503 no public URL or lookup token configured, or the lookup token refused.
   async fetch(req: Request, env: Env): Promise<Response> {
     const path = new URL(req.url).pathname;
     if (path !== "/") return json({ error: "not_found" }, 404);
@@ -35,7 +42,7 @@ export default {
     if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405, { Allow: "POST" });
 
     const publicUrl = (env.PUBLIC_URL ?? "").replace(/\/+$/, "");
-    if (!publicUrl) return json({ error: "uploads_off" }, 503);
+    if (!publicUrl || !env.GITHUB_LOOKUP_TOKEN) return json({ error: "uploads_off" }, 503);
     const token = bearer(req.headers.get("authorization"));
     if (!token) return json({ error: "github_token_required" }, 401);
     // The write streams straight to R2, which wants the length up front.
@@ -49,7 +56,15 @@ export default {
     const user = await githubUser(token, env.GITHUB_API_ORIGIN);
     if (user === "refused") return json({ error: "github_token_invalid" }, 401);
     if (user === "unreachable") return json({ error: "github_unreachable" }, 502);
+    // Counted before the lookup, so a stranger retrying costs our token little.
     if (await overLimit(env, `user:${user.id}`, PER_USER)) return slowDown();
+    const verdict = await contributes(user, env.GITHUB_LOOKUP_TOKEN, env.GITHUB_API_ORIGIN || undefined);
+    if (verdict === "stranger") return json({ error: "not_a_contributor", message: NOT_A_CONTRIBUTOR }, 403);
+    if (verdict === "unreachable") return json({ error: "github_unreachable" }, 502);
+    if (verdict === "lookup_refused") {
+      console.error("[upload] GitHub refused the lookup token; renew GITHUB_LOOKUP_TOKEN");
+      return json({ error: "contributor_check_failed" }, 503);
+    }
 
     const reader = req.body?.getReader();
     const head = reader ? await readHead(reader, HEAD_BYTES) : [];
@@ -109,7 +124,10 @@ function overLimit(env: Env, name: string, windows: Window[]): Promise<boolean> 
 
 /// Who GitHub says holds `token`. A token for an Actions run (`ghs_…`) is
 /// refused here: it is no user.
-async function githubUser(token: string, origin?: string): Promise<{ id: number } | "refused" | "unreachable"> {
+async function githubUser(
+  token: string,
+  origin?: string,
+): Promise<{ id: number; login: string } | "refused" | "unreachable"> {
   try {
     const res = await fetch(`${origin || "https://api.github.com"}/user`, {
       headers: {
@@ -122,8 +140,8 @@ async function githubUser(token: string, origin?: string): Promise<{ id: number 
     });
     if (res.status === 401 || res.status === 403) return "refused";
     if (!res.ok) return "unreachable";
-    const id = ((await res.json()) as { id?: unknown }).id;
-    return typeof id === "number" ? { id } : "unreachable";
+    const { id, login } = (await res.json()) as { id?: unknown; login?: unknown };
+    return typeof id === "number" && typeof login === "string" ? { id, login } : "unreachable";
   } catch {
     return "unreachable";
   }
