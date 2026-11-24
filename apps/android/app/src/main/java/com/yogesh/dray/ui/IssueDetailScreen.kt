@@ -99,6 +99,7 @@ fun IssueDetailScreen(server: String, id: String, identifier: String, back: () -
             val read = IssueDetail.decode(store.call(server, "get_issue", jsonOf("identifier" to identifier, "id" to id)))
                 ?: throw IllegalStateException("The issue could not be read.")
             model.details[id] = read
+            model.refreshed(read.issue)
             failure = null
         } catch (e: CancellationException) {
             throw e

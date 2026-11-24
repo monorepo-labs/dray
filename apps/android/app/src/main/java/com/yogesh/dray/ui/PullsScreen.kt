@@ -68,7 +68,7 @@ import com.yogesh.dray.store.PullsModel
 import com.yogesh.dray.store.Store
 import com.yogesh.dray.store.botOf
 import com.yogesh.dray.store.repoOf
-import com.yogesh.dray.store.trackerServer
+import com.yogesh.dray.store.trackerOr
 import com.yogesh.dray.wire.parseDate
 import com.yogesh.dray.wire.shortAge
 import kotlinx.coroutines.delay
@@ -111,7 +111,7 @@ fun PullsScreen(back: () -> Unit, open: (PullRow) -> Unit) {
     val connected = store.live.filter { store.serverState[it.id] == ConnState.Connected }.map { it.id }
     val keys = pullsKeys(store, picks.space)
     // Before any server is up, the last search's server stands in, so its answer draws.
-    val home = store.trackerServer ?: model.home
+    val home = store.trackerOr(model.home)
     val rows = allRows(store, model, picks.people, picks.owner, picks.space, keys, home)
     val repos = rows.map { it.repoName }.distinct().sorted()
     val repoShown = picks.repo?.takeIf { it in repos }
@@ -179,6 +179,7 @@ fun PullsScreen(back: () -> Unit, open: (PullRow) -> Unit) {
                 }
                 when {
                     missing != null && rows.isEmpty() -> item("missing") { Note(missing.sentence) }
+                    search != null && home == null -> item("waiting") { Reading("Waiting for a server…") }
                     search == null && keys.isEmpty() -> item("none") { Note("Attach a project with a GitHub remote to see its pull requests.") }
                     !loaded && rows.isEmpty() -> item("reading") { Reading() }
                     sections.isEmpty() && !(rows.isEmpty() && errors.isNotEmpty()) -> item("empty") {

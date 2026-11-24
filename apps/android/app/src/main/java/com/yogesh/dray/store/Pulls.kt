@@ -40,6 +40,12 @@ val Store.trackerServer: String?
         return (up.firstOrNull { connection(it.id)?.welcome?.dictation == true } ?: up.firstOrNull())?.id
     }
 
+/**
+ * [trackerServer], else the server a page last read through while it is still switched on, so its
+ * kept answers draw before one is up. One switched off never stands in: its answers stay hidden.
+ */
+fun Store.trackerOr(last: String?): String? = trackerServer ?: last?.takeIf { h -> live.any { it.id == h } }
+
 /** The bot a session is a task of, at any depth: its parents up to a bot's chat. */
 fun Store.botOf(key: SessionKey): Bot? {
     var at = key
@@ -216,22 +222,29 @@ class PullsModel(private val store: Store, private val cache: Cache) {
         searches[searchKey(home, filter, owner)]?.prs.orEmpty().mapNotNull { p ->
             val listing = p.mark.listing ?: return@mapNotNull null
             val repo = marksRepo(p.mark.url) ?: return@mapNotNull null
-            val at = checkouts[repo] ?: ProjectKey(home, "github:${p.repo}")
+            val at = checkout(repo) ?: ProjectKey(home, "github:${p.repo}")
             PullRow(at.server, at.path, repo, p.mark, listing)
         }
 
     fun searched(server: String?, filter: String, owner: String?) = server != null && searches[searchKey(server, filter, owner)] != null
 
+    /** A repo's checkout, where its server is still switched on: rows never point at one that is off. */
+    private fun checkout(repo: String): ProjectKey? = checkouts[repo]?.takeIf { at -> store.live.any { it.id == at.server } }
+
     /** A row any read holds, by its link: what a PR's page opens on before its own read lands. */
     fun row(url: String): PullRow? {
+        val on = store.live.map { it.id }.toSet()
         for ((key, list) in marks) {
+            if (key.server !in on) continue
             val mark = list.firstOrNull { it.url == url } ?: continue
             return PullRow(key.server, key.path, marksRepo(url) ?: continue, mark, mark.listing ?: continue)
         }
         for ((key, s) in searches) {
+            val server = key.substringBefore('\u0001')
+            if (server !in on) continue
             val p = s.prs.firstOrNull { it.mark.url == url } ?: continue
             val repo = marksRepo(url) ?: continue
-            val at = checkouts[repo] ?: ProjectKey(key.substringBefore('\u0001'), "github:${p.repo}")
+            val at = checkout(repo) ?: ProjectKey(server, "github:${p.repo}")
             return PullRow(at.server, at.path, repo, p.mark, p.mark.listing ?: continue)
         }
         return null
