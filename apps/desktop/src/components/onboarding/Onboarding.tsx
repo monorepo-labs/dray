@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 import type { Bot } from "@/types/events";
 
 import BotTiles from "./BotTiles";
-import Welcome from "./Welcome";
+import Welcome, { MUSIC_AT } from "./Welcome";
 import { type AgentSetup, type GithubSetup, type SetupState, useAgentSetup, useGithubSetup } from "./agents";
 import {
   finishOnboarding,
@@ -23,7 +23,7 @@ import {
   useOnboarding,
   useWelcomeSound,
 } from "./state";
-import { playWelcomeSound, WELCOME_SOUNDS } from "./welcomeSounds";
+import { playWelcomeSound, startOnboardingMusic, WELCOME_SOUNDS } from "./welcomeSounds";
 import "./onboarding.css";
 
 /// How long a finished setup stays on screen before the flow moves on by itself.
@@ -58,6 +58,19 @@ function Flow({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }) {
   const [step, setStep] = useState<"welcome" | "setup" | "bot">("welcome");
   const agents = useAgentSetup();
   const github = useGithubSetup();
+  const sound = useWelcomeSound();
+  // From the welcome line to the end, over every step; leaving fades it out.
+  useEffect(() => {
+    if (sound === "none") return;
+    let stop: (() => void) | undefined;
+    const timer = setTimeout(() => (stop = startOnboardingMusic()), MUSIC_AT);
+    return () => {
+      clearTimeout(timer);
+      stop?.();
+    };
+    // Once per showing, like the welcome sound.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <div className="fixed inset-0 z-[900] flex flex-col overflow-hidden bg-black text-white select-none">
       <header data-tauri-drag-region="deep" className="relative z-10 flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">

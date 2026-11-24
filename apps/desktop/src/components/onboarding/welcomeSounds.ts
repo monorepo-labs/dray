@@ -155,6 +155,123 @@ function noise(ctx: AudioContext, from: number, until: number) {
   return src;
 }
 
+const SIXTEENTH = 60 / 124 / 4;
+// D, A, Bm, G: four bars, looping. Every voice stays above ~140Hz or leans on
+// harmonics, since a laptop's speakers drop anything lower.
+const CHORDS = [
+  [293.66, 369.99, 440, 587.33],
+  [277.18, 329.63, 440, 554.37],
+  [293.66, 369.99, 493.88, 587.33],
+  [293.66, 392, 493.88, 587.33],
+];
+const ROOTS = [146.83, 110, 123.47, 98];
+const ARP = [0, 1, 2, 3, 1, 2, 3, 2];
+// The hook, in eighths; 0 rests.
+const LEAD = [
+  [880, 0, 739.99, 880, 1174.66, 0, 880, 0],
+  [1108.73, 0, 880, 659.25, 880, 0, 1108.73, 0],
+  [987.77, 0, 739.99, 987.77, 1174.66, 0, 1108.73, 987.77],
+  [880, 0, 783.99, 0, 987.77, 0, 880, 0],
+];
+
+/// Onboarding's music after the logo: a bright looping game-start groove.
+/// The first bar is the arpeggio alone, then drums, bass and the hook come in.
+/// Returns a stop that fades it out.
+export function startOnboardingMusic(): () => void {
+  let ctx: AudioContext;
+  try {
+    ctx = new AudioContext();
+  } catch {
+    return () => {};
+  }
+  const master = ctx.createGain();
+  master.gain.setValueAtTime(0.0001, ctx.currentTime);
+  master.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + 0.6);
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -18;
+  comp.ratio.value = 3;
+  master.connect(comp).connect(ctx.destination);
+  const hall = makeHall(ctx, 2.5);
+  const wet = ctx.createGain();
+  wet.gain.value = 0.18;
+  hall.connect(wet).connect(master);
+
+  const noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+  const data = noiseBuf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+
+  const pluck = (hz: number, t: number, type: OscillatorType, level: number, decay: number, cutoff: number, send = 0) => {
+    const lp = filter(ctx, "lowpass", cutoff);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(level, t + 0.005);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+    lp.connect(env).connect(master);
+    if (send) {
+      const s = ctx.createGain();
+      s.gain.value = send;
+      env.connect(s).connect(hall);
+    }
+    voice(ctx, lp, hz, type, 0, t, t + decay + 0.02, 1);
+  };
+  const hit = (t: number, type: BiquadFilterType, hz: number, level: number, decay: number) => {
+    const src = ctx.createBufferSource();
+    src.buffer = noiseBuf;
+    const f = filter(ctx, type, hz);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(level, t);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+    src.connect(f).connect(env).connect(master);
+    src.start(t);
+    src.stop(t + decay + 0.02);
+  };
+  const kick = (t: number) => {
+    const osc = ctx.createOscillator();
+    osc.frequency.setValueAtTime(180, t);
+    osc.frequency.exponentialRampToValueAtTime(50, t + 0.12);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.9, t);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+    osc.connect(env).connect(master);
+    osc.start(t);
+    osc.stop(t + 0.3);
+    hit(t, "highpass", 3000, 0.25, 0.015);
+  };
+
+  const play = (n: number, t: number) => {
+    const s = n % 64;
+    const bar = Math.floor(s / 16);
+    const i = s % 16;
+    pluck(CHORDS[bar][ARP[i % 8]] * (i >= 8 ? 2 : 1), t, "triangle", 0.07, 0.2, 5000, 0.4);
+    if (n < 16) return;
+    if (i % 4 === 0) kick(t);
+    if (i % 4 === 2) hit(t, "highpass", 7000, 0.12, 0.05);
+    if (i === 4 || i === 12) hit(t, "bandpass", 1600, 0.35, 0.14);
+    if (i % 2 === 0) pluck(ROOTS[bar] * (i % 4 === 2 ? 2 : 1), t, "sawtooth", 0.14, 0.16, 1100);
+    const note = i % 2 === 0 ? LEAD[bar][i / 2] : 0;
+    if (note) pluck(note, t, "square", 0.045, 0.22, 3200, 0.5);
+  };
+
+  const start = ctx.currentTime + 0.05;
+  let step = 0;
+  const tick = () => {
+    while (start + step * SIXTEENTH < ctx.currentTime + 0.25) {
+      play(step, start + step * SIXTEENTH);
+      step++;
+    }
+  };
+  tick();
+  const timer = setInterval(tick, 60);
+  return () => {
+    clearInterval(timer);
+    const now = ctx.currentTime;
+    master.gain.cancelScheduledValues(now);
+    master.gain.setValueAtTime(Math.max(0.0001, master.gain.value), now);
+    master.gain.exponentialRampToValueAtTime(0.0001, now + 1.2);
+    setTimeout(() => void ctx.close(), 1500);
+  };
+}
+
 /// Decaying noise as an impulse: a large soft room.
 function makeHall(ctx: AudioContext, seconds: number) {
   const hall = ctx.createConvolver();

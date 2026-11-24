@@ -51,7 +51,7 @@ export function setFreshMachine(on: boolean) {
 }
 
 const SOUND = "dray.dev.onboarding.sound";
-let sound: WelcomeSound = WELCOME_SOUNDS.find((s) => s.id === localStorage.getItem(SOUND))?.id ?? "glow";
+let sound: WelcomeSound = WELCOME_SOUNDS.find((s) => s.id === localStorage.getItem(SOUND))?.id ?? "air";
 
 /// The welcome sound take picked by ear in the dev switch.
 export function useWelcomeSound(): WelcomeSound {

@@ -11,6 +11,8 @@ const SHINE_AT = 1600;
 const LIT_AT = SHINE_AT + 500;
 const LOGO_OUT_AT = 4600;
 const TEXT_AT = 5200;
+/// The music comes in with the welcome line.
+export const MUSIC_AT = TEXT_AT;
 /// Each word of the welcome rises a beat after the one before it.
 const WORD_STEP = 120;
 const NEXT_AT = 9200;
