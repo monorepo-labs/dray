@@ -576,6 +576,11 @@ function ContinueCard({
             ? "bg-[#EDEDEF] text-[#0A0A0A] hover:bg-[#E2E2E5] focus-visible:ring-black/40"
             : "bg-[#242424] text-white hover:bg-[#2C2C2C] focus-visible:ring-white/40",
         row ? "col-span-2 h-24 items-center justify-between px-8" : "min-h-48 flex-col justify-between p-8",
+        // Bare on its own row, nothing marks the card's edge, so the label
+        // lines up with the heading's ink instead: GateHeading's 102px indent,
+        // 2px more for the "C"'s side bearing against the heading's digit, less
+        // the Borders grid's 1px pad. Measured off the pixels.
+        bare && row && (page ? "pl-[103px] max-lg:pl-0" : "pl-[104px] max-lg:pl-0"),
       )}
     >
       {row ? (
