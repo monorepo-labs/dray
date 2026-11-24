@@ -83,6 +83,7 @@ fn branches() -> BranchList {
                     .flatten(),
             )
             .collect(),
+        remote_branches: Vec::new(),
         default_base: Some("origin/main".into()),
         dirty: 2,
     }

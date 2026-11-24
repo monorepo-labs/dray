@@ -149,6 +149,10 @@ data class StatusEvent(val sessionId: String, val status: String, val modified: 
 @Serializable
 data class TitleEvent(val sessionId: String, val title: String)
 
+/** `session_deleted`: another client deleted a session. */
+@Serializable
+data class DeletedEvent(val sessionId: String)
+
 @Serializable
 data class Queued(val id: String, val text: String, val attachmentPaths: List<String> = emptyList())
 

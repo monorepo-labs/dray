@@ -2059,7 +2059,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             &session_id, Some(crate::bots::Act::Deleted), &sink.clone(), crate::delete_session(&session_id, sink),
         ).await;
         fork_session(session_id: String, fork_id: String, worktree: bool) =>
-            crate::fork_session(&session_id, &fork_id, worktree).await;
+            crate::fork_session(&session_id, &fork_id, worktree, sink).await;
         session_index_item(session_id: String) => crate::session_index_item(&session_id).await;
         session_keeps_children(session_id: String) => crate::session_keeps_children(&session_id).await;
         fx_subagent_events(session_id: String, agent: String) =>
@@ -2080,7 +2080,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         bot_stalls() => ok(live_stalls());
         worktree_disposition(session_id: String) =>crate::worktree_disposition(&session_id).await;
         remove_session_worktree(session_id: String) => crate::remove_session_worktree(&session_id).await;
-        detach_session(session_id: String) => store::detach_session(&session_id).await;
+        detach_session(session_id: String) => crate::detach_session(&session_id, sink).await;
         attach_session(session_id: String, bot: String) => crate::orchestration::attach_to_bot(&session_id, &bot, &sink).await.map_err(crate::Fail::from);
         set_auto_continue(session_id: String, on: bool) => crate::auto_continue::set_auto_continue(session_id, on, sink).await;
         list_session_index_items(archived: bool) => store::list_session_index_items(archived).await;
