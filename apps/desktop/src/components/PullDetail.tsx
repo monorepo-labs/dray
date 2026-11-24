@@ -311,7 +311,8 @@ export function StartBox({
   disabled,
   taskDisabled,
   taskControls,
-  botTitle,
+  botPick,
+  botAction,
   starting,
   cloning,
   onStart,
@@ -331,8 +332,11 @@ export function StartBox({
   taskDisabled?: boolean;
   /// Drawn after the Task side's pickers.
   taskControls?: React.ReactNode;
-  /// The arrow's hint on the Bot side.
-  botTitle?: (bot: Bot) => string;
+  /// The bot the Bot side sends to, where the caller keeps its own pick.
+  botPick?: Bot | null;
+  /// Drawn on the Bot side in place of the bot menu and the arrow, handed a
+  /// send to any bot.
+  botAction?: (send: (bot: Bot) => void) => React.ReactNode;
   starting: boolean;
   cloning: boolean;
   onStart: (bot: Bot | null) => void;
@@ -341,7 +345,7 @@ export function StartBox({
 }) {
   const [botId, setBotId] = useLocalStorage<string | null>(LAST_BOT_KEY, null);
   const [mode, setMode] = useLocalStorage<"bot" | "task">(LAST_MODE_KEY, "bot");
-  const bot = bots.find((b) => b.id === botId) ?? bots[0] ?? null;
+  const bot = botPick !== undefined ? botPick : (bots.find((b) => b.id === botId) ?? bots[0] ?? null);
   const toBot = !!bot && mode === "bot";
   const off = disabled || (!toBot && !!taskDisabled);
   const start = () => {
@@ -349,11 +353,15 @@ export function StartBox({
     if (toBot) setBotId(bot.id);
     onStart(toBot ? bot : null);
   };
+  const sendTo = (to: Bot) => {
+    if (!disabled) onStart(to);
+  };
+  const custom = toBot && !!botAction;
 
   return (
-    // The chat composer's own card: in light the shadow draws it and the
-    // edge is clear, in dark the edge draws it and there is no shadow.
-    <div className="rounded-2xl border border-edge-surface bg-composer shadow-[var(--shadow-composer,var(--shadow-surface))] backdrop-blur-xl">
+    // The chat composer's card (edge in dark, shadow in light) at the side
+    // panel's own radius, the sheet's 8px, since it sits inside one.
+    <div className="rounded-[8px] border border-edge-surface bg-composer shadow-[var(--shadow-composer,var(--shadow-surface))] backdrop-blur-xl">
       {children(start)}
       {/* One row, never two: the pickers shrink and truncate rather than push
           the arrow onto a line of its own. */}
@@ -365,7 +373,7 @@ export function StartBox({
             options={[
               // With several, the menu beside it names the bot, so the half
               // says only what kind of task this is.
-              bots.length > 1
+              bots.length > 1 || botAction
                 ? { value: "bot", label: "Bot" }
                 : {
                     value: "bot",
@@ -385,28 +393,32 @@ export function StartBox({
         )}
         {/* The reused pickers keep their look; only their labels may shorten. */}
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden [&_button]:min-w-0 [&_button>span]:min-w-0 [&_button>span]:truncate">
-          {toBot && bots.length > 1 && <BotMenu bots={bots} bot={bot} onPick={setBotId} />}
+          {toBot && !custom && bots.length > 1 && <BotMenu bots={bots} bot={bot} onPick={setBotId} />}
           {!toBot && <TaskModelPicker server={server} picks={picks} onChange={onPicks} onRepair={onRepairPicks} />}
           {/* The New Task page's own picker, over this repo's checkouts and a
               stand-in on each machine without one. */}
           {!toBot && <MachineSelector projects={machines} value={machine} onSelect={onMachine} />}
           {!toBot && taskControls}
         </div>
-        <span className="shrink-0">
-          <SendButton
-            disabled={off}
-            onClick={start}
-            title={
-              cloning
-                ? "Cloning…"
-                : starting
-                  ? "Starting…"
-                  : toBot
-                    ? (botTitle?.(bot) ?? `Start task in ${bot.name}`)
-                    : "Start task"
-            }
-          />
-        </span>
+        {custom ? (
+          botAction(sendTo)
+        ) : (
+          <span className="shrink-0">
+            <SendButton
+              disabled={off}
+              onClick={start}
+              title={
+                cloning
+                  ? "Cloning…"
+                  : starting
+                    ? "Starting…"
+                    : toBot
+                      ? `Start task in ${bot.name}`
+                      : "Start task"
+              }
+            />
+          </span>
+        )}
       </div>
     </div>
   );

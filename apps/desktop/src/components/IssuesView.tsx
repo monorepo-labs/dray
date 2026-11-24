@@ -23,7 +23,7 @@ import Avatar from "@/components/Avatar";
 import { PriorityMenu, StatusMenu } from "@/components/IssueMenus";
 import IssueLabelChip from "@/components/IssueLabelChip";
 import IssueStateIcon from "@/components/IssueStateIcon";
-import { IssueQuickActions } from "@/components/IssueStart";
+import { IssueQuickActions, IssueTaskChip } from "@/components/IssueStart";
 import { ListGroup, RepoMenu } from "@/components/ListGroup";
 import Segmented from "@/components/Segmented";
 import LinearIcon from "@/components/LinearIcon";
@@ -1202,6 +1202,8 @@ function IssueRow({
           some rows and text on others is worse than one that is never a link.
           ⌘-click on the row still leaves for the tracker, where they are
           listed. */}
+      {/* Tasks linked to it, the PR chip's shape with a task's mark. */}
+      <IssueTaskChip issue={issue} className="hidden @md:inline-flex" />
       {issue.pullRequests.length > 0 && (
         <span className="hidden shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-muted-foreground @md:inline-flex">
           <GitPullRequest className="size-3" />

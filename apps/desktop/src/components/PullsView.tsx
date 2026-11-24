@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ChevronDown, MessageSquare, RefreshCw } from "lucide-react";
 
 import Avatar from "@/components/Avatar";
-import { SessionLink } from "@/components/PullDetail";
+import TaskChip from "@/components/TaskChip";
 import { ListGroup, RepoMenu } from "@/components/ListGroup";
 import { MissingCli } from "@/components/PrPanel";
 import PrStateIcon, { ChecksRunningIcon } from "@/components/PrStateIcon";
@@ -262,7 +262,7 @@ export default function PullsView({
                 <PullRow
                   key={row.mark.url}
                   row={row}
-                  session={sessionsFor(row)[0] ?? null}
+                  sessions={sessionsFor(row)}
                   botOf={botOf}
                   onOpenSession={onOpenSession}
                   showRepo={!repoShown && repos.length > 1}
@@ -282,7 +282,7 @@ export default function PullsView({
 /// plain click opens the pane beside the list.
 function PullRow({
   row,
-  session,
+  sessions,
   botOf,
   onOpenSession,
   showRepo,
@@ -290,9 +290,9 @@ function PullRow({
   onPick,
 }: {
   row: InboxRow;
-  /// Its latest task, live or settled — named on the row so a PR nobody has
-  /// worked on stands out, and opened from there.
-  session: SessionIndexItem | null;
+  /// Its tasks, live or settled, newest first — a chip on the row so a PR
+  /// nobody has worked on stands out, and opened from there.
+  sessions: SessionIndexItem[];
   botOf: (item: SessionIndexItem) => Bot | undefined;
   onOpenSession: (item: SessionIndexItem) => void;
   showRepo: boolean;
@@ -337,13 +337,8 @@ function PullRow({
         </span>
       )}
       <Counts added={listing.additions} removed={listing.deletions} className="hidden shrink-0 @lg:inline" />
-      {session ? (
-        <SessionLink
-          item={session}
-          bot={botOf(session)}
-          onOpen={() => onOpenSession(session)}
-          className="hidden max-w-44 shrink-0 text-muted-foreground @md:flex"
-        />
+      {sessions.length > 0 ? (
+        <TaskChip tasks={sessions} botOf={botOf} onOpen={onOpenSession} className="hidden @md:inline-flex" />
       ) : (
         <span className="hidden w-20 shrink-0 truncate text-muted-foreground/50 @md:inline">
           {listing.isCrossRepository ? "Read only" : "No task"}

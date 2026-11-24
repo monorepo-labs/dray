@@ -4,7 +4,7 @@ import { rememberedModel, usableEffort, usableModel } from "@/lib/model";
 import { stanceFor } from "@/lib/permission";
 import type { PrPicks } from "@/lib/prInbox";
 import { invoke, LOCAL, serverOfPath, type ServerId } from "@/lib/transport";
-import type { IssueRef, Model, Project } from "@/types/events";
+import type { IssueRef, Model, Project, SessionIndexItem } from "@/types/events";
 
 /// What a task from the issues page runs on: a new task's picks.
 export type IssuePicks = PrPicks & { useWorktree: boolean };
@@ -68,4 +68,11 @@ export function issuePrompt(
 ): string {
   const head = [issueTag(issue.identifier, issue.title), issue.url].filter(Boolean).join("\n");
   return [head, body?.trim(), note.trim()].filter(Boolean).join("\n\n");
+}
+
+/// Tasks linked to `issue`, newest first.
+export function tasksForIssue(items: readonly SessionIndexItem[], issue: Pick<IssueRef, "identifier">) {
+  return items
+    .filter((i) => i.issues.some((r) => r.identifier === issue.identifier))
+    .sort((a, b) => b.created.localeCompare(a.created));
 }

@@ -178,6 +178,7 @@ import { noteMergeForStar, useStarPrompt } from "@/hooks/useStarPrompt";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { readIssueDetail, useSessionIssues } from "@/hooks/useIssues";
 import { IssueComposer, IssueStartContext, type IssueStarter } from "@/components/IssueStart";
+import { TaskIconSwitch } from "@/components/TaskChip";
 import { sessionsAnswered, useSessions } from "@/hooks/useSessions";
 import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailability";
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
@@ -204,7 +205,7 @@ import { useUpdater } from "@/hooks/useUpdater";
 import { appendToDraft, onDraftWrite, readDraft, writeDraft } from "@/hooks/useDraft";
 import { draftKey, useDrafts } from "@/hooks/useDrafts";
 import { setIssueOpener } from "@/lib/issue";
-import { issuePrompt, issueRepo, lastTaskPicks, projectForIssue, usablePicks, type IssuePicks } from "@/lib/issueStart";
+import { issuePrompt, issueRepo, lastTaskPicks, projectForIssue, tasksForIssue, usablePicks, type IssuePicks } from "@/lib/issueStart";
 import { readIssueTracker, setIssueRepo, setIssueTracker } from "@/lib/issueTracker";
 import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
@@ -3275,6 +3276,11 @@ function App() {
     bots,
     start: startIssueTask,
     send: sendIssueToBot,
+    // A bot's own chat can link the issue it was sent; its task is the work.
+    tasksFor: (issue) =>
+      tasksForIssue([...sessionIndexItems, ...otherIndexSide], issue).filter((i) => !botAt(bots, i.cwd)),
+    botOf: botOfPrSession,
+    onOpenTask: openPrSession,
   };
 
   /// Writes a session's settled or pinned flag and takes the sidebar wherever
@@ -4876,6 +4882,7 @@ function App() {
         )
       }
     >
+      {(issuesOpen || pullsOpen) && <TaskIconSwitch />}
       {/* Hidden rather than unmounted, like everything else in this column:
           the list, its filters and its scroll survive a trip into a session and
           back, which is the trip this page exists to make. */}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { issuePrompt, issueRepo, projectForIssue } from "@/lib/issueStart";
-import type { Project } from "@/types/events";
+import { issuePrompt, issueRepo, projectForIssue, tasksForIssue } from "@/lib/issueStart";
+import type { Project, SessionIndexItem } from "@/types/events";
 
 const gh = { tracker: "github" as const, identifier: "Acme/App#12" };
 const project = (path: string, remote?: string, lastSelected = ""): Project => ({
@@ -59,5 +59,18 @@ describe("issuePrompt", () => {
       "#acme/app#12 Fix login\nhttps://github.com/acme/app/issues/12\n\nBody\n\nKeep it small",
     );
     expect(issuePrompt(issue, null, "Note")).toBe("#acme/app#12 Fix login\nhttps://github.com/acme/app/issues/12\n\nNote");
+  });
+});
+
+describe("tasksForIssue", () => {
+  const item = (sessionId: string, created: string, identifier: string | null) =>
+    ({
+      sessionId,
+      created,
+      issues: identifier ? [{ tracker: "github", id: "", identifier, title: "", url: "" }] : [],
+    }) as unknown as SessionIndexItem;
+  it("lists tasks linked to the issue, newest first", () => {
+    const list = [item("a", "1", "acme/app#12"), item("b", "3", "acme/app#12"), item("c", "2", "acme/app#13"), item("e", "5", null)];
+    expect(tasksForIssue(list, { identifier: "acme/app#12" }).map((i) => i.sessionId)).toEqual(["b", "a"]);
   });
 });
