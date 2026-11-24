@@ -39,7 +39,7 @@ Picking a branch checks it out in the project for real. If the project has uncom
 
 The model button shows the agent's mark, the model name, and the effort beside it. Click it to open the model menu.
 
-- **Agent.** On a new task, a row of agent marks sits at the top of the menu: Claude Code, Codex, pi, fx and Grok. `⌘⇧A` cycles them. An agent that is not installed carries a red dot; picking it shows how to install it under the composer. The agent is fixed once the session starts.
+- **Agent.** On a new task, a row of agent marks sits at the top of the menu: Claude Code, Codex, pi, fx, Grok and OpenCode. `⌘⇧A` cycles them. An agent that is not installed carries a red dot; picking it shows how to install it under the composer. The agent is fixed once the session starts.
 - **Model.** Click a model to pick it. Hover a model with effort levels to open its effort submenu.
 - **fx provider.** On fx, the top row also holds fx's providers. This one can change mid-session, but not while a turn runs ("Provider can't be changed mid-stream"). It also changes fx's own default provider on your machine.
 
@@ -70,6 +70,7 @@ Fast mode runs the model at its faster tier. The **Fast mode** switch sits in th
 | fx | Models that report a fast tier. A change applies from your next turn. |
 | Grok | Grok 4.7 only. |
 | pi | None. |
+| OpenCode | None. |
 
 If the agent refuses fast mode, its own sentence shows under the switch, for example "Fast mode disabled · usage credits exhausted". The switch stays as you set it. The note clears once a turn runs fast again, and shows only while the switch is on.
 
@@ -93,6 +94,7 @@ Each agent offers only the modes it can honour:
 | Grok | Ask every time, Auto, Bypass permissions. Grok has a plan mode of its own; see [Permissions](/using-dray/permissions#approve-a-plan). |
 | fx | Ask every time, Auto, Bypass permissions. |
 | pi | No picker. pi has no permission system of its own; an extension you install decides. |
+| OpenCode | All four. |
 
 When the agent asks, a card appears in the transcript. See [Permissions](/using-dray/permissions).
 
@@ -107,13 +109,14 @@ Some agents cannot take a change in the middle of a turn. There, the control dim
 | Grok | Permission mode |
 | fx | Provider. Model, effort, permission mode and fast mode stay open and apply to the next turn. |
 | pi | Nothing |
+| OpenCode | Permission mode |
 
 ## Send while a turn runs
 
 You do not have to wait. Type and press `⏎` during a turn, and the prompt is queued. It shows dimmed at the bottom of the transcript until the agent takes it. The send button's tooltip says "Send — queued onto this turn".
 
 - **Claude Code, Codex, pi and Grok** take the queued prompt into the running turn, usually at the next tool call.
-- **fx** takes one prompt per turn, so queued prompts wait for the turn to end and then go together as the next turn. Under the newest one, **Now** stops the running turn so they go at once. `⌘⏎` does the same.
+- **fx and OpenCode** take one prompt per turn, so queued prompts wait for the turn to end and then go together as the next turn. Under the newest one, **Now** stops the running turn so they go at once. `⌘⏎` does the same.
 
 **Esc** takes back the newest queued prompt and puts its text back in the box. The hint "Esc to cancel" sits under it.
 
@@ -157,7 +160,7 @@ They are suggestions to the agent, not commands Dray runs itself.
 | `⌘⇧P` | Next project (new task) |
 | `⌘⇧S` | Next server (new task) |
 | `⌘⇧T` | Toggle worktree (new task) |
-| `⌘⏎` | Send queued prompts now (fx) |
+| `⌘⏎` | Send queued prompts now (fx, OpenCode) |
 | `⌘S` | Save as draft (new task) |
 
 You can change any of these in Settings → Shortcuts.

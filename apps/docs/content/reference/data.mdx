@@ -53,7 +53,7 @@ Deleting a session removes, from this machine:
 - its worktree and the worktree's branch, if it had one,
 - any hidden sessions it started.
 
-It does not remove the agent's own record of the conversation. Claude Code, Codex, fx and Grok Build keep their own transcripts in their own folders (below). A pushed branch and any pull request stay on GitHub.
+It does not remove the agent's own record of the conversation. Claude Code, Codex, fx, Grok Build and OpenCode keep their own transcripts in their own folders (below). A pushed branch and any pull request stay on GitHub.
 
 **Settling** a session is not deleting it. Settle stops it and removes its browser profile, so it starts signed out of websites if you unsettle it. The transcript, attachments and worktree stay until you delete the worktree or the session. See [Sessions](/using-dray/sessions).
 
@@ -90,6 +90,7 @@ Dray runs each agent's own CLI and does not store agent logins. Each agent keeps
 | pi | `~/.pi/agent` |
 | fx | `~/.fx` |
 | Grok Build | `~/.grok` |
+| OpenCode | `~/.local/share/opencode`, settings in `~/.config/opencode` |
 | GitHub CLI | `gh`'s own config. Dray uses it for pull requests and GitHub issues and stores no GitHub token. |
 
 Signing in from Settings → Accounts runs the agent's own login, so the credential lands in that agent's folder. Two exceptions write there on your behalf:

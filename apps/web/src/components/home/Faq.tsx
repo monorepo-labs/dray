@@ -47,7 +47,7 @@ const FAQ: [string, string][] = [
   ],
   [
     "Which agents does Dray support?",
-    "Dray supports Claude Code, Codex, pi, fx and Grok Build.",
+    "Dray supports Claude Code, Codex, pi, fx, Grok Build and OpenCode.",
   ],
   [
     "Is Dray safe to use with my Claude subscription?",

@@ -24,7 +24,7 @@ Write the prompt for someone who has not read your conversation. The new session
 | `--project <path>` | The repo to run in. | The git repo you are in, then the calling session's project. |
 | `--model <alias>` | A model the agent knows, like `opus`, `sonnet`, `fable` or `haiku` on Claude Code, or a `provider/model` id on pi. | The calling session's model, if the agent is the same. Otherwise the agent's own default. |
 | `--effort <level>` | `low`, `medium`, `high`, `xhigh`, `max` or `ultra`. | The calling session's effort, if the agent is the same. Otherwise the model's default. |
-| `--harness <name>` | Which agent runs it: `claude_code`, `codex`, `pi`, `fx` or `grok`. | The calling session's agent, else Claude Code. |
+| `--harness <name>` | Which agent runs it: `claude_code`, `codex`, `pi`, `fx`, `grok` or `opencode`. | The calling session's agent, else Claude Code. |
 | `--base <session\|ref>` | Start the worktree from existing work: a session id, a branch, a tag or a commit. Committed work only. | `origin/<default branch>` |
 | `--title <title>` | The session's title. | One generated from the prompt. |
 | `--issue <ID>` | An issue this work is against, like `DRA-53` or `owner/repo#12`. Repeat for several. | None. |

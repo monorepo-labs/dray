@@ -36,7 +36,7 @@ dray server install
 dray server install --tools git,gh,claude_code
 ```
 
-Lists what is already here, asks what to install from what is missing, then starts the server. The choices are git, the GitHub CLI and the five agents (`claude_code`, `codex`, `pi`, `fx`, `grok`). On Linux it also offers **Browser for agents**, the system libraries `dray browser` needs, and **ffmpeg**, which `dray browser record` needs. Those two install with apt only.
+Lists what is already here, asks what to install from what is missing, then starts the server. The choices are git, the GitHub CLI and the six agents (`claude_code`, `codex`, `pi`, `fx`, `grok`, `opencode`). On Linux it also offers **Browser for agents**, the system libraries `dray browser` needs, and **ffmpeg**, which `dray browser record` needs. Those two install with apt only.
 
 `--tools` installs the ones you name without asking. With no terminal to ask in and no `--tools`, it installs nothing and says what is missing. Anything that needs admin rights it cannot get is printed for you to run yourself.
 
