@@ -2,9 +2,9 @@ import SwiftUI
 import UIKit
 
 /// `EMOJI` in react.rs, which refuses any other.
-let reactions = ["👍", "❤️", "😂", "🎉", "✅", "👀", "😢"]
+let reactions = ["👍", "👎", "❤️", "😂", "🎉", "✅", "👀", "😢"]
 
-private let reactionLabels = ["👀": "Seen", "✅": "Done", "🎉": "Celebrating", "👍": "Like", "❤️": "Love", "😂": "Laughing", "😢": "Sad"]
+private let reactionLabels = ["👀": "Seen", "✅": "Done", "🎉": "Celebrating", "👍": "Like", "👎": "Dislike", "❤️": "Love", "😂": "Laughing", "😢": "Sad"]
 
 /// The desktop's `ReactionBadge`: the page's colour, edged and ringed in it again, so it reads as cut out of the bubble.
 struct ReactionBadge: View {

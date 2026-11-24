@@ -348,8 +348,8 @@ pub struct IssueCard {
 pub struct React {
     /// The bot's chat: the calling session.
     pub session_id: String,
-    /// 👀 ✅ 🎉 👍 ❤️ 😂 😢, or the word for one: seen, done, celebrate, like,
-    /// love, laugh, sad.
+    /// 👀 ✅ 🎉 👍 👎 ❤️ 😂 😢, or the word for one: seen, done, celebrate,
+    /// like, dislike, love, laugh, sad.
     pub emoji: String,
 }
 

@@ -13,11 +13,12 @@ use crate::{session::manager, sink::Sink, Fail};
 /// The reactions there are, each with the word that also names it. A short
 /// fixed set, so each one keeps a single meaning the prompt can teach. The
 /// user picks from the same one.
-pub const EMOJI: [(&str, &str); 7] = [
+pub const EMOJI: [(&str, &str); 8] = [
     ("👀", "seen"),
     ("✅", "done"),
     ("🎉", "celebrate"),
     ("👍", "like"),
+    ("👎", "dislike"),
     ("❤️", "love"),
     ("😂", "laugh"),
     ("😢", "sad"),
@@ -165,6 +166,7 @@ mod tests {
         assert_eq!(emoji("✅\u{FE0F}"), Some("✅"));
         assert_eq!(emoji("celebrate"), Some("🎉"));
         assert_eq!(emoji("👍"), Some("👍"));
+        assert_eq!(emoji("dislike"), Some("👎"));
         assert_eq!(emoji("❤"), Some("❤️"));
         assert_eq!(emoji("❤️"), Some("❤️"));
         assert_eq!(emoji("Laugh"), Some("😂"));
