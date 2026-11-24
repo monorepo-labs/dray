@@ -27,6 +27,7 @@ import "../App.css";
 type Backdrop = "black" | "blue";
 type Cards = "dark" | "white";
 type Layout = "gaps" | "small" | "borders";
+type Exit = "card" | "title";
 type TakeProps = {
   hl: Highlight[];
   onAction: (label: string) => void;
@@ -34,6 +35,7 @@ type TakeProps = {
   backdrop?: Backdrop;
   cards?: Cards;
   layout?: Layout;
+  exit?: Exit;
 };
 
 const title = (h: Highlight) => changelogPlain(h.item.title ?? h.item.body);
@@ -525,6 +527,45 @@ function LandingCard({
   );
 }
 
+/// The page's way on, as a card of its own in the grid: a step lighter than
+/// the feature cards (#242424, the gate cards' own hover tone) with the label
+/// in full white. Solid white was tried and glared on the black. `row` lays it
+/// across both columns.
+/// On white cards it is a step darker, #EDEDEF with dark type.
+function ContinueCard({ row, onClose, white }: { row: boolean; onClose: () => void; white?: boolean }) {
+  const arrow = (
+    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden>
+      <path d="M4 12h14M12 5l7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" />
+    </svg>
+  );
+  return (
+    <button
+      type="button"
+      data-autofocus
+      onClick={onClose}
+      className={cn(
+        "flex cursor-pointer text-left outline-none transition-colors focus-visible:ring-1",
+        white
+          ? "bg-[#EDEDEF] text-[#0A0A0A] hover:bg-[#E2E2E5] focus-visible:ring-black/40"
+          : "bg-[#242424] text-white hover:bg-[#2C2C2C] focus-visible:ring-white/40",
+        row ? "col-span-2 h-24 items-center justify-between px-8" : "min-h-48 flex-col justify-between p-8",
+      )}
+    >
+      {row ? (
+        <>
+          <span className="text-[24px] leading-8 tracking-[-0.01em]">Continue</span>
+          {arrow}
+        </>
+      ) : (
+        <>
+          <span className="self-end">{arrow}</span>
+          <span className="text-[28px] leading-9 tracking-[-0.02em]">Continue</span>
+        </>
+      )}
+    </button>
+  );
+}
+
 /// The way out, a ghost button at the far end of the heading's line, lined
 /// up with its 40px line box. It takes focus on open, so Enter leaves at once.
 function ContinueButton({ onClose }: { onClose: () => void }) {
@@ -548,12 +589,23 @@ function ContinueButton({ onClose }: { onClose: () => void }) {
 /// Continue or Escape.
 ///
 /// White cards on the site's blue band are the default; black and dark cards
-/// stay behind switches. Two columns throughout, the last card across the
-/// row when the count is odd, so no count leaves a hole.
-function TakeLanding({ hl, onAction, onClose, backdrop = "blue", cards = "white", layout = "gaps" }: TakeProps) {
+/// stay behind switches. `exit` "card" puts Continue back in the grid as its
+/// last card instead of the title's line. Two columns throughout: with the
+/// title button an odd count's last card spans the row, and the Continue
+/// card fills the odd slot or takes its own row, so no count leaves a hole.
+function TakeLanding({
+  hl,
+  onAction,
+  onClose,
+  backdrop = "blue",
+  cards = "white",
+  layout = "gaps",
+  exit = "title",
+}: TakeProps) {
   const one = hl.length === 1;
   const blue = backdrop === "blue";
   const white = cards === "white";
+  const asCard = exit === "card";
   return (
     <Shell
       label="New in Dray"
@@ -569,7 +621,7 @@ function TakeLanding({ hl, onAction, onClose, backdrop = "blue", cards = "white"
         <div className="mx-auto flex w-full max-w-[1120px] flex-col pt-6">
           <div className="flex items-start justify-between gap-6">
             <GateHeading>{one ? "New in Dray." : `${hl.length} new things in Dray.`}</GateHeading>
-            <ContinueButton onClose={onClose} />
+            {!asCard && <ContinueButton onClose={onClose} />}
           </div>
           {/* Gaps and small gaps: 16px or 6px of the page between cards,
               stripes and all. Borders: cards edge to edge, a hairline
@@ -590,9 +642,10 @@ function TakeLanding({ hl, onAction, onClose, backdrop = "blue", cards = "white"
                 h={white ? onWhite(h) : h}
                 onAction={onAction}
                 white={white}
-                wide={hl.length % 2 === 1 && i === hl.length - 1}
+                wide={!asCard && hl.length % 2 === 1 && i === hl.length - 1}
               />
             ))}
+            {asCard && <ContinueCard row={hl.length % 2 === 0} onClose={onClose} white={white} />}
           </div>
         </div>
       </main>
@@ -648,7 +701,8 @@ function Row({
   backdrop,
   cards,
   layout,
-}: (typeof TAKES)[number] & { hl: Highlight[]; backdrop: Backdrop; cards: Cards; layout: Layout }) {
+  exit,
+}: (typeof TAKES)[number] & { hl: Highlight[]; backdrop: Backdrop; cards: Cards; layout: Layout; exit: Exit }) {
   const [open, setOpen] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
   const done = (line: string) => {
@@ -672,6 +726,7 @@ function Row({
           backdrop={backdrop}
           cards={cards}
           layout={layout}
+          exit={exit}
           onAction={(label) => done(`action: ${label}`)}
           onClose={() => done("closed, seen")}
         />
@@ -692,6 +747,7 @@ function Demo() {
     const l = params.get("layout");
     return l === "small" || l === "borders" ? l : "gaps";
   });
+  const [exit, setExit] = useState<Exit>(() => (params.get("exit") === "card" ? "card" : "title"));
   return (
     <TooltipProvider>
       <div className="mx-auto flex max-w-3xl flex-col gap-6 p-10">
@@ -773,11 +829,26 @@ function Demo() {
                 </Button>
               ))}
             </div>
+            <span className="ml-3 text-muted-foreground">Exit</span>
+            <div role="radiogroup" aria-label="F exit" className="flex gap-1">
+              {(["card", "title"] as const).map((e) => (
+                <Button
+                  key={e}
+                  role="radio"
+                  aria-checked={exit === e}
+                  size="sm"
+                  variant={exit === e ? "default" : "outline"}
+                  onClick={() => setExit(e)}
+                >
+                  {e === "card" ? "Card" : "Title button"}
+                </Button>
+              ))}
+            </div>
           </div>
         </header>
         <ul className="flex flex-col border-t border-border">
           {TAKES.filter((t) => !only || only.includes(t.id)).map((t) => (
-            <Row key={t.id} {...t} hl={hl} backdrop={backdrop} cards={cards} layout={layout} />
+            <Row key={t.id} {...t} hl={hl} backdrop={backdrop} cards={cards} layout={layout} exit={exit} />
           ))}
         </ul>
       </div>
