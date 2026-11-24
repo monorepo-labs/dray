@@ -26,7 +26,7 @@ import "../App.css";
 
 type Backdrop = "black" | "blue";
 type Cards = "dark" | "white";
-type Layout = "gaps" | "borders";
+type Layout = "gaps" | "small" | "borders";
 type TakeProps = {
   hl: Highlight[];
   onAction: (label: string) => void;
@@ -469,18 +469,32 @@ function ActionMono({ h, onAction, white }: { h: Highlight; onAction: (label: st
   );
 }
 
-/// One feature, as the sign-in gate draws a way in: a square #1C1C1C card,
-/// the picture or video on top, the title under
-/// it and any action as a small link. No description: the title is a
-/// sentence that says the whole thing, two lines at most.
+/// One feature, as the sign-in gate draws a way in: a square card, the
+/// picture or video on top, the title under it and any action as a small
+/// link. No description: the title is a sentence that says the whole thing,
+/// two lines at most.
 ///
 /// A highlight with no picture or video is text alone: the title at the top
 /// of a card the grid stretches to its neighbour's height, the action at its
 /// foot, rather than an empty box where a picture would be.
 ///
+/// `wide` is the odd count's last card, across the whole row: the picture
+/// keeps a column's width on the left and the title sits beside it, so the
+/// row is as tall as the others and the grid has no hole.
+///
 /// `white` is the white card, dark title, tried on the blue backdrop; its
 /// pictures are the `-white` captures, drawn on a white tile to match.
-function LandingCard({ h, onAction, white }: { h: Highlight; onAction: (label: string) => void; white?: boolean }) {
+function LandingCard({
+  h,
+  onAction,
+  white,
+  wide,
+}: {
+  h: Highlight;
+  onAction: (label: string) => void;
+  white?: boolean;
+  wide?: boolean;
+}) {
   const media = h.item.media[0];
   const fill = white ? "bg-white" : "bg-[#1C1C1C]";
   const heading = (
@@ -495,13 +509,13 @@ function LandingCard({ h, onAction, white }: { h: Highlight; onAction: (label: s
   );
   if (!media)
     return (
-      <article className={cn("flex flex-col justify-between gap-8 p-6", fill)}>
+      <article className={cn("flex flex-col justify-between gap-8 p-6", fill, wide && "col-span-2")}>
         {heading}
         <ActionMono h={h} onAction={onAction} white={white} />
       </article>
     );
   return (
-    <article className={cn("flex flex-col", fill)}>
+    <article className={cn(fill, wide ? "col-span-2 grid grid-cols-2" : "flex flex-col")}>
       <Media media={media} className={cn("aspect-video w-full", fill)} />
       <div className="flex flex-col gap-3 p-6">
         {heading}
@@ -511,57 +525,31 @@ function LandingCard({ h, onAction, white }: { h: Highlight; onAction: (label: s
   );
 }
 
-/// The page's way on, as a card of its own in the grid: a step lighter than
-/// the feature cards (#242424, the gate cards' own hover tone) with the label
-/// in full white. Solid white was tried and glared on the black. `row` lays it
-/// across both columns.
-/// On white cards it is a step darker, #EDEDEF with dark type.
-function ContinueCard({ row, onClose, white }: { row: boolean; onClose: () => void; white?: boolean }) {
-  const arrow = (
-    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden>
-      <path d="M4 12h14M12 5l7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" />
-    </svg>
-  );
+/// The way out, a ghost button at the far end of the heading's line, lined
+/// up with its 40px line box. It takes focus on open, so Enter leaves at once.
+function ContinueButton({ onClose }: { onClose: () => void }) {
   return (
     <button
       type="button"
       data-autofocus
       onClick={onClose}
-      className={cn(
-        "flex cursor-pointer text-left outline-none transition-colors focus-visible:ring-1",
-        white
-          ? "bg-[#EDEDEF] text-[#0A0A0A] hover:bg-[#E2E2E5] focus-visible:ring-black/40"
-          : "bg-[#242424] text-white hover:bg-[#2C2C2C] focus-visible:ring-white/40",
-        row ? "col-span-2 h-24 items-center justify-between px-8" : "min-h-48 flex-col justify-between p-8",
-      )}
+      className="mt-3.5 flex h-10 shrink-0 cursor-pointer items-center rounded-md px-4 text-[15px] text-white/80 outline-none transition-colors hover:bg-white/10 hover:text-white focus-visible:ring-1 focus-visible:ring-white/50"
     >
-      {row ? (
-        <>
-          <span className="text-[24px] leading-8 tracking-[-0.01em]">Continue</span>
-          {arrow}
-        </>
-      ) : (
-        <>
-          <span className="self-end">{arrow}</span>
-          <span className="text-[28px] leading-9 tracking-[-0.02em]">Continue</span>
-        </>
-      )}
+      Continue
     </button>
   );
 }
 
-/// F — landing, in the sign-in gate's own frame (#1277): black whatever the
-/// theme, the site's long stripes from its closing band behind it, rippling
-/// where the pointer crosses them as they do there (the gate's tiles and
-/// plain black lost to them), the light heading counting what is new, and the features as the gate's square cards 2px apart. The brand
-/// blue was tried and read too intense, and a hairline grid after the site's
-/// "Ticket to merge" section was tried and dropped. Nothing opens and
-/// nothing is picked: the reader scans the cards and leaves by Continue, the
-/// grid's last card, or Escape.
+/// F — landing, in the sign-in gate's own frame (#1277): the site's long
+/// stripes from its closing band behind it, rippling where the pointer
+/// crosses them as they do there, the light heading counting what is new
+/// with Continue at the far end of its line, and the features as cards. Nothing
+/// opens and nothing is picked: the reader scans the cards and leaves by
+/// Continue or Escape.
 ///
-/// Two columns throughout. Continue fills the last row's empty slot when the
-/// count is odd and takes a row of its own when it is even, so no count leaves
-/// a hole.
+/// White cards on the site's blue band are the default; black and dark cards
+/// stay behind switches. Two columns throughout, the last card across the
+/// row when the count is odd, so no count leaves a hole.
 function TakeLanding({ hl, onAction, onClose, backdrop = "blue", cards = "white", layout = "gaps" }: TakeProps) {
   const one = hl.length === 1;
   const blue = backdrop === "blue";
@@ -579,21 +567,32 @@ function TakeLanding({ hl, onAction, onClose, backdrop = "blue", cards = "white"
       </header>
       <main className="relative min-h-0 flex-1 overflow-y-auto px-10 pb-12">
         <div className="mx-auto flex w-full max-w-[1120px] flex-col pt-6">
-          <GateHeading>{one ? "New in Dray." : `${hl.length} new things in Dray.`}</GateHeading>
-          {/* Gaps: 16px of the page between cards, stripes and all. Borders:
-              cards edge to edge, a hairline between and around them, as the
-              site's "Ticket to merge" grid draws its columns; the line is the
-              grid's own fill showing through 1px gaps and a 1px pad. */}
+          <div className="flex items-start justify-between gap-6">
+            <GateHeading>{one ? "New in Dray." : `${hl.length} new things in Dray.`}</GateHeading>
+            <ContinueButton onClose={onClose} />
+          </div>
+          {/* Gaps and small gaps: 16px or 6px of the page between cards,
+              stripes and all. Borders: cards edge to edge, a hairline
+              between and around them, as the site's "Ticket to merge" grid
+              draws its columns; the line is the grid's own fill showing
+              through 1px gaps and a 1px pad. */}
           <div
             className={cn(
               "grid grid-cols-2",
-              layout === "gaps" ? "gap-4" : cn("gap-px p-px", white ? "bg-[#D4D4D8]" : "bg-[#3A3A3A]"),
+              layout === "gaps" && "gap-4",
+              layout === "small" && "gap-1.5",
+              layout === "borders" && cn("gap-px p-px", white ? "bg-[#D4D4D8]" : "bg-[#3A3A3A]"),
             )}
           >
             {hl.map((h, i) => (
-              <LandingCard key={i} h={white ? onWhite(h) : h} onAction={onAction} white={white} />
+              <LandingCard
+                key={i}
+                h={white ? onWhite(h) : h}
+                onAction={onAction}
+                white={white}
+                wide={hl.length % 2 === 1 && i === hl.length - 1}
+              />
             ))}
-            <ContinueCard row={hl.length % 2 === 0} onClose={onClose} white={white} />
           </div>
         </div>
       </main>
@@ -605,7 +604,7 @@ const TAKES: { id: string; name: string; what: string; Take: (props: TakeProps) 
   {
     id: "F",
     name: "Landing (picked)",
-    what: "A landing page's feature section in the sign-in gate's own frame: the count as the title, every highlight a large card its title alone explains, Continue the grid's last card. Escape leaves too.",
+    what: "A landing page's feature section in the sign-in gate's own frame: the count as the title, every highlight a large card its title alone explains, Continue, a ghost button at the end of the title's line. Escape leaves too.",
     Take: TakeLanding,
   },
   {
@@ -689,7 +688,10 @@ function Demo() {
   const hl = count === 0 ? NEXT_RELEASE : PAGE_HIGHLIGHTS.slice(0, count);
   const [backdrop, setBackdrop] = useState<Backdrop>(() => (params.get("bg") === "black" ? "black" : "blue"));
   const [cards, setCards] = useState<Cards>(() => (params.get("cards") === "dark" ? "dark" : "white"));
-  const [layout, setLayout] = useState<Layout>(() => (params.get("layout") === "borders" ? "borders" : "gaps"));
+  const [layout, setLayout] = useState<Layout>(() => {
+    const l = params.get("layout");
+    return l === "small" || l === "borders" ? l : "gaps";
+  });
   return (
     <TooltipProvider>
       <div className="mx-auto flex max-w-3xl flex-col gap-6 p-10">
@@ -758,7 +760,7 @@ function Demo() {
             </div>
             <span className="ml-3 text-muted-foreground">Layout</span>
             <div role="radiogroup" aria-label="F layout" className="flex gap-1">
-              {(["gaps", "borders"] as const).map((l) => (
+              {(["gaps", "small", "borders"] as const).map((l) => (
                 <Button
                   key={l}
                   role="radio"
@@ -767,7 +769,7 @@ function Demo() {
                   variant={layout === l ? "default" : "outline"}
                   onClick={() => setLayout(l)}
                 >
-                  {l === "gaps" ? "Gaps" : "Borders"}
+                  {{ gaps: "Gaps", small: "Small gaps", borders: "Borders" }[l]}
                 </Button>
               ))}
             </div>
