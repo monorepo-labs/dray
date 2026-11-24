@@ -51,6 +51,13 @@ struct PrDetail: Decodable {
     let reviewers: [PrReviewer]
 }
 
+/// A tracker or PR label. Here rather than in Issues.swift because Dray Island
+/// compiles this file and not that one.
+struct IssueLabel: Codable, Hashable {
+    let name: String
+    let color: String
+}
+
 struct PrReviewer: Decodable, Hashable {
     let name: String
     let avatar: String?

@@ -16,11 +16,6 @@ struct IssuePerson: Codable, Hashable {
     let avatar: String?
 }
 
-struct IssueLabel: Codable, Hashable {
-    let name: String
-    let color: String
-}
-
 struct IssueGroup: Codable, Hashable {
     let id: String
     let name: String
