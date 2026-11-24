@@ -15,6 +15,7 @@ import { basename } from "@/lib/format";
 import { SEGMENT_COLOR } from "@/lib/highlight";
 import { openLink } from "@/lib/openLink";
 import {
+  FILE_CODE_CLASS,
   FILE_LINK_CLASS,
   FILE_PATH_CLASS,
   LOCAL_IMAGE_CLASS,
@@ -305,21 +306,23 @@ function FilePathSpan({
     const path = absolutePath(title, cwd);
     const line = Number(dataLine);
     const written = classes.includes(FILE_LINK_CLASS);
+    const asWritten = written || classes.includes(FILE_CODE_CLASS);
     // A bare path is drawn the way the reader's own mention is — `@`, the
     // filename and its locator, the directory on the tooltip — since the two
     // name the same thing and a deep path is most of a line. A link the agent
-    // *wrote* keeps the label it wrote. The locator is what is left of the
-    // marked text past the path, so `:12` and `#L12` come through as typed.
+    // *wrote* keeps the label it wrote, and inline code its text, since that
+    // is copied as a literal. The locator is what is left of the marked text
+    // past the path, so `:12` and `#L12` come through as typed.
     const label = textOf(children);
     const locator = label?.startsWith(title) ? label.slice(title.length) : "";
     const name = basename(title);
-    const body = written ? children : `@${name}${locator}`;
+    const body = asWritten ? children : `@${name}${locator}`;
     // The face is not what was written, so a copy reads the text it replaced.
-    const copy = written ? undefined : (label ?? title);
+    const copy = asWritten ? undefined : (label ?? title);
     if (!path) {
       return (
         <span
-          className={written ? undefined : SEGMENT_COLOR.mention}
+          className={asWritten ? undefined : SEGMENT_COLOR.mention}
           title={title}
           data-copy={copy}
         >
@@ -333,7 +336,7 @@ function FilePathSpan({
         line={Number.isInteger(line) && line > 0 ? line : undefined}
         writtenAsLink={written}
         copy={copy}
-        className={written ? undefined : SEGMENT_COLOR.mention}
+        className={asWritten ? undefined : SEGMENT_COLOR.mention}
       >
         {body}
       </FileLink>

@@ -4,6 +4,7 @@ import { Streamdown } from "streamdown";
 import { describe, expect, it } from "vitest";
 
 import {
+  FILE_CODE_CLASS,
   FILE_LINK_CLASS,
   FILE_PATH_CLASS,
   linkBareUrls,
@@ -298,18 +299,40 @@ describe("rehypeFilePaths", () => {
     expect(tree.children![0].children![0].children).toEqual([{ type: "text", value: command }]);
   });
 
+  /// A lone path in code still opens, but its text stays as written.
+  it("marks inline code that is one path and nothing else", () => {
+    const tree = paragraph([
+      {
+        type: "element",
+        tagName: "code",
+        properties: {},
+        children: [{ type: "text", value: "src/a.ts:12" }],
+      },
+    ]);
+    walk(tree);
+
+    const [span] = marked(tree);
+    expect(span.properties).toMatchObject({
+      className: [FILE_PATH_CLASS, FILE_CODE_CLASS],
+      title: "src/a.ts",
+      dataLine: "12",
+    });
+    expect(span.children).toEqual([{ type: "text", value: "src/a.ts:12" }]);
+  });
+
   /// Through Streamdown, since what reaches the walk as inline code is its call.
   it("marks a path in prose and leaves one in code as written", () => {
     const html = renderToStaticMarkup(
       createElement(
         Streamdown,
         { mode: "static", rehypePlugins: REHYPE_PLUGINS_WITH_FILE_PATHS },
-        "See /a/b.ts, then run `fx -t /home/user/.local/bin/fx login`.\n\n```sh\ncat /a/c.ts\n```",
+        "See /a/b.ts and `/a/d.ts`, then run `fx -t /home/user/.local/bin/fx login`.\n\n```sh\ncat /a/c.ts\n```",
       ),
     );
     const titles = [...html.matchAll(new RegExp(`class="${FILE_PATH_CLASS}" title="([^"]*)"`, "g"))];
     expect(titles.map((m) => m[1])).toEqual(["/a/b.ts"]);
     expect(html).toContain("fx -t /home/user/.local/bin/fx login</code>");
+    expect(html).toContain(`class="${FILE_PATH_CLASS} ${FILE_CODE_CLASS}" title="/a/d.ts">/a/d.ts</span>`);
   });
 
   it("leaves a tree with no path in it untouched", () => {
