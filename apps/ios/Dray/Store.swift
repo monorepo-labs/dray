@@ -939,8 +939,8 @@ final class Store {
         } catch { lastError = error.localizedDescription }
     }
 
-    /// Takes a read, finished session's unread mark back. Not echoed by the server, so set here too,
-    /// and put back where the write failed or moved nothing (`null`), or it would vanish on the next read.
+    /// Takes a read, finished session's unread mark back. Set here at once, ahead of the server's
+    /// `session_changed`, and put back where the write failed or moved nothing (`null`).
     func markUnread(_ key: SessionKey) async {
         let was = items[key]?.status, heard = statusHeard[key]
         items[key]?.status = "completed"
@@ -1014,7 +1014,7 @@ final class Store {
     }
 
     /// Deletes a session for good, its hidden children with it; false where the server refused.
-    /// No event says so to other clients, so the row goes here once the server agrees.
+    /// The row goes once the server agrees; `session_deleted` tells every other client.
     func delete(_ key: SessionKey) async -> Bool {
         do {
             _ = try await call(key.server, "delete_session", ["sessionId": .string(key.id)], as: JSON.self)
@@ -1022,10 +1022,15 @@ final class Store {
             lastError = error.localizedDescription
             return false
         }
+        forget(key)
+        return true
+    }
+
+    /// Drops a deleted session's row, here or from `session_deleted`.
+    private func forget(_ key: SessionKey) {
         deleted.insert(key)
         items[key] = nil
         asks[key] = nil
-        return true
     }
 
     /// Lets go of every transcript held but `kept`'s. The Island's close: held, each
@@ -1387,6 +1392,9 @@ final class Store {
         case "session_title":
             guard let t = try? decoder.decode(EventFrame<TitleEvent>.self, from: data).payload else { return }
             items[SessionKey(server: server, id: t.sessionId)]?.title = t.title
+        case "session_deleted":
+            guard let d = try? decoder.decode(EventFrame<DeletedEvent>.self, from: data).payload else { return }
+            forget(SessionKey(server: server, id: d.sessionId))
         case "clone_progress":
             guard let p = try? decoder.decode(EventFrame<CloneProgress>.self, from: data).payload else { return }
             cloneProgress[server, default: [:]][p.slug] = p.line

@@ -2182,6 +2182,11 @@ cloud: boolean, };
 
 export type ServerStatus = "connecting" | "connected" | "disconnected";
 
+/**
+ * The payload of [`SESSION_DELETED`].
+ */
+export type SessionDeletedEvent = { sessionId: string, };
+
 export type SessionIndexItem = { sessionId: string, harness: Harness, 
 /**
  * Where the agent actually runs. Equals `project_path` for a normal
