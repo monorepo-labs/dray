@@ -217,12 +217,13 @@ describe("nextHarness", () => {
   /// Toggling between two was written when there were two, and silently never
   /// reached the third. The chord steps the picker's own row instead.
   it("steps through every harness in the picker's order and wraps", () => {
-    expect(HARNESS_ORDER).toEqual(["claude_code", "codex", "pi", "fx", "grok"]);
+    expect(HARNESS_ORDER).toEqual(["claude_code", "codex", "pi", "fx", "grok", "opencode"]);
     expect(nextHarness("claude_code")).toBe("codex");
     expect(nextHarness("codex")).toBe("pi");
     expect(nextHarness("pi")).toBe("fx");
     expect(nextHarness("fx")).toBe("grok");
-    expect(nextHarness("grok")).toBe("claude_code");
+    expect(nextHarness("grok")).toBe("opencode");
+    expect(nextHarness("opencode")).toBe("claude_code");
   });
 
   it("parks an unknown harness on the first", () => {

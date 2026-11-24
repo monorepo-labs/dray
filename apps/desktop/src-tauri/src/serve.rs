@@ -521,7 +521,7 @@ async fn sweep_browser_profiles() {
     // session made or unsettled meanwhile would lose a profile it just opened.
     // Only the renames are waited on; the removals run on.
     let _ = tokio::task::spawn_blocking(move || {
-        #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+        #[cfg(feature = "cef")]
         crate::cef::automation::sweep_profiles(&live);
         crate::headless::automation::sweep_profiles(&live);
     })
@@ -580,7 +580,9 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     sweep_browser_profiles().await;
     crate::auto_continue::rearm(&sink).await;
 
+    crate::remote_asks::forget_unanswered().await;
     tokio::spawn(crate::remote_reports::run(sink.clone()));
+    tokio::spawn(crate::remote_asks::run(sink.clone()));
     tokio::spawn(crate::stalls::run(sink.clone()));
     tokio::spawn(crate::held_flags::run(sink.clone()));
     tokio::spawn(crate::routines::run(sink.clone()));
@@ -772,6 +774,15 @@ fn same_token(given: &str, token: &str) -> bool {
             .zip(token.bytes())
             .fold(0u8, |acc, (a, b)| acc | (a ^ b))
             == 0
+}
+
+/// Who this server is, the same however it was reached: a phone pairing it
+/// directly and reaching it through a Mac that shares it (#1404) holds the
+/// token itself, so hashing that matches the two. One-way, so the welcome
+/// that carries it through a relay gives the token to no one.
+fn server_id(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(format!("dray-server\0{token}"))[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[derive(Deserialize)]
@@ -1619,6 +1630,8 @@ async fn connection(
         "os": std::env::consts::OS,
         // This server judges its bots' "Waiting on you" cards (`bot_stalls`).
         "stalls": true,
+        // Never `id`: every client reads a frame's `id` as a call's, and a phone's fails on a string.
+        "identity": server_id(token),
     });
     // The welcome stays text whatever was asked: a client reads it before it
     // knows whether this server understood `deflate` at all.
@@ -2049,13 +2062,16 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         // `dray --machine` from an agent on the Mac that added this machine.
         orchestrate(
             line: String, origin: Option<String>, caller: Option<crate::orchestration::Caller>,
-            sender: Option<crate::events::MessageSender>,
+            sender: Option<crate::events::MessageSender>, ask: Option<String>,
         ) => ok(crate::orchestration::answer_forward(
-            crate::orchestration::Forward { line, origin, caller, sender }, sink,
+            crate::orchestration::Forward { line, origin, caller, sender, ask }, sink,
         ).await);
         // A bot's server collecting what its tasks here said (#958).
         parent_reports(children: Vec<String>, ack: Vec<String>, forget: Option<Vec<String>>) =>
             crate::remote_reports::take(children, ack, forget.unwrap_or_default()).await;
+        // An asking server collecting its questions' answers here (#1463).
+        bot_answers(asks: Vec<String>, ack: Vec<String>, undelivered: Vec<String>) =>
+            crate::remote_asks::take(asks, ack, undelivered, &sink).await;
         bot_stalls() => ok(live_stalls());
         worktree_disposition(session_id: String) =>crate::worktree_disposition(&session_id).await;
         remove_session_worktree(session_id: String) => crate::remove_session_worktree(&session_id).await;
@@ -2237,6 +2253,13 @@ mod tests {
         assert!(!relayed("GET /file?path=%2Fvia%3Dx HTTP/1.1"), "a path holding via= is not a via");
         assert!(!relayed("GET /file?path=%2Fa HTTP/1.1"));
         assert!(!relayed("GET /?via=69b4 HTTP/1.1"), "the socket's upgrade carries via in its hello");
+    }
+
+    /// The phone hashes the token it holds the same way (`serverId` in its
+    /// Store.swift, whose test pins this value too), or the copies never match.
+    #[test]
+    fn server_id_is_the_phones_hash_of_the_token() {
+        assert_eq!(super::server_id("test-token"), "4b3f3d0f73afd9cc");
     }
 
     use super::*;

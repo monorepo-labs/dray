@@ -435,6 +435,12 @@ A bot's role is the first line of its `AGENTS.md`. `dray bot ls` shows each
 bot's role, whether it is working, and its open tasks. `dray session new` from
 a bot warns on stderr when other bots have open tasks in the same project.
 
+`dray --machine <name> bot …` acts on the bots of a machine from
+`dray machine ls`, every verb and routine alike. `--ask` works there too: the
+answer comes back to you once that machine's server is reachable from this one,
+usually within seconds of the bot's turn ending. `routine add` there needs
+`--bot`, since the calling bot is on this machine.
+
 Between bots, Dray stops an exchange after 4 messages back and forth, a
 message repeated within one exchange, or 20 messages between two bots in 5
 minutes. The refused send fails with the reason; tell the user what is still
@@ -600,7 +606,7 @@ dray session send <session-id> "Use the staging DB"   # finds the machine on its
 dray session model <session-id> sonnet                # so does every verb taking an id
 ```
 
-`--machine <name>` runs a `session`, `draft`, `issue`, `browser` or `share`
+`--machine <name>` runs a `session`, `draft`, `issue`, `browser`, `share` or `bot`
 command on a machine from `dray machine ls`, through this machine's Dray
 server — app open or not. A session id needs no `--machine`: one this machine
 has never heard of is looked for on every machine it reaches.

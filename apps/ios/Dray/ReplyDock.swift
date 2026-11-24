@@ -255,6 +255,7 @@ struct ReplyDock: View {
                 .fixedSize()
             }
             .accessibilityLabel("Model")
+            .accessibilityValue(current?.label ?? item?.model ?? "")
             Button { picking = true } label: {
                 Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold)).frame(width: 24, height: 20)
             }

@@ -80,7 +80,7 @@ import {
   type TabKey,
 } from "@/lib/tabOrder";
 import BranchButton from "@/components/layout/BranchButton";
-import { IS_MAC } from "@/lib/platform";
+import { SPLITS_PAGES } from "@/lib/platform";
 import {
   addSplit,
   isSplit,
@@ -630,7 +630,7 @@ export default function ViewTabs({
   const splittable = (item: Item) =>
     !item.group &&
     /^(page:|changes$|file:|task:|pick:|pickfile:)/.test(item.key) &&
-    (IS_MAC || !item.key.startsWith("page:"));
+    (SPLITS_PAGES || !item.key.startsWith("page:"));
 
   const drag = useDragReorder(
     items,

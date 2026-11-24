@@ -95,17 +95,18 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
         }
     }
     BackHandler(stack.size > 1) { pop() }
+    val store = LocalStore.current
     // A tapped alert opens its chat over the list, wherever the reader was.
     LaunchedEffect(Push.opening) {
         val key = Push.opening ?: return@LaunchedEffect
         Push.opening = null
         stack.removeAll { it != Route.List }
-        push(Route.Session(key))
+        // Tagged with a copy through a Mac held back since, or the reverse (#1404).
+        push(Route.Session(SessionKey(store.shownAs(key.server), key.id)))
     }
     LaunchedEffect(stack.last()) { Push.viewing = (stack.last() as? Route.Session)?.key }
     NotificationAsk()
     val holder = rememberSaveableStateHolder()
-    val store = LocalStore.current
     val context = LocalContext.current
     val task = remember { NewTask(store, context.applicationContext) }
 

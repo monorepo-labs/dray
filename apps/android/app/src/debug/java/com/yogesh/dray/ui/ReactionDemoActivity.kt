@@ -33,7 +33,7 @@ import kotlin.math.roundToInt
  * Whether every reaction sits at the centre of its badge by eye, on this phone's emoji font: each
  * drawn as the text box puts it (raw) and as [ReactionBadge] does, at real size and blown up
  * four times, plain as the app draws them, with the nudge under each in pixels.
- * `adb shell am start -n com.yogesh.dray.android/com.yogesh.dray.ui.ReactionDemoActivity`
+ * `adb shell am start -n com.dray.app/com.yogesh.dray.ui.ReactionDemoActivity`
  */
 class ReactionDemoActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

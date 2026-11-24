@@ -137,6 +137,8 @@ struct Welcome: Decodable {
     /// The CLI release a `dray-serve` shipped in; none on a local build or a Mac.
     let release: String?
     let dev: Bool?
+    /// A hash of the server's token, so the same machine reached two ways is one (`serverId`).
+    let identity: String?
 
     /// Dray on a Mac, whose server follows the app's own updates.
     var macApp: Bool { dictation == true && release == nil && dev != true }

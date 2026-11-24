@@ -25,7 +25,9 @@ phone reads and drives it over the same WebSocket the desktop uses
   "Swipe up to type" sits over the orb until the reader has done it three times.
   The sheet opens short over the keyboard, as Android's does, and a drag up
   its header takes it to full height (#1415): one detent at a time, since a
-  sheet offered both goes to the larger as soon as the keyboard is up. In a
+  sheet offered both goes to the larger as soon as the keyboard is up. A
+  swipe down the short sheet closes it with the keyboard, never the keyboard
+  alone (#1453). In a
   bot's chat a swipe in from the right edge opens its Tasks sheet, the button
   being a reach to the top of the screen. The model chip and
   "···" open **This task**: the session's model, effort, fast mode and
@@ -78,7 +80,18 @@ phone reads and drives it over the same WebSocket the desktop uses
   own, never saved, with a hello naming `via` its id and `/file`/`/upload`
   carrying `via=`, under the paired server's token. Its id is hashed from the
   pair, so transcripts survive a reconnect. The Island skips this: it follows
-  the app's links, which already name those machines.
+  the app's links, which already name those machines. **A machine the phone
+  also pairs directly is shown once, the direct way** (#1404): every welcome
+  carries `identity`, a hash of the server's token that a relay passes
+  through untouched, so a relayed copy whose `identity` hashes a token the
+  phone holds gives way to the direct pairing **while that one works**
+  (#1466): a copy on screen goes once its twin connects, never before, so a
+  reconnect takes no open chat away; a copy not on screen stays off while its
+  twin is coming up, and comes back once the twin is lost or turned off.
+  Identities are kept across launches, so a launch draws no duplicate even
+  for a moment. An alert tagged by a copy that gave way opens and answers on
+  its twin (`reachable`). A server from before `identity` is still shown twice. Never `id` in a welcome:
+  `Head` reads every frame's `id` as a call's, and fails on a string.
 - **Pull request** sheet from the session view: readiness in the desktop's
   order with checks speaking first, checks failing-first, comments; every
   check and comment opens on GitHub. Merge is the desktop's split button —

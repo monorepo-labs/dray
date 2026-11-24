@@ -14,7 +14,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.yogesh.dray.android"
+        applicationId = "com.dray.app"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

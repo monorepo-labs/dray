@@ -1081,14 +1081,15 @@ pub async fn append_session_index_item(session: SessionIndexItem) -> Result<()> 
 /// Records the settable per-session fields, writing only when one changed —
 /// the whole index is serialized on every write, and an unchanged send is the
 /// ordinary case. `modified` is left to the `InProgress` the send publishes.
+/// Answers the entry only where it changed, for the caller to announce.
 pub async fn touch_session_index_item(
     session_id: &str,
     model: ModelId,
     effort: Option<Effort>,
     permission_mode: ApprovalPolicy,
     fast: bool,
-) -> Result<()> {
-    edit_item(session_id, |item| {
+) -> Result<Option<SessionIndexItem>> {
+    let item = edit_item(session_id, |item| {
         // An unset pick means "no explicit model" — the truth for a new session,
         // but touching an existing one it must not *erase* a model already recorded.
         // fx's model list is its active provider's and global, so switching provider
@@ -1112,10 +1113,10 @@ pub async fn touch_session_index_item(
         item.effort = effort;
         item.permission_mode = permission_mode;
         item.fast = fast;
-        ((), changed)
+        (changed.then(|| item.clone()), changed)
     })
     .await?;
-    Ok(())
+    Ok(item.flatten())
 }
 
 /// Brings a set-aside session back, for a queued prompt reaching the child:

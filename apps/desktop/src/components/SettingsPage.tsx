@@ -69,7 +69,7 @@ import ShortcutsSettings from "@/components/settings/ShortcutsSettings";
 import SpacesSettings from "@/components/settings/SpacesSettings";
 import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
 import { useTranscriptionSettings } from "@/hooks/useTranscription";
-import { IS_LINUX, IS_MAC } from "@/lib/platform";
+import { IS_LINUX, IS_MAC, IS_WINDOWS } from "@/lib/platform";
 import { SETTINGS_TABS as SETTINGS_TAB_IDS, type SettingsTab } from "@/lib/settingsTabs";
 import { applyIsland, ISLAND_ENABLED, ISLAND_KEY, ISLAND_KEYS, type IslandKey } from "@/lib/island";
 import { captureCaps, captureFrom, decodeCapture, DEFAULT_CAPTURE, encodeCapture } from "@/lib/islandCapture";
@@ -406,8 +406,8 @@ function OpenFilesRow() {
   // Finder on a Mac; on Linux whichever file manager the scan listed.
   const files = choices.find((app) => app.kind === "files")?.name ?? (IS_MAC ? "Finder" : "the file manager");
 
-  const unavailable = !IS_MAC && !IS_LINUX
-    ? "Opening a file in another app needs macOS or Linux for now."
+  const unavailable = !IS_MAC && !IS_LINUX && !IS_WINDOWS
+    ? "Opening a file in another app needs macOS, Linux or Windows for now."
     : apps !== null && editors.length === 0
       ? `No editor Dray knows about is installed, so filenames open in ${files}.`
       : null;

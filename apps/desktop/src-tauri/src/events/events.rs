@@ -861,6 +861,11 @@ pub struct MessageSender {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub reply: Option<bool>,
+    /// An `--ask` from another machine: the id its server collects the answer
+    /// by (#1463). Held in memory only, from the send to the turn it arms.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub ask_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

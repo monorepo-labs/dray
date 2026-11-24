@@ -36,6 +36,8 @@ export const DEFAULT_MODEL_FOR: Record<Harness, ModelId> = {
   // One vendor and a list this build can name, so the bare alias does what it
   // does for Claude Code: follow whatever xAI ship under it.
   grok: "grok-4.7",
+  // Multi-provider like pi, and its own config already names a model.
+  opencode: UNSET_MODEL,
 };
 
 /// The providers `fx provider` takes, in fx's own words. Fixed by fx's CLI
@@ -201,7 +203,7 @@ export function usableEffort(
 /// The agents in the order the picker draws them, which is also the order ⌘⇧A
 /// steps through. One list: a chord visiting a harness the row cannot show, or
 /// skipping one it can, reads as the chord being broken.
-export const HARNESS_ORDER: Harness[] = ["claude_code", "codex", "pi", "fx", "grok"];
+export const HARNESS_ORDER: Harness[] = ["claude_code", "codex", "pi", "fx", "grok", "opencode"];
 
 /// Named as the reader knows them, not as the wire spells them.
 export const AGENT_LABELS: Record<Harness, string> = {
@@ -213,6 +215,7 @@ export const AGENT_LABELS: Record<Harness, string> = {
   // one of these models is also served by — the installer calls this one Grok
   // Build and the picker is naming an agent, not a model.
   grok: "Grok",
+  opencode: "OpenCode",
 };
 
 /// Where ⌘⇧A lands from `current`, wrapping, over the agents the reader has

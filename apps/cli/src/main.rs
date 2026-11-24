@@ -255,7 +255,7 @@ struct New {
     #[arg(long)]
     effort: Option<String>,
 
-    /// Which agent runs it: claude_code, codex, pi, fx or grok.
+    /// Which agent runs it: claude_code, codex, pi, fx, grok or opencode.
     #[arg(long)]
     harness: Option<String>,
 
@@ -509,19 +509,8 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
     if let Some(machine) = cli.machine {
-        // These act on this machine, or on nothing a server answers.
-        if !matches!(
-            cli.command,
-            Command::Session(_)
-                | Command::Issue(_)
-                | Command::Draft(_)
-                | Command::Browser(_)
-                | Command::Share(_)
-                | Command::New(_)
-                | Command::Ls(_)
-                | Command::Send(_)
-        ) {
-            return Err("--machine takes session, draft, issue, browser and share commands".into());
+        if let Some(refusal) = machine_refusal(&cli.command) {
+            return Err(refusal);
         }
         let _ = MACHINE.set(machine);
     }
@@ -552,6 +541,23 @@ fn run() -> Result<(), String> {
         Command::Serve(args) => setup::serve(args),
         Command::Service(command) => setup::service(command),
         Command::Tunnel(args) => setup::tunnel(args),
+    }
+}
+
+/// Why `--machine` cannot carry `command`, or `None` where it can.
+fn machine_refusal(command: &Command) -> Option<String> {
+    match command {
+        Command::Session(_)
+        | Command::Issue(_)
+        | Command::Draft(_)
+        | Command::Browser(_)
+        | Command::Share(_)
+        | Command::New(_)
+        | Command::Ls(_)
+        | Command::Send(_) => None,
+        Command::Bot(command) => bot::machine_refusal(command),
+        // These act on this machine, or on nothing a server answers.
+        _ => Some("--machine takes session, draft, issue, browser, share and bot commands".into()),
     }
 }
 
@@ -1926,6 +1932,37 @@ mod tests {
             let cli = Cli::try_parse_from(argv).unwrap();
             assert_eq!(cli.machine.as_deref(), Some("vps"), "{argv:?}");
         }
+    }
+
+    /// Every bot verb rides `--machine` to that machine's server, `--ask`
+    /// included (#1463), bar a routine whose default bot is this one's (#1461).
+    #[test]
+    fn machine_takes_bot_commands() {
+        let refusal = |argv: &[&str]| {
+            let cli = Cli::try_parse_from(argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+            assert_eq!(cli.machine.as_deref(), Some("vps"), "{argv:?}");
+            machine_refusal(&cli.command)
+        };
+        for argv in [
+            &["dray", "--machine", "vps", "bot", "ls"][..],
+            &["dray", "bot", "ls", "--json", "--machine", "vps"],
+            &["dray", "--machine", "vps", "bot", "new", "Ops", "--colour", "teal"],
+            &["dray", "--machine", "vps", "bot", "send", "Ops", "hi"],
+            &["dray", "--machine", "vps", "bot", "send", "--ask", "Ops", "hi"],
+            &["dray", "--machine", "vps", "bot", "rename", "Ops", "Release"],
+            &["dray", "--machine", "vps", "bot", "rm", "Ops"],
+            &["dray", "--machine", "vps", "bot", "routine", "add", "PR", "look", "--every", "2h", "--bot", "Ops"],
+            &["dray", "--machine", "vps", "bot", "routine", "ls"],
+            &["dray", "--machine", "vps", "bot", "routine", "pause", "PR"],
+            &["dray", "--machine", "vps", "bot", "routine", "resume", "PR"],
+            &["dray", "--machine", "vps", "bot", "routine", "run", "PR"],
+            &["dray", "--machine", "vps", "bot", "routine", "rm", "PR"],
+        ] {
+            assert_eq!(refusal(argv), None, "{argv:?}");
+        }
+        let add = refusal(&["dray", "--machine", "vps", "bot", "routine", "add", "PR", "look", "--every", "2h"]).unwrap();
+        assert!(add.contains("--bot"), "{add}");
+        assert!(refusal(&["dray", "--machine", "vps", "skill", "install"]).unwrap().contains("bot"));
     }
 
     #[test]

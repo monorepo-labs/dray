@@ -11,12 +11,15 @@ export type Control = "model" | "effort" | "stance" | "fast";
 /// cannot happen under a running turn. Codex steers a queued prompt into the
 /// running turn and ignores its model. fx refuses every change mid-prompt, but
 /// its queued prompt is the next turn, so its picks wait for that turn.
+/// OpenCode takes model and effort mid-prompt; its stance is permission rules
+/// fixed at spawn.
 const LIVE: Record<Harness, readonly Control[]> = {
   claude_code: ["model", "stance", "fast"],
   grok: ["model", "effort", "fast"],
   pi: ["model", "effort"],
   fx: ["model", "effort", "stance", "fast"],
   codex: [],
+  opencode: ["model", "effort"],
 };
 
 /// Locked while a turn runs where the harness cannot apply the control to the

@@ -1,0 +1,212 @@
+opencode-go/beam-free
+{
+  "id": "beam-free",
+  "api": {
+    "id": "beam-free",
+    "npm": "@ai-sdk/openai-compatible",
+    "url": "https://opencode.ai/inference/go/openai/v1"
+  },
+  "status": "active",
+  "name": "Beam Free",
+  "providerID": "opencode-go",
+  "capabilities": {
+    "temperature": true,
+    "reasoning": true,
+    "attachment": false,
+    "toolcall": true,
+    "input": {
+      "text": true,
+      "audio": false,
+      "image": false,
+      "video": false,
+      "pdf": false
+    },
+    "output": {
+      "text": true,
+      "audio": false,
+      "image": false,
+      "video": false,
+      "pdf": false
+    },
+    "interleaved": {
+      "field": "reasoning_content"
+    }
+  },
+  "cost": {
+    "input": 0,
+    "output": 0,
+    "cache": {
+      "read": 0,
+      "write": 0
+    }
+  },
+  "options": {},
+  "limit": {
+    "context": 1048576,
+    "output": 131072
+  },
+  "headers": {},
+  "family": "beam-free",
+  "release_date": "2026-10-05",
+  "variants": {
+    "low": {
+      "reasoningEffort": "low"
+    },
+    "medium": {
+      "reasoningEffort": "medium"
+    },
+    "high": {
+      "reasoningEffort": "high"
+    },
+    "xhigh": {
+      "reasoningEffort": "xhigh"
+    },
+    "max": {
+      "reasoningEffort": "max"
+    }
+  }
+}
+opencode-go/gpt-6-luna
+{
+  "id": "gpt-6-luna",
+  "api": {
+    "id": "gpt-6-luna",
+    "npm": "@ai-sdk/openai",
+    "url": "https://opencode.ai/inference/go/openai/v1"
+  },
+  "status": "active",
+  "name": "GPT-6 Luna",
+  "providerID": "opencode-go",
+  "capabilities": {
+    "temperature": true,
+    "reasoning": true,
+    "attachment": true,
+    "toolcall": true,
+    "input": {
+      "text": true,
+      "audio": false,
+      "image": true,
+      "video": false,
+      "pdf": true
+    },
+    "output": {
+      "text": true,
+      "audio": false,
+      "image": false,
+      "video": false,
+      "pdf": false
+    },
+    "interleaved": false
+  },
+  "cost": {
+    "input": 0.1,
+    "output": 0.5,
+    "cache": {
+      "read": 0.01,
+      "write": 0.125
+    }
+  },
+  "options": {},
+  "limit": {
+    "context": 1050000,
+    "input": 922000,
+    "output": 128000
+  },
+  "headers": {},
+  "family": "gpt-luna",
+  "release_date": "2026-09-22",
+  "variants": {
+    "none": {
+      "reasoningEffort": "none",
+      "reasoningSummary": "auto",
+      "include": [
+        "reasoning.encrypted_content"
+      ]
+    },
+    "low": {
+      "reasoningEffort": "low",
+      "reasoningSummary": "auto",
+      "include": [
+        "reasoning.encrypted_content"
+      ]
+    },
+    "medium": {
+      "reasoningEffort": "medium",
+      "reasoningSummary": "auto",
+      "include": [
+        "reasoning.encrypted_content"
+      ]
+    },
+    "high": {
+      "reasoningEffort": "high",
+      "reasoningSummary": "auto",
+      "include": [
+        "reasoning.encrypted_content"
+      ]
+    },
+    "xhigh": {
+      "reasoningEffort": "xhigh",
+      "reasoningSummary": "auto",
+      "include": [
+        "reasoning.encrypted_content"
+      ]
+    },
+    "max": {
+      "reasoningEffort": "max",
+      "reasoningSummary": "auto",
+      "include": [
+        "reasoning.encrypted_content"
+      ]
+    }
+  }
+}
+orcarouter/obsidian/Qwen3.8-27B
+{
+  "id": "obsidian/Qwen3.8-27B",
+  "api": {
+    "id": "obsidian/Qwen3.8-27B",
+    "npm": "@ai-sdk/openai-compatible",
+    "url": "https://api.orcarouter.ai/v1"
+  },
+  "status": "active",
+  "name": "Obsidian Qwen3.8-27B",
+  "providerID": "orcarouter",
+  "capabilities": {
+    "temperature": false,
+    "reasoning": false,
+    "attachment": false,
+    "toolcall": true,
+    "input": {
+      "text": true,
+      "audio": false,
+      "image": false,
+      "video": false,
+      "pdf": false
+    },
+    "output": {
+      "text": true,
+      "audio": false,
+      "image": false,
+      "video": false,
+      "pdf": false
+    },
+    "interleaved": false
+  },
+  "cost": {
+    "input": 0,
+    "output": 0,
+    "cache": {
+      "read": 0,
+      "write": 0
+    }
+  },
+  "options": {},
+  "limit": {
+    "context": 0,
+    "output": 0
+  },
+  "headers": {},
+  "family": "",
+  "release_date": "",
+  "variants": {}
+}

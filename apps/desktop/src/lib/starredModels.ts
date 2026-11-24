@@ -67,7 +67,8 @@ const FX_DEFAULT_STARS: Record<string, string[]> = {
 /// the list — fx renamed it, or the account cannot reach it — seeds nothing,
 /// which is the same state as before this existed.
 export function defaultStars(harness: Harness, provider: string, models: Model[]): ModelId[] {
-  if (harness === "pi") return [];
+  // OpenCode's list is the reader's providers', as pi's is.
+  if (harness === "pi" || harness === "opencode") return [];
   if (harness !== "fx") return models.filter((m) => !m.secondary).map((m) => m.id);
   const needles = FX_DEFAULT_STARS[provider] ?? [];
   return models

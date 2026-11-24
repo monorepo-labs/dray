@@ -659,7 +659,16 @@ async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Respo
     if machine == elsewhere::CLOUD && !creates {
         bail!("only `dray session new` takes --machine cloud — a cloud task's own machine is named on its row");
     }
-    let forward = elsewhere::prepare(request).await?;
+    let asks_bot = match &request {
+        Request::SendToBot(send) if send.ask => Some(send.bot.clone()),
+        _ => None,
+    };
+    let mut forward = elsewhere::prepare(request).await?;
+    // Named, so the answer the bot's server keeps for it is collected here
+    // (#1463). With no sender the far side refuses it, as a local ask is.
+    if asks_bot.is_some() && forward.sender.is_some() {
+        forward.ask = Some(crate::remote_asks::mint());
+    }
     let placed = match machine == elsewhere::CLOUD {
         true => Some(elsewhere::start_cloud(forward.origin.as_deref()).await?),
         false => None,
@@ -685,6 +694,16 @@ async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Respo
         if caller.bot_tree {
             let saved = crate::machines::on(machine).await.map_err(anyhow::Error::msg)?;
             crate::remote_reports::track(&saved.id, &session.session_id, &caller.session.session_id).await?;
+        }
+    }
+    if let (Some(bot), Some(id), Some(from), Response::BotSent { .. }) =
+        (asks_bot, forward.ask.clone(), &forward.sender, &response)
+    {
+        let saved = crate::machines::on(machine).await.map_err(anyhow::Error::msg)?;
+        crate::remote_asks::track(id, &saved, &bot, from).await?;
+        // A routine's run waits on the answer, as for a bot on this machine.
+        if from.routine == Some(true) {
+            crate::routines::asked(&from.session_id);
         }
     }
     // A message brings a set-aside session back, so a flag held from before
@@ -728,6 +747,10 @@ pub struct Forward {
     pub caller: Option<Caller>,
     #[serde(default)]
     pub sender: Option<MessageSender>,
+    /// A `bot send --ask`'s question id, which the forwarding server collects
+    /// the bot's answer by (#1463).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<String>,
 }
 
 /// The calling session's row, carried whole with its depth, since the
@@ -792,6 +815,7 @@ pub async fn answer_forward(forward: Forward, app: Sink) -> Response {
             Request::CreateDraft(create) => create_draft(create, caller, &app).await,
             Request::StartDraft(start) => start_draft(start, caller, &app).await,
             Request::SendMessage(send) => send_message(send, forward.sender, &app).await,
+            Request::SendToBot(send) => send_to_bot(send, forward.sender, forward.ask, &app).await,
             other => dispatch(other, &app).await,
         }
     };
@@ -1044,8 +1068,9 @@ pub(crate) mod elsewhere {
             Request::StartDraft(start) => {
                 forward.caller = caller(parent_of(start.parent_session_id.as_deref()).await?.as_ref()).await?;
             }
-            Request::SendMessage(send) => {
-                if let Some(from) = sender(send.from_session_id.as_deref()).await {
+            Request::SendMessage(SendMessage { from_session_id, .. })
+            | Request::SendToBot(SendToBot { from_session_id, .. }) => {
+                if let Some(from) = sender(from_session_id.as_deref()).await {
                     forward.sender = Some(MessageSender { machine: Some(this_machine().await), ..from });
                 }
             }
@@ -1230,7 +1255,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             app.emit(bots::BOTS_CHANGED, ()).ok();
             Ok(Response::Bot { bot: summary })
         }
-        Request::SendToBot(send) => send_to_bot(send, app).await,
+        Request::SendToBot(send) => send_to_bot(send, None, None, app).await,
         Request::AddRoutine(add) => {
             let bot = crate::routines::bot_for(add.bot.as_deref(), add.from_session_id.as_deref())
                 .await?
@@ -1409,7 +1434,7 @@ pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_jso
             Ok(serde_json::json!(focused.then(crate::apps::app_selection).flatten()))
         }
         "close_session" => {
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             if let Some(id) = args["sessionId"].as_str() {
                 crate::cef::close_session(id);
             }
@@ -1872,6 +1897,8 @@ fn stance_on(harness: Harness, mode: ApprovalPolicy) -> ApprovalPolicy {
         (Harness::Codex | Harness::Fx | Harness::Grok, A::Plan) => A::Manual,
         (Harness::Codex | Harness::Fx, A::DontAsk) => A::Auto,
         (Harness::Grok, A::DontAsk) => A::BypassPermissions,
+        // opencode.rs runs `dontAsk` as Auto; Plan is the `plan` agent.
+        (Harness::OpenCode, A::DontAsk) => A::Auto,
         _ => mode,
     }
 }
@@ -1879,11 +1906,12 @@ fn stance_on(harness: Harness, mode: ApprovalPolicy) -> ApprovalPolicy {
 /// Whether `harness` has said which models it serves: Claude Code's are a
 /// table, the rest a probe that lists nothing until it answers.
 async fn lists_models(harness: Harness) -> bool {
-    use crate::harness::{codex, fx, grok, pi};
+    use crate::harness::{codex, fx, grok, opencode, pi};
     match harness {
         Harness::Pi => !pi::models::list().await.is_empty(),
         Harness::Fx => !fx::models::list().await.is_empty(),
         Harness::Grok => !grok::models::list().await.is_empty(),
+        Harness::OpenCode => !opencode::models::list().await.is_empty(),
         Harness::Codex => !codex::models::list().await.is_empty(),
         _ => true,
     }
@@ -1938,7 +1966,7 @@ async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
         Ok((output, data)) => Response::Browser { output, data },
         Err(message) => Response::error(message),
     };
-    #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+    #[cfg(feature = "cef")]
     if !crate::is_server() {
         return Ok(answered(crate::cef::automation::run(&request.session_id, request.action).await));
     }
@@ -2830,26 +2858,55 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
 /// Nothing reports back, unlike a task's turns: the bot answers, if it wants
 /// to, with a send of its own. A bot nobody has written to yet has no chat, so
 /// the message opens one, on the agent its last chat ran — else the sender's.
-async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
+/// `carried` is the sender a forwarding server looked up, as for [`send_message`],
+/// and `ask_id` the question id it collects an `--ask`'s answer by (#1463).
+async fn send_to_bot(
+    send: SendToBot,
+    carried: Option<MessageSender>,
+    ask_id: Option<String>,
+    app: &Sink,
+) -> Result<Response> {
     if send.prompt.trim().is_empty() {
         bail!("a message needs some text");
     }
+    let relayed = carried.is_some();
+    // This index holds no session from the asking machine, so the answer is
+    // kept here for that machine's server, which collects it by this id.
+    let remote_ask = match (relayed && send.ask, ask_id) {
+        (false, _) => None,
+        (true, Some(id)) => Some(id),
+        (true, None) => bail!(
+            "--ask can't reach this machine from yours: update the Dray server on the asking machine, which collects the answer"
+        ),
+    };
     let bot = bots::find_bot(&send.bot).await?;
-    let mut from = sender(send.from_session_id.as_deref()).await;
+    let mut from = match carried {
+        Some(from) => Some(from),
+        None => sender(send.from_session_id.as_deref()).await,
+    };
     if from.as_ref().is_some_and(|f| f.bot_id.as_deref() == Some(&bot.id)) {
         bail!("a bot cannot message itself");
     }
     match from.as_mut() {
-        Some(f) if f.bot_id.is_some() => stamp_bot_message(f, &bot, &send.prompt, send.ask, app).await?,
+        // The exchange guards key on the sender's chat, which lives on its own
+        // machine, as a relayed `dray session send` skips them too.
+        Some(f) if f.bot_id.is_some() && !relayed => stamp_bot_message(f, &bot, &send.prompt, send.ask, app).await?,
         // A task or a routine run asking: no exchange to guard, and the answer
         // goes back to the session itself.
-        Some(f) if send.ask => f.ask = Some(true),
+        Some(f) if send.ask => {
+            f.ask = Some(true);
+            f.ask_id = remote_ask.clone();
+        }
         None if send.ask => bail!("--ask needs a session to pass the answer back to: run it from one"),
         _ => {}
     }
     // A run's turn ending is not the run ending while an answer is coming. Marked
-    // once the question is sent: a failed send leaves nothing to wait on.
-    let waiting_run = from.as_ref().filter(|f| f.ask == Some(true) && f.routine == Some(true)).map(|f| f.session_id.clone());
+    // once the question is sent: a failed send leaves nothing to wait on. A run
+    // on another machine is marked there.
+    let waiting_run = from
+        .as_ref()
+        .filter(|f| f.ask == Some(true) && f.routine == Some(true) && !relayed)
+        .map(|f| f.session_id.clone());
     // Held from the lookup until a new chat is on the index, or two first
     // messages would each start an agent in the one folder.
     let lock = bots::first_chat_lock(&bot.id);
@@ -2859,6 +2916,29 @@ async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
     if !bots::list_bots().await?.iter().any(|b| b.id == bot.id) {
         bail!("bot {:?} was just deleted", bot.name);
     }
+    // On file before the message can reach the bot, so the answer has a place
+    // to land however fast it comes, and taken back if the send fails.
+    if let (Some(id), Some(f)) = (&remote_ask, &from) {
+        crate::remote_asks::expect(id, &bot.id, &f.title, f.machine.as_deref()).await?;
+    }
+    let sent = send_into_bot_chat(send, bot, from, first, waiting_run, app).await;
+    if let (Some(id), Err(_)) = (&remote_ask, &sent) {
+        crate::remote_asks::unexpect(id).await;
+    }
+    sent
+}
+
+/// The rest of [`send_to_bot`], once the bot is known to stand: into its chat,
+/// or opening one. `first` is the bot's first-chat lock, held until a new chat
+/// is on the index.
+async fn send_into_bot_chat(
+    send: SendToBot,
+    bot: bots::Bot,
+    from: Option<MessageSender>,
+    first: tokio::sync::MutexGuard<'_, ()>,
+    waiting_run: Option<String>,
+    app: &Sink,
+) -> Result<Response> {
     if let Some(chat) = bots::chat_of(&bot).await {
         drop(first);
         // The sender passed on, so a run's one-way note to a bot never reads as

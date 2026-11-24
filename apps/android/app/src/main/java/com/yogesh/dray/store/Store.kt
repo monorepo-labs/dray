@@ -51,6 +51,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -72,7 +74,9 @@ data class Server(
 )
 
 /** A relayed server's way in: the paired server it goes through, whose token it uses, and its id there. */
-data class Via(val parent: String, val machine: String)
+data class Via(val parent: String, val machine: String) {
+    val key: String get() = "$parent/$machine"
+}
 
 /** A relayed machine's id, the same on every launch so its transcripts survive a reconnect. */
 private fun relayedId(parent: String, machine: String): String {
@@ -81,6 +85,13 @@ private fun relayedId(parent: String, machine: String): String {
     val lsb = d.drop(8).take(8).fold(0L) { a, b -> (a shl 8) or (b.toLong() and 0xff) }
     return UUID(msb, lsb).toString().uppercase()
 }
+
+/**
+ * What a server's welcome names it by, from the token the phone holds for it: `server_id` in
+ * serve.rs and `serverId` in Store.swift, which must hash it the same way.
+ */
+fun serverId(token: String): String =
+    MessageDigest.getInstance("SHA-256").digest("dray-server\u0000$token".toByteArray()).take(8).joinToString("") { "%02x".format(it) }
 
 /** One address however it was typed: `http`, a missing scheme, case or a trailing slash. */
 private fun address(url: String) = (socketUrl(url) ?: url).lowercase().trim('/')
@@ -108,6 +119,8 @@ class Store(private val context: Context) {
     val queued = mutableStateMapOf<SessionKey, List<Queued>>()
     /** Counts the phone's own sends per session: a send brings its chat back to the bottom. */
     val sends = mutableStateMapOf<SessionKey, Int>()
+    /** Counts `session_changed` per session, so a send can tell whether the server already spoke for it. */
+    private val announced = mutableMapOf<SessionKey, Int>()
     var projects by mutableStateOf(mapOf<String, List<Project>>())
         private set
     /** Each repo's PR marks by branch, as `pr_marks` last answered. */
@@ -169,6 +182,19 @@ class Store(private val context: Context) {
     private val callBatch = mutableMapOf<SessionKey, MutableSet<String>>()
     private var listSaving = false
 
+    /** What each paired server last shared, so a copy held back comes back without asking it again. */
+    private val shared = mutableMapOf<String, List<Sharing.Machine>>()
+    /** Each shared machine's `identity` by `Via.key`, kept across launches so a copy is held back before it ever connects. */
+    private val copyIds = mutableStateMapOf<String, String>().apply {
+        prefs.getString("copyIds", null)?.let { runCatching { putAll(wireJson.decodeFromString(copyIdsSerializer, it)) } }
+    }
+    /** Paired servers' `identity`, hashed from their tokens once. */
+    private val directIds = mutableMapOf<String, String>()
+    /** Paired servers down long enough to count as failing, which lets their copies back. Coming to the front clears `lost`, never this. */
+    private val unreachable = mutableSetOf<String>()
+    /** A held-back copy's id and the paired server shown in its place, both ways, so an alert tagged with either still lands. */
+    private val standIns = mutableMapOf<String, String>()
+
     /** Appearance's Hide sessions: home shows bots alone. */
     var hideSessions: Boolean
         get() = hideSessionsState
@@ -204,7 +230,39 @@ class Store(private val context: Context) {
 
     // Servers
 
-    val live: List<Server> get() = servers.filter { it.on }
+    val live: List<Server> get() = covered.let { c -> servers.filter { it.on && it.id !in c } }
+
+    /**
+     * Paired servers shown through a sharing Mac instead, while they are unreachable themselves
+     * (#1404): their own rows are the last read's, and would draw every session twice.
+     */
+    val covered: Set<String>
+        get() {
+            val shown = servers.mapNotNull { s -> s.via?.let { copyIds[it.key] } }.toSet()
+            if (shown.isEmpty()) return emptySet()
+            return servers.filter { it.via == null && directId(it.id) in shown }.map { it.id }.toSet()
+        }
+
+    /** The server an alert tagged `id` now goes to: a copy held back answers as its paired server, and back. */
+    fun shownAs(id: String): String =
+        if (servers.any { it.id == id }) id else standIns[id]?.takeIf { s -> servers.any { it.id == s } } ?: id
+
+    private fun directId(id: String): String? = directIds[id] ?: secrets.get(id)?.let(::serverId)?.also { directIds[id] = it }
+
+    /** The paired server a shared machine is held back for: on, not failing, and holding the token its welcome hashes. */
+    private fun twin(via: Via): String? {
+        val identity = copyIds[via.key] ?: return null
+        return servers.firstOrNull { it.via == null && it.id != via.parent && it.on && it.id !in unreachable && directId(it.id) == identity }?.id
+    }
+
+    /** Brings every share back in line after a paired server came, went or changed state. */
+    private fun reshare() {
+        for ((parent, machines) in shared.toMap()) share(parent, machines)
+    }
+
+    private fun saveCopyIds() {
+        prefs.edit().putString("copyIds", wireJson.encodeToString(copyIdsSerializer, copyIds.toMap())).apply()
+    }
 
     fun connection(server: String): Connection? = connections[server]
     fun name(of: String): String = servers.firstOrNull { it.id == of }?.name ?: "Server"
@@ -227,21 +285,34 @@ class Store(private val context: Context) {
             val moved = held.copy(url = url, on = true)
             servers = servers.map { if (it.id == held.id) moved else it }
             secrets.set(held.id, token)
+            directIds.remove(held.id)
             save()
-            return start(moved)
+            start(moved)
+            return reshare()
         }
         val s = Server(UUID.randomUUID().toString().uppercase(), name, url)
         secrets.set(s.id, token)
         servers = servers + s
         save()
         start(s)
+        // Its copy through a Mac goes now, not once it connects: until it fails it is the way in.
+        reshare()
     }
 
     fun removeServer(s: Server) {
-        for (gone in listOf(s) + servers.filter { it.via?.parent == s.id }) onRemoving(gone)
+        // A copy coming back in its place takes the push handle over on that same server; unregistering
+        // would race its registering, and the server drops a handle whatever tag it was given under.
+        val heldFor = shared.flatMap { (p, ms) -> ms.map { Via(p, it.id) } }.filter { twin(it) == s.id }
+        if (heldFor.isEmpty()) onRemoving(s)
+        for (gone in servers.filter { it.via?.parent == s.id }) onRemoving(gone)
         forget(s.id)
         secrets.delete(s.id)
+        directIds.remove(s.id)
+        if (copyIds.keys.removeAll { it.startsWith("${s.id}/") }) saveCopyIds()
+        heldFor.firstOrNull()?.let { standIns[s.id] = relayedId(it.parent, it.machine) }
         save()
+        // Only copies held back for this server come back: twin() asks each who it is held for.
+        reshare()
     }
 
     fun renameServer(id: String, name: String) {
@@ -257,13 +328,16 @@ class Store(private val context: Context) {
         servers = servers.map { if (it.id == id) next else it }
         save()
         if (on) start(next) else drop(id)
+        reshare()
     }
 
     /** A new token for a server whose old one was refused, tried at once. */
     fun updateToken(id: String, token: String) {
         secrets.set(id, token)
+        directIds.remove(id)
         connections[id]?.update(token)
         for (s in servers) if (s.via?.parent == id) connections[s.id]?.update(token)
+        reshare()
     }
 
     private fun save() {
@@ -301,6 +375,8 @@ class Store(private val context: Context) {
         cached = cached - id
         lost = lost - id
         downSince.remove(id)
+        unreachable.remove(id)
+        shared.remove(id)
     }
 
     /** Coming back to the front reconnects; `now` also asks servers that stopped, as a Retry does. */
@@ -316,19 +392,29 @@ class Store(private val context: Context) {
 
     private fun track(id: String, state: ConnState) {
         when (state) {
-            ConnState.Connected -> { downSince.remove(id); lost = lost - id }
+            ConnState.Connected -> {
+                downSince.remove(id)
+                lost = lost - id
+                if (unreachable.remove(id)) reshare()
+            }
             // Waiting cannot fix a refused token or a version apart.
-            is ConnState.Failed -> lost = lost + id
+            is ConnState.Failed -> failing(id)
             else -> {
                 if (downSince[id] != null) return
                 val since = System.currentTimeMillis()
                 downSince[id] = since
                 scope.launch {
                     delay(LOST_AFTER_MS)
-                    if (downSince[id] == since) lost = lost + id
+                    if (downSince[id] == since) failing(id)
                 }
             }
         }
+    }
+
+    /** Down long enough to say so: a paired server's copy through a Mac comes back in its place. */
+    private fun failing(id: String) {
+        lost = lost + id
+        if (servers.any { it.id == id && it.via == null } && unreachable.add(id)) reshare()
     }
 
     /** One server's Retry: reconnect where it is down, re-read where it is up. */
@@ -367,12 +453,25 @@ class Store(private val context: Context) {
         c.resume()
     }
 
-    /** Brings `parent`'s relayed servers in line with what it shares. */
+    /**
+     * Brings `parent`'s relayed servers in line with what it shares, bar a machine the phone also
+     * pairs directly (#1404): that copy is held back while the direct way works, which it does
+     * with the Mac off too.
+     */
     private fun share(parent: String, machines: List<Sharing.Machine>) {
         val p = servers.firstOrNull { it.id == parent && it.via == null } ?: return
-        for (s in servers.filter { it.via?.parent == parent && machines.none { m -> m.id == it.via.machine } }) forget(s.id)
+        shared[parent] = machines
+        for (s in servers.filter { it.via?.parent == parent }) {
+            val via = s.via ?: continue
+            if (machines.none { it.id == via.machine }) forget(s.id) else twin(via)?.let { hold(s, it) }
+        }
         for (m in machines) {
             val id = relayedId(parent, m.id)
+            val twin = twin(Via(parent, m.id))
+            if (twin != null) {
+                standIns[id] = twin
+                continue
+            }
             if (servers.any { it.id == id }) {
                 servers = servers.map { if (it.id == id) it.copy(name = m.name) else it }
                 continue
@@ -383,6 +482,19 @@ class Store(private val context: Context) {
             servers = servers.toMutableList().apply { add(after + 1, s) }
             start(s)
         }
+    }
+
+    /**
+     * Takes a copy off the list for `twin`. A copy that connected handed the phone's push handle
+     * to that same server under its own tag, and the server keeps one tag per handle, so the twin
+     * takes it back rather than the copy unregistering, which would drop the twin's too.
+     */
+    private fun hold(s: Server, twin: String) {
+        val wasUp = serverState[s.id] == ConnState.Connected
+        forget(s.id)
+        standIns[s.id] = twin
+        standIns.remove(twin)
+        if (wasUp && serverState[twin] == ConnState.Connected) onConnected(twin)
     }
 
     private suspend fun loadShared(server: String) {
@@ -446,6 +558,16 @@ class Store(private val context: Context) {
 
     /** A fresh connection re-reads the index and the tail of every open transcript, so nothing missed while down is lost. */
     private suspend fun connected(server: String) {
+        // A copy names who it is only here, the first time; learnt, it may be one to hold back before anything of it is read.
+        servers.firstOrNull { it.id == server }?.via?.let { via ->
+            val identity = connections[server]?.welcome?.identity
+            if (identity != null && copyIds[via.key] != identity) {
+                copyIds[via.key] = identity
+                saveCopyIds()
+                reshare()
+            }
+        }
+        if (servers.none { it.id == server }) return
         scope.launch { loadBots(server) }
         scope.launch { loadShared(server) }
         onConnected(server)
@@ -590,8 +712,9 @@ class Store(private val context: Context) {
      */
     fun runs(project: String?, settled: Boolean = false): List<Run> {
         val chats = bots.mapValues { (_, list) -> list.map { it.path } }
+        val hidden = covered
         val list = items.filter { (key, item) ->
-            item.hidden != true && (item.archived == true) == settled &&
+            key.server !in hidden && item.hidden != true && (item.archived == true) == settled &&
                 (project == null || project == item.project) &&
                 // A bot's chat is its row in the bots section, never a task row.
                 !(!settled && chats[key.server].orEmpty().any { samePath(it, item.cwd) }) &&
@@ -759,17 +882,24 @@ class Store(private val context: Context) {
                 switchAgent(c, key, merged(key, item), harness, model ?: item.model, effort, stance, fast)
                 item = item.copy(harness = harness)
             }
+            val heard = announced[key]
+            val sent = item.copy(
+                model = model ?: item.model,
+                effort = if (effortMoved) effort else effort ?: item.effort,
+                permissionMode = Picks.taskStance(item.harness, stance ?: item.permissionMode),
+                fast = fast ?: item.fast ?: false,
+            )
             val reply = c.call(
                 "send_msg",
                 jsonOf(
                     "sessionId" to key.id,
                     "prompt" to text,
                     "attachmentPaths" to emptyList<String>(),
-                    "harness" to item.harness,
-                    "model" to (model ?: item.model),
-                    "effort" to (if (effortMoved) effort else effort ?: item.effort),
-                    "permissionMode" to Picks.taskStance(item.harness, stance ?: item.permissionMode),
-                    "fast" to (fast ?: item.fast ?: false),
+                    "harness" to sent.harness,
+                    "model" to sent.model,
+                    "effort" to sent.effort,
+                    "permissionMode" to sent.permissionMode,
+                    "fast" to sent.fast,
                     "cwd" to item.cwd,
                     "branch" to null,
                     "useWorktree" to false,
@@ -779,6 +909,12 @@ class Store(private val context: Context) {
                 ),
             ).ok
             decodeOrNull<SessionItem>(reply["snapshot"])?.let { setItem(SessionKey(key.server, it.sessionId), it) }
+            // What `send_msg` wrote to the index, for a server too old to say so in `session_changed`:
+            // without it the dock falls back to the model the session just left. A newer server's word
+            // wins, since it may have refused a pick. An unset model keeps the old.
+            if (announced[key] == heard) items[key]?.let {
+                setItem(key, it.copy(model = sent.model.ifEmpty { it.model }, effort = sent.effort, permissionMode = sent.permissionMode, fast = sent.fast))
+            }
             // By id: the server's `queue_changed` usually lands before this reply.
             decodeOrNull<Queued>(reply["queued"])?.let { q ->
                 if (queued[key]?.contains(q) != true) queued[key] = queued[key].orEmpty() + q
@@ -916,6 +1052,7 @@ class Store(private val context: Context) {
             }
             "machines_shared" -> decodeOrNull<Sharing>(payload)?.let { share(server, it.machines) }
             "session_created", "session_changed" -> decodeOrNull<SessionItem>(payload)?.let { item ->
+                SessionKey(server, item.sessionId).let { announced[it] = (announced[it] ?: 0) + 1 }
                 dropStalePick(SessionKey(server, item.sessionId), item)
                 setItem(SessionKey(server, item.sessionId), item)
                 scope.launch { loadMarks(server, force = false, only = setOf(item.projectPath)) }
@@ -989,6 +1126,7 @@ class Store(private val context: Context) {
     companion object {
         /** How long a server may stay down before a session on it says so. */
         const val LOST_AFTER_MS = 10_000L
+        private val copyIdsSerializer = MapSerializer(String.serializer(), String.serializer())
     }
 }
 

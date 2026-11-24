@@ -194,6 +194,7 @@ pub async fn model_spec(harness: Harness, model: &ModelId) -> Result<Option<Mode
         Harness::Pi => crate::harness::pi::models::find(model).await,
         Harness::Fx => crate::harness::fx::models::find(model).await,
         Harness::Grok => crate::harness::grok::models::find(model).await,
+        Harness::OpenCode => crate::harness::opencode::models::find(model).await,
         Harness::Codex => crate::harness::codex::models::find(model).await,
         _ => Some(find_model(model).with_context(|| format!("unknown model {model}"))?),
     })
@@ -305,8 +306,9 @@ async fn move_agent(
     crate::bots::drop_task_handover(id);
     // Only an agent that took part has a conversation here to go back to.
     let remember = crate::bots::agent_joined(&item).await;
-    // Codex and fx keep one thread id on the index, so they always start fresh.
-    let resumed = item.other_agents.contains(&to) && !matches!(to, Harness::Codex | Harness::Fx);
+    // Codex, fx and OpenCode keep one thread id on the index, so they always
+    // start fresh.
+    let resumed = item.other_agents.contains(&to) && !matches!(to, Harness::Codex | Harness::Fx | Harness::OpenCode);
     let payload = AgentEventPayload::AgentSwitched { from: item.harness, to, resumed };
     let event = AgentEvent::mint(id.clone(), to, seq, None, None, payload);
     // The marker before the index: a marker whose agent the index never took
@@ -1672,18 +1674,18 @@ impl SessionManager {
 
             // Before the send, so the index reflects intent even if writing to
             // the child fails — the prompt event is persisted ahead of stdin too.
-            touch_session_index_item(session_id, model.clone(), effort, permission_mode, fast).await?;
+            record_picks(session_id, model.clone(), effort, permission_mode, fast, app).await?;
 
             // Mid-turn only where the harness takes a live control while a
             // model call is open, verified against each CLI: Claude Code's and
             // pi's next call inside the turn runs on the new model, and grok
-            // takes the option. fx refuses ("Prompt already in progress"), so
+            // and OpenCode take the option. fx refuses ("Prompt already in progress"), so
             // its pick is deferred to the flush that opens the queued turn.
             // Codex steers a queued prompt into the running turn and ignores
             // its model, so nothing can move it — the composer locks those
             // controls mid-turn instead.
             let applied = !turn_in_flight
-                || matches!(s.harness, Harness::ClaudeCode | Harness::Grok | Harness::Pi);
+                || matches!(s.harness, Harness::ClaudeCode | Harness::Grok | Harness::Pi | Harness::OpenCode);
             if applied {
                 apply_live_controls(s, session_id, &model, model_spec.as_ref(), effort, permission_mode, fast, app)
                     .await?;
@@ -1802,7 +1804,7 @@ impl SessionManager {
             });
         }
 
-        touch_session_index_item(session_id, model, effort, permission_mode, fast).await?;
+        record_picks(session_id, model, effort, permission_mode, fast, app).await?;
 
         // A fork that hasn't spawned yet. The app's half happened when the user
         // asked for it — log copied, entry written — and this is the spawn that
@@ -2018,8 +2020,18 @@ impl SessionManager {
         // `thread/fork` and `session recover` both name the parent's own id, so
         // a Codex or fx parent that never got one has nothing to fork — refused
         // before a row exists.
-        if matches!(parent.harness, Harness::Codex | Harness::Fx) && parent.thread_id.is_none() {
+        if matches!(parent.harness, Harness::Codex | Harness::Fx | Harness::OpenCode) && parent.thread_id.is_none() {
             bail!("this {} session has no conversation to fork yet", parent.harness.label());
+        }
+
+        // OpenCode files a session under the folder it was made in, and a fork
+        // or resume naming another `cwd` still runs in that one — measured, so a
+        // fork into a worktree would edit the parent's checkout.
+        if worktree && parent.harness == Harness::OpenCode {
+            bail!(
+                "OpenCode keeps a session in the folder it started in, so a fork can't move to a new \
+                 worktree. Fork it in place instead."
+            );
         }
 
         // Resolved against the project rather than the parent's own name, so a
@@ -2074,7 +2086,7 @@ impl SessionManager {
         // first send: a parent deleted in between would otherwise leave a fork
         // that fails every send. Safe while `fork_from` stands, since that is
         // what makes the first spawn fork this thread instead of resuming it.
-        if parent.harness == Harness::Codex {
+        if matches!(parent.harness, Harness::Codex | Harness::OpenCode) {
             item.thread_id = parent.thread_id.clone();
         }
         append_session_index_item(item.clone()).await?;
@@ -2119,7 +2131,9 @@ impl SessionManager {
         let spec = model_spec(s.harness, model).await?;
         match &s.stdin {
             Transport::Fx(fx) => fx.defer_controls(DeferredControls { model: spec, effort, mode, fast }),
-            _ if s.harness == Harness::ClaudeCode => {
+            // OpenCode queues like fx but takes a config option mid-prompt, so
+            // the pick goes out now rather than at the flush.
+            _ if matches!(s.harness, Harness::ClaudeCode | Harness::OpenCode) => {
                 apply_live_controls(s, session_id, model, spec.as_ref(), effort, mode, fast, app).await?
             }
             // pi and grok steer a prompt into the running turn rather than
@@ -2380,7 +2394,7 @@ impl SessionManager {
             Some(session) => session.kill_tree().await,
             None => Ok(()),
         };
-        #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+        #[cfg(feature = "cef")]
         if !crate::is_server() {
             crate::cef::close_session(session_id);
         }
@@ -2395,7 +2409,7 @@ impl SessionManager {
         crate::share::close_session(session_id);
         // Settled is done with, so the profile goes too: an unsettled session's
         // browser starts signed out. Both, whichever browser made one.
-        #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+        #[cfg(feature = "cef")]
         crate::cef::automation::delete_profile(session_id);
         #[cfg(any(feature = "serve", feature = "desktop"))]
         crate::headless::automation::delete_profile(session_id);
@@ -2453,7 +2467,7 @@ impl SessionManager {
         }
         // Files on this disk whichever browser made them, so both are swept
         // whether or not the app that filmed one is open.
-        #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+        #[cfg(feature = "cef")]
         crate::cef::automation::delete_recordings(session_id);
         #[cfg(any(feature = "serve", feature = "desktop"))]
         crate::headless::automation::delete_recordings(session_id);
@@ -2530,6 +2544,9 @@ pub enum Transport {
     /// chose — grok honours `_meta.sessionId`, so there is no minted id to
     /// carry. See [`GrokSession`](crate::harness::grok::GrokSession).
     Grok(crate::harness::grok::GrokSession),
+    /// OpenCode's connection: ACP, addressed to the session OpenCode minted.
+    /// See [`OpenCodeSession`](crate::harness::opencode::OpenCodeSession).
+    OpenCode(crate::harness::opencode::OpenCodeSession),
 }
 
 impl Transport {
@@ -2549,8 +2566,11 @@ impl Transport {
     /// [`flush_one_per_turn`]. Every other transport has a tool boundary to hand
     /// a batch over at, seconds away, which is why this is a question about the
     /// transport rather than a flag on the session.
+    ///
+    /// OpenCode is here for fx's reason: a second `session/prompt` is refused,
+    /// and it has no interject.
     pub fn one_prompt_per_turn(&self) -> bool {
-        matches!(self, Transport::Fx(_))
+        matches!(self, Transport::Fx(_) | Transport::OpenCode(_))
     }
 
     /// Opens a turn with one prompt, for the transports that take it as a
@@ -2567,6 +2587,9 @@ impl Transport {
             Transport::Grok(session) => {
                 Some(crate::harness::grok::start_turn(session, text, images).await)
             }
+            Transport::OpenCode(session) => {
+                Some(crate::harness::opencode::start_turn(session, text, images).await)
+            }
             _ => None,
         }
     }
@@ -2580,7 +2603,7 @@ impl Transport {
     pub fn lines(&self) -> Result<&Arc<Mutex<ChildStdin>>> {
         match self {
             Transport::Lines(stdin) => Ok(stdin),
-            Transport::Rpc(_) | Transport::Pi(_) | Transport::Fx(_) | Transport::Grok(_) => {
+            Transport::Rpc(_) | Transport::Pi(_) | Transport::Fx(_) | Transport::Grok(_) | Transport::OpenCode(_) => {
                 bail!("this control is not wired for this harness")
             }
         }
@@ -2759,6 +2782,26 @@ impl Session {
                     // model id here, so a respawn that dropped it would put the
                     // session back on standard speed with the switch still lit.
                     fast,
+                    cwd,
+                    session_cwd,
+                    is_new_session,
+                    fork_from,
+                    app,
+                )
+                .await
+            }
+            Harness::OpenCode => {
+                // No `-w`, so the tree is made before this. A fork's first send
+                // carries `fork_from`, and the spawn makes the copy.
+                if worktree_name.is_some() {
+                    bail!("OpenCode cannot create a worktree — it has to be made first");
+                }
+
+                crate::harness::opencode::init(
+                    session_id,
+                    model,
+                    effort,
+                    permission_mode,
                     cwd,
                     session_cwd,
                     is_new_session,
@@ -3063,6 +3106,14 @@ impl Session {
             return Ok(());
         }
 
+        // OpenCode drops effort on a model change and this sends it again, so
+        // the effort arm after this compares against what the child is on.
+        if let Transport::OpenCode(session) = &self.stdin {
+            self.effort = crate::harness::opencode::set_model(session, model, self.effort).await?;
+            self.model = model.id.clone();
+            return Ok(());
+        }
+
         // Codex takes it on the next `turn/start`, which sticks to the thread.
         if let Transport::Rpc(thread) = &self.stdin {
             thread.update(|settings| settings.set_model(model));
@@ -3148,6 +3199,15 @@ impl Session {
             return Ok(());
         }
 
+        // OpenCode's `effort` option. `None` is OpenCode's own default.
+        if let Transport::OpenCode(session) = &self.stdin {
+            if let Some(effort) = effort {
+                crate::harness::opencode::set_effort(session, effort).await?;
+            }
+            self.effort = effort;
+            return Ok(());
+        }
+
         // pi's `set_thinking_level`. `None` is pi's own default, which nothing
         // here can spell, so it is recorded and left to the next respawn.
         if let Transport::Pi(client) = &self.stdin {
@@ -3206,6 +3266,11 @@ impl Session {
         // it, which is settle's problem rather than Stop's.
         if let Transport::Grok(session) = &self.stdin {
             return crate::harness::grok::cancel(session);
+        }
+
+        // The same notification; OpenCode aborts the running tool itself.
+        if let Transport::OpenCode(session) = &self.stdin {
+            return crate::harness::opencode::cancel(session);
         }
 
         // pi never reaches here: its Stop goes through
@@ -3343,6 +3408,14 @@ impl Session {
             // a `selected` wrapper — so the button's payload goes back as it was
             // built and nothing here composes one.
             (Transport::Grok(session), Reply::Rpc(rpc_id)) => {
+                let outcome = chosen
+                    .decision
+                    .clone()
+                    .context("this option carries no outcome to send")?;
+                session.client.respond(*rpc_id, outcome)?;
+            }
+            // ACP's outcome envelope again, built by the button.
+            (Transport::OpenCode(session), Reply::Rpc(rpc_id)) => {
                 let outcome = chosen
                     .decision
                     .clone()
@@ -3489,6 +3562,13 @@ impl Session {
         // fx holds a `session.lock` per session, released on a clean exit.
         if let Transport::Fx(session) = &self.stdin {
             crate::harness::fx::shutdown(&mut self.child, session).await;
+            return Ok(());
+        }
+
+        // OpenCode's language and MCP servers are its children, and would
+        // outlive a kill of the parent alone.
+        if let Transport::OpenCode(_) = &self.stdin {
+            crate::harness::opencode::kill_tree(&mut self.child).await;
             return Ok(());
         }
 
@@ -4364,12 +4444,13 @@ async fn apply_live_controls(
                     // adopted what fx answered, and every field written back
                     // is the session's own, since this returns before the
                     // effort, stance and fast arms run.
-                    touch_session_index_item(
+                    record_picks(
                         session_id,
                         s.model.clone(),
                         s.effort,
                         s.permission_mode,
                         s.fast,
+                        app,
                     )
                     .await?;
                     return Err(err);
@@ -4401,12 +4482,13 @@ async fn apply_live_controls(
             // the one that was asked for. Every other field is still
             // the pick: fast mode is applied below this block, so
             // recording the child's current value here would drop it.
-            touch_session_index_item(
+            record_picks(
                 session_id,
                 model.clone(),
                 s.effort,
                 permission_mode,
                 fast,
+                app,
             )
             .await?;
         }
@@ -4423,9 +4505,25 @@ async fn apply_live_controls(
                 return Err(err);
             }
             report_session_error(session_id, s.harness, &format!("{err:#}"), &s.seq, app).await;
-            touch_session_index_item(session_id, s.model.clone(), s.effort, s.permission_mode, s.fast)
-                .await?;
+            record_picks(session_id, s.model.clone(), s.effort, s.permission_mode, s.fast, app).await?;
         }
+    }
+    Ok(())
+}
+
+/// Records a send's picks on the index and tells every client where they
+/// changed: a phone's selector shows the index's model, and without this a
+/// pick sent from it fell back to the model the session had left.
+async fn record_picks(
+    session_id: &str,
+    model: ModelId,
+    effort: Option<Effort>,
+    permission_mode: ApprovalPolicy,
+    fast: bool,
+    app: &Sink,
+) -> Result<()> {
+    if let Some(item) = touch_session_index_item(session_id, model, effort, permission_mode, fast).await? {
+        app.emit(crate::orchestration::SESSION_CHANGED, &item).ok();
     }
     Ok(())
 }

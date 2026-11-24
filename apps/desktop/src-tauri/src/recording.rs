@@ -65,7 +65,11 @@ impl Recorder {
         // Refused before anything is filmed: a recording that cannot be
         // converted is one the agent would only find out about at the end.
         if !cfg!(target_os = "macos") && ffmpeg().is_none() {
-            return Err("recording needs ffmpeg on this server; run `dray setup` and pick it".into());
+            return Err(if cfg!(windows) {
+                "recording needs ffmpeg on this machine; install it with `winget install Gyan.FFmpeg`".into()
+            } else {
+                "recording needs ffmpeg on this server; run `dray setup` and pick it".into()
+            });
         }
         std::fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
         let mov = dir.join(format!("{stem}.mov"));
@@ -349,9 +353,13 @@ fn run(name: &str, mut command: std::process::Command) -> Result<(), String> {
 /// by systemd or launchd has a short `PATH`.
 fn ffmpeg() -> Option<PathBuf> {
     let path = std::env::var_os("PATH").unwrap_or_default();
+    // winget's links, which a process started before the install has no
+    // `PATH` entry for.
+    let winget = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join(r"Microsoft\WinGet\Links"));
     std::env::split_paths(&path)
         .chain(["/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/snap/bin"].map(PathBuf::from))
-        .map(|dir| dir.join("ffmpeg"))
+        .chain(winget.filter(|_| cfg!(windows)))
+        .map(|dir| dir.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }))
         .find(|p| p.is_file())
 }
 
