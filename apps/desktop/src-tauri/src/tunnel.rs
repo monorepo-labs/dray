@@ -13,7 +13,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use opentunnel::{Client, ClientOptions, Routes, State, Storage, Tunnel};
+use opentunnel::{Client, ClientOptions, Event, Routes, State, Storage, Tunnel};
 use sha2::{Digest, Sha256};
 
 pub const REMOTE: &str = "remote";
@@ -99,14 +99,14 @@ pub async fn warm(profile: &'static str) {
     let _live = slot(profile).lock().await;
     let client = match client().await {
         Ok(client) => client,
-        Err(e) => return eprintln!("tunnel: could not warm {profile}: {e:#}"),
+        Err(e) => return log(profile, &format!("could not warm: {e:#}")),
     };
     if matches!(client.get(profile), Ok(Some(_))) {
         return;
     }
     match ensure(&client, profile).await {
-        Ok(_) => eprintln!("tunnel: {profile} provisioned"),
-        Err(e) => eprintln!("tunnel: could not warm {profile}: {e:#}"),
+        Ok(_) => log(profile, "provisioned"),
+        Err(e) => log(profile, &format!("could not warm: {e:#}")),
     }
 }
 
@@ -119,6 +119,7 @@ pub async fn expose(profile: &'static str, label: &str, target: String) -> Resul
             let client = client().await?;
             let identity = ensure(&client, profile).await?;
             let tunnel = client.connect(profile, Routes::new())?;
+            log_events(profile, identity.hostname.clone(), tunnel.subscribe());
             *live = Some(Live { tunnel, hostname: identity.hostname, token: identity.token, routes: Routes::new() });
         }
         let entry = live.as_mut().expect("set above");
@@ -178,6 +179,40 @@ pub async fn withdraw(profile: &'static str, label: &str, target: Option<&str>) 
     } else {
         let _ = entry.tunnel.set_routes(entry.routes.clone());
     }
+}
+
+/// One timestamped line in the server log, the only record of a tunnel's
+/// life: an outage is diagnosed afterwards by lining these up with the Mac's
+/// own network log.
+pub fn log(profile: &str, what: &str) {
+    eprintln!("[tunnel {profile} {}] {what}", chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z"));
+}
+
+/// Writes `profile`'s tunnel lifecycle to the server log until the tunnel
+/// ends. Events carry no token.
+fn log_events(profile: &'static str, hostname: String, mut events: tokio::sync::broadcast::Receiver<Event>) {
+    use tokio::sync::broadcast::error::RecvError;
+    tokio::spawn(async move {
+        loop {
+            let line = match events.recv().await {
+                Ok(Event::Connecting { attempt }) => format!("connecting to the relay, attempt {attempt}"),
+                Ok(Event::Connected { session, routes }) => {
+                    let at: Vec<_> = routes.iter().map(|r| format!("https://{r}.{hostname}")).collect();
+                    format!("connected, session {session}, serving {}", at.join(" "))
+                }
+                Ok(Event::Disconnected { reason }) => format!("dropped: {reason}"),
+                Ok(Event::Reconnecting { attempt, delay_ms }) => format!("reconnecting in {delay_ms}ms, attempt {attempt}"),
+                Ok(Event::ConnectionOpened { conn, peer, .. }) => format!("visitor {conn} from {peer}"),
+                Ok(Event::ConnectionClosed { conn, error: Some(e), .. }) => format!("visitor {conn} closed: {e}"),
+                Ok(Event::ConnectionClosed { .. }) => continue,
+                Ok(Event::CertificateRenewed { expiry }) => format!("certificate renewed, expires {expiry}"),
+                Ok(Event::Stopped { error }) => format!("stopped: {}", error.unwrap_or_else(|| "closed".into())),
+                Err(RecvError::Lagged(n)) => format!("{n} events not logged"),
+                Err(RecvError::Closed) => return,
+            };
+            log(profile, &line);
+        }
+    });
 }
 
 /// `profile`'s tunnel state as it moves, while it has one.
