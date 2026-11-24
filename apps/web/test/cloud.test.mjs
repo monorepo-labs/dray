@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { createServer } from "node:net";
 import { after, before, describe, test } from "node:test";
 import { fakeBoat } from "./fake-boat.mjs";
+import { nextDev } from "./next-dev.mjs";
 
 /// The Dray Cloud routes (#857) under a real `next dev`, against a faked boat.
 /// Run with `pnpm test` from apps/web.
@@ -15,45 +14,6 @@ const ORG = "dray-cloud-org";
 const hmac = (what) => createHmac("sha256", SECRET).update(what).digest("hex");
 const SERVE_TOKEN = hmac("serve-token");
 const MACHINE_SECRET = hmac("machine");
-
-async function freePort() {
-  const server = createServer();
-  await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  const { port } = server.address();
-  await new Promise((r) => server.close(r));
-  return port;
-}
-
-/// Starts `next dev` with `env` and waits until it answers.
-async function next(env) {
-  const port = await freePort();
-  const child = spawn("node_modules/.bin/next", ["dev", "-p", String(port), "-H", "127.0.0.1"], {
-    cwd: new URL("..", import.meta.url),
-    env: { ...process.env, ...env, NEXT_TELEMETRY_DISABLED: "1" },
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: true,
-  });
-  let log = "";
-  child.stdout.on("data", (d) => (log += d));
-  child.stderr.on("data", (d) => (log += d));
-  const base = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 240; i++) {
-    if (child.exitCode !== null) throw new Error(`next dev exited:\n${log}`);
-    try {
-      await fetch(`${base}/api/cloud/machines`);
-      const stop = () => {
-        const exited = new Promise((r) => child.once("exit", r));
-        process.kill(-child.pid, "SIGTERM");
-        return exited;
-      };
-      return { base, log: () => log, stop };
-    } catch {
-      await new Promise((r) => setTimeout(r, 500));
-    }
-  }
-  child.kill();
-  throw new Error(`next dev never answered:\n${log}`);
-}
 
 const ROUTES = [
   ["GET", "/api/cloud/machines"],
@@ -67,7 +27,7 @@ const ROUTES = [
 describe("without DRAY_CLOUD_KEY", () => {
   let app;
   before(async () => {
-    app = await next({ DRAY_CLOUD_KEY: "", DRAY_CLOUD_SECRET: SECRET, BOAT_API_KEY: BOAT_KEY });
+    app = await nextDev("/api/cloud/machines", { DRAY_CLOUD_KEY: "", DRAY_CLOUD_SECRET: SECRET, BOAT_API_KEY: BOAT_KEY });
   });
   after(() => app?.stop());
 
@@ -84,7 +44,7 @@ describe("with DRAY_CLOUD_KEY", () => {
   let boat;
   before(async () => {
     boat = await fakeBoat({ key: BOAT_KEY, org: ORG });
-    app = await next({
+    app = await nextDev("/api/cloud/machines", {
       DRAY_CLOUD_KEY: KEY,
       DRAY_CLOUD_SECRET: SECRET,
       BOAT_API_KEY: BOAT_KEY,

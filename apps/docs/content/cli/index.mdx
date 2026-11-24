@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-`dray` is Dray's command line. It lets you, and the agents running inside Dray, do from a terminal what you would otherwise do in the app: start sessions, list them, message them, save drafts, tag issues, drive a session's browser, share a dev server, and set up a server. Its main use is letting one agent fan work out into several sessions, each with its own worktree and its own row in the sidebar.
+`dray` is Dray's command line. It lets you, and the agents running inside Dray, do from a terminal what you would otherwise do in the app: start sessions, list them, message them, save drafts, tag issues, drive a session's browser, share a dev server, upload screenshots for a pull request, and set up a server. Its main use is letting one agent fan work out into several sessions, each with its own worktree and its own row in the sidebar.
 
 Every command talks to the Dray app on the same machine, so the app has to be running. On a Linux server, it talks to the Dray server instead. See [Connect a server](/server).
 
@@ -87,6 +87,7 @@ Prints a completion script for `bash`, `zsh`, `fish`, `elvish` or `powershell`.
 | `dray issue` | Tag a session with the issues its work is against | [Issues](/cli/issues) |
 | `dray browser` | Drive a session's browser: open, read, click, type, screenshot, record | [Browser](/cli/browser) |
 | `dray share` | Publish a session's dev server as a public link | [Share](/cli/share) |
+| `dray upload` | Upload screenshots and print markdown for a pull request | [Upload](/cli/upload) |
 | `dray server` | Make this machine a Dray server | [Servers](/cli/servers) |
 | `dray machine` | The list of servers the app connects to | [Servers](/cli/servers) |
 | `dray update` | Install the newest release | above |

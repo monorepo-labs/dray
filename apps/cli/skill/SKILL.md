@@ -366,6 +366,16 @@ link. It is refused when the task's branch has no open pull request, and while
 the task is still mid-turn.
 
 ```bash
+dray upload before.png after.png   # one ![name](url) line per file
+```
+
+Screenshots for a pull request body or comment. Paste the lines it prints into
+`gh pr create --body` or `gh pr edit --body`. It signs in with `GITHUB_TOKEN` or
+`gh auth token`. PNG, JPEG, GIF or WebP, 4 MB each, 30 an hour per GitHub
+account. The images are public, so upload only what belongs in the PR. This is
+for GitHub; `dray image add` is what shows a screenshot in your chat.
+
+```bash
 dray session need <task-id> "Pick: keep the button or drop it"   # no text clears it
 ```
 

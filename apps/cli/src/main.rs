@@ -15,6 +15,7 @@ mod draft;
 mod machine;
 mod routine;
 mod setup;
+mod upload;
 use draft::DraftCommand;
 use dray_proto::{
     encode_line, AddVideo, AttachSession, BrowserAction, MergeCard, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
@@ -81,6 +82,10 @@ enum Command {
     /// live ones, or stop one.
     #[command(arg_required_else_help = true, args_conflicts_with_subcommands = true)]
     Share(ShareArgs),
+    /// Upload screenshots for a PR body and print a markdown image line for
+    /// each. Signs in with your GitHub token, from `gh auth token` or GITHUB_TOKEN.
+    #[command(arg_required_else_help = true)]
+    Upload(upload::Upload),
     /// The machines this one reaches: add, list, rename, connect, remove.
     #[command(subcommand, arg_required_else_help = true)]
     Machine(machine::MachineCommand),
@@ -524,6 +529,7 @@ fn run() -> Result<(), String> {
         Command::Video(VideoCommand::Add(args)) => add_media(args.file, args.name, args.session, false),
         Command::Image(ImageCommand::Add(args)) => add_media(args.file, args.name, args.session, true),
         Command::Share(args) => share(args),
+        Command::Upload(args) => upload::run(args),
         Command::Machine(command) => machine::run(command),
         Command::Server(command) => setup::server(command),
         Command::Login => setup::login(),
