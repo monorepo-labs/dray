@@ -172,8 +172,8 @@ enum SessionCommand {
 
 #[derive(Args)]
 struct ReactArgs {
-    /// 👀 ✅ 🎉 👍 ❤️ 😂 😢, or its word: seen, done, celebrate, like, love,
-    /// laugh, sad.
+    /// 👀 ✅ 🎉 👍 👎 ❤️ 😂 😢, or its word: seen, done, celebrate, like,
+    /// dislike, love, laugh, sad.
     emoji: String,
 }
 

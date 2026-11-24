@@ -388,7 +388,7 @@ row in the "Waiting on you" card at the foot of your chat, and it clears as soon
 as the task moves.
 
 ```bash
-dray session react 👀   # or ✅ 🎉 👍 ❤️ 😂 😢; also seen, done, celebrate, like, love, laugh, sad
+dray session react 👀   # or ✅ 🎉 👍 👎 ❤️ 😂 😢; also seen, done, celebrate, like, dislike, love, laugh, sad
 ```
 
 A bot only. Puts the emoji on the user's newest message in your chat, in place

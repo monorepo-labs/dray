@@ -2,13 +2,14 @@ import type { AgentEvent } from "@/types/events";
 
 /// The reactions there are, the bot's and the reader's alike: `EMOJI` in
 /// react.rs, which refuses any other.
-export const REACTIONS = ["👍", "❤️", "😂", "🎉", "✅", "👀", "😢"] as const;
+export const REACTIONS = ["👍", "👎", "❤️", "😂", "🎉", "✅", "👀", "😢"] as const;
 
 export const REACTION_LABELS: Record<string, string> = {
   "👀": "Seen",
   "✅": "Done",
   "🎉": "Celebrating",
   "👍": "Like",
+  "👎": "Dislike",
   "❤️": "Love",
   "😂": "Laughing",
   "😢": "Sad",
