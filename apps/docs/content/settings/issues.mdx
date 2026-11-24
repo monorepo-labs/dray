@@ -69,7 +69,15 @@ A row shows the identifier, the title, labels, and a pull-request mark with its 
 - Click a row to open it in the pane beside the list: description, people, labels and comments. `⌘E` closes the pane, and opens it again on the last issue.
 - Use `↑` and `↓` to move through the rows, and `Return` to open one.
 - ⌘-click a row to open it in Linear or GitHub instead.
-- **Work on it**, shown on a row when you hover it, takes you to an empty composer with the issue already tagged. It starts nothing until you send.
+
+### Start work on an issue
+
+You start work from the Issues page itself; it never takes you to the new-task page. A task for an issue runs in the attached project whose git remote is the issue's repository, and the task is linked to the issue.
+
+- **Start task**, on a row when you hover it and at the top of the opened issue, starts a task at once on the agent, model, effort and worktree setting your last new task used. Its prompt is the issue's title, link and description.
+- The opened issue ends in a composer holding that same prompt. Add a note, change the model or the worktree switch, and press the arrow (or `⌘Return`) to start the task. The issue's newest task is named above it; click it to open the task.
+- **Give to bot**, beside Start task, hands the issue to one of your bots. With one bot it goes straight there; with several, a menu picks one. The bot is told in a message you don't see, and starts on it when it is free. Nothing is written to GitHub or Linear.
+- Start task is off when no attached project has the issue's repository as its remote, and for Linear issues, which name no repository.
 
 ## Change status and priority
 

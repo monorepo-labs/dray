@@ -1996,11 +1996,11 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             harness: Harness, model: ModelId, effort: Option<Effort>,
             permission_mode: ApprovalPolicy, fast: bool, cwd: String,
             branch: Option<String>, use_worktree: bool, worktree_name: Option<String>,
-            base_ref: Option<String>, is_new_session: bool,
+            base_ref: Option<String>, is_new_session: bool, issue_ids: Option<Vec<String>>,
         ) => crate::send_msg(
             &session_id, &prompt, attachment_paths, harness, model, effort,
             permission_mode, fast, &cwd, branch.as_deref(), use_worktree,
-            worktree_name.as_deref(), base_ref.as_deref(), is_new_session, sink,
+            worktree_name.as_deref(), base_ref.as_deref(), is_new_session, issue_ids, sink,
         ).await;
         start_pr_session(
             session_id: String, prompt: String, harness: Harness, model: ModelId,
@@ -2032,6 +2032,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             crate::bots::react::react_to_message(session_id, message_id, emoji, sink).await;
         approve_issue(session_id: String, card_id: String, number: u64) =>
             crate::issues::card::approve_issue(session_id, card_id, number, sink).await;
+        give_issue_to_bot(bot_id: String, issue: crate::issues::IssueRef) =>
+            crate::issues::card::give_issue_to_bot(bot_id, issue, sink).await;
         mark_session_read(session_id: String, read: bool) => crate::mark_session_read(&session_id, read, sink).await;
         set_session_flags(session_id: String, archived: Option<bool>, pinned: Option<bool>, hidden: Option<bool>, aside: Option<bool>) =>
             crate::bots::reader_did(

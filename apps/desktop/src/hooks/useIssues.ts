@@ -149,6 +149,18 @@ function rememberDetail(identifier: string, detail: IssueDetail, generation: num
   }
 }
 
+/// One issue's detail, from the cache while fresh, else read and cached: what
+/// a task started from a list row takes its body from.
+export async function readIssueDetail(issue: { identifier: string; id: string }): Promise<IssueDetail> {
+  const held = detailCache.get(issue.identifier);
+  if (held && Date.now() - (detailFetchedAt.get(issue.identifier) ?? 0) < FRESH_MS) return held;
+  const reading = issueGeneration();
+  const id = issue.id && issue.id !== issue.identifier ? issue.id : null;
+  const detail = await invoke<IssueDetail>("get_issue", { identifier: issue.identifier, id });
+  rememberDetail(issue.identifier, detail, reading);
+  return detail;
+}
+
 type Read = { key: string; details: Record<string, IssueDetail> };
 
 function split(key: string): string[] {

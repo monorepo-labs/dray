@@ -461,7 +461,7 @@ function useStartPicks(latest: SessionIndexItem | undefined) {
 /// The New Task composer's own model picker, on the page's picks: the agent
 /// row, models, effort and fast mode, read from the task's server. A bot's
 /// task never shows it, since it runs on the bot's own agent.
-function TaskModelPicker({
+export function TaskModelPicker({
   server,
   picks,
   onChange,

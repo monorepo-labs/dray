@@ -2,10 +2,9 @@ import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 
 import { invoke, listen, LOCAL, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { CircleDashed, Plus } from "lucide-react";
+import { CircleDashed } from "lucide-react";
 import PrStateIcon from "@/components/PrStateIcon";
 
-import { Button } from "@/components/ui/button";
 
 import "./App.css";
 import Chat from "@/components/Chat";
@@ -177,7 +176,8 @@ import WhatsNewPage from "@/components/WhatsNewPage";
 import StarCard from "@/components/StarCard";
 import { noteMergeForStar, useStarPrompt } from "@/hooks/useStarPrompt";
 import { useIntegrations } from "@/hooks/useIntegrations";
-import { useSessionIssues } from "@/hooks/useIssues";
+import { readIssueDetail, useSessionIssues } from "@/hooks/useIssues";
+import { IssueComposer, IssueQuickActions, IssueStartContext, type IssueStarter } from "@/components/IssueStart";
 import { sessionsAnswered, useSessions } from "@/hooks/useSessions";
 import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailability";
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
@@ -203,11 +203,12 @@ import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
 import { appendToDraft, onDraftWrite, readDraft, writeDraft } from "@/hooks/useDraft";
 import { draftKey, useDrafts } from "@/hooks/useDrafts";
-import { issueTag, rememberIssueTitle, setIssueOpener } from "@/lib/issue";
+import { setIssueOpener } from "@/lib/issue";
+import { issuePrompt, lastTaskPicks, projectForIssue, tasksForIssue, usablePicks, type IssuePicks } from "@/lib/issueStart";
 import { readIssueTracker, setIssueRepo, setIssueTracker } from "@/lib/issueTracker";
 import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
-import { focusComposer, focusComposerEnd } from "@/lib/composerFocus";
+import { focusComposer } from "@/lib/composerFocus";
 import { changeRange, lastToolResult, writingTurns } from "@/lib/changes";
 import { useOlderWrites } from "@/hooks/useOlderWrites";
 import { usePlan } from "@/lib/plan";
@@ -3187,30 +3188,52 @@ function App() {
     setSettingsOpen(true);
   };
 
-  /// Leaves the issues page for the empty composer, with the issue tagged in
-  /// the draft.
-  ///
-  /// The tag alone is the whole handoff: `expand_tags` resolves it out of the
-  /// prompt text on send, so nothing is linked here. It lands in the composer
-  /// rather than starting a session, which is what leaves the project, the
-  /// model and the harness still to be picked.
-  const workOnIssue = (issue: { identifier: string; title: string }) => {
-    goToSession(handleNewSession);
-    // The same two things the `#` picker's own pick does, and the draft reads
-    // as prose without either. **The title is remembered**, since nothing
-    // closes an issue tag and the chip cannot find its end otherwise — so the
-    // Linear tag chipped as the bare identifier with its title left beside it
-    // in plain text. **And a space follows it**, since a chip only forms once
-    // the caret has left the word: dropped straight in, the caret sat at the
-    // tag's end and the whole run stayed drawn as raw text.
-    rememberIssueTitle(issue.identifier, issue.title);
-    appendToDraft(null, issueTag(issue.identifier, issue.title));
-    // A space after it, which `appendToDraft` trims off — its rule is
-    // dictation's, where whatever the model padded its words with is noise. A
-    // tag wants one: a chip only forms once the caret has left the word, so
-    // without it the whole run stayed drawn as raw text.
-    writeDraft(null, `${readDraft(null)} `);
-    focusComposerEnd();
+  /// Starts a task for `issue` from the issues page, in the project whose git
+  /// remote is the issue's repository, without leaving the page. The task is
+  /// filed under the issue and lands in the sidebar on `session_created`.
+  const startIssueTask = async (issue: IssueRef, prompt?: string, picks?: IssuePicks) => {
+    const project = projectForIssue(projects, issue);
+    if (!project) throw new Error("No project here has this issue's repository as its remote.");
+    const server = serverOfPath(project.path);
+    // A row's one click carries the body the details pane would have shown;
+    // an issue that cannot be read still starts, on its title and link.
+    const text =
+      prompt ?? issuePrompt(issue, await readIssueDetail(issue).then((d) => d.description, () => null));
+    const { useWorktree: worktree, ...rest } = await usablePicks(server, picks ?? lastTaskPicks());
+    await invoke("send_msg", {
+      sessionId: crypto.randomUUID(),
+      prompt: text,
+      attachmentPaths: [],
+      ...rest,
+      cwd: project.path,
+      branch: null,
+      useWorktree: worktree,
+      worktreeName: null,
+      baseRef: null,
+      isNewSession: true,
+      issueIds: [issue.identifier],
+    });
+  };
+  /// Hands `issue` to `bot`, which is told in a hidden prompt and starts it
+  /// once free, as an approval on its issue card tells it.
+  const giveIssueToBot = async (issue: IssueRef, bot: Bot) => {
+    const { tracker, id, identifier, title, url } = issue;
+    await invoke("give_issue_to_bot", { botId: bot.id, issue: { tracker, id, identifier, title, url } }, serverOfBot(bot)).catch(
+      (e) => {
+        throw String(e).includes("unknown command") ? new Error(`Update ${bot.name}'s server to hand it issues.`) : e;
+      },
+    );
+  };
+  const issueStarter: IssueStarter = {
+    projectFor: (issue) => projectForIssue(projects, issue),
+    // A bot's own chat can link the issue it was handed; its task is the work.
+    tasksFor: (issue) =>
+      tasksForIssue([...sessionIndexItems, ...otherIndexSide], issue).filter((i) => !botAt(bots, i.cwd)),
+    bots,
+    botOf: botOfPrSession,
+    onOpenTask: openPrSession,
+    start: startIssueTask,
+    give: giveIssueToBot,
   };
 
   /// Writes a session's settled or pinned flag and takes the sidebar wherever
@@ -4013,6 +4036,7 @@ function App() {
   return (
     <TooltipProvider>
     <MergeCardHostContext value={mergeCardHost}>
+    <IssueStartContext value={issueStarter}>
     <DiffWorkerPool pair={codeThemePair}>
     {/* Hidden, not unmounted, while settings take the window: transcripts,
         scroll pins and drafts wait here. `display: none` is also what takes
@@ -4436,14 +4460,7 @@ function App() {
             // In the strip rather than on the issue's own row, beside Refresh:
             // it acts on the issue the pane is showing, which is the pane's
             // whole subject — the same slot Open takes for a session.
-            actions={
-              pickedIssue && (
-                <Button variant="secondary" size="xs" onClick={() => workOnIssue(pickedIssue)}>
-                  Work on it
-                  <Plus data-icon="inline-end" />
-                </Button>
-              )
-            }
+            actions={pickedIssue && <IssueQuickActions issue={pickedIssue} />}
           >
             <TabBody active>
               <MountOnce when>
@@ -4457,6 +4474,13 @@ function App() {
                 loading={pickedIssueData.loading}
                 unavailable={pickedIssueData.unavailable}
               />
+              {pickedIssue && (
+                <IssueComposer
+                  key={pickedIssue.identifier}
+                  issue={pickedIssue}
+                  detail={pickedIssueData.details[pickedIssue.identifier]}
+                />
+              )}
               </MountOnce>
             </TabBody>
           </RightPanel>
@@ -4825,7 +4849,6 @@ function App() {
           active={issuesOpen}
           picked={pickedIssue}
           onPick={setPickedIssue}
-          onWorkOn={workOnIssue}
           refreshRef={issuesRefreshRef}
           connected={integrations.connected}
           onConnect={integrations.connect}
@@ -5163,6 +5186,7 @@ function App() {
       </AlertDialogContent>
     </AlertDialog>
     </DiffWorkerPool>
+    </IssueStartContext>
     </MergeCardHostContext>
     </TooltipProvider>
   );

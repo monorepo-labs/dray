@@ -6,14 +6,12 @@ import {
   useSyncExternalStore,
   type MutableRefObject,
   type ReactNode,
-  type SyntheticEvent,
 } from "react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   ChevronDown,
   GitPullRequest,
-  Plus,
   RefreshCw,
   Search,
   Shapes,
@@ -25,10 +23,11 @@ import Avatar from "@/components/Avatar";
 import { PriorityMenu, StatusMenu } from "@/components/IssueMenus";
 import IssueLabelChip from "@/components/IssueLabelChip";
 import IssueStateIcon from "@/components/IssueStateIcon";
+import { IssueQuickActions } from "@/components/IssueStart";
 import { ListGroup, RepoMenu } from "@/components/ListGroup";
 import Segmented from "@/components/Segmented";
 import LinearIcon from "@/components/LinearIcon";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -151,7 +150,6 @@ export default function IssuesView({
   onRecheckGithub,
   picked,
   onPick,
-  onWorkOn,
   refreshRef,
 }: {
   /// The page is the thing on screen. Hidden pages do not read, for the reason
@@ -173,9 +171,6 @@ export default function IssuesView({
   picked: IssueRef | null;
   /// `null` closes the pane.
   onPick: (issue: IssueRef | null) => void;
-  /// Takes the reader to the empty composer with this issue tagged. Owned by
-  /// `App`, which is the only thing that can leave this page.
-  onWorkOn: (issue: Issue) => void;
   /// Where this page hands its refresh up, so ⌘R can reach it. `App` owns the
   /// chord — it has to pick between this page and the right panel, and only it
   /// knows which one the reader is looking at.
@@ -584,7 +579,6 @@ export default function IssuesView({
                     scopedToMe={query.scope === "assigned"}
                     states={statesFor(issue)}
                     onPick={onPick}
-                    onWorkOn={onWorkOn}
                   />
                 ))
               : loaded &&
@@ -603,7 +597,6 @@ export default function IssuesView({
                         scopedToMe={query.scope === "assigned"}
                         states={statesFor(issue)}
                         onPick={onPick}
-                        onWorkOn={onWorkOn}
                       />
                     ))}
                   </ListGroup>
@@ -641,7 +634,6 @@ export default function IssuesView({
                           scopedToMe={query.scope === "assigned"}
                           states={statesFor(issue)}
                           onPick={onPick}
-                          onWorkOn={onWorkOn}
                         />
                       ))
                     ) : (
@@ -1043,18 +1035,15 @@ function FilterMenu({
 /// with. Linear is still one click away — the pane's own row carries the
 /// button — but it is the second thing offered rather than the first.
 ///
-/// "Work on it" starts nothing. It cannot: this page is workspace-wide, so a
-/// button that spawned a session would have to guess which repo the work belongs
-/// in. It hands the reader to the empty composer with the issue already tagged
-/// instead — which is the one place that *does* know how to ask, since the
-/// project, the model and the harness are all still sitting there unpicked.
+/// Hover offers Start task and Give to bot ([IssueQuickActions]). The page is
+/// workspace-wide, so a task runs in the project whose git remote is the
+/// issue's repository, and Start task is off where none is.
 function IssueRow({
   issue,
   picked,
   scopedToMe,
   states,
   onPick,
-  onWorkOn,
 }: {
   issue: Issue;
   picked: boolean;
@@ -1065,13 +1054,7 @@ function IssueRow({
   /// which leaves the glyph a plain one.
   states: IssueState[];
   onPick: (issue: Issue) => void;
-  onWorkOn: (issue: Issue) => void;
 }) {
-  const workOn = (e: SyntheticEvent) => {
-    e.stopPropagation();
-    onWorkOn(issue);
-  };
-
   return (
     // A div behaving as a button, the shape `IssuePanel`'s own row uses. This
     // was a real `button` back when the only thing inside it was one span
@@ -1154,35 +1137,20 @@ function IssueRow({
 
       <span className="min-w-0 flex-1 truncate">{issue.title}</span>
 
-      {/* A span carrying `buttonVariants` rather than a `Button`. The row is a
-          div with `role="button"` and this stays a span with it: the row's
-          accessible role is what a nested control conflicts with, not the tag
-          it happens to use, so promoting either to a real `button` would put
-          the invalid nesting straight back. Same bargain `FileLink` makes, and
-          `stopPropagation` on the key as well as the click is what keeps the
-          two apart — the row's own `target === currentTarget` guard is the
-          other half.
-
-          Its slot is reserved whether or not it is drawn: revealed by adding
-          width, the whole row would shift under the cursor that revealed it.
-          Hidden by opacity rather than `display`, or it could not be reached by
-          keyboard at all. */}
+      {/* Spans, not buttons: the row is a `role="button"`, and a real button
+          nested in it is invalid markup. Its slot is reserved whether or not it
+          is drawn, so revealing it never shifts the row under the cursor, and
+          hidden by opacity rather than `display` so the keyboard still reaches
+          it. It stays up while an action runs or its menu is open. */}
       <span
-        role="button"
-        tabIndex={0}
-        onClick={workOn}
-        onKeyDown={(e) => {
-          if (e.key !== "Enter" && e.key !== " ") return;
-          e.preventDefault();
-          workOn(e);
-        }}
         className={cn(
-          buttonVariants({ variant: "ghost", size: "xs" }),
-          "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+          "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100",
+          "focus-within:pointer-events-auto focus-within:opacity-100",
+          "has-[.row-busy]:pointer-events-auto has-[.row-busy]:opacity-100",
+          "has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100",
         )}
       >
-        Work on it
-        <Plus data-icon="inline-end" />
+        <IssueQuickActions issue={issue} inRow />
       </span>
 
       {/* Who filed it, GitHub's rows alone. It is the person field that always
