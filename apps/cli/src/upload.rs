@@ -1,9 +1,10 @@
-//! `dray upload`: put screenshots and recordings somewhere a PR body can show
-//! them (#1477, #1479).
+//! `dray upload`: put screenshots and recordings somewhere a Dray PR body can
+//! show them (#1477, #1479). For Dray's own contributors only (#1501), so it is
+//! hidden from `--help` and documented in CONTRIBUTING.md, not the user docs.
 //!
 //! GitHub takes uploads only through its web editor, so this sends each file
-//! to Dray's upload Worker (`apps/upload-worker`), which checks the caller's
-//! GitHub token and stores the file in R2. Through `curl`, as `dray update`
+//! to Dray's upload Worker (`apps/upload-worker`), which checks the caller
+//! contributes to monorepo-labs/dray and stores the file in R2. Through `curl`, as `dray update`
 //! already is, so this binary links no HTTP stack.
 
 use std::io::Write;
@@ -136,6 +137,9 @@ fn read_reply(output: &str) -> Result<Stored, String> {
             "GitHub refused the token. Run `gh auth login`, or set GITHUB_TOKEN to a user's token".into()
         }
         ("401", _) => "the upload service wants a GitHub token".into(),
+        ("403", _) => "uploads are for Dray contributors: collaborators of monorepo-labs/dray and authors of an \
+                       open pull request there. Open your PR first, then upload"
+            .into(),
         ("413", _) => match json["max_bytes"].as_u64() {
             Some(max) => format!("over the {} limit for this kind of file", megabytes(max)),
             None => "too large".into(),
@@ -184,6 +188,7 @@ mod tests {
         assert!(read_reply("{\"error\":\"github_token_invalid\"}\n401").err().unwrap().contains("gh auth login"));
         assert!(read_reply("{\"error\":\"not_accepted\"}\n415").err().unwrap().contains("mp4, webm or mov"));
         assert!(read_reply("{\"error\":\"slow_down\"}\n429").err().unwrap().contains("30 an hour"));
+        assert!(read_reply("{\"error\":\"not_a_contributor\"}\n403").err().unwrap().contains("Dray contributors"));
         assert_eq!(
             read_reply("{\"error\":\"too_large\",\"max_bytes\":20971520}\n413").err().unwrap(),
             "over the 20 MB limit for this kind of file"

@@ -381,19 +381,6 @@ Don't restate the card in your reply; say only what it can't, such as why
 these issues.
 
 ```bash
-dray upload before.png after.png demo.mp4   # one markdown line per file
-```
-
-Screenshots and recordings for a pull request body or comment. Paste the lines
-it prints into `gh pr create --body` or `gh pr edit --body`. It signs in with
-`GITHUB_TOKEN` or `gh auth token`. PNG, JPEG, GIF or WebP up to 20 MB; MP4,
-WebM or MOV up to 100 MB; 30 an hour per GitHub account. An image prints as
-`![name](url)`; a video prints as a plain `[name](url)` link, since GitHub
-plays only videos uploaded through its own editor. Everything uploaded is
-public, so upload only what belongs in the PR. This is for GitHub;
-`dray image add` and `dray video add` are what show media in your chat.
-
-```bash
 dray session need <task-id> "Pick: keep the button or drop it"   # no text clears it
 ```
 

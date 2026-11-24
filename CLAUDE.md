@@ -44,6 +44,8 @@ printf 'header = "Authorization: Bearer %s"\n' "$(gh auth token)" \
 
 It answers JSON whose `url` is the public link. PNG, JPEG, GIF, WebP up to 20 MB; MP4, WebM, MOV up to 100 MB; 30 uploads an hour per user. Needs a GitHub login (`gh auth login`, or `GITHUB_TOKEN`). Uploads are public. A video prints as a link, not an embed. Never commit an image for a PR, never push a branch to hold one. Endpoint = [apps/upload-worker](apps/upload-worker), client = [upload.rs](apps/cli/src/upload.rs).
 
+**Uploads are for Dray contributors alone** (#1501): a collaborator of `monorepo-labs/dray` or member of its org, or the author of an open PR there; anyone else gets a 403. So `dray upload` is hidden from `dray --help` and kept out of the user docs and the skill — this file and CONTRIBUTING.md are its only docs; don't add it back elsewhere. The Worker asks GitHub with its own `GITHUB_LOOKUP_TOKEN` secret, never the caller's token.
+
 **Always write commit message with `caveman-commit` skill.** Invoke it, don't imitate — skill carry format and it can change under you. Every commit here, amend included.
 
 **Comment sparingly.** ~10% of lines, only where code cannot speak for itself:

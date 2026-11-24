@@ -1,7 +1,7 @@
 # Contributing
 
 Dray is a desktop app that runs coding-agent CLIs (Claude Code, Codex, pi, fx,
-Grok) in a chat UI. A Rust core spawns each agent, maps its output to one event
+Grok, OpenCode) in a chat UI. A Rust core spawns each agent, maps its output to one event
 model and streams it to a React frontend. The same core runs headless as
 `dray-serve`, which the phone apps and remote machines talk to.
 
@@ -98,8 +98,17 @@ Upload each with the `dray` CLI and paste the line it prints into the PR body:
 dray upload before.png after.png
 ```
 
-- Signs in with `GITHUB_TOKEN` if set, else `gh auth token`. The token is
-  checked with GitHub and never kept.
+`dray upload` is for Dray contributors only, which is why `dray --help` and
+the user docs leave it out. It takes a file from:
+
+- a collaborator of `monorepo-labs/dray`, or a member of the `monorepo-labs` org;
+- the author of an open pull request in `monorepo-labs/dray`. From outside,
+  open your PR first (a draft is fine), upload, then edit the body.
+
+Anyone else gets a 403. Details:
+
+- Signs in with `GITHUB_TOKEN` if set, else `gh auth token`. The token only
+  tells the service who you are; it is never kept or logged.
 - PNG, JPEG, GIF or WebP up to 20 MB. MP4, WebM or MOV up to 100 MB. 30
   uploads an hour per account.
 - A video prints as a plain link: GitHub embeds only videos uploaded through

@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 
 /// The upload Worker (#1479) under a real `wrangler dev`: local R2 and Durable
-/// Objects, GitHub's `/user` faked. What landed in the bucket is read back
+/// Objects, GitHub faked: `/user` and the contributor lookups (#1501). What landed in the bucket is read back
 /// through wrangler's local explorer API.
 
 const MB = 1024 * 1024;
@@ -24,19 +24,45 @@ async function freePort() {
   return port;
 }
 
-/// GitHub's `GET /user`: each token in `users` is that user, anything else is
-/// refused. Every Authorization header it saw lands in `seen`.
-async function fakeGithub(users) {
+const LOOKUP = "github_pat_lookup_secret";
+
+/// GitHub as the Worker reads it. `GET /user`: each token in `users` is that
+/// user, anything else is refused. The contributor lookups answer only to
+/// `LOOKUP`, from `collaborators`, `members` and `openPulls` (authors' ids,
+/// paged as GitHub does). Every request lands in `seen` as `{ path, auth }`;
+/// `refuseLookup` makes GitHub refuse our token.
+async function fakeGithub({ users, collaborators = [], members = [], openPulls = [] }) {
   const seen = [];
+  const fake = { seen, refuseLookup: false };
   const server = createServer((req, res) => {
     const auth = req.headers.authorization ?? "";
-    seen.push(auth);
-    const user = req.url === "/user" && users[auth.replace(/^Bearer /, "")];
-    res.writeHead(user ? 200 : 401, { "content-type": "application/json" });
-    res.end(JSON.stringify(user ?? { message: "Bad credentials" }));
+    const url = new URL(req.url, "http://x");
+    seen.push({ path: req.url, auth });
+    const send = (status, body) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(body === undefined ? "" : JSON.stringify(body));
+    };
+    if (url.pathname === "/user") {
+      const user = users[auth.replace(/^Bearer /, "")];
+      return user ? send(200, user) : send(401, { message: "Bad credentials" });
+    }
+    if (auth !== `Bearer ${LOOKUP}` || fake.refuseLookup) return send(401, { message: "Bad credentials" });
+    let m;
+    if ((m = url.pathname.match(/^\/repos\/monorepo-labs\/dray\/collaborators\/([^/]+)$/)))
+      return send(collaborators.includes(m[1]) ? 204 : 404);
+    if ((m = url.pathname.match(/^\/orgs\/monorepo-labs\/members\/([^/]+)$/)))
+      return send(members.includes(m[1]) ? 204 : 404);
+    if (url.pathname === "/repos/monorepo-labs/dray/pulls" && url.searchParams.get("state") === "open") {
+      const per = Number(url.searchParams.get("per_page") ?? 30);
+      const page = Number(url.searchParams.get("page") ?? 1);
+      return send(200, openPulls.slice((page - 1) * per, page * per).map((id, i) => ({ number: i + 1, user: { id } })));
+    }
+    send(404, { message: "Not Found" });
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  return { url: `http://127.0.0.1:${server.address().port}`, seen, close: () => new Promise((r) => server.close(r)) };
+  fake.url = `http://127.0.0.1:${server.address().port}`;
+  fake.close = () => new Promise((r) => server.close(r));
+  return fake;
 }
 
 /// `wrangler dev` with `vars` over the config's, state in a fresh directory.
@@ -91,11 +117,26 @@ describe("the upload Worker", () => {
   const stamp = Date.now().toString(36);
   const TOKEN = `gho_good_${stamp}`;
   const FLOOD = `gho_flood_${stamp}`;
+  const MEMBER = `gho_member_${stamp}`;
+  const AUTHOR = `gho_author_${stamp}`;
+  const STRANGER = `gho_stranger_${stamp}`;
   let github, dev;
 
   before(async () => {
-    github = await fakeGithub({ [TOKEN]: { id: 4242, login: "octo" }, [FLOOD]: { id: 4343, login: "flood" } });
-    dev = await wranglerDev({ GITHUB_API_ORIGIN: github.url, PUBLIC_URL });
+    github = await fakeGithub({
+      users: {
+        [TOKEN]: { id: 4242, login: "octo" },
+        [FLOOD]: { id: 4343, login: "flood" },
+        [MEMBER]: { id: 5151, login: "member" },
+        [AUTHOR]: { id: 6161, login: "outsider" },
+        [STRANGER]: { id: 7171, login: "stranger" },
+      },
+      collaborators: ["octo", "flood"],
+      members: ["member"],
+      // The author's PR sits on the second page, past 100 others.
+      openPulls: [...Array(100).fill(9999), 6161],
+    });
+    dev = await wranglerDev({ GITHUB_API_ORIGIN: github.url, GITHUB_LOOKUP_TOKEN: LOOKUP, PUBLIC_URL });
   });
 
   after(async () => {
@@ -122,10 +163,13 @@ describe("the upload Worker", () => {
     return { body, meta: head.result };
   };
 
-  test("GET sends a person to the docs", async () => {
+  test("GET sends a person to the contributing guide", async () => {
     const res = await fetch(`${dev.base}/`, { redirect: "manual" });
     assert.equal(res.status, 302);
-    assert.equal(res.headers.get("location"), "https://www.drayhq.com/docs/cli/upload");
+    assert.equal(
+      res.headers.get("location"),
+      "https://github.com/monorepo-labs/dray/blob/main/CONTRIBUTING.md#screenshots-and-videos",
+    );
   });
 
   test("stores a PNG under the public URL, with its type and uploader", async () => {
@@ -139,7 +183,59 @@ describe("the upload Worker", () => {
     assert.equal(meta.http_metadata.contentType, "image/png");
     assert.equal(meta.http_metadata.cacheControl, "public, max-age=31536000, immutable");
     assert.deepEqual(meta.custom_metadata, { "github-id": "4242" });
-    assert.equal(github.seen.at(-1), `Bearer ${TOKEN}`);
+  });
+
+  test("a collaborator, an org member and an open PR's author may upload", async () => {
+    const asked = github.seen.length;
+    const collaborator = await upload(png("collaborator"));
+    assert.equal(collaborator.status, 200, JSON.stringify(collaborator.json));
+    // A collaborator is answered by the first lookup alone.
+    assert.deepEqual(
+      github.seen.slice(asked).map((s) => s.path),
+      ["/user", "/repos/monorepo-labs/dray/collaborators/octo"],
+    );
+    const member = await upload(png("member"), MEMBER);
+    assert.equal(member.status, 200, JSON.stringify(member.json));
+    const author = await upload(png("author"), AUTHOR);
+    assert.equal(author.status, 200, JSON.stringify(author.json));
+    const { meta } = await stored(author.json.url);
+    assert.deepEqual(meta.custom_metadata, { "github-id": "6161" });
+  });
+
+  test("anyone else is refused with 403, saying who uploads are for", async () => {
+    const asked = github.seen.length;
+    const { status, json } = await upload(png("stranger"), STRANGER);
+    assert.equal(status, 403);
+    assert.equal(json.error, "not_a_contributor");
+    assert.match(json.message, /Dray contributors/);
+    assert.deepEqual(
+      github.seen.slice(asked).map((s) => s.path),
+      [
+        "/user",
+        "/repos/monorepo-labs/dray/collaborators/stranger",
+        "/orgs/monorepo-labs/members/stranger",
+        "/repos/monorepo-labs/dray/pulls?state=open&per_page=100&page=1",
+        "/repos/monorepo-labs/dray/pulls?state=open&per_page=100&page=2",
+      ],
+    );
+  });
+
+  test("the caller's token only asks who they are; the lookups carry ours", () => {
+    for (const { path, auth } of github.seen) {
+      if (path === "/user") assert.notEqual(auth, `Bearer ${LOOKUP}`);
+      else assert.equal(auth, `Bearer ${LOOKUP}`, path);
+    }
+  });
+
+  test("our token refused is 503, never a 403 for a contributor", async () => {
+    github.refuseLookup = true;
+    try {
+      const { status, json } = await upload(png("refused lookup"));
+      assert.equal(status, 503);
+      assert.equal(json.error, "contributor_check_failed");
+    } finally {
+      github.refuseLookup = false;
+    }
   });
 
   test("every upload gets a key of its own, the same bytes included", async () => {
@@ -214,6 +310,24 @@ describe("the upload Worker", () => {
 
   test("the token reaches no log", () => {
     assert.ok(dev.log().includes("POST /"));
-    for (const t of [TOKEN, FLOOD, "gho_not_a_real_one"]) assert.ok(!dev.log().includes(t));
+    for (const t of [TOKEN, FLOOD, MEMBER, AUTHOR, STRANGER, LOOKUP, "gho_not_a_real_one"]) {
+      assert.ok(!dev.log().includes(t));
+    }
+  });
+});
+
+describe("the upload Worker with no lookup token", () => {
+  let dev;
+  before(async () => {
+    dev = await wranglerDev({ PUBLIC_URL });
+  });
+  after(async () => {
+    await dev?.stop();
+  });
+
+  test("takes nothing, since it cannot tell who contributes", async () => {
+    const res = await fetch(`${dev.base}/`, { method: "POST", headers: { Authorization: "Bearer gho_any" }, body: png("x") });
+    assert.equal(res.status, 503);
+    assert.equal((await res.json()).error, "uploads_off");
   });
 });
