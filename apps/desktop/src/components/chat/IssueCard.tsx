@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useSyncExternalStore, type MouseEvent } from "react";
+import { createContext, useContext, useState, type MouseEvent } from "react";
 import { Check, Play } from "lucide-react";
 
 import GitHubIcon from "@/components/GitHubIcon";
@@ -6,8 +6,7 @@ import IssueLabelChip from "@/components/IssueLabelChip";
 import { Button } from "@/components/ui/button";
 import Spinner from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
-import { channel } from "@/lib/channel";
+import { useTheme } from "@/hooks/useTheme";
 import { openIssue } from "@/lib/issue";
 import { rowRef, type IssueStarts } from "@/lib/issueCard";
 import { invoke } from "@/lib/transport";
@@ -22,121 +21,81 @@ export const IssueCardChatContext = createContext<{ starts: IssueStarts; closed:
   closed: true,
 });
 
-// Two takes on the compact card while one is picked, switched from a
-// dev-only row over each card. Goes once the pick is made.
-type Design = "compact" | "tiles";
-const DESIGNS: { value: Design; label: string }[] = [
-  { value: "compact", label: "C · Compact" },
-  { value: "tiles", label: "C2 · Tiles" },
-];
-const DESIGN_KEY = "dray.issueCardDesign";
-const designChanged = channel<void>();
-const readDesign = (): Design => (readLocalStorage<string>(DESIGN_KEY, "compact") === "tiles" ? "tiles" : "compact");
-const setDesign = (design: Design) => {
-  writeLocalStorage(DESIGN_KEY, design);
-  designChanged.emit();
-};
-
-type Row = { row: IssueCardRow; open: (e: MouseEvent) => void; action: React.ReactNode };
-
-/// GitHub issues posted into the chat by `dray session issue-card`, one or
-/// several. An issue opens on the issues page; its play button hands it to the
-/// agent to work on.
-export default function IssueCard({ event }: { event: AgentEvent }) {
-  const chat = useContext(IssueCardChatContext);
-  const design = useSyncExternalStore(designChanged.subscribe, readDesign);
-  if (event.payload.type !== "issue_card") return null;
-  const { title, repo, issues } = event.payload;
-  const started = chat.starts.get(event.id);
-  const rows: Row[] = issues.map((row) => ({
-    row,
-    // The issues page on a click, GitHub on ⌘-click, as an issue tag does.
-    open: (e) => openIssue(rowRef(repo, row), e),
-    action: <WorkOn event={event} row={row} started={started?.has(row.number) === true} closed={chat.closed} />,
-  }));
-  return (
-    <div className="flex w-full max-w-lg flex-col gap-1.5 self-start">
-      {import.meta.env.DEV && <DesignSwitch design={design} />}
-      <div className={cn("rounded-xl p-1", SURFACE)}>
-        <div className="flex items-center gap-1.5 px-2.5 pt-1.5 pb-1 text-xs text-muted-foreground">
-          <GitHubIcon className="size-3" />
-          <span className="truncate">{repo}</span>
-          {title && <span className="ml-auto shrink-0">{title}</span>}
-        </div>
-        <ul className={cn(design === "tiles" && "flex flex-col gap-0.5")}>
-          {rows.map((r) => (
-            <Item key={r.row.number} {...r} tile={design === "tiles"} single={rows.length === 1} />
-          ))}
-        </ul>
-      </div>
-    </div>
-  );
-}
-
-function DesignSwitch({ design }: { design: Design }) {
-  return (
-    <div className="flex items-center gap-1 text-xs text-muted-foreground">
-      <span className="mr-1">Design</span>
-      {DESIGNS.map((d) => (
-        <button
-          key={d.value}
-          type="button"
-          onClick={() => setDesign(d.value)}
-          className={cn(
-            "cursor-pointer rounded-md px-1.5 py-0.5",
-            d.value === design ? "bg-[var(--fill-soft,var(--muted))] text-foreground" : "hover:text-foreground",
-          )}
-        >
-          {d.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 /// The merge card's surface: `--shadow-card` lifts it in light, a half-pixel
 /// edge draws it in dark, where that shadow is `none`.
 const SURFACE = "bg-card shadow-[var(--shadow-raised-card,var(--shadow-card))] dark:border-[0.5px] dark:border-border/50";
 
-/// One issue: number, title and label dots on one line, the description's
-/// opening under it when it is the card's only issue. A tile sits on a fill of
-/// its own, and the gap between tiles is what separates them.
-function Item({ row, open, action, tile, single }: Row & { tile: boolean; single: boolean }) {
+/// GitHub's own open green and closed purple, light and dark: its light pair is
+/// too deep to read on a dark card, which is why `readableStateColor` alone,
+/// leaving dark untouched, is not enough here.
+const STATE_COLOR = {
+  light: { open: "#1a7f37", closed: "#8250df" },
+  dark: { open: "#3fb950", closed: "#a371f7" },
+} as const;
+
+/// GitHub issues posted into the chat by `dray session issue-card`, one or
+/// several, each on a tile of its own. An issue opens on the issues page; its
+/// play button hands it to the agent to work on.
+export default function IssueCard({ event }: { event: AgentEvent }) {
+  const chat = useContext(IssueCardChatContext);
+  const { resolvedMode } = useTheme();
+  if (event.payload.type !== "issue_card") return null;
+  // `title` is not drawn: a heading over the list read as noise.
+  const { repo, issues } = event.payload;
+  const started = chat.starts.get(event.id);
+  const colors = STATE_COLOR[resolvedMode === "light" ? "light" : "dark"];
   return (
-    <li
-      className={cn(
-        "rounded-lg",
-        tile
-          ? "bg-[color-mix(in_oklab,var(--muted)_55%,transparent)] hover:bg-[var(--fill-soft,var(--muted))]"
-          : "hover:bg-[var(--fill-soft,var(--muted))]",
-      )}
-    >
-      <div className="flex items-center gap-1">
-        <button
-          type="button"
-          onClick={open}
-          className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2.5 text-left text-ui", tile ? "py-2" : "py-1.5")}
-        >
-          <span className="shrink-0 text-muted-foreground tabular-nums">#{row.number}</span>
-          <span className={cn("min-w-0 flex-1 truncate", row.closed && "text-muted-foreground")}>{row.title}</span>
-          <LabelDots labels={row.labels} />
-        </button>
-        {/* One width for the button, Started and Closed, so the rows line up. */}
-        <span className="flex w-20 shrink-0 justify-end pr-1">{row.closed ? <Closed /> : action}</span>
+    <div className={cn("w-full max-w-lg self-start rounded-xl p-1", SURFACE)}>
+      <div className="flex items-center gap-1.5 px-2.5 pt-1.5 pb-1 text-xs text-muted-foreground">
+        <GitHubIcon className="size-3" />
+        <span className="truncate">{repo}</span>
       </div>
-      {/* Padding outside the clamp, or the clipped third line shows in it. */}
-      {single && row.excerpt && (
-        <div className="px-2.5 pb-2">
-          <p className="line-clamp-2 text-xs text-muted-foreground">{row.excerpt}</p>
-        </div>
-      )}
-    </li>
+      <ul className="flex flex-col gap-0.5">
+        {issues.map((row) => (
+          <Tile
+            key={row.number}
+            row={row}
+            color={row.closed ? colors.closed : colors.open}
+            // The issues page on a click, GitHub on ⌘-click, as an issue tag does.
+            open={(e) => openIssue(rowRef(repo, row), e)}
+            action={
+              row.closed ? null : (
+                <WorkOn event={event} row={row} started={started?.has(row.number) === true} closed={chat.closed} />
+              )
+            }
+          />
+        ))}
+      </ul>
+    </div>
   );
 }
 
-/// What says a row is closed, now that no state glyph does.
-function Closed() {
-  return <span className="px-1.5 text-xs text-muted-foreground">Closed</span>;
+/// One issue on a fill of its own; the gap between tiles is what separates
+/// them. The number's colour is the state: no glyph, no word.
+function Tile({
+  row,
+  color,
+  open,
+  action,
+}: {
+  row: IssueCardRow;
+  color: string;
+  open: (e: MouseEvent) => void;
+  action: React.ReactNode;
+}) {
+  return (
+    <li className="flex items-center gap-1 rounded-lg bg-[color-mix(in_oklab,var(--muted)_55%,transparent)] hover:bg-[var(--fill-soft,var(--muted))]">
+      <button type="button" onClick={open} className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2.5 py-2 text-left text-ui">
+        <span className="shrink-0 font-medium tabular-nums" style={{ color }} aria-label={`#${row.number}, ${row.closed ? "closed" : "open"}`}>
+          #{row.number}
+        </span>
+        <span className={cn("min-w-0 flex-1 truncate", row.closed && "text-muted-foreground")}>{row.title}</span>
+        <LabelDots labels={row.labels} />
+      </button>
+      {/* One width for the button, Started and nothing, so the rows line up. */}
+      <span className="flex w-20 shrink-0 justify-end pr-1">{action}</span>
+    </li>
+  );
 }
 
 function LabelDots({ labels }: { labels: IssueLabel[] }) {

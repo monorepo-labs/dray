@@ -369,16 +369,16 @@ the task is still mid-turn.
 
 ```bash
 dray session issue-card owner/repo 12              # one issue
-dray session issue-card owner/repo 12 15 18 --title "Open bugs"
+dray session issue-card owner/repo 12 15 18
 ```
 
 Whenever you show the user GitHub issues, one or several, post them as a card
-instead of writing them out. It lands in your own chat: each issue with its
-status, number, title, labels and the start of its description, in the order
-given, 20 at most. The user opens an issue in Dray from the card, or presses
-Work on it, which reaches you as a message of its own naming the issue: start
-on it then. `--title` is optional. Don't restate the card in your reply; say
-only what it can't, such as why these issues.
+instead of writing them out. It lands in your own chat: each issue's number,
+coloured open or closed, its title and its labels, in the order given, 20 at
+most. The user opens an issue in Dray from the card, or presses Work on it,
+which reaches you as a message of its own naming the issue: start on it then.
+Don't restate the card in your reply; say only what it can't, such as why
+these issues.
 
 ```bash
 dray upload before.png after.png   # one ![name](url) line per file

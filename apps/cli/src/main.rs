@@ -188,9 +188,6 @@ struct IssueCardArgs {
     /// Issue numbers, in the order to list them: 12 15 #18.
     #[arg(required = true, value_parser = issue_number)]
     numbers: Vec<u64>,
-    /// A short heading over the issues, like "Open bugs".
-    #[arg(long)]
-    title: Option<String>,
 }
 
 fn issue_number(said: &str) -> Result<u64, String> {
@@ -833,7 +830,7 @@ fn merge_card(args: SessionArg) -> Result<(), String> {
 
 fn issue_card(args: IssueCardArgs) -> Result<(), String> {
     let session_id = parent_session_id().ok_or("run this from inside a Dray session: the card goes in its chat.")?;
-    let request = Request::IssueCard(IssueCard { session_id, repo: args.repo, numbers: args.numbers, title: args.title });
+    let request = Request::IssueCard(IssueCard { session_id, repo: args.repo, numbers: args.numbers, title: None });
     match send(request)? {
         Response::IssueCard { issues } => {
             eprintln!("Posted an issue card:");
