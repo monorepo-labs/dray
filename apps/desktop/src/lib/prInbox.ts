@@ -34,6 +34,44 @@ export function inboxRows(
   return rows.sort((a, b) => b.listing.updatedAt.localeCompare(a.listing.updatedAt));
 }
 
+/// `gh --repo`'s spelling of a repo the marks or git name as `host/owner/name`:
+/// `owner/name` on github.com, whole on any other host.
+export const ghSlug = (repo: string): string => repo.replace(/^github\.com\//i, "").toLowerCase();
+
+/// The keys the page reads, given which ones sit on a machine that is down.
+///
+/// A PR list comes from GitHub, so a stopped machine costs nothing where its
+/// repo is known: a repo another key already reads needs nothing more, and one
+/// only that machine has is read through This Mac by its slug. A key whose repo
+/// is unknown cannot be read at all, and is handed back in `unnamed` so the
+/// page can say its machine is offline rather than show the socket's error.
+export function pullsReads(
+  keys: readonly string[],
+  down: (key: string) => boolean,
+  slugFor: (key: string) => string | undefined,
+): { keys: string[]; unnamed: string[] } {
+  const slugOfKey = (key: string) => {
+    const slug = key.startsWith("github:") ? key.slice("github:".length) : slugFor(key);
+    return slug && ghSlug(slug);
+  };
+  const covered = new Set(keys.filter((key) => !down(key)).flatMap((key) => slugOfKey(key) ?? []));
+  const reads: string[] = [];
+  const unnamed: string[] = [];
+  for (const key of keys) {
+    if (!down(key)) {
+      reads.push(key);
+      continue;
+    }
+    const slug = slugOfKey(key);
+    if (!slug) unnamed.push(key);
+    else if (!covered.has(slug)) {
+      covered.add(slug);
+      reads.push(`github:${slug}`);
+    }
+  }
+  return { keys: reads, unnamed };
+}
+
 /// `owner/name` for a row's label and the repo filter.
 export const rowRepoName = (row: InboxRow): string => prRepoSlug(row.mark.url) ?? row.repo;
 

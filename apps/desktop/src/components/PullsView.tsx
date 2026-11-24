@@ -19,6 +19,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useHotkey } from "@/hooks/useHotkey";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { relativeTime } from "@/lib/format";
 import {
   SECTIONS,
@@ -96,6 +98,8 @@ export default function PullsView({
   hasRepos,
   missing,
   errors,
+  offline,
+  active,
   people,
   onPeople,
   scope,
@@ -122,6 +126,11 @@ export default function PullsView({
   missing: { kind: "no_cli" | "not_authenticated"; cwd: string } | null;
   /// Repos whose last read failed for a reason worth saying.
   errors: { name: string; error: PrUnavailable }[];
+  /// Machines that are down holding a project whose repo can't be named, so
+  /// its pull requests can't be listed until they are back.
+  offline: string[];
+  /// Whether the page is on screen, which is when ⌘E is its own.
+  active: boolean;
   people: PeopleFilter;
   onPeople: (people: PeopleFilter) => void;
   scope: PullsScope;
@@ -140,7 +149,7 @@ export default function PullsView({
   loading: boolean;
   onRefresh: () => void;
 }) {
-  const [repo, setRepo] = useState<string | null>(null);
+  const [repo, setRepo] = useLocalStorage<string | null>("ade.pullsRepo", null);
 
   const repos = useMemo(() => [...new Set(rows.map(rowRepoName))].sort(), [rows]);
   // A repo picked under another scope may have no rows here; the filter then
@@ -157,6 +166,20 @@ export default function PullsView({
     ...section,
     rows: shown.filter((row) => inboxSection(row.mark) === section.key),
   })).filter((section) => section.rows.length > 0);
+
+  // ⌘E opens and shuts the pane here, the issues page's rule: `App` gives the
+  // chord up on every page, and only the list knows which row to put back —
+  // the one last open, else the first on screen.
+  const [cursor, setCursor] = useState<InboxRow | null>(picked);
+  if (picked && picked !== cursor) setCursor(picked);
+  useHotkey(
+    "panel.toggle",
+    () => {
+      const first = sections[0]?.rows[0] ?? null;
+      onPick(picked ? null : (cursor && shown.some((row) => row.mark.url === cursor.mark.url) ? cursor : first));
+    },
+    { enabled: active && !missing },
+  );
 
   if (missing) {
     return (
@@ -235,6 +258,12 @@ export default function PullsView({
           </Tooltip>
         </div>
       </div>
+
+      {offline.length > 0 && (
+        <p className="px-3 pb-2 text-ui text-muted-foreground">
+          {offline.join(", ")} {offline.length === 1 ? "is" : "are"} offline, so some pull requests may be missing.
+        </p>
+      )}
 
       {errors.map(({ name, error }) => (
         <p key={name} className="border-b border-border px-3 py-2 text-ui text-destructive">
