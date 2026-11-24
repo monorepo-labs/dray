@@ -1,0 +1,153 @@
+import { bearer, HEAD_BYTES, keyFor, MAX_BYTES, sniff } from "./files";
+import { Limiter, type Window } from "./limiter";
+
+export { Limiter };
+
+export interface Env {
+  BUCKET: R2Bucket;
+  LIMITER: DurableObjectNamespace<Limiter>;
+  /// Where the bucket is served publicly; each answer's URL is this plus the key.
+  PUBLIC_URL: string;
+  /// A stand-in for api.github.com, for tests. Unset in production.
+  GITHUB_API_ORIGIN?: string;
+}
+
+const DOCS = "https://www.drayhq.com/docs/cli/upload";
+const ACCEPTED = ["png", "jpg", "gif", "webp", "mp4", "webm", "mov"];
+const PER_ADDRESS: Window[] = [{ max: 120, secs: 3600 }];
+const PER_USER: Window[] = [
+  { max: 30, secs: 3600 },
+  { max: 200, secs: 86400 },
+];
+
+export default {
+  /// One file for a PR body (#1477, #1479), sent as the raw request body with
+  /// the caller's GitHub token as a bearer. The token is checked against
+  /// GitHub and dropped: never stored, logged or passed anywhere else.
+  /// Answers the public URL.
+  ///
+  /// 401 a token GitHub refuses, 411 no Content-Length, 413 too big, 415 not
+  /// a type taken, 429 the rate limit, 503 no public URL configured.
+  async fetch(req: Request, env: Env): Promise<Response> {
+    const path = new URL(req.url).pathname;
+    if (path !== "/") return json({ error: "not_found" }, 404);
+    if (req.method === "GET") return Response.redirect(DOCS, 302);
+    if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405, { Allow: "POST" });
+
+    const publicUrl = (env.PUBLIC_URL ?? "").replace(/\/+$/, "");
+    if (!publicUrl) return json({ error: "uploads_off" }, 503);
+    const token = bearer(req.headers.get("authorization"));
+    if (!token) return json({ error: "github_token_required" }, 401);
+    // The write streams straight to R2, which wants the length up front.
+    const length = Number(req.headers.get("content-length") ?? NaN);
+    if (!Number.isSafeInteger(length) || length < 0) return json({ error: "length_required" }, 411);
+    if (length > MAX_BYTES) return tooBig(MAX_BYTES);
+
+    // Before GitHub hears of it, so a flood of bad tokens costs nothing there.
+    const address = req.headers.get("cf-connecting-ip") ?? "unknown";
+    if (await overLimit(env, `address:${address}`, PER_ADDRESS)) return slowDown();
+    const user = await githubUser(token, env.GITHUB_API_ORIGIN);
+    if (user === "refused") return json({ error: "github_token_invalid" }, 401);
+    if (user === "unreachable") return json({ error: "github_unreachable" }, 502);
+    if (await overLimit(env, `user:${user.id}`, PER_USER)) return slowDown();
+
+    const reader = req.body?.getReader();
+    const head = reader ? await readHead(reader, HEAD_BYTES) : [];
+    const kind = sniff(concat(head));
+    if (!kind) {
+      await reader?.cancel().catch(() => {});
+      return json({ error: "not_accepted", accepted: ACCEPTED }, 415);
+    }
+    if (length > kind.maxBytes) {
+      await reader?.cancel().catch(() => {});
+      return tooBig(kind.maxBytes);
+    }
+
+    const key = keyFor(kind);
+    const body = new FixedLengthStream(length);
+    const writer = body.writable.getWriter();
+    const pump = (async () => {
+      for (const chunk of head) await writer.write(chunk);
+      for (;;) {
+        const { done, value } = await reader!.read();
+        if (done) break;
+        await writer.write(value);
+      }
+      await writer.close();
+    })().catch(async (e) => {
+      // Or the write below waits forever on bytes that are not coming.
+      await writer.abort(e).catch(() => {});
+      throw e;
+    });
+    const put = env.BUCKET.put(key, body.readable, {
+      httpMetadata: {
+        contentType: kind.type,
+        // The key is never reused, so its bytes never change.
+        cacheControl: "public, max-age=31536000, immutable",
+      },
+      customMetadata: { "github-id": String(user.id) },
+    });
+    const [sent, stored] = await Promise.allSettled([pump, put]);
+    if (sent.status === "rejected") return json({ error: "body_incomplete" }, 400);
+    if (stored.status === "rejected") {
+      console.error(`[upload] storage failed: ${stored.reason}`);
+      return json({ error: "storage_failed" }, 502);
+    }
+    return json({ url: `${publicUrl}/${key}`, type: kind.type, size: length });
+  },
+} satisfies ExportedHandler<Env>;
+
+const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
+  Response.json(body, { status, headers });
+const tooBig = (max: number) => json({ error: "too_large", max_bytes: max }, 413);
+const slowDown = () => json({ error: "slow_down" }, 429);
+
+/// Counts one call against `name` and answers whether it is over a limit.
+function overLimit(env: Env, name: string, windows: Window[]): Promise<boolean> {
+  return env.LIMITER.get(env.LIMITER.idFromName(name)).hit(windows);
+}
+
+/// Who GitHub says holds `token`. A token for an Actions run (`ghs_…`) is
+/// refused here: it is no user.
+async function githubUser(token: string, origin?: string): Promise<{ id: number } | "refused" | "unreachable"> {
+  try {
+    const res = await fetch(`${origin || "https://api.github.com"}/user`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": "dray-upload",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (res.status === 401 || res.status === 403) return "refused";
+    if (!res.ok) return "unreachable";
+    const id = ((await res.json()) as { id?: unknown }).id;
+    return typeof id === "number" ? { id } : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
+/// Chunks off the front of the body until at least `want` bytes, or all of it.
+async function readHead(reader: ReadableStreamDefaultReader<Uint8Array>, want: number): Promise<Uint8Array[]> {
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (size < want) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    size += value.length;
+  }
+  return chunks;
+}
+
+function concat(chunks: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.length;
+  }
+  return out;
+}

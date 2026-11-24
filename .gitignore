@@ -33,6 +33,9 @@ apps/desktop/public/file-icons
 apps/desktop/demo/system-sounds/
 apps/desktop/demo/oss-sounds/
 
+# wrangler dev's local R2 and Durable Object state
+.wrangler
+
 # Next.js
 .next
 out
