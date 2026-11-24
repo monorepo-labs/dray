@@ -101,7 +101,7 @@ import StalledTasks from "@/components/chat/StalledTasks";
 import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/MergeCard";
 import { cardRepos } from "@/lib/mergeCard";
 import BotWelcome from "@/components/chat/BotWelcome";
-import Onboarding from "@/components/onboarding/Onboarding";
+import { takeDrayBotAsk, useDrayBotAsk } from "@/components/onboarding/state";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import SplitPanes, { cardOrder, SplitFile } from "@/components/SplitPanes";
 import { pruneSplits, removeSplit, useLitGroup, useSplitGroups, useSplitPanes, useSplitWeight } from "@/lib/splitPanes";
@@ -3778,12 +3778,16 @@ function App() {
     setFocusBot(false);
     requestAnimationFrame(focusComposer);
   }, [focusBot, onDrayBot]);
-  const startWithBot = () => {
-    if (!drayBot) return;
+  // Onboarding's Continue asks for it, often before sign-in, when this app was
+  // not yet mounted to hear it; the ask waits until there is a Dray Bot to open.
+  const drayBotAsked = useDrayBotAsk();
+  useEffect(() => {
+    if (!drayBotAsked || !drayBot) return;
+    takeDrayBotAsk();
     setSettingsOpen(false);
     if (!onDrayBot) openBot(drayBot);
     setFocusBot(true);
-  };
+  }, [drayBotAsked, drayBot, onDrayBot, openBot]);
   // In a bot's chat `@` lists the other bots instead of files: those on its
   // own server, the only ones `dray bot send` reaches from there.
   const composerBot = selectedBot ?? newBot;
@@ -5166,7 +5170,6 @@ function App() {
         onClose={() => closeWhatsNew(false)}
       />
     )}
-    <Onboarding bot={drayBot} onStart={startWithBot} />
     {/* Same corner as What's New, so it waits for that card to go. */}
     {starPrompt && !whatsNew && <StarCard />}
     <DragGhost />

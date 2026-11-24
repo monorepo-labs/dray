@@ -36,8 +36,8 @@ export default function BotTiles() {
 function Tile({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="relative flex flex-col overflow-clip bg-[#FFFFFF1A]">
-      <div aria-hidden className="flex h-[232px] shrink-0 flex-col justify-center px-8">
-        <div className="origin-center scale-[0.86]">{children}</div>
+      <div aria-hidden className="flex h-[204px] shrink-0 flex-col justify-center px-8">
+        <div className="origin-center scale-[0.8]">{children}</div>
       </div>
       <h3 className="px-6 pt-1 pb-5 text-[17px] leading-6 tracking-[-0.02em] text-balance text-white">{title}</h3>
     </div>

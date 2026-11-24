@@ -1,6 +1,8 @@
 import { useSyncExternalStore } from "react";
 
+import { SIGNED_IN } from "@/components/AccountGate";
 import { channel } from "@/lib/channel";
+import { gatesSignIn, ONBOARDED } from "@/lib/signInGate";
 
 import cleanUrl from "@/assets/welcome-voice.m4a";
 import pilotUrl from "@/assets/welcome-voice-pilot.m4a";
@@ -8,19 +10,24 @@ import radioUrl from "@/assets/welcome-voice-radio.m4a";
 
 import { MUSIC_TRACKS, type MusicTrack, WELCOME_SOUNDS, type WelcomeSound } from "./welcomeSounds";
 
-/// Onboarding on trial (#1421). Dev builds only, played from the dev switch; a
-/// release never shows it until it is wired to first launch.
+/// Onboarding (#1421): shown once, on first launch, ahead of the sign-in gate.
+/// The dev switch plays it again at any time.
 type State = { on: boolean; run: number };
 
 const KEY = "dray.dev.onboarding.on";
 const ON = import.meta.env.DEV;
 const changed = channel<void>();
 
-let state: State = { on: ON && localStorage.getItem(KEY) === "1", run: 0 };
+/// Only where the gate stands, so it plays before sign-in; and never for a
+/// reader this app has seen signed in, who used Dray before onboarding existed.
+const firstRun =
+  gatesSignIn(import.meta.env) && localStorage.getItem(ONBOARDED) !== "1" && localStorage.getItem(SIGNED_IN) !== "1";
+
+let state: State = { on: firstRun || (ON && localStorage.getItem(KEY) === "1"), run: 0 };
 
 function set(next: State) {
   state = next;
-  localStorage.setItem(KEY, next.on ? "1" : "0");
+  if (ON) localStorage.setItem(KEY, next.on ? "1" : "0");
   changed.emit();
 }
 
@@ -29,8 +36,30 @@ export function replayOnboarding() {
   set({ on: true, run: state.run + 1 });
 }
 
+/// Onboarding is done, here for good: the sign-in gate is next, or the app for
+/// a reader already signed in.
 export function finishOnboarding() {
+  localStorage.setItem(ONBOARDED, "1");
   if (state.on) set({ ...state, on: false });
+}
+
+let openBot = false;
+
+/// Asks the app to open Dray Bot's chat once it can. Onboarding ends before
+/// sign-in, when no app is mounted to open it, so the ask waits for one.
+export function askToOpenDrayBot() {
+  openBot = true;
+  changed.emit();
+}
+
+/// Whether Dray Bot's chat is waiting to be opened; `takeDrayBotAsk` clears it.
+export function useDrayBotAsk(): boolean {
+  return useSyncExternalStore(changed.subscribe, () => openBot);
+}
+
+export function takeDrayBotAsk() {
+  openBot = false;
+  changed.emit();
 }
 
 /// Whether onboarding is on screen. `run` changes on every replay, so a flow

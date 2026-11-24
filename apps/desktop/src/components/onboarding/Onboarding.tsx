@@ -8,6 +8,7 @@ import { GateCards } from "@/components/SignInGate";
 import { Continue } from "@/components/WhatsNewPage";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Switch } from "@/components/ui/switch";
+import { invoke, LOCAL } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { Bot } from "@/types/events";
 
@@ -15,6 +16,7 @@ import BotTiles from "./BotTiles";
 import Welcome, { MUSIC_AT } from "./Welcome";
 import { type AgentSetup, type GithubSetup, type SetupState, useAgentSetup, useGithubSetup } from "./agents";
 import {
+  askToOpenDrayBot,
   finishOnboarding,
   replayOnboarding,
   setFreshMachine,
@@ -38,10 +40,12 @@ const READY_HOLD_MS = 1600;
 const FIRST_REVEAL_MS = 900;
 const NEXT_REVEAL_MS = 260;
 
-/// The full-window onboarding, over the app: welcome, setup, Dray Bot. Drawn
-/// like the sign-in gate — black, the site's tiles — since it is the brand's
-/// own page rather than the app's.
-export default function Onboarding({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }) {
+/// The full-window onboarding: welcome, setup, Dray Bot. Drawn like the
+/// sign-in gate — black, the site's tiles — since it is the brand's own page
+/// rather than the app's. Mounted above the gate, not inside the app, so a new
+/// reader meets it before signing in; nothing in it needs an account. Its
+/// Continue leads to the gate, and to Dray Bot's chat once the app is in.
+export default function Onboarding() {
   const { on, run } = useOnboarding();
   return (
     <>
@@ -49,10 +53,9 @@ export default function Onboarding({ bot, onStart }: { bot: Bot | undefined; onS
       {on && (
         <Flow
           key={run}
-          bot={bot}
           onStart={() => {
             finishOnboarding();
-            onStart();
+            askToOpenDrayBot();
           }}
         />
       )}
@@ -60,8 +63,16 @@ export default function Onboarding({ bot, onStart }: { bot: Bot | undefined; onS
   );
 }
 
-function Flow({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }) {
+function Flow({ onStart }: { onStart: () => void }) {
   const [step, setStep] = useState<"welcome" | "setup" | "bot">("welcome");
+  // Read here, not handed down by the app, which is not mounted before sign-in.
+  // The first read is what makes Dray Bot.
+  const [bot, setBot] = useState<Bot>();
+  useEffect(() => {
+    invoke<Bot[]>("list_bots", {}, LOCAL)
+      .then((bots) => setBot(bots.find((b) => b.welcome) ?? bots[0]))
+      .catch(() => {});
+  }, []);
   const agents = useAgentSetup();
   const github = useGithubSetup();
   const sound = useWelcomeSound();
@@ -87,7 +98,8 @@ function Flow({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
-    <div className="fixed inset-0 z-[900] flex flex-col overflow-hidden bg-black text-white select-none">
+    // Above the sign-in gate (1000), which it comes before.
+    <div className="fixed inset-0 z-[1010] flex flex-col overflow-hidden bg-black text-white select-none">
       <header data-tauri-drag-region="deep" className="relative z-10 flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">
         <WindowControls />
       </header>
@@ -256,8 +268,10 @@ function MeetBot({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }
     return () => window.removeEventListener("keydown", onKey);
   }, [onStart]);
   return (
-    <main className="relative flex flex-1 items-center justify-center overflow-y-auto px-10 pb-10">
-      <div className="flex w-full max-w-[960px] flex-col">
+    // `m-auto` rather than centring on the flex box: centred content taller
+    // than a short window spilled off the top, out of the scroll's reach.
+    <main className="relative flex min-h-0 flex-1 overflow-y-auto px-10 pb-10">
+      <div className="m-auto flex w-full max-w-[960px] flex-col">
         <div className="flex items-start justify-between gap-10">
           <div className="ob-in flex shrink-0 items-center gap-4">
             <BotAvatar seed={bot?.id ?? "dray"} avatar={bot?.avatar} follow className="size-12" />
@@ -354,7 +368,7 @@ function DevSwitch() {
   );
 
   return (
-    <div className="fixed top-12 right-3 z-[1001] flex w-72 flex-col rounded-xl bg-popover p-1.5 text-popover-foreground shadow-(--shadow-ring) backdrop-blur-xl animate-in fade-in zoom-in-95">
+    <div className="fixed top-12 right-3 z-[1020] flex w-72 flex-col rounded-xl bg-popover p-1.5 text-popover-foreground shadow-(--shadow-ring) backdrop-blur-xl animate-in fade-in zoom-in-95">
       <div className="flex items-center justify-between px-2 pt-1 pb-1.5">
         <span className="text-ui font-medium">Onboarding</span>
         <KbdGroup>
