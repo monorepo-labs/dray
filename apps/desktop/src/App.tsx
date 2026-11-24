@@ -178,7 +178,6 @@ import { noteMergeForStar, useStarPrompt } from "@/hooks/useStarPrompt";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { readIssueDetail, useSessionIssues } from "@/hooks/useIssues";
 import { IssueComposer, IssueStartContext, type IssueStarter } from "@/components/IssueStart";
-import { TaskIconSwitch } from "@/components/TaskChip";
 import { sessionsAnswered, useSessions } from "@/hooks/useSessions";
 import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailability";
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
@@ -4882,7 +4881,6 @@ function App() {
         )
       }
     >
-      {(issuesOpen || pullsOpen) && <TaskIconSwitch />}
       {/* Hidden rather than unmounted, like everything else in this column:
           the list, its filters and its scroll survive a trip into a session and
           back, which is the trip this page exists to make. */}
