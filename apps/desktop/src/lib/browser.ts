@@ -733,6 +733,12 @@ export function stoppedServer(tab: BrowserTab, browser: string): StoppedServer |
   return { port: local, sessionId: serverOfSession(browser) === LOCAL ? browser : null, since, retrying };
 }
 
+/// The colour `tab`'s page shows, which its tab and URL row wear. None under a
+/// stopped server's page: Chromium's error page behind it reports its own.
+export function pageColour(tab: BrowserTab, browser: string): string | null {
+  return stoppedServer(tab, browser) ? null : (tab.background ?? null);
+}
+
 /// One of the session's dev servers, opened in this Mac's browser — `browser`'s
 /// tabs, which are a bot's for one of its tasks. Forwarded off the session's
 /// own machine either way. A failed forward reports where a failed open does.
