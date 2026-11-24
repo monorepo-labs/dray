@@ -1,6 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
-import welcomeVoiceUrl from "@/assets/welcome-voice.m4a";
 import AgentIcon from "@/components/AgentIcon";
 import BotAvatar from "@/components/BotAvatar";
 import GitHubIcon from "@/components/GitHubIcon";
@@ -20,6 +19,10 @@ import {
   replayOnboarding,
   setFreshMachine,
   setWelcomeSound,
+  setWelcomeVoice,
+  useWelcomeVoice,
+  WELCOME_VOICES,
+  type WelcomeVoice,
   useFreshMachine,
   useOnboarding,
   useWelcomeSound,
@@ -60,23 +63,21 @@ function Flow({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }) {
   const agents = useAgentSetup();
   const github = useGithubSetup();
   const sound = useWelcomeSound();
+  const voicePick = useWelcomeVoice();
   // With the welcome line: the welcome said aloud once, the music low under it
   // and up once it ends, playing on over every step. Leaving fades it out.
   useEffect(() => {
     if (sound === "none") return;
     let music: ReturnType<typeof startOnboardingMusic> | undefined;
-    const voice = new Audio(welcomeVoiceUrl);
-    voice.volume = 0.5;
+    let voice: HTMLAudioElement | undefined;
     const lift = () => music?.lift();
-    voice.addEventListener("ended", lift);
-    voice.addEventListener("error", lift);
     const timer = setTimeout(() => {
       music = startOnboardingMusic();
-      voice.play().catch(lift);
+      voice = playVoice(voicePick, lift);
     }, MUSIC_AT);
     return () => {
       clearTimeout(timer);
-      voice.pause();
+      voice?.pause();
       music?.stop();
     };
     // Once per showing, like the welcome sound.
@@ -281,12 +282,28 @@ function MeetBot({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }
   );
 }
 
+/// Plays a welcome voice take at half volume; `onDone` runs when it ends or
+/// cannot play.
+function playVoice(id: WelcomeVoice, onDone?: () => void): HTMLAudioElement {
+  const audio = new Audio(WELCOME_VOICES.find((v) => v.id === id)?.url);
+  audio.volume = 0.5;
+  if (onDone) {
+    audio.addEventListener("ended", onDone);
+    audio.addEventListener("error", onDone);
+  }
+  audio.play().catch(() => onDone?.());
+  return audio;
+}
+
+let preview: HTMLAudioElement | undefined;
+
 /// ⌘⇧O: play onboarding from the start or turn it off, and pick its sound.
 function DevSwitch() {
   const [open, setOpen] = useState(false);
   const { on } = useOnboarding();
   const fresh = useFreshMachine();
   const sound = useWelcomeSound();
+  const voice = useWelcomeVoice();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -360,6 +377,28 @@ function DevSwitch() {
               )}
             >
               {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="mt-1 flex flex-col gap-1.5 border-t border-hairline px-2 pt-2 pb-1">
+        <span className="text-xs text-muted-foreground">Welcome voice · click to hear</span>
+        <div className="flex flex-wrap gap-1">
+          {WELCOME_VOICES.map((v) => (
+            <button
+              key={v.id}
+              type="button"
+              onClick={() => {
+                setWelcomeVoice(v.id);
+                preview?.pause();
+                preview = playVoice(v.id);
+              }}
+              className={cn(
+                "h-7 cursor-pointer rounded-md px-2.5 text-ui",
+                voice === v.id ? "bg-foreground text-background" : "bg-muted hover:bg-muted/70",
+              )}
+            >
+              {v.label}
             </button>
           ))}
         </div>

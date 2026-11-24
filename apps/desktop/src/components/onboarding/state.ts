@@ -2,6 +2,10 @@ import { useSyncExternalStore } from "react";
 
 import { channel } from "@/lib/channel";
 
+import cleanUrl from "@/assets/welcome-voice.m4a";
+import pilotUrl from "@/assets/welcome-voice-pilot.m4a";
+import radioUrl from "@/assets/welcome-voice-radio.m4a";
+
 import { WELCOME_SOUNDS, type WelcomeSound } from "./welcomeSounds";
 
 /// Onboarding on trial (#1421). Dev builds only, played from the dev switch; a
@@ -61,5 +65,26 @@ export function useWelcomeSound(): WelcomeSound {
 export function setWelcomeSound(id: WelcomeSound) {
   sound = id;
   localStorage.setItem(SOUND, id);
+  changed.emit();
+}
+
+/// The spoken welcome's takes: as recorded, over a cabin PA, over a radio.
+export const WELCOME_VOICES = [
+  { id: "clean", label: "Clean", url: cleanUrl },
+  { id: "pilot", label: "Pilot", url: pilotUrl },
+  { id: "radio", label: "Radio", url: radioUrl },
+] as const;
+export type WelcomeVoice = (typeof WELCOME_VOICES)[number]["id"];
+
+const VOICE = "dray.dev.onboarding.voice";
+let voice: WelcomeVoice = WELCOME_VOICES.find((v) => v.id === localStorage.getItem(VOICE))?.id ?? "pilot";
+
+export function useWelcomeVoice(): WelcomeVoice {
+  return useSyncExternalStore(changed.subscribe, () => voice);
+}
+
+export function setWelcomeVoice(id: WelcomeVoice) {
+  voice = id;
+  localStorage.setItem(VOICE, id);
   changed.emit();
 }
