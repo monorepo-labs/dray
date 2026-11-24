@@ -637,7 +637,12 @@ private struct PullRowView: View {
                 Text(l.title).font(Theme.Font.body).foregroundStyle(Theme.text.opacity(0.88)).lineLimit(2)
                 HStack(spacing: 6) {
                     Text("#\(String(row.mark.number))").monospacedDigit()
-                    if showRepo { Text(row.repoName.split(separator: "/").last.map(String.init) ?? row.repoName) }
+                    if showRepo {
+                        HStack(spacing: 3) {
+                            Image(systemName: "book.closed").imageScale(.small)
+                            Text(row.repoName.split(separator: "/").last.map(String.init) ?? row.repoName)
+                        }
+                    }
                     taskLabel
                 }
                 .font(Theme.Font.footnote)

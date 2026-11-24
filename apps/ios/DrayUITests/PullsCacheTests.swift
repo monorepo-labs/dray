@@ -25,6 +25,13 @@ final class PullsCacheTests: XCTestCase {
         snap(app, "01-pulls-cold-launch")
         sleep(4)
         snap(app, "01b-pulls-refreshed")
+        // Several repositories, so each row names its own.
+        app.buttons["Involving me"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["pull.row"].firstMatch.waitForExistence(timeout: 60), "Involving me drew no PR")
+        sleep(4)
+        snap(app, "01c-pulls-involving")
+        app.buttons["All"].firstMatch.tap()
+        sleep(2)
 
         // The search sits behind its button, and opens with the keyboard up.
         let word = env["DRAY_SEARCH"] ?? "iOS"

@@ -279,11 +279,12 @@ struct SessionList: View {
     /// Settings on the left; the drafts and settled views sharing one glass pill
     /// on the right, then New bot. While one view is shown, the other dims, so the lit one reads as on.
     @ToolbarContentBuilder private var header: some ToolbarContent {
-        // The desktop's two pages beside Settings, each a push over the list.
+        // The desktop's two pages beside Settings, each a push over the list. Whenever a server is on,
+        // up or not: both draw their kept lists while one reconnects, so a dropped socket hides nothing.
         ToolbarItemGroup(placement: .topBarLeading) {
             Button { sheet = .settings(server: nil) } label: { Image(systemName: "gearshape") }
                 .accessibilityLabel("Settings")
-            if anyConnected {
+            if !store.live.isEmpty {
                 Button { listPage = .pulls } label: { Image(systemName: "arrow.triangle.pull") }
                     .accessibilityLabel("Pull requests")
                 Button { listPage = .issues } label: { Image(systemName: "smallcircle.circle") }
