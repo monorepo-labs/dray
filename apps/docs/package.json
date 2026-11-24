@@ -11,6 +11,6 @@
     "build": "blume build"
   },
   "dependencies": {
-    "blume": "2.2.4"
+    "blume": "2.2.7"
   }
 }
