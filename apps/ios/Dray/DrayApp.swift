@@ -56,7 +56,6 @@ struct RootView: View {
     /// Read outside the split view: a column inside one reports compact even beside the detail.
     @Environment(\.horizontalSizeClass) private var width
     @Environment(NewTask.self) private var task
-    @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
     @State private var selection: SessionKey?
     @State private var columns = NavigationSplitViewVisibility.automatic
     /// The main pane as wide as the window: a sidebar up now is laid over it rather than beside it.
@@ -86,7 +85,7 @@ struct RootView: View {
                     }
                     .environment(\.openTask) { opened.append($0) }
                     .environment(\.openSession) { self.selection = $0 }
-                } else if width == .regular && !store.live.isEmpty && !hideSessions {
+                } else if width == .regular && !store.live.isEmpty {
                     // The new task page: the phone's dock under its list, with the main pane to itself.
                     Color.clear
                         .overlay(alignment: .bottom) {

@@ -31,6 +31,23 @@ final class PullsTests: XCTestCase {
         XCTAssertEqual(inboxSection(mark(status: "BLOCKED")), .waiting)
     }
 
+    /// Every word must land in the title, number, author, head branch or repository.
+    func testSearch() {
+        let m = mark()
+        let row = PullRow(server: UUID(), key: "/p", repo: "github.com/o/r", mark: m, listing: m.listing!)
+        XCTAssertTrue(pullMatches(row, ""))
+        XCTAssertTrue(pullMatches(row, "fix #7"))
+        XCTAssertTrue(pullMatches(row, "FEATURE"))
+        XCTAssertTrue(pullMatches(row, "o/r"))
+        XCTAssertFalse(pullMatches(row, "fix other"))
+    }
+
+    /// A dragged-in screenshot's tag becomes an image line; other HTML and markers go.
+    func testPrBody() {
+        let body = "Before<img width=\"300\" alt=\"x\" src=\"https://u.example/a.png\" />after\n<!-- bot -->\n<details><summary>More</summary>text</details>"
+        XCTAssertEqual(prBody(body), "Before\n![](https://u.example/a.png)\nafter\n\nMoretext")
+    }
+
     func testTaskCopyOnConnectedServer() {
         let item: SessionItem = decode("""
         {"sessionId":"s1","harness":"claude_code","cwd":"/p/.claude/worktrees/w","projectPath":"/p","title":"t","model":"opus",

@@ -206,16 +206,23 @@ func prPrompt(_ pr: PullRequest, picked: Set<String>, text: String) -> String {
     return parts.joined(separator: "\n\n")
 }
 
+/// The search box's test: every word in the title, `#number`, author, head branch or repository.
+func pullMatches(_ row: PullRow, _ text: String) -> Bool {
+    let hay = [row.listing.title, "#\(row.mark.number)", row.listing.author, row.mark.headRefName, row.repoName]
+        .joined(separator: " ").lowercased()
+    return text.lowercased().split(separator: " ").allSatisfy { hay.contains($0) }
+}
+
 // MARK: Wire
 
 /// `pr_search`'s answer: the reader's open PRs across GitHub and the owners to narrow by.
-struct PrSearch: Decodable {
+struct PrSearch: Codable {
     let viewer: String
     let orgs: [String]
     let prs: [SearchedPr]
 }
 
-struct SearchedPr: Decodable {
+struct SearchedPr: Codable {
     /// `owner/name`.
     let repo: String
     let ownerIsOrg: Bool
@@ -253,7 +260,8 @@ extension Store {
 // MARK: Model
 
 /// What the page reads: each repo's marks with listings for All, one search for
-/// the rest. Kept for the app's life, so coming back draws at once.
+/// the rest. Kept on disk too, so the page draws its last answer at once, even
+/// on a cold launch before any server is up, and reads again behind it.
 @MainActor @Observable
 final class PullsModel {
     static let shared = PullsModel()
@@ -266,8 +274,33 @@ final class PullsModel {
     private(set) var checkouts: [String: ProjectKey] = [:]
     /// Who the search can narrow to: the reader, every owner met, their orgs. Gathered, never dropped.
     private(set) var owners: [String] = []
+    /// The server the last search went through, which keyed it: the rows to draw until one is up.
+    private(set) var home: UUID?
     private(set) var loading = false
+    /// Each opened PR's description, labels and reviewers by row id, this launch only: a page opened again draws at once.
+    var details: [String: PrDetail] = [:]
+    /// When each read last landed, this launch only: a kept answer is drawn, then read again.
     @ObservationIgnored private var readAt: [String: Date] = [:]
+
+    private struct Kept: Codable {
+        var marks: [ProjectKey: [PrMark]]
+        var searches: [String: PrSearch]
+        var checkouts: [String: ProjectKey]
+        var owners: [String]
+        var home: UUID?
+    }
+
+    private static let file = Cache.root.appending(path: "pulls.json")
+
+    private init() {
+        guard let data = try? Data(contentsOf: Self.file), let kept = try? JSONDecoder().decode(Kept.self, from: data) else { return }
+        (marks, searches, checkouts, owners, home) = (kept.marks, kept.searches, kept.checkouts, kept.owners, kept.home)
+    }
+
+    private func keep() {
+        let kept = Kept(marks: marks, searches: searches, checkouts: checkouts, owners: owners, home: home)
+        Cache.write(Self.file) { try JSONEncoder().encode(kept) }
+    }
 
     /// A repo's marks, fresh for a minute unless forced; every key at once.
     func loadMarks(_ store: Store, _ keys: [ProjectKey], force: Bool) async {
@@ -289,6 +322,7 @@ final class PullsModel {
                 }
             }
         }
+        keep()
     }
 
     /// Per server too: two servers may run `gh` as different accounts.
@@ -298,7 +332,7 @@ final class PullsModel {
     func search(_ store: Store, filter: String, owner: String?, force: Bool) async {
         guard let server = store.trackerServer else { return }
         let key = searchKey(server, filter, owner)
-        if !force, searches[key] != nil, Date().timeIntervalSince(readAt[key] ?? .distantPast) < 60 { return }
+        if !force, Date().timeIntervalSince(readAt[key] ?? .distantPast) < 60 { return }
         loading = true
         defer { loading = false }
         // An org owner is searched `org:`, a person `user:`; GitHub drops every PR on the wrong one.
@@ -314,9 +348,11 @@ final class PullsModel {
             searches[key] = found
             readAt[key] = Date()
             searchError = nil
+            home = server
             let seen = [found.viewer] + found.prs.map { String($0.repo.split(separator: "/").first ?? "") } + found.orgs
             for o in seen where !o.isEmpty && !owners.contains(o) { owners.append(o) }
             await findCheckouts(store, Set(found.prs.compactMap { marksRepo($0.mark.url) }))
+            keep()
         } catch {
             searchError = PrUnavailable.from(error)
         }
@@ -384,6 +420,8 @@ struct PullsView: View {
     @State private var owner: String?
     @State private var repo: String?
     @State private var picked: PullRow?
+    @State private var text = ""
+    @State private var searching = false
 
     var body: some View {
         let rows = allRows
@@ -391,12 +429,16 @@ struct PullsView: View {
         let repoShown = repo.flatMap { repos.contains($0) ? $0 : nil }
         let shown = rows.filter { r in
             (owner == nil || r.owner.lowercased() == owner?.lowercased()) && (repoShown == nil || r.repoName == repoShown)
+                && pullMatches(r, text)
         }
         let sections = InboxSection.allCases.compactMap { s in
             let inSection = shown.filter { inboxSection($0.mark) == s }
             return inSection.isEmpty ? nil : (section: s, rows: inSection)
         }
         List {
+            if searching {
+                ListSearchField(prompt: "Search pull requests", text: $text, open: $searching).plainRow()
+            }
             ChipRow(focus: people.rawValue) {
                 ForEach(PeopleFilter.allCases, id: \.self) { f in
                     PickChip(label: f.label, selected: people == f) { people = f }.id(f.rawValue)
@@ -419,7 +461,7 @@ struct PullsView: View {
                 .frame(height: 44).plainRow()
             } else if sections.isEmpty && !(rows.isEmpty && !errors.isEmpty) {
                 note(rows.isEmpty ? "No open pull requests\(people.empty)\(space.isEmpty ? "" : " in \(space)")."
-                    : "No pull request matches these filters.")
+                    : text.isEmpty ? "No pull request matches these filters." : "No pull request matches that.")
             }
             ForEach(sections, id: \.section) { s in
                 HStack {
@@ -446,7 +488,10 @@ struct PullsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) { CloseButton() }
-            ToolbarItem(placement: .primaryAction) { filterMenu(repos: repos, repoShown: repoShown) }
+            ToolbarItemGroup(placement: .primaryAction) {
+                SearchButton(open: $searching)
+                filterMenu(repos: repos, repoShown: repoShown)
+            }
         }
         .refreshable { await read(force: true) }
         // Re-read on every filter and server change, then every minute while the page is up.
@@ -506,13 +551,20 @@ struct PullsView: View {
 
     private var connected: [UUID] { store.live.filter { store.serverState[$0.id] == .connected }.map(\.id) }
 
+    /// The search's server: the one it would read through, else the last one, whose kept answer draws until a server is up.
+    private var home: UUID? {
+        store.trackerServer ?? model.home.flatMap { h in store.live.contains { $0.id == h } ? h : nil }
+    }
+
     /// The spaces' projects, then every bot task's repo, which no space holds: the desktop's `pullsKeys`.
+    /// Every live server's, up or not, so kept marks draw on a cold launch; only the connected are read.
     private var keys: [ProjectKey] {
         var seen = Set<ProjectKey>()
-        let own = connected.flatMap { s in
+        let live = store.live.map(\.id)
+        let own = live.flatMap { s in
             (store.projects[s] ?? []).filter { space.isEmpty || $0.space == space }.map { ProjectKey(server: s, path: $0.path) }
         }
-        let bots = store.items.filter { $0.value.hidden == true && $0.value.archived != true && connected.contains($0.key.server) }
+        let bots = store.items.filter { $0.value.hidden == true && $0.value.archived != true && live.contains($0.key.server) }
             .map { ProjectKey(server: $0.key.server, path: $0.value.projectPath) }
         return (own + bots).filter { seen.insert($0).inserted }
     }
@@ -524,7 +576,7 @@ struct PullsView: View {
 
     private var allRows: [PullRow] {
         guard let filter = people.search else { return model.markRows(keys) }
-        guard let home = store.trackerServer else { return [] }
+        guard let home else { return [] }
         let rows = model.searchRows(filter, owner, home: home)
         return space.isEmpty ? rows : rows.filter { spaceRepos.contains($0.repo) }
     }
@@ -537,14 +589,14 @@ struct PullsView: View {
         if let filter = people.search {
             await model.search(store, filter: filter, owner: owner, force: force)
         } else {
-            await model.loadMarks(store, keys, force: force)
+            await model.loadMarks(store, keys.filter { connected.contains($0.server) }, force: force)
         }
     }
 
     private var hasRepos: Bool { people.search != nil || !keys.isEmpty }
 
     private var loaded: Bool {
-        if let filter = people.search { return model.searched(store.trackerServer, filter, owner) || model.searchError != nil }
+        if let filter = people.search { return model.searched(home, filter, owner) || model.searchError != nil }
         return keys.contains { model.marks[$0] != nil || model.markErrors[$0] != nil }
     }
 
@@ -570,7 +622,7 @@ struct PullsView: View {
     }
 }
 
-/// One pull request: its glyph, its title over who and where, and its latest task.
+/// One pull request: its glyph, its title over where and its latest task, and its age over its author.
 private struct PullRowView: View {
     @Environment(Store.self) private var store
     let row: PullRow
@@ -586,13 +638,6 @@ private struct PullRowView: View {
                 HStack(spacing: 6) {
                     Text("#\(String(row.mark.number))").monospacedDigit()
                     if showRepo { Text(row.repoName.split(separator: "/").last.map(String.init) ?? row.repoName) }
-                    Text(l.author)
-                    if l.commentCount > 0 {
-                        HStack(spacing: 2) {
-                            Image(systemName: "bubble.left")
-                            Text("\(l.commentCount)").monospacedDigit()
-                        }
-                    }
                     taskLabel
                 }
                 .font(Theme.Font.footnote)
@@ -600,12 +645,14 @@ private struct PullRowView: View {
                 .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Group {
+            // Who opened it sits under when it last moved, as the desktop row ends on both.
+            VStack(alignment: .trailing, spacing: 6) {
                 if row.mark.checksState == "RUNNING" {
                     ChecksSpinner(size: 15)
                 } else if let at = parseDate(l.updatedAt) {
                     Text(shortAge(at)).font(Theme.Font.footnote.font.monospacedDigit()).foregroundStyle(Theme.tertiary)
                 }
+                Avatar(url: l.authorAvatar, name: l.author, size: 18)
             }
             .padding(.top, 3)
         }
@@ -615,7 +662,7 @@ private struct PullRowView: View {
         .contentShape(.rect)
     }
 
-    /// Its latest task, so a PR nobody has worked on stands out; a bot's wears its face.
+    /// Its latest task, a bot's wearing its face; nothing where there is none, bar a fork's Read only.
     @ViewBuilder private var taskLabel: some View {
         if let task, let item = store.items[task] {
             let bot = store.botOf(task)
@@ -625,9 +672,59 @@ private struct PullRowView: View {
                 Text(bot.map { "\($0.name) · \(item.title)" } ?? item.title)
             }
             .foregroundStyle(item.archived == true ? Theme.tertiary : Theme.secondary)
-        } else {
-            Text("· \(row.listing.isCrossRepository ? "Read only" : "No task")").foregroundStyle(Theme.dim)
+        } else if row.listing.isCrossRepository {
+            Text("· Read only").foregroundStyle(Theme.dim)
         }
+    }
+}
+
+/// Opens a list page's search field; the field itself closes it.
+struct SearchButton: View {
+    @Binding var open: Bool
+
+    var body: some View {
+        Button { withAnimation(Theme.motion) { open.toggle() } } label: { Image(systemName: "magnifyingglass") }
+            .accessibilityLabel("Search")
+    }
+}
+
+/// A list page's search, as the list's first row while open: the keyboard comes
+/// up with it, and clearing it or Cancel puts it away, the row going back to the list.
+struct ListSearchField: View {
+    let prompt: String
+    @Binding var text: String
+    @Binding var open: Bool
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: Theme.Space.m) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(Theme.tertiary)
+                TextField(prompt, text: $text)
+                    .focused($focused)
+                    .submitLabel(.search)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                if !text.isEmpty {
+                    Button(action: close) { Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.tertiary) }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear search")
+                }
+            }
+            .font(Theme.Font.body)
+            .foregroundStyle(Theme.text)
+            .padding(.horizontal, 12)
+            .frame(height: 40)
+            .background(Theme.raised, in: Capsule())
+            Button("Cancel", action: close).buttonStyle(.plain).font(Theme.Font.body).foregroundStyle(Theme.text)
+        }
+        .padding(.top, Theme.Space.s)
+        .onAppear { focused = true }
+    }
+
+    private func close() {
+        text = ""
+        withAnimation(Theme.motion) { open = false }
     }
 }
 

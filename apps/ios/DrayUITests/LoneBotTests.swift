@@ -50,13 +50,6 @@ final class LoneBotTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Hi."].waitForExistence(timeout: 10), "the row did not open")
     }
 
-    /// Settings › Hide sessions leaves the bot alone on the list, whatever sessions there are.
-    func testHideSessionsOpens() throws {
-        let app = try coldLaunch("DRAY_VISIBLE_URL", hide: true)
-        XCTAssertTrue(app.staticTexts["Hi."].waitForExistence(timeout: 15), "the chat did not open")
-        snap(app, "7-hide-sessions-opened")
-    }
-
     /// No chat yet: the bot's own page, with the dock aimed at it.
     func testFreshBotOpensItsPage() throws {
         let app = try coldLaunch("DRAY_FRESH_URL")
@@ -88,10 +81,10 @@ final class LoneBotTests: XCTestCase {
     }
 
     /// Pairs the one server through a link, which opens nothing on its own, then launches cold.
-    private func coldLaunch(_ urlKey: String, hide: Bool = false) throws -> XCUIApplication {
+    private func coldLaunch(_ urlKey: String) throws -> XCUIApplication {
         let app = try paired(urlKey)
         app.terminate()
-        app.launchArguments = ["-list.hideSessions", hide ? "YES" : "NO"]
+        app.launchArguments = []
         app.launch()
         return app
     }
@@ -100,7 +93,7 @@ final class LoneBotTests: XCTestCase {
     private func paired(_ urlKey: String) throws -> XCUIApplication {
         let url = try link(urlKey)
         let app = XCUIApplication()
-        app.launchArguments = ["-servers", "", "-list.hideSessions", "NO"]
+        app.launchArguments = ["-servers", ""]
         app.launch()
         app.open(url)
         XCTAssertTrue(app.buttons["Add"].waitForExistence(timeout: 10), "the link opened no add sheet")

@@ -67,7 +67,7 @@ phone reads and drives it over the same WebSocket the desktop uses
   shows it whenever no session is open. A sidebar laid over the pane shuts;
   one beside it stays, as a row tap does.
 - **A lone bot opens itself** (#1169): a cold launch where one bot is all
-  the list would draw — no other bot, no session shown, or Hide sessions on —
+  the list would draw — no other bot and no session shown —
   opens its chat at once. It decides off the cached list, so the list never
   shows first; a server with no cache waits on its index and its bots both,
   and until both are in its rows stay hidden, or a bot's chat draws as a task.

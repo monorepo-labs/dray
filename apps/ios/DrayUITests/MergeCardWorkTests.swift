@@ -9,7 +9,7 @@ final class MergeCardWorkTests: XCTestCase {
         let env = ProcessInfo.processInfo.environment
         guard let url = env["DRAY_CARD_URL"], let token = env["DRAY_TOKEN"] else { throw XCTSkip("no server") }
         let app = XCUIApplication()
-        app.launchArguments = ["-servers", "", "-list.hideSessions", "NO", "-bot.dismissedStalls", ""]
+        app.launchArguments = ["-servers", "", "-bot.dismissedStalls", ""]
         app.launch()
         XCTAssertTrue(app.buttons["Enter an address"].waitForExistence(timeout: 10), "no empty list")
         app.buttons["Enter an address"].tap()

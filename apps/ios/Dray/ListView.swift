@@ -42,10 +42,8 @@ struct SessionList: View {
     @State private var mode = ListMode.live
     @State private var drafts: [(server: UUID, draft: DraftItem)] = []
     @State private var shown = Self.pageSize
-    /// A bot with no chat, opened on its own page while sessions are hidden.
+    /// A lone bot with no chat, opened on its own page at launch.
     @State private var starting: BotStart?
-    /// Settings › Appearance: the list is bots alone, with nothing that serves sessions.
-    @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
     @State private var newBot = false
     /// The pull requests or issues page, opened over the list.
     @State private var listPage: ListPage?
@@ -74,7 +72,7 @@ struct SessionList: View {
         let names = store.live.flatMap { store.projects[$0.id] ?? [] }.map(\.name).filter { seen.insert($0).inserted }
         // A picked project that left the list narrows nothing.
         let filter = names.contains { $0 == project } ? project : nil
-        let all = mode == .drafts || hideSessions ? [] : store.runs(project: filter, settled: mode == .settled)
+        let all = mode == .drafts ? [] : store.runs(project: filter, settled: mode == .settled)
         // Paged: only the first `shown` rows are drawn, more as the last one comes on screen.
         let runs = page(all, shown)
         let more = runs.reduce(0) { $0 + $1.rows.count } < all.reduce(0) { $0 + $1.rows.count }
@@ -86,9 +84,8 @@ struct SessionList: View {
         } : []
         let blank = mode == .live && runs.isEmpty && botRows.isEmpty
         // A picked filter keeps its strip, or there would be no way back to All.
-        let strip = !hideSessions && names.count > 1 && (filter != nil || !(mode == .drafts ? drafts.isEmpty : all.isEmpty))
-        // Bots only: a bot with no chat yet opens its own page, which carries the dock instead.
-        let dock = !store.live.isEmpty && !hideSessions
+        let strip = names.count > 1 && (filter != nil || !(mode == .drafts ? drafts.isEmpty : all.isEmpty))
+        let dock = !store.live.isEmpty
         let lone = autoOpen ? loneBot : nil
         let read = store.live.allSatisfy { store.read($0.id) } && store.awaitingShares.isEmpty
         VStack(spacing: 0) {
@@ -112,7 +109,7 @@ struct SessionList: View {
                         Button {
                             task.aim(at: b.bot, on: b.server)
                             // Beside the main pane, the new task page is where that dock is.
-                            if hideSessions { starting = BotStart(server: b.server, bot: b.bot) } else { newTaskPage() }
+                            newTaskPage()
                         } label: {
                             BotListRow(server: b.server, bot: b.bot, chat: nil)
                         }
@@ -216,15 +213,6 @@ struct SessionList: View {
         }
         // A new view or filter starts on its first page.
         .onChange(of: "\(mode)\(filter ?? "")") { shown = Self.pageSize }
-        // Its buttons go with the sessions, so a view left open would have no way back; the dock
-        // goes too, so a recording it held is stopped and kept, as leaving `BotStartView` does.
-        .onChange(of: hideSessions) {
-            guard hideSessions else { return }
-            mode = .live
-            if Dictations.shared.state(.newSession) == .recording {
-                Task { await Dictations.shared.stop(store, draft: .newSession) }
-            }
-        }
         .page()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { header }
@@ -295,7 +283,7 @@ struct SessionList: View {
         ToolbarItemGroup(placement: .topBarLeading) {
             Button { sheet = .settings(server: nil) } label: { Image(systemName: "gearshape") }
                 .accessibilityLabel("Settings")
-            if anyConnected && !hideSessions {
+            if anyConnected {
                 Button { listPage = .pulls } label: { Image(systemName: "arrow.triangle.pull") }
                     .accessibilityLabel("Pull requests")
                 Button { listPage = .issues } label: { Image(systemName: "smallcircle.circle") }
@@ -304,10 +292,10 @@ struct SessionList: View {
         }
         // Each only where it has something to show, or is the view up now so there is a way back.
         ToolbarItemGroup(placement: .topBarTrailing) {
-            if !hideSessions, mode == .drafts || (anyConnected && !drafts.isEmpty) {
+            if mode == .drafts || (anyConnected && !drafts.isEmpty) {
                 viewToggle(.drafts, label: "Drafts") { Image(systemName: "circle.dashed") }
             }
-            if !hideSessions, mode == .settled || (anyConnected && store.items.values.contains { $0.archived == true && $0.hidden != true }) {
+            if mode == .settled || (anyConnected && store.items.values.contains { $0.archived == true && $0.hidden != true }) {
                 viewToggle(.settled, label: "Settled") { CheckCheck().frame(width: 20, height: 20) }
             }
         }
@@ -373,7 +361,7 @@ struct SessionList: View {
         guard !store.live.isEmpty,
               store.live.allSatisfy({ store.known($0.id) }), store.awaitingShares.isEmpty,
               store.allBots.count == 1, let b = store.allBots.first,
-              hideSessions || store.runs(project: nil).isEmpty else { return nil }
+              store.runs(project: nil).isEmpty else { return nil }
         return BotStart(server: b.server, bot: b.bot)
     }
 
@@ -451,10 +439,7 @@ struct SessionList: View {
                 .compactMap { r in parseDate(r.item.modified).map { (row: r, at: $0) } }
                 .filter { Calendar.current.isDateInToday($0.at) }
             Group {
-                if hideSessions {
-                    EmptyScreen(art: EmptyArt(kind: .tasks), title: "No bots yet",
-                                message: "Tap + to make one.")
-                } else if let last = today.max(by: { $0.at < $1.at }) {
+                if let last = today.max(by: { $0.at < $1.at }) {
                     EmptyScreen(art: SettledStack(title: last.row.item.title, time: shortAge(last.at)),
                                 title: "All clear", message: today.count == 1 ? "1 settled today." : "\(today.count) settled today.")
                 } else if let filter {

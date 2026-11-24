@@ -20,7 +20,7 @@ final class BotTapTests: XCTestCase {
     func testTapLoneBotAfterBack() throws {
         let app = try paired("DRAY_LONE_URL")
         app.terminate()
-        app.launchArguments = ["-list.hideSessions", "NO"]
+        app.launchArguments = []
         app.launch()
         XCTAssertTrue(app.staticTexts["Morning. Nothing on fire."].waitForExistence(timeout: 15), "the chat did not open")
         back(app)
@@ -54,7 +54,7 @@ final class BotTapTests: XCTestCase {
         var link = URLComponents(string: "dray://connect")!
         link.queryItems = [.init(name: "url", value: url), .init(name: "token", value: token), .init(name: "name", value: "Test Mac")]
         let app = XCUIApplication()
-        app.launchArguments = ["-servers", "", "-list.hideSessions", "NO"]
+        app.launchArguments = ["-servers", ""]
         app.launch()
         app.open(link.url!)
         XCTAssertTrue(app.buttons["Add"].waitForExistence(timeout: 10), "the link opened no add sheet")

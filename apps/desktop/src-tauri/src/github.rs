@@ -1060,6 +1060,126 @@ pub(crate) fn unavailable(message: String) -> PrUnavailable {
     }
 }
 
+/// What a pull request's own page shows past [`PullRequest`]: its description,
+/// labels and who is asked to review or has.
+///
+/// Its own read, not more fields on [`QUERY`]: that one polls, and two more
+/// connections there take it from 2 points to 3 on every read; this one costs 1,
+/// once per opened page.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrDetail {
+    pub body: String,
+    pub created_at: String,
+    pub labels: Vec<PrLabel>,
+    /// Asked and not yet answered: a person, a bot or a team.
+    pub requested: Vec<PrReviewer>,
+    /// Each reviewer's latest verdict, `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED` or `DISMISSED`.
+    pub reviews: Vec<PrReviewer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrLabel {
+    pub name: String,
+    /// `rrggbb`, no `#`.
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PrReviewer {
+    pub name: String,
+    pub avatar: Option<String>,
+    /// Empty for a request.
+    pub state: String,
+}
+
+const QUERY_DETAIL: &str = r#"
+query($owner:String!,$repo:String!,$number:Int!){
+ repository(owner:$owner,name:$repo){
+  pullRequest(number:$number){
+   body createdAt
+   labels(first:20){nodes{name color}}
+   reviewRequests(first:20){nodes{requestedReviewer{__typename ... on User{login avatarUrl} ... on Team{name avatarUrl} ... on Bot{login avatarUrl} ... on Mannequin{login avatarUrl}}}}
+   latestReviews(first:20){nodes{author{login avatarUrl} state}}
+ }}}
+"#;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DetailRepository {
+    pull_request: Option<RawDetail>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawDetail {
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    created_at: String,
+    labels: Option<Nodes<PrLabel>>,
+    review_requests: Option<Nodes<RawRequest>>,
+    latest_reviews: Option<Nodes<RawLatestReview>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawRequest {
+    /// Null for a reviewer this token cannot see.
+    requested_reviewer: Option<RawReviewer>,
+}
+
+/// A user, bot or mannequin answers `login`; a team answers `name`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawReviewer {
+    login: Option<String>,
+    name: Option<String>,
+    avatar_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawLatestReview {
+    author: Option<RawAuthor>,
+    #[serde(default)]
+    state: String,
+}
+
+/// One pull request's [`PrDetail`], by number, in the repo `cwd` names.
+pub async fn pr_detail(cwd: String, number: u64) -> Result<PrDetail, PrUnavailable> {
+    pr_detail_inner(&cwd, number).await.map_err(unavailable)
+}
+
+async fn pr_detail_inner(cwd: &str, number: u64) -> Result<PrDetail, String> {
+    let (owner, repo) = repo_slug(cwd).await?;
+    let (owner, repo) = (format!("owner={owner}"), format!("repo={repo}"));
+    let (query, number) = (format!("query={QUERY_DETAIL}"), format!("number={number}"));
+    // `-F`, not `-f`: the query takes an `Int!`, and `-f` sends a string.
+    read_detail(&gh(cwd, &["api", "graphql", "-f", &owner, "-f", &repo, "-f", &query, "-F", &number]).await?)
+}
+
+fn read_detail(out: &str) -> Result<PrDetail, String> {
+    let raw = Response::<DetailRepository>::repository(out)?
+        .and_then(|r| r.pull_request)
+        .ok_or("GitHub has no such pull request")?;
+    Ok(PrDetail {
+        body: raw.body,
+        created_at: raw.created_at,
+        labels: Nodes::take(raw.labels),
+        requested: Nodes::take(raw.review_requests)
+            .into_iter()
+            .filter_map(|r| r.requested_reviewer)
+            .filter_map(|r| {
+                Some(PrReviewer { name: r.login.or(r.name)?, avatar: r.avatar_url, state: String::new() })
+            })
+            .collect(),
+        reviews: Nodes::take(raw.latest_reviews)
+            .into_iter()
+            .map(|r| PrReviewer { name: login(&r.author), avatar: avatar(&r.author), state: r.state })
+            .collect(),
+    })
+}
+
 async fn prs_for_branch_inner(cwd: &str, branch: &str) -> Result<Vec<PullRequest>, String> {
     read_prs(&graphql(cwd, QUERY, Some(branch)).await?)
 }
@@ -1709,6 +1829,23 @@ mod tests {
 
     fn parse() -> PullRequest {
         read_prs(FIXTURE).expect("fixture parses").pop().expect("one PR")
+    }
+
+    /// A team asked by name, a reviewer the token cannot see as null, and a
+    /// PR the repo does not have as an error rather than an empty page.
+    #[test]
+    fn reads_pr_detail() {
+        let out = r#"{"data":{"repository":{"pullRequest":{"body":"hi","createdAt":"2026-11-20T10:00:00Z",
+            "labels":{"nodes":[{"name":"bug","color":"d73a4a"}]},
+            "reviewRequests":{"nodes":[{"requestedReviewer":{"__typename":"User","login":"a","avatarUrl":"u"}},
+              {"requestedReviewer":{"__typename":"Team","name":"core","avatarUrl":null}},{"requestedReviewer":null}]},
+            "latestReviews":{"nodes":[{"author":{"login":"b","avatarUrl":null},"state":"APPROVED"}]}}}}}"#;
+        let d = read_detail(out).unwrap();
+        assert_eq!(d.body, "hi");
+        assert_eq!(d.labels[0].color, "d73a4a");
+        assert_eq!(d.requested.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["a", "core"]);
+        assert_eq!((d.reviews[0].name.as_str(), d.reviews[0].state.as_str()), ("b", "APPROVED"));
+        assert!(read_detail(r#"{"data":{"repository":{"pullRequest":null}}}"#).is_err());
     }
 
     #[test]
