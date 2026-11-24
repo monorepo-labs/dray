@@ -28,6 +28,7 @@ type Backdrop = "black" | "blue";
 type Cards = "dark" | "white";
 type Layout = "gaps" | "small" | "borders";
 type Exit = "card" | "title";
+type Order = "picture" | "title";
 type TakeProps = {
   hl: Highlight[];
   onAction: (label: string) => void;
@@ -36,6 +37,7 @@ type TakeProps = {
   cards?: Cards;
   layout?: Layout;
   exit?: Exit;
+  order?: Order;
 };
 
 const title = (h: Highlight) => changelogPlain(h.item.title ?? h.item.body);
@@ -486,16 +488,21 @@ function ActionMono({ h, onAction, white }: { h: Highlight; onAction: (label: st
 ///
 /// `white` is the white card, dark title, tried on the blue backdrop; its
 /// pictures are the `-white` captures, drawn on a white tile to match.
+///
+/// `titleFirst` puts the title above the picture (left of it on a wide card),
+/// the picture held to the card's foot so a row's pictures line up.
 function LandingCard({
   h,
   onAction,
   white,
   wide,
+  titleFirst,
 }: {
   h: Highlight;
   onAction: (label: string) => void;
   white?: boolean;
   wide?: boolean;
+  titleFirst?: boolean;
 }) {
   const media = h.item.media[0];
   const fill = white ? "bg-white" : "bg-[#1C1C1C]";
@@ -518,7 +525,7 @@ function LandingCard({
     );
   return (
     <article className={cn(fill, wide ? "col-span-2 grid grid-cols-2" : "flex flex-col")}>
-      <Media media={media} className={cn("aspect-video w-full", fill)} />
+      <Media media={media} className={cn("aspect-video w-full", fill, titleFirst && "order-last mt-auto")} />
       <div className="flex flex-col gap-3 p-6">
         {heading}
         <ActionMono h={h} onAction={onAction} white={white} />
@@ -601,6 +608,7 @@ function TakeLanding({
   cards = "white",
   layout = "gaps",
   exit = "title",
+  order = "picture",
 }: TakeProps) {
   const one = hl.length === 1;
   const blue = backdrop === "blue";
@@ -643,6 +651,7 @@ function TakeLanding({
                 onAction={onAction}
                 white={white}
                 wide={!asCard && hl.length % 2 === 1 && i === hl.length - 1}
+                titleFirst={order === "title"}
               />
             ))}
             {asCard && <ContinueCard row={hl.length % 2 === 0} onClose={onClose} white={white} />}
@@ -702,7 +711,15 @@ function Row({
   cards,
   layout,
   exit,
-}: (typeof TAKES)[number] & { hl: Highlight[]; backdrop: Backdrop; cards: Cards; layout: Layout; exit: Exit }) {
+  order,
+}: (typeof TAKES)[number] & {
+  hl: Highlight[];
+  backdrop: Backdrop;
+  cards: Cards;
+  layout: Layout;
+  exit: Exit;
+  order: Order;
+}) {
   const [open, setOpen] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
   const done = (line: string) => {
@@ -727,6 +744,7 @@ function Row({
           cards={cards}
           layout={layout}
           exit={exit}
+          order={order}
           onAction={(label) => done(`action: ${label}`)}
           onClose={() => done("closed, seen")}
         />
@@ -748,6 +766,7 @@ function Demo() {
     return l === "small" || l === "borders" ? l : "gaps";
   });
   const [exit, setExit] = useState<Exit>(() => (params.get("exit") === "card" ? "card" : "title"));
+  const [order, setOrder] = useState<Order>(() => (params.get("order") === "title" ? "title" : "picture"));
   return (
     <TooltipProvider>
       <div className="mx-auto flex max-w-3xl flex-col gap-6 p-10">
@@ -783,7 +802,7 @@ function Demo() {
               ))}
             </div>
           </div>
-          <div className="flex items-center gap-3 text-ui">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-ui">
             <span className="text-muted-foreground">F backdrop</span>
             <div role="radiogroup" aria-label="F backdrop" className="flex gap-1">
               {(["black", "blue"] as const).map((b) => (
@@ -844,11 +863,26 @@ function Demo() {
                 </Button>
               ))}
             </div>
+            <span className="ml-3 text-muted-foreground">Order</span>
+            <div role="radiogroup" aria-label="F card order" className="flex gap-1">
+              {(["picture", "title"] as const).map((o) => (
+                <Button
+                  key={o}
+                  role="radio"
+                  aria-checked={order === o}
+                  size="sm"
+                  variant={order === o ? "default" : "outline"}
+                  onClick={() => setOrder(o)}
+                >
+                  {o === "picture" ? "Picture first" : "Title first"}
+                </Button>
+              ))}
+            </div>
           </div>
         </header>
         <ul className="flex flex-col border-t border-border">
           {TAKES.filter((t) => !only || only.includes(t.id)).map((t) => (
-            <Row key={t.id} {...t} hl={hl} backdrop={backdrop} cards={cards} layout={layout} exit={exit} />
+            <Row key={t.id} {...t} hl={hl} backdrop={backdrop} cards={cards} layout={layout} exit={exit} order={order} />
           ))}
         </ul>
       </div>
