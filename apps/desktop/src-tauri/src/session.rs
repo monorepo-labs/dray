@@ -2497,9 +2497,14 @@ impl SessionManager {
     /// The child goes first and its lock is released before the disk work, so a
     /// dying process can't append one last event to a file we just removed.
     ///
+    /// Every client hears [`SESSION_DELETED`](crate::orchestration::SESSION_DELETED)
+    /// once the entry is gone, and the worktree and files go after the answer:
+    /// `git worktree remove` on a tree holding `node_modules` and `target/`
+    /// took long enough that a phone's delete looked stuck (#1521).
+    ///
     /// `with_children` false leaves its hidden children be: a bot's task's
     /// sub-tasks outlive it ([`crate::bots::keeps_children`]).
-    pub async fn delete(&self, session_id: &str, with_children: bool) -> Result<bool> {
+    pub async fn delete(&self, session_id: &str, with_children: bool, sink: &Sink) -> Result<bool> {
         // A hidden child is listed nowhere on screen, so it goes with
         // it. Here rather than in the frontend, which holds one side of the
         // settled split and can miss a child sitting on the other.
@@ -2508,57 +2513,77 @@ impl SessionManager {
             false => Vec::new(),
         };
         for child in children {
-            Box::pin(self.delete(&child.session_id, true)).await?;
+            Box::pin(self.delete(&child.session_id, true, sink)).await?;
         }
 
         self.settle(session_id).await?;
 
-        // Best-effort for the same reason the attachments below are, and with
-        // one cost worth naming: a removal that fails here orphans the tree
-        // with no UI left to retry from, since the row it hung off is about to
-        // go. `git worktree remove` by hand is the recovery. Failing the
-        // delete instead would be worse — the session the user asked to be rid
-        // of would still be there.
-        //
-        // Deliberately *not* covered by the card the frontend raises when
-        // [`remove_worktree`] above is refused. That card corrects a "Deleted"
-        // the reader was shown and sends them back to the session to try again;
-        // here they were shown nothing to correct, and the session it would be
-        // keyed to is the one being deleted — so it would be a card about a row
-        // that is gone, whose button leads nowhere. Saying this properly means
-        // naming the orphaned path with no session behind it, which is a
-        // channel of its own and not this one.
-        if let Some(item) = get_session_index_item(session_id).await? {
-            if let Err(e) = remove_session_worktree(&item).await {
-                eprintln!("could not remove worktree for {session_id}: {e}");
-            }
+        let item = get_session_index_item(session_id).await?;
+        let existed = delete_session(session_id).await?;
+        let event = crate::orchestration::SessionDeletedEvent { session_id: session_id.to_string() };
+        if let Err(e) = sink.emit(crate::orchestration::SESSION_DELETED, &event) {
+            eprintln!("[delete emit err] {e}");
         }
+        let id = session_id.to_string();
+        tokio::spawn(async move { sweep_deleted(&id, item).await });
+        Ok(existed)
+    }
+}
 
-        // Best-effort: the images are a convenience for the transcript that is
-        // about to stop existing, so failing to remove them must not fail the
-        // delete the user asked for.
-        if let Err(e) = attachments::delete_session_attachments(session_id).await {
-            eprintln!("could not delete attachments for {session_id}: {e}");
+/// One deleted session's leftovers at a time: two `git worktree remove`s in one
+/// repo race on its worktree list, and a parent's delete sweeps its children's.
+static SWEEPS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// What a delete leaves on disk once its entry is gone: worktree, attachments,
+/// recordings, pi's own transcript. Each best-effort, since the session they
+/// served no longer exists to fail.
+async fn sweep_deleted(session_id: &str, item: Option<SessionIndexItem>) {
+    let _one_at_a_time = SWEEPS.lock().await;
+    // Best-effort for the same reason the attachments below are, and with
+    // one cost worth naming: a removal that fails here orphans the tree
+    // with no UI left to retry from, since the row it hung off has gone.
+    // `git worktree remove` by hand is the recovery. Failing the
+    // delete instead would be worse — the session the user asked to be rid
+    // of would still be there.
+    //
+    // Deliberately *not* covered by the card the frontend raises when
+    // [`remove_worktree`] above is refused. That card corrects a "Deleted"
+    // the reader was shown and sends them back to the session to try again;
+    // here they were shown nothing to correct, and the session it would be
+    // keyed to is the one being deleted — so it would be a card about a row
+    // that is gone, whose button leads nowhere. Saying this properly means
+    // naming the orphaned path with no session behind it, which is a
+    // channel of its own and not this one.
+    if let Some(item) = item {
+        if let Err(e) = remove_session_worktree(&item).await {
+            eprintln!("could not remove worktree for {session_id}: {e}");
         }
-        // Files on this disk whichever browser made them, so both are swept
-        // whether or not the app that filmed one is open.
-        #[cfg(feature = "cef")]
-        crate::cef::automation::delete_recordings(session_id);
-        #[cfg(any(feature = "serve", feature = "desktop"))]
-        crate::headless::automation::delete_recordings(session_id);
-
-        // pi keeps its own transcript beside Dray's, because the *file* is its
-        // resume handle. Left behind it is a whole conversation on disk that
-        // nothing can ever reach again, the index entry naming it having just
-        // gone. Best-effort and unconditional: a non-pi session has no such
-        // file, and a missing one reads as done.
-        if let Err(e) = crate::store::delete_pi_session_file(session_id).await {
-            eprintln!("could not delete pi's session file for {session_id}: {e}");
-        }
-
-        delete_session(session_id).await
     }
 
+    // Best-effort: the images are a convenience for the transcript that is
+    // about to stop existing, so failing to remove them must not fail the
+    // delete the user asked for.
+    if let Err(e) = attachments::delete_session_attachments(session_id).await {
+        eprintln!("could not delete attachments for {session_id}: {e}");
+    }
+    // Files on this disk whichever browser made them, so both are swept
+    // whether or not the app that filmed one is open.
+    #[cfg(feature = "cef")]
+    crate::cef::automation::delete_recordings(session_id);
+    #[cfg(any(feature = "serve", feature = "desktop"))]
+    crate::headless::automation::delete_recordings(session_id);
+
+    // pi keeps its own transcript beside Dray's, because the *file* is its
+    // resume handle. Left behind it is a whole conversation on disk that
+    // nothing can ever reach again, the index entry naming it having just
+    // gone. Best-effort and unconditional: a non-pi session has no such
+    // file, and a missing one reads as done.
+    if let Err(e) = crate::store::delete_pi_session_file(session_id).await {
+        eprintln!("could not delete pi's session file for {session_id}: {e}");
+    }
+}
+
+impl SessionManager {
     /// Moves a session's unread mark: `Completed` → `Idle` on a read, `Idle` →
     /// `Completed` on an unread, anything else untouched. Returns the status as
     /// written, `None` for no change.

@@ -408,6 +408,11 @@ struct TitleEvent: Decodable {
     let title: String
 }
 
+/// `session_deleted`: another client deleted a session.
+struct DeletedEvent: Decodable {
+    let sessionId: String
+}
+
 struct SendOutcome: Decodable {
     /// The new index entry, flattened into a snapshot; only on the send that created it.
     let snapshot: SessionItem?
