@@ -61,6 +61,8 @@ enum Theme {
     static let destructive = Color(hex: 0xFF6467)
     /// `--accent-merged`: a merged PR.
     static let merged = Color(hex: 0xA855F7)
+    /// GitHub's own closed purple on dark: a closed issue's number on a bot's issue card.
+    static let closedIssue = Color(hex: 0xA371F7)
     /// `--accent-merge`: GitHub's own green, on the merge button alone.
     static let merge = Color(hex: 0x238636)
     /// `--accent-mention`: a link in prose, far from the yellow so it never reads as a mark.

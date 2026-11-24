@@ -534,6 +534,9 @@ enum Payload: Decodable {
     case subagentCompleted(agentId: String)
     /// A merge card a bot posted, or Dray did once the PR was ready.
     case mergeCard(MergeCard)
+    /// GitHub issues a bot showed the reader, and one the reader handed back to it.
+    case issueCard(IssueCard)
+    case issueApproved(cardId: String, number: Int)
     /// A session a bot chat started, logged by the server as it made it.
     case taskStarted(taskId: String, title: String?)
     /// Lessons a bot turn filed, one per file, and one taken back.
@@ -605,6 +608,11 @@ enum Payload: Decodable {
                 self = .error(try c.decode(String.self, forKey: "message"))
             case "merge_card":
                 self = .mergeCard(try MergeCard(from: decoder))
+            case "issue_card":
+                self = .issueCard(try IssueCard(from: decoder))
+            case "issue_approved":
+                self = .issueApproved(cardId: try c.decode(String.self, forKey: "cardId"),
+                                      number: try c.decode(Int.self, forKey: "number"))
             case "task_started":
                 self = .taskStarted(taskId: try c.decode(String.self, forKey: "taskId"),
                                     title: try? c.decode(String.self, forKey: "title"))
@@ -667,6 +675,28 @@ struct MergeCard: Decodable, Hashable {
     /// Where `pr_marks` and `merge_pr` run on the chat's server: the checkout, or for a
     /// task on another machine the GitHub slug, read through `gh` (`cardRepo`).
     var prPath: String { repo.map { "github:\($0)" } ?? projectPath }
+}
+
+/// `dray session issue-card`'s card: one repo's issues, as GitHub had them when posted.
+struct IssueCard: Decodable, Hashable {
+    /// `owner/name`.
+    let repo: String
+    let issues: [IssueCardRow]
+}
+
+struct IssueCardRow: Decodable, Hashable, Identifiable {
+    let number: Int
+    let title: String
+    let url: String
+    let closed: Bool
+    /// The issues page's `IssueLabel`, apart because Dray Island compiles this file without that one.
+    let labels: [Label]
+    var id: Int { number }
+
+    struct Label: Decodable, Hashable {
+        let name: String
+        let color: String
+    }
 }
 
 /// One file a bot's turn changed under its instructions, skills or memory.
