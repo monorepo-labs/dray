@@ -27,17 +27,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.isImeVisible
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.runtime.key
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.Dp
-import com.yogesh.dray.wire.Bot
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -80,6 +69,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.runtime.mutableFloatStateOf
+import com.yogesh.dray.store.OpenIntoBot
 import com.yogesh.dray.model.ListRow
 import com.yogesh.dray.model.SessionKey
 import com.yogesh.dray.model.Stage
@@ -124,8 +118,8 @@ fun ListScreen(
     val connected = store.live.count { store.serverState[it.id] == ConnState.Connected }
 
     var newBot by remember { mutableStateOf(false) }
-    // How tall the bots under the dock last stood: the list scrolls its last row clear of them.
-    var botsHeight by remember { mutableStateOf(0.dp) }
+    var listTop by remember { mutableFloatStateOf(0f) }
+    var botsFoot by remember { mutableFloatStateOf(0f) }
     // The row whose Delete is waiting on its confirm.
     var deleting by remember { mutableStateOf<ListRow?>(null) }
     LoneBot(settled, openSession, startBot)
@@ -198,7 +192,8 @@ fun ListScreen(
         ) {
             val rows = runs.flatMap { it.rows }
             val empty = !settled && !drafts && runs.isEmpty()
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 12.dp, bottom = 120.dp + botsHeight)) {
+            val bots = if (settled || drafts) emptyList() else store.allBots
+            LazyColumn(Modifier.fillMaxSize().onGloballyPositioned { listTop = it.positionInWindow().y }, contentPadding = PaddingValues(top = 12.dp, bottom = 120.dp)) {
                 for (s in store.live) {
                     val h = store.health(s.id) ?: continue
                     if (store.serverState[s.id] != ConnState.Connected && !h.needsYou) continue
@@ -208,9 +203,19 @@ fun ListScreen(
                         }
                     }
                 }
+                // Bots lead the live list, as on the desktop: a bot belongs to no project, so no filter narrows them.
+                bots.forEachIndexed { i, (server, bot) ->
+                    item("bot-$server-${bot.id}") {
+                        val chat = store.botChat(server, bot).lastOrNull()
+                        // The last bot's foot is where an empty list's screen starts, so it never draws over them.
+                        Box(if (i == bots.lastIndex) Modifier.onGloballyPositioned { botsFoot = it.positionInWindow().y + it.size.height } else Modifier) {
+                            BotListRow(server, bot, chat) { if (chat != null) openSession(chat) else startBot(server, bot.id) }
+                        }
+                    }
+                }
                 if (names.size > 1 && (filter != null || rows.isNotEmpty())) {
                     item("projects") { ProjectStrip(names, filter) { project = it } }
-                }
+                } else if (bots.isNotEmpty() && rows.isNotEmpty()) item("bots-gap") { Spacer(Modifier.height(16.dp)) }
                 if (drafts) {
                     val shownDrafts = draftRows.filter { filter == null || it.second.project == filter }
                     draftsError?.let { err ->
@@ -283,13 +288,12 @@ fun ListScreen(
                 }
                 if (shown < rows.size) item("more") { LaunchedEffect(Unit) { shown += PAGE }; Spacer(Modifier.height(1.dp)) }
             }
-            if (empty) Box(Modifier.padding(bottom = botsHeight)) { EmptyList(filter, addServer, openSettings) }
+            if (empty) {
+                val above = if (bots.isEmpty()) 0.dp else with(LocalDensity.current) { (botsFoot - listTop).coerceAtLeast(0f).toDp() }
+                Box(Modifier.padding(top = above)) { EmptyList(filter, addServer, openSettings) }
+            }
         }
-        val bots = if (drafts) emptyList() else store.allBots
-        LaunchedEffect(bots.isEmpty()) { if (bots.isEmpty()) botsHeight = 0.dp }
-        if (!settled) NewTaskDock(openSession, Modifier.align(Alignment.BottomCenter), footer = if (bots.isEmpty()) null else ({
-            DockBots(bots, openSession, startBot) { botsHeight = it }
-        }))
+        if (!settled) NewTaskDock(openSession, Modifier.align(Alignment.BottomCenter))
         }
     }
     if (newBot) BotSheet(editing = null, close = { newBot = false }, started = openSession)
@@ -306,7 +310,7 @@ private fun LoneBot(settled: Boolean, openSession: (SessionKey) -> Unit, startBo
     val store = LocalStore.current
     var chance by rememberSaveable { mutableStateOf(true) }
     val lone = if (chance && !settled && store.live.isNotEmpty() && store.live.all { store.known(it.id) } &&
-        store.allBots.size == 1 && store.runs(null).isEmpty()) store.allBots.first() else null
+        !OpenIntoBot.on && store.allBots.size == 1 && store.runs(null).isEmpty()) store.allBots.first() else null
     LaunchedEffect(lone) {
         val (server, bot) = lone ?: return@LaunchedEffect
         chance = false
@@ -315,30 +319,6 @@ private fun LoneBot(settled: Boolean, openSession: (SessionKey) -> Unit, startBo
     LaunchedEffect(settled) { if (settled) chance = false }
     // A server slower than this to answer never opens its bot.
     LaunchedEffect(Unit) { delay(10_000); chance = false }
-}
-
-/**
- * The bots, under the new-task dock where a thumb rests rather than atop the list. A bot belongs to
- * no project, so no filter narrows them. Past three rows they scroll in place, the fourth peeking.
- * With the keyboard up they step aside, so the field sits on the keyboard as it does with no bots.
- */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun DockBots(bots: List<Pair<String, Bot>>, openSession: (SessionKey) -> Unit, startBot: (String, String) -> Unit, measured: (Dp) -> Unit) {
-    val store = LocalStore.current
-    val density = LocalDensity.current
-    if (WindowInsets.isImeVisible) return
-    Column(
-        Modifier.onSizeChanged { measured(with(density) { it.height.toDp() }) }
-            .fillMaxWidth().heightIn(max = 232.dp).verticalScroll(rememberScrollState()).padding(bottom = 4.dp),
-    ) {
-        bots.forEach { (server, bot) ->
-            key(server, bot.id) {
-                val chat = store.botChat(server, bot).lastOrNull()
-                BotListRow(server, bot, chat) { if (chat != null) openSession(chat) else startBot(server, bot.id) }
-            }
-        }
-    }
 }
 
 @Composable

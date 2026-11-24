@@ -58,7 +58,6 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -115,10 +114,6 @@ fun VoiceDock(
     header: (@Composable () -> Unit)? = null,
     /** The words were discarded, not sent: what they came from lets go of them. */
     discarded: () -> Unit = {},
-    /** Dims the orb and picks, never the footer: nothing connected says nothing about the rows under them. */
-    dimmed: Boolean = false,
-    /** Rows under the picks, edge to edge, drawn only while the dock rests: the list's bots. */
-    footer: (@Composable () -> Unit)? = null,
 ) {
     val store = LocalStore.current
     val haptics = LocalHapticFeedback.current
@@ -168,11 +163,9 @@ fun VoiceDock(
     }
 
     // The page showing through at rest, and nearly closed over the list once open.
-    // The resting fade is measured, not a share of the dock, so a tall footer never stretches it over the orb.
-    val restFade = with(LocalDensity.current) { 68.dp.toPx() }
     val backdrop = when {
         !covers -> Brush.verticalGradient(0f to Dray.page.copy(alpha = 0f), 0.22f to Dray.page)
-        phase == DockPhase.Rest -> Brush.verticalGradient(listOf(Dray.page.copy(alpha = 0f), Dray.page), endY = restFade)
+        phase == DockPhase.Rest -> Brush.verticalGradient(0f to Dray.page.copy(alpha = 0f), 0.26f to Dray.page)
         phase == DockPhase.Ready -> Brush.verticalGradient(listOf(Dray.page.copy(alpha = 0.97f), Dray.page))
         else -> Brush.verticalGradient(0f to Dray.page.copy(alpha = 0.6f), 0.45f to Dray.page.copy(alpha = 0.88f), 0.7f to Dray.page)
     }
@@ -185,53 +178,48 @@ fun VoiceDock(
             // Open, the dock is the screen: a touch on it never reaches the list behind.
             .then(if (open && covers) Modifier.clickable(remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, null) {} else Modifier)
             .navigationBarsPadding()
+            .padding(horizontal = 20.dp)
             .padding(top = if (open && covers) 0.dp else if (covers) 44.dp else 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Bottom,
     ) {
-        Column(
-            Modifier.fillMaxWidth().then(if (open && covers) Modifier.weight(1f) else Modifier)
-                .alpha(if (dimmed) 0.3f else 1f).padding(horizontal = 20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Bottom,
-        ) {
-            header?.invoke()
-            if (phase == DockPhase.Ready) {
-                if (covers) SpokenText(text, Modifier.weight(1f)) { edit() } else WaitingBubble(text) { edit() }
-            } else if (open && covers) {
-                Spacer(Modifier.weight(1f))
-            }
-            if (!open) {
-                val line = hint ?: note
-                if (line != null) KeptNote(line, draft, Modifier.padding(bottom = 14.dp))
-                else if (!typing) Text("Swipe up to type", Modifier.padding(bottom = 14.dp), style = Dray.Font.footnote.copy(color = Dray.tertiary))
-            }
-            Column(
-                Modifier.fillMaxWidth().padding(bottom = if (footer != null && !open) 10.dp else 24.dp).pointerSwipeUp(phase == DockPhase.Rest && !typing) { edit() },
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                if (typing) {
-                    ChatField(words.field, text, { store.drafts[draft] = it }, sending, sendable = ready && !sending, send = start)
-                } else {
-                    DockOrb(draft, if (open && phase != DockPhase.Ready) 120.dp else 76.dp, ::tapped, Modifier.animateContentSize())
-                }
-                AnimatedVisibility(open, enter = fadeIn(), exit = fadeOut()) {
-                    DockActions(
-                        draft, phase, confirming, note, sending, ready,
-                        onConfirm = { confirming = it },
-                        onStart = start,
-                        onDiscard = {
-                            if (phase == DockPhase.Ready) { store.drafts.remove(draft); clearFailure(); discarded() } else Dictations.cancel(draft)
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        },
-                        saveDraft = saveDraft,
-                        discardAsks = phase != DockPhase.Ready || hasText,
-                        words = words,
-                        modifier = Modifier.padding(top = 24.dp),
-                    )
-                }
-                Box(Modifier.padding(top = if (open) 18.dp else 14.dp)) { picks(if (typing || busy) null else ::edit) }
-            }
+        header?.invoke()
+        if (phase == DockPhase.Ready) {
+            if (covers) SpokenText(text, Modifier.weight(1f)) { edit() } else WaitingBubble(text) { edit() }
+        } else if (open && covers) {
+            Spacer(Modifier.weight(1f))
         }
-        if (!open) footer?.invoke()
+        if (!open) {
+            val line = hint ?: note
+            if (line != null) KeptNote(line, draft, Modifier.padding(bottom = 14.dp))
+            else if (!typing) Text("Swipe up to type", Modifier.padding(bottom = 14.dp), style = Dray.Font.footnote.copy(color = Dray.tertiary))
+        }
+        Column(
+            Modifier.fillMaxWidth().padding(bottom = 24.dp).pointerSwipeUp(phase == DockPhase.Rest && !typing) { edit() },
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            if (typing) {
+                ChatField(words.field, text, { store.drafts[draft] = it }, sending, sendable = ready && !sending, send = start)
+            } else {
+                DockOrb(draft, if (open && phase != DockPhase.Ready) 120.dp else 76.dp, ::tapped, Modifier.animateContentSize())
+            }
+            AnimatedVisibility(open, enter = fadeIn(), exit = fadeOut()) {
+                DockActions(
+                    draft, phase, confirming, note, sending, ready,
+                    onConfirm = { confirming = it },
+                    onStart = start,
+                    onDiscard = {
+                        if (phase == DockPhase.Ready) { store.drafts.remove(draft); clearFailure(); discarded() } else Dictations.cancel(draft)
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    },
+                    saveDraft = saveDraft,
+                    discardAsks = phase != DockPhase.Ready || hasText,
+                    words = words,
+                    modifier = Modifier.padding(top = 24.dp),
+                )
+            }
+            Box(Modifier.padding(top = if (open) 18.dp else 14.dp)) { picks(if (typing || busy) null else ::edit) }
+        }
     }
     if (editing) TextSheet(sheetTitle, text, { store.drafts[draft] = it }) { editing = false }
 }

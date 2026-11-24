@@ -9,6 +9,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import com.yogesh.dray.store.OpenIntoBot
+import com.yogesh.dray.store.allBots
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -123,12 +125,49 @@ fun SettingsScreen(focus: String?, back: () -> Unit, dictation: () -> Unit = {},
                 SettingsRow("Notifications", icon = { Icon(Icons.Outlined.Notifications, null, Modifier.size(20.dp), tint = Dray.secondary) },
                     value = if (com.yogesh.dray.push.Push.enabled && com.yogesh.dray.push.Push.available) "On" else "Off", onClick = notifications)
             }
+            OpenIntoBotGroup()
             About()
         }
         Page.Servers -> SettingsPage("Servers", ::pop) {
             ServerCards(null, open = { pages.add(Page.Server(it)) }, all = {}, add = add)
         }
         is Page.Server -> ServerDetail(page.id, ::pop)
+    }
+}
+
+/** "Open into a bot": its switch, and while on, every bot to pick from, the one it opens checked. */
+@Composable
+private fun OpenIntoBotGroup() {
+    val store = LocalStore.current
+    val bots = store.allBots
+    val target = OpenIntoBot.target(bots)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        RowGroup {
+            SwitchRow("Open into a bot", OpenIntoBot.on) { OpenIntoBot.turn(it) }
+            if (OpenIntoBot.on) bots.forEach { (server, bot) ->
+                RowDivider()
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable { OpenIntoBot.pick(server, bot.id) }.padding(start = 16.dp, end = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    BotFace(bot, 24.dp)
+                    Column(Modifier.weight(1f)) {
+                        Text(bot.name, style = Dray.Font.body, maxLines = 1)
+                        // Two servers can each hold a bot of one name.
+                        if (store.live.size > 1) Text(store.name(server), style = Dray.Font.footnote.copy(color = Dray.tertiary), maxLines = 1)
+                    }
+                    if (target?.first == server && target.second.id == bot.id) Icon(Icons.Filled.Check, "Opens at launch", Modifier.size(20.dp), tint = Dray.text)
+                }
+            }
+        }
+        GroupLabel(
+            when {
+                !OpenIntoBot.on -> "Open Dray on a bot's chat at launch. Back goes to your tasks."
+                bots.isEmpty() -> "No bots yet. Make one with + on the list."
+                else -> "Dray opens on the checked bot's chat at launch. Back goes to your tasks."
+            },
+        )
     }
 }
 

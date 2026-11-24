@@ -15,6 +15,12 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import com.yogesh.dray.store.OpenIntoBot
+import com.yogesh.dray.store.allBots
+import com.yogesh.dray.store.botChat
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -117,6 +123,18 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
         push(Route.Session(SessionKey(store.shownAs(key.server), key.id)))
     }
     LaunchedEffect(stack.last()) { Push.viewing = (stack.last() as? Route.Session)?.key }
+    // Settings' "Open into a bot", once per launch, over the list so back lands there. Anything that
+    // leaves the list first — an alert, a link, the reader's own tap — spends it, as does a slow server.
+    var launchSpent by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(stack.size) { if (stack.size > 1) launchSpent = true }
+    LaunchedEffect(Unit) { delay(10_000); launchSpent = true }
+    val launchBot = if (!launchSpent && OpenIntoBot.on && store.live.isNotEmpty() && store.live.all { store.known(it.id) })
+        OpenIntoBot.target(store.allBots) else null
+    LaunchedEffect(launchBot) {
+        val (server, bot) = launchBot ?: return@LaunchedEffect
+        launchSpent = true
+        store.botChat(server, bot).lastOrNull()?.let { push(Route.Session(it)) } ?: push(Route.BotStart(server, bot.id))
+    }
     NotificationAsk()
     val holder = rememberSaveableStateHolder()
     val context = LocalContext.current

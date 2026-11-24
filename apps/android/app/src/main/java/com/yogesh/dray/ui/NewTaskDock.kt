@@ -65,7 +65,7 @@ val LocalNewTask = compositionLocalOf<NewTask> { error("No NewTask provided") }
  * keyboard edits the words in a sheet, and a swipe up opens it. VoiceDock.swift.
  */
 @Composable
-fun NewTaskDock(started: (SessionKey) -> Unit, modifier: Modifier = Modifier, footer: (@Composable () -> Unit)? = null) {
+fun NewTaskDock(started: (SessionKey) -> Unit, modifier: Modifier = Modifier) {
     val store = LocalStore.current
     val task = LocalNewTask.current
     val scope = rememberCoroutineScope()
@@ -95,10 +95,8 @@ fun NewTaskDock(started: (SessionKey) -> Unit, modifier: Modifier = Modifier, fo
             // Open while any machine is up: a draft pinned to one that went down still needs a way to move elsewhere.
             Picks(task, server?.let { store.name(it) }, edit) { if (task.connected.isNotEmpty()) picking = true }
         },
-        modifier = modifier,
         // Dim while nothing is connected: the screen above says why.
-        dimmed = server == null,
-        footer = footer,
+        modifier = modifier.alpha(if (server == null) 0.3f else 1f),
         saveDraft = { scope.launch { task.saveDraft() } },
         draft = NEW_SESSION,
         discarded = task::forgetDraft,

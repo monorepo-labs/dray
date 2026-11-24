@@ -41,6 +41,11 @@ reads and drives it over the same WebSocket the desktop and iOS use
 - **Permission and question cards**, answered in place, in the transcript and
   under the row in the list.
 - **Servers** in Settings: state, on/off, Fix, remove, add.
+- **Open into a bot** in Settings (#1517), off unless turned on: the app opens
+  on the picked bot's chat at launch (the first bot where none is picked, or
+  the picked one is gone), over the list so back lands there. An alert, a
+  link or any move off the list first spends it. It stands in for the lone-bot
+  open while on (`OpenIntoBot`).
 
 - **Dictation** (`voice/`, Dictation.swift): per draft, outliving the screen
   that started it. Two engines: Android's `SpeechRecognizer` on the phone
@@ -52,9 +57,6 @@ reads and drives it over the same WebSocket the desktop and iOS use
   as OrbDriver/OrbClock do. The list's foot is VoiceDock (orb, then Cancel and
   Done, then the words and Start task); its picks and start are a stand-in
   until New task lands (`NewTaskDock`). Debug builds carry `OrbDemoActivity`.
-  **The bots sit under the dock**, not atop the list (#1517): the thumb rests
-  there. Past three they scroll in place; with the keyboard up, or the dock
-  open, they step aside.
 - **Push** (`push/`, Push.swift on FCM): the FCM token is sealed by the relay
   (`/api/push/register` with `platform: "android"`) into a handle each server
   gets with `push_register`, exactly as iOS hands its APNs handle over; the
