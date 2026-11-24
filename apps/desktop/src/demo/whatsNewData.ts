@@ -111,7 +111,7 @@ export const NEXT_RELEASE: Highlight[] = [
   page(
     "OpenCode is now in Dray.",
     "Pick OpenCode in the composer and run it like any other agent, with your own models and providers.",
-    [{ kind: "image", url: "/demo/whats-new/opencode-composer.png", alt: "The composer's agent menu with OpenCode picked" }],
+    [{ kind: "image", url: "/demo/whats-new/opencode-logo.png", alt: "The OpenCode logo" }],
   ),
 ];
 

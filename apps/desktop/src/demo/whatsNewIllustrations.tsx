@@ -367,6 +367,17 @@ function OpenCodeRow() {
   );
 }
 
+/// OpenCode's mark alone, centred, its counter's shade lighter on white as the
+/// site draws it in light.
+function OpenCodeLogo() {
+  return (
+    <svg aria-hidden viewBox="0 0 240 300" className={cn("h-[88px]", WHITE ? "text-[#0A0A0A]" : "text-white")} fill="currentColor">
+      <path d="M180 240H60V120H180V240Z" opacity={WHITE ? 0.2 : 0.28} />
+      <path d="M180 60H60V240H180V60ZM240 300H0V0H240V300Z" />
+    </svg>
+  );
+}
+
 /// The App Store link as a scannable code, dark on white with the four-module
 /// quiet zone the spec asks for, since the tile around it is dark.
 function Qr({ size }: { size: number }) {
@@ -553,6 +564,7 @@ const ROWS: { title: string; takes: Record<string, { name: string; Art: () => Re
       "opencode-composer": { name: "A · Picked in the composer", Art: OpenCodeComposer },
       "opencode-chat": { name: "B · OpenCode answers", Art: OpenCodeChat },
       "opencode-row": { name: "C · Sixth in the row", Art: OpenCodeRow },
+      "opencode-logo": { name: "D · The logo alone", Art: OpenCodeLogo },
     },
   },
 ];
