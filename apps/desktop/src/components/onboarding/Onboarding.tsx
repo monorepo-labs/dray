@@ -230,9 +230,18 @@ function MeetBot({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }
   return (
     <main className="relative flex flex-1 items-center justify-center overflow-y-auto px-10 pb-10">
       <div className="flex w-full max-w-[960px] flex-col">
-        <div className="ob-in flex items-center gap-4">
-          <BotAvatar seed={bot?.id ?? "dray"} avatar={bot?.avatar} follow className="size-12" />
-          <h1 className="text-[36px] leading-10 font-light tracking-[-0.03em]">Meet Dray Bot.</h1>
+        <div className="flex items-start justify-between gap-10">
+          <div className="ob-in flex shrink-0 items-center gap-4">
+            <BotAvatar seed={bot?.id ?? "dray"} avatar={bot?.avatar} follow className="size-12" />
+            <h1 className="text-[36px] leading-10 font-light tracking-[-0.03em]">Meet Dray Bot.</h1>
+          </div>
+          <div className="ob-in flex max-w-[440px] flex-col gap-2 pt-1" style={{ animationDelay: "60ms" }}>
+            <p className="text-[15px] leading-6 text-white/70">
+              Dray Bot is how I work these days. I tell it what I want, and it starts the tasks, keeps them moving and only
+              comes back when it needs me. Far calmer than watching every task myself.
+            </p>
+            <p className="text-[13px] leading-[18px] text-white/40">Yogesh, who makes Dray</p>
+          </div>
         </div>
         <div className="ob-in mt-8" style={{ animationDelay: "120ms" }}>
           <BotTiles />

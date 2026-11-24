@@ -11,6 +11,8 @@ const SHINE_AT = 1600;
 const LIT_AT = SHINE_AT + 500;
 const LOGO_OUT_AT = 4600;
 const TEXT_AT = 5200;
+/// Each word of the welcome rises a beat after the one before it.
+const WORD_STEP = 120;
 const NEXT_AT = 9200;
 
 /// The Dray wordmark, mark and letters, as apps/web's `Wordmark` draws it.
@@ -59,17 +61,18 @@ export default function Welcome({ onNext }: { onNext: () => void }) {
     <main className="relative grid flex-1 place-items-center pb-24">
       <div className="ob-out col-start-1 row-start-1" style={delay(LOGO_OUT_AT)}>
         <div className="ob-fade" style={delay(100)}>
-          <div className="relative h-8 w-[155px] overflow-hidden" style={MASK}>
+          <div className="relative h-[26px] w-[126px] overflow-hidden" style={MASK}>
             <div className="ob-lit absolute inset-0 bg-white" style={delay(LIT_AT)} />
             <div className="ob-shine absolute inset-y-0 -left-full w-[300%]" style={delay(SHINE_AT)} />
           </div>
         </div>
       </div>
-      <h1
-        className="ob-in col-start-1 row-start-1 text-[44px] leading-[52px] font-light tracking-[-0.03em] text-white"
-        style={delay(TEXT_AT)}
-      >
-        Welcome to Dray
+      <h1 className="col-start-1 row-start-1 flex gap-[0.25em] text-[44px] leading-[52px] font-light tracking-[-0.03em] text-white">
+        {["Welcome", "to", "Dray"].map((word, i) => (
+          <span key={word} className="ob-in inline-block" style={delay(TEXT_AT + i * WORD_STEP)}>
+            {word}
+          </span>
+        ))}
       </h1>
     </main>
   );
