@@ -41,7 +41,7 @@ The session's Changes, Files and PR tabs all read the worktree, not the project'
 A new worktree starts from your remote's default branch, `origin/main` or whatever `origin` names as default, not from the branch you have checked out. Uncommitted work and local commits in your main checkout are not in it.
 
 - **Claude Code** fetches first, so the base is the latest `origin/main`. If the fetch fails, it starts from your local `HEAD`.
-- **Codex, pi, fx and Grok** start from `origin/main` as your clone last fetched it; Dray does not fetch. A repo with no remote starts from `HEAD`.
+- **Codex, pi, fx, Grok and OpenCode** start from `origin/main` as your clone last fetched it; Dray does not fetch. A repo with no remote starts from `HEAD`.
 
 ## Delete a worktree
 
