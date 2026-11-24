@@ -8,6 +8,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { Bot, SessionIndexItem } from "@/types/events";
 
@@ -22,8 +23,9 @@ function Mark({ bot }: { bot: Bot | undefined }): ReactNode {
 }
 
 /// Tasks linked to a row's issue or pull request, as a chip shaped like the
-/// issue row's PR chip. One task opens on a click, several open a menu. A span
-/// with `role="button"`, since the rows it sits in are `role="button"` divs.
+/// issue row's PR chip: the newest task's mark, and a count only past one. One
+/// task opens on a click, several open a menu. A span with `role="button"`,
+/// since the rows it sits in are `role="button"` divs.
 export default function TaskChip({
   tasks,
   botOf,
@@ -38,18 +40,21 @@ export default function TaskChip({
 }) {
   if (tasks.length === 0) return null;
   const latest = tasks[0];
+  const bot = botOf(latest);
   const chip = (props: React.HTMLAttributes<HTMLSpanElement>) => (
     <span
       role="button"
       tabIndex={0}
+      aria-label={tasks.length === 1 ? `Open task ${latest.title}` : `${tasks.length} tasks`}
       {...props}
       className={cn(
-        "inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-border px-1.5 py-px text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground",
+        "inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-border py-px text-muted-foreground tabular-nums transition-colors hover:bg-sidebar-accent hover:text-foreground",
+        tasks.length > 1 ? "px-1.5" : "px-1",
         className,
       )}
     >
-      <Mark bot={botOf(latest)} />
-      {tasks.length === 1 ? "1 task" : `${tasks.length} tasks`}
+      <Mark bot={bot} />
+      {tasks.length > 1 && tasks.length}
     </span>
   );
 
@@ -58,15 +63,21 @@ export default function TaskChip({
       e.stopPropagation();
       onOpen(latest);
     };
-    return chip({
-      title: latest.title,
-      onClick: open,
-      onKeyDown: (e) => {
-        if (e.key !== "Enter" && e.key !== " ") return;
-        e.preventDefault();
-        open(e);
-      },
-    });
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {chip({
+            onClick: open,
+            onKeyDown: (e) => {
+              if (e.key !== "Enter" && e.key !== " ") return;
+              e.preventDefault();
+              open(e);
+            },
+          })}
+        </TooltipTrigger>
+        <TooltipContent>{bot ? `${bot.name} · ${latest.title}` : latest.title}</TooltipContent>
+      </Tooltip>
+    );
   }
 
   return (
