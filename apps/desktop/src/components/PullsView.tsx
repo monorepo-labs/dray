@@ -386,7 +386,7 @@ function PullRow({
         <TaskChip tasks={sessions} botOf={botOf} onOpen={onOpenSession} onMany={onPick} className="hidden @md:inline-flex" />
       ) : (
         <span className="hidden w-20 shrink-0 truncate text-muted-foreground/50 @md:inline">
-          {listing.isCrossRepository ? "Read only" : "No task"}
+          {listing.isCrossRepository && "Read only"}
         </span>
       )}
       <Avatar src={listing.authorAvatar} name={listing.author} />
