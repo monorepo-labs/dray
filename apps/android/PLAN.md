@@ -135,6 +135,12 @@ library**, its Compose port from JitPack, pinned to a tag in
 `app/build.gradle.kts` as iOS pins the Swift package. `Orb.kt` only maps an
 `OrbKind` to its state and variant. Change the drawing there, not here.
 
+**The launcher icon is the iOS icon's layout as vectors**: `res/drawable/ic_launcher_*`
+hold the mark, tile and themed (monochrome) layer, and the splash reuses the
+foreground. A vector draws no blur, so the mark's shadow and the legacy
+`ic_launcher.png`s are rendered by `scripts/launcher_icon.sh`; rerun it after
+moving the mark.
+
 ## Build and test
 
 JDK 17 and the Android SDK (platform `android-37.2`, which AndroidX needs to compile against; the app targets 36, what Play requires). AGP 9 compiles Kotlin itself, so there is no `kotlin-android` plugin: the compose plugin's version in `build.gradle.kts` is the Kotlin in use. From `apps/android`:

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed icons tint this from its alpha alone; same geometry as ic_launcher_mark. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:translateX="37.305" android:translateY="33" android:scaleX="0.21" android:scaleY="0.21">
+        <path android:fillColor="#FF000000" android:pathData="M101.004 0C104.603 1.05271e-07 107.52 2.92624 107.52 6.53595V18.3007C107.52 36.3492 122.108 50.9804 140.102 50.9804H152.484C156.083 50.9804 159 53.9066 159 57.5163V142.484C159 146.093 156.083 149.02 152.484 149.02H140.102C122.108 149.02 107.52 163.651 107.52 181.699V193.464C107.52 197.074 104.603 200 101.004 200H0.32582C0.145874 200 0 199.854 0 199.673V134.967C0 134.787 0.145874 134.641 0.32582 134.641H61.2541C79.2486 134.641 93.8361 120.009 93.8361 101.961V98.0392C93.8361 79.9907 79.2486 65.3595 61.2541 65.3595H0.32582C0.145874 65.3595 0 65.2132 0 65.0327V0.326797C0 0.146312 0.145874 0 0.32582 0H101.004Z" />
+    </group>
+</vector>
