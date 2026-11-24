@@ -3106,8 +3106,10 @@ impl Session {
             return Ok(());
         }
 
+        // OpenCode drops effort on a model change and this sends it again, so
+        // the effort arm after this compares against what the child is on.
         if let Transport::OpenCode(session) = &self.stdin {
-            crate::harness::opencode::set_model(session, model).await?;
+            self.effort = crate::harness::opencode::set_model(session, model, self.effort).await?;
             self.model = model.id.clone();
             return Ok(());
         }
