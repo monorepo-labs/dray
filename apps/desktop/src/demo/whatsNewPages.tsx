@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
-import { NEXT_RELEASE, PAGE_HIGHLIGHTS } from "@/demo/whatsNewData";
+import { NEXT_RELEASE, onWhite, PAGE_HIGHLIGHTS } from "@/demo/whatsNewData";
 import { Stripes } from "@/demo/whatsNewStripes";
 import type { ChangelogMedia, Highlight } from "@/lib/changelog";
 import { cn } from "@/lib/utils";
@@ -25,7 +25,14 @@ import "../App.css";
 /// rather than run. `?takes=ACE` lists only those. F is the one picked.
 
 type Backdrop = "black" | "blue";
-type TakeProps = { hl: Highlight[]; onAction: (label: string) => void; onClose: () => void; backdrop?: Backdrop };
+type Cards = "dark" | "white";
+type TakeProps = {
+  hl: Highlight[];
+  onAction: (label: string) => void;
+  onClose: () => void;
+  backdrop?: Backdrop;
+  cards?: Cards;
+};
 
 const title = (h: Highlight) => changelogPlain(h.item.title ?? h.item.body);
 
@@ -440,14 +447,17 @@ function TakeSpotlight({ hl, onAction, onClose }: TakeProps) {
   );
 }
 
-function ActionMono({ h, onAction }: { h: Highlight; onAction: (label: string) => void }) {
+function ActionMono({ h, onAction, white }: { h: Highlight; onAction: (label: string) => void; white?: boolean }) {
   const action = h.item.highlight?.action;
   if (!action) return null;
   return (
     <button
       type="button"
       onClick={() => onAction(action.label)}
-      className="inline-flex cursor-pointer items-center gap-1.5 self-start font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white/75 uppercase outline-none hover:text-white focus-visible:text-white"
+      className={cn(
+        "inline-flex cursor-pointer items-center gap-1.5 self-start font-mono text-[11px] leading-[14px] tracking-[0.06em] uppercase outline-none",
+        white ? "text-[#0A0A0A]/70 hover:text-[#0A0A0A] focus-visible:text-[#0A0A0A]" : "text-white/75 hover:text-white focus-visible:text-white",
+      )}
     >
       {action.label}
       <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden>
@@ -465,24 +475,35 @@ function ActionMono({ h, onAction }: { h: Highlight; onAction: (label: string) =
 /// A highlight with no picture or video is text alone: the title at the top
 /// of a card the grid stretches to its neighbour's height, the action at its
 /// foot, rather than an empty box where a picture would be.
-function LandingCard({ h, onAction }: { h: Highlight; onAction: (label: string) => void }) {
+///
+/// `white` is the white card, dark title, tried on the blue backdrop; its
+/// pictures are the `-white` captures, drawn on a white tile to match.
+function LandingCard({ h, onAction, white }: { h: Highlight; onAction: (label: string) => void; white?: boolean }) {
   const media = h.item.media[0];
+  const fill = white ? "bg-white" : "bg-[#1C1C1C]";
   const heading = (
-    <h2 className="line-clamp-2 text-[20px] leading-7 tracking-[-0.01em] text-balance text-white">{title(h)}</h2>
+    <h2
+      className={cn(
+        "line-clamp-2 text-[20px] leading-7 tracking-[-0.01em] text-balance",
+        white ? "text-[#0A0A0A]" : "text-white",
+      )}
+    >
+      {title(h)}
+    </h2>
   );
   if (!media)
     return (
-      <article className="flex flex-col justify-between gap-8 bg-[#1C1C1C] p-6">
+      <article className={cn("flex flex-col justify-between gap-8 p-6", fill)}>
         {heading}
-        <ActionMono h={h} onAction={onAction} />
+        <ActionMono h={h} onAction={onAction} white={white} />
       </article>
     );
   return (
-    <article className="flex flex-col bg-[#1C1C1C]">
-      <Media media={media} className="aspect-video w-full bg-[#1C1C1C]" />
+    <article className={cn("flex flex-col", fill)}>
+      <Media media={media} className={cn("aspect-video w-full", fill)} />
       <div className="flex flex-col gap-3 p-6">
         {heading}
-        <ActionMono h={h} onAction={onAction} />
+        <ActionMono h={h} onAction={onAction} white={white} />
       </div>
     </article>
   );
@@ -492,7 +513,8 @@ function LandingCard({ h, onAction }: { h: Highlight; onAction: (label: string) 
 /// the feature cards (#242424, the gate cards' own hover tone) with the label
 /// in full white. Solid white was tried and glared on the black. `row` lays it
 /// across both columns.
-function ContinueCard({ row, onClose }: { row: boolean; onClose: () => void }) {
+/// On white cards it is a step darker, #EDEDEF with dark type.
+function ContinueCard({ row, onClose, white }: { row: boolean; onClose: () => void; white?: boolean }) {
   const arrow = (
     <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden>
       <path d="M4 12h14M12 5l7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" />
@@ -504,7 +526,10 @@ function ContinueCard({ row, onClose }: { row: boolean; onClose: () => void }) {
       data-autofocus
       onClick={onClose}
       className={cn(
-        "flex cursor-pointer bg-[#242424] text-left text-white outline-none transition-colors hover:bg-[#2C2C2C] focus-visible:ring-1 focus-visible:ring-white/40",
+        "flex cursor-pointer text-left outline-none transition-colors focus-visible:ring-1",
+        white
+          ? "bg-[#EDEDEF] text-[#0A0A0A] hover:bg-[#E2E2E5] focus-visible:ring-black/40"
+          : "bg-[#242424] text-white hover:bg-[#2C2C2C] focus-visible:ring-white/40",
         row ? "col-span-2 h-24 items-center justify-between px-8" : "min-h-48 flex-col justify-between p-8",
       )}
     >
@@ -535,9 +560,10 @@ function ContinueCard({ row, onClose }: { row: boolean; onClose: () => void }) {
 /// Two columns throughout. Continue fills the last row's empty slot when the
 /// count is odd and takes a row of its own when it is even, so no count leaves
 /// a hole.
-function TakeLanding({ hl, onAction, onClose, backdrop = "black" }: TakeProps) {
+function TakeLanding({ hl, onAction, onClose, backdrop = "black", cards = "dark" }: TakeProps) {
   const one = hl.length === 1;
   const blue = backdrop === "blue";
+  const white = cards === "white";
   return (
     <Shell
       label="New in Dray"
@@ -556,9 +582,9 @@ function TakeLanding({ hl, onAction, onClose, backdrop = "black" }: TakeProps) {
               through the 2px gaps as a dotted line. */}
           <div className={cn("grid grid-cols-2 gap-[2px]", blue ? "bg-[#1612F8]" : "bg-black")}>
             {hl.map((h, i) => (
-              <LandingCard key={i} h={h} onAction={onAction} />
+              <LandingCard key={i} h={white ? onWhite(h) : h} onAction={onAction} white={white} />
             ))}
-            <ContinueCard row={hl.length % 2 === 0} onClose={onClose} />
+            <ContinueCard row={hl.length % 2 === 0} onClose={onClose} white={white} />
           </div>
         </div>
       </main>
@@ -605,7 +631,15 @@ const TAKES: { id: string; name: string; what: string; Take: (props: TakeProps) 
   },
 ];
 
-function Row({ id, name, what, Take, hl, backdrop }: (typeof TAKES)[number] & { hl: Highlight[]; backdrop: Backdrop }) {
+function Row({
+  id,
+  name,
+  what,
+  Take,
+  hl,
+  backdrop,
+  cards,
+}: (typeof TAKES)[number] & { hl: Highlight[]; backdrop: Backdrop; cards: Cards }) {
   const [open, setOpen] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
   const done = (line: string) => {
@@ -627,6 +661,7 @@ function Row({ id, name, what, Take, hl, backdrop }: (typeof TAKES)[number] & { 
         <Take
           hl={hl}
           backdrop={backdrop}
+          cards={cards}
           onAction={(label) => done(`action: ${label}`)}
           onClose={() => done("closed, seen")}
         />
@@ -642,6 +677,7 @@ function Demo() {
   const [count, setCount] = useState(() => Math.min(Math.max(Number(params.get("n")) || 0, 0), PAGE_HIGHLIGHTS.length));
   const hl = count === 0 ? NEXT_RELEASE : PAGE_HIGHLIGHTS.slice(0, count);
   const [backdrop, setBackdrop] = useState<Backdrop>(() => (params.get("bg") === "blue" ? "blue" : "black"));
+  const [cards, setCards] = useState<Cards>(() => (params.get("cards") === "white" ? "white" : "dark"));
   return (
     <TooltipProvider>
       <div className="mx-auto flex max-w-3xl flex-col gap-6 p-10">
@@ -693,11 +729,26 @@ function Demo() {
                 </Button>
               ))}
             </div>
+            <span className="ml-3 text-muted-foreground">Cards</span>
+            <div role="radiogroup" aria-label="F cards" className="flex gap-1">
+              {(["dark", "white"] as const).map((c) => (
+                <Button
+                  key={c}
+                  role="radio"
+                  aria-checked={cards === c}
+                  size="sm"
+                  variant={cards === c ? "default" : "outline"}
+                  onClick={() => setCards(c)}
+                >
+                  {c === "dark" ? "Dark" : "White"}
+                </Button>
+              ))}
+            </div>
           </div>
         </header>
         <ul className="flex flex-col border-t border-border">
           {TAKES.filter((t) => !only || only.includes(t.id)).map((t) => (
-            <Row key={t.id} {...t} hl={hl} backdrop={backdrop} />
+            <Row key={t.id} {...t} hl={hl} backdrop={backdrop} cards={cards} />
           ))}
         </ul>
       </div>

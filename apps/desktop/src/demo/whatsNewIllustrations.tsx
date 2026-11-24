@@ -24,15 +24,22 @@ const MONO = "font-mono tracking-[-0.04em]";
 const BLUE = "#1612F8";
 const CLAUDE = "#D97757";
 
-/// The tile, #1C1C1C: the What's New card's own fill, so a picture and the
-/// title under it read as one surface. `zoom` 6.4 is the 2560×1440 capture;
-/// the listing draws smaller so takes sit side by side.
+/// `?tile=white` draws every tile white, for What's New's white cards; the
+/// captures carry a `-white` suffix.
+const WHITE = new URLSearchParams(location.search).get("tile") === "white";
+
+/// The tile, #1C1C1C or white: the What's New card's own fill, so a picture
+/// and the title under it read as one surface. `zoom` 6.4 is the 2560×1440
+/// capture; the listing draws smaller so takes sit side by side.
 function Frame({ zoom = 6.4, children }: { zoom?: number; children: ReactNode }) {
   return (
     <div style={{ width: 400 * zoom, height: 225 * zoom }} className="shrink-0 overflow-hidden bg-black">
       <div
         style={{ zoom }}
-        className="relative flex h-[225px] w-[400px] items-center justify-center overflow-hidden bg-[#1C1C1C] p-6 text-white antialiased"
+        className={cn(
+          "relative flex h-[225px] w-[400px] items-center justify-center overflow-hidden p-6 text-white antialiased",
+          WHITE ? "bg-white" : "bg-[#1C1C1C]",
+        )}
       >
         {children}
       </div>
@@ -180,7 +187,13 @@ function HarnessComposer() {
           The redirect fires twice. Fixed.
         </Says>
       </div>
-      <div className="mr-2 flex w-[150px] flex-col self-end border border-[#333333] bg-[#141414] shadow-[0_8px_24px_#000000A0]">
+      {/* No shadow on white: it hazes past the dark panel onto the tile. */}
+      <div
+        className={cn(
+          "mr-2 flex w-[150px] flex-col self-end border border-[#333333] bg-[#141414]",
+          !WHITE && "shadow-[0_8px_24px_#000000A0]",
+        )}
+      >
         {rows.map(([h, name]) => {
           const picked = h === "codex";
           return (
@@ -223,7 +236,7 @@ function ScanToInstall() {
   return (
     <div className="absolute top-1/2 right-7 flex -translate-y-1/2 flex-col items-center gap-2">
       <Qr size={100} />
-      <span className={`${MONO} text-[11px] leading-[14px] text-white`}>Scan to install</span>
+      <span className={cn(MONO, "text-[11px] leading-[14px]", WHITE ? "text-[#0A0A0A]" : "text-white")}>Scan to install</span>
     </div>
   );
 }
@@ -309,7 +322,7 @@ function RealPhone({ left, width = 150, src }: { left: number; width?: number; s
       {button("right", 270, 135)}
       {button("right", 560, 70)}
       <div
-        className="relative bg-gradient-to-br from-[#8E8E93] via-[#3A3A3C] to-[#6E6E73] p-[1.5px] shadow-[0_20px_40px_#000000C0]"
+        className={cn("relative bg-gradient-to-br from-[#8E8E93] via-[#3A3A3C] to-[#6E6E73] p-[1.5px]", WHITE ? "shadow-[0_16px_32px_#00000040]" : "shadow-[0_20px_40px_#000000C0]")}
         style={{ height: 956 * pt + 10, borderRadius: radius + 5 }}
       >
         <div className="h-full bg-black p-[3.5px]" style={{ borderRadius: radius + 3.5 }}>

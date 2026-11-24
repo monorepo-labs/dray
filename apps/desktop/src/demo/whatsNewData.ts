@@ -109,3 +109,11 @@ export const NEXT_RELEASE: Highlight[] = [
     [{ kind: "image", url: "/demo/whats-new/iphone-app.png", alt: "Dray's bot chat on an iPhone, beside a QR code for the App Store" }],
   ),
 ];
+
+/// A next-release highlight on a white card: its drawn picture swapped for
+/// the `-white` capture beside it, so picture and card share one fill.
+/// The sample highlights have no white twin and are left as they are.
+export const onWhite = (h: Highlight): Highlight =>
+  NEXT_RELEASE.includes(h)
+    ? { ...h, item: { ...h.item, media: h.item.media.map((m) => ({ ...m, url: m.url.replace(/\.png$/, "-white.png") })) } }
+    : h;
