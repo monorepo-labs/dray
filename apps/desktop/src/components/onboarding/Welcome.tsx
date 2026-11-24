@@ -12,11 +12,13 @@ import type { Variant } from "./state";
 import "./onboarding.css";
 
 /// Onboarding's first screen: one of three openings, then the same headline and
-/// button. Each plays the welcome chime as its moment lands.
+/// button. The welcome sound's riser starts at once and its hit lands with
+/// the opening's moment.
 export default function Welcome({ variant, bot, onNext }: { variant: Variant; bot: Bot | undefined; onNext: () => void }) {
   const opening = OPENINGS[variant];
   useEffect(() => {
-    const timer = setTimeout(playWelcome, opening.chimeAt);
+    // A tick late, so a mount React throws away at once never plays.
+    const timer = setTimeout(() => playWelcome(opening.chimeAt), 0);
     return () => clearTimeout(timer);
   }, [opening]);
 
@@ -52,7 +54,7 @@ export default function Welcome({ variant, bot, onNext }: { variant: Variant; bo
   );
 }
 
-/// When, in ms, each opening lands its chime, tiles and text.
+/// When, in ms, each opening lands its sound's hit, tiles and text.
 const OPENINGS: Record<Variant, { chimeAt: number; tilesAt: number; textAt: number }> = {
   arrive: { chimeAt: 820, tilesAt: 900, textAt: 1300 },
   tiles: { chimeAt: 1500, tilesAt: 1700, textAt: 1800 },

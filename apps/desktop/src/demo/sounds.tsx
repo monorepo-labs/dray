@@ -50,7 +50,7 @@ const APP: Sound[] = [
     name: "Welcome",
     file: "src/lib/sound.ts, made in code",
     play: playWelcome,
-    where: ["Onboarding's first screen, as the welcome lands."],
+    where: ["Onboarding's first screen: the riser starts with it, the hit lands with the opening."],
   },
   {
     name: "Dictation start",

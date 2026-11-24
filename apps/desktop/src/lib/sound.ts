@@ -56,47 +56,111 @@ export function playDictationSound(sound: "start" | "stop") {
   play(sound === "start" ? startUrl : stopUrl, 0.35);
 }
 
-/// Onboarding's welcome: a rising four-note bell over a soft echo, made in
-/// code so there is no file to keep in step with it.
-export function playWelcome() {
+/// Onboarding's welcome, a studio-logo intro made in code: a breathy riser
+/// swells for `hitInMs`, then a sub boom and a wide D major chord bloom open
+/// and ring out in a long hall. The hit is what lines up with the moment on
+/// screen, so the riser starts that long before it.
+export function playWelcome(hitInMs = 1100) {
   try {
     const ctx = new AudioContext();
+    const now = ctx.currentTime + 0.03;
+    const hit = now + Math.max(0.4, hitInMs / 1000);
+
+    const master = ctx.createDynamicsCompressor();
+    master.threshold.value = -18;
+    master.ratio.value = 3;
     const out = ctx.createGain();
-    out.gain.value = 0.16;
-    // A short darkened echo is what makes four plain sines ring like a bell.
-    const echo = ctx.createDelay();
-    echo.delayTime.value = 0.19;
-    const feedback = ctx.createGain();
-    feedback.gain.value = 0.3;
+    out.gain.value = 0.5;
+    master.connect(out).connect(ctx.destination);
+
+    // A hall made of decaying noise: what turns a dry synth into a big room.
+    const hall = ctx.createConvolver();
+    const seconds = 4.5;
+    const impulse = ctx.createBuffer(2, ctx.sampleRate * seconds, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const data = impulse.getChannelData(ch);
+      for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / data.length, 2.6);
+    }
+    hall.buffer = impulse;
+    const wet = ctx.createGain();
+    wet.gain.value = 0.5;
+    hall.connect(wet).connect(master);
+
+    // Riser: noise through a band that climbs, swelling into the hit.
+    const noise = ctx.createBuffer(1, ctx.sampleRate * 3, ctx.sampleRate);
+    const n = noise.getChannelData(0);
+    for (let i = 0; i < n.length; i++) n[i] = Math.random() * 2 - 1;
+    const air = ctx.createBufferSource();
+    air.buffer = noise;
+    const band = ctx.createBiquadFilter();
+    band.type = "bandpass";
+    band.Q.value = 1.2;
+    band.frequency.setValueAtTime(250, now);
+    band.frequency.exponentialRampToValueAtTime(3500, hit);
+    const swell = ctx.createGain();
+    swell.gain.setValueAtTime(0.0001, now);
+    swell.gain.exponentialRampToValueAtTime(0.16, hit - 0.02);
+    swell.gain.exponentialRampToValueAtTime(0.0001, hit + 0.5);
+    air.connect(band).connect(swell);
+    swell.connect(master);
+    swell.connect(hall);
+    air.start(now);
+    air.stop(hit + 0.6);
+
+    // Boom: a sine falling from 90Hz to 40Hz, felt more than heard.
+    const sub = ctx.createOscillator();
+    sub.frequency.setValueAtTime(90, hit);
+    sub.frequency.exponentialRampToValueAtTime(40, hit + 1.2);
+    const thump = ctx.createGain();
+    thump.gain.setValueAtTime(0.0001, hit);
+    thump.gain.exponentialRampToValueAtTime(0.9, hit + 0.02);
+    thump.gain.exponentialRampToValueAtTime(0.0001, hit + 2.6);
+    sub.connect(thump).connect(master);
+    sub.start(hit);
+    sub.stop(hit + 2.7);
+
+    // The chord: D major add 9 spread over three octaves, two detuned saws a
+    // note, behind a filter that opens on the hit and slowly closes again.
     const tone = ctx.createBiquadFilter();
     tone.type = "lowpass";
-    tone.frequency.value = 2400;
-    echo.connect(tone).connect(feedback).connect(echo);
-    tone.connect(out);
-    out.connect(ctx.destination);
-
-    const start = ctx.currentTime + 0.02;
-    [392, 587.33, 783.99, 987.77].forEach((hz, i) => {
-      const at = start + i * 0.085;
-      for (const [mult, level] of [
-        [1, 1],
-        [2, 0.18],
-        [3, 0.05],
-      ]) {
+    tone.Q.value = 0.7;
+    tone.frequency.setValueAtTime(220, hit);
+    tone.frequency.exponentialRampToValueAtTime(2600, hit + 0.9);
+    tone.frequency.exponentialRampToValueAtTime(500, hit + 4.5);
+    const pad = ctx.createGain();
+    pad.gain.setValueAtTime(0.0001, hit);
+    pad.gain.exponentialRampToValueAtTime(0.07, hit + 0.12);
+    pad.gain.setValueAtTime(0.07, hit + 0.8);
+    pad.gain.exponentialRampToValueAtTime(0.0001, hit + 5);
+    tone.connect(pad);
+    pad.connect(master);
+    pad.connect(hall);
+    for (const hz of [73.42, 110, 146.83, 185, 220, 329.63, 440]) {
+      for (const cents of [-8, 8]) {
         const osc = ctx.createOscillator();
-        osc.frequency.value = hz * mult;
-        const env = ctx.createGain();
-        env.gain.setValueAtTime(0, at);
-        env.gain.linearRampToValueAtTime(level * (1 - i * 0.12), at + 0.008);
-        env.gain.exponentialRampToValueAtTime(0.0001, at + 1.6 - i * 0.15);
-        osc.connect(env);
-        env.connect(out);
-        env.connect(echo);
-        osc.start(at);
-        osc.stop(at + 1.7);
+        osc.type = "sawtooth";
+        osc.frequency.value = hz;
+        osc.detune.value = cents;
+        osc.connect(tone);
+        osc.start(hit);
+        osc.stop(hit + 5.1);
       }
-    });
-    setTimeout(() => void ctx.close(), 3500);
+    }
+
+    // Shimmer: soft high sines that fade in late, into the hall only.
+    for (const hz of [587.33, 880, 1174.66]) {
+      const osc = ctx.createOscillator();
+      osc.frequency.value = hz;
+      const glow = ctx.createGain();
+      glow.gain.setValueAtTime(0.0001, hit + 0.2);
+      glow.gain.exponentialRampToValueAtTime(0.03, hit + 1.4);
+      glow.gain.exponentialRampToValueAtTime(0.0001, hit + 5);
+      osc.connect(glow).connect(hall);
+      osc.start(hit + 0.2);
+      osc.stop(hit + 5.1);
+    }
+
+    setTimeout(() => void ctx.close(), (hit - now + 10) * 1000);
   } catch {
     // No audio output.
   }

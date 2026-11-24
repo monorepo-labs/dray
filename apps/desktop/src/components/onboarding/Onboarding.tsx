@@ -276,16 +276,15 @@ function DevSwitch() {
       </div>
       {VARIANTS.map((v, i) => row(v.label, String(i + 1), pick === v.id, () => replayOnboarding(v.id)))}
       {row("Off", "0", pick === null, () => replayOnboarding(null))}
-      {/* One button for the row, the switch only drawing its state: a label
+      {/* The row takes the click and the switch only draws its state: a label
           around the switch passed one click on as two and left it unchanged. */}
-      <button
-        type="button"
+      <div
         onClick={() => setFreshMachine(!fresh)}
-        className="mt-1 flex h-9 cursor-pointer items-center gap-2 border-t border-hairline px-2 pt-1 text-left text-ui"
+        className="mt-1 flex h-9 cursor-pointer items-center gap-2 border-t border-hairline px-2 pt-1 text-ui"
       >
-        <Switch checked={fresh} tabIndex={-1} aria-hidden className="pointer-events-none" />
+        <Switch checked={fresh} aria-label="Show agents as not set up" className="pointer-events-none" />
         Show agents as not set up
-      </button>
+      </div>
     </div>
   );
 }
