@@ -1,4 +1,5 @@
-import { callerOf, overLimit, type Phone, pushReady, seal } from "@/lib/push";
+import { callerOf, overLimit } from "@/lib/rate";
+import { type Phone, pushReady, seal } from "@/lib/push";
 
 /// The phone trades its push token for a sealed handle, the only thing it
 /// gives a server: an iPhone's APNs token with its environment, or an Android
