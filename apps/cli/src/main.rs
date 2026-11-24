@@ -1934,8 +1934,8 @@ mod tests {
         }
     }
 
-    /// Every bot verb rides `--machine` to that machine's server, bar the two
-    /// whose answer or default lives on this one, which say why (#1461).
+    /// Every bot verb rides `--machine` to that machine's server, `--ask`
+    /// included (#1463), bar a routine whose default bot is this one's (#1461).
     #[test]
     fn machine_takes_bot_commands() {
         let refusal = |argv: &[&str]| {
@@ -1948,6 +1948,7 @@ mod tests {
             &["dray", "bot", "ls", "--json", "--machine", "vps"],
             &["dray", "--machine", "vps", "bot", "new", "Ops", "--colour", "teal"],
             &["dray", "--machine", "vps", "bot", "send", "Ops", "hi"],
+            &["dray", "--machine", "vps", "bot", "send", "--ask", "Ops", "hi"],
             &["dray", "--machine", "vps", "bot", "rename", "Ops", "Release"],
             &["dray", "--machine", "vps", "bot", "rm", "Ops"],
             &["dray", "--machine", "vps", "bot", "routine", "add", "PR", "look", "--every", "2h", "--bot", "Ops"],
@@ -1959,8 +1960,6 @@ mod tests {
         ] {
             assert_eq!(refusal(argv), None, "{argv:?}");
         }
-        let ask = refusal(&["dray", "--machine", "vps", "bot", "send", "--ask", "Ops", "hi"]).unwrap();
-        assert!(ask.contains("--ask") && ask.contains("own server"), "{ask}");
         let add = refusal(&["dray", "--machine", "vps", "bot", "routine", "add", "PR", "look", "--every", "2h"]).unwrap();
         assert!(add.contains("--bot"), "{add}");
         assert!(refusal(&["dray", "--machine", "vps", "skill", "install"]).unwrap().contains("bot"));

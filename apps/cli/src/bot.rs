@@ -80,11 +80,6 @@ pub struct BotArg {
 /// Why `--machine` cannot carry `command`, or `None` where it can.
 pub fn machine_refusal(command: &BotCommand) -> Option<String> {
     match command {
-        BotCommand::Send(send) if send.ask => Some(
-            "--ask can't take --machine: Dray passes a bot's answer back only to a session on the bot's own \
-             server, and yours is on this one. Send it without --ask."
-                .into(),
-        ),
         BotCommand::Routine(command) => crate::routine::machine_refusal(command),
         _ => None,
     }

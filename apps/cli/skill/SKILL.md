@@ -436,9 +436,10 @@ bot's role, whether it is working, and its open tasks. `dray session new` from
 a bot warns on stderr when other bots have open tasks in the same project.
 
 `dray --machine <name> bot …` acts on the bots of a machine from
-`dray machine ls`, every verb and routine alike. Two things stay on their own
-server: `--ask`, since the answer comes back only to a session there, and
-`routine add` without `--bot`, since the calling bot is on this one.
+`dray machine ls`, every verb and routine alike. `--ask` works there too: the
+answer comes back to you once that machine's server is reachable from this one,
+usually within seconds of the bot's turn ending. `routine add` there needs
+`--bot`, since the calling bot is on this machine.
 
 Between bots, Dray stops an exchange after 4 messages back and forth, a
 message repeated within one exchange, or 20 messages between two bots in 5

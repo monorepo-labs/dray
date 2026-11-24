@@ -580,7 +580,9 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     sweep_browser_profiles().await;
     crate::auto_continue::rearm(&sink).await;
 
+    crate::remote_asks::forget_unanswered().await;
     tokio::spawn(crate::remote_reports::run(sink.clone()));
+    tokio::spawn(crate::remote_asks::run(sink.clone()));
     tokio::spawn(crate::stalls::run(sink.clone()));
     tokio::spawn(crate::held_flags::run(sink.clone()));
     tokio::spawn(crate::routines::run(sink.clone()));
@@ -2049,13 +2051,16 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         // `dray --machine` from an agent on the Mac that added this machine.
         orchestrate(
             line: String, origin: Option<String>, caller: Option<crate::orchestration::Caller>,
-            sender: Option<crate::events::MessageSender>,
+            sender: Option<crate::events::MessageSender>, ask: Option<String>,
         ) => ok(crate::orchestration::answer_forward(
-            crate::orchestration::Forward { line, origin, caller, sender }, sink,
+            crate::orchestration::Forward { line, origin, caller, sender, ask }, sink,
         ).await);
         // A bot's server collecting what its tasks here said (#958).
         parent_reports(children: Vec<String>, ack: Vec<String>, forget: Option<Vec<String>>) =>
             crate::remote_reports::take(children, ack, forget.unwrap_or_default()).await;
+        // An asking server collecting its questions' answers here (#1463).
+        bot_answers(asks: Vec<String>, ack: Vec<String>, undelivered: Vec<String>) =>
+            crate::remote_asks::take(asks, ack, undelivered, &sink).await;
         bot_stalls() => ok(live_stalls());
         worktree_disposition(session_id: String) =>crate::worktree_disposition(&session_id).await;
         remove_session_worktree(session_id: String) => crate::remove_session_worktree(&session_id).await;
