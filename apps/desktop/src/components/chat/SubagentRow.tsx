@@ -1,6 +1,7 @@
 import { ChevronRight } from "lucide-react";
 import Orb from "@/components/Orb";
 
+import { runSettings } from "@/lib/tools";
 import { canOpenTab, opensTab, type SubagentRun } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 
@@ -31,6 +32,10 @@ export default function SubagentRow({
   const running = !run.done && !run.background;
   // fx's tab is empty until the child's turn is saved, so the row waits too.
   const locked = opensTab(run) && !canOpenTab(run);
+  // A child on another model or effort is a fact about the run, so it sits on
+  // the row rather than behind the click.
+  const settings =
+    run.spawn?.payload.type === "tool_call_started" ? runSettings(run.spawn.payload.input) : "";
 
   return (
     <button
@@ -55,6 +60,10 @@ export default function SubagentRow({
       >
         {detail}
       </span>
+
+      {settings && (
+        <span className="shrink-0 font-mono text-muted-foreground/70">{settings}</span>
+      )}
 
       {!locked && (
         <ChevronRight className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />

@@ -359,15 +359,82 @@ impl Mapper {
                 kind,
                 agent_thread_id,
                 agent_path,
-            } => self.subagent_activity(id, kind, agent_thread_id, agent_path),
+                model,
+                reasoning_effort,
+            } => self.subagent_activity(
+                id,
+                kind,
+                agent_thread_id,
+                agent_path,
+                model,
+                reasoning_effort.as_ref().map(value_text),
+            ),
 
             ThreadItem::ContextCompaction { .. } => {
                 vec![self.event(AgentEventPayload::ContextCompactionStarted)]
             }
 
+            ThreadItem::Sleep { id, duration_ms } => {
+                vec![self.event(AgentEventPayload::ToolCallStarted {
+                    call_id: id,
+                    name: "sleep".to_string(),
+                    tool_type: ToolType::Other,
+                    input: json!({"duration_ms": duration_ms}),
+                    raw_input: None,
+                    title: duration_ms.map(seconds),
+                })]
+            }
+
+            ThreadItem::ImageGeneration { id, revised_prompt, .. } => {
+                vec![self.image_generation_started(id, revised_prompt)]
+            }
+
+            ThreadItem::DynamicToolCall {
+                id,
+                namespace,
+                tool,
+                arguments,
+                ..
+            } => {
+                vec![self.event(AgentEventPayload::ToolCallStarted {
+                    call_id: id,
+                    title: Some(match &namespace {
+                        Some(ns) if !ns.is_empty() => format!("{ns} · {tool}"),
+                        _ => tool.clone(),
+                    }),
+                    name: tool,
+                    tool_type: ToolType::Other,
+                    input: arguments.unwrap_or(json!({})),
+                    raw_input: None,
+                })]
+            }
+
             // `Other` includes Codex's echo of our prompt, which Dray already minted.
             ThreadItem::Extension { .. } | ThreadItem::Other => Vec::new(),
         }
+    }
+
+    /// The row for an image being made. The prompt Codex rewrote is the title,
+    /// and it may land only on completion, so that re-opens the row with it.
+    fn image_generation_started(&mut self, id: String, revised_prompt: Option<String>) -> AgentEvent {
+        let prompt = revised_prompt.filter(|p| !p.trim().is_empty());
+        self.event(AgentEventPayload::ToolCallStarted {
+            call_id: id,
+            name: "image_generation".to_string(),
+            tool_type: ToolType::Other,
+            input: json!({"prompt": prompt}),
+            raw_input: None,
+            title: prompt.clone(),
+        })
+    }
+
+    /// A call's answer, then the working indicator back on: the main agent
+    /// picks up again after every tool.
+    fn closed(&mut self, call_id: String, result: ToolResult) -> Vec<AgentEvent> {
+        vec![
+            self.event(AgentEventPayload::ToolCallCompleted { call_id, result }),
+            self.event(AgentEventPayload::ModelRequestStarted),
+        ]
     }
 
     /// The opening row both web-search routes share.
@@ -541,6 +608,60 @@ impl Mapper {
                 out
             }
 
+            ThreadItem::Sleep { id, .. } => self.closed(id, result(String::new(), false)),
+
+            ThreadItem::ImageGeneration {
+                id,
+                status,
+                revised_prompt,
+                saved_path,
+                failure,
+            } => {
+                let failed = failure.is_some() || status.as_deref() == Some("failed");
+                let mut out = Vec::new();
+                if revised_prompt.as_deref().is_some_and(|p| !p.trim().is_empty()) {
+                    out.push(self.image_generation_started(id.clone(), revised_prompt));
+                }
+                let images = saved_path
+                    .filter(|_| !failed)
+                    .map(|path| ImageRef {
+                        path: Some(display_path(&path)),
+                        url: None,
+                        mime_type: None,
+                    })
+                    .into_iter()
+                    .collect();
+                // Internally tagged (`{"type": "usageLimitExceeded", …}`), so
+                // the tag is read by name; `error_kind`'s first-key reading
+                // would name a field. The tag is the most a reader can be told.
+                let text = failure
+                    .as_ref()
+                    .map(|f| match f.get("type").and_then(|t| t.as_str()) {
+                        Some(kind) => kind.to_string(),
+                        None => error_kind(f),
+                    })
+                    .unwrap_or_default();
+                out.extend(self.closed(id, ToolResult { images, ..result(text, failed) }));
+                out
+            }
+
+            ThreadItem::DynamicToolCall {
+                id,
+                status,
+                success,
+                content_items,
+                duration_ms,
+                ..
+            } => {
+                let text = content_items
+                    .iter()
+                    .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let failed = status != ItemStatus::Completed || success == Some(false);
+                self.closed(id, ToolResult { duration_ms, ..result(text, failed) })
+            }
+
             // Handled on `item/started`, which carries the identical activity —
             // acting on both would draw the spawn row twice and close the run
             // before its own events had arrived.
@@ -577,6 +698,8 @@ impl Mapper {
         kind: Option<String>,
         agent_thread_id: Option<String>,
         agent_path: Option<String>,
+        model: Option<String>,
+        effort: Option<String>,
     ) -> Vec<AgentEvent> {
         let Some(thread) = agent_thread_id else {
             // Nothing to file work under. The row would be a card that never
@@ -595,11 +718,13 @@ impl Mapper {
                     },
                 );
 
+                // `model`/`effort` are the keys fx's spawn uses, so the run
+                // rows read both harnesses the same way.
                 vec![self.event(AgentEventPayload::ToolCallStarted {
                     call_id: id,
                     name: "spawn_agent".to_string(),
                     tool_type: ToolType::SubagentSpawn,
-                    input: json!({"description": label}),
+                    input: json!({"description": label, "model": model, "effort": effort}),
                     raw_input: None,
                     title: Some(label),
                 })]
@@ -870,6 +995,36 @@ fn block_ref(item_id: &str) -> BlockRef {
     BlockRef {
         message_id: item_id.to_string(),
         index: 0,
+    }
+}
+
+fn result(text: String, is_error: bool) -> ToolResult {
+    ToolResult {
+        text,
+        is_error,
+        structured: None,
+        exit_code: None,
+        duration_ms: None,
+        images: Vec::new(),
+    }
+}
+
+/// A wire scalar as text: a reasoning effort is a string today, but a custom
+/// one may arrive as a number.
+fn value_text(value: &serde_json::Value) -> String {
+    match value.as_str() {
+        Some(text) => text.to_string(),
+        None => value.to_string(),
+    }
+}
+
+/// `2000` as `2s`, `90000` as `1m 30s`: a sleep row's title.
+fn seconds(ms: u64) -> String {
+    let secs = ms.div_ceil(1000);
+    match (secs / 60, secs % 60) {
+        (0, s) => format!("{s}s"),
+        (m, 0) => format!("{m}m"),
+        (m, s) => format!("{m}m {s}s"),
     }
 }
 
@@ -1356,5 +1511,58 @@ mod tests {
             }
             other => panic!("expected file edits, got {other:?}"),
         }
+    }
+
+    /// Written against the 0.172 schema; no capture yet, since the account
+    /// that made the others has no image tool. The picture is the answer, so
+    /// the row carries the saved file, titled by the prompt Codex rewrote.
+    #[test]
+    fn a_generated_image_draws_with_its_file() {
+        let mut m = mapper();
+        let item = |status: &str| json!({"type": "imageGeneration", "id": "ig_1",
+            "status": status, "revisedPrompt": "A red circle", "generationId": null,
+            "savedPath": "/Users/dev/.codex/generated_images/t/ig_1.png", "failure": null});
+        map_one(&mut m, "item/started", json!({"threadId": "t", "item": item("inProgress")}));
+        let done = map_one(&mut m, "item/completed", json!({"threadId": "t", "item": item("completed")}));
+
+        assert!(matches!(&done[0].payload,
+            AgentEventPayload::ToolCallStarted { title: Some(t), .. } if t == "A red circle"));
+        match &done[1].payload {
+            AgentEventPayload::ToolCallCompleted { result, .. } => {
+                assert!(!result.is_error);
+                assert_eq!(result.images[0].path.as_deref(),
+                    Some("/Users/dev/.codex/generated_images/t/ig_1.png"));
+            }
+            other => panic!("expected a result, got {other:?}"),
+        }
+
+        let refused = map_one(&mut m, "item/completed", json!({"threadId": "t", "item": {
+            "type": "imageGeneration", "id": "ig_2", "status": "failed",
+            "failure": {"type": "usageLimitExceeded", "limitId": "images"}}}));
+        assert!(matches!(&refused[0].payload,
+            AgentEventPayload::ToolCallCompleted { result, .. }
+                if result.is_error && result.images.is_empty()
+                    && result.text == "usageLimitExceeded"));
+    }
+
+    /// A plugin's tool reads like an MCP call: its own name, its text answer.
+    #[test]
+    fn a_dynamic_tool_call_draws_its_text() {
+        let mut m = mapper();
+        let started = map_one(&mut m, "item/started", json!({"threadId": "t", "item": {
+            "type": "dynamicToolCall", "id": "dt_1", "namespace": "browser", "tool": "open",
+            "arguments": {"url": "https://example.com"}, "status": "inProgress",
+            "contentItems": null, "success": null, "durationMs": null}}));
+        assert!(matches!(&started[0].payload,
+            AgentEventPayload::ToolCallStarted { name, title: Some(t), .. }
+                if name == "open" && t == "browser · open"));
+
+        let done = map_one(&mut m, "item/completed", json!({"threadId": "t", "item": {
+            "type": "dynamicToolCall", "id": "dt_1", "tool": "open", "status": "completed",
+            "success": true, "durationMs": 40,
+            "contentItems": [{"type": "inputText", "text": "opened"}]}}));
+        assert!(matches!(&done[0].payload,
+            AgentEventPayload::ToolCallCompleted { result, .. }
+                if result.text == "opened" && !result.is_error && result.duration_ms == Some(40)));
     }
 }
