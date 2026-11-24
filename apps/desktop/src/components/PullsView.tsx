@@ -374,6 +374,9 @@ function PullRow({
           {rowRepoName(row).split("/").pop()}
         </span>
       )}
+      {listing.isCrossRepository && (
+        <span className="hidden shrink-0 text-muted-foreground/50 @md:inline">Read only</span>
+      )}
       {mark.checksState === "RUNNING" && <ChecksRunningIcon />}
       {listing.commentCount > 0 && (
         <span className="hidden shrink-0 items-center gap-1 text-muted-foreground tabular-nums @sm:flex">
@@ -382,12 +385,8 @@ function PullRow({
         </span>
       )}
       <Counts added={listing.additions} removed={listing.deletions} className="hidden shrink-0 @lg:inline" />
-      {sessions.length > 0 ? (
+      {sessions.length > 0 && (
         <TaskChip tasks={sessions} botOf={botOf} onOpen={onOpenSession} onMany={onPick} className="hidden @md:inline-flex" />
-      ) : (
-        <span className="hidden w-20 shrink-0 truncate text-muted-foreground/50 @md:inline">
-          {listing.isCrossRepository ? "Read only" : "No task"}
-        </span>
       )}
       <Avatar src={listing.authorAvatar} name={listing.author} />
       <span className="w-14 shrink-0 text-right text-muted-foreground tabular-nums">

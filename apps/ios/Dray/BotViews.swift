@@ -298,6 +298,8 @@ private struct BotRowView: View {
                 FailureRow(text: text)
             case .card(_, let card, _):
                 MergeCardView(server: key.server, card: card, compact: late)
+            case .issues(let id, let card, let sessionId, let started, _):
+                IssueCardView(session: SessionKey(server: key.server, id: sessionId), cardId: id, card: card, started: started)
             case .task(_, let id, let title, _):
                 line("Started a new task") { taskChip(id, title: title) }
             case .sent:
@@ -543,6 +545,127 @@ struct MergeCardView: View {
         case .blocked: return ("Blocked", Theme.accent)
         case .conflict, .draft, .unstable, .ready: return nil
         }
+    }
+}
+
+// MARK: Issue card
+
+/// GitHub issues a bot posted with `dray session issue-card`, each on a tile of
+/// its own. A tile opens its issue; its play button hands the issue back to the
+/// bot, and the tile then reads Started. The desktop's `IssueCard`.
+struct IssueCardView: View {
+    @Environment(Store.self) private var store
+    let session: SessionKey
+    let cardId: String
+    let card: IssueCard
+    let started: Set<Int>
+    @State private var opened: IssueCardRow?
+    @State private var sending: Int?
+
+    var body: some View {
+        // A settled chat has no agent to tell, as a reaction there is refused too.
+        let settled = store.items[session].map { $0.archived == true || $0.routineRun != nil } ?? false
+        VStack(alignment: .leading, spacing: 2) {
+            Text(card.repo).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary).lineLimit(1)
+                .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 4)
+            ForEach(card.issues) { row in
+                tile(row, canStart: !settled && !row.closed && !started.contains(row.number))
+            }
+        }
+        .padding(4)
+        .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.group, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.group, style: .continuous).strokeBorder(Theme.hairline))
+        .sheet(item: $opened) { row in
+            NavigationStack {
+                IssueDetailView(issue: issue(row), server: session.server, workOn: { _ in
+                    opened = nil
+                    if !settled && !row.closed && !started.contains(row.number) { Task { await start(row) } }
+                }, updated: { _ in })
+                .toolbar { ToolbarItem(placement: .topBarLeading) { CloseButton() } }
+            }
+        }
+    }
+
+    private func tile(_ row: IssueCardRow, canStart: Bool) -> some View {
+        HStack(spacing: Theme.Space.xs) {
+            Button { opened = row } label: {
+                HStack(spacing: Theme.Space.s) {
+                    Text("#\(String(row.number))")
+                        .font(Theme.Font.subhead.font.monospacedDigit())
+                        .foregroundStyle(row.closed ? Theme.closedIssue : Theme.tertiary)
+                    Text(row.title)
+                        .font(Theme.Font.subhead)
+                        .foregroundStyle(row.closed ? Theme.secondary : Theme.text)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if !row.labels.isEmpty {
+                        HStack(spacing: 3) {
+                            ForEach(row.labels.prefix(4), id: \.name) { l in
+                                Circle().fill(Color(trackerHex: l.color)).frame(width: 7, height: 7)
+                            }
+                        }
+                    }
+                }
+                .padding(.leading, 10)
+                .padding(.vertical, 10)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("#\(row.number), \(row.closed ? "closed" : "open"), \(row.title)")
+            .accessibilityAddTraits(.isButton)
+            // One width for the button, Started and nothing, so the rows line up. A ZStack, since
+            // an empty Group takes no frame and the labels then slid to the edge.
+            ZStack {
+                if started.contains(row.number) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.add)
+                        .frame(width: 40, height: 40)
+                        .accessibilityLabel("Started")
+                } else if sending == row.number {
+                    ProgressView().controlSize(.small)
+                } else if canStart {
+                    Button { Task { await start(row) } } label: {
+                        Image(systemName: "play")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.secondary)
+                            .frame(width: 40, height: 40)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Work on it")
+                }
+            }
+            .frame(width: 44, alignment: .trailing)
+            .padding(.trailing, 4)
+        }
+        .background(Theme.raised.opacity(0.55), in: .rect(cornerRadius: Theme.Radius.group - 4, style: .continuous))
+    }
+
+    /// Tells the bot to work on it; the logged hand-off it answers with turns the tile to Started.
+    private func start(_ row: IssueCardRow) async {
+        sending = row.number
+        defer { sending = nil }
+        do {
+            _ = try await store.call(session.server, "approve_issue",
+                                     ["sessionId": .string(session.id), "cardId": .string(cardId), "number": .number(Double(row.number))],
+                                     as: JSON.self)
+            Haptic.success()
+        } catch {
+            store.lastError = error.localizedDescription
+            Haptic.error()
+        }
+    }
+
+    /// The row as the issues page's own, whose detail view reads the rest.
+    private func issue(_ row: IssueCardRow) -> Issue {
+        Issue(tracker: "github", id: "", identifier: "\(card.repo)#\(row.number)", title: row.title, url: row.url,
+              state: IssueState(id: "", name: row.closed ? "Closed" : "Open", kind: row.closed ? "completed" : "unstarted",
+                                color: row.closed ? "#a371f7" : "#3fb950"),
+              priority: "none", assignee: nil, author: nil,
+              labels: row.labels.map { IssueLabel(name: $0.name, color: $0.color) }, team: nil, project: nil,
+              updatedAt: "", pullRequests: [], issueType: nil)
     }
 }
 
