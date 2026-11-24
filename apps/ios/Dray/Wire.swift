@@ -5,7 +5,17 @@ import Foundation
 #if os(macOS)
 let sendingDevice = "island"
 #else
-let sendingDevice = "iphone"
+/// Read off the model identifier rather than `UIDevice`, which is main-actor
+/// only and absent from the island's build.
+let sendingDevice: String = {
+    var size = 0
+    sysctlbyname("hw.machine", nil, &size, nil, 0)
+    var machine = [CChar](repeating: 0, count: max(size, 1))
+    sysctlbyname("hw.machine", &machine, &size, nil, 0)
+    // A simulator reports the Mac's architecture there and names the device it plays here.
+    let model = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] ?? String(cString: machine)
+    return model.hasPrefix("iPad") ? "ipad" : "iphone"
+}()
 #endif
 
 /// This device's wall clock with its UTC offset, as `send_msg`'s `sentAt`: a bot

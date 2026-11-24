@@ -128,6 +128,7 @@ pub enum Device {
     Windows,
     Linux,
     Iphone,
+    Ipad,
     Android,
     Island,
     /// A name from a newer client. Read as no device rather than failing the send.
@@ -142,6 +143,7 @@ impl Device {
             Device::Windows => "Windows app",
             Device::Linux => "Linux app",
             Device::Iphone => "iPhone",
+            Device::Ipad => "iPad",
             Device::Android => "Android",
             Device::Island => "Island",
             Device::Other => return None,
@@ -5341,6 +5343,7 @@ mod tests {
     #[test]
     fn a_device_from_a_newer_client_is_no_device() {
         assert_eq!(serde_json::from_value::<Device>(json!("iphone")).unwrap(), Device::Iphone);
+        assert_eq!(Origin { device: Device::Ipad, time: None }.tag().unwrap(), "[sent from iPad]");
         assert_eq!(serde_json::from_value::<Device>(json!("vision_pro")).unwrap(), Device::Other);
         assert_eq!(Origin { device: Device::Other, time: None }.tag(), None);
     }
