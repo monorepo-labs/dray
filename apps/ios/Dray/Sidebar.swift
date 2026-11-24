@@ -1,7 +1,7 @@
 import Foundation
 
 /// A project is named by its server and its path, the way a session is.
-struct ProjectKey: Hashable {
+struct ProjectKey: Hashable, Codable {
     let server: UUID
     let path: String
 }

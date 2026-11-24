@@ -13,7 +13,7 @@ final class ReplySheetSwipeTests: XCTestCase {
             throw XCTSkip("set TEST_RUNNER_DRAY_URL, _TOKEN and _TASK")
         }
         let app = XCUIApplication()
-        app.launchArguments = ["-servers", "", "-dictation.server", "", "-list.hideSessions", "NO"]
+        app.launchArguments = ["-servers", "", "-dictation.server", ""]
         app.launch()
         var link = URLComponents(string: "dray://connect")!
         link.queryItems = [.init(name: "url", value: url), .init(name: "token", value: token), .init(name: "name", value: "Test server")]

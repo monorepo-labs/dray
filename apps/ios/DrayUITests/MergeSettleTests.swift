@@ -12,7 +12,7 @@ final class MergeSettleTests: XCTestCase {
     func testMergeCardsLand() throws {
         guard let url = env["DRAY_MERGE_URL"], let token = env["DRAY_TOKEN"] else { throw XCTSkip("no server") }
         let app = XCUIApplication()
-        app.launchArguments = ["-servers", "", "-list.hideSessions", "NO", "-bot.dismissedStalls", ""]
+        app.launchArguments = ["-servers", "", "-bot.dismissedStalls", ""]
         app.launch()
         XCTAssertTrue(app.buttons["Enter an address"].waitForExistence(timeout: 10), "no empty list")
         app.buttons["Enter an address"].tap()

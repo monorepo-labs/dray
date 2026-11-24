@@ -238,7 +238,7 @@ struct BotPreview: Codable, Hashable {
 
 /// One branch's pull request, as `pr_marks` answers it. Only `OPEN` and
 /// `MERGED` are asked for; `checksState` is `RUNNING`, `FAILING` or `CLEAR`.
-struct PrMark: Decodable, Hashable {
+struct PrMark: Codable, Hashable {
     let number: Int
     let headRefName: String
     let isDraft: Bool
@@ -254,7 +254,7 @@ struct PrMark: Decodable, Hashable {
 }
 
 /// An open pull request as the pull requests page lists it.
-struct PrListing: Decodable, Hashable {
+struct PrListing: Codable, Hashable {
     let title: String
     let author: String
     let authorAvatar: String?
