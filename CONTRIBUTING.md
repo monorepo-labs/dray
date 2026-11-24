@@ -109,7 +109,7 @@ Anyone else gets a 403. Details:
 
 - Signs in with `GITHUB_TOKEN` if set, else `gh auth token`. The token only
   tells the service who you are; it is never kept or logged.
-- PNG, JPEG, GIF or WebP up to 20 MB. MP4, WebM or MOV up to 100 MB. 30
+- PNG, JPEG, GIF or WebP up to 20 MB. MP4, WebM or MOV up to 100 MB. 300
   uploads an hour per account.
 - A video prints as a plain link: GitHub embeds only videos uploaded through
   its own editor.

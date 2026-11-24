@@ -15,7 +15,7 @@ through a binding. No S3 keys.
 - Images (png, jpg, gif, webp) up to 20 MB; videos (mp4, webm, mov) up to 100 MB.
 - Keys are 128 random bits plus the extension. Not a content hash, which would
   need the whole body in memory before the write starts.
-- 120 requests an hour per address before GitHub is asked; 30 an hour and 200
+- 600 requests an hour per address before GitHub is asked; 300 an hour and 2000
   a day per GitHub user, counted before the contributor lookup so a stranger
   retrying costs our token little. Counted in a Durable Object (`Limiter`), since the
   Rate Limiting binding only counts over 10 or 60 seconds.
