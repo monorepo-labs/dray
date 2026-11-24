@@ -105,21 +105,28 @@ fn unlink(text: &str) -> String {
 static STARTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// The reader pressed Work on it on issue `number` of card `card_id` in
-/// `session_id`: logs it on the card and hands the issue to the agent in a
-/// hidden prompt. Refused where the row was already handed over. Named for
-/// the first cut, which added a label; nothing on GitHub changes now.
+/// `session_id`: hands the issue to the agent in a hidden prompt, then logs it
+/// on the card. Refused where the row was already handed over or the chat is
+/// settled. Named for the first cut, which added a label; nothing on GitHub
+/// changes now.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn approve_issue(session_id: String, card_id: String, number: u64, sink: Sink) -> Result<(), Fail> {
     let _held = STARTING.lock().await;
     let item = store::get_session_index_item(&session_id).await?.context("no such session")?;
+    // `send_review` answers Ok without sending to a settled chat, which would
+    // leave the row Started with nobody told and every retry refused.
+    if crate::bots::current_chat(item.clone()).await.archived {
+        return Err(anyhow::anyhow!("this chat is settled").into());
+    }
     let (repo, row, started) = find_card(&session_id, &card_id).await?;
     let row = row(number).with_context(|| format!("#{number} is not on this card"))?;
     if started.contains(&number) {
         return Err(anyhow::anyhow!("#{number} is already handed over").into());
     }
+    // Sent before it is logged, so a send that fails leaves the row open to retry.
+    crate::orchestration::send_review(session_id.clone(), work_prompt(&repo, row.number, &row.title), sink.clone()).await?;
     let payload = AgentEventPayload::IssueApproved { card_id, number };
     manager().log_event(&session_id, item.harness, payload, &sink).await?;
-    crate::orchestration::send_review(session_id, work_prompt(&repo, row.number, &row.title), sink).await?;
     Ok(())
 }
 

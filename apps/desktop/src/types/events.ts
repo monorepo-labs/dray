@@ -1146,7 +1146,6 @@ mime: string,
 dataUrl: string, bytes: number, };
 
 /**
- * One file a bot's turn changed under its instructions, skills or memory.
  * One issue on an [`IssueCard`](AgentEventPayload::IssueCard). Open or
  * closed as a bool, never the issues page's state enum, so the logged line
  * cannot fail a reader whose enum lacks a kind.
@@ -1390,6 +1389,7 @@ export type IssuesChangedEvent = { sessionId: string, issues: Array<IssueRef>, }
 export type LearnedDiff = { path: string, before: string, after: string, };
 
 /**
+ * One file a bot's turn changed under its instructions, skills or memory.
  * `kind` and `change` are plain strings, never enums, so a kind a later build
  * adds cannot fail an older reader's whole line.
  */
