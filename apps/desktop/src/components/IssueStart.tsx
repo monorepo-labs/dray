@@ -100,7 +100,7 @@ export function IssueQuickActions({ issue }: { issue: IssueRef }) {
       >
         Start task
       </ActButton>
-      <SendToBot bots={ctx.bots} act={sendAct} onSend={send} variant="ghost" />
+      <SendToBot bots={ctx.bots} act={sendAct} onSend={send} />
     </span>
   );
 }
@@ -119,7 +119,7 @@ function ActButton({
   ...trigger
 }: {
   act: Act;
-  variant?: "ghost" | "secondary";
+  variant?: "ghost" | "secondary" | "outline" | "default";
   disabled?: boolean;
   hint: string;
   onPress?: () => void;
@@ -189,6 +189,58 @@ function ActButton({
   );
 }
 
+/// The composer's Send to bot takes, from the app's own button variants,
+/// switched in dev builds until one is picked. A row's is always ghost.
+const SEND_LOOKS = {
+  ghost: { variant: "ghost", gap: "gap-px", extra: "", chevron: "" },
+  // One border round both halves: the chevron's left edge sits on the face's right.
+  outline: { variant: "outline", gap: "", extra: "", chevron: "-ml-px" },
+  // The merge button's shape: a filled pair with a hairline between.
+  filled: { variant: "default", gap: "gap-px", extra: "", chevron: "" },
+  // Secondary with the filled buttons' lift rather than its own faint edge.
+  raised: { variant: "secondary", gap: "gap-px", extra: "shadow-(--shadow-button)", chevron: "" },
+} as const;
+export type SendLook = keyof typeof SEND_LOOKS;
+const PICKABLE: SendLook[] = ["outline", "filled", "raised"];
+
+const LOOK_KEY = "dray.dev.sendLook";
+let sendLook = readLocalStorage<SendLook>(LOOK_KEY, "outline");
+const lookListeners = new Set<() => void>();
+function useSendLook(): SendLook {
+  return useSyncExternalStore(
+    (l) => {
+      lookListeners.add(l);
+      return () => lookListeners.delete(l);
+    },
+    () => sendLook,
+  );
+}
+
+/// The dev build's switch between the composer's Send to bot takes.
+export function SendLookSwitch() {
+  const look = useSendLook();
+  if (!import.meta.env.DEV) return null;
+  return (
+    <div className="pointer-events-auto fixed bottom-3 left-1/2 z-50 flex -translate-x-1/2 items-center gap-1 rounded-lg border border-border bg-popover p-1 text-xs text-muted-foreground shadow-[var(--shadow-card)]">
+      <span className="px-1.5">Send button</span>
+      {PICKABLE.map((k) => (
+        <button
+          key={k}
+          type="button"
+          onClick={() => {
+            sendLook = k;
+            writeLocalStorage(LOOK_KEY, k);
+            for (const l of lookListeners) l();
+          }}
+          className={cn("rounded-md px-2 py-1 capitalize", k === look ? "bg-sidebar-accent text-foreground" : "hover:bg-sidebar-accent/50")}
+        >
+          {k}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 const LAST_BOT_KEY = "dray.issueSendBot";
 let lastBotId = readLocalStorage<string | null>(LAST_BOT_KEY, null);
 const lastBotListeners = new Set<() => void>();
@@ -218,13 +270,16 @@ function SendToBot({
   bots,
   act,
   onSend,
-  variant,
+  look,
 }: {
   bots: Bot[];
   act: Act;
   onSend: (bot: Bot) => void;
-  variant: "ghost" | "secondary";
+  /// The composer's take; a row's is ghost.
+  look?: SendLook;
 }) {
+  const style = SEND_LOOKS[look ?? "ghost"];
+  const variant = style.variant;
   const [last, setLast] = useLastBot(bots);
   if (!last) return null;
   const others = bots.filter((b) => b.id !== last.id);
@@ -233,21 +288,27 @@ function SendToBot({
     onSend(bot);
   };
   return (
-    <span className="flex shrink-0 items-center gap-px">
+    <span className={cn("flex shrink-0 items-center", style.gap)}>
       <ActButton
         act={act}
         variant={variant}
         hint={`Send it to ${last.name}, who starts it when free`}
         onPress={() => send(last)}
         icon={<BotAvatar seed={last.id} avatar={last.avatar} className="block size-3.5 scale-[1.18]" />}
-        className={cn("max-w-44", others.length > 0 && "rounded-r-none")}
+        className={cn("max-w-44", style.extra, others.length > 0 && "rounded-r-none")}
       >
         <span className="truncate">Send to {last.name}</span>
       </ActButton>
       {others.length > 0 && (
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
-            <ActButton act={{ state: "idle" }} variant={variant} hint="Send to another bot" menu className="rounded-l-none px-1">
+            <ActButton
+              act={{ state: "idle" }}
+              variant={variant}
+              hint="Send to another bot"
+              menu
+              className={cn("rounded-l-none px-1", style.extra, style.chevron)}
+            >
               {null}
             </ActButton>
           </DropdownMenuTrigger>
@@ -282,6 +343,7 @@ export function IssueComposer({ issue }: { issue: IssueRef }) {
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const [lastBot] = useLastBot(ctx?.bots ?? []);
+  const look = useSendLook();
   if (!ctx) return null;
 
   const machines = ctx.machinesFor(issue);
@@ -334,7 +396,7 @@ export function IssueComposer({ issue }: { issue: IssueRef }) {
             bots={ctx.bots}
             act={starting ? { state: "busy" } : { state: "idle" }}
             onSend={send}
-            variant="secondary"
+            look={look}
           />
         )}
         starting={starting}
