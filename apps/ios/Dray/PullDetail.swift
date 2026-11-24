@@ -52,6 +52,8 @@ struct PullDetailView: View {
                     reading("Reading the pull request…")
                 }
             }
+            // Full width whatever the content: a short line left the scroll view a narrow column (#1509).
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)
             .padding(.top, 14)
             .padding(.bottom, Theme.Space.xxl)

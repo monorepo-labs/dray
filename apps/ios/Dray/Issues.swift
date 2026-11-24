@@ -856,6 +856,8 @@ struct IssueDetailView: View {
                 Button { workOn(issueTag(shown.identifier, shown.title)) } label: { Text("Work on it") }
                     .buttonStyle(CapsuleButtonStyle(height: 48))
             }
+            // Full width whatever the content: a short line left the scroll view a narrow column (#1509).
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)
             .padding(.top, 14)
             .padding(.bottom, Theme.Space.xxl)
