@@ -271,7 +271,7 @@ That ordering is the whole feature. The index entry lands **before** spawn on pu
 
 **"Is it installed" is read off the cached path, not probed again.** `binpath::agent_available` calls the ordinary resolver and asks `is_absolute()` — a successful resolution is always absolute, and the bare-name fallback is the only relative answer either resolver can give. Free after the first call, which matters because the *failing* call is the expensive one. For Codex it covers a stale binary for free: one with no `app-server` subcommand never satisfies `speaks_app_server`, so it falls through to the bare name exactly like an absent one.
 
-**Only onboarding installs**, and only an agent not on the machine at all (`install_agent`): the vendor's own script, run in the background, then the cached miss is dropped (`binpath::forget_agent`) so the agent reads as installed at once. Everywhere else Dray names the command and links the page. Known cost: a CLI the reader installs by hand while the app runs still reads as missing until restart.
+**Only onboarding installs**, and only an agent not on the machine at all (`install_agent`): the vendor's own script, run in the background, then the cached miss is dropped (`binpath::forget_agent`) so the agent reads as installed at once. `gh` likewise, through Homebrew (`install_gh`), or GitHub's page where there is none. Everywhere else Dray names the command and links the page. Known cost: a CLI the reader installs by hand while the app runs still reads as missing until restart.
 
 ## Demo pages
 

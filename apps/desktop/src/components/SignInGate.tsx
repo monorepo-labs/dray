@@ -98,11 +98,10 @@ function body(
   );
 }
 
-/// `flush` drops the indent that lines it up over the cards, for a centred page.
-function Label({ children, danger = false, flush = false }: { children: ReactNode; danger?: boolean; flush?: boolean }) {
+function Label({ children, danger = false }: { children: ReactNode; danger?: boolean }) {
   return (
     <div
-      className={`flex items-center gap-2 font-mono text-[11px] leading-[14px] tracking-[0.06em] uppercase ${flush ? "" : "pl-[102px] max-lg:pl-0"} ${danger ? "text-[#FF6467]" : "text-white/50"}`}
+      className={`flex items-center gap-2 pl-[102px] font-mono text-[11px] leading-[14px] tracking-[0.06em] uppercase max-lg:pl-0 ${danger ? "text-[#FF6467]" : "text-white/50"}`}
     >
       <Mark />
       {children}
@@ -292,7 +291,7 @@ function pts(list: string, fill: string): [number, number, string][] {
 
 // Shared with What's New and onboarding so the brand's full-window pages read
 // as one family.
-export { Heading as GateHeading, Label as GateLabel, Cards as GateCards, Tiles as GateTiles, MARK as GATE_MARK };
+export { Heading as GateHeading, Cards as GateCards, Tiles as GateTiles, MARK as GATE_MARK };
 
 function Tiles() {
   return (

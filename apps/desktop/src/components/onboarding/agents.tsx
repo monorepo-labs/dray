@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { useAgentAccounts } from "@/hooks/useAgentAccounts";
 import { rereadAgentAvailability } from "@/hooks/useAgentAvailability";
 import { onFocusChange } from "@/lib/focus";
 import { AGENT_LABELS, HARNESS_ORDER } from "@/lib/model";
 import { invoke, LOCAL } from "@/lib/transport";
-import type { AuthOption, Harness } from "@/types/events";
+import type { AuthOption, Harness, IntegrationsView } from "@/types/events";
 
 import { useFreshMachine } from "./state";
 
@@ -97,3 +98,57 @@ export function useAgentSetup(): AgentSetup {
 
   return { rows, ready: rows.filter((r) => r.state === "ready"), act };
 }
+
+export type GithubSetup = { state: SetupState; error: string | null; act: () => void };
+
+/// `gh` on this Mac, installed and signed in, read the way Settings reads it
+/// and read again whenever the window comes back from Terminal or a browser.
+export function useGithubSetup(): GithubSetup {
+  const fresh = useFreshMachine();
+  const [known, setKnown] = useState<SetupState>("checking");
+  const [doing, setDoing] = useState<{ state: SetupState; error?: string } | null>(null);
+
+  const read = useCallback(async () => {
+    const found = await invoke<boolean>("recheck_gh", {}, LOCAL).catch(() => false);
+    if (!found) return setKnown("install");
+    const view = await invoke<IntegrationsView>("get_integrations", {}, LOCAL).catch(() => null);
+    setKnown(view?.github ? "ready" : "signin");
+  }, []);
+
+  useEffect(() => {
+    void read();
+    return onFocusChange((focused) => focused && void read());
+  }, [read]);
+
+  const signIn = () => {
+    setDoing({ state: "signing" });
+    invoke("run_gh_login", { server: null }, LOCAL).catch(() => setDoing(null));
+  };
+
+  const shown = fresh && known === "ready" ? "signin" : known;
+  const state = shown === "ready" || !doing ? shown : doing.state;
+
+  const act = () => {
+    if (state === "signin" || state === "signing") signIn();
+    else if (state === "failed") void openUrl(GH_PAGE);
+    else if (state === "install") {
+      setDoing({ state: "installing" });
+      invoke<boolean>("install_gh", {}, LOCAL)
+        .then(async (found) => {
+          await read();
+          if (found) signIn();
+          else setDoing({ state: "failed", error: "GitHub CLI installed, but Dray can't find it" });
+        })
+        .catch((err) => {
+          if (String(err) === "no-brew") {
+            setDoing(null);
+            void openUrl(GH_PAGE);
+          } else setDoing({ state: "failed", error: String(err) });
+        });
+    }
+  };
+
+  return { state, error: doing?.error ?? null, act };
+}
+
+const GH_PAGE = "https://cli.github.com";

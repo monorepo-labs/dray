@@ -2,67 +2,44 @@ import { useSyncExternalStore } from "react";
 
 import { channel } from "@/lib/channel";
 
-/// The welcome openings on trial (#1421), each followed by the same agent and
-/// Dray Bot steps. Dev builds only, picked from the dev switch; a release never
-/// shows one until a winner is wired to first launch.
-export const VARIANTS = [
-  { id: "arrive", label: "Welcome A · Bot arrives" },
-  { id: "tiles", label: "Welcome B · Tiles build the mark" },
-  { id: "wordmark", label: "Welcome C · Wordmark reveal" },
-] as const;
-export type Variant = (typeof VARIANTS)[number]["id"];
+import { WELCOME_SOUNDS, type WelcomeSound } from "./welcomeSounds";
 
-type State = { variant: Variant | null; done: boolean; run: number };
+/// Onboarding on trial (#1421). Dev builds only, played from the dev switch; a
+/// release never shows it until it is wired to first launch.
+type State = { on: boolean; run: number };
 
-const KEY = "dray.dev.onboarding";
+const KEY = "dray.dev.onboarding.on";
 const ON = import.meta.env.DEV;
 const changed = channel<void>();
 
-let state: State = read();
-
-function read(): State {
-  if (!ON) return { variant: null, done: true, run: 0 };
-  try {
-    const saved = JSON.parse(localStorage.getItem(KEY) ?? "null");
-    if (saved && VARIANTS.some((v) => v.id === saved.variant)) return { variant: saved.variant, done: !!saved.done, run: 0 };
-  } catch {
-    // A bad entry is the same as none.
-  }
-  return { variant: null, done: true, run: 0 };
-}
+let state: State = { on: ON && localStorage.getItem(KEY) === "1", run: 0 };
 
 function set(next: State) {
   state = next;
-  localStorage.setItem(KEY, JSON.stringify({ variant: next.variant, done: next.done }));
+  localStorage.setItem(KEY, next.on ? "1" : "0");
   changed.emit();
 }
 
-/// Starts onboarding from its first screen with `variant`'s welcome; `null`
-/// turns it off.
-export function replayOnboarding(variant: Variant | null) {
-  set({ variant, done: variant === null, run: state.run + 1 });
+/// Plays onboarding from its first screen.
+export function replayOnboarding() {
+  set({ on: true, run: state.run + 1 });
 }
 
 export function finishOnboarding() {
-  if (!state.done) set({ ...state, done: true });
+  if (state.on) set({ ...state, on: false });
 }
 
-/// The opening on screen, or `null`. `run` changes on every replay, so a flow
+/// Whether onboarding is on screen. `run` changes on every replay, so a flow
 /// keyed on it starts over.
-export function useOnboarding(): { variant: Variant | null; run: number } {
-  const now = useSyncExternalStore(changed.subscribe, () => state);
-  return { variant: now.done ? null : now.variant, run: now.run };
-}
-
-export function useOnboardingPick(): Variant | null {
-  return useSyncExternalStore(changed.subscribe, () => state).variant;
+export function useOnboarding(): State {
+  return useSyncExternalStore(changed.subscribe, () => state);
 }
 
 const FRESH = "dray.dev.onboarding.fresh";
 let fresh = ON && localStorage.getItem(FRESH) === "1";
 
-/// Dev only: draws every agent as not signed in, so a machine with all five
-/// set up can still see the setup screens a new user gets.
+/// Dev only: draws every agent and `gh` as not signed in, so a machine with
+/// everything set up can still see the setup screen a new user gets.
 export function useFreshMachine(): boolean {
   return useSyncExternalStore(changed.subscribe, () => fresh);
 }
@@ -70,5 +47,19 @@ export function useFreshMachine(): boolean {
 export function setFreshMachine(on: boolean) {
   fresh = on;
   localStorage.setItem(FRESH, on ? "1" : "0");
+  changed.emit();
+}
+
+const SOUND = "dray.dev.onboarding.sound";
+let sound: WelcomeSound = WELCOME_SOUNDS.find((s) => s.id === localStorage.getItem(SOUND))?.id ?? "glow";
+
+/// The welcome sound take picked by ear in the dev switch.
+export function useWelcomeSound(): WelcomeSound {
+  return useSyncExternalStore(changed.subscribe, () => sound);
+}
+
+export function setWelcomeSound(id: WelcomeSound) {
+  sound = id;
+  localStorage.setItem(SOUND, id);
   changed.emit();
 }

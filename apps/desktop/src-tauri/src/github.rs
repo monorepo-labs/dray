@@ -1050,6 +1050,40 @@ pub async fn recheck_gh() -> bool {
     binpath::gh().await.is_some()
 }
 
+/// Installs `gh` with Homebrew, for onboarding. `Err("no-brew")` where there is
+/// no Homebrew, which the caller answers by opening GitHub's install page; any
+/// other `Err` is brew's own last line.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn install_gh() -> Result<bool, String> {
+    if binpath::gh().await.is_some() {
+        return Ok(true);
+    }
+    let brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+        .into_iter()
+        .map(Path::new)
+        .find(|p| p.exists())
+        .ok_or("no-brew")?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(600),
+        Command::new(brew)
+            .args(["install", "gh"])
+            // Its own update first can take minutes and changes nothing gh needs.
+            .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| "GitHub CLI install took too long".to_string())?
+    .map_err(|err| format!("could not run brew: {err}"))?;
+    if !output.status.success() {
+        let text = String::from_utf8_lossy(&output.stderr);
+        let said = text.lines().map(str::trim).filter(|line| !line.is_empty()).last();
+        return Err(said.unwrap_or("GitHub CLI install failed").to_string());
+    }
+    Ok(recheck_gh().await)
+}
+
 /// Maps a raw `gh` failure onto the reason the panel branches on. Split out so
 /// the classifier can be tested without spawning anything.
 pub(crate) fn unavailable(message: String) -> PrUnavailable {
