@@ -137,7 +137,7 @@ library**, its Compose port from JitPack, pinned to a tag in
 
 ## Build and test
 
-JDK 17 and the Android SDK (`compileSdk 35`). From `apps/android`:
+JDK 17 and the Android SDK (platform `android-37.2`, which AndroidX needs to compile against; the app targets 36, what Play requires). AGP 9 compiles Kotlin itself, so there is no `kotlin-android` plugin: the compose plugin's version in `build.gradle.kts` is the Kotlin in use. From `apps/android`:
 
 ```bash
 ./gradlew assembleDebug        # app/build/outputs/apk/debug/app-debug.apk
