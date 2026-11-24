@@ -129,6 +129,9 @@ final class Store {
     /// Servers down long enough to say so (`lostAfter`), or refused outright.
     /// A quick drop — the app back from the background, a blip — says nothing.
     private(set) var lost: Set<UUID> = []
+    /// Direct servers whose shared copy is on screen in their place, its twin being down:
+    /// what they still hold from before is left out of the list, or it draws twice (#1466).
+    private(set) var covered: Set<UUID> = []
 
     /// For a client that reacts beside drawing: the Island chimes and counts a new card on its pill.
     @ObservationIgnored var asksChanged: () -> Void = {}
@@ -152,9 +155,12 @@ final class Store {
     /// Status events heard per session, so a write waiting on its answer can tell one landed meanwhile.
     @ObservationIgnored private var statusHeard: [SessionKey: Int] = [:]
     @ObservationIgnored private var connections: [UUID: Connection] = [:]
-    /// Shared machines this phone also pairs directly, held back from `share` so each
-    /// session draws once (#1404). The direct way wins, since it works with the sharer off.
-    @ObservationIgnored private var pairedCopies: Set<Via> = []
+    /// Each paired server's last `share_machines` answer, so a copy held back returns without asking again.
+    @ObservationIgnored private var shared: [UUID: [Sharing.Machine]] = [:]
+    /// Each shared machine's welcome `identity`, kept across launches so a copy of a server
+    /// this phone pairs directly is held back before it ever connects (#1404).
+    @ObservationIgnored private var identities: [Via: String] = Store.savedIdentities()
+    @ObservationIgnored private var resharing = false
     @ObservationIgnored private var marksAt: [ProjectKey: Date] = [:]
     @ObservationIgnored private var marking: Set<ProjectKey> = []
     /// `dropTranscripts` calls so far, and the session the last one kept, so a read out across a drop knows.
@@ -224,7 +230,6 @@ final class Store {
         Keychain.set(token, for: s.id.uuidString)
         servers.append(s)
         save()
-        dropPairedCopies()
         start(s)
     }
 
@@ -264,9 +269,10 @@ final class Store {
         forget(s.id)
         Keychain.delete(s.id.uuidString)
         save()
-        // A copy held back for it comes back; one held back for a server still paired goes again on connect.
-        pairedCopies.removeAll()
-        Task { for p in servers where p.via == nil && serverState[p.id] == .connected { await loadShared(p.id) } }
+        identities = identities.filter { $0.key.parent != s.id }
+        saveIdentities()
+        // A copy held back for it comes back.
+        reshare()
     }
 
     /// The servers that are on, which is every one the list, Run with and banners reason about.
@@ -279,11 +285,13 @@ final class Store {
         servers[i].on = on
         save()
         if on { start(servers[i]) } else { drop(id) }
+        reshare()
     }
 
     private func forget(_ id: UUID) {
         let gone = Set([id] + servers.filter { $0.via?.parent == id }.map(\.id))
         drop(id)
+        shared[id] = nil
         for key in transcripts.keys where gone.contains(key.server) { transcripts[key] = nil }
         serverRead = serverRead.filter { !gone.contains($0.server) }
         servers.removeAll { $0.id == id }
@@ -350,6 +358,7 @@ final class Store {
         Keychain.set(token, for: id.uuidString)
         connections[id]?.update(token: token)
         for s in servers where s.via?.parent == id { connections[s.id]?.update(token: token) }
+        reshare()
     }
 
     func connection(_ server: UUID) -> Connection? { connections[server] }
@@ -380,16 +389,21 @@ final class Store {
         case .connected:
             downSince[id] = nil
             lost.remove(id)
+            reshare()
         case .failed:
             // Waiting cannot fix a refused token or a version apart.
             lost.insert(id)
+            reshare()
         case .connecting, .waiting:
             guard downSince[id] == nil else { return }
             let since = Date()
             downSince[id] = since
             Task {
                 try? await Task.sleep(for: Self.lostAfter)
-                if downSince[id] == since { lost.insert(id) }
+                if downSince[id] == since {
+                    lost.insert(id)
+                    reshare()
+                }
             }
         }
     }
@@ -433,30 +447,77 @@ final class Store {
     /// follows the app's links instead, which already name these machines.
     private func share(_ parent: UUID, _ machines: [Sharing.Machine]) {
         guard home == nil, let p = servers.first(where: { $0.id == parent }), p.via == nil else { return }
+        shared[parent] = machines
+        let twins = directTwins()
         for s in servers where s.via?.parent == parent && !machines.contains(where: { $0.id == s.via?.machine }) { forget(s.id) }
-        for m in machines where !pairedCopies.contains(Via(parent: parent, machine: m.id)) {
+        for m in machines {
+            let via = Via(parent: parent, machine: m.id)
             let id = relayedId(parent, m.id)
             if let i = servers.firstIndex(where: { $0.id == id }) {
-                servers[i].name = m.name
+                if twinUp(via, twins) { forget(id) } else { servers[i].name = m.name }
                 continue
             }
+            guard !holdBack(via, twins) else { continue }
             let s = Server(id: id, name: m.name, url: p.url, via: Via(parent: parent, machine: m.id))
             // Listed under the server it goes through.
             let after = servers.lastIndex { $0.id == parent || $0.via?.parent == parent } ?? servers.count - 1
             servers.insert(s, at: after + 1)
             start(s)
         }
+        let copies = Set(servers.compactMap { $0.via.flatMap { identities[$0] }.flatMap { twins[$0] } })
+        if copies != covered { covered = copies }
     }
 
-    /// Drops each shared machine whose welcome names a server this phone pairs directly.
-    /// No `onRemoving`: its push handle is the direct one's too, on the same server.
-    private func dropPairedCopies() {
-        let mine = Set(servers.filter { $0.via == nil }.compactMap { Keychain.get($0.id.uuidString).map { serverId(token: $0) } })
-        for s in servers {
-            guard let via = s.via, let id = connections[s.id]?.welcome?.identity, mine.contains(id) else { continue }
-            pairedCopies.insert(via)
-            forget(s.id)
+    /// The servers this phone pairs directly and has on, by the `identity` their welcome carries.
+    private func directTwins() -> [String: UUID] {
+        var twins: [String: UUID] = [:]
+        for s in servers where s.via == nil && s.on {
+            if let token = Keychain.get(s.id.uuidString) { twins[serverId(token: token)] = s.id }
         }
+        return twins
+    }
+
+    /// A shared machine this phone also pairs directly draws once, the direct way, while that
+    /// way works (#1404). A copy on screen goes only once its twin is connected, so a
+    /// reconnect never takes away a chat the reader is in.
+    private func twinUp(_ via: Via, _ twins: [String: UUID]) -> Bool {
+        guard let twin = identities[via].flatMap({ twins[$0] }) else { return false }
+        return serverState[twin] == .connected
+    }
+
+    /// A copy not on screen stays off while its twin is still coming up, or the sharer is
+    /// down too and the copy could do no better: so a launch draws no duplicate, even for a moment.
+    private func holdBack(_ via: Via, _ twins: [String: UUID]) -> Bool {
+        guard let twin = identities[via].flatMap({ twins[$0] }) else { return false }
+        return !lost.contains(twin) || lost.contains(via.parent)
+    }
+
+    /// Runs `share` again on every list held, once per main-actor turn: called from
+    /// connection state changes, which `forget` itself sets off.
+    private func reshare() {
+        guard !resharing else { return }
+        resharing = true
+        Task {
+            resharing = false
+            for (parent, machines) in shared { share(parent, machines) }
+        }
+    }
+
+    /// The server an alert tagged `id` reaches: a shared machine's copy held back
+    /// is answered by its direct twin, which the server may not have heard of yet.
+    func reachable(_ id: UUID) -> UUID {
+        guard !servers.contains(where: { $0.id == id }),
+              let via = identities.keys.first(where: { relayedId($0.parent, $0.machine) == id }),
+              let twin = identities[via].flatMap({ directTwins()[$0] }) else { return id }
+        return twin
+    }
+
+    private static func savedIdentities() -> [Via: String] {
+        UserDefaults.standard.data(forKey: "sharedIdentities").flatMap { try? JSONDecoder().decode([Via: String].self, from: $0) } ?? [:]
+    }
+
+    private func saveIdentities() {
+        UserDefaults.standard.set(try? JSONEncoder().encode(identities), forKey: "sharedIdentities")
     }
 
     private func loadShared(_ server: UUID) async {
@@ -547,7 +608,18 @@ final class Store {
     /// A fresh connection re-reads the index and the tail of every open
     /// transcript, so nothing that happened while it was down is missed.
     private func connected(_ server: UUID) async {
-        dropPairedCopies()
+        if let via = servers.first(where: { $0.id == server })?.via, let identity = connections[server]?.welcome?.identity {
+            if identities[via] != identity {
+                identities[via] = identity
+                saveIdentities()
+                reshare()
+            }
+            // Before `onConnected`, so a copy going at once never takes the push handle from its twin.
+            if twinUp(via, directTwins()) {
+                forget(server)
+                return reshare()
+            }
+        }
         guard servers.contains(where: { $0.id == server }) else { return }
         if server == home { linksMayHaveMoved() }
         onConnected(server)
@@ -585,7 +657,7 @@ final class Store {
 
     /// Every live server's bots, in its own order, servers in the list's.
     var allBots: [(server: UUID, bot: Bot)] {
-        live.flatMap { s in (bots[s.id] ?? []).map { (s.id, $0) } }
+        live.filter { !covered.contains($0.id) }.flatMap { s in (bots[s.id] ?? []).map { (s.id, $0) } }
     }
 
     /// A bot's chat: every unsettled session in its folder, oldest first. The
@@ -823,6 +895,7 @@ final class Store {
                 && !(settled == false && (chats[key.server] ?? []).contains { samePath($0, item.cwd) })
                 // The index lands before the bots, and a bot's chat would draw as a task row until they do.
                 && (settled || known(key.server))
+                && !covered.contains(key.server)
         }.map { (key: $0.key, item: $0.value) }
         return stageRuns(list, pins: !settled) { stage($0.key, $0.item) }
     }

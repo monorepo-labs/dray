@@ -145,8 +145,11 @@ final class Push: NSObject, UNUserNotificationCenterDelegate {
     // forms answer off it, and UIKit aborts the app for that.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                             withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
-        let key = PushAlert(notification.request.content.userInfo)?.key
-        Task { @MainActor in done(key != nil && key == viewing ? [] : [.banner, .list, .sound]) }
+        let alert = PushAlert(notification.request.content.userInfo)
+        Task { @MainActor in
+            let key = alert.map { SessionKey(server: store?.reachable($0.server) ?? $0.server, id: $0.key.id) }
+            done(key != nil && key == viewing ? [] : [.banner, .list, .sound])
+        }
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
@@ -163,6 +166,9 @@ final class Push: NSObject, UNUserNotificationCenterDelegate {
 
     /// A tap opens the chat; an action answers from the alert, the app never coming forward.
     private func act(_ alert: PushAlert, _ action: String, typed: String?, title: String) async {
+        var alert = alert
+        // Tagged by a shared copy that has since given way to its direct twin (#1404).
+        alert.server = store?.reachable(alert.server) ?? alert.server
         let cmd: String
         var args: [String: JSON] = ["sessionId": .string(alert.session)]
         switch action {
@@ -256,7 +262,7 @@ let pushLog = Logger(subsystem: "com.yogesh.dray.ios", category: "push")
 /// What the relay puts under `dray` in an alert.
 struct PushAlert {
     let kind: String
-    let server: UUID
+    var server: UUID
     let session: String
     /// The chat a tap opens where not `session`: a bot's task opens the bot's chat.
     let open: String?
