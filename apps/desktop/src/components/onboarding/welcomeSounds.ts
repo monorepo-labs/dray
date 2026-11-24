@@ -75,32 +75,28 @@ const LEAD = [
 ];
 
 const MUSIC_LEVEL = 0.35;
-/// The music's share of its level while the welcome voice speaks over it.
-const UNDER_VOICE = 0.7;
 /// How long the music takes to fade once onboarding ends.
 const MUSIC_FADE_S = 4;
 const LOOP_STEPS = 64;
 const RATE = 48000;
 
 /// Onboarding's music after the logo: an intro bar of arpeggio alone, then a
-/// four-bar loop with drums, bass and the hook. It starts low, under the voice,
-/// until `lift` brings it up; `stop` fades it out slowly.
+/// four-bar loop with drums, bass and the hook; `stop` fades it out slowly.
 ///
 /// Rendered ahead into buffers and looped by the audio engine itself: notes
 /// paced by a timer stalled whenever the window went to the background, which
 /// throttles timers, and the music stopped and started with every app switch.
-export function startOnboardingMusic(): { lift: () => void; stop: () => void } {
+export function startOnboardingMusic(): { stop: () => void } {
   let ctx: AudioContext;
   try {
     ctx = new AudioContext();
   } catch {
-    return { lift: () => {}, stop: () => {} };
+    return { stop: () => {} };
   }
   const master = ctx.createGain();
   master.gain.setValueAtTime(0.0001, ctx.currentTime);
   master.connect(ctx.destination);
   let stopped = false;
-  let lifted = false;
 
   // The first pass: the intro bar and one whole loop, cut at the loop's end;
   // the loop that follows carries that last bar's tail at its own start.
@@ -109,7 +105,7 @@ export function startOnboardingMusic(): { lift: () => void; stop: () => void } {
       if (stopped) return;
       const at = ctx.currentTime + 0.05;
       master.gain.setValueAtTime(0.0001, at);
-      master.gain.exponentialRampToValueAtTime(lifted ? MUSIC_LEVEL : MUSIC_LEVEL * UNDER_VOICE, at + 0.6);
+      master.gain.exponentialRampToValueAtTime(MUSIC_LEVEL, at + 0.6);
       const head = ctx.createBufferSource();
       head.buffer = first;
       head.connect(master);
@@ -122,14 +118,6 @@ export function startOnboardingMusic(): { lift: () => void; stop: () => void } {
     })
     .catch(() => {});
 
-  const lift = () => {
-    if (stopped) return;
-    lifted = true;
-    const now = ctx.currentTime;
-    master.gain.cancelScheduledValues(now);
-    master.gain.setValueAtTime(master.gain.value, now);
-    master.gain.linearRampToValueAtTime(MUSIC_LEVEL, now + 1.5);
-  };
   const stop = () => {
     if (stopped) return;
     stopped = true;
@@ -139,7 +127,7 @@ export function startOnboardingMusic(): { lift: () => void; stop: () => void } {
     master.gain.linearRampToValueAtTime(0, now + MUSIC_FADE_S);
     setTimeout(() => void ctx.close(), (MUSIC_FADE_S + 0.3) * 1000);
   };
-  return { lift, stop };
+  return { stop };
 }
 
 /// The loop alone, its tail folded back onto its start so it repeats seamlessly.

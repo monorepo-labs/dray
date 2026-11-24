@@ -1,6 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
-import welcomeVoiceUrl from "@/assets/welcome-voice.m4a";
 import AgentIcon from "@/components/AgentIcon";
 import BotAvatar from "@/components/BotAvatar";
 import GitHubIcon from "@/components/GitHubIcon";
@@ -54,24 +53,13 @@ function Flow({ onStart }: { onStart: () => void }) {
   }, []);
   const agents = useAgentSetup();
   const github = useGithubSetup();
-  // With the welcome line: the welcome said aloud once, over a radio at half
-  // volume, the music under it and up once it ends, playing on over every step.
+  // The music comes in with the welcome line and plays on over every step.
   // Leaving fades it out.
   useEffect(() => {
     let music: ReturnType<typeof startOnboardingMusic> | undefined;
-    let voice: HTMLAudioElement | undefined;
-    const lift = () => music?.lift();
-    const timer = setTimeout(() => {
-      music = startOnboardingMusic();
-      voice = new Audio(welcomeVoiceUrl);
-      voice.volume = 0.5;
-      voice.addEventListener("ended", lift);
-      voice.addEventListener("error", lift);
-      voice.play().catch(lift);
-    }, MUSIC_AT);
+    const timer = setTimeout(() => (music = startOnboardingMusic()), MUSIC_AT);
     return () => {
       clearTimeout(timer);
-      voice?.pause();
       music?.stop();
     };
   }, []);
