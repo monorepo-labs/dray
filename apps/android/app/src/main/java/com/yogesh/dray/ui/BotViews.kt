@@ -348,6 +348,7 @@ private fun BotRowView(key: SessionKey, row: BotRow, late: Boolean, openTask: (S
             }
             is BotItem.Notice -> FailureRow(item.text)
             is BotItem.Card -> MergeCardView(key.server, item.card, late, openTask)
+            is BotItem.Issues -> IssueCardView(key.server, item, settled = store.items[key]?.archived == true)
             is BotItem.Task -> line("Started a new task") { taskChip(item.sessionId, item.title) }
             is BotItem.BotMessage -> Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 line("Message from") { botChip(item.botId, item.title) }
