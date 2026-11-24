@@ -53,8 +53,8 @@ function Flow({ onStart }: { onStart: () => void }) {
   }, []);
   const agents = useAgentSetup();
   const github = useGithubSetup();
-  // The music comes in with the welcome line and plays on over every step.
-  // Leaving fades it out.
+  // The music comes in with the welcome line and plays once; leaving before
+  // it ends fades it out.
   useEffect(() => {
     let music: ReturnType<typeof startOnboardingMusic> | undefined;
     const timer = setTimeout(() => (music = startOnboardingMusic()), MUSIC_AT);
