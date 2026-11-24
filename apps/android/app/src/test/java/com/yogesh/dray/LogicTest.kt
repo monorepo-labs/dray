@@ -187,6 +187,10 @@ class LogicTest {
         val text = "Saved it to /tmp/shot.png for you.\n`/tmp/x.png`"
         assertEquals(listOf("/tmp/shot.png", "/tmp/x.png"), imagePaths(text))
         assertEquals("Saved it to for you.", hiding(listOf("/tmp/shot.png", "/tmp/x.png"), text))
+        assertEquals(
+            "Run `open /tmp/a.png -a Preview` to see.",
+            hiding(listOf("/tmp/a.png"), "Run `open /tmp/a.png -a Preview` to see /tmp/a.png."),
+        )
     }
 
     @Test

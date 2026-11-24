@@ -66,6 +66,11 @@ final class RecordingTests: XCTestCase {
         """)
     }
 
+    func testLeavesACommandInACodeSpanWhole() {
+        let text = "Run `open /tmp/a.png -a Preview` to see /tmp/a.png."
+        XCTAssertEqual(hiding(["/tmp/a.png"], in: text), "Run `open /tmp/a.png -a Preview` to see.")
+    }
+
     func testHidesOnlyWholePaths() {
         let text = "Shot /tmp/a.png, backup [old](/tmp/a.png.bak) and /tmp/a.png.bak"
         XCTAssertEqual(hiding(["/tmp/a.png"], in: text), "Shot, backup [old](/tmp/a.png.bak) and /tmp/a.png.bak")

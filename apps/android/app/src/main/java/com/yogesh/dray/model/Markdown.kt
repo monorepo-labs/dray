@@ -153,6 +153,17 @@ private val linkOrImage = Regex("""!?\[[^\]]*]\(<?([^)\s>]+)>?(?:\s+"[^"]*")?\)"
 private val codeSpan = Regex("""`([^`]+)`""")
 private val barePath = Regex("""(^|[\s"'(<>\[=:])(/[^\s"'`()<>]*[^\s"'`()<>\].,;:!?])(?=$|[\s"'`()<>\],;:!?]|\.(?:$|\s))""")
 
+/** `line` with `change` run on what sits outside its code spans. A span with more than the path in it is a command, and taking the path out breaks it (#1487). */
+private fun outsideCodeSpans(line: String, change: (String) -> String): String {
+    val out = StringBuilder()
+    var at = 0
+    for (span in codeSpan.findAll(line)) {
+        out.append(change(line.substring(at, span.range.first))).append(span.value)
+        at = span.range.last + 1
+    }
+    return out.append(change(line.substring(at))).toString()
+}
+
 /**
  * The text with `paths` taken out — bare, in a code span, or as a markdown link or image —
  * since the picture or player drawn for each names it already. A line left with no words goes.
@@ -165,7 +176,7 @@ fun hiding(paths: List<String>, text: String): String {
         val out = original
             .replace(linkOrImage) { if (it.groupValues[1] in named) "" else it.value }
             .replace(codeSpan) { if (it.groupValues[1] in named) "" else it.value }
-            .replace(barePath) { if (it.groupValues[2] in named) it.groupValues[1] else it.value }
+            .let { line -> outsideCodeSpans(line) { it.replace(barePath) { m -> if (m.groupValues[2] in named) m.groupValues[1] else m.value } } }
         if (out == original) return@mapNotNull out
         if (out.none { it.isLetterOrDigit() }) return@mapNotNull null
         // Indent is left alone: a list item's nesting reads off it.

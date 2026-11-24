@@ -218,14 +218,25 @@ export default function UserMessage({
 
                 if (!path) {
                   return (
-                    <span key={i} className={SEGMENT_COLOR.mention} title={raw}>
+                    <span
+                      key={i}
+                      className={SEGMENT_COLOR.mention}
+                      title={raw}
+                      data-copy={segment.text}
+                    >
                       @{name}
                     </span>
                   );
                 }
 
                 return (
-                  <FileLink key={i} path={path} title={raw} className={SEGMENT_COLOR.mention}>
+                  <FileLink
+                    key={i}
+                    path={path}
+                    title={raw}
+                    copy={segment.text}
+                    className={SEGMENT_COLOR.mention}
+                  >
                     @{name}
                   </FileLink>
                 );
@@ -246,7 +257,12 @@ export default function UserMessage({
 
                 if (!path) {
                   return (
-                    <span key={i} className={SEGMENT_COLOR.path} title={segment.text}>
+                    <span
+                      key={i}
+                      className={SEGMENT_COLOR.path}
+                      title={segment.text}
+                      data-copy={segment.text}
+                    >
                       @{name}
                     </span>
                   );
@@ -258,6 +274,7 @@ export default function UserMessage({
                     path={path}
                     line={segment.line}
                     title={segment.text}
+                    copy={segment.text}
                     className={SEGMENT_COLOR.path}
                   >
                     @{name}

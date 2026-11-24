@@ -252,6 +252,17 @@ func imagePaths(in text: String) -> [String] {
     }
 }
 
+/// `line` with `change` run on what sits outside its code spans. A span with
+/// more than the path in it is a command, and taking the path out breaks it (#1487).
+private func outsideCodeSpans(_ line: String, _ change: (String) -> String) -> String {
+    var out = "", rest = line[...]
+    while let span = rest.firstMatch(of: /`[^`]+`/) {
+        out += change(String(rest[..<span.range.lowerBound])) + span.output
+        rest = rest[span.range.upperBound...]
+    }
+    return out + change(String(rest))
+}
+
 /// The text with `paths` taken out — bare, in a code span, or as a markdown
 /// link or inline image — since the picture or player drawn for each names it
 /// already. Code and a markdown image line stay whole, and a line left with no
@@ -264,12 +275,14 @@ func hiding(_ paths: [String], in text: String) -> String {
         if code || original.trimmingCharacters(in: .whitespaces).wholeMatch(of: imageLine) != nil { return original }
         // Whole tokens only, bounded the way the finders bound them, so `/a.png`
         // never takes a bite out of `/a.png.bak`.
-        let out = original
+        let spared = original
             .replacing(/!?\[[^\]]*\]\(<?([^)\s>]+)>?(?:\s+"[^"]*")?\)/) { named.contains(String($0.1)) ? "" : String($0.0) }
             .replacing(/`([^`]+)`/) { named.contains(String($0.1)) ? "" : String($0.0) }
-            .replacing(#/(^|[\s"'(<>\[=:])(\/[^\s"'`()<>]*[^\s"'`()<>\].,;:!?])(?=$|[\s"'`()<>\],;:!?]|\.(?:$|\s))/#) {
+        let out = outsideCodeSpans(spared) {
+            $0.replacing(#/(^|[\s"'(<>\[=:])(\/[^\s"'`()<>]*[^\s"'`()<>\].,;:!?])(?=$|[\s"'`()<>\],;:!?]|\.(?:$|\s))/#) {
                 named.contains(String($0.2)) ? String($0.1) : String($0.0)
             }
+        }
         guard out != original else { return out }
         guard out.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
         // Indent is left alone: a list item's nesting reads off it.
