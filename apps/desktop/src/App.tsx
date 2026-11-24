@@ -177,7 +177,7 @@ import StarCard from "@/components/StarCard";
 import { noteMergeForStar, useStarPrompt } from "@/hooks/useStarPrompt";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { readIssueDetail, useSessionIssues } from "@/hooks/useIssues";
-import { IssueComposer, IssueStartContext, type IssueStarter } from "@/components/IssueStart";
+import { IssueComposer, IssueStartContext, IssueTasks, type IssueStarter } from "@/components/IssueStart";
 import { sessionsAnswered, useSessions } from "@/hooks/useSessions";
 import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailability";
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
@@ -3280,6 +3280,13 @@ function App() {
       tasksForIssue([...sessionIndexItems, ...otherIndexSide], issue).filter((i) => !botAt(bots, i.cwd)),
     botOf: botOfPrSession,
     onOpenTask: openPrSession,
+    statusOf: (item) => {
+      if (item.archived) return "Settled";
+      if (askingSessions.has(item.sessionId)) return "Waiting on you";
+      const status = statusBySession[item.sessionId] ?? item.status;
+      return status === "in_progress" ? "Working" : status === "completed" ? "Done" : "Idle";
+    },
+    onShowTasks: (issue) => setPickedIssue(issue),
   };
 
   /// Writes a session's settled or pinned flag and takes the sidebar wherever
@@ -4509,6 +4516,7 @@ function App() {
           >
             <TabBody active>
               <MountOnce when>
+              {pickedIssue && <IssueTasks issue={pickedIssue} />}
               <IssuePanel
                 // No session, so no link to remove — the row draws its open-in-
                 // tracker button and nothing else.

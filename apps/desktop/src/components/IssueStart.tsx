@@ -1,11 +1,11 @@
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { Check, ChevronDown, Play } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Play } from "lucide-react";
 
 import BotAvatar from "@/components/BotAvatar";
 import { StartBox } from "@/components/PullDetail";
 import ProjectSelector from "@/components/composer/ProjectSelector";
 import WorktreeToggle from "@/components/composer/WorktreeToggle";
-import TaskChip from "@/components/TaskChip";
+import TaskChip, { TaskMark } from "@/components/TaskChip";
 import { buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -46,6 +46,10 @@ export type IssueStarter = {
   tasksFor: (issue: IssueRef) => SessionIndexItem[];
   botOf: (item: SessionIndexItem) => Bot | undefined;
   onOpenTask: (item: SessionIndexItem) => void;
+  /// A task's state in a word: working, waiting on you, settled…
+  statusOf: (item: SessionIndexItem) => string;
+  /// Opens the issue's details, where its tasks are listed.
+  onShowTasks: (issue: IssueRef) => void;
 };
 
 export const IssueStartContext = createContext<IssueStarter | null>(null);
@@ -399,5 +403,51 @@ export function IssueComposer({ issue }: { issue: IssueRef }) {
 export function IssueTaskChip({ issue, className }: { issue: IssueRef; className?: string }) {
   const ctx = useContext(IssueStartContext);
   if (!ctx) return null;
-  return <TaskChip tasks={ctx.tasksFor(issue)} botOf={ctx.botOf} onOpen={ctx.onOpenTask} className={className} />;
+  return (
+    <TaskChip
+      tasks={ctx.tasksFor(issue)}
+      botOf={ctx.botOf}
+      onOpen={ctx.onOpenTask}
+      onMany={() => ctx.onShowTasks(issue)}
+      className={className}
+    />
+  );
+}
+
+/// The details pane's head: every task linked to the issue, newest first, each
+/// with its mark, title and state, opening on a click.
+export function IssueTasks({ issue }: { issue: IssueRef }) {
+  const ctx = useContext(IssueStartContext);
+  if (!ctx) return null;
+  const tasks = ctx.tasksFor(issue);
+  if (tasks.length === 0) return null;
+  return (
+    <div className="shrink-0 border-b border-border px-3 py-2 text-ui">
+      <p className="px-1 pb-1 text-muted-foreground">{tasks.length === 1 ? "Task" : `Tasks · ${tasks.length}`}</p>
+      <ul className="max-h-40 overflow-y-auto">
+        {tasks.map((task) => {
+          const bot = ctx.botOf(task);
+          return (
+            <li key={task.sessionId}>
+              <button
+                type="button"
+                onClick={() => ctx.onOpenTask(task)}
+                className={cn(
+                  "flex w-full min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+                  task.archived ? "text-muted-foreground" : "text-foreground",
+                )}
+              >
+                <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
+                  <TaskMark bot={bot} />
+                </span>
+                <span className="min-w-0 flex-1 truncate">{task.title}</span>
+                <span className="shrink-0 text-muted-foreground">{ctx.statusOf(task)}</span>
+                <ChevronRight className="size-3 shrink-0 text-muted-foreground opacity-60" />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
 }

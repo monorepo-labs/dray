@@ -14,7 +14,7 @@ import type { Bot, SessionIndexItem } from "@/types/events";
 
 /// A task's mark: its bot's face for a bot's task, else the chat bubble a
 /// session's tab wears.
-function Mark({ bot }: { bot: Bot | undefined }): ReactNode {
+export function TaskMark({ bot }: { bot: Bot | undefined }): ReactNode {
   return bot ? (
     <BotAvatar seed={bot.id} avatar={bot.avatar} className="block size-3.5 scale-[1.18]" />
   ) : (
@@ -24,18 +24,22 @@ function Mark({ bot }: { bot: Bot | undefined }): ReactNode {
 
 /// Tasks linked to a row's issue or pull request, as a chip shaped like the
 /// issue row's PR chip: the newest task's mark, and a count only past one. One
-/// task opens on a click, several open a menu. A span with `role="button"`,
-/// since the rows it sits in are `role="button"` divs.
+/// task opens on a click; several call `onMany`, which shows them all, or open
+/// a menu without one. A span with `role="button"`, since the rows it sits in
+/// are `role="button"` divs.
 export default function TaskChip({
   tasks,
   botOf,
   onOpen,
+  onMany,
   className,
 }: {
   /// Newest first.
   tasks: SessionIndexItem[];
   botOf: (item: SessionIndexItem) => Bot | undefined;
   onOpen: (item: SessionIndexItem) => void;
+  /// Where several go: the row's own details, which list them.
+  onMany?: () => void;
   className?: string;
 }) {
   if (tasks.length === 0) return null;
@@ -53,7 +57,7 @@ export default function TaskChip({
         className,
       )}
     >
-      <Mark bot={bot} />
+      <TaskMark bot={bot} />
       {tasks.length > 1 && tasks.length}
     </span>
   );
@@ -75,7 +79,29 @@ export default function TaskChip({
             },
           })}
         </TooltipTrigger>
-        <TooltipContent>{bot ? `${bot.name} · ${latest.title}` : latest.title}</TooltipContent>
+        <TooltipContent>{bot ? `${bot.name} ${latest.archived ? "worked" : "is working"} on this` : latest.title}</TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  if (onMany) {
+    const show = (e: React.SyntheticEvent) => {
+      e.stopPropagation();
+      onMany();
+    };
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {chip({
+            onClick: show,
+            onKeyDown: (e) => {
+              if (e.key !== "Enter" && e.key !== " ") return;
+              e.preventDefault();
+              show(e);
+            },
+          })}
+        </TooltipTrigger>
+        <TooltipContent>{tasks.length} tasks</TooltipContent>
       </Tooltip>
     );
   }
@@ -94,7 +120,7 @@ export default function TaskChip({
           const bot = botOf(task);
           return (
             <DropdownMenuItem key={task.sessionId} onSelect={() => onOpen(task)}>
-              <Mark bot={bot} />
+              <TaskMark bot={bot} />
               <span className="min-w-0 flex-1 truncate">{bot ? `${bot.name} · ${task.title}` : task.title}</span>
               {task.archived && <span className="shrink-0 text-muted-foreground">Settled</span>}
             </DropdownMenuItem>
