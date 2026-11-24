@@ -1128,6 +1128,8 @@ mod tests {
     fn report_detected_apps() {
         #[cfg(target_os = "linux")]
         let detect = linux::detect;
+        #[cfg(windows)]
+        let detect = windows::detect;
         for app in detect() {
             println!(
                 "{:?}\t{}\t{}\ticon={}",

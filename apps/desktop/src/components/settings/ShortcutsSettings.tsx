@@ -40,7 +40,7 @@ import {
   useAnyModsOverride,
   useMods,
 } from "@/lib/digitChords";
-import { HAS_ISLAND, IS_MAC } from "@/lib/platform";
+import { HAS_ISLAND, IS_MAC, IS_WINDOWS } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /// Who already answers `mods` plus one of the first `slots` digits: another
@@ -140,7 +140,10 @@ function DigitRow({ id, label, slots }: { id: DigitChordId; label: string; slots
               e.preventDefault();
               e.stopPropagation();
               peak.current = null;
-              if (!usableMods(next)) return setRefused("Hold ⌘, ⌃ or ⌥.");
+              if (!usableMods(next))
+                return setRefused(
+                  IS_MAC ? "Hold ⌘, ⌃ or ⌥." : IS_WINDOWS ? "Hold Ctrl, Alt or Win." : "Hold Ctrl, Alt or Super.",
+                );
               const by = digitClash(next, slots, id);
               if (by) return setRefused(`Already used by ${by}.`);
               setMods(id, next);
@@ -322,7 +325,7 @@ export default function ShortcutsSettings({ onOpenIsland }: { onOpenIsland: () =
                   >
                     {recording === id ? (
                       <span className="text-ui text-muted-foreground">
-                        {chordFor(id) === null ? "Press keys…" : "Press keys, ⌫ to remove"}
+                        {chordFor(id) === null ? "Press keys…" : `Press keys, ${IS_MAC ? "⌫" : "Backspace"} to remove`}
                       </span>
                     ) : chordFor(id) === null ? (
                       // `ShortcutKeys` draws nothing for an unbound id, which

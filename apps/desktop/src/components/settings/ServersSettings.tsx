@@ -362,8 +362,8 @@ function ShareMachinesRow() {
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="text-ui font-medium">Share these servers</span>
         <span className="text-ui text-muted-foreground">
-          Your phone, or a Mac paired with this one, reaches every server above through this Mac, with no pairing of
-          its own.
+          Your phone, or another {MACHINE} paired with this one, reaches every server above through this {MACHINE},
+          with no pairing of its own.
         </span>
       </div>
       <Switch aria-label="Share these servers" checked={on} onCheckedChange={toggle} />
@@ -439,10 +439,10 @@ function UpdateLine({
       </>
     );
   } else if (connected && server.latest && server.app) {
-    // Another Mac's Dray.app serves this, so only that app's updater moves it.
+    // Another machine's Dray app serves this, so only that app's updater moves it.
     line = (
       <>
-        {label(`v${server.latest} is out · update Dray on that Mac`)}
+        {label(`v${server.latest} is out · update Dray on that ${MACHINE}`)}
         <Button
           variant="ghost"
           size="sm"

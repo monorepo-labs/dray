@@ -5,12 +5,13 @@ sidebar:
   order: 1
 ---
 
-Dray is a Mac app, with a Linux version in beta. It runs the coding agent CLIs you install yourself, so setting it up is two things: the app, and at least one agent.
+Dray runs on macOS, Linux and Windows. The Linux and Windows builds are in beta. It runs the coding agent CLIs you install yourself, so setting it up is two things: the app, and at least one agent.
 
 ## Requirements
 
 - On a Mac: macOS 11 or later, Apple silicon or Intel. There is one universal download for both. Dray Island, the panel you can open over any app, needs macOS 15.
 - On Linux (beta): x64 or arm64. The `.deb` needs Ubuntu 22.04 or later, or Debian 12 or later. The AppImage runs on other distros with glibc 2.35 or later (most released since 2022) and needs no extra packages.
+- On Windows (beta): Windows 11 on x64. The NSIS installer installs for your user account, so it needs no administrator prompt. Dray Island works here too.
 - At least one agent CLI: Claude Code, Codex, pi, fx, Grok Build or OpenCode. See [Agents](/using-dray/agents).
 - git, for branches and worktrees. A folder that is not a git repository still works, without those two.
 - Optional: the GitHub CLI (`gh`), signed in. Dray uses it to list your repositories when you attach a project, and for the pull request tab.
@@ -39,6 +40,12 @@ Get the file for your system from [drayhq.com/download](https://www.drayhq.com/d
 - **AppImage**, for other distros with glibc 2.35 or later. Make it executable with `chmod +x Dray_amd64.AppImage` (or Properties → Allow executing as program), then double-click it.
 
 Both update themselves, like the Mac app. A `.deb` asks for your password once per update.
+
+### On Windows (beta)
+
+Get the installer from [drayhq.com/download](https://www.drayhq.com/download). Run `Dray_x64-setup.exe` and follow the prompts; the app installs under your user account and appears in the Start menu. Stable releases also offer an MSI (`Dray_x64_en-US.msi`) for machines managed per machine.
+
+The installer is not signed yet, so Windows may show a SmartScreen warning. Update to a signed build when one is available.
 
 ## Install an agent
 
@@ -80,7 +87,7 @@ Dray opens on a new task: a composer in the middle of the window, and the sideba
 
 Your sessions run in a background process, not in the window. Close the window or quit the app and the agents keep working. Open Dray again and you find them where you left them.
 
-When you quit (`⌘Q`, or the window's close button), Dray asks first:
+When you quit (`⌘Q` on a Mac, `Ctrl+Q` on Windows and Linux, or the window's close button), Dray asks first:
 
 - **Quit** closes the app. Sessions keep running in the background.
 - **Quit completely** closes the app and stops every session too.
@@ -98,6 +105,6 @@ You can see how far it has got in Settings → Integrations → **Browser**, and
 
 ## Limits
 
-- The Linux app is a beta. If something breaks, [open an issue](https://github.com/monorepo-labs/dray/issues/new).
+- The Linux and Windows apps are betas. If something breaks, [open an issue](https://github.com/monorepo-labs/dray/issues/new).
 - Dray can also run on a Linux server that you drive from the app: see [Connect a server](/server).
 - Dray does not install an agent or sign you in to one. Each agent uses its own login, subscription or key.

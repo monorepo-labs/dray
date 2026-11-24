@@ -25,6 +25,30 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 /// button spinning until the app restarted.
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Vendor installers are POSIX shell scripts. Windows runs them under the Git
+/// Bash that ships with Git for Windows; without one, the caller sends the
+/// reader to the vendor's own instructions instead.
+#[cfg(windows)]
+fn installer_shell() -> Option<(std::path::PathBuf, &'static str)> {
+    for (root, relative) in [
+        ("ProgramFiles", "Git/bin/bash.exe"),
+        ("ProgramFiles(x86)", "Git/bin/bash.exe"),
+        ("LOCALAPPDATA", "Programs/Git/bin/bash.exe"),
+    ] {
+        let Some(dir) = std::env::var_os(root) else { continue };
+        let candidate = std::path::Path::new(&dir).join(relative);
+        if candidate.is_file() {
+            return Some((candidate, "-c"));
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn installer_shell() -> Option<(std::path::PathBuf, &'static str)> {
+    Some((std::path::PathBuf::from("/bin/sh"), "-c"))
+}
+
 #[derive(Serialize, TS, Clone)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
@@ -125,9 +149,12 @@ pub async fn install_agent(harness: Harness) -> Result<(), String> {
         return Err(format!("Dray can't install {}", harness.label()));
     }
     if !binpath::agent_installed(harness).await {
+        let (shell, flag) = installer_shell().ok_or_else(|| {
+            format!("Dray needs Git Bash to install {}. Install it yourself: {}", harness.label(), harness.docs_url())
+        })?;
         let output = tokio::time::timeout(
             UPDATE_TIMEOUT,
-            Command::new("/bin/sh").args(["-c", script]).stdin(Stdio::null()).kill_on_drop(true).output(),
+            Command::new(shell).args([flag, script]).stdin(Stdio::null()).kill_on_drop(true).output(),
         )
         .await
         .map_err(|_| format!("{} install took too long", harness.label()))?

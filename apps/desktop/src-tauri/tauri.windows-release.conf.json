@@ -4,7 +4,7 @@
   "bundle": {
     "publisher": "Dray",
     "shortDescription": "Desktop app for coding agents",
-    "externalBin": ["target/cli/dray-cli"],
+    "externalBin": ["target/cli/dray-cli", "target/island-linux/dray-island"],
     "windows": {
       "nsis": { "installMode": "currentUser" }
     }

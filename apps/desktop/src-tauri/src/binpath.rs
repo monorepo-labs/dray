@@ -388,8 +388,8 @@ fn search_path(bin: &str) -> Option<PathBuf> {
         .find(|candidate| is_executable(candidate))
 }
 
-/// The files a bare name can be: itself, or on Windows `claude.exe` and the
-/// `.cmd` shim npm writes. Never the bare name there, since npm leaves a `sh`
+/// The files a bare name can be: itself, or on Windows `claude.exe` and a
+/// `.cmd` or `.bat` shim. Never the bare name there, since npm leaves a `sh`
 /// script of that name beside the shim, which Windows cannot run.
 #[cfg(unix)]
 fn spellings(path: PathBuf) -> [PathBuf; 1] {
@@ -397,8 +397,8 @@ fn spellings(path: PathBuf) -> [PathBuf; 1] {
 }
 
 #[cfg(windows)]
-fn spellings(path: PathBuf) -> [PathBuf; 2] {
-    [path.with_extension("exe"), path.with_extension("cmd")]
+fn spellings(path: PathBuf) -> [PathBuf; 3] {
+    [path.with_extension("exe"), path.with_extension("cmd"), path.with_extension("bat")]
 }
 
 /// A `Command` running `bin`. On Windows an npm `.cmd` shim is read and what
@@ -415,11 +415,14 @@ pub fn command(bin: &Path) -> Command {
     Command::new(bin)
 }
 
-/// What an npm cmd-shim at `shim` launches: the program, and the script to
-/// hand it where that is a `node` script.
+/// What an npm `.cmd` or `.bat` shim at `shim` launches: the program, and the
+/// script to hand it where that is a `node` script. Both quote `%~dp0` paths
+/// the same way, and neither can be spawned by `CreateProcess` directly.
 #[cfg(windows)]
 fn shim_target(shim: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
-    if !shim.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd")) {
+    if !shim.extension().is_some_and(|e| {
+        e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat")
+    }) {
         return None;
     }
     let text = std::fs::read_to_string(shim).ok()?;
@@ -473,7 +476,10 @@ fn known_dirs() -> Vec<PathBuf> {
         appdata.map(|a| a.join("npm")),
         local.as_ref().map(|l| l.join("pnpm")),
         Some(home.join(".bun").join("bin")),
-        local.map(|l| l.join("Microsoft").join("WinGet").join("Links")),
+        local.as_ref().map(|l| l.join("Microsoft").join("WinGet").join("Links")),
+        // Git for Windows installed for this user alone: agent_updates.rs runs
+        // vendor installers under its bash, and only `Git\cmd` reaches PATH.
+        local.map(|l| l.join("Programs").join("Git").join("bin")),
         std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("nodejs")),
         std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("Git").join("cmd")),
         // Git's `sh`, which a routine's check runs through: the installer puts
@@ -707,21 +713,28 @@ static LOGIN_PATH_STALE: AtomicBool = AtomicBool::new(false);
 /// there, not in what this process inherited.
 #[cfg(windows)]
 async fn login_shell_path() -> Option<OsString> {
-    let output = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "[Environment]::GetEnvironmentVariable('Path','Machine') + ';' + \
-             [Environment]::GetEnvironmentVariable('Path','User')",
-        ])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(crate::platform::CREATE_NO_WINDOW)
-        .output()
-        .await
-        .ok()?;
-    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().into())
+    // PowerShell 7 installs as `pwsh` and need not leave `powershell` on PATH.
+    for shell in ["powershell", "pwsh"] {
+        let output = Command::new(shell)
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[Environment]::GetEnvironmentVariable('Path','Machine') + ';' + \
+                 [Environment]::GetEnvironmentVariable('Path','User')",
+            ])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(crate::platform::CREATE_NO_WINDOW)
+            .output()
+            .await;
+        if let Ok(output) = output {
+            if output.status.success() {
+                return Some(String::from_utf8_lossy(&output.stdout).trim().into());
+            }
+        }
+    }
+    None
 }
 
 /// `-l` matters more than it looks: without it zsh reads `.zshrc` only, and a
@@ -803,6 +816,28 @@ mod tests {
         assert_eq!(shim_paths(exe), vec![r"node_modules\@anthropic-ai\claude-code\bin\claude.exe"]);
         let js = "IF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n)\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n";
         assert_eq!(shim_paths(js).last().map(String::as_str), Some(r"node_modules\@openai\codex\bin\codex.js"));
+    }
+
+    /// A `.bat` launcher cannot be handed to `CreateProcess` either, so it goes
+    /// through the same unwrap as npm's `.cmd` shims.
+    #[test]
+    #[cfg(windows)]
+    fn unwraps_a_bat_shim() {
+        let dir = std::env::temp_dir().join(format!("dray-bat-shim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let shim = dir.join("claude.bat");
+        std::fs::write(
+            &shim,
+            "@ECHO off\r\n\"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.js\" %*\r\n",
+        )
+        .unwrap();
+
+        let (program, script) = shim_target(&shim).expect("bat shim unwrapped");
+        assert_eq!(script, Some(dir.join(r"node_modules\@anthropic-ai\claude-code\bin\claude.js")));
+        assert!(program.ends_with("node.exe") || program == PathBuf::from("node"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The resolver must agree with the shell about where `claude` is. Skipped
