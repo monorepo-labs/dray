@@ -45,6 +45,10 @@ struct SessionList: View {
     /// A lone bot with no chat, opened on its own page at launch.
     @State private var starting: BotStart?
     @State private var newBot = false
+    /// The bots' rows under the dock, measured so the list's last row scrolls clear of them.
+    @State private var deckHeight: CGFloat = 0
+    /// The bots step aside while the keyboard is up, so the field sits on it.
+    @State private var keyboardUp = false
     /// The pull requests or issues page, opened over the list.
     @State private var listPage: ListPage?
     @Environment(\.scenePhase) private var phase
@@ -52,6 +56,8 @@ struct SessionList: View {
     @State private var deleting: ListRow?
 
     private static let pageSize = 40
+
+    typealias BotRow = (id: String, server: UUID, bot: Bot, chat: SessionKey?)
 
     /// The runs cut to their first `limit` rows, a nest never split across the cut.
     private func page(_ runs: [(stage: Stage, rows: [ListRow])], _ limit: Int) -> [(stage: Stage, rows: [ListRow])] {
@@ -78,8 +84,8 @@ struct SessionList: View {
         let more = runs.reduce(0) { $0 + $1.rows.count } < all.reduce(0) { $0 + $1.rows.count }
         // Nested where its parent is listed anywhere: a pinned child draws at depth 0 still holding the link.
         let listed = Set(all.flatMap { $0.rows.map(\.key) })
-        // Bots lead the live list, as on the desktop: a bot belongs to no project, so no filter narrows them.
-        let botRows = mode == .live ? store.allBots.map { b in
+        // Bots sit under the dock, in the thumb's reach: a bot belongs to no project, so no filter narrows them.
+        let botRows: [BotRow] = mode == .live ? store.allBots.map { b in
             (id: "\(b.server)/\(b.bot.id)", server: b.server, bot: b.bot, chat: store.botChat(b.server, b.bot).last)
         } : []
         let blank = mode == .live && runs.isEmpty && botRows.isEmpty
@@ -99,25 +105,6 @@ struct SessionList: View {
                             .bannerRow()
                     }
                 }
-                ForEach(botRows, id: \.id) { b in
-                    if let chat = b.chat {
-                        BotListRow(server: b.server, bot: b.bot, chat: chat)
-                            .tag(chat)
-                            .sessionRow(selected: selection == chat)
-                    } else {
-                        // No chat yet: the dock aims at its folder, and the first message starts one.
-                        Button {
-                            task.aim(at: b.bot, on: b.server)
-                            // Beside the main pane, the new task page is where that dock is.
-                            newTaskPage()
-                        } label: {
-                            BotListRow(server: b.server, bot: b.bot, chat: nil)
-                        }
-                        .buttonStyle(RowButtonStyle())
-                        .sessionRow(selected: selection == nil && task.bot?.bot.id == b.bot.id)
-                    }
-                }
-                // Under the bots, since no filter narrows them; its top padding is the gap after them.
                 if strip {
                     ProjectStrip(names: names, picked: filter) { project = $0 }
                         .padding(.bottom, Theme.Space.m)
@@ -125,7 +112,7 @@ struct SessionList: View {
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
                         .selectionDisabled()
-                } else if !botRows.isEmpty && !runs.isEmpty { Color.clear.frame(height: Theme.Space.l).plainRow() }
+                }
                 if mode == .drafts {
                     draftRows(filter)
                 } else if runs.isEmpty && mode == .settled {
@@ -175,8 +162,8 @@ struct SessionList: View {
             // With a hardware keyboard a tap focused the row, and its focus ring drew a white box round it.
             .focusable(false)
             .contentMargins(.top, Theme.Space.m, for: .scrollContent)
-            // The resting dock's height, so the last row scrolls clear of the orb.
-            .contentMargins(.bottom, dock ? (sidebar ? 96 : 160) : 0, for: .scrollContent)
+            // The resting dock's height and the bots under it, so the last row scrolls clear of both.
+            .contentMargins(.bottom, (dock ? (sidebar ? 96 : 160) : 0) + (showsDeck(botRows) ? deckHeight : 0), for: .scrollContent)
             // The breaks between runs are 16pt, under the 44pt a list row otherwise takes.
             .environment(\.defaultMinListRowHeight, 1)
             .themedList()
@@ -190,6 +177,7 @@ struct SessionList: View {
             .overlay { if blank { empty(filter) } }
         }
         .overlay(alignment: .bottom) {
+          VStack(spacing: 0) {
             // Beside the main pane the orb is the new task page's, opened from here.
             if dock && sidebar {
                 Button {
@@ -210,7 +198,11 @@ struct SessionList: View {
                 // Dim while nothing is connected: the screen above says why.
                 VoiceDock(task: task, started: { selection = $0 }, engaged: { autoOpen = false }).opacity(blank && !anyConnected ? 0.3 : 1)
             }
+            if showsDeck(botRows) { botDeck(botRows) }
+          }
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
         // A new view or filter starts on its first page.
         .onChange(of: "\(mode)\(filter ?? "")") { shown = Self.pageSize }
         .page()
@@ -383,6 +375,42 @@ struct SessionList: View {
                 starting = b
             }
         }
+    }
+
+    /// Out of the way while the dock is open over the list or the keyboard is up.
+    private func showsDeck(_ rows: [BotRow]) -> Bool {
+        !rows.isEmpty && !keyboardUp && Dictations.shared.state(.newSession) == .idle && !task.hasText
+    }
+
+    /// The bots, under the dock where a thumb reaches them: a chat opens, a bot with none aims the dock at it.
+    private func botDeck(_ rows: [BotRow]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(rows, id: \.id) { b in
+                let picked = b.chat.map { selection == $0 } ?? (selection == nil && task.bot?.bot.id == b.bot.id)
+                Button {
+                    if let chat = b.chat {
+                        selection = chat
+                    } else {
+                        // No chat yet: the dock aims at its folder, and the first message starts one.
+                        task.aim(at: b.bot, on: b.server)
+                        // Beside the main pane, the new task page is where that dock is.
+                        newTaskPage()
+                    }
+                } label: {
+                    BotListRow(server: b.server, bot: b.bot, chat: b.chat)
+                }
+                .buttonStyle(RowButtonStyle())
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                    .fill(picked ? Theme.selected : .clear)
+                    .padding(.horizontal, Theme.Space.xs))
+                .padding(.leading, 6)
+                .padding(.trailing, 8)
+            }
+        }
+        .padding(.bottom, Theme.Space.s)
+        .background(Theme.page.ignoresSafeArea())
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { deckHeight = $0 }
+        .transition(.opacity)
     }
 
     /// What the list says with no rows: no server yet, one coming up, or nothing started.
