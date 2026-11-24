@@ -2957,7 +2957,27 @@ async fn send_into_bot_chat(
         Some(id) => store::get_session_index_item(id).await?,
         None => None,
     };
-    let own = bots::last_session_of(&bot).await;
+    let prompt = attribute(&send.prompt, from.as_ref());
+    open_bot_chat(&bot, &prompt, calling, from, false, app).await?;
+    if let Some(run) = waiting_run {
+        crate::routines::asked(&run);
+    }
+    Ok(Response::BotSent { bot: bots::summary(bot).await, queued: false })
+}
+
+/// Starts `bot`'s chat on `prompt`, for a bot with none yet: on the agent its
+/// last chat ran, else `calling`'s, else Claude Code. `hidden` marks the
+/// prompt as Dray's own, drawn as nothing, as a kickoff is. The caller holds
+/// the bot's first-chat lock.
+pub(crate) async fn open_bot_chat(
+    bot: &bots::Bot,
+    prompt: &str,
+    calling: Option<SessionIndexItem>,
+    from: Option<MessageSender>,
+    hidden: bool,
+    app: &Sink,
+) -> Result<SessionIndexItem> {
+    let own = bots::last_session_of(bot).await;
     let like = own.clone().or(calling);
     let harness = like.as_ref().map_or(Harness::ClaudeCode, |l| l.harness);
     let model = resolve_model(None, like.as_ref(), harness).await?;
@@ -2967,20 +2987,23 @@ async fn send_into_bot_chat(
     // on a stance nobody could see.
     let permission_mode = own.map_or(ApprovalPolicy::Auto, |o| o.permission_mode);
     let fast = resolve_fast(None, like.as_ref(), harness);
-    let prompt = attribute(&send.prompt, from.as_ref());
     let session_id = uuid::Uuid::now_v7().to_string();
-    let outcome = manager()
+    if hidden {
+        bots::mark_dray_prompt(&session_id, prompt);
+    }
+    let sent = manager()
         .send_msg(
-            &session_id, &prompt, &[], &[], harness, model, effort, permission_mode, fast, &bot.path, None, false,
+            &session_id, prompt, &[], &[], harness, model, effort, permission_mode, fast, &bot.path, None, false,
             None, None, true, None, false, Some(&bot.name), from, None, app,
         )
-        .await?;
-    let item = outcome.snapshot.map(|s| s.index_item).context("the bot's chat started but returned no index entry")?;
-    app.emit(SESSION_CREATED, &item).ok();
-    if let Some(run) = waiting_run {
-        crate::routines::asked(&run);
+        .await;
+    // A send that failed before logging the prompt left the mark behind.
+    if hidden {
+        bots::take_dray_prompt(&session_id, prompt);
     }
-    Ok(Response::BotSent { bot: bots::summary(bot).await, queued: false })
+    let item = sent?.snapshot.map(|s| s.index_item).context("the bot's chat started but returned no index entry")?;
+    app.emit(SESSION_CREATED, &item).ok();
+    Ok(item)
 }
 
 /// Numbers a bot's message to `to` into its exchange and holds it to the

@@ -120,9 +120,67 @@ pub fn approval_prompt(repo: &str, row: &IssueCardRow) -> String {
     )
 }
 
+/// The reader sent `issue` to a bot from the issues page: the bot is told
+/// in a hidden prompt, as an approval tells it, and nothing is written to the
+/// tracker. A bot mid-turn takes it once that turn ends; a bot with no chat
+/// yet opens one on it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn send_issue_to_bot(bot_id: String, issue: super::IssueRef, note: Option<String>, sink: Sink) -> Result<(), Fail> {
+    let bot = crate::bots::find_bot(&bot_id).await?;
+    let prompt = handoff_prompt(&issue, note.as_deref());
+    // Held until a new chat is on the index, as `dray bot send` holds it.
+    let lock = crate::bots::first_chat_lock(&bot.id);
+    let first = lock.lock().await;
+    match crate::bots::chat_of(&bot).await {
+        Some(chat) => {
+            drop(first);
+            crate::orchestration::send_review(chat.session_id, prompt, sink).await?;
+        }
+        // A bot nobody has talked to yet, as every new one is: its chat opens
+        // on the hand-off.
+        None => {
+            crate::orchestration::open_bot_chat(&bot, &prompt, None, None, true, &sink).await?;
+        }
+    }
+    Ok(())
+}
+
+/// What a bot is told of an issue sent to it, with the reader's note last.
+/// Hidden, like an approval's.
+pub fn handoff_prompt(issue: &super::IssueRef, note: Option<&str>) -> String {
+    let link = if issue.url.is_empty() { String::new() } else { format!(" ({})", issue.url) };
+    let mut told = format!(
+        "Work on {id} \"{title}\"{link}. The user sent it to you from the issues page. \
+         Start on it the way your instructions say to work an issue, once you are free.",
+        id = issue.identifier,
+        title = issue.title,
+    );
+    if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
+        told.push_str("\n\nTheir note:\n");
+        told.push_str(note);
+    }
+    told
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_handoff_names_the_issue_and_says_work_on_it() {
+        let issue = super::super::IssueRef {
+            tracker: super::super::IssueTracker::Github,
+            id: String::new(),
+            identifier: "acme/app#7".into(),
+            title: "Fix login".into(),
+            url: "https://github.com/acme/app/issues/7".into(),
+        };
+        let told = handoff_prompt(&issue, None);
+        assert!(told.starts_with("Work on acme/app#7 \"Fix login\" (https://github.com/acme/app/issues/7)."));
+        assert!(!told.contains("label"));
+        assert!(handoff_prompt(&issue, Some("  ship it today ")).ends_with("Their note:\nship it today"));
+        assert!(!handoff_prompt(&issue, Some("   ")).contains("note"));
+    }
 
     #[test]
     fn the_prompt_names_the_issue_and_says_go() {
