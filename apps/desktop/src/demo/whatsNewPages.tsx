@@ -24,7 +24,8 @@ import "../App.css";
 /// over the whole window, as the app would; an action is logged in its row
 /// rather than run. `?takes=ACE` lists only those. F is the one picked.
 
-type TakeProps = { hl: Highlight[]; onAction: (label: string) => void; onClose: () => void };
+type Backdrop = "black" | "blue";
+type TakeProps = { hl: Highlight[]; onAction: (label: string) => void; onClose: () => void; backdrop?: Backdrop };
 
 const title = (h: Highlight) => changelogPlain(h.item.title ?? h.item.body);
 
@@ -534,20 +535,26 @@ function ContinueCard({ row, onClose }: { row: boolean; onClose: () => void }) {
 /// Two columns throughout. Continue fills the last row's empty slot when the
 /// count is odd and takes a row of its own when it is even, so no count leaves
 /// a hole.
-function TakeLanding({ hl, onAction, onClose }: TakeProps) {
+function TakeLanding({ hl, onAction, onClose, backdrop = "black" }: TakeProps) {
   const one = hl.length === 1;
+  const blue = backdrop === "blue";
   return (
-    <Shell label="New in Dray" onClose={onClose} className="overflow-hidden bg-black text-white select-none">
-      <Stripes ink="#FFFFFF14" />
+    <Shell
+      label="New in Dray"
+      onClose={onClose}
+      className={cn("overflow-hidden text-white select-none", blue ? "bg-[#1612F8]" : "bg-black")}
+    >
+      {/* Blue is the site's closing band: its own black stripes at 12%. */}
+      <Stripes ink={blue ? "#0000001F" : "#FFFFFF14"} />
       <header data-tauri-drag-region="deep" className="relative flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">
         <WindowControls />
       </header>
       <main className="relative min-h-0 flex-1 overflow-y-auto px-10 pb-12">
         <div className="mx-auto flex w-full max-w-[1120px] flex-col pt-6">
           <GateHeading>{one ? "New in Dray." : `${hl.length} new things in Dray.`}</GateHeading>
-          {/* Backed by the page's black, so the tiles never show through the
-              2px gaps as a dotted line. */}
-          <div className="grid grid-cols-2 gap-[2px] bg-black">
+          {/* Backed by the page's own colour, so the stripes never show
+              through the 2px gaps as a dotted line. */}
+          <div className={cn("grid grid-cols-2 gap-[2px]", blue ? "bg-[#1612F8]" : "bg-black")}>
             {hl.map((h, i) => (
               <LandingCard key={i} h={h} onAction={onAction} />
             ))}
@@ -598,7 +605,7 @@ const TAKES: { id: string; name: string; what: string; Take: (props: TakeProps) 
   },
 ];
 
-function Row({ id, name, what, Take, hl }: (typeof TAKES)[number] & { hl: Highlight[] }) {
+function Row({ id, name, what, Take, hl, backdrop }: (typeof TAKES)[number] & { hl: Highlight[]; backdrop: Backdrop }) {
   const [open, setOpen] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
   const done = (line: string) => {
@@ -617,7 +624,12 @@ function Row({ id, name, what, Take, hl }: (typeof TAKES)[number] & { hl: Highli
         Open
       </Button>
       {open && (
-        <Take hl={hl} onAction={(label) => done(`action: ${label}`)} onClose={() => done("closed, seen")} />
+        <Take
+          hl={hl}
+          backdrop={backdrop}
+          onAction={(label) => done(`action: ${label}`)}
+          onClose={() => done("closed, seen")}
+        />
       )}
     </li>
   );
@@ -629,6 +641,7 @@ function Demo() {
   // 0 is the next release's own highlights; 1 to 6 are samples.
   const [count, setCount] = useState(() => Math.min(Math.max(Number(params.get("n")) || 0, 0), PAGE_HIGHLIGHTS.length));
   const hl = count === 0 ? NEXT_RELEASE : PAGE_HIGHLIGHTS.slice(0, count);
+  const [backdrop, setBackdrop] = useState<Backdrop>(() => (params.get("bg") === "blue" ? "blue" : "black"));
   return (
     <TooltipProvider>
       <div className="mx-auto flex max-w-3xl flex-col gap-6 p-10">
@@ -664,10 +677,27 @@ function Demo() {
               ))}
             </div>
           </div>
+          <div className="flex items-center gap-3 text-ui">
+            <span className="text-muted-foreground">F backdrop</span>
+            <div role="radiogroup" aria-label="F backdrop" className="flex gap-1">
+              {(["black", "blue"] as const).map((b) => (
+                <Button
+                  key={b}
+                  role="radio"
+                  aria-checked={backdrop === b}
+                  size="sm"
+                  variant={backdrop === b ? "default" : "outline"}
+                  onClick={() => setBackdrop(b)}
+                >
+                  {b === "black" ? "Black" : "Blue"}
+                </Button>
+              ))}
+            </div>
+          </div>
         </header>
         <ul className="flex flex-col border-t border-border">
           {TAKES.filter((t) => !only || only.includes(t.id)).map((t) => (
-            <Row key={t.id} {...t} hl={hl} />
+            <Row key={t.id} {...t} hl={hl} backdrop={backdrop} />
           ))}
         </ul>
       </div>
