@@ -90,4 +90,6 @@ A bot starts tasks on its own server. `--machine cloud` starts one on a fresh Dr
 
 **The app opens on the first bot**, once the live index has landed so its chat is found, and only while the reader has gone nowhere yet; with no bot it stays on the new-task page. Deleting a bot lands on the first bot left, else the new-task page.
 
-**Not built.** Moving a bot between servers. `dray bot` takes no `--machine`: it acts on the server it runs on, so bots message only bots on their own server. No editing a bot's files from the app; ask the bot.
+**`dray --machine <name> bot …` acts on that machine's bots** (#1461), forwarded like any `--machine` request. A `bot send` carries its sender as `session send` does, so the far bot reads who wrote and from which machine, and skips the bot-to-bot guards, which key on a chat the far server does not hold. `--ask` is refused both in the CLI and on the far side: its answer goes back by session id through the bot's own index. `routine add` without `--bot` is refused too, its default being the calling bot, which is here; the other routine verbs run unscoped there.
+
+**Not built.** Moving a bot between servers. Asking a bot on another machine and getting its answer back. No editing a bot's files from the app; ask the bot.

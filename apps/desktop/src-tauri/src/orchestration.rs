@@ -792,6 +792,7 @@ pub async fn answer_forward(forward: Forward, app: Sink) -> Response {
             Request::CreateDraft(create) => create_draft(create, caller, &app).await,
             Request::StartDraft(start) => start_draft(start, caller, &app).await,
             Request::SendMessage(send) => send_message(send, forward.sender, &app).await,
+            Request::SendToBot(send) => send_to_bot(send, forward.sender, &app).await,
             other => dispatch(other, &app).await,
         }
     };
@@ -1044,8 +1045,9 @@ pub(crate) mod elsewhere {
             Request::StartDraft(start) => {
                 forward.caller = caller(parent_of(start.parent_session_id.as_deref()).await?.as_ref()).await?;
             }
-            Request::SendMessage(send) => {
-                if let Some(from) = sender(send.from_session_id.as_deref()).await {
+            Request::SendMessage(SendMessage { from_session_id, .. })
+            | Request::SendToBot(SendToBot { from_session_id, .. }) => {
+                if let Some(from) = sender(from_session_id.as_deref()).await {
                     forward.sender = Some(MessageSender { machine: Some(this_machine().await), ..from });
                 }
             }
@@ -1230,7 +1232,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             app.emit(bots::BOTS_CHANGED, ()).ok();
             Ok(Response::Bot { bot: summary })
         }
-        Request::SendToBot(send) => send_to_bot(send, app).await,
+        Request::SendToBot(send) => send_to_bot(send, None, app).await,
         Request::AddRoutine(add) => {
             let bot = crate::routines::bot_for(add.bot.as_deref(), add.from_session_id.as_deref())
                 .await?
@@ -2830,17 +2832,29 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
 /// Nothing reports back, unlike a task's turns: the bot answers, if it wants
 /// to, with a send of its own. A bot nobody has written to yet has no chat, so
 /// the message opens one, on the agent its last chat ran — else the sender's.
-async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
+/// `carried` is the sender a forwarding server looked up, as for [`send_message`].
+async fn send_to_bot(send: SendToBot, carried: Option<MessageSender>, app: &Sink) -> Result<Response> {
     if send.prompt.trim().is_empty() {
         bail!("a message needs some text");
     }
+    let relayed = carried.is_some();
+    // An answer is passed back by session id through this index, which holds
+    // no session from the machine that sent it.
+    if relayed && send.ask {
+        bail!("--ask can't reach another machine: Dray passes a bot's answer back only to a session on its own server");
+    }
     let bot = bots::find_bot(&send.bot).await?;
-    let mut from = sender(send.from_session_id.as_deref()).await;
+    let mut from = match carried {
+        Some(from) => Some(from),
+        None => sender(send.from_session_id.as_deref()).await,
+    };
     if from.as_ref().is_some_and(|f| f.bot_id.as_deref() == Some(&bot.id)) {
         bail!("a bot cannot message itself");
     }
     match from.as_mut() {
-        Some(f) if f.bot_id.is_some() => stamp_bot_message(f, &bot, &send.prompt, send.ask, app).await?,
+        // The exchange guards key on the sender's chat, which lives on its own
+        // machine, as a relayed `dray session send` skips them too.
+        Some(f) if f.bot_id.is_some() && !relayed => stamp_bot_message(f, &bot, &send.prompt, send.ask, app).await?,
         // A task or a routine run asking: no exchange to guard, and the answer
         // goes back to the session itself.
         Some(f) if send.ask => f.ask = Some(true),

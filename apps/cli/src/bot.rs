@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 use dray_proto::{BotRef, BotSummary, CreateBot, RenameBot, Request, Response, SendToBot};
 
-use super::{parent_session_id, send, unexpected};
+use super::{parent_session_id, send, unexpected, MACHINE};
 
 #[derive(Subcommand)]
 pub enum BotCommand {
@@ -77,6 +77,19 @@ pub struct BotArg {
     bot: String,
 }
 
+/// Why `--machine` cannot carry `command`, or `None` where it can.
+pub fn machine_refusal(command: &BotCommand) -> Option<String> {
+    match command {
+        BotCommand::Send(send) if send.ask => Some(
+            "--ask can't take --machine: Dray passes a bot's answer back only to a session on the bot's own \
+             server, and yours is on this one. Send it without --ask."
+                .into(),
+        ),
+        BotCommand::Routine(command) => crate::routine::machine_refusal(command),
+        _ => None,
+    }
+}
+
 pub fn run(command: BotCommand) -> Result<(), String> {
     match command {
         BotCommand::New(args) => {
@@ -84,8 +97,9 @@ pub fn run(command: BotCommand) -> Result<(), String> {
             let request = Request::CreateBot(CreateBot { name: args.name, shape: args.shape, hue });
             let bot = answered(send(request)?)?;
             println!("{}", bot.id);
+            let machine = MACHINE.get().map(|m| format!("--machine {m} ")).unwrap_or_default();
             eprintln!(
-                "Made \"{}\". Its chat starts with the first message: `dray bot send \"{}\" \"<message>\"`.",
+                "Made \"{}\". Its chat starts with the first message: `dray {machine}bot send \"{}\" \"<message>\"`.",
                 bot.name, bot.name
             );
             Ok(())
