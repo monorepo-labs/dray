@@ -130,17 +130,21 @@ phone reads and drives it over the same WebSocket the desktop uses
     three filters are one `pr_search`, each row read through a checkout
     `repo_checkouts` finds, else its `github:` slug. Spaces, Owner and
     Repository sit behind the filter button. The phone has no active space,
-    so Spaces starts on All. A PR opens the PR sheet's rows with a box on
-    each comment and inline thread, Select unresolved, its tasks newest
-    first (a settled one opens with no dock), and a start box: a bot's task
-    or the reader's own on a machine, agent, model, effort and fast mode,
-    always Auto. A checkout is attached or cloned (`clone_github_repo`) only
-    on Start, then `start_pr_session`.
+    so Spaces starts on All. A PR opens the PR sheet's rows, a comment
+    opening in place on a tap, and its tasks newest first (a settled one
+    opens with no dock). The top bar holds Share (the system sheet) and play,
+    which opens the start sheet (`StartTask.swift`): the reader's words, a
+    bot's task or the reader's own on a machine, agent, model, effort and
+    fast mode, always Auto. A checkout is attached or cloned
+    (`clone_github_repo`) only on Start, then `start_pr_session`.
   - Issues (`Issues.swift`): GitHub and Linear, the desktop's scopes,
     Open/Closed, search, repository, type and label or team and project;
     Linear grouped by state with Done and Cancelled read on opening. An
-    issue moves its status and priority (`update_issue`), and Work on it
-    puts its tag in the new task's words. Linear connects by pasting a key.
+    issue moves its status and priority (`update_issue`). Its play opens
+    the same start sheet: sent to a bot (`send_issue_to_bot`), or a task
+    right there (`send_msg` with `issueIds`) on a checkout of the issue's
+    repo, cloned if none, any project for Linear's; the task then opens.
+    Linear connects by pasting a key.
 
 Left out: push, attachments, the Diff/Files/Browser views,
 forks, settle/pin, the settled list, spaces.
