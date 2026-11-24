@@ -462,10 +462,9 @@ pub enum AgentEventPayload {
         repo: Option<String>,
     },
 
-    /// GitHub issues the agent listed for the reader with `dray session
-    /// issue-card`, each opened in the issues view and approved from its row.
-    /// The rows are as GitHub had them when posted; an approval logs the
-    /// labels it left (`IssueApproved`).
+    /// GitHub issues the agent showed the reader with `dray session
+    /// issue-card`, each opened in the issues view or handed back to the agent
+    /// to work on from its row. The rows are as GitHub had them when posted.
     IssueCard {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -474,12 +473,11 @@ pub enum AgentEventPayload {
         repo: String,
         issues: Vec<IssueCardRow>,
     },
-    /// The reader approved one of an issue card's issues: the `ready` label is
-    /// on it, and the agent was told. `labels` is the issue's after.
+    /// The reader asked the agent to work on one of an issue card's issues,
+    /// and the agent was told. Drawn on the card's row as started.
     IssueApproved {
         card_id: String,
         number: u64,
-        labels: Vec<crate::issues::IssueLabel>,
     },
 
     /// What a bot's turn changed in its instructions, skills or memory, read
@@ -832,6 +830,13 @@ pub struct IssueCardRow {
     pub closed: bool,
     #[serde(default)]
     pub labels: Vec<crate::issues::IssueLabel>,
+    /// The description's opening, flattened to one paragraph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub excerpt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub author: Option<crate::issues::IssuePerson>,
 }
 
 /// `kind` and `change` are plain strings, never enums, so a kind a later build

@@ -1,39 +1,25 @@
-import type { AgentEvent, IssueCardRow, IssueLabel, IssueRef } from "@/types/events";
+import type { AgentEvent, IssueCardRow, IssueRef } from "@/types/events";
 
 export type IssueCardPayload = Extract<AgentEvent["payload"], { type: "issue_card" }>;
 
-/// The label an approval adds: `READY` in card.rs.
-export const READY = "ready";
+/// Each card's issues the reader handed to the agent, by card id.
+export type IssueStarts = Map<string, Set<number>>;
 
-/// Each card's approvals, by card id then issue number, with the labels the
-/// issue carried after. A row approved twice keeps the newest.
-export type IssueApprovals = Map<string, Map<number, IssueLabel[]>>;
-
-export function issueApprovals(events: readonly AgentEvent[]): IssueApprovals {
-  const out: IssueApprovals = new Map();
+export function issueStarts(events: readonly AgentEvent[]): IssueStarts {
+  const out: IssueStarts = new Map();
   for (const { payload } of events) {
     if (payload.type !== "issue_approved") continue;
-    const card = out.get(payload.cardId) ?? new Map<number, IssueLabel[]>();
-    card.set(payload.number, payload.labels);
+    const card = out.get(payload.cardId) ?? new Set<number>();
+    card.add(payload.number);
     out.set(payload.cardId, card);
   }
   return out;
 }
 
-/// A stable string for `issueApprovals`, so a context built from it changes
-/// only when an approval lands, not on every event.
-export function approvalsKey(approvals: IssueApprovals): string {
-  return [...approvals].map(([card, rows]) => `${card}:${[...rows.keys()].join(",")}`).join(";");
-}
-
-/// A row as it stands: its labels after an approval where there was one, and
-/// approved where it was approved here or already carries the label.
-export function rowState(row: IssueCardRow, approved: Map<number, IssueLabel[]> | undefined) {
-  const labels = approved?.get(row.number) ?? row.labels;
-  return {
-    labels,
-    approved: approved?.has(row.number) === true || labels.some((l) => l.name.toLowerCase() === READY),
-  };
+/// A stable string for `issueStarts`, so a context built from it changes
+/// only when a hand-off lands, not on every event.
+export function startsKey(starts: IssueStarts): string {
+  return [...starts].map(([card, rows]) => `${card}:${[...rows].join(",")}`).join(";");
 }
 
 /// What `openIssue` takes for a row: GitHub's `owner/repo#n` identifier.

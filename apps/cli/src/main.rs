@@ -160,9 +160,9 @@ enum SessionCommand {
     /// Post a card in this session's chat for a task's open pull request, so
     /// the user can merge it from the chat.
     MergeCard(SessionArg),
-    /// Post a card in this session's chat listing GitHub issues, so the user
-    /// can open each one in Dray and approve it, which adds the `ready` label
-    /// and tells you so you can start on it.
+    /// Post a card in this session's chat showing GitHub issues, one or
+    /// several. The user opens each in Dray, or presses Work on it, which
+    /// tells you to start on that issue.
     IssueCard(IssueCardArgs),
     /// Say in one line what a stalled task needs from the user, for the "Waiting
     /// on you" card in this bot's chat. Cleared when the task moves; no text
@@ -188,7 +188,7 @@ struct IssueCardArgs {
     /// Issue numbers, in the order to list them: 12 15 #18.
     #[arg(required = true, value_parser = issue_number)]
     numbers: Vec<u64>,
-    /// A short heading over the list, like "Ready to start".
+    /// A short heading over the issues, like "Open bugs".
     #[arg(long)]
     title: Option<String>,
 }

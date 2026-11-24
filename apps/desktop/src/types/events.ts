@@ -390,7 +390,7 @@ repo?: string, } | { "type": "issue_card", title?: string,
 /**
  * `owner/name`.
  */
-repo: string, issues: Array<IssueCardRow>, } | { "type": "issue_approved", cardId: string, number: number, labels: Array<IssueLabel>, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "reaction", 
+repo: string, issues: Array<IssueCardRow>, } | { "type": "issue_approved", cardId: string, number: number, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "reaction", 
 /**
  * The event reacted to, always in this same session: a `user_message`,
  * or with `by_user` an `assistant_text`.
@@ -1151,7 +1151,11 @@ dataUrl: string, bytes: number, };
  * closed as a bool, never the issues page's state enum, so the logged line
  * cannot fail a reader whose enum lacks a kind.
  */
-export type IssueCardRow = { number: number, title: string, url: string, closed: boolean, labels: Array<IssueLabel>, };
+export type IssueCardRow = { number: number, title: string, url: string, closed: boolean, labels: Array<IssueLabel>, 
+/**
+ * The description's opening, flattened to one paragraph.
+ */
+excerpt?: string, author?: IssuePerson, };
 
 export type IssueComment = { author: IssuePerson, body: string, createdAt: string, url: string | null, };
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { botItems } from "@/lib/botTranscript";
-import { approvalsKey, issueApprovals, rowRef, rowState } from "@/lib/issueCard";
+import { issueStarts, rowRef, startsKey } from "@/lib/issueCard";
 import { buildTranscript } from "@/lib/transcript";
 import type { AgentEvent, IssueCardRow } from "@/types/events";
 
@@ -10,28 +10,18 @@ const event = (payload: object): AgentEvent =>
   ({ id: `e${seq}`, sessionId: "s", harness: "claude_code", seq: seq++, ts: "", turnId: null, subagent: null, payload }) as AgentEvent;
 
 const bug = { name: "bug", color: "#d73a4a" };
-const ready = { name: "Ready", color: "#0e8a16" };
 const row = (number: number, labels = [bug]): IssueCardRow => ({ number, title: `Issue ${number}`, url: `u${number}`, closed: false, labels });
-const card = () => event({ type: "issue_card", repo: "acme/app", issues: [row(1), row(2), row(3, [ready])] });
-const approve = (cardId: string, number: number) =>
-  event({ type: "issue_approved", cardId, number, labels: [bug, { name: "ready", color: "#0e8a16" }] });
+const card = () => event({ type: "issue_card", repo: "acme/app", issues: [row(1), row(2), row(3)] });
+const approve = (cardId: string, number: number) => event({ type: "issue_approved", cardId, number });
 
-describe("issue card approvals", () => {
-  it("reads each card's approvals with the labels they left", () => {
+describe("issue card hand-offs", () => {
+  it("reads each card's started issues", () => {
     const one = card();
     const other = card();
-    const approvals = issueApprovals([one, approve(one.id, 2), other, approve(other.id, 1)]);
-    expect([...approvals.get(one.id)!.keys()]).toEqual([2]);
-    expect(approvals.get(one.id)!.get(2)!.map((l) => l.name)).toEqual(["bug", "ready"]);
-    expect(approvalsKey(approvals)).toBe(`${one.id}:2;${other.id}:1`);
-  });
-
-  it("counts a row approved here, or already labelled ready", () => {
-    const one = card();
-    const approved = issueApprovals([one, approve(one.id, 2)]).get(one.id);
-    expect(rowState(row(1), approved).approved).toBe(false);
-    expect(rowState(row(2), approved)).toEqual({ approved: true, labels: [bug, { name: "ready", color: "#0e8a16" }] });
-    expect(rowState(row(3, [ready]), undefined).approved).toBe(true);
+    const starts = issueStarts([one, approve(one.id, 2), other, approve(other.id, 1), approve(one.id, 3)]);
+    expect([...starts.get(one.id)!]).toEqual([2, 3]);
+    expect([...starts.get(other.id)!]).toEqual([1]);
+    expect(startsKey(starts)).toBe(`${one.id}:2,3;${other.id}:1`);
   });
 
   it("opens a row by GitHub's owner/repo#n", () => {

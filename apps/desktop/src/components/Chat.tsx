@@ -35,7 +35,7 @@ import { readerMessagesAfter } from "@/lib/mergeCard";
 import { isProvisional } from "@/lib/provisional";
 import { dropOlder, loadOlder } from "@/lib/olderPages";
 import { readerReactions } from "@/lib/reactions";
-import { approvalsKey, issueApprovals } from "@/lib/issueCard";
+import { issueStarts, startsKey } from "@/lib/issueCard";
 import { invoke } from "@/lib/transport";
 import type { Bot, SessionSnapshot } from "@/types/events";
 
@@ -756,11 +756,11 @@ export default function Chat({
     [reactionKey, closed],
   );
 
-  // Rebuilt only when an approval lands, like the reactions above.
-  const approvals = issueApprovals(segments.flatMap((s) => s.events));
-  const approvedKey = approvalsKey(approvals);
+  // Rebuilt only when a hand-off lands, like the reactions above.
+  const starts = issueStarts(segments.flatMap((s) => s.events));
+  const startedKey = startsKey(starts);
   const settled = !!session?.archived;
-  const issueCards = useMemo(() => ({ approvals, closed: settled }), [approvedKey, settled]);
+  const issueCards = useMemo(() => ({ starts, closed: settled }), [startedKey, settled]);
 
   if (!session) return null;
 
