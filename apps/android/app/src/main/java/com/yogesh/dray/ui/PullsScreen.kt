@@ -317,7 +317,10 @@ private fun PullRowView(row: PullRow, task: SessionKey?, showRepo: Boolean, onCl
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 val foot = Dray.Font.footnote.copy(color = Dray.tertiary)
                 Text("#${row.mark.number}", style = foot, maxLines = 1)
-                if (showRepo) Text(row.repoName.substringAfterLast('/'), style = foot, maxLines = 1)
+                if (showRepo) Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+                    RepoMark(12.dp, Dray.tertiary)
+                    Text(row.repoName.substringAfterLast('/'), style = foot, maxLines = 1)
+                }
                 // Its latest task; a bot's wears its face. A PR with none says nothing.
                 val item = task?.let { store.items[it] }
                 if (item != null) {
