@@ -35,6 +35,15 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 **Commit, push and open the PR unasked once the work is done and tested** — draft, the default road above — then stop for his check. Mark it ready and loop the Claude review only after his go. End with a short "what changed" and the proof, plus only what truly needs a human — never a list of steps to try. Still ask before anything rewriting history, and before a branch nobody asked for.
 
+**PR screenshots and videos go up with `dray upload <file>`, never into the repo.** It prints one markdown line per file; paste it into the PR body. A `dray` with no `upload` command yet = plain curl, the token on stdin so it stays off the process list:
+
+```bash
+printf 'header = "Authorization: Bearer %s"\n' "$(gh auth token)" \
+  | curl -s -K - --data-binary @shot.png https://upload.drayhq.com/
+```
+
+It answers JSON whose `url` is the public link. PNG, JPEG, GIF, WebP up to 20 MB; MP4, WebM, MOV up to 100 MB; 30 uploads an hour per user. Needs a GitHub login (`gh auth login`, or `GITHUB_TOKEN`). Uploads are public. A video prints as a link, not an embed. Never commit an image for a PR, never push a branch to hold one. Endpoint = [apps/upload-worker](apps/upload-worker), client = [upload.rs](apps/cli/src/upload.rs).
+
 **Always write commit message with `caveman-commit` skill.** Invoke it, don't imitate — skill carry format and it can change under you. Every commit here, amend included.
 
 **Comment sparingly.** ~10% of lines, only where code cannot speak for itself:
