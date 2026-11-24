@@ -365,6 +365,19 @@ title, the PR number, its live status, a Merge button and an Open on GitHub
 link. It is refused when the task's branch has no open pull request, and while
 the task is still mid-turn.
 
+## Listing issues for the user
+
+```bash
+dray session issue-card owner/repo 12 15 18 --title "Ready to start"
+```
+
+When you show the user GitHub issues to pick from, post them as a card instead
+of listing them in text. It lands in your own chat: one row per issue with its
+status, number, title and labels, in the order given, 20 at most. A row opens
+the issue in Dray. Its check button approves it: Dray adds the `ready` label on
+GitHub and tells you which one in a message of its own, so start on it then.
+`--title` is optional. Don't restate the card in your reply.
+
 ```bash
 dray upload before.png after.png   # one ![name](url) line per file
 ```

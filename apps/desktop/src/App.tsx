@@ -204,6 +204,7 @@ import { useUpdater } from "@/hooks/useUpdater";
 import { appendToDraft, onDraftWrite, readDraft, writeDraft } from "@/hooks/useDraft";
 import { draftKey, useDrafts } from "@/hooks/useDrafts";
 import { issueTag, rememberIssueTitle, setIssueOpener } from "@/lib/issue";
+import { readIssueTracker, setIssueRepo, setIssueTracker } from "@/lib/issueTracker";
 import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
 import { focusComposer, focusComposerEnd } from "@/lib/composerFocus";
@@ -2769,6 +2770,13 @@ function App() {
     setIssueOpener((issue) => {
       // A pull request tagged from the `#` menu is no issue to open here.
       if (prRepoSlug(issue.url)) return openLink(issue.url);
+      // A GitHub issue opened from the Linear list would sit beside a list
+      // about something else: the page moves to the issue's own repo.
+      const repo = issue.tracker === "github" ? issue.identifier.split("#")[0] : null;
+      if (repo && readIssueTracker() !== "github") {
+        setIssueRepo(repo);
+        setIssueTracker("github");
+      }
       setPickedIssue(issue);
       setPage("issues");
     });

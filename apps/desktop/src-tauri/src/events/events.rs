@@ -462,6 +462,26 @@ pub enum AgentEventPayload {
         repo: Option<String>,
     },
 
+    /// GitHub issues the agent listed for the reader with `dray session
+    /// issue-card`, each opened in the issues view and approved from its row.
+    /// The rows are as GitHub had them when posted; an approval logs the
+    /// labels it left (`IssueApproved`).
+    IssueCard {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        title: Option<String>,
+        /// `owner/name`.
+        repo: String,
+        issues: Vec<IssueCardRow>,
+    },
+    /// The reader approved one of an issue card's issues: the `ready` label is
+    /// on it, and the agent was told. `labels` is the issue's after.
+    IssueApproved {
+        card_id: String,
+        number: u64,
+        labels: Vec<crate::issues::IssueLabel>,
+    },
+
     /// What a bot's turn changed in its instructions, skills or memory, read
     /// off the commit Dray made of its folder. Drawn as "Learned" rows with
     /// View diff and Undo, so a lesson the bot gave itself is never silent.
@@ -798,6 +818,22 @@ pub struct ToolResult {
 }
 
 /// One file a bot's turn changed under its instructions, skills or memory.
+/// One issue on an [`IssueCard`](AgentEventPayload::IssueCard). Open or
+/// closed as a bool, never the issues page's state enum, so the logged line
+/// cannot fail a reader whose enum lacks a kind.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCardRow {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    #[serde(default)]
+    pub closed: bool,
+    #[serde(default)]
+    pub labels: Vec<crate::issues::IssueLabel>,
+}
+
 /// `kind` and `change` are plain strings, never enums, so a kind a later build
 /// adds cannot fail an older reader's whole line.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

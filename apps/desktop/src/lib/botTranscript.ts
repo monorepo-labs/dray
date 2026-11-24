@@ -12,7 +12,8 @@ export type BotItem =
   /// An error, or a turn that failed: drawn as the transcript draws them, since
   /// a bot turn that fails before answering otherwise ends with no word why.
   | { kind: "notice"; event: AgentEvent }
-  /// A task's pull request, posted by `dray session merge-card`.
+  /// A task's pull request, posted by `dray session merge-card`, or issues
+  /// posted by `dray session issue-card`.
   | { kind: "card"; event: AgentEvent }
   | { kind: "task"; key: string; sessionId: string; ts: string; title?: string }
   | { kind: "report"; event: AgentEvent; sessionId: string; title: string }
@@ -356,7 +357,7 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       if (hasText(p.text) && !review) items.push({ kind: "assistant", event });
     } else if (p.type === "error" || p.type === "notice") {
       items.push({ kind: "notice", event });
-    } else if (p.type === "merge_card") {
+    } else if (p.type === "merge_card" || p.type === "issue_card") {
       items.push({ kind: "card", event });
     } else if (p.type === "task_started") {
       const title = cardTitles.get(p.taskId) ?? p.title;

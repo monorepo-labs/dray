@@ -21,6 +21,8 @@
 //! session, recorded on its index entry, and it is what draws the panel's tab
 //! and what a tag resolves to.
 
+#[path = "card.rs"]
+pub mod card;
 #[path = "github.rs"]
 pub mod github;
 #[path = "linear.rs"]
@@ -1061,7 +1063,8 @@ pub async fn get_issue(
 /// Moves an issue's status or priority, and answers with the issue as it now
 /// stands.
 ///
-/// **The only write this app makes to a tracker.** Everything else here reads:
+/// **The only write this app makes to a tracker** but an issue card's
+/// approval, which adds a label ([`card`]). Everything else here reads:
 /// a link is a fact about the session, and status and priority are the two
 /// things a reader otherwise leaves the app to change. Assignee, labels and
 /// comments stay out — the agent has the tracker's own MCP server for those,

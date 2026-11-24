@@ -681,10 +681,12 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
       continue;
     }
 
-    if (event.payload.type === "merge_card") {
+    if (event.payload.type === "merge_card" || event.payload.type === "issue_card") {
       current.cards.push(event);
       continue;
     }
+    // Drawn on its card, never as a row of its own.
+    if (event.payload.type === "issue_approved") continue;
     if (event.payload.type === "tool_call_started") current.toolCalls += 1;
     if (event.payload.type === "assistant_text") current.messages += 1;
     // Only a *rendered* row unseats the flag. A replayed log carries trailing

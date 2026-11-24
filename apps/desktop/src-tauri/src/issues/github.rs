@@ -352,6 +352,32 @@ pub async fn update_issue(identifier: &str, state_id: &str) -> Result<(), IssueU
         .map(|_| ())
 }
 
+/// One issue as a list row reads it: no body, no comments.
+pub async fn get_row(repo: &str, number: u64) -> Result<Issue, IssueUnavailable> {
+    let dir = neutral_dir().await?;
+    let out = run_json(&dir, &["issue", "view", &number.to_string(), "-R", repo], LIST_FIELDS).await?;
+    map_issue(&parse(&out)?, repo).ok_or_else(|| IssueUnavailable::Other(format!("Could not read {repo}#{number}")))
+}
+
+/// Puts `label` on an issue and answers its labels after. A repository with
+/// no such label is given one first, since `gh` refuses to add a label the
+/// repository lacks.
+pub async fn add_label(repo: &str, number: u64, label: &str, color: &str) -> Result<Vec<IssueLabel>, IssueUnavailable> {
+    let dir = neutral_dir().await?;
+    let number = number.to_string();
+    let edit = ["issue", "edit", &number, "-R", repo, "--add-label", label];
+    match run(&dir, &edit).await {
+        // "failed to update …: 'ready' not found", measured on gh 2.x.
+        Err(IssueUnavailable::Other(message)) if message.contains(&format!("'{label}' not found")) => {
+            run(&dir, &["label", "create", label, "-R", repo, "--color", color]).await?;
+            run(&dir, &edit).await?;
+        }
+        out => drop(out?),
+    }
+    let out = run(&dir, &["issue", "view", &number, "-R", repo, "--json", "labels"]).await?;
+    Ok(map_labels(&parse(&out)?))
+}
+
 /// The filter row's options: the repositories, the statuses each offers, and
 /// the labels of the one being read.
 ///
@@ -589,13 +615,7 @@ fn map_issue(node: &Value, repo: &str) -> Option<Issue> {
         // is the same reading the PR panel takes of a review.
         assignee: array(node, "assignees").first().and_then(map_person),
         author: node.get("author").and_then(map_person),
-        labels: array(node, "labels")
-            .iter()
-            .map(|label| IssueLabel {
-                name: text(label, "name"),
-                color: map_label_color(label),
-            })
-            .collect(),
+        labels: map_labels(node),
         // The repository, which is what the identifier is built from and what
         // the page joins a row to its status menu on.
         team: Some(repo.to_string()),
@@ -605,6 +625,13 @@ fn map_issue(node: &Value, repo: &str) -> Option<Issue> {
         pull_requests: pull_requests(node),
         issue_type: node.get("issueType").and_then(map_issue_type),
     })
+}
+
+fn map_labels(node: &Value) -> Vec<IssueLabel> {
+    array(node, "labels")
+        .iter()
+        .map(|label| IssueLabel { name: text(label, "name"), color: map_label_color(label) })
+        .collect()
 }
 
 /// Linked pull requests, by number.

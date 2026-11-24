@@ -4,6 +4,7 @@ import { ArrowDown } from "lucide-react";
 import AssistantMessage from "@/components/chat/AssistantMessage";
 import BotTranscript, { type BotTask } from "@/components/chat/BotTranscript";
 import BackgroundTasksIndicator from "@/components/chat/BackgroundTasksIndicator";
+import { IssueCardChatContext } from "@/components/chat/IssueCard";
 import { MergeCardChatContext } from "@/components/chat/MergeCard";
 import ApiRetryIndicator from "@/components/chat/ApiRetryIndicator";
 import PermissionRequest from "@/components/chat/PermissionRequest";
@@ -34,6 +35,7 @@ import { readerMessagesAfter } from "@/lib/mergeCard";
 import { isProvisional } from "@/lib/provisional";
 import { dropOlder, loadOlder } from "@/lib/olderPages";
 import { readerReactions } from "@/lib/reactions";
+import { approvalsKey, issueApprovals } from "@/lib/issueCard";
 import { invoke } from "@/lib/transport";
 import type { Bot, SessionSnapshot } from "@/types/events";
 
@@ -754,6 +756,12 @@ export default function Chat({
     [reactionKey, closed],
   );
 
+  // Rebuilt only when an approval lands, like the reactions above.
+  const approvals = issueApprovals(segments.flatMap((s) => s.events));
+  const approvedKey = approvalsKey(approvals);
+  const settled = !!session?.archived;
+  const issueCards = useMemo(() => ({ approvals, closed: settled }), [approvedKey, settled]);
+
   if (!session) return null;
 
   // fx and OpenCode alone: each takes one prompt per turn, so a held message waits out the
@@ -778,6 +786,7 @@ export default function Chat({
     // `@mention` and a file link, several components down. See `useChatSession`.
     <ChatSessionContext value={chatSession}>
       <MergeCardChatContext value={cardChat}>
+      <IssueCardChatContext value={issueCards}>
       <ReactionsContext value={reactions}>
       <div className="relative h-full">
         <div
@@ -934,6 +943,7 @@ export default function Chat({
 
       </div>
       </ReactionsContext>
+      </IssueCardChatContext>
       </MergeCardChatContext>
     </ChatSessionContext>
   );
