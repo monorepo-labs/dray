@@ -27,7 +27,7 @@ import "../App.css";
 type Backdrop = "black" | "blue";
 type Cards = "dark" | "white";
 type Layout = "gaps" | "small" | "borders";
-type Exit = "card" | "title";
+type Exit = "card" | "bare" | "title";
 type Order = "picture" | "title";
 type TakeProps = {
   hl: Highlight[];
@@ -539,7 +539,23 @@ function LandingCard({
 /// in full white. Solid white was tried and glared on the black. `row` lays it
 /// across both columns.
 /// On white cards it is a step darker, #EDEDEF with dark type.
-function ContinueCard({ row, onClose, white }: { row: boolean; onClose: () => void; white?: boolean }) {
+/// `bare` has no fill: white type and arrow straight on the page, with a
+/// hairline in white to hold the card's shape where the page shows through
+/// the gaps around it. In the Borders layout the grid's own fill is the line,
+/// so a bare card there takes the page's colour instead of showing it.
+function ContinueCard({
+  row,
+  onClose,
+  white,
+  bare,
+  page,
+}: {
+  row: boolean;
+  onClose: () => void;
+  white?: boolean;
+  bare?: "outlined" | "flat";
+  page?: string;
+}) {
   const arrow = (
     <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden>
       <path d="M4 12h14M12 5l7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" />
@@ -552,9 +568,11 @@ function ContinueCard({ row, onClose, white }: { row: boolean; onClose: () => vo
       onClick={onClose}
       className={cn(
         "flex cursor-pointer text-left outline-none transition-colors focus-visible:ring-1",
-        white
-          ? "bg-[#EDEDEF] text-[#0A0A0A] hover:bg-[#E2E2E5] focus-visible:ring-black/40"
-          : "bg-[#242424] text-white hover:bg-[#2C2C2C] focus-visible:ring-white/40",
+        bare
+          ? cn("text-white hover:bg-white/10 focus-visible:ring-white/50", bare === "outlined" && "border border-white/40", page)
+          : white
+            ? "bg-[#EDEDEF] text-[#0A0A0A] hover:bg-[#E2E2E5] focus-visible:ring-black/40"
+            : "bg-[#242424] text-white hover:bg-[#2C2C2C] focus-visible:ring-white/40",
         row ? "col-span-2 h-24 items-center justify-between px-8" : "min-h-48 flex-col justify-between p-8",
       )}
     >
@@ -613,7 +631,7 @@ function TakeLanding({
   const one = hl.length === 1;
   const blue = backdrop === "blue";
   const white = cards === "white";
-  const asCard = exit === "card";
+  const asCard = exit !== "title";
   return (
     <Shell
       label="New in Dray"
@@ -654,7 +672,15 @@ function TakeLanding({
                 titleFirst={order === "title"}
               />
             ))}
-            {asCard && <ContinueCard row={hl.length % 2 === 0} onClose={onClose} white={white} />}
+            {asCard && (
+              <ContinueCard
+                row={hl.length % 2 === 0}
+                onClose={onClose}
+                white={white}
+                bare={exit === "bare" ? (layout === "borders" ? "flat" : "outlined") : undefined}
+                page={layout === "borders" ? (blue ? "bg-[#1612F8]" : "bg-black") : undefined}
+              />
+            )}
           </div>
         </div>
       </main>
@@ -765,7 +791,10 @@ function Demo() {
     const l = params.get("layout");
     return l === "small" || l === "borders" ? l : "gaps";
   });
-  const [exit, setExit] = useState<Exit>(() => (params.get("exit") === "card" ? "card" : "title"));
+  const [exit, setExit] = useState<Exit>(() => {
+    const e = params.get("exit");
+    return e === "card" || e === "bare" ? e : "title";
+  });
   const [order, setOrder] = useState<Order>(() => (params.get("order") === "title" ? "title" : "picture"));
   return (
     <TooltipProvider>
@@ -850,7 +879,7 @@ function Demo() {
             </div>
             <span className="ml-3 text-muted-foreground">Exit</span>
             <div role="radiogroup" aria-label="F exit" className="flex gap-1">
-              {(["card", "title"] as const).map((e) => (
+              {(["card", "bare", "title"] as const).map((e) => (
                 <Button
                   key={e}
                   role="radio"
@@ -859,7 +888,7 @@ function Demo() {
                   variant={exit === e ? "default" : "outline"}
                   onClick={() => setExit(e)}
                 >
-                  {e === "card" ? "Card" : "Title button"}
+                  {{ card: "Card", bare: "Card, no fill", title: "Title button" }[e]}
                 </Button>
               ))}
             </div>
