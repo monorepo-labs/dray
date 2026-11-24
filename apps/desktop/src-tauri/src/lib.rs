@@ -72,6 +72,7 @@ pub mod drafts;
 pub mod projects;
 pub mod push;
 pub mod remote_reports;
+pub mod remote_asks;
 pub mod held_flags;
 pub mod routines;
 #[cfg(feature = "desktop")]

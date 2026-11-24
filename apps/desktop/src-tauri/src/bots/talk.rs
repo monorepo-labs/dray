@@ -46,6 +46,9 @@ pub struct Ask {
     /// asking is in none.
     pub chain: Option<String>,
     pub hop: Option<u32>,
+    /// Asked from another machine: the answer is kept for that machine's
+    /// server to collect by this id ([`crate::remote_asks`]).
+    pub remote: Option<String>,
 }
 
 /// Why a bot's message was not sent.
@@ -156,6 +159,7 @@ pub fn delivered(session_id: &str, from: Option<&MessageSender>) -> bool {
         bot_id: from.bot_id.clone(),
         chain: from.chain.clone(),
         hop: from.hop,
+        remote: from.ask_id.clone(),
     };
     ASKS.lock().unwrap().entry(session_id.to_string()).or_default().push(ask);
     true
@@ -187,6 +191,16 @@ pub fn pass_back(
         let Some(item) = crate::store::get_session_index_item(&session_id).await? else { return Ok(()) };
         let Some(replier) = super::bot_at(&item.cwd).await else { return Ok(()) };
         for ask in asks {
+            if let Some(id) = &ask.remote {
+                let answer = crate::remote_asks::Answer {
+                    session_id: session_id.clone(),
+                    title: replier.name.clone(),
+                    bot_id: replier.id.clone(),
+                    text: text.clone(),
+                };
+                crate::remote_asks::answer(id, answer).await?;
+                continue;
+            }
             let to = match &ask.bot_id {
                 Some(bot_id) => {
                     let Ok(asker) = super::find_bot(bot_id).await else { continue };
@@ -284,7 +298,7 @@ mod tests {
     #[test]
     fn an_ask_waits_for_its_turn_to_end_unless_answered_by_hand() {
         assert!(delivered("t-ask", Some(&bot_message("c", 1, true))));
-        let ask = Ask { session_id: "s".into(), bot_id: Some("ops".into()), chain: Some("c".into()), hop: Some(1) };
+        let ask = Ask { session_id: "s".into(), bot_id: Some("ops".into()), chain: Some("c".into()), hop: Some(1), remote: None };
         assert_eq!(take_asks("t-ask"), vec![ask]);
         assert!(take_asks("t-ask").is_empty());
 
@@ -309,8 +323,25 @@ mod tests {
     fn a_task_can_ask_too() {
         let task = MessageSender { session_id: "task".into(), title: "Fix".into(), ask: Some(true), ..Default::default() };
         assert!(delivered("t-task", Some(&task)));
-        let ask = Ask { session_id: "task".into(), bot_id: None, chain: None, hop: None };
+        let ask = Ask { session_id: "task".into(), bot_id: None, chain: None, hop: None, remote: None };
         assert_eq!(take_asks("t-task"), vec![ask]);
         assert!(!delivered("t-task", None));
+    }
+
+    /// An ask from another machine carries the id its server collects by, and
+    /// never reaches the log: the field is in memory alone.
+    #[test]
+    fn an_ask_from_another_machine_keeps_its_id() {
+        let far = MessageSender {
+            session_id: "far".into(),
+            title: "Fix".into(),
+            machine: Some("laptop".into()),
+            ask: Some(true),
+            ask_id: Some("q1".into()),
+            ..Default::default()
+        };
+        assert!(delivered("t-far", Some(&far)));
+        assert_eq!(take_asks("t-far")[0].remote.as_deref(), Some("q1"));
+        assert!(serde_json::to_value(&far).unwrap().get("askId").is_none());
     }
 }
