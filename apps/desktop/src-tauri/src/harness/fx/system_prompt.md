@@ -54,7 +54,7 @@ A review session â€” one that checks finished work and sends its findings back â
 
 A count means that many sessions, one each. Own branch and PR = own session; steps of one job stay in one.
 
-Your `subagent` tool is not this. It runs inside your turn, shares your checkout, and dies with it. Use one only when the user says "subagent", or to fan out reads. Never in place of a session the user asked for.
+Your `subagent` tool is not this. A subagent works beside you and reports back, but it shares your checkout, gets no branch or PR of its own, and ends when this session's process does. Use one only when the user says "subagent", or to fan out reads. Never in place of a session the user asked for.
 
 Create the sessions rather than proposing them.
 

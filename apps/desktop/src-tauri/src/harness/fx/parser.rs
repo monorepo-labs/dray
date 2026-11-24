@@ -68,6 +68,8 @@ pub enum SessionUpdate {
         kind: ToolKind,
         #[serde(default)]
         raw_input: Option<Value>,
+        #[serde(default, rename = "_meta")]
+        meta: ToolCallMeta,
     },
     #[serde(rename_all = "camelCase")]
     ToolCallUpdate {
@@ -117,6 +119,36 @@ pub struct FxInfoMeta {
     /// sends `null` to say the retry is over, `Some(Some(_))` while it runs.
     #[serde(default, deserialize_with = "present")]
     pub model_response_recovery: Option<Option<Recovery>>,
+}
+
+/// fx 0.0.17's account of a call beside ACP's own fields. Every level
+/// defaults, so a call without it — any older fx — parses as before.
+#[derive(Debug, Default, Deserialize)]
+pub struct ToolCallMeta {
+    #[serde(default)]
+    pub fx: FxToolCallMeta,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FxToolCallMeta {
+    #[serde(default)]
+    pub tool_call: FxToolCall,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct FxToolCall {
+    /// Set on an MCP tool's call, which a toolbox run is shown as.
+    #[serde(default)]
+    pub mcp: Option<McpIdentity>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct McpIdentity {
+    #[serde(default)]
+    pub server: String,
+    #[serde(default)]
+    pub tool: String,
 }
 
 /// One reading of a retry. `state` is `waiting` (a countdown to the next try),

@@ -211,6 +211,18 @@ describe("fx's own tools", () => {
     expect(groupLabel("skill", 2, false)).toBe("Read 2 skills");
     expect(groupLabel("capability_search", 3, false)).toBe("Searched 3 capabilities");
   });
+
+  // fx 0.0.17's toolbox, as captured in `toolbox.jsonl`.
+  it("names a toolbox call by what it did", () => {
+    const search = { search: "echo" };
+    expect(toolLabel(verbName("toolbox", "other", search), false)).toBe("Searched tools");
+    expect(toolSummary("toolbox", "other", search)).toBe("echo");
+    const skill = { open: "caveman-help", kind: "skill" };
+    expect(toolLabel(verbName("toolbox", "other", skill), false)).toBe("Read Skill");
+    expect(toolSummary("toolbox", "other", skill)).toBe("caveman-help");
+    expect(toolLabel(verbName("toolbox", "other", { open: "mcp_echo_echo" }), true)).toBe("Opening");
+    expect(groupLabel("toolbox", 2, false)).toBe("Used toolbox 2 calls");
+  });
 });
 
 /// What a delegated run was asked to do, and what it was asked to do it with.
@@ -237,6 +249,18 @@ describe("subagentBrief", () => {
     );
     expect(verbName("subagent", "subagent_spawn", { action: "message" })).toBe("subagent");
     expect(toolSummary("subagent", "subagent_spawn", { action: "message", agent: "w", message: "List" })).toBe("List");
+  });
+
+  // fx 0.0.17's other actions, as captured in `subagent_stop.jsonl`.
+  it("names the child fx 0.0.17 checks, stops or messages mid-work", () => {
+    const stop = { action: "stop", agent: "sleeper" };
+    expect(toolLabel(verbName("subagent", "other", stop), false)).toBe("Stopped");
+    expect(toolSummary("subagent", "other", stop)).toBe("sleeper");
+    expect(toolLabel(verbName("subagent", "other", { action: "status", agent: "s" }), false)).toBe("Checked");
+    expect(toolLabel(verbName("subagent", "other", { action: "message", agent: "s", message: "m" }), true)).toBe(
+      "Messaging",
+    );
+    expect(toolSummary("subagent", "other", { action: "wait", agent: "s" })).toBeNull();
   });
 
   // fx 0.0.17, as captured: a message to a named child, not a nested request.

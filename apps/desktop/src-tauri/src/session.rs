@@ -4425,6 +4425,12 @@ async fn apply_live_controls(
     // the two cannot disagree: a pick neither respawns for nor applies would
     // be recorded in the index and never reach the child.
     let caps = s.harness.caps();
+    // fx carries the old model's level across a switch and lists it among the
+    // new one's, so the ladder it teaches leaves that level out until fx is
+    // seen taking it. Re-sent, fx either takes it, which teaches the ladder, or
+    // refuses it, which is reported. Left alone, the next send judged the
+    // level unsupported and dropped it from the index (#1492).
+    let reapply_effort = matches!(s.stdin, Transport::Fx(_)) && s.model != *model && model_spec.is_some();
 
     if caps.applies_model_in_place && s.model != *model {
         // Claude Code names a default, so the spec is there by
@@ -4460,7 +4466,7 @@ async fn apply_live_controls(
             None => bail!("no model to switch the session to"),
         }
     }
-    if caps.applies_effort_in_place && s.effort != effort {
+    if caps.applies_effort_in_place && (s.effort != effort || (reapply_effort && effort.is_some())) {
         // A declined effort must not take the prompt down with it. fx
         // refuses one on a model that does no reasoning, and losing the
         // message over a level is a far worse answer than running the
