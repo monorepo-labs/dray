@@ -93,19 +93,20 @@ export const PAGE_HIGHLIGHTS: Highlight[] = [
   ),
 ];
 
-/// The next release's two highlights. Their pictures are drawn in code
-/// ([whatsNewIllustrations.tsx](whatsNewIllustrations.tsx)) and captured at
-/// 1280×720; for the release itself they move to apps/web/public/changelog/.
+/// The next release's two highlights, on the picked take of each. Their
+/// pictures are drawn in code ([whatsNewIllustrations.tsx](whatsNewIllustrations.tsx))
+/// and captured at 1280×720; for the release itself they move to
+/// apps/web/public/changelog/.
 export const NEXT_RELEASE: Highlight[] = [
   page(
     "Switch a task's harness mid-session.",
     "Pick another harness in the composer and your next message moves the task there, with everything said so far.",
-    [{ kind: "image", url: "/demo/whats-new/agent-switch.png", alt: "A task's harnesses, Codex picked for its next message" }],
+    [{ kind: "image", url: "/demo/whats-new/harness-chat.png", alt: "One chat, Claude Code answering and then Codex" }],
   ),
   page(
     "Dray is now on iPhone. Work from anywhere.",
     "Every task on every machine, with questions to answer, permissions to allow and alerts when one is ready to merge.",
-    [{ kind: "image", url: "/demo/whats-new/iphone.png", alt: "Dray on an iPhone beside a Ready to merge alert" }],
+    [{ kind: "image", url: "/demo/whats-new/iphone-lock.png", alt: "Dray's alerts on an iPhone lock screen, beside a QR code for the App Store" }],
     { label: "Get it on the App Store", target: "https://apps.apple.com/app/id6824145317" },
   ),
 ];
