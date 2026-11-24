@@ -8,7 +8,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { Bot, SessionIndexItem } from "@/types/events";
 
@@ -49,7 +48,9 @@ export default function TaskChip({
     <span
       role="button"
       tabIndex={0}
-      aria-label={tasks.length === 1 ? `Open task ${latest.title}` : `${tasks.length} tasks`}
+      aria-label={
+        tasks.length > 1 ? `${tasks.length} tasks` : bot ? `${bot.name} is working on this` : `Open task ${latest.title}`
+      }
       {...props}
       className={cn(
         "inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-border py-px text-muted-foreground tabular-nums transition-colors hover:bg-sidebar-accent hover:text-foreground",
@@ -67,21 +68,14 @@ export default function TaskChip({
       e.stopPropagation();
       onOpen(latest);
     };
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          {chip({
-            onClick: open,
-            onKeyDown: (e) => {
-              if (e.key !== "Enter" && e.key !== " ") return;
-              e.preventDefault();
-              open(e);
-            },
-          })}
-        </TooltipTrigger>
-        <TooltipContent>{bot ? `${bot.name} ${latest.archived ? "worked" : "is working"} on this` : latest.title}</TooltipContent>
-      </Tooltip>
-    );
+    return chip({
+      onClick: open,
+      onKeyDown: (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        open(e);
+      },
+    });
   }
 
   if (onMany) {
@@ -89,21 +83,14 @@ export default function TaskChip({
       e.stopPropagation();
       onMany();
     };
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          {chip({
-            onClick: show,
-            onKeyDown: (e) => {
-              if (e.key !== "Enter" && e.key !== " ") return;
-              e.preventDefault();
-              show(e);
-            },
-          })}
-        </TooltipTrigger>
-        <TooltipContent>{tasks.length} tasks</TooltipContent>
-      </Tooltip>
-    );
+    return chip({
+      onClick: show,
+      onKeyDown: (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        show(e);
+      },
+    });
   }
 
   return (
