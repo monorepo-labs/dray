@@ -1521,9 +1521,12 @@ enum Cache {
         return folder(key.server).appending(path: "t-\(name).json")
     }
 
+    /// One queue, so writes land in the order made: two detached tasks could land an older copy last.
+    private static let writes = DispatchQueue(label: "dray.cache", qos: .utility)
+
     /// Encodes and writes off the main thread; a failed write costs the next cold open, nothing else.
     static func write(_ url: URL, _ make: @escaping () throws -> Data) {
-        Task.detached(priority: .utility) {
+        writes.async {
             guard let data = try? make() else { return }
             try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: url, options: .atomic)

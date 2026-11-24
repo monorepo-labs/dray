@@ -123,7 +123,11 @@ phone reads and drives it over the same WebSocket the desktop uses
   button beside Settings opening a sheet with its own stack. Pushed inside
   the split view's sidebar instead, a page's own push looped the layout.
   GitHub's search and the trackers are asked through `trackerServer`: the
-  Mac app's server where one is connected, else the first.
+  Mac app's server where one is connected, else the first. Both keep their
+  last answers on disk, per server; a server switched off loses its kept
+  answers and their freshness at once, so none draws and it is read afresh
+  once back on (#1547). A GitHub repository picked through one server is no
+  pick on another that does not hold it.
   - Pull requests (`Pulls.swift`, `PullDetail.swift`, rules from
     `prInbox.ts` restated and tested in `PullsTests`): All reads each
     project's `pr_marks` with `listing`, plus bot tasks' repos; the other

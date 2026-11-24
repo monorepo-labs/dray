@@ -188,6 +188,19 @@ final class IssuesModel {
         Cache.write(Self.file) { try JSONEncoder().encode(kept) }
     }
 
+    /// Drops everything read through `servers`, freshness stamps included. Keys lead with their server.
+    func forget(_ servers: Set<UUID>) {
+        func theirs(_ key: String) -> Bool { UUID(uuidString: String(key.prefix { $0 != "|" })).map(servers.contains) ?? false }
+        guard lists.keys.contains(where: theirs) || filters.keys.contains(where: theirs)
+                || integrations.keys.contains(where: servers.contains) || home.map(servers.contains) == true else { return }
+        lists = lists.filter { !theirs($0.key) }
+        filters = filters.filter { !theirs($0.key) }
+        listedAt = listedAt.filter { !theirs($0.key) }
+        if home.map(servers.contains) == true { home = nil }
+        // Last: its `didSet` writes the file with everything above gone.
+        integrations = integrations.filter { !servers.contains($0.key) }
+    }
+
     func fresh(_ key: String) -> Bool { Date().timeIntervalSince(listedAt[key] ?? .distantPast) < 60 }
 
     func put(filters: IssueFilters, _ key: String) {
@@ -251,6 +264,9 @@ struct IssuesView: View {
     private var connected: Bool? {
         integrations.map { github ? $0.github != nil : $0.linear != nil }
     }
+    /// The picked repository while this server lists it: a pick made through another server,
+    /// one since switched off maybe, is no pick here, or its issues read on through this one.
+    private var shownRepo: String { filters?.teams.contains { $0.id == repo } == true ? repo : "" }
     private var filtersKey: String { "\(server?.uuidString ?? "")|\(tracker)|\(repo)" }
     private var filters: IssueFilters? { model.filters[filtersKey] }
     private var issues: [Issue] { model.lists[queryKey] ?? stale }
@@ -331,7 +347,7 @@ struct IssuesView: View {
         if let unavailable {
             Text(.init(unavailable.sentence(tracker))).font(Theme.Font.footnote).foregroundStyle(Theme.destructive).plainRow()
         }
-        if github && repo.isEmpty {
+        if github && shownRepo.isEmpty {
             // Nothing is read until a repository is picked: the repositories are the empty state.
             if let filters {
                 if filters.teams.isEmpty {
@@ -441,7 +457,7 @@ struct IssuesView: View {
 
     /// The tracker leads, so it can move with nothing connected; the rest once its filters are read.
     private var filterMenu: some View {
-        let narrowed = github ? (!repo.isEmpty && (label != nil || issueType != nil)) : (team != nil || project != nil)
+        let narrowed = github ? (!shownRepo.isEmpty && (label != nil || issueType != nil)) : (team != nil || project != nil)
         return Menu {
             Picker("Tracker", selection: $tracker) {
                 Text("GitHub").tag("github")
@@ -451,7 +467,7 @@ struct IssuesView: View {
             if connected == true, let filters {
                 if github {
                     if !filters.teams.isEmpty {
-                        Picker("Repository", selection: Binding(get: { repo }, set: { repo = $0; label = nil; issueType = nil })) {
+                        Picker("Repository", selection: Binding(get: { shownRepo }, set: { repo = $0; label = nil; issueType = nil })) {
                             ForEach(filters.teams, id: \.id) { Text($0.name).tag($0.id) }
                         }
                         .pickerStyle(.menu)
@@ -498,13 +514,13 @@ struct IssuesView: View {
     private func query(settled: Bool) -> JSON {
         .object([
             "tracker": .string(tracker), "text": JSON(text.isEmpty ? nil : text), "scope": .string(scope),
-            "teamId": JSON(github ? repo : team), "projectId": JSON(github ? nil : project),
+            "teamId": JSON(github ? shownRepo : team), "projectId": JSON(github ? nil : project),
             "label": JSON(github ? label : nil), "issueType": JSON(github ? issueType : nil), "settled": .bool(settled),
         ])
     }
 
     private var queryKey: String {
-        "\(server?.uuidString ?? "")|\(tracker)|\(scope)|\(closed)|\(repo)|\(team ?? "")|\(project ?? "")|\(label ?? "")|\(issueType ?? "")|\(text)|\(connected == true)"
+        "\(server?.uuidString ?? "")|\(tracker)|\(scope)|\(closed)|\(shownRepo)|\(team ?? "")|\(project ?? "")|\(label ?? "")|\(issueType ?? "")|\(text)|\(connected == true)"
     }
 
     private func readIntegrations() async {
@@ -529,7 +545,7 @@ struct IssuesView: View {
     }
 
     private func list(force: Bool) async {
-        guard let server, online, connected == true, !(github && repo.isEmpty) else { return }
+        guard let server, online, connected == true, !(github && shownRepo.isEmpty) else { return }
         let key = queryKey
         if !force && model.fresh(key) { return }
         loading = true
@@ -557,7 +573,11 @@ struct IssuesView: View {
             if let i = list.firstIndex(where: { $0.id == next.id }) { list[i] = next } else { list.append(next) }
         }
         var shown = issues
-        if !github && ["completed", "canceled"].contains(next.state.kind) {
+        let done = ["completed", "canceled"].contains(next.state.kind)
+        if github {
+            // GitHub's Open and Closed are two lists: an issue moved across leaves this one.
+            if done == closed { put(&shown) } else { shown.removeAll { $0.id == next.id } }
+        } else if done {
             shown.removeAll { $0.id == next.id }
             if settled != nil { put(&settled!) }
         } else {

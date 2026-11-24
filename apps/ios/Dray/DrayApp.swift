@@ -32,6 +32,11 @@ struct DrayApp: App {
                 .tint(Theme.text)
                 // Before the docks decide between the orb and keyboard mode.
                 .task { await AppleSpeech.shared.refresh() }
+                // Off, a server's kept issues and PRs go, so none draws and it is read afresh once back on.
+                .onChange(of: store.servers.filter { !$0.on }.map(\.id), initial: true) { _, off in
+                    IssuesModel.shared.forget(Set(off))
+                    PullsModel.shared.forget(Set(off))
+                }
         }
         .onChange(of: phase) { _, now in
             if now == .active { store.resume() }
