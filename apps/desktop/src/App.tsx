@@ -56,7 +56,7 @@ import { repoChanged } from "@/lib/prSync";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useChanges } from "@/hooks/useChanges";
 import { setTranscriptPrefetch } from "@/hooks/useHoverPrefetch";
-import { keptPrMark, readPrMentionKey, subscribePrMentionKey, usePrMarks } from "@/hooks/usePrMarks";
+import { keptPrMark, knownRepo, readPrMentionKey, subscribePrMentionKey, usePrMarks } from "@/hooks/usePrMarks";
 import { usePrReady } from "@/hooks/usePrReady";
 import { useAutoMergeCards } from "@/hooks/useAutoMergeCards";
 import { useWorkStatus } from "@/hooks/useWorkStatus";
@@ -215,7 +215,7 @@ import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { marksRepo, prBadgeCount, prRepoSlug, sessionBranch, slugKey, slugOf } from "@/lib/pr";
 import { usePrSearch } from "@/hooks/usePrSearch";
-import { inboxRows, sessionsForPr, type InboxRow, type PrCheckout, type PrMachines, type PrPicks } from "@/lib/prInbox";
+import { inboxRows, pullsReads, sessionsForPr, type InboxRow, type PrCheckout, type PrMachines, type PrPicks } from "@/lib/prInbox";
 import type { PullsScope } from "@/components/PullsView";
 import type { PeopleFilter } from "@/lib/prInbox";
 import { holdSettle } from "@/lib/heldFlags";
@@ -779,14 +779,20 @@ function App() {
   const [pickedPr, setPickedPr] = useState<InboxRow | null>(null);
   // Who the page lists, and which workspace's projects: two filters that
   // compose, the first choosing where rows come from.
-  const [pullsPeople, setPullsPeople] = useState<PeopleFilter>("involving");
-  const [pullsScope, setPullsScope] = useState<PullsScope>("space");
+  // Kept across visits and launches, as the issues page keeps its repository:
+  // the page is opened far more often than it is filtered.
+  const [storedPeople, setPullsPeople] = useLocalStorage<PeopleFilter>("ade.pullsPeople", "involving");
+  const [storedScope, setPullsScope] = useLocalStorage<PullsScope>("ade.pullsScope", "space");
+  // Local storage holds whatever an older build wrote, so an unknown pick reads as the default.
+  const pullsPeople: PeopleFilter = ["all", "involving", "mine", "review"].includes(storedPeople) ? storedPeople : "involving";
+  const pullsScope: PullsScope = storedScope === "all" ? "all" : "space";
   // Every people filter but All lists from one GitHub search across every
   // repo; All lists the projects added to Dray, through their marks.
   const pullsSearch = pullsPeople !== "all";
   const pullsFilter = pullsPeople === "mine" ? "author" : pullsPeople === "review" ? "review_requested" : "involves";
   // The owner the "involving me" search is narrowed to, or every one.
-  const [pullsOwner, setPullsOwner] = useState<string | null>(null);
+  const [storedOwner, setPullsOwner] = useLocalStorage<string | null>("ade.pullsOwner", null);
+  const pullsOwner = typeof storedOwner === "string" && storedOwner ? storedOwner : null;
 
   const storedViewTab: ViewTab = selectedSessionId ? viewTabs[selectedSessionId] ?? "chat" : "chat";
   const selectedBotId = botAt(bots, sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.cwd ?? "")?.id;
@@ -1495,7 +1501,7 @@ function App() {
   // scope first, so a PR two keys share is read through a checkout here, then
   // every bot task's repo, which the space check spares as the sidebar does
   // (`inBotTree`).
-  const pullsKeys = useMemo(
+  const pullsWanted = useMemo(
     () =>
       // "Involving me" lists from one GitHub search and reads no repo here.
       pullsOpen && !pullsSearch
@@ -1508,6 +1514,31 @@ function App() {
         : [],
     [pullsOpen, pullsSearch, pullsScope, projects, spaceProjects, botRepoKey],
   );
+  // A key on a machine that is down is read by its GitHub repo through This
+  // Mac, or not at all where another key reads that repo already: the PRs
+  // come from GitHub, not the machine. Planned every render, since what is
+  // down and which repo each key is change without these deps moving. A
+  // stopped checkout of a repo on another host has no PRs to miss.
+  const pullsPlan = pullsReads(
+    pullsWanted.filter((key) => {
+      const remote = projects.find((p) => p.path === key)?.remote;
+      return !remote || remote.startsWith("github.com/") || !shownOffline(serverOfPath(key)) || !!knownRepo(key);
+    }),
+    (key) => shownOffline(serverOfPath(key)),
+    (key) => {
+      const remote = projects.find((p) => p.path === key)?.remote;
+      const task = sessionIndexItems.find((i) => i.projectPath === key && offlineRepo(i));
+      return (
+        knownRepo(key) ??
+        (remote?.startsWith("github.com/") ? remote : undefined) ??
+        (task ? offlineRepo(task) : undefined)
+      );
+    },
+  );
+  const pullsKeyList = pullsPlan.keys.join("\n");
+  const pullsKeys = useMemo(() => (pullsKeyList ? pullsKeyList.split("\n") : []), [pullsKeyList]);
+  // Machines holding a project whose repo nothing here can name, said once.
+  const pullsOffline = [...new Set(pullsPlan.unnamed.map((key) => serverName(serverOfPath(key))))];
   // The repo the composer's `#` menu is listing pull requests from, while it is.
   const prMentionKey = useSyncExternalStore(subscribePrMentionKey, readPrMentionKey);
   const listedKeys = useMemo(
@@ -1769,9 +1800,10 @@ function App() {
   const pullsErrors = pullsSearch
     ? prSearch.error?.kind === "other" ? [{ name: "GitHub search", error: prSearch.error }] : []
     : pullsKeys.flatMap((key) => {
-    const error = prMarks.errorFor(key);
-    return error?.kind === "other" ? [{ name: projects.find((p) => p.path === key)?.name ?? key, error }] : [];
-  });
+        const error = prMarks.errorFor(key);
+        const name = projects.find((p) => p.path === key)?.name ?? slugOf(key) ?? key.split("/").pop() ?? key;
+        return error?.kind === "other" ? [{ name, error }] : [];
+      });
   const pullsLoaded =
     pullsSearch
       ? !!prSearch.answer || !!prSearch.error
@@ -4918,6 +4950,8 @@ function App() {
             hasRepos={pullsSearch || pullsKeys.length > 0}
             missing={pullsMissing}
             errors={pullsErrors}
+            offline={pullsSearch ? [] : pullsOffline}
+            active={pullsOpen}
             people={pullsPeople}
             onPeople={(people) => {
               setPullsPeople(people);

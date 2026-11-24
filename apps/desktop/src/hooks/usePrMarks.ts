@@ -83,10 +83,33 @@ const lastError = new Map<string, PrUnavailable>();
 /// listing, which no other reader draws, so the sidebar's own polls stay as
 /// small as they were.
 const listed = new Set<string>();
-/// A listed key whose cached answer was read without listings — by the
-/// sidebar before the page opened — is no answer for the page yet.
+/// When each key's listings were last read. A sidebar read asks for none, so
+/// its answer keeps the listings the page last read (see `carryListings`) and
+/// this says how old those are.
+const listedAt = new Map<string, number>();
+/// A listed key whose open PRs lack listings, or carry ones older than a
+/// fresh read, wants a read that asks for them. What it holds is still drawn
+/// meanwhile, so the page paints at once on return.
 const lacksListing = (path: string) =>
-  listed.has(path) && [...(numbered.get(path)?.values() ?? [])].some((pr) => pr.state === "OPEN" && !pr.listing);
+  listed.has(path) &&
+  [...(numbered.get(path)?.values() ?? [])].some(
+    (pr) => pr.state === "OPEN" && (!pr.listing || Date.now() - (listedAt.get(path) ?? 0) >= FRESH_MS),
+  );
+
+/// `prs` with each open PR's listing taken from `before` where this read asked
+/// for none. The sidebar re-reads the page's repos while the page is closed,
+/// and dropping their listings left it blank on return until a read landed.
+function carryListings(prs: PrMark[], before: Map<number, PrMark> | undefined): PrMark[] {
+  if (!before) return prs;
+  return prs.map((pr) => {
+    const listing = !pr.listing && pr.state === "OPEN" ? before.get(pr.number)?.listing : undefined;
+    return listing ? { ...pr, listing } : pr;
+  });
+}
+
+/// The GitHub repo a key was last read as, `host/owner/name`, outside React:
+/// for deciding what to read before the hook has run.
+export const knownRepo = (key: string): string | undefined => repoOf.get(key);
 
 const EMPTY: Map<string, PrMark> = new Map();
 
@@ -263,8 +286,9 @@ export function usePrMarks(
         let answer: Map<string, PrMark>;
         let all: PrMark[];
         const asked = Date.now();
+        const withListing = sharing(path).some((key) => listed.has(key));
         try {
-          all = await invoke<PrMark[]>("pr_marks", { cwd: path, listing: sharing(path).some((key) => listed.has(key)) });
+          all = await invoke<PrMark[]>("pr_marks", { cwd: path, listing: withListing });
           answer = marksByBranch(all);
         } catch (error) {
           if (marksGaveUp(error)) failures.delete(path);
@@ -311,7 +335,9 @@ export function usePrMarks(
           answeredAt.set(key, startedAt);
           const before = cache.get(key);
           cache.set(key, answer);
-          numbered.set(key, new Map(all.map((pr) => [pr.number, pr])));
+          const prs = withListing ? all : carryListings(all, numbered.get(key));
+          numbered.set(key, new Map(prs.map((pr) => [pr.number, pr])));
+          if (withListing) listedAt.set(key, asked);
           fetchedAt.set(key, Date.now());
           askedAt.set(key, asked);
 
