@@ -13,7 +13,7 @@ import "../App.css";
 
 /// A bot's chat with an issue card for several issues and one for a single
 /// issue, through the real `BotTranscript` and `IssueCard`. Tiles: one
-/// fill per issue, the number coloured by state; the play button waits as the server would, then
+/// fill per issue, a closed one numbered in purple; the play button waits as the server would, then
 /// logs the hand-off, so the row turns Started.
 
 const SESSION = "01a1cfc8-demo-issue-card";

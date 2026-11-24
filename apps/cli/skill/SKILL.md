@@ -374,7 +374,7 @@ dray session issue-card owner/repo 12 15 18
 
 Whenever you show the user GitHub issues, one or several, post them as a card
 instead of writing them out. It lands in your own chat: each issue's number,
-coloured open or closed, its title and its labels, in the order given, 20 at
+purple once closed, its title and its labels, in the order given, 20 at
 most. The user opens an issue in Dray from the card, or presses Work on it,
 which reaches you as a message of its own naming the issue: start on it then.
 Don't restate the card in your reply; say only what it can't, such as why

@@ -25,13 +25,10 @@ export const IssueCardChatContext = createContext<{ starts: IssueStarts; closed:
 /// edge draws it in dark, where that shadow is `none`.
 const SURFACE = "bg-card shadow-[var(--shadow-raised-card,var(--shadow-card))] dark:border-[0.5px] dark:border-border/50";
 
-/// GitHub's own open green and closed purple, light and dark: its light pair is
-/// too deep to read on a dark card, which is why `readableStateColor` alone,
-/// leaving dark untouched, is not enough here.
-const STATE_COLOR = {
-  light: { open: "#1a7f37", closed: "#8250df" },
-  dark: { open: "#3fb950", closed: "#a371f7" },
-} as const;
+/// GitHub's own closed purple, light and dark: its light one is too deep to
+/// read on a dark card, which is why `readableStateColor` alone, leaving dark
+/// untouched, is not enough here. Open takes no colour of its own.
+const CLOSED_COLOR = { light: "#8250df", dark: "#a371f7" } as const;
 
 /// GitHub issues posted into the chat by `dray session issue-card`, one or
 /// several, each on a tile of its own. An issue opens on the issues page; its
@@ -43,7 +40,7 @@ export default function IssueCard({ event }: { event: AgentEvent }) {
   // `title` is not drawn: a heading over the list read as noise.
   const { repo, issues } = event.payload;
   const started = chat.starts.get(event.id);
-  const colors = STATE_COLOR[resolvedMode === "light" ? "light" : "dark"];
+  const closedColor = CLOSED_COLOR[resolvedMode === "light" ? "light" : "dark"];
   return (
     <div className={cn("w-full max-w-lg self-start rounded-xl p-1", SURFACE)}>
       <div className="flex items-center gap-1.5 px-2.5 pt-1.5 pb-1 text-xs text-muted-foreground">
@@ -55,7 +52,7 @@ export default function IssueCard({ event }: { event: AgentEvent }) {
           <Tile
             key={row.number}
             row={row}
-            color={row.closed ? colors.closed : colors.open}
+            color={row.closed ? closedColor : undefined}
             // The issues page on a click, GitHub on ⌘-click, as an issue tag does.
             open={(e) => openIssue(rowRef(repo, row), e)}
             action={
@@ -71,7 +68,7 @@ export default function IssueCard({ event }: { event: AgentEvent }) {
 }
 
 /// One issue on a fill of its own; the gap between tiles is what separates
-/// them. The number's colour is the state: no glyph, no word.
+/// them. A closed issue's number turns purple: no glyph, no word.
 function Tile({
   row,
   color,
@@ -79,14 +76,15 @@ function Tile({
   action,
 }: {
   row: IssueCardRow;
-  color: string;
+  /// Set for a closed issue alone; an open one keeps the muted number.
+  color: string | undefined;
   open: (e: MouseEvent) => void;
   action: React.ReactNode;
 }) {
   return (
     <li className="flex items-center gap-1 rounded-lg bg-[color-mix(in_oklab,var(--muted)_55%,transparent)] hover:bg-[var(--fill-soft,var(--muted))]">
       <button type="button" onClick={open} className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2.5 py-2 text-left text-ui">
-        <span className="shrink-0 font-medium tabular-nums" style={{ color }} aria-label={`#${row.number}, ${row.closed ? "closed" : "open"}`}>
+        <span className="shrink-0 text-muted-foreground tabular-nums" style={{ color }} aria-label={`#${row.number}, ${row.closed ? "closed" : "open"}`}>
           #{row.number}
         </span>
         <span className={cn("min-w-0 flex-1 truncate", row.closed && "text-muted-foreground")}>{row.title}</span>
