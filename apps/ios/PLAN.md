@@ -84,9 +84,13 @@ phone reads and drives it over the same WebSocket the desktop uses
   also pairs directly is shown once, the direct way** (#1404): every welcome
   carries `identity`, a hash of the server's token that a relay passes
   through untouched, so a relayed copy whose `identity` hashes a token the
-  phone holds is dropped and held back from later shares, whatever state the
-  direct one is in. Removing a paired server lets them all back. A server
-  from before `identity` is still shown twice. Never `id` in a welcome:
+  phone holds gives way to the direct pairing **while that one works**
+  (#1466): a copy on screen goes once its twin connects, never before, so a
+  reconnect takes no open chat away; a copy not on screen stays off while its
+  twin is coming up, and comes back once the twin is lost or turned off.
+  Identities are kept across launches, so a launch draws no duplicate even
+  for a moment. An alert tagged by a copy that gave way opens and answers on
+  its twin (`reachable`). A server from before `identity` is still shown twice. Never `id` in a welcome:
   `Head` reads every frame's `id` as a call's, and fails on a string.
 - **Pull request** sheet from the session view: readiness in the desktop's
   order with checks speaking first, checks failing-first, comments; every
