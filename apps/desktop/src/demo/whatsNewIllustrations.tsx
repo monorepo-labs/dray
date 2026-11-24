@@ -47,12 +47,13 @@ function Frame({ zoom = 6.4, children }: { zoom?: number; children: ReactNode })
   );
 }
 
-function You({ children, small }: { children: ReactNode; small?: boolean }) {
+function You({ children, small, light }: { children: ReactNode; small?: boolean; light?: boolean }) {
   return (
     <div
       className={cn(
         MONO,
-        "max-w-[85%] self-end bg-[#262626] text-white",
+        "max-w-[85%] self-end",
+        light ? "bg-[#E9E9EC] text-[#0A0A0A]" : "bg-[#262626] text-white",
         small ? "px-1.5 py-[3px] text-[9px] leading-3" : "px-2 py-1 text-[11px] leading-[14px]",
       )}
     >
@@ -63,31 +64,45 @@ function You({ children, small }: { children: ReactNode; small?: boolean }) {
 
 /// An agent's reply under its mark, white on a tile: grey for the agent it
 /// was, blue for the one it moved to, `brand` for Claude's own orange.
+/// `light` is the light-mode chat, dark text, for white cards.
 function Says({
   harness,
   picked,
   brand,
   small,
+  light,
   children,
 }: {
   harness: Harness;
   picked?: boolean;
   brand?: boolean;
   small?: boolean;
+  light?: boolean;
   children: ReactNode;
 }) {
   return (
     <div className="flex items-start gap-1.5">
       <span
         className={cn("flex shrink-0 items-center justify-center", small ? "size-3" : "size-[15px]")}
-        style={{ background: picked ? BLUE : brand ? CLAUDE : "#262626" }}
+        style={{ background: picked ? BLUE : brand ? CLAUDE : light ? "#E4E4E7" : "#262626" }}
       >
         <AgentIcon
           harness={harness}
-          className={cn(small ? "size-2" : "size-2.5", picked || brand ? "text-white" : "text-[#CFCFCF]")}
+          className={cn(
+            small ? "size-2" : "size-2.5",
+            picked || brand ? "text-white" : light ? "text-[#52525B]" : "text-[#CFCFCF]",
+          )}
         />
       </span>
-      <span className={cn(MONO, "text-[#CFCFCF]", small ? "text-[9px] leading-3" : "text-[11px] leading-[15px]")}>{children}</span>
+      <span
+        className={cn(
+          MONO,
+          light ? "text-[#3F3F46]" : "text-[#CFCFCF]",
+          small ? "text-[9px] leading-3" : "text-[11px] leading-[15px]",
+        )}
+      >
+        {children}
+      </span>
     </div>
   );
 }
@@ -172,41 +187,64 @@ function HarnessCarried() {
 }
 
 /// The chat as Claude Code left it, and the composer's harness menu open
-/// under it with Codex picked for the message being typed.
+/// under it with Codex picked for the message being typed. On a white tile
+/// it is the light-mode chat, as the site draws its mocks in light: a pale
+/// panel held by a hairline, dark text, the same orange and blue.
 function HarnessComposer() {
+  const light = WHITE;
   const rows: [Harness, string][] = [
     ["claude_code", "Claude Code"],
     ["codex", "Codex"],
     ["grok", "Grok"],
   ];
   return (
-    <div aria-hidden className="flex w-[300px] flex-col bg-[#0A0A0A]">
+    <div
+      aria-hidden
+      className={cn("flex w-[300px] flex-col", light ? "bg-[#F7F7F8] shadow-[0_0_0_1px_#00000014]" : "bg-[#0A0A0A]")}
+    >
       <div className="flex flex-col gap-2 px-3 pt-2.5 pb-2">
-        <You>Why does sign-in loop?</You>
-        <Says harness="claude_code" brand>
+        <You light={light}>Why does sign-in loop?</You>
+        <Says harness="claude_code" brand light={light}>
           The redirect fires twice. Fixed.
         </Says>
       </div>
-      {/* No shadow on white: it hazes past the dark panel onto the tile. */}
       <div
         className={cn(
-          "mr-2 flex w-[150px] flex-col self-end border border-[#333333] bg-[#141414]",
-          !WHITE && "shadow-[0_8px_24px_#000000A0]",
+          "mr-2 flex w-[150px] flex-col self-end border",
+          light
+            ? "border-[#0000001A] bg-white shadow-[0_4px_12px_#00000014]"
+            : "border-[#333333] bg-[#141414] shadow-[0_8px_24px_#000000A0]",
         )}
       >
         {rows.map(([h, name]) => {
           const picked = h === "codex";
           return (
             <div key={h} className="flex h-6 items-center gap-2 px-2" style={{ background: picked ? BLUE : undefined }}>
-              <AgentIcon harness={h} className={cn("size-2.5", picked ? "text-white" : "text-[#8A8A8A]")} />
-              <span className={cn(MONO, "text-[11px] leading-[14px]", picked ? "text-white" : "text-[#CFCFCF]")}>{name}</span>
+              <AgentIcon
+                harness={h}
+                className={cn("size-2.5", picked ? "text-white" : light ? "text-[#71717A]" : "text-[#8A8A8A]")}
+              />
+              <span
+                className={cn(
+                  MONO,
+                  "text-[11px] leading-[14px]",
+                  picked ? "text-white" : light ? "text-[#3F3F46]" : "text-[#CFCFCF]",
+                )}
+              >
+                {name}
+              </span>
             </div>
           );
         })}
       </div>
-      <div className="m-2 mt-1 flex h-9 items-center gap-2 border border-[#333333] bg-[#141414] px-2">
-        <span className={`${MONO} text-[11px] leading-[14px] text-white`}>Now add a test</span>
-        <span className="h-3 w-px bg-white" />
+      <div
+        className={cn(
+          "m-2 mt-1 flex h-9 items-center gap-2 border px-2",
+          light ? "border-[#0000001A] bg-white" : "border-[#333333] bg-[#141414]",
+        )}
+      >
+        <span className={cn(MONO, "text-[11px] leading-[14px]", light ? "text-[#0A0A0A]" : "text-white")}>Now add a test</span>
+        <span className={cn("h-3 w-px", light ? "bg-[#0A0A0A]" : "bg-white")} />
         <span className={`${MONO} ml-auto flex h-5 items-center gap-1 px-1.5 text-[10px] leading-3 text-white`} style={{ background: BLUE }}>
           <AgentIcon harness="codex" className="size-2.5 text-white" />
           Codex
