@@ -174,19 +174,24 @@ const LEAD = [
   [880, 0, 783.99, 0, 987.77, 0, 880, 0],
 ];
 
+const MUSIC_LEVEL = 0.35;
+/// How long the music takes to fade once onboarding ends.
+const MUSIC_FADE_S = 4;
+
 /// Onboarding's music after the logo: a bright looping game-start groove.
 /// The first bar is the arpeggio alone, then drums, bass and the hook come in.
-/// Returns a stop that fades it out.
-export function startOnboardingMusic(): () => void {
+/// It starts low, under the voice, until `lift` brings it up; `stop` fades it
+/// out slowly.
+export function startOnboardingMusic(): { lift: () => void; stop: () => void } {
   let ctx: AudioContext;
   try {
     ctx = new AudioContext();
   } catch {
-    return () => {};
+    return { lift: () => {}, stop: () => {} };
   }
   const master = ctx.createGain();
   master.gain.setValueAtTime(0.0001, ctx.currentTime);
-  master.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + 0.6);
+  master.gain.exponentialRampToValueAtTime(MUSIC_LEVEL * 0.35, ctx.currentTime + 0.6);
   const comp = ctx.createDynamicsCompressor();
   comp.threshold.value = -18;
   comp.ratio.value = 3;
@@ -262,14 +267,32 @@ export function startOnboardingMusic(): () => void {
   };
   tick();
   const timer = setInterval(tick, 60);
-  return () => {
-    clearInterval(timer);
+  let stopped = false;
+  const lift = () => {
+    if (stopped) return;
     const now = ctx.currentTime;
     master.gain.cancelScheduledValues(now);
-    master.gain.setValueAtTime(Math.max(0.0001, master.gain.value), now);
-    master.gain.exponentialRampToValueAtTime(0.0001, now + 1.2);
-    setTimeout(() => void ctx.close(), 1500);
+    master.gain.setValueAtTime(master.gain.value, now);
+    master.gain.linearRampToValueAtTime(MUSIC_LEVEL, now + 1.5);
   };
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    // The loop keeps playing under the fade; stopping it here went silent
+    // within the lookahead, whatever the fade's length.
+    const now = ctx.currentTime;
+    master.gain.cancelScheduledValues(now);
+    master.gain.setValueAtTime(master.gain.value, now);
+    master.gain.linearRampToValueAtTime(0, now + MUSIC_FADE_S);
+    setTimeout(
+      () => {
+        clearInterval(timer);
+        void ctx.close();
+      },
+      (MUSIC_FADE_S + 0.3) * 1000,
+    );
+  };
+  return { lift, stop };
 }
 
 /// Decaying noise as an impulse: a large soft room.

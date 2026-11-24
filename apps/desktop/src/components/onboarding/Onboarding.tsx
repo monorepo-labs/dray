@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
+import welcomeVoiceUrl from "@/assets/welcome-voice.m4a";
 import AgentIcon from "@/components/AgentIcon";
 import BotAvatar from "@/components/BotAvatar";
 import GitHubIcon from "@/components/GitHubIcon";
@@ -59,14 +60,23 @@ function Flow({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }) {
   const agents = useAgentSetup();
   const github = useGithubSetup();
   const sound = useWelcomeSound();
-  // From the welcome line to the end, over every step; leaving fades it out.
+  // With the welcome line: the welcome said aloud once, the music low under it
+  // and up once it ends, playing on over every step. Leaving fades it out.
   useEffect(() => {
     if (sound === "none") return;
-    let stop: (() => void) | undefined;
-    const timer = setTimeout(() => (stop = startOnboardingMusic()), MUSIC_AT);
+    let music: ReturnType<typeof startOnboardingMusic> | undefined;
+    const voice = new Audio(welcomeVoiceUrl);
+    const lift = () => music?.lift();
+    voice.addEventListener("ended", lift);
+    voice.addEventListener("error", lift);
+    const timer = setTimeout(() => {
+      music = startOnboardingMusic();
+      voice.play().catch(lift);
+    }, MUSIC_AT);
     return () => {
       clearTimeout(timer);
-      stop?.();
+      voice.pause();
+      music?.stop();
     };
     // Once per showing, like the welcome sound.
     // eslint-disable-next-line react-hooks/exhaustive-deps
