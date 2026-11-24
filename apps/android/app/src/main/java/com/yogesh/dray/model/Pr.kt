@@ -201,6 +201,35 @@ fun commentText(body: String): String {
     return (out.toString() + prose(text.substring(last))).trim()
 }
 
+private val imgAny = Regex("""<img\b[^>]*>""", RegexOption.IGNORE_CASE)
+private val svgSrc = Regex("""\bsrc\s*=\s*["'][^"']*\.svg(?:\?[^"']*)?["']""", RegexOption.IGNORE_CASE)
+private val sizeAttr = Regex("""\b(?:width|height)\s*=\s*["']?(\d+)""", RegexOption.IGNORE_CASE)
+private val svgMarkdown = Regex("""!\[([^\]]*)]\(<?[^)\s>]*\.svg(?:\?[^)\s>]*)?>?\)""", RegexOption.IGNORE_CASE)
+private val nowhereLink = Regex("""<a\s+href\s*=\s*["']#["']\s*>([\s\S]*?)</a>""", RegexOption.IGNORE_CASE)
+private val emptyLink = Regex("""(?<!!)\[\s*]\([^)\s]*\)\s?""")
+private val altText = Regex("""\balt\s*=\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+
+/**
+ * A comment body opened whole: its bot marker lines gone, then drawn as a PR description is,
+ * pictures and all. An SVG (a review bot's severity badge) or an icon sized under 64px (a deploy
+ * bot's project logo) is its alt text: the phone draws no SVG, and draws every picture full width.
+ */
+fun commentMarkdown(body: String): String {
+    var fenced = false
+    val text = body.replace("\r\n", "\n").split('\n').filter { line ->
+        if (line.startsWith("```")) fenced = !fenced
+        fenced || !markerLine.containsMatchIn(line)
+    }.joinToString("\n")
+        .replace(imgAny) { m ->
+            val icon = svgSrc.containsMatchIn(m.value) || sizeAttr.findAll(m.value).any { (it.groupValues[1].toIntOrNull() ?: 64) < 64 }
+            if (icon) altText.find(m.value)?.groupValues?.get(1).orEmpty() else m.value
+        }
+        .replace(svgMarkdown) { it.groupValues[1] }
+        .replace(nowhereLink) { it.groupValues[1] }
+    // A link that only held an icon is left with no words: nothing to tap or read.
+    return prBodyMarkdown(text).replace(emptyLink, "")
+}
+
 private fun prose(text: String): String {
     var s = tag.replace(text, "")
     // `&amp;` last, or `&amp;lt;` would decode twice.

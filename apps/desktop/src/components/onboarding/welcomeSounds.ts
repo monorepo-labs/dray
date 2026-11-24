@@ -75,61 +75,52 @@ const LEAD = [
 ];
 
 const MUSIC_LEVEL = 0.35;
-/// The music's share of its level while the welcome voice speaks over it.
-const UNDER_VOICE = 0.7;
 /// How long the music takes to fade once onboarding ends.
 const MUSIC_FADE_S = 4;
+/// The four bars after the intro, in sixteenths.
 const LOOP_STEPS = 64;
+/// Ring-out after the last note.
+const TAIL_S = 2;
 const RATE = 48000;
 
-/// Onboarding's music after the logo: an intro bar of arpeggio alone, then a
-/// four-bar loop with drums, bass and the hook. It starts low, under the voice,
-/// until `lift` brings it up; `stop` fades it out slowly.
+/// Onboarding's music after the logo, played once: an intro bar of arpeggio
+/// alone, then four bars with drums, bass and the hook, easing out over the
+/// last. `stop` fades it early. Never looped, since a reader still installing
+/// an agent sits on setup for minutes.
 ///
-/// Rendered ahead into buffers and looped by the audio engine itself: notes
-/// paced by a timer stalled whenever the window went to the background, which
-/// throttles timers, and the music stopped and started with every app switch.
-export function startOnboardingMusic(): { lift: () => void; stop: () => void } {
+/// Rendered ahead into a buffer: notes paced by a timer stalled whenever the
+/// window went to the background, which throttles timers.
+export function startOnboardingMusic(): { stop: () => void } {
   let ctx: AudioContext;
   try {
     ctx = new AudioContext();
   } catch {
-    return { lift: () => {}, stop: () => {} };
+    return { stop: () => {} };
   }
+  const close = () => void ctx.close().catch(() => {});
   const master = ctx.createGain();
   master.gain.setValueAtTime(0.0001, ctx.currentTime);
   master.connect(ctx.destination);
   let stopped = false;
-  let lifted = false;
 
-  // The first pass: the intro bar and one whole loop, cut at the loop's end;
-  // the loop that follows carries that last bar's tail at its own start.
-  void Promise.all([renderSteps(0, 16 + LOOP_STEPS, 0), renderLoop()])
-    .then(([first, loop]) => {
+  void renderSteps(0, 16 + LOOP_STEPS, TAIL_S)
+    .then((music) => {
       if (stopped) return;
       const at = ctx.currentTime + 0.05;
+      // The intro bar and three more come before it.
+      const lastBar = at + 64 * SIXTEENTH;
       master.gain.setValueAtTime(0.0001, at);
-      master.gain.exponentialRampToValueAtTime(lifted ? MUSIC_LEVEL : MUSIC_LEVEL * UNDER_VOICE, at + 0.6);
-      const head = ctx.createBufferSource();
-      head.buffer = first;
-      head.connect(master);
-      head.start(at);
-      const rest = ctx.createBufferSource();
-      rest.buffer = loop;
-      rest.loop = true;
-      rest.connect(master);
-      rest.start(at + first.duration);
+      master.gain.exponentialRampToValueAtTime(MUSIC_LEVEL, at + 0.6);
+      master.gain.setValueAtTime(MUSIC_LEVEL, lastBar);
+      master.gain.linearRampToValueAtTime(0, at + music.duration);
+      const src = ctx.createBufferSource();
+      src.buffer = music;
+      src.connect(master);
+      src.onended = close;
+      src.start(at);
     })
     .catch(() => {});
 
-  const lift = () => {
-    if (stopped) return;
-    lifted = true;
-    const now = ctx.currentTime;
-    master.gain.cancelScheduledValues(now);
-    master.gain.setValueAtTime(master.gain.value, now);
-    master.gain.linearRampToValueAtTime(MUSIC_LEVEL, now + 1.5);
-  };
   const stop = () => {
     if (stopped) return;
     stopped = true;
@@ -137,23 +128,9 @@ export function startOnboardingMusic(): { lift: () => void; stop: () => void } {
     master.gain.cancelScheduledValues(now);
     master.gain.setValueAtTime(master.gain.value, now);
     master.gain.linearRampToValueAtTime(0, now + MUSIC_FADE_S);
-    setTimeout(() => void ctx.close(), (MUSIC_FADE_S + 0.3) * 1000);
+    setTimeout(close, (MUSIC_FADE_S + 0.3) * 1000);
   };
-  return { lift, stop };
-}
-
-/// The loop alone, its tail folded back onto its start so it repeats seamlessly.
-async function renderLoop(): Promise<AudioBuffer> {
-  const raw = await renderSteps(16, 16 + LOOP_STEPS, 3);
-  const len = Math.round(LOOP_STEPS * SIXTEENTH * RATE);
-  const out = new AudioBuffer({ numberOfChannels: 2, length: len, sampleRate: RATE });
-  for (let ch = 0; ch < 2; ch++) {
-    const src = raw.getChannelData(ch);
-    const dst = out.getChannelData(ch);
-    dst.set(src.subarray(0, len));
-    for (let i = len; i < src.length; i++) dst[i - len] += src[i];
-  }
-  return out;
+  return { stop };
 }
 
 /// Renders steps `from` to `to` (sixteenths, counted from the intro's first),

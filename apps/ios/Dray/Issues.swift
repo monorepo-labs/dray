@@ -132,6 +132,20 @@ func issueTag(_ identifier: String, _ title: String) -> String {
     title.isEmpty ? "#\(identifier)" : "#\(identifier) \(title)"
 }
 
+/// A GitHub issue's `owner/repo`, off its `owner/repo#12`; a Linear issue names none. `issueRepo`.
+func issueRepo(_ issue: Issue) -> String? {
+    guard issue.tracker == "github", let at = issue.identifier.lastIndex(of: "#"), at > issue.identifier.startIndex else { return nil }
+    return String(issue.identifier[..<at])
+}
+
+/// A task's prompt for an issue: its tag, which chips in the transcript, the link,
+/// the body as the tracker holds it, and the reader's note last. `issuePrompt`.
+func issuePrompt(_ issue: Issue, body: String?, note: String) -> String {
+    let head = [issueTag(issue.identifier, issue.title), issue.url].filter { !$0.isEmpty }.joined(separator: "\n")
+    return [head, body?.trimmingCharacters(in: .whitespacesAndNewlines), note.trimmingCharacters(in: .whitespacesAndNewlines)]
+        .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
+}
+
 extension Color {
     /// A tracker's `#rrggbb`; grey for anything else.
     init(trackerHex: String) {
@@ -201,11 +215,9 @@ final class IssuesModel {
 /// issues page on a phone. The tracker switch leads; whose issues are chips
 /// under it; repository, team, project, type and label sit behind the filter
 /// button. A row opens the issue, where its status and priority can move and
-/// Work on it carries its tag to the new-task dock.
+/// play starts a task on it.
 struct IssuesView: View {
     @Environment(Store.self) private var store
-    /// Puts a tag in the new task's words and goes back to the list.
-    let workOn: (String) -> Void
 
     @AppStorage("issues.tracker") private var tracker = "linear"
     @AppStorage("issues.repo") private var repo = ""
@@ -292,7 +304,7 @@ struct IssuesView: View {
         }
         .navigationDestination(item: $picked) { issue in
             if let server {
-                IssueDetailView(issue: issue, server: server, workOn: workOn, updated: edited)
+                IssueDetailView(issue: issue, server: server, updated: edited)
             }
         }
     }
@@ -809,17 +821,23 @@ private struct ConnectTracker: View {
 // MARK: One issue
 
 /// An opened issue: its status and priority, which move from here, its people
-/// and labels, its description and conversation, and Work on it.
+/// and labels, its description and conversation. Play opens the sheet that
+/// starts a task on it, the reader's own or a bot's, and Share hands the link on.
 struct IssueDetailView: View {
     @Environment(Store.self) private var store
     let issue: Issue
     let server: UUID
-    let workOn: (String) -> Void
     /// The list's copy of the row, kept in step with a status or priority moved here.
     let updated: (Issue) -> Void
+    /// Set from a bot's issue card: play hands the issue back to that bot, as the card's own play does.
+    var approve: (() -> Void)? = nil
+    /// Whether play shows at all; a card's issue already started, or closed, has none.
+    var startable = true
     @State private var detail: IssueDetail?
     @State private var failure: String?
     @State private var saving = false
+    @State private var starting = false
+    @State private var opening: SessionKey?
 
     var body: some View {
         let shown = detail?.issue ?? issue
@@ -853,8 +871,6 @@ struct IssueDetailView: View {
                         Text("Reading the issue…").font(Theme.Font.subhead).foregroundStyle(Theme.secondary).shimmer()
                     }
                 }
-                Button { workOn(issueTag(shown.identifier, shown.title)) } label: { Text("Work on it") }
-                    .buttonStyle(CapsuleButtonStyle(height: 48))
             }
             // Full width whatever the content: a short line left the scroll view a narrow column (#1509).
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -866,12 +882,15 @@ struct IssueDetailView: View {
         .navigationTitle(shown.short)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if let url = URL(string: shown.url) {
-                ToolbarItem(placement: .primaryAction) {
-                    Link(destination: url) { Image(systemName: "arrow.up.right") }.accessibilityLabel("Open in the tracker")
-                }
+            DetailActions(link: URL(string: shown.url), title: shown.title,
+                          play: !startable ? nil : approve ?? { starting = true })
+        }
+        .sheet(isPresented: $starting) {
+            StartTaskSheet(subject: .issue(shown, server: server, body: detail?.description)) { key in
+                if let key { opening = key }
             }
         }
+        .navigationDestination(item: $opening) { TranscriptView(key: $0).id($0) }
         .refreshable { await read() }
         .task { await read() }
     }

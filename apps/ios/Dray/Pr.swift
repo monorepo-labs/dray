@@ -83,22 +83,10 @@ struct PrComment: Decodable, Hashable, Identifiable {
     let path: String?
     let resolved: Bool
     let replies: [PrComment]
-    /// GitHub's node id; absent from an older server.
-    var nodeId: String? = nil
-
-    private enum CodingKeys: String, CodingKey {
-        case author, avatar, body, createdAt, url, kind, path, resolved, replies
-        case nodeId = "id"
-    }
 
     /// Stable across polls, so a new reply or an edit keeps an open thread
     /// open. Not the url alone: every review carries the PR's own.
     var id: String { "\(url)|\(createdAt)|\(author)" }
-
-    /// What the pull requests page picks it by: `commentKey` in `prInbox.ts`.
-    var key: String { nodeId.flatMap { $0.isEmpty ? nil : $0 } ?? "\(url)\u{0}\(createdAt)" }
-    /// A review's inline threads, the replies carrying a file.
-    var threads: [PrComment] { kind == "comment" ? [] : replies.filter { $0.path != nil } }
 }
 
 /// Why the server could not ask GitHub: `{"kind":…,"detail":…}`.

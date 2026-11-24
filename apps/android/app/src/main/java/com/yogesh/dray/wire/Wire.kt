@@ -80,10 +80,16 @@ data class SessionItem(
     val routineRun: String? = null,
     /** A lazy fork the CLI has not carried out yet: it has run no turn, so there is nothing to mark unread. */
     val forkFrom: String? = null,
+    /** Issues the task was started on or tagged with. */
+    val issues: List<IssueLink> = emptyList(),
 ) {
     val busy: Boolean get() = status == "in_progress"
     val project: String get() = projectPath.trimEnd('/').substringAfterLast('/')
 }
+
+/** An issue on a session's index entry, the server's `IssueRef`. */
+@Serializable
+data class IssueLink(val tracker: String = "", val id: String = "", val identifier: String = "", val title: String = "", val url: String = "")
 
 /** A bot, as `list_bots` answers it. Its chat is any session whose `cwd` is `path`. */
 @Serializable

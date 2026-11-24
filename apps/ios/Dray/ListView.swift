@@ -228,13 +228,7 @@ struct SessionList: View {
             NavigationStack {
                 switch p {
                 case .pulls: PullsView()
-                case .issues:
-                    IssuesView { tag in
-                        // The tag lands in the dock's words, where project and agent are still to pick: the desktop's Work on.
-                        task.text = task.hasText ? "\(task.text) \(tag) " : "\(tag) "
-                        listPage = nil
-                        newTaskPage()
-                    }
+                case .issues: IssuesView()
                 }
             }
             .presentationBackground(Theme.page)
