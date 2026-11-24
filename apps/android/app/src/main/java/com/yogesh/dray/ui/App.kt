@@ -137,8 +137,9 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
     LaunchedEffect(Unit) { delay(10_000); launchSpent = true }
     val late = if (!launchSpent && store.live.isNotEmpty() && store.live.all { store.known(it.id) }) launchRoute(store) else null
     LaunchedEffect(late) {
+        val route = late ?: return@LaunchedEffect
         launchSpent = true
-        push(late ?: return@LaunchedEffect)
+        push(route)
     }
     NotificationAsk()
     val holder = rememberSaveableStateHolder()
