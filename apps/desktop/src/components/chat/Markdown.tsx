@@ -1,8 +1,9 @@
 import { fileSrc, qualify } from "@/lib/transport";
-import { memo, useMemo } from "react";
-import { Streamdown, type Components, type ThemeInput } from "streamdown";
+import { memo, useMemo, useState } from "react";
+import { Streamdown, defaultComponents, type Components, type ThemeInput } from "streamdown";
 
 import FileLink from "@/components/chat/FileLink";
+import ImageGallery, { GalleryPicture, useGallerySlot } from "@/components/chat/ImageGallery";
 import { MarkdownTable } from "@/components/chat/MarkdownTable";
 import ProofImage from "@/components/chat/ProofImage";
 import VideoPlayer from "@/components/chat/VideoPlayer";
@@ -18,6 +19,7 @@ import {
   FILE_CODE_CLASS,
   FILE_LINK_CLASS,
   FILE_PATH_CLASS,
+  IMAGE_ROW_CLASS,
   LOCAL_IMAGE_CLASS,
   REHYPE_PLUGINS,
   REHYPE_PLUGINS_WITH_FILE_LINKS,
@@ -134,7 +136,7 @@ function MarkdownImpl({
       ...(linkFilePaths === "written"
         ? { span: DocPathSpan }
         : linkFilePaths
-          ? { span: FilePathSpan }
+          ? { span: FilePathSpan, div: ImageRowDiv, img: MarkdownImage }
           : null),
       ...components,
     }),
@@ -368,6 +370,30 @@ function FilePathSpan({
       {children}
     </span>
   );
+}
+
+/// Every `div` in a message, passed through unless `rehypeImageRows` marked it a
+/// row of pictures.
+function ImageRowDiv({ className, node: _node, ...props }: React.ComponentProps<"div"> & { node?: unknown }) {
+  if (className?.split(" ").includes(IMAGE_ROW_CLASS)) {
+    return <ImageGallery>{props.children}</ImageGallery>;
+  }
+  return <div className={className} {...props} />;
+}
+
+const DefaultImage = defaultComponents.img as React.ComponentType<React.ComponentProps<"img">>;
+
+/// A web image in a message: a gallery tile where it stands on its own, and
+/// Streamdown's own inline image where it sits in a sentence, a badge's case.
+function MarkdownImage(props: React.ComponentProps<"img"> & { node?: unknown }) {
+  const { src, alt } = props;
+  // Streamdown's stand-in for an image still streaming in; its own img draws it.
+  const ready = typeof src === "string" && src !== "streamdown:incomplete-image";
+  const [failed, setFailed] = useState(false);
+  const open = useGallerySlot(ready && !failed ? { src, name: alt || "image" } : null);
+  // A failed load goes back to Streamdown too, which says the image is unavailable.
+  if (!open || !ready || failed) return <DefaultImage {...props} />;
+  return <GalleryPicture src={src} alt={alt} onOpen={open} onError={() => setFailed(true)} />;
 }
 
 function DocPathSpan(props: React.ComponentProps<typeof FilePathSpan>) {
