@@ -101,12 +101,12 @@ export const NEXT_RELEASE: Highlight[] = [
   page(
     "Switch a task's harness mid-session.",
     "Pick another harness in the composer and your next message moves the task there, with everything said so far.",
-    [{ kind: "image", url: "/demo/whats-new/harness-chat.png", alt: "One chat, Claude Code answering and then Codex" }],
+    [{ kind: "image", url: "/demo/whats-new/harness-composer.png", alt: "A chat Claude Code answered, Codex picked in the composer for the next message" }],
   ),
   page(
     "Dray is now on iPhone. Work from anywhere.",
     "Every task on every machine, with questions to answer, permissions to allow and alerts when one is ready to merge.",
-    [{ kind: "image", url: "/demo/whats-new/iphone-lock.png", alt: "Dray's alerts on an iPhone lock screen, beside a QR code for the App Store" }],
+    [{ kind: "image", url: "/demo/whats-new/iphone-app.png", alt: "Dray's bot chat on an iPhone, beside a QR code for the App Store" }],
     { label: "Get it on the App Store", target: "https://apps.apple.com/app/id6824145317" },
   ),
 ];

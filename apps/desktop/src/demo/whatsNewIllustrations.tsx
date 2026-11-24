@@ -52,15 +52,31 @@ function You({ children, small }: { children: ReactNode; small?: boolean }) {
 }
 
 /// An agent's reply under its mark: grey for the agent it was, blue for the
-/// one it moved to.
-function Says({ harness, picked, small, children }: { harness: Harness; picked?: boolean; small?: boolean; children: ReactNode }) {
+/// one it moved to. `brand` draws the mark in the agent's own colour.
+function Says({
+  harness,
+  picked,
+  brand,
+  small,
+  children,
+}: {
+  harness: Harness;
+  picked?: boolean;
+  brand?: boolean;
+  small?: boolean;
+  children: ReactNode;
+}) {
   return (
     <div className="flex items-start gap-1.5">
       <span
         className={cn("flex shrink-0 items-center justify-center", small ? "size-3" : "size-[15px]")}
         style={{ background: picked ? BLUE : "#262626" }}
       >
-        <AgentIcon harness={harness} className={cn(small ? "size-2" : "size-2.5", picked ? "text-white" : "text-[#CFCFCF]")} />
+        <AgentIcon
+          harness={harness}
+          brand={brand}
+          className={cn(small ? "size-2" : "size-2.5", !brand && (picked ? "text-white" : "text-[#CFCFCF]"))}
+        />
       </span>
       <span className={cn(MONO, "text-[#CFCFCF]", small ? "text-[9px] leading-3" : "text-[11px] leading-[15px]")}>{children}</span>
     </div>
@@ -158,7 +174,9 @@ function HarnessComposer() {
     <div aria-hidden className="flex w-[300px] flex-col bg-[#0A0A0A]">
       <div className="flex flex-col gap-2 px-3 pt-2.5 pb-2">
         <You>Why does sign-in loop?</You>
-        <Says harness="claude_code">The redirect fires twice. Fixed.</Says>
+        <Says harness="claude_code" brand>
+          The redirect fires twice. Fixed.
+        </Says>
       </div>
       <div className="mr-2 flex w-[150px] flex-col self-end border border-[#333333] bg-[#141414] shadow-[0_8px_24px_#000000A0]">
         {rows.map(([h, name]) => {
@@ -167,7 +185,6 @@ function HarnessComposer() {
             <div key={h} className="flex h-6 items-center gap-2 px-2" style={{ background: picked ? BLUE : undefined }}>
               <AgentIcon harness={h} className={cn("size-2.5", picked ? "text-white" : "text-[#8A8A8A]")} />
               <span className={cn(MONO, "text-[11px] leading-[14px]", picked ? "text-white" : "text-[#CFCFCF]")}>{name}</span>
-              {picked && <span className={`${MONO} ml-auto text-[9px] leading-3 text-[#FFFFFFB3]`}>next</span>}
             </div>
           );
         })}
@@ -204,10 +221,7 @@ function ScanToInstall() {
   return (
     <div className="absolute top-1/2 right-7 flex -translate-y-1/2 flex-col items-center gap-2">
       <Qr size={100} />
-      <div className="flex flex-col items-center">
-        <span className={`${MONO} text-[11px] leading-[14px] text-white`}>Dray for iPhone</span>
-        <span className={`${MONO} text-[10px] leading-[13px] text-[#8A8A8A]`}>Scan to install</span>
-      </div>
+      <span className={`${MONO} text-[11px] leading-[14px] text-white`}>Scan to install</span>
     </div>
   );
 }
@@ -273,22 +287,49 @@ function Alert({ title, body, mark }: { title: string; body: string; mark: strin
   );
 }
 
-/// The lock screen while the reader is away: one task ready to merge, one
-/// waiting on an answer, one done.
-function IPhoneLockScreen() {
+/// An iPhone 16 Pro Max drawn to its own proportions (a 440×956pt screen,
+/// 62pt corners, the Dynamic Island 126×37pt at 11pt), titanium rim and side
+/// buttons, bleeding off the tile's foot, a real screenshot on its screen.
+function RealPhone({ left, width = 150, src }: { left: number; width?: number; src: string }) {
+  const pt = (width - 10) / 440;
+  const radius = 62 * pt;
+  const button = (side: "left" | "right", top: number, height: number) => (
+    <span
+      className="absolute w-[2px] rounded-[1px] bg-gradient-to-b from-[#5A5A5E] via-[#3A3A3C] to-[#5A5A5E]"
+      style={{ [side]: -1.5, top: top * pt, height: height * pt }}
+    />
+  );
+  return (
+    <div className="absolute top-4" style={{ left, width }}>
+      {button("left", 150, 50)}
+      {button("left", 235, 85)}
+      {button("left", 335, 85)}
+      {button("right", 270, 135)}
+      {button("right", 560, 70)}
+      <div
+        className="relative bg-gradient-to-br from-[#8E8E93] via-[#3A3A3C] to-[#6E6E73] p-[1.5px] shadow-[0_20px_40px_#000000C0]"
+        style={{ height: 956 * pt + 10, borderRadius: radius + 5 }}
+      >
+        <div className="h-full bg-black p-[3.5px]" style={{ borderRadius: radius + 3.5 }}>
+          <div className="relative h-full overflow-hidden bg-black" style={{ borderRadius: radius }}>
+            <img src={src} alt="" className="absolute inset-0 size-full object-cover object-top" />
+            <span
+              className="absolute left-1/2 -translate-x-1/2 rounded-full bg-black"
+              style={{ top: 11 * pt, width: 126 * pt, height: 37 * pt }}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/// The app itself in the phone: the bot chat from its App Store screenshots
+/// (`01-bot-chat`, the 6.9-inch export), a merge and two waiting tasks on it.
+function IPhoneApp() {
   return (
     <div aria-hidden className="absolute inset-0">
-      <Phone left={56} width={156}>
-        <div className="flex flex-col items-center pt-1 pb-1.5">
-          <span className="text-[8px] leading-[10px] text-[#CFCFCF]">Tuesday 24 November</span>
-          <span className="text-[30px] leading-[34px] font-medium tracking-[-0.02em] text-white">9:41</span>
-        </div>
-        <div className="flex flex-col gap-1">
-          <Alert title="Ready to merge" body="Fix login loop" mark="#238636" />
-          <Alert title="Needs you" body="Postgres or SQLite?" mark={BLUE} />
-          <Alert title="Done" body="Add dark mode" mark="#3D3D3D" />
-        </div>
-      </Phone>
+      <RealPhone left={70} src="/demo/whats-new/ios-bot-chat.png" />
       <ScanToInstall />
     </div>
   );
@@ -335,7 +376,7 @@ const ROWS: { title: string; takes: Record<string, { name: string; Art: () => Re
     title: "Dray on iPhone",
     takes: {
       "iphone-permission": { name: "A · Allow from anywhere", Art: IPhonePermission },
-      "iphone-lock": { name: "B · Lock screen", Art: IPhoneLockScreen },
+      "iphone-app": { name: "B · The app in a real frame", Art: IPhoneApp },
       "iphone-question": { name: "C · Answer a question", Art: IPhoneQuestion },
     },
   },
