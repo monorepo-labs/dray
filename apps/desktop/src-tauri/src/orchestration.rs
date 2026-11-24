@@ -1232,6 +1232,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::CreateBot(create) => {
             let avatar = bots::face(create.shape.as_deref(), create.hue)?;
             let bot = bots::create_bot(create.name, Some(avatar)).await?;
+            crate::analytics::bot_created(None, "cli");
             app.emit(bots::BOTS_CHANGED, ()).ok();
             Ok(Response::Bot { bot: bots::summary(bot).await })
         }
@@ -1263,6 +1264,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             let schedule =
                 crate::routines::Schedule::parse(add.every.as_deref(), add.at.as_deref(), add.days.as_deref())?;
             let routine = crate::routines::add(&bot, &add.name, &add.prompt, schedule, add.check).await?;
+            crate::analytics::routine_added(routine.schedule.every_minutes.is_some(), routine.check.is_some());
             app.emit(crate::routines::ROUTINES_CHANGED, ()).ok();
             Ok(Response::Routine { routine: routine_summary(routine).await })
         }
