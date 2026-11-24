@@ -185,7 +185,10 @@ async fn serve_and_tunnel(sink: Sink) {
                     backoff = Duration::from_secs(2);
                     follow(&sink, &address).await;
                 }
-                Err(e) => set(&sink, None, Some(format!("{e:#}"))),
+                Err(e) => {
+                    tunnel::log(tunnel::REMOTE, &format!("could not open, trying again in {}s: {e:#}", backoff.as_secs()));
+                    set(&sink, None, Some(format!("{e:#}")));
+                }
             }
             tokio::time::sleep(backoff).await;
             backoff = (backoff * 2).min(Duration::from_secs(60));
