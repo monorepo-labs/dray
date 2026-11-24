@@ -66,6 +66,7 @@ function Flow({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }) {
     if (sound === "none") return;
     let music: ReturnType<typeof startOnboardingMusic> | undefined;
     const voice = new Audio(welcomeVoiceUrl);
+    voice.volume = 0.5;
     const lift = () => music?.lift();
     voice.addEventListener("ended", lift);
     voice.addEventListener("error", lift);
