@@ -7,6 +7,7 @@ import {
   FILE_CODE_CLASS,
   FILE_LINK_CLASS,
   FILE_PATH_CLASS,
+  IMAGE_ROW_CLASS,
   linkBareUrls,
   LOCAL_IMAGE_CLASS,
   localImagePath,
@@ -602,5 +603,46 @@ describe("local images", () => {
     ]) {
       expect(localImagePath(src)).toBeNull();
     }
+  });
+});
+
+describe("image rows", () => {
+  function render(md: string): string {
+    return renderToStaticMarkup(
+      createElement(Streamdown, { mode: "static", rehypePlugins: REHYPE_PLUGINS_WITH_FILE_PATHS }, md),
+    );
+  }
+
+  /// Each row's pictures, as the sources and local paths it holds.
+  function rows(html: string): string[][] {
+    const parts = html.split(`class="${IMAGE_ROW_CLASS}"`).slice(1);
+    return parts.map((part) => {
+      const inner = part.split("<p")[0];
+      return [...inner.matchAll(/(?:src|title)="([^"]*)"/g)].map((m) => m[1]);
+    });
+  }
+
+  it("gathers image-only paragraphs into one row, web and local alike", () => {
+    const html = render(
+      [
+        "Screens:",
+        "![a](https://img.drayhq.com/a.png)\n![b](https://img.drayhq.com/b.png)",
+        "![c](/tmp/c.png)",
+        "![d](https://img.drayhq.com/d.png)",
+        "And the desktop one:",
+        "![e](https://img.drayhq.com/e.png)",
+      ].join("\n\n"),
+    );
+    expect(rows(html)).toEqual([
+      ["https://img.drayhq.com/a.png", "https://img.drayhq.com/b.png", "/tmp/c.png", "https://img.drayhq.com/d.png"],
+      ["https://img.drayhq.com/e.png"],
+    ]);
+  });
+
+  it("leaves an image in a sentence or a link where it is", () => {
+    const html = render(
+      "See ![x](https://img.drayhq.com/x.png) here.\n\n[![badge](https://img.shields.io/b.svg)](https://example.com)",
+    );
+    expect(html).not.toContain(IMAGE_ROW_CLASS);
   });
 });

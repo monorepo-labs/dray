@@ -399,6 +399,62 @@ function markLocalImages(node: HastNode) {
   }
 }
 
+/// The marker `rehypeImageRows` puts on a run of pictures standing on their own,
+/// which `Markdown` draws as one side-by-side gallery.
+export const IMAGE_ROW_CLASS = "dray-image-row";
+
+function isPicture(node: HastNode): boolean {
+  if (node.type !== "element") return false;
+  if (node.tagName === "img") return true;
+  const classes = node.properties?.className;
+  return node.tagName === "span" && Array.isArray(classes) && classes.includes(LOCAL_IMAGE_CLASS);
+}
+
+function isGap(node: HastNode): boolean {
+  return (node.type === "text" && !node.value?.trim()) || (node.type === "element" && node.tagName === "br");
+}
+
+/// A paragraph's pictures where it holds nothing else; `null` otherwise. A
+/// picture inside a link is not one — a badge row is links, and the link is
+/// what a click there means.
+function picturesOf(node: HastNode): HastNode[] | null {
+  if (node.type !== "element" || node.tagName !== "p") return null;
+  const kept = (node.children ?? []).filter((child) => !isGap(child));
+  return kept.length > 0 && kept.every(isPicture) ? kept : null;
+}
+
+/// Gathers every run of image-only paragraphs into one marked `div`, so four
+/// screenshots on four lines sit side by side instead of each taking a screen.
+/// Runs after harden, so an image it blocked is text by then and ends the run.
+function rehypeImageRows() {
+  return (tree: HastNode) => groupImageRows(tree);
+}
+
+function groupImageRows(node: HastNode) {
+  const children = node.children;
+  if (!children) return;
+  const out: HastNode[] = [];
+  let row: HastNode | null = null;
+  for (const child of children) {
+    const pictures = picturesOf(child);
+    if (pictures) {
+      if (!row) {
+        row = { type: "element", tagName: "div", properties: { className: [IMAGE_ROW_CLASS] }, children: [] };
+        out.push(row);
+      }
+      row.children!.push(...pictures);
+      continue;
+    }
+    // The newline between two paragraphs does not end a run.
+    if (!(row && isGap(child))) {
+      row = null;
+      groupImageRows(child);
+    }
+    out.push(child);
+  }
+  node.children = out;
+}
+
 /// The same pipeline with paths marked, for the one surface where a path names
 /// a file on *this* machine.
 ///
@@ -415,6 +471,7 @@ export const REHYPE_PLUGINS_WITH_FILE_PATHS = [
   rehypeFilePaths,
   rehypeLocalImages,
   HARDEN,
+  rehypeImageRows,
 ] as StreamdownProps["rehypePlugins"];
 
 /// For a markdown file read in the Files view: the links its author wrote to
