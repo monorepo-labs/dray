@@ -30,6 +30,16 @@
   }
 }
 
+/* The wordmark waits dim, and turns white as the light passes. */
+.ob-lit {
+  animation: ob-lit 0.9s ease-out both;
+}
+@keyframes ob-lit {
+  from {
+    opacity: 0.55;
+  }
+}
+
 /* A band of light sweeps across the wordmark, inside its mask. */
 .ob-shine {
   background: linear-gradient(105deg, transparent 38%, rgb(255 255 255) 50%, transparent 62%);
@@ -48,6 +58,7 @@
   .ob-in,
   .ob-fade,
   .ob-out,
+  .ob-lit,
   .ob-shine {
     animation: none;
   }

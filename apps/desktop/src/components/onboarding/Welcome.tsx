@@ -7,9 +7,11 @@ import "./onboarding.css";
 /// When, in ms, each beat of the welcome lands. The wordmark sits a while
 /// before and after its light, so it reads as a name and not a flash.
 const SHINE_AT = 1600;
-const LOGO_OUT_AT = 4400;
-const TEXT_AT = 5000;
-const NEXT_AT = 7400;
+/// The light leaves the wordmark white behind it, about when it is halfway across.
+const LIT_AT = SHINE_AT + 500;
+const LOGO_OUT_AT = 4600;
+const TEXT_AT = 5200;
+const NEXT_AT = 9200;
 
 /// The Dray wordmark, mark and letters, as apps/web's `Wordmark` draws it.
 const WORDMARK = [
@@ -58,7 +60,7 @@ export default function Welcome({ onNext }: { onNext: () => void }) {
       <div className="ob-out col-start-1 row-start-1" style={delay(LOGO_OUT_AT)}>
         <div className="ob-fade" style={delay(100)}>
           <div className="relative h-8 w-[155px] overflow-hidden" style={MASK}>
-            <div className="absolute inset-0 bg-white/55" />
+            <div className="ob-lit absolute inset-0 bg-white" style={delay(LIT_AT)} />
             <div className="ob-shine absolute inset-y-0 -left-full w-[300%]" style={delay(SHINE_AT)} />
           </div>
         </div>
