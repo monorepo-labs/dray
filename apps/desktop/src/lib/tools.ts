@@ -47,7 +47,8 @@ export function toolSummary(
   // fx's own skill tool, whose only field is an opaque location ending in the
   // skill's name — `skill:68130a4a3e6c5614:0/find-skills`. Tool-keyed for the
   // same reason: `location` names a skill on this tool and nothing else.
-  if (name === "skill") return field(input, "location")?.split("/").pop() ?? null;
+  // OpenCode's takes the skill's `name` instead.
+  if (name === "skill") return field(input, "location")?.split("/").pop() ?? field(input, "name");
 
   // grok's MCP dispatcher: every server's tool arrives as one `use_tool` call
   // whose own name says nothing, with the real one under `tool_name` and that
@@ -214,6 +215,16 @@ const TOOL_VERBS: Record<string, Verbs> = {
   // itself arrives on `_x.ai/exit_plan_mode` for the card to draw.
   enter_plan_mode: ["Entering plan mode", "Entered plan mode", "plan"],
   exit_plan_mode: ["Presenting plan", "Presented plan", "plan"],
+
+  // OpenCode's own, lowercase. `bash`, `read`, `write`, `edit`, `grep` and
+  // `skill` are above and shared deliberately — one act, one label.
+  glob: ["Searching", "Searched", "pattern"],
+  list: ["Listing", "Listed", "directory"],
+  patch: ["Editing", "Edited", "file"],
+  webfetch: ["Fetching", "Fetched", "page"],
+  websearch: ["Searching web", "Searched web", "query"],
+  todowrite: ["Todo", "Todo", "todo list"],
+  task: ["Delegating", "Delegated", "task"],
 };
 
 /// What a delegated run was asked to do, and what it was asked to do it with.

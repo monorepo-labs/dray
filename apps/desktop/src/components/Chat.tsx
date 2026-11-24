@@ -756,7 +756,7 @@ export default function Chat({
 
   if (!session) return null;
 
-  // fx alone: it takes one prompt per turn, so a held message waits out the
+  // fx and OpenCode alone: each takes one prompt per turn, so a held message waits out the
   // whole turn on screen. Every other harness hands its queue over at the next
   // tool boundary, seconds away, where stopping the turn to save that wait
   // costs more than the wait.
@@ -768,7 +768,7 @@ export default function Chat({
   const queued = (
     <QueuedMessages
       messages={queuedMessages}
-      onSendNow={session.harness === "fx" && active ? onSendNow : undefined}
+      onSendNow={(session.harness === "fx" || session.harness === "opencode") && active ? onSendNow : undefined}
       active={active}
     />
   );

@@ -1897,6 +1897,8 @@ fn stance_on(harness: Harness, mode: ApprovalPolicy) -> ApprovalPolicy {
         (Harness::Codex | Harness::Fx | Harness::Grok, A::Plan) => A::Manual,
         (Harness::Codex | Harness::Fx, A::DontAsk) => A::Auto,
         (Harness::Grok, A::DontAsk) => A::BypassPermissions,
+        // opencode.rs runs `dontAsk` as Auto; Plan is the `plan` agent.
+        (Harness::OpenCode, A::DontAsk) => A::Auto,
         _ => mode,
     }
 }
@@ -1904,11 +1906,12 @@ fn stance_on(harness: Harness, mode: ApprovalPolicy) -> ApprovalPolicy {
 /// Whether `harness` has said which models it serves: Claude Code's are a
 /// table, the rest a probe that lists nothing until it answers.
 async fn lists_models(harness: Harness) -> bool {
-    use crate::harness::{codex, fx, grok, pi};
+    use crate::harness::{codex, fx, grok, opencode, pi};
     match harness {
         Harness::Pi => !pi::models::list().await.is_empty(),
         Harness::Fx => !fx::models::list().await.is_empty(),
         Harness::Grok => !grok::models::list().await.is_empty(),
+        Harness::OpenCode => !opencode::models::list().await.is_empty(),
         Harness::Codex => !codex::models::list().await.is_empty(),
         _ => true,
     }
