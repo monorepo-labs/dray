@@ -32,7 +32,7 @@ final class IssueCardTests: XCTestCase {
         let play = app.buttons.matching(identifier: "Work on it").firstMatch
         XCTAssertTrue(play.exists, "no Work on it button")
         play.tap()
-        XCTAssertTrue(app.staticTexts["Started"].waitForExistence(timeout: 15), "tile never read Started")
+        XCTAssertTrue(app.images["Started"].waitForExistence(timeout: 15), "tile never showed its check")
         sleep(1)
         attach(app, "started")
 

@@ -618,13 +618,11 @@ struct IssueCardView: View {
             // an empty Group takes no frame and the labels then slid to the edge.
             ZStack {
                 if started.contains(row.number) {
-                    HStack(spacing: 3) {
-                        Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.add)
-                        Text("Started")
-                    }
-                    .font(Theme.Font.footnote)
-                    .foregroundStyle(Theme.secondary)
-                    .accessibilityElement(children: .combine)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.add)
+                        .frame(width: 40, height: 40)
+                        .accessibilityLabel("Started")
                 } else if sending == row.number {
                     ProgressView().controlSize(.small)
                 } else if canStart {
@@ -639,7 +637,7 @@ struct IssueCardView: View {
                     .accessibilityLabel("Work on it")
                 }
             }
-            .frame(width: 72, alignment: .trailing)
+            .frame(width: 44, alignment: .trailing)
             .padding(.trailing, 4)
         }
         .background(Theme.raised.opacity(0.55), in: .rect(cornerRadius: Theme.Radius.group - 4, style: .continuous))
