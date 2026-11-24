@@ -1,158 +1,99 @@
-import { useEffect } from "react";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { Check, ChevronDown, Copy, ExternalLink } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import AgentIcon from "@/components/AgentIcon";
-import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import Spinner from "@/components/ui/spinner";
-import { useAgentAccounts, useAuthOptions } from "@/hooks/useAgentAccounts";
-import { useAgentAvailability } from "@/hooks/useAgentAvailability";
-import { useCopied } from "@/hooks/useCopied";
+import { useAgentAccounts } from "@/hooks/useAgentAccounts";
+import { rereadAgentAvailability } from "@/hooks/useAgentAvailability";
 import { onFocusChange } from "@/lib/focus";
 import { AGENT_LABELS, HARNESS_ORDER } from "@/lib/model";
 import { invoke, LOCAL } from "@/lib/transport";
-import { cn } from "@/lib/utils";
-import type { Harness } from "@/types/events";
+import type { AuthOption, Harness } from "@/types/events";
 
 import { useFreshMachine } from "./state";
 
-export type SetupState = "checking" | "ready" | "signin" | "install";
+export type SetupState = "checking" | "ready" | "signin" | "install" | "installing" | "signing" | "failed";
 
-export type SetupRow = {
-  harness: Harness;
-  label: string;
-  state: SetupState;
-  installCommand: string | null;
-  docsUrl: string | null;
+export type SetupRow = { harness: Harness; label: string; state: SetupState; error: string | null };
+
+export type AgentSetup = {
+  rows: SetupRow[];
+  ready: SetupRow[];
+  /// The one thing to do about `harness`: install it, sign it in, or retry a
+  /// failed install in Terminal.
+  act: (harness: Harness) => void;
 };
 
-export type AgentSetup = { rows: SetupRow[]; ready: SetupRow[]; checking: boolean };
-
-/// Every agent on this Mac, read the way the Accounts tab reads them, and read
-/// again whenever the window comes back from a Terminal sign-in.
+/// Every agent on this Mac, read the way the Accounts tab reads them, plus
+/// whatever onboarding is doing about each one right now.
 export function useAgentSetup(): AgentSetup {
   const { agents, refresh } = useAgentAccounts("", LOCAL);
-  const availability = useAgentAvailability(LOCAL);
-  useEffect(() => onFocusChange((focused) => focused && void refresh()), [refresh]);
   const fresh = useFreshMachine();
+  // What this screen started, keyed by agent: the accounts read can't say
+  // "installing", and a login in Terminal reads as signed out until it lands.
+  const [doing, setDoing] = useState<Partial<Record<Harness, { state: SetupState; error?: string }>>>({});
+  // Installs handed to Terminal, looked for again when the window comes back.
+  const inTerminal = useRef(new Set<Harness>());
+
+  useEffect(
+    () =>
+      onFocusChange((focused) => {
+        if (!focused) return;
+        const pending = [...inTerminal.current];
+        inTerminal.current.clear();
+        void Promise.all(pending.map((harness) => invoke<boolean>("recheck_agent", { harness }, LOCAL).catch(() => false))).then(
+          (found) => {
+            if (found.some(Boolean)) rereadAgentAvailability();
+            void refresh();
+          },
+        );
+      }),
+    [refresh],
+  );
+
+  const mark = (harness: Harness, state: SetupState | null, error?: string) =>
+    setDoing((was) => {
+      const next = { ...was };
+      if (state) next[harness] = { state, error };
+      else delete next[harness];
+      return next;
+    });
+
+  const signIn = useCallback(async (harness: Harness) => {
+    const options = await invoke<AuthOption[]>("agent_auth_options", { harness, provider: null }, LOCAL).catch(() => []);
+    const first = options.find((o) => o.command);
+    if (!first) return mark(harness, null);
+    mark(harness, "signing");
+    await invoke("run_agent_login", { harness, provider: null, auth: first.id, cwd: "" }, LOCAL).catch(() => mark(harness, null));
+  }, []);
 
   const rows = HARNESS_ORDER.map((harness): SetupRow => {
     const agent = agents?.find((a) => a.harness === harness);
-    const avail = availability?.find((a) => a.harness === harness);
     const signedIn = !fresh && agent?.accounts.some((a) => a.state === "logged_in");
-    return {
-      harness,
-      label: agent?.label ?? AGENT_LABELS[harness],
-      state: !agent ? "checking" : !agent.installed ? "install" : signedIn ? "ready" : "signin",
-      installCommand: avail?.installCommand ?? null,
-      docsUrl: avail?.docsUrl ?? null,
-    };
+    const known: SetupState = !agent ? "checking" : !agent.installed ? "install" : signedIn ? "ready" : "signin";
+    const now = doing[harness];
+    // A sign-in that landed wins over "signing"; anything else this screen
+    // started wins over the last read.
+    const state = known === "ready" || !now ? known : now.state;
+    return { harness, label: agent?.label ?? AGENT_LABELS[harness], state, error: now?.error ?? null };
   });
-  return { rows, ready: rows.filter((r) => r.state === "ready"), checking: agents === null };
-}
 
-const STATE_TEXT: Record<SetupState, string> = {
-  checking: "Checking…",
-  ready: "Ready",
-  signin: "Not signed in",
-  install: "Not installed",
-};
+  const act = (harness: Harness) => {
+    const row = rows.find((r) => r.harness === harness);
+    if (!row) return;
+    if (row.state === "signin" || row.state === "signing") void signIn(harness);
+    else if (row.state === "failed") {
+      inTerminal.current.add(harness);
+      mark(harness, "install");
+      void invoke("install_agent_in_terminal", { harness }, LOCAL).catch(() => {});
+    } else if (row.state === "install") {
+      mark(harness, "installing");
+      invoke("install_agent", { harness }, LOCAL)
+        .then(async () => {
+          rereadAgentAvailability();
+          await refresh();
+          await signIn(harness);
+        })
+        .catch((err) => mark(harness, "failed", String(err)));
+    }
+  };
 
-export function StateLine({ row, className }: { row: SetupRow; className?: string }) {
-  return (
-    <span className={cn("flex min-w-0 items-center gap-1.5 text-ui text-muted-foreground", className)}>
-      <span
-        aria-hidden
-        className={cn(
-          "size-1.5 shrink-0 rounded-full",
-          row.state === "ready" ? "bg-accent-add" : "bg-muted-foreground/40",
-        )}
-      />
-      <span className="truncate">{STATE_TEXT[row.state]}</span>
-    </span>
-  );
-}
-
-/// The one thing to do about an agent: install it, sign it in, or nothing.
-/// `onMore` opens Settings → Agents, which holds the key and provider forms.
-export function AgentAction({ row, onMore }: { row: SetupRow; onMore: () => void }) {
-  if (row.state === "checking") return <Spinner className="size-3.5 text-muted-foreground" />;
-  if (row.state === "ready") return null;
-  if (row.state === "install") return <InstallAction row={row} />;
-  return <SignInAction row={row} onMore={onMore} />;
-}
-
-function InstallAction({ row }: { row: SetupRow }) {
-  const [copied, copy] = useCopied();
-  if (!row.installCommand) return null;
-  return (
-    <span className="flex items-center gap-0.5">
-      <Button variant="secondary" size="sm" onClick={() => void copy(row.installCommand!)}>
-        {copied ? <Check /> : <Copy />}
-        {copied ? "Copied" : "Copy install"}
-      </Button>
-      {row.docsUrl && (
-        <Button variant="ghost" size="icon-sm" aria-label="Install guide" onClick={() => void openUrl(row.docsUrl!)}>
-          <ExternalLink />
-        </Button>
-      )}
-    </span>
-  );
-}
-
-function SignInAction({ row, onMore }: { row: SetupRow; onMore: () => void }) {
-  const options = useAuthOptions(row.harness, null, LOCAL).filter((o) => o.command);
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="secondary" size="sm">
-          Sign in
-          <ChevronDown className="text-muted-foreground" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-64">
-        {options.map((option) => (
-          <DropdownMenuItem
-            key={option.id}
-            className="flex-col items-start gap-0"
-            onSelect={() =>
-              void invoke("run_agent_login", { harness: row.harness, provider: null, auth: option.id, cwd: "" }, LOCAL).catch(
-                (err) => console.error("sign-in", err),
-              )
-            }
-          >
-            <span>{option.label}</span>
-            {option.hint && <span className="text-xs text-muted-foreground">{option.hint}</span>}
-          </DropdownMenuItem>
-        ))}
-        {options.length > 0 && <DropdownMenuSeparator />}
-        <DropdownMenuItem onSelect={onMore}>Other ways…</DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-/// Every agent as a compact row: face, name, state, action.
-export function AgentList({ setup, onMore, className }: { setup: AgentSetup; onMore: () => void; className?: string }) {
-  return (
-    <ul className={cn("flex flex-col", className)}>
-      {setup.rows.map((row) => (
-        <li key={row.harness} className="flex h-10 items-center gap-2.5">
-          <AgentIcon harness={row.harness} brand className="size-4 shrink-0" />
-          <span className="flex min-w-0 flex-1 flex-col">
-            <span className="truncate text-ui leading-tight font-medium">{row.label}</span>
-            <StateLine row={row} className="text-xs leading-tight" />
-          </span>
-          <AgentAction row={row} onMore={onMore} />
-        </li>
-      ))}
-    </ul>
-  );
+  return { rows, ready: rows.filter((r) => r.state === "ready"), act };
 }

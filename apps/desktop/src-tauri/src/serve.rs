@@ -2109,6 +2109,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             crate::accounts::sign_out_agent(harness, provider).await;
         check_agent_updates() => ok(crate::agent_updates::check_agent_updates().await);
         update_agent(harness: Harness) => crate::agent_updates::update_agent(harness).await;
+        install_agent(harness: Harness) => crate::agent_updates::install_agent(harness).await;
+        recheck_agent(harness: Harness) => ok(crate::agent_updates::recheck_agent(harness).await);
 
         // Projects and settings.
         list_projects() => crate::projects::list_projects().await;

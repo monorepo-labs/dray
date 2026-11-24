@@ -101,8 +101,7 @@ import StalledTasks from "@/components/chat/StalledTasks";
 import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/MergeCard";
 import { cardRepos } from "@/lib/mergeCard";
 import BotWelcome from "@/components/chat/BotWelcome";
-import Onboarding, { OnboardingChat } from "@/components/onboarding/Onboarding";
-import { useOnboarding } from "@/components/onboarding/state";
+import Onboarding from "@/components/onboarding/Onboarding";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import SplitPanes, { cardOrder, SplitFile } from "@/components/SplitPanes";
 import { pruneSplits, removeSplit, useLitGroup, useSplitGroups, useSplitPanes, useSplitWeight } from "@/lib/splitPanes";
@@ -3736,30 +3735,22 @@ function App() {
   // A bot whose empty chat opens on a welcome (Dray Bot) draws as a chat
   // already under way: the welcome in the transcript, the composer below it.
   const welcomeBot = newBot && greetingOf(newBot).length > 0 ? newBot : undefined;
-  // Onboarding (#1421) introduces Dray Bot and can send it a first message.
-  const onboarding = useOnboarding();
+  // Onboarding (#1421) introduces Dray Bot and ends in its chat.
   const drayBot = bots.find((b) => b.welcome) ?? bots[0];
   const onDrayBot =
     !!drayBot && ((welcomeBot?.id === drayBot.id && !selectedSessionId) || selectedBot?.id === drayBot.id);
-  const onboardingChat = onboarding.variant === "chat" && onDrayBot;
-  // What to send once the bot's chat is on screen; empty only focuses it.
-  const [botAsk, setBotAsk] = useState<string | null>(null);
+  // Focused once the bot's chat is on screen, which opening it takes a render.
+  const [focusBot, setFocusBot] = useState(false);
   useEffect(() => {
-    if (botAsk === null || !onDrayBot) return;
-    setBotAsk(null);
-    if (botAsk) void handleSendMsg(botAsk);
-    else requestAnimationFrame(focusComposer);
-    // `handleSendMsg` is rebuilt every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [botAsk, onDrayBot]);
-  const askBot = (text: string) => {
+    if (!focusBot || !onDrayBot) return;
+    setFocusBot(false);
+    requestAnimationFrame(focusComposer);
+  }, [focusBot, onDrayBot]);
+  const startWithBot = () => {
     if (!drayBot) return;
+    setSettingsOpen(false);
     if (!onDrayBot) openBot(drayBot);
-    setBotAsk(text);
-  };
-  const openAgentSettings = () => {
-    setSettingsTab("accounts");
-    setSettingsOpen(true);
+    setFocusBot(true);
   };
   // In a bot's chat `@` lists the other bots instead of files: those on its
   // own server, the only ones `dray bot send` reaches from there.
@@ -5000,8 +4991,6 @@ function App() {
             loads it. One already loaded keeps drawing what it has. */}
         {offlineServer && !selectedSession ? (
           <TranscriptSkeleton still={offlineServer.status !== "connecting"} sessionId={selectedSessionId} />
-        ) : onboardingChat ? (
-          <OnboardingChat welcome={drayBot && greetingOf(drayBot)[0]} onAsk={askBot} onMore={openAgentSettings} />
         ) : welcomeBot && !selectedSessionId ? (
           <BotWelcome messages={greetingOf(welcomeBot)} />
         ) : (
@@ -5143,14 +5132,7 @@ function App() {
         onClose={() => closeWhatsNew(false)}
       />
     )}
-    <Onboarding
-      bot={drayBot}
-      chatStarted={!!botList.find((b) => b.bot.id === drayBot?.id)?.session}
-      settingsOpen={settingsOpen}
-      onOpenBot={() => drayBot && !onDrayBot && openBot(drayBot)}
-      onAsk={askBot}
-      onMore={openAgentSettings}
-    />
+    <Onboarding bot={drayBot} onStart={startWithBot} />
     {/* Same corner as What's New, so it waits for that card to go. */}
     {starPrompt && !whatsNew && <StarCard />}
     <DragGhost />

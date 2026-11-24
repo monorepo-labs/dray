@@ -2,13 +2,13 @@ import { useSyncExternalStore } from "react";
 
 import { channel } from "@/lib/channel";
 
-/// The onboarding flows on trial (#1421). Dev builds only, picked from the dev
-/// switch; a release never shows one until a winner is wired to first launch.
+/// The welcome openings on trial (#1421), each followed by the same agent and
+/// Dray Bot steps. Dev builds only, picked from the dev switch; a release never
+/// shows one until a winner is wired to first launch.
 export const VARIANTS = [
-  { id: "steps", label: "Full-screen steps" },
-  { id: "checklist", label: "Checklist card" },
-  { id: "chat", label: "Bot-led chat" },
-  { id: "tour", label: "Coach-mark tour" },
+  { id: "arrive", label: "Welcome A · Bot arrives" },
+  { id: "tiles", label: "Welcome B · Tiles build the mark" },
+  { id: "wordmark", label: "Welcome C · Wordmark reveal" },
 ] as const;
 export type Variant = (typeof VARIANTS)[number]["id"];
 
@@ -37,7 +37,8 @@ function set(next: State) {
   changed.emit();
 }
 
-/// Starts `variant` from its first screen; `null` turns onboarding off.
+/// Starts onboarding from its first screen with `variant`'s welcome; `null`
+/// turns it off.
 export function replayOnboarding(variant: Variant | null) {
   set({ variant, done: variant === null, run: state.run + 1 });
 }
@@ -46,7 +47,7 @@ export function finishOnboarding() {
   if (!state.done) set({ ...state, done: true });
 }
 
-/// The flow on screen, or `null`. `run` changes on every replay, so a flow
+/// The opening on screen, or `null`. `run` changes on every replay, so a flow
 /// keyed on it starts over.
 export function useOnboarding(): { variant: Variant | null; run: number } {
   const now = useSyncExternalStore(changed.subscribe, () => state);
@@ -71,10 +72,3 @@ export function setFreshMachine(on: boolean) {
   localStorage.setItem(FRESH, on ? "1" : "0");
   changed.emit();
 }
-
-/// What a new user is offered to send Dray Bot first.
-export const STARTERS = [
-  "What can you do for me?",
-  "Look at my projects and suggest a first task",
-  "Help me fix a bug",
-];

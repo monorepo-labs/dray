@@ -10,9 +10,10 @@ import type { AgentAvailability, Harness } from "@/types/events";
 /// picker and the composer's notice both read it, and two copies would let one
 /// mark an agent unavailable while the other still offered to send to it.
 ///
-/// Read once per server per process. The answer cannot change while a server
-/// runs — Rust caches the resolution in a `OnceLock`, absence included — so
-/// refetching would spend a login shell to be told the same thing.
+/// Read once per server per process. Rust caches the resolution, absence
+/// included, so refetching would spend a login shell to be told the same thing
+/// — until Dray installs an agent itself, which calls
+/// [`rereadAgentAvailability`].
 const answers = new Map<ServerId, AgentAvailability[]>();
 const inFlight = new Set<ServerId>();
 const changed = channel<void>();
@@ -31,6 +32,16 @@ function read(server: ServerId) {
     // remote server that was unreachable is asked again on the next mount.
     .catch(() => {})
     .finally(() => inFlight.delete(server));
+}
+
+/// Asks again, keeping the old answer on screen until the new one lands.
+export function rereadAgentAvailability(server: ServerId = LOCAL) {
+  invoke<AgentAvailability[]>("agent_availability", {}, server)
+    .then((next) => {
+      answers.set(server, next);
+      changed.emit();
+    })
+    .catch(() => {});
 }
 
 /// The agents on `server`, or `null` until the first read lands.

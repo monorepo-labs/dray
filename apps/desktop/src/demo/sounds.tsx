@@ -4,7 +4,7 @@ import ReactDOM from "react-dom/client";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
-import { playCelebration, playDictationSound, playNotification } from "@/lib/sound";
+import { playCelebration, playDictationSound, playNotification, playWelcome } from "@/lib/sound";
 import { playSwipeTick } from "@/lib/tick";
 import "../App.css";
 import sendUrl from "../../../island/Island/send.wav?url";
@@ -45,6 +45,12 @@ const APP: Sound[] = [
     file: "public/celebration.wav",
     play: playCelebration,
     where: ["A session settled, from its row or its menu."],
+  },
+  {
+    name: "Welcome",
+    file: "src/lib/sound.ts, made in code",
+    play: playWelcome,
+    where: ["Onboarding's first screen, as the welcome lands."],
   },
   {
     name: "Dictation start",

@@ -1,0 +1,158 @@
+/* Onboarding's motion. Every element starts hidden and plays once, on a delay
+   its own `animation-delay` sets, so `both` keeps it hidden until its turn. */
+.ob-in {
+  animation: ob-in 0.7s cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+@keyframes ob-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+    filter: blur(6px);
+  }
+}
+
+.ob-fade {
+  animation: ob-fade 1.2s ease-out both;
+}
+@keyframes ob-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* The tiles along the bottom rise into place. */
+.ob-rise {
+  animation: ob-rise 1.1s cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+@keyframes ob-rise {
+  from {
+    opacity: 0;
+    transform: translateY(80px);
+  }
+}
+
+/* A: the bot falls in, squashes on landing, and settles. */
+.ob-drop {
+  transform-origin: 50% 100%;
+  animation: ob-drop 1.15s both;
+}
+@keyframes ob-drop {
+  0% {
+    transform: translateY(-70vh) scale(0.92, 1.1);
+    animation-timing-function: cubic-bezier(0.55, 0, 1, 0.45);
+  }
+  48% {
+    transform: translateY(0) scale(1.18, 0.82);
+    animation-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+  }
+  66% {
+    transform: translateY(-18px) scale(0.95, 1.06);
+    animation-timing-function: cubic-bezier(0.55, 0, 1, 0.45);
+  }
+  80% {
+    transform: translateY(0) scale(1.06, 0.94);
+    animation-timing-function: ease-out;
+  }
+  100% {
+    transform: none;
+  }
+}
+
+/* The shadow under the falling bot grows as it nears the floor. */
+.ob-shadow {
+  animation: ob-shadow 1.15s both;
+}
+@keyframes ob-shadow {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  48% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+  66% {
+    transform: scale(0.85);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* B: each tile flies in from its own --dx/--dy/--r to its place in the mark. */
+.ob-fly {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ob-fly 1.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes ob-fly {
+  from {
+    opacity: 0;
+    transform: translate(var(--dx), var(--dy)) rotate(var(--r)) scale(0.3);
+  }
+}
+
+/* The mark brightens once, when the last tile lands. */
+.ob-flash {
+  animation: ob-flash 1.2s ease-out both;
+}
+@keyframes ob-flash {
+  0% {
+    filter: drop-shadow(0 0 0 rgb(255 255 255 / 0));
+  }
+  30% {
+    filter: drop-shadow(0 0 28px rgb(255 255 255 / 0.55));
+  }
+  100% {
+    filter: drop-shadow(0 0 0 rgb(255 255 255 / 0));
+  }
+}
+
+/* C: each letter sharpens out of a blur. */
+.ob-letter {
+  display: inline-block;
+  animation: ob-letter 0.9s cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+@keyframes ob-letter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+    filter: blur(14px);
+  }
+}
+
+/* C: "Dray"'s letters flare as they sharpen. On the letter's own filter, since
+   a glow on a parent of blurred letters paints their layers' boxes. */
+.ob-letter.ob-lit {
+  animation-name: ob-lit;
+  animation-duration: 2s;
+}
+@keyframes ob-lit {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+    filter: blur(14px) drop-shadow(0 0 0 rgb(255 255 255 / 0));
+  }
+  30% {
+    opacity: 1;
+    transform: none;
+    filter: blur(0) drop-shadow(0 0 18px rgb(255 255 255 / 0.7));
+  }
+  100% {
+    filter: blur(0) drop-shadow(0 0 0 rgb(255 255 255 / 0));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ob-in,
+  .ob-fade,
+  .ob-rise,
+  .ob-drop,
+  .ob-shadow,
+  .ob-fly,
+  .ob-flash,
+  .ob-letter {
+    animation: none;
+  }
+}
