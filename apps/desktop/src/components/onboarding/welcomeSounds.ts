@@ -291,6 +291,8 @@ export const MUSIC_TRACKS = [
 export type MusicTrack = (typeof MUSIC_TRACKS)[number]["id"];
 
 const MUSIC_LEVEL = 0.35;
+/// The music's share of its level while the welcome voice speaks over it.
+const UNDER_VOICE = 0.7;
 /// How long the music takes to fade once onboarding ends.
 const MUSIC_FADE_S = 4;
 const LOOP_STEPS = 64;
@@ -327,7 +329,7 @@ export function startOnboardingMusic(
       if (stopped) return;
       const at = ctx.currentTime + 0.05;
       master.gain.setValueAtTime(0.0001, at);
-      master.gain.exponentialRampToValueAtTime(lifted ? level : level * 0.35, at + 0.6);
+      master.gain.exponentialRampToValueAtTime(lifted ? level : level * UNDER_VOICE, at + 0.6);
       const head = ctx.createBufferSource();
       head.buffer = first;
       head.connect(master);
