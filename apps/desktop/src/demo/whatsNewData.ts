@@ -93,7 +93,7 @@ export const PAGE_HIGHLIGHTS: Highlight[] = [
   ),
 ];
 
-/// The next release's two highlights, on the picked take of each. Their
+/// The next release's three highlights, on the picked take of each. Their
 /// pictures are drawn in code ([whatsNewIllustrations.tsx](whatsNewIllustrations.tsx))
 /// and captured at 2560×1440; for the release itself they move to
 /// apps/web/public/changelog/.
@@ -107,6 +107,11 @@ export const NEXT_RELEASE: Highlight[] = [
     "Your agents, in your pocket. Dray is now on iPhone.",
     "Every task on every machine, with questions to answer, permissions to allow and alerts when one is ready to merge.",
     [{ kind: "image", url: "/demo/whats-new/iphone-app.png", alt: "Dray's bot chat on an iPhone, beside a QR code for the App Store" }],
+  ),
+  page(
+    "OpenCode is now in Dray.",
+    "Pick OpenCode in the composer and run it like any other agent, with your own models and providers.",
+    [{ kind: "image", url: "/demo/whats-new/opencode-logo.png", alt: "The OpenCode logo" }],
   ),
 ];
 

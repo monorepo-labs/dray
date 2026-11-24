@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 
 import AgentIcon from "@/components/AgentIcon";
 import type { Harness } from "@/types/events";
+import { AGENT_LABELS, HARNESS_ORDER } from "@/lib/model";
 import { cn } from "@/lib/utils";
 import DemoThemeBar from "@/demo/ThemeBar";
 import { APP_STORE_QR } from "./appStoreQr";
@@ -48,6 +49,19 @@ function Frame({ zoom = 6.4, children }: { zoom?: number; children: ReactNode })
   );
 }
 
+/// OpenCode's official mark (opencode.ai/brand), as the site's agent grid
+/// draws it: a frame with the lower half of its counter in a lighter shade.
+/// Every other agent is the app's own `AgentIcon`.
+function Mark({ harness, className }: { harness: Harness; className?: string }) {
+  if (harness !== "opencode") return <AgentIcon harness={harness} className={className} />;
+  return (
+    <svg viewBox="0 0 240 300" fill="currentColor" className={cn("shrink-0", className)}>
+      <path d="M180 240H60V120H180V240Z" opacity="0.28" />
+      <path d="M180 60H60V240H180V60ZM240 300H0V0H240V300Z" />
+    </svg>
+  );
+}
+
 function You({ children, small, light }: { children: ReactNode; small?: boolean; light?: boolean }) {
   return (
     <div
@@ -87,7 +101,7 @@ function Says({
         className={cn("flex shrink-0 items-center justify-center", small ? "size-3" : "size-[15px]")}
         style={{ background: picked ? BLUE : brand ? CLAUDE : light ? "#E4E4E7" : "#262626" }}
       >
-        <AgentIcon
+        <Mark
           harness={harness}
           className={cn(
             small ? "size-2" : "size-2.5",
@@ -252,6 +266,115 @@ function HarnessComposer() {
         </span>
       </div>
     </div>
+  );
+}
+
+const PANEL = (light: boolean) => (light ? "bg-[#F7F7F8] shadow-[0_0_0_1px_#00000014]" : "bg-[#0A0A0A]");
+
+/// The composer's input line, OpenCode on its agent chip.
+function Composer({ light, text }: { light: boolean; text: string }) {
+  return (
+    <div
+      className={cn(
+        "m-2 mt-1 flex h-9 items-center gap-2 border px-2",
+        light ? "border-[#0000001A] bg-white" : "border-[#333333] bg-[#141414]",
+      )}
+    >
+      <span className={cn(MONO, "text-[11px] leading-[14px]", light ? "text-[#0A0A0A]" : "text-white")}>{text}</span>
+      <span className={cn("h-3 w-px", light ? "bg-[#0A0A0A]" : "bg-white")} />
+      <span className={`${MONO} ml-auto flex h-5 items-center gap-1 px-1.5 text-[10px] leading-3 text-white`} style={{ background: BLUE }}>
+        <Mark harness="opencode" className="size-2.5 text-white" />
+        OpenCode
+      </span>
+    </div>
+  );
+}
+
+/// The composer's agent menu open on all six, OpenCode last and picked, over
+/// the message it will run: `HarnessComposer` without the chat, since the news
+/// is the row, not a move.
+function OpenCodeComposer() {
+  const light = WHITE;
+  return (
+    <div aria-hidden className={cn("flex w-[300px] flex-col pt-2", PANEL(light))}>
+      <div
+        className={cn(
+          "mr-2 flex w-[160px] flex-col self-end border",
+          light
+            ? "border-[#0000001A] bg-white shadow-[0_4px_12px_#00000014]"
+            : "border-[#333333] bg-[#141414] shadow-[0_8px_24px_#000000A0]",
+        )}
+      >
+        {HARNESS_ORDER.map((h) => {
+          const picked = h === "opencode";
+          return (
+            <div key={h} className="flex h-[22px] items-center gap-2 px-2" style={{ background: picked ? BLUE : undefined }}>
+              <Mark harness={h} className={cn("size-2.5", picked ? "text-white" : light ? "text-[#71717A]" : "text-[#8A8A8A]")} />
+              <span className={cn(MONO, "text-[11px] leading-[14px]", picked ? "text-white" : light ? "text-[#3F3F46]" : "text-[#CFCFCF]")}>
+                {AGENT_LABELS[h]}
+              </span>
+              {picked && <span className={`${MONO} ml-auto text-[9px] leading-3 text-white/70`}>New</span>}
+            </div>
+          );
+        })}
+      </div>
+      <Composer light={light} text="Clean up the auth module" />
+    </div>
+  );
+}
+
+/// A task OpenCode already answered, the composer still on it.
+function OpenCodeChat() {
+  const light = WHITE;
+  return (
+    <div aria-hidden className={cn("flex w-[300px] flex-col", PANEL(light))}>
+      <div className="flex flex-col gap-2 px-3 pt-2.5 pb-2">
+        <You light={light}>Why is the orders page slow?</You>
+        <Says harness="opencode" picked light={light}>
+          An N+1 in the loader. Batched it.
+        </Says>
+      </div>
+      <Composer light={light} text="Add a test for it" />
+    </div>
+  );
+}
+
+/// The six agents as tiles, the way the site's agent grid shows them,
+/// OpenCode's the blue one.
+function OpenCodeRow() {
+  const light = WHITE;
+  return (
+    <div aria-hidden className="grid grid-cols-3 gap-2">
+      {HARNESS_ORDER.map((h) => {
+        const picked = h === "opencode";
+        return (
+          <div
+            key={h}
+            className={cn(
+              "flex h-[72px] w-[104px] flex-col items-center justify-center gap-2",
+              !picked && (light ? "bg-[#F4F4F5]" : "bg-[#0A0A0A]"),
+            )}
+            style={picked ? { background: BLUE } : undefined}
+          >
+            <Mark harness={h} className={cn("size-5", picked ? "text-white" : light ? "text-[#52525B]" : "text-[#CFCFCF]")} />
+            <span className={cn(MONO, "text-[11px] leading-[14px]", picked ? "text-white" : light ? "text-[#3F3F46]" : "text-[#CFCFCF]")}>
+              {AGENT_LABELS[h]}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/// OpenCode's mark alone, centred, its counter's shade lighter on white as the
+/// site draws it in light.
+function OpenCodeLogo() {
+  return (
+    <svg aria-hidden viewBox="0 0 240 300" className={cn("h-[88px]", WHITE ? "text-[#0A0A0A]" : "text-white")} fill="currentColor">
+      <path d="M180 240H60V120H180V240Z" opacity={WHITE ? 0.2 : 0.28} />
+      <path d="M180 60H60V240H180V60ZM240 300H0V0H240V300Z" />
+    </svg>
   );
 }
 
@@ -433,6 +556,15 @@ const ROWS: { title: string; takes: Record<string, { name: string; Art: () => Re
       "iphone-permission": { name: "A · Allow from anywhere", Art: IPhonePermission },
       "iphone-app": { name: "B · The app in a real frame", Art: IPhoneApp },
       "iphone-question": { name: "C · Answer a question", Art: IPhoneQuestion },
+    },
+  },
+  {
+    title: "OpenCode in Dray",
+    takes: {
+      "opencode-composer": { name: "A · Picked in the composer", Art: OpenCodeComposer },
+      "opencode-chat": { name: "B · OpenCode answers", Art: OpenCodeChat },
+      "opencode-row": { name: "C · Sixth in the row", Art: OpenCodeRow },
+      "opencode-logo": { name: "D · The logo alone", Art: OpenCodeLogo },
     },
   },
 ];
