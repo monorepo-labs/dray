@@ -721,6 +721,11 @@ pub fn learn_ladder(model_arg: &str, reading: Option<LadderReading>) -> bool {
     true
 }
 
+#[cfg(test)]
+pub(super) fn learned(model_arg: &str) -> Option<Vec<Effort>> {
+    LADDERS.lock().expect("fx ladders poisoned").get(model_arg).cloned()
+}
+
 /// Puts what has been learned over everything else — the only source that has
 /// seen this model take a level rather than been told it would.
 fn with_learned_ladders(models: Vec<Model>) -> Vec<Model> {

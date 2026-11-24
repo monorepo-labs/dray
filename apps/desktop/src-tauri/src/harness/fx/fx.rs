@@ -1532,6 +1532,32 @@ mod tests {
         assert!(line.contains("\"max\""), "{line}");
     }
 
+    /// A model switch's reply lists the level fx carried over, so it cannot
+    /// teach the ladder that level — the next send then judged it unsupported
+    /// and saved no effort. fx taking it again is what teaches it, which is why
+    /// `apply_live_controls` re-sends the effort after an fx model switch.
+    /// grok-4.6's real options, as the live switch answered with `low` carried.
+    #[test]
+    fn a_carried_level_is_learned_once_fx_takes_it_again() {
+        let (session, _rx) = session_on(None);
+        let sink = Sink::new(|_, _| {});
+        let reply = |model: &str| {
+            parser::ConfigOptions::of(&json!({"configOptions": [
+                {"id": "model", "currentValue": model, "options": [{"value": model}]},
+                {"id": "effort", "currentValue": "low", "options": [
+                    {"value": "auto"}, {"value": "xhigh"}, {"value": "high"},
+                    {"value": "medium"}, {"value": "low"}]},
+            ]}))
+        };
+
+        note_config(&session, &reply("test/carry"), None, &sink);
+        let switched = models::learned("test/carry").unwrap();
+        assert!(!switched.contains(&Effort::Low), "a carried level proves nothing");
+
+        note_effort(&session, &reply("test/carry"), Effort::Low, &sink);
+        assert!(models::learned("test/carry").unwrap().contains(&Effort::Low));
+    }
+
     /// A level a model has stopped taking must not make its session
     /// unopenable. This is the resume path: `init` used to `?` on the refusal
     /// and kill the child, so the conversation could not be reached at all.
