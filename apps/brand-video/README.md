@@ -8,15 +8,14 @@ Every frame is a pure function of time (`src/scene.js`), so the render is
 frame-perfect and any frame can be drawn on its own.
 
 ```bash
-pnpm dev            # preview at http://127.0.0.1:5199/?v=a — A/B/C, scrub, space, ←/→
-pnpm render         # out/harness-switch-{a,b,c}.mp4 and out/stills/
-node render.mjs b   # one take
+pnpm dev            # preview at http://127.0.0.1:5199/ — scrub, space, ←/→
+pnpm render         # out/harness-switch.mp4 and out/stills/
 ```
 
 The render seeks the page frame by frame in headless Chromium (Playwright's
 `chromium-headless-shell`; `npx playwright-core install chromium-headless-shell`
 if missing) and pipes PNGs to `ffmpeg` (H.264, yuv420p, no audio).
 
-The headline takes live in `VARIANTS`; the beats in `T` and `CAMERA`. The tile
+The chat lives in `FEED` and `SENDS`, the beats in `T` and `CAMERA`. The tile
 data in `src/tiles.js` and the marks in `src/marks.js` are copied from
 `apps/web`, so a redraw there wants a copy here.

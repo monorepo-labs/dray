@@ -2,17 +2,17 @@ import "@fontsource-variable/inter";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "./style.css";
-import { DUR, FPS, H, mount, VARIANTS, W } from "./scene.js";
+import { DUR, FPS, H, mount, W } from "./scene.js";
 
 const q = new URLSearchParams(location.search);
 const stage = document.getElementById("stage");
 const viewport = document.getElementById("viewport");
-let variant = VARIANTS[q.get("v")] ? q.get("v") : "a";
-let scene = mount(stage, variant);
 
 await Promise.all(
   ['350 100px "Inter Variable"', '400 20px "Geist Variable"', '400 20px "Geist Mono Variable"'].map((f) => document.fonts.load(f)),
 );
+// Mounted after the fonts, since the chat's item heights are measured off them.
+const scene = mount(stage);
 
 if (q.has("render")) {
   // render.mjs drives frames itself; nothing here moves on its own.
@@ -38,17 +38,6 @@ if (q.has("render")) {
   };
   addEventListener("resize", fit);
   fit();
-
-  const pick = (v) => {
-    variant = v;
-    scene = mount(stage, v);
-    for (const b of document.querySelectorAll("[data-v]")) b.setAttribute("aria-pressed", String(b.dataset.v === v));
-    const c = VARIANTS[v];
-    document.getElementById("copy").textContent = `“${c.hook}”  →  “${c.lead} ${c.rest}”`;
-    history.replaceState(null, "", `?v=${v}`);
-  };
-  for (const b of document.querySelectorAll("[data-v]")) b.onclick = () => pick(b.dataset.v);
-  pick(variant);
 
   play.onclick = () => (playing = !playing);
   range.oninput = () => {

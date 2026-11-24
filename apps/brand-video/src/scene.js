@@ -6,12 +6,7 @@ export const H = 1080;
 export const FPS = 60;
 export const DUR = 15;
 
-/// The headline takes Yogesh picks from: an opening hook and the end card.
-export const VARIANTS = {
-  a: { hook: "Claude Code hit its limit.", lead: "Switch to Codex mid-task.", rest: "It picks up where Claude left off." },
-  b: { hook: "Out of usage mid-task?", lead: "Switch agents mid-task.", rest: "Nothing starts over." },
-  c: { hook: "One task, two agents.", lead: "Out of Claude?", rest: "Keep going in Codex." },
-};
+const OUTRO = "Switch to any agent harness mid-task.";
 
 const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
 const prog = (t, a, b) => clamp((t - a) / (b - a));
@@ -31,14 +26,13 @@ const ease = {
 // Every beat, in seconds. The wipe fully covers the frame between +0.52 and
 // +0.56, so the cut (camera jump, picker closing, chip swap) lands inside it.
 const T = {
-  panelIn: 2.15,
-  limit: 5.75,
-  cursorIn: 6.4,
-  chipClick: 7.3,
-  pickerOpen: 7.36,
-  codexClick: 8.4,
-  wipe: 8.52,
-  end: 12.45,
+  limit: 5.4,
+  cursorIn: 6.1,
+  chipClick: 6.95,
+  pickerOpen: 7.0,
+  codexClick: 8.0,
+  wipe: 8.12,
+  end: 12.6,
 };
 T.cut = T.wipe + 0.54;
 
@@ -46,38 +40,45 @@ const RED = "#FF6467";
 const GREEN = "#2EC58F";
 const BLUES = ["#1612F8", "#0C0C9E", "#4A46FF", "#7F8CFF"];
 
-const ROWS = [
-  { id: "r1", agent: "claude", kind: "Read", text: "checkout.test.ts", meta: "48 lines", at: 2.85 },
-  { id: "r2", agent: "claude", kind: "Run", text: "pnpm test checkout", meta: "2 failed", tone: RED, at: 3.3 },
-  { id: "r3", agent: "claude", kind: "say", text: "The total is rounded before tax is added. Fixing it in cart.ts.", at: 3.85, type: 0.9 },
-  { id: "r4", agent: "claude", kind: "Edit", text: "cart.ts", meta: "Working", at: 4.95, live: true },
-  { id: "div", kind: "divider", text: "Switched to Codex · same task", at: T.cut + 0.24 },
-  { id: "c1", agent: "codex", kind: "Edit", text: "cart.ts", meta: `<span style="color:${GREEN}">+4</span> <span style="color:${RED}">−2</span>`, at: 9.65 },
-  { id: "c2", agent: "codex", kind: "Run", text: "pnpm test checkout", meta: "12 passed", tone: GREEN, at: 10.4 },
-  { id: "c3", agent: "codex", kind: "say", text: "Fixed: tax is added before rounding. All 12 tests pass.", meta: "Done", tone: GREEN, at: 11.0, type: 0.85 },
+// What the reader types into the composer, and when it goes out as a bubble.
+const SENDS = [
+  { text: "The checkout test fails on CI about half the time. Can you fix it?", type: [0.55, 1.25], send: 1.4 },
+  { text: "Keep going.", type: [9.0, 9.4], send: 9.6 },
 ];
-{
-  let y = 248;
-  for (const r of ROWS) {
-    r.h = r.kind === "divider" ? 56 : 84;
-    r.y = y;
-    y += r.h + 2;
-  }
-}
+
+// The conversation, top to bottom. Each item grows in at `at`.
+const FEED = [
+  { kind: "user", text: SENDS[0].text, at: SENDS[0].send + 0.04 },
+  { kind: "head", agent: "claude", at: 2.0 },
+  { kind: "tool", tool: "Read", target: "checkout.test.ts", meta: "48 lines", at: 2.35 },
+  { kind: "tool", tool: "Run", target: "pnpm test checkout", meta: "2 failed", tone: RED, at: 2.8 },
+  { kind: "text", text: "The total is rounded before tax is added, so some carts land a cent off. Fixing it in cart.ts.", at: 3.25, type: 1.0 },
+  { kind: "tool", tool: "Edit", target: "cart.ts", live: true, at: 4.55 },
+  { kind: "limit", at: T.limit },
+  { kind: "divider", at: T.cut + 0.2 },
+  { kind: "user", text: SENDS[1].text, at: SENDS[1].send + 0.04 },
+  { kind: "head", agent: "codex", at: 10.0 },
+  { kind: "tool", tool: "Edit", target: "cart.ts", meta: `<span style="color:${GREEN}">+4</span> <span style="color:${RED}">−2</span>`, at: 10.3 },
+  { kind: "tool", tool: "Run", target: "pnpm test checkout", meta: "12 passed", tone: GREEN, at: 10.7 },
+  { kind: "text", text: "Fixed: tax is added before rounding. All 12 tests pass.", at: 11.05, type: 0.7 },
+];
+
+// The window: header strip, feed, composer, 2px apart like the site's cards.
+const PANEL = { x: 300, w: 1320, head: [70, 100], feed: [172, 708], composer: [882, 108] };
+const CHIP = { x: 1262, y: 904, w: 250, h: 64 };
 
 // [t, x, y, scale, ease into this key]. The pair at the cut is a hard jump.
 const CAMERA = [
-  [0, 960, 560, 1.1],
-  [2.1, 960, 560, 1.1, "linear"],
-  [3.1, 960, 470, 1.0, "outQuint"],
-  [5.65, 960, 455, 1.03, "inOutCubic"],
-  [6.1, 1070, 400, 1.12, "outCubic"],
-  [6.5, 1090, 390, 1.14, "inOutCubic"],
-  [7.35, 1300, 330, 1.72, "inOutQuint"],
-  [T.cut, 1310, 350, 1.78, "inOutCubic"],
-  [T.cut + 0.001, 1000, 640, 1.32, "linear"],
-  [11.7, 960, 505, 1.0, "inOutCubic"],
-  [13.2, 960, 505, 0.95, "inOutCubic"],
+  [0, 960, 560, 1.12],
+  [1.3, 960, 535, 1.0, "outQuint"],
+  [5.3, 960, 545, 1.02, "inOutCubic"],
+  [5.8, 1000, 610, 1.1, "outCubic"],
+  [6.15, 1010, 620, 1.11, "inOutCubic"],
+  [7.0, 1240, 760, 1.75, "inOutQuint"],
+  [T.cut, 1255, 765, 1.8, "inOutCubic"],
+  [T.cut + 0.001, 1020, 700, 1.3, "linear"],
+  [11.4, 960, 535, 1.0, "inOutCubic"],
+  [13.3, 960, 535, 0.95, "inOutCubic"],
 ];
 
 function camera(t) {
@@ -94,11 +95,11 @@ function camera(t) {
 // World point → screen point under a camera.
 const toScreen = (cam, x, y) => [(x - cam.x) * cam.s + W / 2, (y - cam.y) * cam.s + H / 2];
 
-/// The cursor's world position: in from the lower right to the chip, then down to Codex.
+/// The cursor's world position: in from the lower right to the composer's chip, then up to Codex.
 function cursorAt(t) {
   const legs = [
-    [T.cursorIn, 7.25, [1760, 800], [1468, 176]],
-    [7.6, 8.3, [1468, 176], [1452, 396]],
+    [T.cursorIn, 6.9, [1720, 1060], [CHIP.x + 132, CHIP.y + 28]],
+    [7.25, 7.9, [CHIP.x + 132, CHIP.y + 28], [1368, 770]],
   ];
   let p = legs[0][2];
   for (const [a, b, from, to] of legs) {
@@ -124,10 +125,10 @@ function hash(x, y, salt) {
 
 const rects = (d) => [...d.matchAll(/M(-?\d+) (-?\d+)h(\d+)v(\d+)/g)].map((m) => m.slice(1).map(Number));
 
-// The gate's black-on-black tones, one per field blue, for the task scene.
+// The sign-in gate's black-on-black tones, one per field blue.
 const DARK = { "#0C0C9E": "#0C0C0C", "#1612F8": "#121212", "#2D29FF": "#181818", "#4A46FF": "#181818", "#7F8CFF": "#1F1F1F" };
 
-/// The hero's pixel field as 60px cells, placed so its visible band fills the
+/// The hero's pixel field as 60px cells in the gate's dark tones, filling the
 /// lower half of the frame; the sides past 1440 grown the way HeroBackdrop does.
 function fieldCells() {
   const cells = [];
@@ -145,16 +146,17 @@ function fieldCells() {
         cells.push([x, y, below < 70 || low ? "#0C0C9E" : hash(x, y, 3) < 0.04 ? "#2D29FF" : "#1612F8"]);
       }
   return cells
-    .map(([x, y, blue]) => ({ x: x + 240, y: y + 180, blue, dark: DARK[blue], h: hash(x, y, 9) }))
+    .map(([x, y, c]) => ({ x: x + 240, y: y + 180, fill: DARK[c] }))
     .filter((c) => c.y >= 540 && c.x > -120 && c.x < W + 60);
 }
 
-const svg = (path, size, fill = "currentColor", box = "0 0 24 24") =>
-  `<svg viewBox="${box}" width="${size}" height="${size}" aria-hidden="true"><path fill="${fill}" d="${path}"/></svg>`;
+const svg = (path, size, fill = "currentColor") =>
+  `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true"><path fill="${fill}" d="${path}"/></svg>`;
 const mark = (h) => `<svg viewBox="0 0 159 200" width="${(h * 159) / 200}" height="${h}" aria-hidden="true"><path fill="currentColor" d="${MARK}"/></svg>`;
 const CLAUDE = (s) => svg(CLAUDE_PATH, s, "#D97757");
 const OPENAI = (s) => svg(OPENAI_PATH, s);
 const ARROW = `<svg width="20" height="20" viewBox="0 0 24 24"><path d="M7 17 17 7M7 7h10v10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const SEND = `<svg width="26" height="26" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="square"/></svg>`;
 const CURSOR = `<svg width="38" height="38" viewBox="0 0 24 24"><path d="M3.9 3.05 20.1 9.45Q21.5 10 20.07 10.46L14.23 12.34Q12.8 12.8 12.34 14.23L10.46 20.07Q10 21.5 9.45 20.1L3.05 3.9Q2.5 2.5 3.9 3.05Z" fill="#1612f8" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
 const words = (text) =>
   text
@@ -162,39 +164,51 @@ const words = (text) =>
     .map((w) => `<span class="w"><span class="wi">${w}</span></span>`)
     .join(" ");
 
-function rowHtml(r) {
-  if (r.kind === "divider")
-    return `<div class="strip divider" id="${r.id}" style="top:${r.y}px;height:${r.h}px">${OPENAI(22)}<span class="mono">${r.text}</span></div>`;
-  const say = r.kind === "say";
-  return `<div class="strip row${say ? " say" : ""}" id="${r.id}" style="top:${r.y}px;height:${r.h}px">
-    <span class="g">${r.agent === "claude" ? CLAUDE(28) : OPENAI(28)}</span>
-    <span class="k mono">${say ? "" : r.kind}</span>
-    <span class="x">${say ? "" : r.text}</span>
-    <span class="m mono"${r.tone ? ` style="color:${r.tone}"` : ""}>${r.meta ?? ""}</span>
-    ${r.live ? '<span class="bar"></span>' : ""}
-  </div>`;
+function itemHtml(it) {
+  switch (it.kind) {
+    case "user":
+      return `<div class="bubble">${it.text}</div>`;
+    case "head":
+      return it.agent === "claude" ? `${CLAUDE(30)}<span class="mono">Claude Code</span>` : `${OPENAI(30)}<span class="mono">Codex</span>`;
+    case "tool":
+      return `<span class="k mono">${it.tool}</span><span class="x">${it.target}</span><span class="m mono"${it.tone ? ` style="color:${it.tone}"` : ""}>${it.meta ?? ""}</span>`;
+    case "text":
+      return `<p></p>`;
+    case "limit":
+      return `<div class="alert"><span class="mono">${mark(14)}Usage limit reached</span><p>Claude Code is out of usage until 6:40 PM.</p></div>`;
+    case "divider":
+      return `<div class="switched">${OPENAI(22)}<span class="mono">Switched to Codex</span></div>`;
+  }
 }
 
 /// Builds the scene into `stage` and returns its frame function. Everything on
 /// screen is a pure function of t, so any frame can be drawn in any order.
-export function mount(stage, variant) {
-  const v = VARIANTS[variant] ?? VARIANTS.a;
+export function mount(stage) {
+  const [hy, hh] = PANEL.head;
+  const [fy, fh] = PANEL.feed;
+  const [cy, ch] = PANEL.composer;
   stage.innerHTML = `
     <canvas id="bg" width="${W}" height="${H}"></canvas>
     <div id="world"><div id="panel">
-      <div id="backing"></div>
-      <div class="strip head" style="top:96px;height:150px">
-        <div class="label mono">${mark(16)}Task</div>
+      <div class="backing" style="top:${hy}px;height:${cy + ch - hy}px"></div>
+      <div class="strip head" style="top:${hy}px;height:${hh}px">
+        <div class="label mono">${mark(15)}Task</div>
         <div class="title">Fix the flaky checkout test</div>
       </div>
-      ${ROWS.map(rowHtml).join("")}
-      <div class="chip" id="chip">
-        <div class="chip-in" id="chip-claude">${CLAUDE(30)}<span>Claude Code</span></div>
-        <div class="chip-in" id="chip-codex">${OPENAI(30)}<span>Codex</span></div>
-        <svg class="chev" width="18" height="18" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div class="strip feed" style="top:${fy}px;height:${fh}px"><div class="feed-in" id="feed">
+        ${FEED.map((it) => `<div class="item ${it.kind}"><div class="in">${itemHtml(it)}</div></div>`).join("")}
+      </div></div>
+      <div class="strip composer" style="top:${cy}px;height:${ch}px">
+        <div class="field" id="field"></div>
+        <div class="send" id="send">${SEND}</div>
+      </div>
+      <div class="chip" id="chip" style="left:${CHIP.x}px;top:${CHIP.y}px;width:${CHIP.w}px;height:${CHIP.h}px">
+        <div class="chip-in" id="chip-claude">${CLAUDE(26)}<span>Claude Code</span></div>
+        <div class="chip-in" id="chip-codex">${OPENAI(26)}<span>Codex</span></div>
+        <svg class="chev" width="16" height="16" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="dot" id="dot"><i></i></span>
       </div>
-      <div class="picker" id="picker">
+      <div class="picker" id="picker" style="left:${CHIP.x + CHIP.w - 606}px;top:${CHIP.y - 12 - 284}px">
         <div class="phead mono">${mark(13)}Switch agent</div>
         <div class="card" id="card-claude">
           <div class="top">${CLAUDE(52)}<span class="tag mono">Limit reached</span></div>
@@ -208,94 +222,98 @@ export function mount(stage, variant) {
       <div class="ripple" id="ripple"></div>
       <div class="cursor" id="cursor">${CURSOR}</div>
     </div></div>
-    <div id="intro" class="overlay"><div class="label mono">${mark(18)}New in Dray</div><h1>${words(v.hook)}</h1></div>
     <canvas id="fx" width="${W}" height="${H}"></canvas>
-    <div id="end" class="overlay">
-      <div class="label mono">${mark(18)}New in Dray</div>
-      <h1><span class="lead">${words(v.lead)}</span><br><span class="rest">${words(v.rest)}</span></h1>
-    </div>
+    <div id="end" class="overlay"><h1>${words(OUTRO)}</h1></div>
     <div id="wm" class="overlay"><svg viewBox="0 0 466 96" width="250" height="52">${WORDMARK_PATHS.map((d) => `<path fill="currentColor" d="${d}"/>`).join("")}</svg></div>`;
 
   const $ = (s) => stage.querySelector(s);
   const bg = $("#bg").getContext("2d");
   const fx = $("#fx").getContext("2d");
   const world = $("#world");
-  const panel = $("#panel");
-  const rows = ROWS.map((r) => ({ r, el: $(`#${r.id}`) }));
-  const introWords = [...stage.querySelectorAll("#intro .wi")];
+  const feed = $("#feed");
+  const items = [...feed.children].map((el, i) => ({ it: FEED[i], el, inner: el.firstElementChild, h: 0 }));
   const endWords = [...stage.querySelectorAll("#end .wi")];
   const cells = fieldCells();
+  let measured = false;
 
-  function drawBg(t, cam) {
+  // Heights are read once, after fonts load, with every item at full text.
+  function measure() {
+    for (const m of items) {
+      if (m.it.kind === "text") m.inner.firstChild.textContent = m.it.text;
+      m.el.style.height = "auto";
+      m.h = m.el.offsetHeight;
+    }
+    measured = true;
+  }
+
+  function drawBg(cam) {
     bg.setTransform(1, 0, 0, 1, 0, 0);
     bg.fillStyle = "#000";
     bg.fillRect(0, 0, W, H);
-    // The field drifts at a quarter of the camera's move, for depth.
-    const k = 0.22;
+    // The field drifts at a fifth of the camera's move, for depth.
+    const k = 0.2;
     const s = 1 + (cam.s - 1) * k;
     const cx = W / 2 + (cam.x - W / 2) * k;
     const cy = H / 2 + (cam.y - H / 2) * k;
     bg.setTransform(s, 0, 0, s, W / 2 - cx * s, H / 2 - cy * s);
     for (const c of cells) {
-      const delay = ((H - c.y) / 540) * 0.45 + (c.x / W) * 0.1 + c.h * 0.15;
-      const a = ease.outCubic(prog(t, delay, delay + 0.35));
-      if (a <= 0) continue;
-      const dark = ease.inOutCubic(prog(t, 1.85 + c.h * 0.35 + ((H - c.y) / 540) * 0.2, 2.35 + c.h * 0.35 + ((H - c.y) / 540) * 0.2));
-      const size = 60 * (0.55 + 0.45 * a);
-      bg.globalAlpha = a;
-      bg.fillStyle = mix(c.blue, c.dark, dark);
-      bg.fillRect(c.x + (60 - size) / 2, c.y + (60 - size) / 2, size, size);
+      bg.fillStyle = c.fill;
+      bg.fillRect(c.x, c.y, 60, 60);
     }
-    bg.globalAlpha = 1;
-    // The site's 2px stripes every 6px; black, so they only show over tiles.
-    bg.fillStyle = `rgba(0,0,0,${lerp(0.12, 0.5, prog(t, 1.9, 2.8))})`;
+    bg.fillStyle = "rgba(0,0,0,0.5)";
     for (let x = -600; x < W + 600; x += 6) bg.fillRect(x, 400, 2, H + 400);
   }
 
-  function stripes(ctx, alpha) {
+  function stripes(ctx) {
     ctx.globalCompositeOperation = "source-atop";
-    ctx.fillStyle = `rgba(0,0,0,${alpha})`;
+    ctx.fillStyle = "rgba(0,0,0,0.12)";
     for (let x = 0; x < W; x += 6) ctx.fillRect(x, 0, 2, H);
     ctx.globalCompositeOperation = "source-over";
   }
 
+  /// One 60px grid of brand-blue tiles; `size(i, j, x, y)` says how big each is now.
+  function tiles(size, salt, settle = () => 0) {
+    for (let i = 0; i < W / 60; i++)
+      for (let j = 0; j < H / 60; j++) {
+        const x = i * 60;
+        const y = j * 60;
+        const s = size(i, j, x, y);
+        if (s <= 0) continue;
+        const u = hash(i, j, salt);
+        fx.fillStyle = mix(BLUES[u < 0.62 ? 0 : u < 0.8 ? 1 : u < 0.94 ? 2 : 3], "#1612F8", settle(i, j, x, y));
+        fx.fillRect(x + (60 - s) / 2, y + (60 - s) / 2, s, s);
+      }
+    stripes(fx);
+  }
+
   function drawFx(t, origin) {
     fx.clearRect(0, 0, W, H);
+    const far = (ox, oy) => Math.max(...[[0, 0], [W, 0], [0, H], [W, H]].map(([x, y]) => Math.hypot(x - ox, y - oy)));
+    if (t < 1.2) {
+      // Opens on the closing band's blue, which breaks into tiles from the middle.
+      const maxD = far(W / 2, H / 2);
+      tiles((i, j, x, y) => {
+        const start = 0.12 + (Math.hypot(x + 30 - W / 2, y + 30 - H / 2) / maxD) * 0.45 + hash(i, j, 3) * 0.1;
+        return 60 * (1 - ease.inCubic(prog(t, start, start + 0.3)));
+      }, 17, (i, j, x, y) => 1 - prog(t, 0, 0.12 + (Math.hypot(x - W / 2, y - H / 2) / maxD) * 0.4));
+    }
     if (t >= T.wipe && t < T.wipe + 1.2) {
       const [ox, oy] = origin;
-      const maxD = Math.max(...[[0, 0], [W, 0], [0, H], [W, H]].map(([x, y]) => Math.hypot(x - ox, y - oy)));
-      for (let i = 0; i < W / 60; i++)
-        for (let j = 0; j < H / 60; j++) {
-          const x = i * 60;
-          const y = j * 60;
-          const d = Math.hypot(x + 30 - ox, y + 30 - oy) / maxD;
-          const h = hash(i, j, 7);
-          const start = T.wipe + d * 0.32 + h * 0.06;
-          const size = 60 * ease.outCubic(prog(t, start, start + 0.14)) * (1 - ease.inCubic(prog(t, start + 0.56, start + 0.72)));
-          if (size <= 0) continue;
-          const u = hash(i, j, 11);
-          fx.fillStyle = BLUES[u < 0.62 ? 0 : u < 0.8 ? 1 : u < 0.94 ? 2 : 3];
-          fx.fillRect(x + (60 - size) / 2, y + (60 - size) / 2, size, size);
-        }
-      stripes(fx, 0.12);
+      const maxD = far(ox, oy);
+      tiles((i, j, x, y) => {
+        const start = T.wipe + (Math.hypot(x + 30 - ox, y + 30 - oy) / maxD) * 0.32 + hash(i, j, 7) * 0.06;
+        return 60 * ease.outCubic(prog(t, start, start + 0.14)) * (1 - ease.inCubic(prog(t, start + 0.56, start + 0.72)));
+      }, 11);
     }
     if (t >= T.end) {
       // The closing band rises from the foot, its lit tiles settling to blue.
-      for (let i = 0; i < W / 60; i++)
-        for (let j = 0; j < H / 60; j++) {
-          const x = i * 60;
-          const y = j * 60;
-          const h = hash(i, j, 5);
-          const start = T.end + ((H - y) / H) * 0.5 + h * 0.12;
-          const size = 60 * ease.outCubic(prog(t, start, start + 0.22));
-          if (size <= 0) continue;
-          const u = hash(i, j, 13);
-          const lit = BLUES[u < 0.55 ? 0 : u < 0.75 ? 1 : u < 0.92 ? 2 : 3];
-          fx.fillStyle = mix(lit, "#1612F8", ease.inOutCubic(prog(t, start + 0.15, start + 0.6)));
-          fx.fillRect(x + (60 - size) / 2, y + (60 - size) / 2, size, size);
-        }
-      stripes(fx, 0.12);
-      const a = ease.outCubic(prog(t, 13.0, 13.6));
+      const start = (i, j, y) => T.end + ((H - y) / H) * 0.5 + hash(i, j, 5) * 0.12;
+      tiles(
+        (i, j, x, y) => 60 * ease.outCubic(prog(t, start(i, j, y), start(i, j, y) + 0.22)),
+        13,
+        (i, j, x, y) => ease.inOutCubic(prog(t, start(i, j, y) + 0.15, start(i, j, y) + 0.6)),
+      );
+      const a = ease.outCubic(prog(t, 13.2, 13.8));
       if (a > 0) {
         fx.globalAlpha = a;
         for (const [d, fill] of CLOSING) {
@@ -308,57 +326,59 @@ export function mount(stage, variant) {
     }
   }
 
-  function revealWords(els, t, inAt, gap, outAt = 1e9) {
-    els.forEach((el, i) => {
-      const p = ease.outQuint(prog(t, inAt + i * gap, inAt + i * gap + 0.7));
-      const q = ease.inOutCubic(prog(t, outAt + i * 0.03, outAt + i * 0.03 + 0.32));
-      el.style.transform = `translateY(${(1 - p) * 110 - q * 110}%)`;
-    });
-  }
-
-  function renderRows(t) {
-    // Black behind the strips that are up, so their 2px gaps read as the
-    // site's gaps rather than letting the striped field through.
-    const shown = rows.filter(({ r }) => t >= r.at).at(-1);
-    $("#backing").style.height = `${(shown ? shown.r.y + shown.r.h : 246) - 96}px`;
-    for (const { r, el } of rows) {
-      if (t < r.at) {
-        el.style.opacity = "0";
-        continue;
+  function renderFeed(t) {
+    let total = 0;
+    for (const { it, el, inner, h } of items) {
+      const p = prog(t, it.at, it.at + 0.45);
+      const grow = h * ease.outCubic(p);
+      el.style.height = `${grow}px`;
+      total += grow;
+      inner.style.opacity = String(ease.outCubic(prog(t, it.at + 0.05, it.at + 0.4)));
+      inner.style.transform = `translateY(${(1 - ease.outQuint(p)) * 16}px)`;
+      if (it.kind === "text") {
+        const tp = prog(t, it.at + 0.1, it.at + 0.1 + it.type);
+        inner.firstChild.innerHTML = it.text.slice(0, Math.floor(it.text.length * tp)) + (tp > 0 && tp < 1 ? '<span class="caret"></span>' : "");
       }
-      const p = prog(t, r.at, r.at + 0.55);
-      el.style.opacity = String(ease.outCubic(p));
-      el.style.transform = `translateY(${(1 - ease.outQuint(p)) * 18}px)`;
-      el.style.clipPath = `inset(0 ${(1 - ease.outExpo(p)) * 100}% 0 0)`;
-      if (r.kind === "say") {
-        const tp = prog(t, r.at + 0.12, r.at + 0.12 + r.type);
-        const n = Math.floor(r.text.length * tp);
-        el.querySelector(".x").innerHTML = r.text.slice(0, n) + (tp < 1 ? '<span class="caret"></span>' : "");
-        if (r.meta) el.querySelector(".m").style.opacity = String(ease.outCubic(prog(t, r.at + r.type + 0.15, r.at + r.type + 0.45)));
-      }
-      if (r.live) {
-        const m = el.querySelector(".m");
-        const bar = el.querySelector(".bar");
-        const stopped = t >= T.limit;
-        el.classList.toggle("stopped", stopped);
-        if (!stopped) {
+      if (it.live) {
+        const m = inner.querySelector(".m");
+        if (t < T.limit) {
           m.textContent = "Working";
           m.className = "m mono shimmer";
           m.style.backgroundPosition = `${-((t * 1.4) % 1) * 200 + 100}% 0`;
-          const x = ((t - r.at) * 0.9) % 1;
-          bar.style.background = `linear-gradient(90deg, transparent ${x * 120 - 25}%, rgba(255,255,255,.55) ${x * 120 - 10}%, transparent ${x * 120}%)`;
         } else {
-          const k = prog(t, T.limit, T.limit + 0.25);
-          m.textContent = "Usage limit reached";
+          m.textContent = "Stopped";
           m.className = "m mono";
-          m.style.color = RED;
           m.style.backgroundPosition = "";
-          m.style.transform = `translateX(${Math.sin(k * Math.PI * 5) * (1 - k) * 6}px)`;
-          bar.style.background = RED;
-          bar.style.opacity = String(lerp(1, 0.7, k));
         }
+        el.classList.toggle("stopped", t >= T.limit);
+      }
+      if (it.kind === "limit") {
+        const k = prog(t, it.at, it.at + 0.3);
+        inner.style.transform += ` translateX(${Math.sin(k * Math.PI * 5) * (1 - k) * 7}px)`;
       }
     }
+    // The feed keeps its newest line in view, the way a chat follows on.
+    const view = PANEL.feed[1] - 36 - 28;
+    feed.style.transform = `translateY(${-Math.max(0, total - view)}px)`;
+  }
+
+  function renderComposer(t) {
+    const field = $("#field");
+    const after = t >= T.cut;
+    const send = SENDS.find((s) => t >= s.type[0] && t < s.send);
+    if (send) {
+      const n = Math.floor(send.text.length * prog(t, send.type[0], send.type[1]));
+      field.className = "field typed";
+      field.innerHTML = `${send.text.slice(0, n)}<span class="caret"></span>`;
+    } else {
+      field.className = "field";
+      field.textContent = after ? "Message Codex" : "Message Claude Code";
+    }
+    const press = Math.max(...SENDS.map((s) => bump(prog(t, s.send - 0.08, s.send + 0.12))));
+    const ready = send ? prog(t, send.type[0], send.type[0] + 0.15) : 0;
+    $("#send").style.background = mix("#3A3A3A", "#FFFFFF", ready);
+    $("#send").style.color = mix("#8A8A8A", "#0A0A0A", ready);
+    $("#send").style.transform = `scale(${1 - press * 0.1})`;
   }
 
   function renderSwitch(t, cam) {
@@ -368,12 +388,11 @@ export function mount(stage, variant) {
     const press = bump(prog(t, T.chipClick - 0.04, T.chipClick + 0.16));
     const open = !after && t >= T.chipClick;
     const chip = $("#chip");
-    chip.style.background = mix("#262626", "#343434", Math.max(press, open ? 0.6 : 0));
+    chip.style.background = mix("#2A2A2A", "#383838", Math.max(press, open ? 0.6 : 0));
     chip.style.transform = `scale(${1 - press * 0.04})`;
 
     const dot = $("#dot");
-    const d = ease.outBack(prog(t, T.limit, T.limit + 0.35));
-    dot.style.transform = `scale(${after ? 0 : d})`;
+    dot.style.transform = `scale(${after ? 0 : ease.outBack(prog(t, T.limit, T.limit + 0.35))})`;
     const pulse = t > T.limit ? ((t - T.limit) % 1.1) / 1.1 : 0;
     dot.firstChild.style.transform = `scale(${1 + pulse * 2.2})`;
     dot.firstChild.style.opacity = String((1 - pulse) * 0.6);
@@ -381,8 +400,8 @@ export function mount(stage, variant) {
     const picker = $("#picker");
     const p = ease.outExpo(prog(t, T.pickerOpen, T.pickerOpen + 0.5));
     picker.style.visibility = after || p <= 0 ? "hidden" : "visible";
-    picker.style.clipPath = `inset(0 0 ${(1 - p) * 100}% 0)`;
-    picker.style.transform = `translateY(${(1 - p) * -14}px)`;
+    picker.style.clipPath = `inset(${(1 - p) * 100}% 0 0 0)`;
+    picker.style.transform = `translateY(${(1 - p) * 14}px)`;
     ["#card-claude", "#card-codex"].forEach((s, i) => {
       const c = ease.outCubic(prog(t, T.pickerOpen + 0.1 + i * 0.07, T.pickerOpen + 0.5 + i * 0.07));
       $(s).firstElementChild.style.opacity = String(c);
@@ -390,7 +409,7 @@ export function mount(stage, variant) {
       $(s).style.setProperty("--rise", `${(1 - c) * 12}px`);
     });
     const codex = $("#card-codex");
-    const hov = prog(t, 8.12, 8.26);
+    const hov = prog(t, T.codexClick - 0.25, T.codexClick - 0.12);
     const flip = ease.outCubic(prog(t, T.codexClick + 0.02, T.codexClick + 0.16));
     codex.style.background = mix(mix("#262626", "#313131", hov), "#FFFFFF", flip);
     codex.style.color = mix("#FFFFFF", "#0A0A0A", flip);
@@ -409,24 +428,20 @@ export function mount(stage, variant) {
   }
 
   function render(t) {
+    if (!measured) measure();
     const cam = camera(t);
     world.style.transform = `translate(${W / 2}px, ${H / 2}px) scale(${cam.s}) translate(${-cam.x}px, ${-cam.y}px)`;
-    drawBg(t, cam);
+    drawBg(cam);
+    renderFeed(t);
+    renderComposer(t);
+    drawFx(t, renderSwitch(t, cam));
 
-    $("#intro .label").style.opacity = String(ease.outCubic(prog(t, 0.05, 0.4)) * (1 - prog(t, 1.7, 1.9)));
-    revealWords(introWords, t, 0.15, 0.06, 1.72);
-
-    const pin = ease.outQuint(prog(t, T.panelIn, T.panelIn + 0.85));
-    panel.style.opacity = String(pin);
-    panel.style.transform = `translateY(${(1 - pin) * 90}px)`;
-    renderRows(t);
-    const origin = renderSwitch(t, cam);
-    drawFx(t, origin);
-
-    $("#end").style.visibility = t >= 13.15 ? "visible" : "hidden";
-    $("#end .label").style.opacity = String(ease.outCubic(prog(t, 13.2, 13.5)));
-    revealWords(endWords, t, 13.25, 0.04);
-    const wm = ease.outQuint(prog(t, 13.7, 14.3));
+    $("#end").style.visibility = t >= 13.3 ? "visible" : "hidden";
+    endWords.forEach((el, i) => {
+      const p = ease.outQuint(prog(t, 13.35 + i * 0.05, 13.35 + i * 0.05 + 0.7));
+      el.style.transform = `translateY(${(1 - p) * 110}%)`;
+    });
+    const wm = ease.outQuint(prog(t, 13.85, 14.4));
     $("#wm").style.opacity = String(wm);
     $("#wm").style.transform = `translateY(${(1 - wm) * 24}px)`;
   }
