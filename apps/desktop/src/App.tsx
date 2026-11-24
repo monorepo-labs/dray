@@ -4866,7 +4866,7 @@ function App() {
         {/* A transcript its server has not answered for yet; the reconnect
             loads it. One already loaded keeps drawing what it has. */}
         {offlineServer && !selectedSession ? (
-          <TranscriptSkeleton still={offlineServer.status !== "connecting"} />
+          <TranscriptSkeleton still={offlineServer.status !== "connecting"} sessionId={selectedSessionId} />
         ) : welcomeBot && !selectedSessionId ? (
           <BotWelcome messages={greetingOf(welcomeBot)} />
         ) : (
