@@ -67,8 +67,9 @@ export default function IssueCard({ event }: { event: AgentEvent }) {
   );
 }
 
-/// One issue on a tile of its own, outlined in light and filled in dark; the gap
-/// between tiles separates them. A closed issue's number turns purple.
+/// One issue on a fill of its own; the gap between tiles separates them, and
+/// a border in light read worse than the fill. A closed issue's number turns
+/// purple.
 function Tile({
   row,
   color,
@@ -82,9 +83,7 @@ function Tile({
   action: React.ReactNode;
 }) {
   return (
-    // Light outlines each tile, dark fills it. The border stays in dark, clear,
-    // so a tile is the same size in both modes.
-    <li className="flex items-center gap-1 rounded-lg border border-border hover:bg-[var(--fill-soft,var(--muted))] dark:border-transparent dark:bg-[color-mix(in_oklab,var(--muted)_55%,transparent)]">
+    <li className="flex items-center gap-1 rounded-lg bg-[color-mix(in_oklab,var(--muted)_55%,transparent)] hover:bg-[var(--fill-soft,var(--muted))]">
       <button type="button" onClick={open} className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2.5 py-2 text-left text-ui">
         <span className="shrink-0 text-muted-foreground tabular-nums" style={{ color }} aria-label={`#${row.number}, ${row.closed ? "closed" : "open"}`}>
           #{row.number}
