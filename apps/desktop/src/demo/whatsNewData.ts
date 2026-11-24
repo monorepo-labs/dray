@@ -95,7 +95,7 @@ export const PAGE_HIGHLIGHTS: Highlight[] = [
 
 /// The next release's two highlights, on the picked take of each. Their
 /// pictures are drawn in code ([whatsNewIllustrations.tsx](whatsNewIllustrations.tsx))
-/// and captured at 1280×720; for the release itself they move to
+/// and captured at 2560×1440; for the release itself they move to
 /// apps/web/public/changelog/.
 export const NEXT_RELEASE: Highlight[] = [
   page(
@@ -104,9 +104,17 @@ export const NEXT_RELEASE: Highlight[] = [
     [{ kind: "image", url: "/demo/whats-new/harness-composer.png", alt: "A chat Claude Code answered, Codex picked in the composer for the next message" }],
   ),
   page(
-    "Dray is now on iPhone. Work from anywhere.",
+    "Dray is on iPhone. Answer your agents from anywhere.",
     "Every task on every machine, with questions to answer, permissions to allow and alerts when one is ready to merge.",
     [{ kind: "image", url: "/demo/whats-new/iphone-app.png", alt: "Dray's bot chat on an iPhone, beside a QR code for the App Store" }],
-    { label: "Get it on the App Store", target: "https://apps.apple.com/app/id6824145317" },
   ),
+];
+
+/// Titles to try on the iPhone highlight, the first in NEXT_RELEASE: each
+/// says what the phone lets you do, since the QR beside it is the way in.
+export const IPHONE_TITLES = [
+  "Dray is on iPhone. Answer your agents from anywhere.",
+  "Answer, steer and merge your tasks from your iPhone.",
+  "Get pinged when a task needs you. Answer from your iPhone.",
+  "Your agents, in your pocket. Dray is now on iPhone.",
 ];

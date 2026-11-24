@@ -12,24 +12,27 @@ import "../App.css";
 /// apps/web/src/components/home/Features.tsx and the devices in Everywhere.tsx:
 /// flat, square-cornered panels, #0A0A0A mocks on a #FFFFFF1A tile, mono type
 /// at 12px, 34px rows, the brand blue for the one thing picked. Each is drawn
-/// at the site's own size in a 400×225 tile and zoomed to 1280×720, the 16:9
-/// of a highlight's picture, then captured to an image for the changelog
+/// at the site's own size in a 400×225 tile and zoomed to 2560×1440, the 16:9
+/// of a highlight's picture at twice its 1280×720 so it stays sharp on a
+/// Retina screen, then captured to an image for the changelog
 /// (`demo/whats-new/<art>.png`), since an image is what every surface reading
 /// changelog.json can show. `?art=<id>` draws one frame alone at the window's
-/// corner, for that capture at a 1280×720 viewport; without it every take is
+/// corner, for that capture at a 2560×1440 viewport; without it every take is
 /// listed, a row per highlight.
 
 const MONO = "font-mono tracking-[-0.04em]";
 const BLUE = "#1612F8";
+const CLAUDE = "#D97757";
 
-/// The site's tile: #FFFFFF1A over the page's black. `zoom` 3.2 is the
-/// 1280×720 capture; the listing draws smaller so takes sit side by side.
-function Frame({ zoom = 3.2, children }: { zoom?: number; children: ReactNode }) {
+/// The tile, #1C1C1C: the What's New card's own fill, so a picture and the
+/// title under it read as one surface. `zoom` 6.4 is the 2560×1440 capture;
+/// the listing draws smaller so takes sit side by side.
+function Frame({ zoom = 6.4, children }: { zoom?: number; children: ReactNode }) {
   return (
     <div style={{ width: 400 * zoom, height: 225 * zoom }} className="shrink-0 overflow-hidden bg-black">
       <div
         style={{ zoom }}
-        className="relative flex h-[225px] w-[400px] items-center justify-center overflow-hidden bg-[#1A1A1A] p-6 text-white antialiased"
+        className="relative flex h-[225px] w-[400px] items-center justify-center overflow-hidden bg-[#1C1C1C] p-6 text-white antialiased"
       >
         {children}
       </div>
@@ -51,8 +54,8 @@ function You({ children, small }: { children: ReactNode; small?: boolean }) {
   );
 }
 
-/// An agent's reply under its mark: grey for the agent it was, blue for the
-/// one it moved to. `brand` draws the mark in the agent's own colour.
+/// An agent's reply under its mark, white on a tile: grey for the agent it
+/// was, blue for the one it moved to, `brand` for Claude's own orange.
 function Says({
   harness,
   picked,
@@ -70,12 +73,11 @@ function Says({
     <div className="flex items-start gap-1.5">
       <span
         className={cn("flex shrink-0 items-center justify-center", small ? "size-3" : "size-[15px]")}
-        style={{ background: picked ? BLUE : "#262626" }}
+        style={{ background: picked ? BLUE : brand ? CLAUDE : "#262626" }}
       >
         <AgentIcon
           harness={harness}
-          brand={brand}
-          className={cn(small ? "size-2" : "size-2.5", !brand && (picked ? "text-white" : "text-[#CFCFCF]"))}
+          className={cn(small ? "size-2" : "size-2.5", picked || brand ? "text-white" : "text-[#CFCFCF]")}
         />
       </span>
       <span className={cn(MONO, "text-[#CFCFCF]", small ? "text-[9px] leading-3" : "text-[11px] leading-[15px]")}>{children}</span>
@@ -325,7 +327,8 @@ function RealPhone({ left, width = 150, src }: { left: number; width?: number; s
 }
 
 /// The app itself in the phone: the bot chat from its App Store screenshots
-/// (`01-bot-chat`, the 6.9-inch export), a merge and two waiting tasks on it.
+/// (`01-bot-chat`, the 6.9-inch export, kept at its full 1320px so the
+/// 2x capture only ever shrinks it), a merge and two waiting tasks on it.
 function IPhoneApp() {
   return (
     <div aria-hidden className="absolute inset-0">
