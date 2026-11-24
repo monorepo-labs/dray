@@ -152,7 +152,8 @@ fun IssuesScreen(back: () -> Unit, open: (server: String, issue: Issue) -> Unit)
                 CircularProgressIndicator(Modifier.padding(end = 8.dp).size(16.dp), color = Dray.tertiary, strokeWidth = 2.dp)
             }
             if (connected == true) SearchButton(searching) { searching = true }
-            if (connected == true && filters != null) {
+            // Always there once a server is: the tracker switch lives behind it.
+            if (server != null) {
                 val any = if (github) picks.repo.isNotEmpty() && (label != null || issueType != null) else team != null || project != null
                 IconButton({ filtering = true }) {
                     Icon(if (any) Icons.Filled.FilterList else Icons.Outlined.FilterList, "Filters", tint = if (any) Dray.text else Dray.secondary)
@@ -160,7 +161,6 @@ fun IssuesScreen(back: () -> Unit, open: (server: String, issue: Issue) -> Unit)
             }
         }
         if (searching) SearchField(text, "Search issues", close = { text = ""; searching = false }) { text = it }
-        Segmented(listOf("github" to "GitHub", "linear" to "Linear"), picks.tracker) { picks.tracker = it; picks.save() }
         PullToRefreshBox(
             isRefreshing = refreshing,
             onRefresh = {
@@ -220,32 +220,37 @@ fun IssuesScreen(back: () -> Unit, open: (server: String, issue: Issue) -> Unit)
         }
     }
 
-    if (filtering && filters != null) {
+    if (filtering) {
         ModalBottomSheet({ filtering = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = Dray.card) {
             PickSheet("Filters", done = { filtering = false }) {
                 PickCard {
-                    if (github) {
-                        val repos = filters.teams
-                        if (repos.isNotEmpty()) {
-                            PickMenu("Repository", repos.firstOrNull { it.id == picks.repo }?.name ?: "Choose", repos.map { it.id to it.name }, picks.repo, pick = {
-                                picks.repo = it; picks.save(); label = null; issueType = null
-                            })
-                        }
-                        if (filters.issueTypes.isNotEmpty()) {
-                            PickDivider()
-                            PickMenu("Type", issueType ?: "Any type", listOf<Pair<String?, String>>(null to "Any type") + filters.issueTypes.map { it.name to it.name }, issueType, pick = { issueType = it })
-                        }
-                        if (filters.labels.isNotEmpty()) {
-                            PickDivider()
-                            PickMenu("Label", label ?: "Any label", listOf<Pair<String?, String>>(null to "Any label") + filters.labels.map { it.name to it.name }, label, pick = { label = it })
-                        }
-                    } else {
-                        PickMenu("Team", filters.teams.firstOrNull { it.id == team }?.name ?: "All teams",
-                            listOf<Pair<String?, String>>(null to "All teams") + filters.teams.map { it.id to it.name }, team, pick = { team = it })
-                        if (filters.projects.isNotEmpty()) {
-                            PickDivider()
-                            PickMenu("Project", filters.projects.firstOrNull { it.id == project }?.name ?: "All projects",
-                                listOf<Pair<String?, String>>(null to "All projects") + filters.projects.map { it.id to it.name }, project, pick = { project = it })
+                    val trackers = listOf("github" to "GitHub", "linear" to "Linear")
+                    PickMenu("Tracker", trackers.first { it.first == picks.tracker }.second, trackers, picks.tracker, pick = { picks.tracker = it; picks.save() })
+                    if (connected == true && filters != null) {
+                        PickDivider()
+                        if (github) {
+                            val repos = filters.teams
+                            if (repos.isNotEmpty()) {
+                                PickMenu("Repository", repos.firstOrNull { it.id == picks.repo }?.name ?: "Choose", repos.map { it.id to it.name }, picks.repo, pick = {
+                                    picks.repo = it; picks.save(); label = null; issueType = null
+                                })
+                            }
+                            if (filters.issueTypes.isNotEmpty()) {
+                                PickDivider()
+                                PickMenu("Type", issueType ?: "Any type", listOf<Pair<String?, String>>(null to "Any type") + filters.issueTypes.map { it.name to it.name }, issueType, pick = { issueType = it })
+                            }
+                            if (filters.labels.isNotEmpty()) {
+                                PickDivider()
+                                PickMenu("Label", label ?: "Any label", listOf<Pair<String?, String>>(null to "Any label") + filters.labels.map { it.name to it.name }, label, pick = { label = it })
+                            }
+                        } else {
+                            PickMenu("Team", filters.teams.firstOrNull { it.id == team }?.name ?: "All teams",
+                                listOf<Pair<String?, String>>(null to "All teams") + filters.teams.map { it.id to it.name }, team, pick = { team = it })
+                            if (filters.projects.isNotEmpty()) {
+                                PickDivider()
+                                PickMenu("Project", filters.projects.firstOrNull { it.id == project }?.name ?: "All projects",
+                                    listOf<Pair<String?, String>>(null to "All projects") + filters.projects.map { it.id to it.name }, project, pick = { project = it })
+                            }
                         }
                     }
                 }
@@ -350,11 +355,12 @@ private fun IssueRowView(issue: Issue, showAssignee: Boolean, onClick: () -> Uni
                 issue.issueType?.let { LabelDot(it) }
                 for (l in issue.labels.take(2)) LabelDot(l)
                 if (issue.pullRequests.isNotEmpty()) Text(issue.pullRequests.joinToString(" ") { "#$it" }.let { "PR $it" }, style = foot, maxLines = 1)
-                if (showAssignee) issue.assignee?.let { Text(it.name, style = foot, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }
         }
-        parseDate(issue.updatedAt)?.let {
-            Text(shortAge(it), Modifier.padding(top = 3.dp), style = Dray.Font.footnote.copy(color = Dray.tertiary))
+        // Whose it is sits under when it last moved, at the row's edge, as on a PR row.
+        Column(Modifier.padding(top = 3.dp), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            parseDate(issue.updatedAt)?.let { Text(shortAge(it), style = Dray.Font.footnote.copy(color = Dray.tertiary)) }
+            if (showAssignee) issue.assignee?.let { Avatar(it.avatar, 18, it.name) }
         }
     }
 }
@@ -430,26 +436,6 @@ fun PriorityGlyph(priority: String, size: Dp = 13.dp) {
                 if (i < lit) Dray.secondary else Dray.dim, Offset(i * (bar + w * 0.17f), w - h), Size(bar, h),
                 androidx.compose.ui.geometry.CornerRadius(bar * 0.3f),
             )
-        }
-    }
-}
-
-/** The iOS segmented control: a raised track, the pick on a lighter thumb. */
-@Composable
-fun <T> Segmented(options: List<Pair<T, String>>, picked: T, pick: (T) -> Unit) {
-    Row(
-        Modifier.padding(horizontal = Dray.Space.l, vertical = Dray.Space.s).fillMaxWidth().height(36.dp)
-            .clip(RoundedCornerShape(Dray.Radius.sm)).background(Dray.raised).padding(2.dp),
-    ) {
-        for ((v, label) in options) {
-            val on = v == picked
-            Box(
-                Modifier.weight(1f).fillMaxSize().clip(RoundedCornerShape(Dray.Radius.sm - 2.dp))
-                    .background(if (on) Dray.tile else Color.Transparent).clickable { pick(v) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(label, style = (if (on) Dray.Font.footnoteStrong else Dray.Font.footnote).copy(color = if (on) Dray.text else Dray.secondary))
-            }
         }
     }
 }
