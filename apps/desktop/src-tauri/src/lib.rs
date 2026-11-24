@@ -234,6 +234,9 @@ async fn send_msg(
     // composer. `None` for everything else the composer sends.
     base_ref: Option<&str>,
     is_new_session: bool,
+    // Issues a task is started *for*, from the issues page: named here so the
+    // task is filed under them, where a `#` tag in the text only mentions.
+    issue_ids: Option<Vec<String>>,
     sink: Sink,
 ) -> Result<SendOutcome, Fail> {
     // The tolerant `Deserialize` reads a name this build doesn't know as
@@ -271,11 +274,10 @@ async fn send_msg(
             session_id,
             prompt,
             &attachment_paths,
-            // Nothing named, ever: the app tags its issues in the prompt
-            // text, the composer's `#` picker being the only route, so there is
-            // one rule on this side of the bridge. `--issue` on the CLI is the
-            // other caller, and it names them because a flag is not prose.
-            &[],
+            // Empty from the composer, which tags its issues in the prompt
+            // text. The issues page names the one it starts a task for, as
+            // `--issue` on the CLI does, since a start is not a mention.
+            issue_ids.as_deref().unwrap_or_default(),
             harness,
             model,
             effort,

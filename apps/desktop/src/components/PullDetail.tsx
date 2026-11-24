@@ -142,8 +142,8 @@ export default function PullDetail({
       </CommentPickContext>
 
       {pr && (
-        <div className="flex shrink-0 flex-col gap-2 border-t border-border px-3 pt-2.5 pb-3">
-          <div className="flex min-h-6 items-center gap-1.5 text-ui text-muted-foreground">
+        <div className="flex shrink-0 flex-col gap-2 px-3 pt-2 pb-3">
+          <div className="flex min-h-6 items-center gap-1.5 px-3 text-ui text-muted-foreground">
             {!writable ? (
               <span>Read only. This branch lives in a fork, so an agent here can't push to it.</span>
             ) : (
@@ -184,27 +184,27 @@ export default function PullDetail({
                         go();
                       }
                     }}
-                    className="block max-h-48 min-h-14 w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-ui outline-none placeholder:text-muted-foreground field-sizing-content"
+                    className="block max-h-48 min-h-14 w-full resize-none bg-transparent px-3 pt-3 pb-1 text-ui outline-none placeholder:text-muted-foreground field-sizing-content"
                   />
                 )}
               </StartBox>
               {/* A clone goes unsaid: where the copy comes from is not the
                   reader's concern here, only that the task starts. */}
               {cloning !== null && (
-                <p className="truncate text-ui text-muted-foreground tabular-nums">
+                <p className="truncate px-3 text-ui text-muted-foreground tabular-nums">
                   Cloning {row.repo.split("/").slice(-2).join("/")}
                   {cloning ? ` · ${cloning}` : "…"}
                 </p>
               )}
               {checkout.kind === "attach" && (
-                <p className="text-ui text-muted-foreground">
+                <p className="px-3 text-ui text-muted-foreground">
                   Attaches {checkout.path} first, the checkout a task of this repo already uses.
                 </p>
               )}
             </>
           )}
 
-          {error && <p className="text-ui text-destructive">{error}</p>}
+          {error && <p className="px-3 text-ui text-destructive">{error}</p>}
         </div>
       )}
     </div>
@@ -298,7 +298,8 @@ const LAST_MODE_KEY = "dray.prStartMode";
 /// task and the reader's own, the plain task's model and machine, and the
 /// composer's own send arrow, which starts it. A bot's task runs on the bot's
 /// agent, where the bot is, so the pickers belong to the plain task alone.
-function StartBox({
+/// The issues page reuses it to start or send an issue.
+export function StartBox({
   bots,
   server,
   machines,
@@ -308,6 +309,10 @@ function StartBox({
   onPicks,
   onRepairPicks,
   disabled,
+  taskDisabled,
+  taskControls,
+  botPick,
+  botAction,
   starting,
   cloning,
   onStart,
@@ -323,6 +328,15 @@ function StartBox({
   /// The picker's own repair of a stale pick, which is not the reader choosing.
   onRepairPicks: (picks: PrPicks) => void;
   disabled: boolean;
+  /// Off on the Task side alone, where only a plain task needs a checkout.
+  taskDisabled?: boolean;
+  /// Drawn after the Task side's pickers.
+  taskControls?: React.ReactNode;
+  /// The bot the Bot side sends to, where the caller keeps its own pick.
+  botPick?: Bot | null;
+  /// Drawn on the Bot side in place of the bot menu and the arrow, handed a
+  /// send to any bot.
+  botAction?: (send: (bot: Bot) => void) => React.ReactNode;
   starting: boolean;
   cloning: boolean;
   onStart: (bot: Bot | null) => void;
@@ -331,20 +345,27 @@ function StartBox({
 }) {
   const [botId, setBotId] = useLocalStorage<string | null>(LAST_BOT_KEY, null);
   const [mode, setMode] = useLocalStorage<"bot" | "task">(LAST_MODE_KEY, "bot");
-  const bot = bots.find((b) => b.id === botId) ?? bots[0] ?? null;
+  const bot = botPick !== undefined ? botPick : (bots.find((b) => b.id === botId) ?? bots[0] ?? null);
   const toBot = !!bot && mode === "bot";
+  const off = disabled || (!toBot && !!taskDisabled);
   const start = () => {
-    if (disabled) return;
+    if (off) return;
     if (toBot) setBotId(bot.id);
     onStart(toBot ? bot : null);
   };
+  const sendTo = (to: Bot) => {
+    if (!disabled) onStart(to);
+  };
+  const custom = toBot && !!botAction;
 
   return (
-    <div className="rounded-2xl bg-composer">
+    // The chat composer's card (edge in dark, shadow in light) at the side
+    // panel's own radius, the sheet's 8px, since it sits inside one.
+    <div className="rounded-[8px] border border-edge-surface bg-composer shadow-[var(--shadow-composer,var(--shadow-surface))] backdrop-blur-xl">
       {children(start)}
       {/* One row, never two: the pickers shrink and truncate rather than push
           the arrow onto a line of its own. */}
-      <div className="flex min-w-0 items-center gap-1 px-2 pb-2">
+      <div className="flex min-w-0 items-center gap-1 px-3 pb-3">
         {bot && (
           <Segmented
             className="shrink-0"
@@ -352,7 +373,7 @@ function StartBox({
             options={[
               // With several, the menu beside it names the bot, so the half
               // says only what kind of task this is.
-              bots.length > 1
+              bots.length > 1 || botAction
                 ? { value: "bot", label: "Bot" }
                 : {
                     value: "bot",
@@ -372,19 +393,32 @@ function StartBox({
         )}
         {/* The reused pickers keep their look; only their labels may shorten. */}
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden [&_button]:min-w-0 [&_button>span]:min-w-0 [&_button>span]:truncate">
-          {toBot && bots.length > 1 && <BotMenu bots={bots} bot={bot} onPick={setBotId} />}
+          {toBot && !custom && bots.length > 1 && <BotMenu bots={bots} bot={bot} onPick={setBotId} />}
           {!toBot && <TaskModelPicker server={server} picks={picks} onChange={onPicks} onRepair={onRepairPicks} />}
           {/* The New Task page's own picker, over this repo's checkouts and a
               stand-in on each machine without one. */}
           {!toBot && <MachineSelector projects={machines} value={machine} onSelect={onMachine} />}
+          {!toBot && taskControls}
         </div>
-        <span className="shrink-0">
-          <SendButton
-            disabled={disabled}
-            onClick={start}
-            title={cloning ? "Cloning…" : starting ? "Starting…" : toBot ? `Start task in ${bot.name}` : "Start task"}
-          />
-        </span>
+        {custom ? (
+          botAction(sendTo)
+        ) : (
+          <span className="shrink-0">
+            <SendButton
+              disabled={off}
+              onClick={start}
+              title={
+                cloning
+                  ? "Cloning…"
+                  : starting
+                    ? "Starting…"
+                    : toBot
+                      ? `Start task in ${bot.name}`
+                      : "Start task"
+              }
+            />
+          </span>
+        )}
       </div>
     </div>
   );
