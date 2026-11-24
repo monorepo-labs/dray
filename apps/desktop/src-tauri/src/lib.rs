@@ -297,6 +297,9 @@ async fn send_msg(
             &sink,
         )
         .await?;
+    if !analytics::client_counts() {
+        analytics::message_sent(session_id.to_string());
+    }
     // The new entry rides back to the caller alone, so every other client — the
     // app beside an Island or a phone that started it — hears of it as `dray new`'s
     // sessions are heard of. The caller's own copy replaces itself.

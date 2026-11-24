@@ -1901,6 +1901,11 @@ pub async fn start_bot(
         .map(|s| s.index_item)
         .ok_or_else(|| anyhow::anyhow!("the bot's chat started but returned no index entry"))?;
     sink.emit(crate::orchestration::SESSION_CREATED, &item).ok();
+    // Here rather than at `create_bot`, which knows no agent yet: New bot
+    // calls the two back to back. A remote reader's app counts it instead.
+    if !crate::analytics::client_counts() {
+        crate::analytics::bot_created(Some(item.harness), "app");
+    }
     Ok(item)
 }
 
