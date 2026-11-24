@@ -1727,6 +1727,16 @@ resolved: boolean,
  */
 replies: Array<PrComment>, };
 
+export type PrDetail = { 
+/**
+ * The description as GitHub stores it: markdown, images as links.
+ */
+body: string, createdAt: string, authorAvatar: string | null, labels: Array<IssueLabel>, 
+/**
+ * Asked and answered, one entry per person or team.
+ */
+reviewers: Array<PrReviewer>, };
+
 /**
  * A pull request's head as the pull requests page names it, for a session
  * started on it: the branch, and the repository as [`repo_key`] spells it.
@@ -1812,6 +1822,12 @@ listing?: PrListing, };
  * closed-without-merging is not asked for.
  */
 export type PrMarkState = "OPEN" | "MERGED";
+
+export type PrReviewer = { 
+/**
+ * A login, or a team's name.
+ */
+name: string, avatar: string | null, state: ReviewerState, };
 
 /**
  * What the pull requests page lists: the reader's open pull requests across
@@ -2034,6 +2050,8 @@ address: string | null,
  * Why this Mac is not answering, while on.
  */
 error: string | null, };
+
+export type ReviewerState = "requested" | "approved" | "changes_requested" | "commented";
 
 export type Routine = { id: string, botId: string, name: string, prompt: string, schedule: Schedule, check?: string, paused: boolean, created: string, 
 /**

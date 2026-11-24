@@ -11,13 +11,15 @@ import {
   CircleSlash,
   Copy,
   ExternalLink,
+  GitBranch,
   MinusCircle,
   X,
 } from "lucide-react";
 
 import Avatar from "@/components/Avatar";
+import IssueLabelChip from "@/components/IssueLabelChip";
 import OpenInButton from "@/components/OpenInButton";
-import PrStateIcon from "@/components/PrStateIcon";
+import PrStateIcon, { PrStateWord } from "@/components/PrStateIcon";
 import Counts from "@/components/changes/Counts";
 import { Markdown } from "@/components/chat/Markdown";
 import { Button } from "@/components/ui/button";
@@ -29,6 +31,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useCopied } from "@/hooks/useCopied";
+import type { PrDetailRead } from "@/hooks/usePrDetail";
 import type { usePullRequest, PrActing, PrAction } from "@/hooks/usePullRequest";
 import { relativeTime } from "@/lib/format";
 import { TERMINAL_OPENER } from "@/lib/openWith";
@@ -47,6 +50,7 @@ import type {
   MergeMethod,
   PrCheck,
   PrComment,
+  PrReviewer,
   PrUnavailable,
   PullRequest,
 } from "@/types/events";
@@ -64,6 +68,9 @@ type PrPanelProps = PrData & {
   /// the missing-CLI state lands in — so the command it was opened to paste
   /// runs against this repo.
   cwd: string;
+  /// The PR's own words, labels and reviewers, on the pull requests page
+  /// alone — see [PrBody].
+  detail?: PrDetailRead;
 };
 
 export const TONE_TEXT: Record<Tone, string> = {
@@ -99,13 +106,14 @@ const LOGIN_COMMAND = "gh auth login";
 /// each — the shape the changes panel already uses, because the question is the
 /// same: a list of things that changed, any one of which can be opened.
 ///
-/// The PR body is deliberately absent from the expanded row. It is the one
-/// thing here the reader wrote themselves, it is usually the longest thing on
-/// the page, and it pushes the checks — the part that changes — below the fold.
-/// The title links out for anyone who wants the rest.
+/// The PR body is absent from a session's tab. There it is the reader's own
+/// text, usually the longest thing on the page, and it pushes the checks — the
+/// part that changes — below the fold. The pull requests page passes `detail`
+/// and draws it, since there the PR is often somebody else's.
 export default function PrPanel({
   branch,
   cwd,
+  detail,
   prs,
   error,
   loading,
@@ -161,6 +169,7 @@ export default function PrPanel({
             collapsible={prs.length > 1}
             acting={acting}
             act={act}
+            detail={detail}
           />
         ))}
       </div>
@@ -299,6 +308,7 @@ function PrRow({
   collapsible,
   acting,
   act,
+  detail,
 }: {
   pr: PullRequest;
   defaultOpen: boolean;
@@ -309,6 +319,7 @@ function PrRow({
   collapsible: boolean;
   acting: PrActing | null;
   act: (number: number, action: PrAction) => Promise<void>;
+  detail?: PrDetailRead;
 }) {
   const [collapsed, setCollapsed] = useState(!defaultOpen);
   const open = !collapsible || !collapsed;
@@ -353,7 +364,11 @@ function PrRow({
         )}
         <PrStateIcon pr={pr} />
         <span className="shrink-0 text-muted-foreground">#{pr.number}</span>
-        <span className="min-w-0 flex-1 truncate text-sidebar-foreground">{pr.title}</span>
+        {/* Whole on the pull requests page, where the pane is about this PR
+            and a cut title is the thing the reader came to read. */}
+        <span className={cn("min-w-0 flex-1 text-sidebar-foreground", detail ? "line-clamp-3" : "truncate")}>
+          {pr.title}
+        </span>
         <Counts added={pr.additions} removed={pr.deletions} className="shrink-0" />
 
         {/* Beside the PR's own name, which is what it points at — and not in
@@ -382,7 +397,9 @@ function PrRow({
               worth naming once the work is on it, and the header already carries
               the merge glyph. The word "Merged" alone was a whole row repeating
               the icon two lines above it. */}
-          {pr.state !== "MERGED" && <Readiness pr={pr} acting={acting} act={act} />}
+          {detail && <PrBody pr={pr} read={detail} />}
+
+          {pr.state !== "MERGED" && <Readiness pr={pr} acting={acting} act={act} showBase={!detail} />}
 
           {/* Its branch is another matter, and the one thing nothing else here
               cleans up: settling a session deletes the local branch and the
@@ -436,6 +453,85 @@ function PrRow({
   );
 }
 
+
+/// How a reviewer's state reads beside their name, in GitHub's own words.
+const REVIEWER: Record<PrReviewer["state"], { word: string; tone: string }> = {
+  requested: { word: "awaiting review", tone: "text-accent-command" },
+  approved: { word: "approved", tone: "text-accent-add" },
+  changes_requested: { word: "requested changes", tone: "text-destructive" },
+  commented: { word: "commented", tone: "text-muted-foreground" },
+};
+
+/// What the pull requests page says about a PR before whether it can land:
+/// who opened it and where it goes, its labels and reviewers, then its
+/// description — the issue pane's `IssueBody`, in the same order and type.
+function PrBody({ pr, read }: { pr: PullRequest; read: PrDetailRead }) {
+  const { detail, loading, error } = read;
+  const body = detail ? stripBotMarkers(detail.body) : "";
+
+  return (
+    <div className="flex flex-col gap-3 px-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-ui text-muted-foreground">
+        <PrStateWord pr={pr} />
+        <span className="flex items-center gap-1.5">
+          <Avatar src={detail?.authorAvatar ?? null} name={pr.author || "?"} />
+          {pr.author || "Someone"} opened this
+          {detail?.createdAt && ` ${relativeTime(detail.createdAt)}`}
+        </span>
+        <span>
+          {pr.changedFiles} {pr.changedFiles === 1 ? "file" : "files"}
+        </span>
+        {pr.updatedAt && <span>Updated {relativeTime(pr.updatedAt)}</span>}
+      </div>
+
+      {/* Base first, the way GitHub writes it: the head merges into it. */}
+      <div className="flex min-w-0 items-center gap-1.5 text-ui text-muted-foreground">
+        <GitBranch className="size-3.5 shrink-0" />
+        <code className="shrink-0 rounded bg-muted px-1 font-mono text-code text-foreground">{pr.baseRefName}</code>
+        <span aria-label="from">←</span>
+        <code className="min-w-0 truncate rounded bg-muted px-1 font-mono text-code text-foreground">
+          {pr.headRefName}
+        </code>
+      </div>
+
+      {detail && detail.labels.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {detail.labels.map((label) => (
+            <IssueLabelChip key={label.name} label={label} className="text-ui" />
+          ))}
+        </div>
+      )}
+
+      {detail && detail.reviewers.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-ui">
+          {detail.reviewers.map((reviewer) => (
+            <span key={reviewer.name} className="flex items-center gap-1.5">
+              <Avatar src={reviewer.avatar} name={reviewer.name} />
+              <span className="text-foreground">{reviewer.name}</span>
+              <span className={REVIEWER[reviewer.state].tone}>{REVIEWER[reviewer.state].word}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {detail ? (
+        body ? (
+          <div className="text-chat">
+            <Markdown>{body}</Markdown>
+          </div>
+        ) : (
+          <p className="text-ui text-muted-foreground">No description.</p>
+        )
+      ) : error ? (
+        <p className="text-ui text-destructive">
+          {UNAVAILABLE[error.kind] || errorText(error) || "Could not read the description."}
+        </p>
+      ) : (
+        loading && <p className="text-ui text-muted-foreground">Reading the description…</p>
+      )}
+    </div>
+  );
+}
 
 /// GitHub's green, on both halves of the split button.
 ///
@@ -566,10 +662,13 @@ function Readiness({
   pr,
   acting,
   act,
+  showBase,
 }: {
   pr: PullRequest;
   acting: PrActing | null;
   act: (number: number, action: PrAction) => Promise<void>;
+  /// Off where [PrBody] already names base and head.
+  showBase: boolean;
 }) {
   const [method, setMethod] = useState<MergeMethod>("squash");
   const [confirming, setConfirming] = useState(false);
@@ -589,7 +688,7 @@ function Readiness({
             what the reader already knows — where the work is *going* is the
             half that isn't on screen anywhere else, and the half that tells two
             PRs from one branch apart. */}
-        {pr.state === "OPEN" && (
+        {pr.state === "OPEN" && showBase && (
           <p className="min-w-0 truncate text-ui text-muted-foreground">
             <span className="text-muted-foreground/50">into</span> {pr.baseRefName}
           </p>
