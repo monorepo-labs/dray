@@ -304,7 +304,6 @@ private fun PullRowView(row: PullRow, task: SessionKey?, showRepo: Boolean, onCl
                 val foot = Dray.Font.footnote.copy(color = Dray.tertiary)
                 Text("#${row.mark.number}", style = foot, maxLines = 1)
                 if (showRepo) Text(row.repoName.substringAfterLast('/'), style = foot, maxLines = 1)
-                Avatar(l.authorAvatar, 16, l.author)
                 if (l.commentCount > 0) Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(12.dp), tint = Dray.tertiary)
                     Text("${l.commentCount}", style = foot, maxLines = 1)
@@ -324,9 +323,11 @@ private fun PullRowView(row: PullRow, task: SessionKey?, showRepo: Boolean, onCl
                 }
             }
         }
-        Box(Modifier.padding(top = 3.dp)) {
+        // Who opened it sits under when it last moved, at the row's edge.
+        Column(Modifier.padding(top = 3.dp), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
             if (row.mark.checksState == "RUNNING") ChecksSpinner(15.dp)
             else parseDate(l.updatedAt)?.let { Text(shortAge(it), style = Dray.Font.footnote.copy(color = Dray.tertiary)) }
+            Avatar(l.authorAvatar, 18, l.author)
         }
     }
 }
