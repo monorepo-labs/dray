@@ -73,7 +73,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.runtime.mutableFloatStateOf
-import com.yogesh.dray.store.OpenIntoBot
 import com.yogesh.dray.model.ListRow
 import com.yogesh.dray.model.SessionKey
 import com.yogesh.dray.model.Stage
@@ -122,7 +121,6 @@ fun ListScreen(
     var botsFoot by remember { mutableFloatStateOf(0f) }
     // The row whose Delete is waiting on its confirm.
     var deleting by remember { mutableStateOf<ListRow?>(null) }
-    LoneBot(settled, openSession, startBot)
     // Read whatever the view, and again as servers come up: the Settled button shows only when there are some,
     // and an empty live list counts what was settled today.
     LaunchedEffect(settled, connected) { if (connected > 0) store.loadSettled() }
@@ -298,27 +296,6 @@ fun ListScreen(
     }
     if (newBot) BotSheet(editing = null, close = { newBot = false }, started = openSession)
     deleting?.let { DeleteConfirm(it) { deleting = null } }
-}
-
-/**
- * Opens a lone bot's chat at launch, where it would be the list's only row: one bot across every
- * server and no task beside it. Waits until every server's list is known, from the cache or a
- * read, so one still coming up never counts as empty. Anything the reader does first spends it.
- */
-@Composable
-private fun LoneBot(settled: Boolean, openSession: (SessionKey) -> Unit, startBot: (String, String) -> Unit) {
-    val store = LocalStore.current
-    var chance by rememberSaveable { mutableStateOf(true) }
-    val lone = if (chance && !settled && store.live.isNotEmpty() && store.live.all { store.known(it.id) } &&
-        !OpenIntoBot.on && store.allBots.size == 1 && store.runs(null).isEmpty()) store.allBots.first() else null
-    LaunchedEffect(lone) {
-        val (server, bot) = lone ?: return@LaunchedEffect
-        chance = false
-        store.botChat(server, bot).lastOrNull()?.let(openSession) ?: startBot(server, bot.id)
-    }
-    LaunchedEffect(settled) { if (settled) chance = false }
-    // A server slower than this to answer never opens its bot.
-    LaunchedEffect(Unit) { delay(10_000); chance = false }
 }
 
 @Composable
