@@ -5,13 +5,14 @@ import BotAvatar from "@/components/BotAvatar";
 import GitHubIcon from "@/components/GitHubIcon";
 import WindowControls from "@/components/layout/WindowControls";
 import { GateCards } from "@/components/SignInGate";
+import { Continue } from "@/components/WhatsNewPage";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import type { Bot } from "@/types/events";
 
 import BotTiles from "./BotTiles";
-import Welcome, { PrimaryButton } from "./Welcome";
+import Welcome from "./Welcome";
 import { type AgentSetup, type GithubSetup, type SetupState, useAgentSetup, useGithubSetup } from "./agents";
 import {
   finishOnboarding,
@@ -27,6 +28,9 @@ import "./onboarding.css";
 
 /// How long a finished setup stays on screen before the flow moves on by itself.
 const READY_HOLD_MS = 1600;
+/// The first card's beat of checking, then the gap between each answer.
+const FIRST_REVEAL_MS = 900;
+const NEXT_REVEAL_MS = 260;
 
 /// The full-window onboarding, over the app: welcome, setup, Dray Bot. Drawn
 /// like the sign-in gate — black, the site's tiles — since it is the brand's
@@ -70,7 +74,9 @@ function Flow({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }) {
 /// pull requests, issues and the bot's view of GitHub all go through `gh`. So
 /// there is no skip; once both are ready the flow moves on by itself.
 function Setup({ agents, github, onNext }: { agents: AgentSetup; github: GithubSetup; onNext: () => void }) {
-  const done = agents.ready.length > 0 && github.state === "ready";
+  const shown = useStagger([...agents.rows.map((r) => r.state), github.state]);
+  const ghState = shown[shown.length - 1];
+  const done = shown.every((s) => s !== "checking") && agents.ready.length > 0 && ghState === "ready";
   const next = useRef(onNext);
   next.current = onNext;
   useEffect(() => {
@@ -82,44 +88,48 @@ function Setup({ agents, github, onNext }: { agents: AgentSetup; github: GithubS
   return (
     <main className="relative flex flex-1 items-center justify-center px-10 pb-16">
       <div className="flex w-full max-w-[1040px] flex-col">
-        <div className="ob-in">
-          <h1 className="mb-10 text-[36px] leading-10 font-light tracking-[-0.03em]">Set up an agent and GitHub.</h1>
-        </div>
-        <div className="ob-in -mt-4" style={{ animationDelay: "80ms" }}>
-          <GroupLabel>Agent · one is enough</GroupLabel>
+        <h1 className="ob-in mb-10 text-[36px] leading-10 font-light tracking-[-0.03em]">
+          Set up an agent, <span className="text-white/40">one is enough,</span> and GitHub too.
+        </h1>
+        <div className="ob-in flex flex-col gap-[2px]" style={{ animationDelay: "80ms" }}>
           <GateCards>
-            {agents.rows.map((row) => (
+            {agents.rows.map((row, i) => (
               <SetupCard
                 key={row.harness}
                 icon={<AgentIcon harness={row.harness} className="size-8 text-white/90" />}
                 label={row.label}
-                state={row.state}
+                state={shown[i]}
                 error={row.error}
                 onAct={() => agents.act(row.harness)}
               />
             ))}
           </GateCards>
-        </div>
-        <div className="ob-in mt-8" style={{ animationDelay: "160ms" }}>
-          <GroupLabel>GitHub</GroupLabel>
-          <GateCards>
-            <SetupCard
-              wide
-              icon={<GitHubIcon className="size-8 text-white/90" />}
-              label="GitHub CLI"
-              state={github.state}
-              error={github.error}
-              onAct={github.act}
-            />
-          </GateCards>
+          <SetupCard
+            wide
+            icon={<GitHubIcon className="size-8 text-white/90" />}
+            label="GitHub CLI"
+            state={ghState}
+            error={github.error}
+            onAct={github.act}
+          />
         </div>
       </div>
     </main>
   );
 }
 
-function GroupLabel({ children }: { children: ReactNode }) {
-  return <div className="mb-3 font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white/50 uppercase">{children}</div>;
+/// Each card reads "checking" for a beat, then its answer lands one card after
+/// another, so the reader sees the machine being looked over even when every
+/// answer was already in. A card still checking holds the ones after it.
+function useStagger(states: SetupState[]): SetupState[] {
+  const [shown, setShown] = useState(0);
+  const waiting = shown < states.length && states[shown] === "checking";
+  useEffect(() => {
+    if (shown >= states.length || waiting) return;
+    const timer = setTimeout(() => setShown((n) => n + 1), shown === 0 ? FIRST_REVEAL_MS : NEXT_REVEAL_MS);
+    return () => clearTimeout(timer);
+  }, [shown, waiting, states.length]);
+  return states.map((s, i) => (i < shown ? s : "checking"));
 }
 
 const DETAIL: Record<SetupState, string> = {
@@ -192,11 +202,9 @@ function SetupCard({
 function Corner({ state }: { state: SetupState }) {
   if (state === "ready")
     return (
-      <span className="flex size-6 shrink-0 items-center justify-center bg-white text-black animate-in zoom-in-50 duration-300">
-        <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-          <path d="M5 12.5 10 17 19 7" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square" />
-        </svg>
-      </span>
+      <svg width="18" height="18" viewBox="0 0 24 24" className="shrink-0 animate-in fade-in zoom-in-50 duration-300" aria-hidden>
+        <path d="M4.5 12.5 9.5 17.5 19.5 6.5" fill="none" stroke="#FFFFFFE6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
     );
   if (state === "checking" || state === "installing" || state === "signing")
     return (
@@ -229,8 +237,8 @@ function MeetBot({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }
         <div className="ob-in mt-8" style={{ animationDelay: "120ms" }}>
           <BotTiles />
         </div>
-        <div className="ob-in mt-6 flex justify-end" style={{ animationDelay: "240ms" }}>
-          <PrimaryButton onClick={onStart}>Get started</PrimaryButton>
+        <div className="ob-in mt-[2px] grid grid-cols-2" style={{ animationDelay: "240ms" }}>
+          <Continue row onClose={onStart} className="pl-6 max-lg:pl-6" />
         </div>
       </div>
     </main>

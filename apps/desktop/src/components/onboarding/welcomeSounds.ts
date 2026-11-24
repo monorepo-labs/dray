@@ -89,24 +89,27 @@ function swell(ctx: AudioContext, out: AudioNode, hall: AudioNode, at: number) {
   band.frequency.exponentialRampToValueAtTime(2800, at);
   const rise = ctx.createGain();
   rise.gain.setValueAtTime(0.0001, start);
-  rise.gain.exponentialRampToValueAtTime(0.07, at);
+  rise.gain.exponentialRampToValueAtTime(0.1, at);
   rise.gain.exponentialRampToValueAtTime(0.0001, at + 1.2);
   noise(ctx, start, at + 1.3).connect(band).connect(rise);
+  rise.connect(out);
   rise.connect(hall);
 
-  const lp = filter(ctx, "lowpass", 300);
-  lp.frequency.setValueAtTime(300, at);
-  lp.frequency.exponentialRampToValueAtTime(1800, at + 1);
-  lp.frequency.exponentialRampToValueAtTime(600, at + 4.5);
+  // Kept above 140Hz: a laptop's speakers play nothing much lower, and the
+  // first take of this lived down there and came out silent.
+  const lp = filter(ctx, "lowpass", 600);
+  lp.frequency.setValueAtTime(600, at);
+  lp.frequency.exponentialRampToValueAtTime(2600, at + 1);
+  lp.frequency.exponentialRampToValueAtTime(900, at + 4.5);
   const env = ctx.createGain();
   env.gain.setValueAtTime(0.0001, at - 0.05);
-  env.gain.exponentialRampToValueAtTime(0.16, at + 0.35);
+  env.gain.exponentialRampToValueAtTime(0.2, at + 0.35);
   env.gain.exponentialRampToValueAtTime(0.0001, at + 4.8);
   lp.connect(env);
   env.connect(out);
   env.connect(hall);
-  for (const hz of [73.42, 146.83, 220, 293.66]) {
-    for (const cents of [-6, 6]) voice(ctx, lp, hz, "sawtooth", cents, at - 0.05, at + 5, 0.12);
+  for (const hz of [146.83, 220, 293.66, 369.99, 440]) {
+    for (const cents of [-6, 6]) voice(ctx, lp, hz, "sawtooth", cents, at - 0.05, at + 5, 0.16);
   }
 }
 

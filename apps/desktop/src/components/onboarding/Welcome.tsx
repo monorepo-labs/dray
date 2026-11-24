@@ -1,30 +1,42 @@
-import { type CSSProperties, type ReactNode, useEffect, useRef } from "react";
+import { type CSSProperties, useEffect, useRef } from "react";
 
-import { GATE_MARK, GateTiles } from "@/components/SignInGate";
+import { GateTiles } from "@/components/SignInGate";
 
 import { useWelcomeSound } from "./state";
 import { playWelcomeSound } from "./welcomeSounds";
 import "./onboarding.css";
 
 /// When, in ms, each beat of the welcome lands.
-const SHINE_AT = 700;
-const TEXT_AT = 1500;
-const NEXT_AT = 3800;
+const SHINE_AT = 600;
+const LOGO_OUT_AT = 1900;
+const TEXT_AT = 2400;
+const NEXT_AT = 4600;
 
-const MARK_SVG = `url("data:image/svg+xml,${encodeURIComponent(
-  `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 159 200'><path d='${GATE_MARK}'/></svg>`,
+/// The Dray wordmark, mark and letters, as apps/web's `Wordmark` draws it.
+const WORDMARK = [
+  "M48.2787 0C49.9989 5.053e-08 51.3934 1.4046 51.3934 3.13726V8.78431C51.3934 17.4476 58.3661 24.4706 66.9672 24.4706H72.8852C74.6055 24.4706 76 25.8752 76 27.6078V68.3922C76 70.1248 74.6055 71.5294 72.8852 71.5294H66.9672C58.3661 71.5294 51.3934 78.5524 51.3934 87.2157V92.8627C51.3934 94.5954 49.9989 96 48.2787 96H0.155738C0.0697261 96 0 95.9298 0 95.8431V64.7843C0 64.6977 0.0697261 64.6275 0.155738 64.6275H29.2787C37.8798 64.6275 44.8525 57.6045 44.8525 48.9412V47.0588C44.8525 38.3955 37.8798 31.3726 29.2787 31.3726H0.155738C0.0697261 31.3726 0 31.3023 0 31.2157V0.156863C0 0.0702299 0.0697261 0 0.155738 0H48.2787Z",
+  "M444.983 12H466L427.416 53.7405V84H407.477V53.8378L369 12H390.017L417.177 41.773L444.983 12Z",
+  "M394 84H374.959L365.762 68.7243H315.238L306.041 84H287L330.384 12H350.616L394 84ZM340.554 26.7892L323.244 55.3946H357.756L340.554 26.7892Z",
+  "M263.573 84L241.47 60.7459H212.898V84H195V12H251.39C258.075 12 263.969 13.0054 269.072 15.0162C274.248 17.027 278.237 19.8487 281.04 23.4811C283.915 27.0487 285.353 31.2 285.353 35.9351V36.3243C285.353 42.4865 283.34 47.5784 279.315 51.6C275.362 55.6216 269.863 58.3135 262.819 59.6757L286 84H263.573ZM267.024 36.7135C267.024 33.0162 266.233 30.3243 264.652 28.6378C263.142 26.9514 261.201 25.9135 258.829 25.5243C256.457 25.1351 253.115 24.9405 248.802 24.9405C246.861 24.9405 245.208 24.973 243.842 25.0378C234.139 25.2324 223.824 25.3297 212.898 25.3297V47.8054H248.586H248.802C253.115 47.8054 256.457 47.6432 258.829 47.3189C261.201 46.9297 263.142 45.9568 264.652 44.4C266.233 42.7784 267.024 40.2162 267.024 36.7135Z",
+  "M185 48.0973C185 54.9081 183.13 61.0378 179.391 66.4865C175.723 71.9351 170.438 76.2162 163.534 79.3297C156.703 82.4432 148.756 84 139.695 84H100V12H139.588C148.72 12 156.703 13.5568 163.534 16.6703C170.438 19.7189 175.723 24 179.391 29.5135C183.13 34.9622 185 41.1568 185 48.0973ZM141.098 69.6973C148.72 69.6973 154.941 67.8486 159.759 64.1514C164.577 60.3892 166.986 55.0378 166.986 48.0973C166.986 44.2054 165.835 40.6054 163.534 37.2973C161.305 33.9243 158.213 31.2649 154.258 29.3189C150.302 27.373 145.916 26.4 141.098 26.4H118.23V69.6973H141.098Z",
+];
+
+const WORDMARK_SVG = `url("data:image/svg+xml,${encodeURIComponent(
+  `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 466 96'>${WORDMARK.map((d) => `<path d='${d}'/>`).join("")}</svg>`,
 )}")`;
+// The shine only paints inside the letters, so the band and the dim base are
+// both cut to the wordmark's shape.
 const MASK: CSSProperties = {
-  maskImage: MARK_SVG,
-  WebkitMaskImage: MARK_SVG,
+  maskImage: WORDMARK_SVG,
+  WebkitMaskImage: WORDMARK_SVG,
   maskSize: "contain",
   WebkitMaskSize: "contain",
   maskRepeat: "no-repeat",
   WebkitMaskRepeat: "no-repeat",
 };
 
-/// Onboarding's first screen: the Dray mark, a light passing over it, then the
-/// welcome, and on to setup by itself.
+/// Onboarding's first screen: the Dray wordmark, a light passing over it, the
+/// wordmark fading, then the welcome in its place, and on to setup by itself.
 export default function Welcome({ onNext }: { onNext: () => void }) {
   const sound = useWelcomeSound();
   const next = useRef(onNext);
@@ -32,7 +44,7 @@ export default function Welcome({ onNext }: { onNext: () => void }) {
 
   useEffect(() => {
     // A tick late, so a mount React throws away at once never plays.
-    const play = setTimeout(() => playWelcomeSound(sound, SHINE_AT + 250), 0);
+    const play = setTimeout(() => playWelcomeSound(sound, SHINE_AT + 300), 0);
     const advance = setTimeout(() => next.current(), NEXT_AT);
     return () => {
       clearTimeout(play);
@@ -47,15 +59,19 @@ export default function Welcome({ onNext }: { onNext: () => void }) {
       <div className="ob-rise pointer-events-none absolute inset-x-0 bottom-0 h-[300px]" style={delay(TEXT_AT)}>
         <GateTiles />
       </div>
-      <main className="relative flex flex-1 flex-col items-center justify-center pb-24">
-        <div className="ob-in relative" style={delay(150)}>
-          <div aria-hidden className="ob-halo absolute -inset-10 rounded-full bg-white/25 blur-2xl" style={delay(SHINE_AT)} />
-          <div className="relative h-10 w-8 overflow-hidden" style={MASK}>
-            <div className="ob-settle absolute inset-0 bg-white" style={delay(SHINE_AT + 500)} />
-            <div className="ob-shine absolute inset-y-0 -left-full w-[300%]" style={delay(SHINE_AT)} />
+      <main className="relative grid flex-1 place-items-center pb-24">
+        <div className="ob-out col-start-1 row-start-1" style={delay(LOGO_OUT_AT)}>
+          <div className="ob-fade" style={delay(100)}>
+            <div className="relative h-8 w-[155px] overflow-hidden" style={MASK}>
+              <div className="absolute inset-0 bg-white/55" />
+              <div className="ob-shine absolute inset-y-0 -left-full w-[300%]" style={delay(SHINE_AT)} />
+            </div>
           </div>
         </div>
-        <h1 className="ob-in mt-8 text-[44px] leading-[52px] font-light tracking-[-0.03em] text-white" style={delay(TEXT_AT)}>
+        <h1
+          className="ob-in col-start-1 row-start-1 text-[44px] leading-[52px] font-light tracking-[-0.03em] text-white"
+          style={delay(TEXT_AT)}
+        >
           Welcome to Dray
         </h1>
       </main>
@@ -64,17 +80,3 @@ export default function Welcome({ onNext }: { onNext: () => void }) {
 }
 
 const delay = (ms: number): CSSProperties => ({ animationDelay: `${ms}ms` });
-
-/// The site's filled button: square, white on black.
-export function PrimaryButton({ children, onClick, disabled }: { children: ReactNode; onClick: () => void; disabled?: boolean }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="h-12 cursor-pointer bg-white px-7 text-[15px] font-medium tracking-[-0.01em] text-black outline-none transition-colors hover:bg-white/85 focus-visible:ring-2 focus-visible:ring-white/50 focus-visible:ring-offset-2 focus-visible:ring-offset-black disabled:cursor-default disabled:opacity-40"
-    >
-      {children}
-    </button>
-  );
-}
