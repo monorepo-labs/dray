@@ -18,6 +18,14 @@ reads:
 - An image or video goes on its own line, indented under its item:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
+- A bigger feature can be a highlight: a page of its own in a dialog the app
+  opens after an update, with the item's first image or video, its title and
+  its text. Mark it with a comment under the item, which GitHub and the site
+  hide: `<!-- highlight: desktop, ios, android -->`, naming the apps it is for.
+  Add `· action: Label → target` for a button on its page, where target is
+  `new-task`, `new-bot`, `settings/<tab>` or an `https://` link. Keep the text
+  to a line or two. A release with no highlights for an app gets the small
+  card there instead, when it carries `notify`.
 
 ## 0.33.0 · 2026-11-22 · notify
 

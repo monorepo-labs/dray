@@ -1,5 +1,6 @@
 import { SparklesIcon } from "@heroicons/react/16/solid";
 
+import { changelogPlain } from "@/components/changelogText";
 import { RailPop, useRailSlot } from "@/components/RailPop";
 import { Button } from "@/components/ui/button";
 import type { Release } from "@/lib/changelog";
@@ -7,10 +8,6 @@ import { cn } from "@/lib/utils";
 
 /// How many items the card names before "+N more" takes over.
 const SHOWN = 3;
-
-/// Markdown marks dropped, for a line too small to carry them.
-const plain = (text: string) =>
-  text.replace(/\*\*|`/g, "").replace(/\[([^\]]+)\]\([^)\s]+\)/g, "$1");
 
 /// The release a reader just updated to, waiting in the corner until they
 /// dismiss it or open the changelog. No timer: the notice stack's cards run
@@ -72,7 +69,7 @@ export default function WhatsNewCard({
               <span aria-hidden className="flex h-[1lh] shrink-0 items-center">
                 <span className="size-[5px] rounded-full bg-muted-foreground/60" />
               </span>
-              <span className="min-w-0 truncate">{plain(item.title ?? item.body)}</span>
+              <span className="min-w-0 truncate">{changelogPlain(item.title ?? item.body)}</span>
             </li>
           ))}
         </ul>

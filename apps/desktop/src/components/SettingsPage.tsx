@@ -69,7 +69,8 @@ import ShortcutsSettings from "@/components/settings/ShortcutsSettings";
 import SpacesSettings from "@/components/settings/SpacesSettings";
 import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
 import { useTranscriptionSettings } from "@/hooks/useTranscription";
-import { HAS_DICTATION, HAS_ISLAND, IS_LINUX, IS_MAC, IS_WINDOWS } from "@/lib/platform";
+import { IS_LINUX, IS_MAC, IS_WINDOWS } from "@/lib/platform";
+import { SETTINGS_TABS as SETTINGS_TAB_IDS, type SettingsTab } from "@/lib/settingsTabs";
 import { applyIsland, ISLAND_ENABLED, ISLAND_KEY, ISLAND_KEYS, type IslandKey } from "@/lib/island";
 import { captureCaps, captureFrom, decodeCapture, DEFAULT_CAPTURE, encodeCapture } from "@/lib/islandCapture";
 import { useWindowFocused } from "@/lib/focus";
@@ -1448,30 +1449,28 @@ function Section({ title, children }: { title?: string; children: ReactNode }) {
   );
 }
 
-/// Set *and* order, so a group added later is one entry plus one body. Icons
-/// are Heroicons' filled 16px set, drawn for small sizes, at the sidebar rows'
-/// own 14px. No keyboard in heroicons, so Shortcuts takes the bolt.
-const ALL_TABS = [
-  { id: "appearance", label: "Appearance", Icon: PaintBrushIcon },
-  { id: "spaces", label: "Spaces", Icon: Square3Stack3DIcon },
-  { id: "servers", label: "Servers", Icon: ServerStackIcon },
-  { id: "accounts", label: "Agents", Icon: KeyIcon },
-  { id: "transcription", label: "Transcription", Icon: MicrophoneIcon },
-  { id: "integrations", label: "Integrations", Icon: PuzzlePieceIcon },
-  { id: "shortcuts", label: "Shortcuts", Icon: BoltIcon },
-  { id: "island", label: "Island", Icon: ComputerDesktopIcon },
-  { id: "composer", label: "Composer", Icon: ChatBubbleBottomCenterTextIcon },
-  { id: "breaks", label: "Breaks", Icon: ClockIcon },
-  { id: "changelog", label: "Changelog", Icon: NewspaperIcon },
-  { id: "about", label: "About", Icon: InformationCircleIcon },
-] as const;
+/// Set and order live in [settingsTabs.ts](../lib/settingsTabs.ts), so a group
+/// added later is one id there, one entry here and one body. Icons are
+/// Heroicons' filled 16px set, drawn for small sizes, at the sidebar rows' own
+/// 14px. No keyboard in heroicons, so Shortcuts takes the bolt.
+const TAB_LOOKS: Record<SettingsTab, { label: string; Icon: typeof PaintBrushIcon }> = {
+  appearance: { label: "Appearance", Icon: PaintBrushIcon },
+  spaces: { label: "Spaces", Icon: Square3Stack3DIcon },
+  servers: { label: "Servers", Icon: ServerStackIcon },
+  accounts: { label: "Agents", Icon: KeyIcon },
+  transcription: { label: "Transcription", Icon: MicrophoneIcon },
+  integrations: { label: "Integrations", Icon: PuzzlePieceIcon },
+  shortcuts: { label: "Shortcuts", Icon: BoltIcon },
+  island: { label: "Island", Icon: ComputerDesktopIcon },
+  composer: { label: "Composer", Icon: ChatBubbleBottomCenterTextIcon },
+  breaks: { label: "Breaks", Icon: ClockIcon },
+  changelog: { label: "Changelog", Icon: NewspaperIcon },
+  about: { label: "About", Icon: InformationCircleIcon },
+};
 
-export type SettingsTab = (typeof ALL_TABS)[number]["id"];
+export type { SettingsTab };
 
-/// Dray Island runs on a Mac, Linux and Windows, so elsewhere its tab would be a page of controls for nothing.
-const SETTINGS_TABS = ALL_TABS.filter(
-  (t) => (HAS_ISLAND || t.id !== "island") && (HAS_DICTATION || t.id !== "transcription"),
-);
+const SETTINGS_TABS = SETTINGS_TAB_IDS.map((id) => ({ id, ...TAB_LOOKS[id] }));
 
 /// A line under a tab's title saying what the tab is for. Accounts has one
 /// because its harness switches change what the composer's picker offers,
