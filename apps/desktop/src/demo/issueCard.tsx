@@ -12,8 +12,8 @@ import type { AgentEvent, IssueCardRow } from "@/types/events";
 import "../App.css";
 
 /// A bot's chat with an issue card for several issues and one for a single
-/// issue, through the real `BotTranscript` and `IssueCard`. The A/B/C row over
-/// each card switches the design; Work on it waits as the server would, then
+/// issue, through the real `BotTranscript` and `IssueCard`. The C / C2 row over
+/// each card switches the design; the play button waits as the server would, then
 /// logs the hand-off, so the row turns Started.
 
 const SESSION = "01a1cfc8-demo-issue-card";
@@ -96,8 +96,8 @@ function Demo() {
         <div className="flex flex-col gap-1">
           <h1 className="text-lg font-medium">Issue card in a bot's chat</h1>
           <p className="text-ui text-muted-foreground">
-            Switch the design with A / B / C over any card; the pick holds for every card. A row opens its issue in Dray
-            in the app; Work on it hands it to the bot and turns Started.
+            Switch the design with C / C2 over any card; the pick holds for every card. A row opens its issue in Dray
+            in the app; the play button (Work on it) hands it to the bot and turns Started.
           </p>
           <div>
             <Button variant="outline" size="xs" onClick={() => setEvents(EVENTS)}>
