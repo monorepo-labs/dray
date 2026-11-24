@@ -303,7 +303,10 @@ const RATE = 48000;
 /// Rendered ahead into buffers and looped by the audio engine itself: notes
 /// paced by a timer stalled whenever the window went to the background, which
 /// throttles timers, and the music stopped and started with every app switch.
-export function startOnboardingMusic(id: MusicTrack, lifted = false): { lift: () => void; stop: () => void } {
+export function startOnboardingMusic(
+  id: MusicTrack,
+  lifted = false,
+): { lift: () => void; stop: (fadeSeconds?: number) => void } {
   const track = MUSIC_TRACKS.find((m) => m.id === id)?.track ?? ARCADE;
   const level = MUSIC_LEVEL * (track.gain ?? 1);
   let ctx: AudioContext;
@@ -345,14 +348,14 @@ export function startOnboardingMusic(id: MusicTrack, lifted = false): { lift: ()
     master.gain.setValueAtTime(master.gain.value, now);
     master.gain.linearRampToValueAtTime(level, now + 1.5);
   };
-  const stop = () => {
+  const stop = (fade = MUSIC_FADE_S) => {
     if (stopped) return;
     stopped = true;
     const now = ctx.currentTime;
     master.gain.cancelScheduledValues(now);
     master.gain.setValueAtTime(master.gain.value, now);
-    master.gain.linearRampToValueAtTime(0, now + MUSIC_FADE_S);
-    setTimeout(() => void ctx.close(), (MUSIC_FADE_S + 0.3) * 1000);
+    master.gain.linearRampToValueAtTime(0, now + fade);
+    setTimeout(() => void ctx.close(), (fade + 0.3) * 1000);
   };
   return { lift, stop };
 }

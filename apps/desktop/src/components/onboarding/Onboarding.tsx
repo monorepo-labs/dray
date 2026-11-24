@@ -29,7 +29,7 @@ import {
   useOnboarding,
   useWelcomeSound,
 } from "./state";
-import { MUSIC_TRACKS, playWelcomeSound, startOnboardingMusic, WELCOME_SOUNDS } from "./welcomeSounds";
+import { MUSIC_TRACKS, type MusicTrack, playWelcomeSound, startOnboardingMusic, WELCOME_SOUNDS } from "./welcomeSounds";
 import "./onboarding.css";
 
 /// How long a finished setup stays on screen before the flow moves on by itself.
@@ -299,7 +299,7 @@ function playVoice(id: WelcomeVoice, onDone?: () => void): HTMLAudioElement {
 }
 
 let preview: HTMLAudioElement | undefined;
-let previewMusic: (() => void) | undefined;
+let previewMusic: { id: MusicTrack; cut: () => void } | undefined;
 
 /// ⌘⇧O: play onboarding from the start or turn it off, and pick its sound.
 function DevSwitch() {
@@ -417,12 +417,23 @@ function DevSwitch() {
               type="button"
               onClick={() => {
                 setOnboardingMusic(m.id);
-                previewMusic?.();
+                // A click on the track already playing stops it; any other
+                // click cuts the playing one short and starts its own.
+                const again = previewMusic?.id === m.id;
+                previewMusic?.cut();
+                previewMusic = undefined;
+                if (again) return;
                 const { stop } = startOnboardingMusic(m.id, true);
-                const timer = setTimeout(stop, 8000);
-                previewMusic = () => {
-                  clearTimeout(timer);
+                const timer = setTimeout(() => {
                   stop();
+                  previewMusic = undefined;
+                }, 8000);
+                previewMusic = {
+                  id: m.id,
+                  cut: () => {
+                    clearTimeout(timer);
+                    stop(0.05);
+                  },
                 };
               }}
               className={cn(
