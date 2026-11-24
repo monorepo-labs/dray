@@ -577,10 +577,10 @@ struct IssueCardView: View {
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.group, style: .continuous).strokeBorder(Theme.hairline))
         .sheet(item: $opened) { row in
             NavigationStack {
-                IssueDetailView(issue: issue(row), server: session.server, workOn: { _ in
+                IssueDetailView(issue: issue(row), server: session.server, updated: { _ in }, approve: {
                     opened = nil
-                    if !settled && !row.closed && !started.contains(row.number) { Task { await start(row) } }
-                }, updated: { _ in })
+                    Task { await start(row) }
+                }, startable: !settled && !row.closed && !started.contains(row.number))
                 .toolbar { ToolbarItem(placement: .topBarLeading) { CloseButton() } }
             }
         }

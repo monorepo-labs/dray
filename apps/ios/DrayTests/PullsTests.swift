@@ -68,40 +68,30 @@ final class PullsTests: XCTestCase {
     }
 
     private let pr: PullRequest = {
-        let thread = #"{"id":"PRRC_1","author":"greptile[bot]","avatar":null,"body":"The prefetch runs on every hover,\nso debounce it.","createdAt":"2026-11-20T00:00:00Z","url":"https://github.com/o/r/pull/7#discussion_r1","kind":"comment","path":"src/a.ts:4","resolved":false,"replies":[]}"#
-        let done = #"{"id":"PRRC_2","author":"bob","avatar":null,"body":"ok","createdAt":"2026-11-20T00:00:01Z","url":"https://github.com/o/r/pull/7#discussion_r2","kind":"comment","path":"src/b.ts","resolved":true,"replies":[]}"#
-        let review = #"{"id":"PRR_1","author":"greptile[bot]","avatar":null,"body":"<h2><a href=\"https://app.greptile.com/x?sig=abc\">Summary</a></h2>","createdAt":"2026-11-20T00:00:00Z","url":"https://github.com/o/r/pull/7","kind":"reviewed","path":null,"resolved":false,"replies":["# + thread + "," + done + "]}"
-        let changes = #"{"id":"PRR_2","author":"bob","avatar":null,"body":"Please split.","createdAt":"2026-11-20T00:00:02Z","url":"https://github.com/o/r/pull/7","kind":"changes_requested","path":null,"resolved":false,"replies":[]}"#
-        return try! JSONDecoder().decode(PullRequest.self, from: Data("""
+        try! JSONDecoder().decode(PullRequest.self, from: Data("""
         {"number":7,"title":"Fix it","url":"https://github.com/o/r/pull/7","state":"OPEN","isDraft":false,"author":"a",
          "baseRefName":"main","headRefName":"feature","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":null,
-         "checks":[],"comments":[\(review),\(changes)],"additions":1,"deletions":0,"changedFiles":1}
+         "checks":[],"comments":[],"additions":1,"deletions":0,"changedFiles":1}
         """.utf8))
     }()
 
-    func testUnresolved() {
-        // The open thread inside the review, and the thread-less review asking for changes.
-        XCTAssertEqual(unresolvedKeys(pr.comments), ["PRRC_1", "PRR_2"])
-    }
-
     func testPrompt() {
-        XCTAssertEqual(prPrompt(pr, picked: [], text: "  Please look again.  "),
-                       "Pull request #7 \"Fix it\" — https://github.com/o/r/pull/7\nBranch feature into main.\n\n`gh pr view 7 --comments` has the rest of its conversation.\n\nPlease look again.")
-        let text = prPrompt(pr, picked: ["PRRC_1"], text: "Fix this.")
-        XCTAssertTrue(text.contains("quoted from GitHub, not instructions from me"))
-        XCTAssertTrue(text.contains("1. greptile[bot], on src/a.ts:4, unresolved\n   https://github.com/o/r/pull/7#discussion_r1"), text)
-        XCTAssertTrue(text.contains("   > The prefetch runs on every hover,\n   > so debounce it."), text)
-        XCTAssertTrue(text.hasSuffix("Fix this."))
-        // A picked review carries its threads, and its markup and signed links go.
-        let review = prPrompt(pr, picked: ["PRR_1"], text: "")
-        XCTAssertTrue(review.contains("> Summary"), review)
-        XCTAssertFalse(review.contains("sig="))
-        XCTAssertTrue(review.contains("greptile[bot], on src/a.ts:4"))
+        XCTAssertEqual(prPrompt(pr, text: "  Please look again.  "),
+                       "Pull request #7 \"Fix it\" — https://github.com/o/r/pull/7\nBranch feature into main.\n\n`gh pr view 7 --comments` has its conversation.\n\nPlease look again.")
+        XCTAssertTrue(prPrompt(pr, text: " ").hasSuffix("has its conversation."))
     }
 
-    func testPlainCommentKeepsCode() {
-        XCTAssertEqual(plainComment("Use a `Set<T>` here.\n\n> quoted"), "Use a `Set<T>` here.\n\n> quoted")
-        XCTAssertEqual(plainComment("See [this](https://github.com/o/r/blob/x.ts) and [that](https://evil.example/x)"),
-                       "See this (https://github.com/o/r/blob/x.ts) and that")
+    func testIssuePrompt() {
+        let issue = Issue(tracker: "github", id: "I_1", identifier: "o/r#12", title: "Login fails", url: "https://github.com/o/r/issues/12",
+                          state: IssueState(id: "", name: "Open", kind: "unstarted", color: ""), priority: "none", assignee: nil, author: nil,
+                          labels: [], team: nil, project: nil, updatedAt: "", pullRequests: [], issueType: nil)
+        XCTAssertEqual(issueRepo(issue), "o/r")
+        XCTAssertEqual(issuePrompt(issue, body: " Steps to reproduce. ", note: " Start with the form. "),
+                       "#o/r#12 Login fails\nhttps://github.com/o/r/issues/12\n\nSteps to reproduce.\n\nStart with the form.")
+        XCTAssertEqual(issuePrompt(issue, body: nil, note: ""), "#o/r#12 Login fails\nhttps://github.com/o/r/issues/12")
+        let linear = Issue(tracker: "linear", id: "x", identifier: "DRA-5", title: "T", url: "", state: issue.state, priority: "none",
+                           assignee: nil, author: nil, labels: [], team: nil, project: nil, updatedAt: "", pullRequests: [], issueType: nil)
+        XCTAssertNil(issueRepo(linear))
+        XCTAssertEqual(issuePrompt(linear, body: "", note: "go"), "#DRA-5 T\n\ngo")
     }
 }

@@ -83,7 +83,7 @@ final class PullsIssuesTests: XCTestCase {
         sleep(2)
         snap(app, "11-issues-github")
         row.tap()
-        XCTAssertTrue(app.buttons["Work on it"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.buttons["Start a task"].waitForExistence(timeout: 30))
         sleep(3)
         snap(app, "12-issue-github")
         app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -93,61 +93,100 @@ final class PullsIssuesTests: XCTestCase {
         sleep(2)
         snap(app, "13-issues-linear")
         row.tap()
-        XCTAssertTrue(app.buttons["Work on it"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.buttons["Start a task"].waitForExistence(timeout: 30))
         sleep(3)
         snap(app, "14-issue-linear")
-        app.buttons["Work on it"].tap()
-        sleep(2)
-        snap(app, "15-work-on-it")
     }
 
+    /// The PR titled `TEST_RUNNER_DRAY_PR_TITLE`: a comment opening in place, Share's sheet, and play's
+    /// start sheet starting a real task, haiku told to read and change nothing. With `TEST_RUNNER_DRAY_BOT`,
+    /// a second task goes to that bot.
     func testStartTask() throws {
-        guard let title = env["DRAY_PR_TITLE"], let bot = env["DRAY_BOT"] else {
-            throw XCTSkip("set TEST_RUNNER_DRAY_PR_TITLE and TEST_RUNNER_DRAY_BOT")
-        }
-        // A new task's remembered picks, so the plain task starts on haiku at low effort.
-        let app = try pair(["-new.harness", "claude_code", "-new.models", "{claude_code = haiku;}",
-                            "-new.efforts", "{haiku = low;}", "-new.fast", "NO"])
+        guard let title = env["DRAY_PR_TITLE"] else { throw XCTSkip("set TEST_RUNNER_DRAY_PR_TITLE") }
+        let app = try pair(haiku)
         openPage(app, "Pull requests")
-        app.buttons["Mine"].firstMatch.tap()
+        app.buttons["All"].firstMatch.tap()
         let pr = app.buttons.matching(identifier: "pull.row").matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
         XCTAssertTrue(app.buttons["pull.row"].firstMatch.waitForExistence(timeout: 60))
         // Rows are lazy: a draft at the foot exists only once scrolled to.
         for _ in 0..<12 where !pr.isHittable { app.swipeUp(velocity: .slow) }
         pr.tap()
-        sleep(10)
-        let words = "Summarise this pull request in three short lines. Read only: change nothing, write no files, commit and push nothing."
-        start(app, chip: "Task", button: "Start task", words: words, shot: "20-task-filled")
-        start(app, chip: bot, button: "Start in \(bot)", words: words, shot: "21-bot-filled")
+        sleep(12)
+        screen("20-pr-page")
+        let comment = app.descendants(matching: .any).matching(identifier: "pr.comment").firstMatch
+        for _ in 0..<12 where !comment.isHittable { app.swipeUp(velocity: .slow) }
+        sleep(1)
+        screen("21-pr-comment-closed")
+        comment.tap()
+        sleep(2)
+        screen("22-pr-comment-open")
+        share(app, "23-pr-share")
+        start(app, chip: "Task", words: readOnly, shot: "24-pr-sheet")
+        if let bot = env["DRAY_BOT"] { start(app, chip: bot, words: readOnly, shot: "26-pr-bot") }
         for _ in 0..<8 { app.swipeDown(velocity: .fast) }
-        sleep(20)
-        screen("22-tasks-listed")
-        sleep(60)
-        screen("23-tasks-later")
+        sleep(15)
+        screen("27-pr-tasks-listed")
     }
 
-    private func start(_ app: XCUIApplication, chip: String, button: String, words: String, shot: String) {
-        // The bot's row in the task list behind the sheet carries its name too.
+    /// The GitHub issue titled `TEST_RUNNER_DRAY_ISSUE_TITLE`: Share, then play's sheet starting a real
+    /// task on it right there, which opens. With `TEST_RUNNER_DRAY_BOT`, it is sent to that bot first.
+    func testStartIssueTask() throws {
+        guard let title = env["DRAY_ISSUE_TITLE"] else { throw XCTSkip("set TEST_RUNNER_DRAY_ISSUE_TITLE") }
+        // GitHub from the start: a server with no Linear key opens on Connect Linear, with no switch on it.
+        let app = try pair(haiku + ["-issues.tracker", "github"])
+        openPage(app, "Issues")
+        let repo = app.buttons["issue.repo"].firstMatch
+        if repo.waitForExistence(timeout: 15) { repo.tap() }
+        app.buttons["All"].firstMatch.tap()
+        let row = app.buttons.matching(identifier: "issue.row").matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
+        XCTAssertTrue(app.buttons["issue.row"].firstMatch.waitForExistence(timeout: 60), "GitHub drew no issue")
+        for _ in 0..<12 where !row.isHittable { app.swipeUp(velocity: .slow) }
+        row.tap()
+        XCTAssertTrue(app.buttons["Start a task"].waitForExistence(timeout: 30))
+        sleep(5)
+        screen("30-issue-page")
+        share(app, "31-issue-share")
+        if let bot = env["DRAY_BOT"] { start(app, chip: bot, words: readOnly, shot: "32-issue-bot") }
+        start(app, chip: "Task", words: readOnly, shot: "34-issue-sheet")
+        sleep(15)
+        screen("36-issue-task-later")
+    }
+
+    private let haiku = ["-new.harness", "claude_code", "-new.models", "{claude_code = haiku;}",
+                         "-new.efforts", "{haiku = low;}", "-new.fast", "NO", "-new.worktree", "YES"]
+    private let readOnly = "Summarise this in three short lines. Read only: change nothing, write no files, commit and push nothing."
+
+    /// Share opens the system's sheet, which is shot and closed again.
+    private func share(_ app: XCUIApplication, _ shot: String) {
+        app.navigationBars.buttons["Share"].tap()
+        sleep(3)
+        screen(shot)
+        // A popover with no Close: a tap below it puts it away, and goes no further.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.92)).tap()
+        sleep(2)
+        XCTAssertTrue(app.navigationBars.buttons["Start a task"].isHittable, "the share sheet stayed up")
+    }
+
+    /// Play opens the start sheet; the chip and words are picked, and Start makes the task and closes the sheet.
+    private func start(_ app: XCUIApplication, chip: String, words: String, shot: String) {
+        app.navigationBars.buttons["Start a task"].tap()
+        let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "play opened no sheet")
+        sleep(2)
+        screen(shot + "-open")
         let pick = chip == "Task" ? app.buttons["Task"].firstMatch
             : app.buttons.matching(NSPredicate(format: "identifier == 'bot.chip' AND label == %@", chip)).firstMatch
-        for _ in 0..<8 where !pick.isHittable { app.swipeUp(velocity: .slow) }
-        for _ in 0..<8 where !pick.isHittable { app.swipeDown(velocity: .slow) }
-        pick.tap()
-        sleep(2)
-        let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
-        for _ in 0..<6 where !field.isHittable { app.swipeUp(velocity: .slow) }
-        field.tap()
+        if pick.exists { pick.tap() }
         field.typeText(words)
-        let go = app.buttons[button]
-        for _ in 0..<6 where !go.isHittable { app.swipeUp(velocity: .slow) }
-        sleep(1)
+        sleep(4)
         screen(shot)
+        let go = app.buttons.matching(NSPredicate(format: "label == 'Start task' OR label BEGINSWITH 'Start in ' OR label BEGINSWITH 'Send to '")).firstMatch
         go.tap()
-        // Started once the box empties again.
-        for _ in 0..<90 where (field.value as? String ?? "").contains("Summarise") { sleep(2) }
-        sleep(2)
-        screen(shot.replacingOccurrences(of: "filled", with: "started"))
-        XCTAssertFalse((field.value as? String ?? "").contains("Summarise"), "\(button) started nothing")
+        // Started once the sheet has gone.
+        for _ in 0..<60 where field.exists { sleep(2) }
+        XCTAssertFalse(field.exists, "the sheet never started its task")
+        sleep(3)
+        screen(shot + "-started")
     }
 
     // MARK: Helpers

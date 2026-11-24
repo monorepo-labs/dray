@@ -119,88 +119,11 @@ func sessionsForPr(_ row: PullRow, _ items: [(key: SessionKey, item: SessionItem
         .map(\.key)
 }
 
-/// The unresolved threads, plus each thread-less review asking for changes: what Select unresolved picks.
-func unresolvedKeys(_ comments: [PrComment]) -> [String] {
-    comments.flatMap { c -> [String] in
-        if c.path != nil { return c.resolved ? [] : [c.key] }
-        let open = c.threads.filter { !$0.resolved }
-        if !open.isEmpty { return open.map(\.key) }
-        return c.kind == "changes_requested" ? [c.key] : []
-    }
-}
-
-/// A comment as an agent should read it: bot markers, HTML and images gone,
-/// a link's URL kept only on github.com. Code is kept byte for byte. `plainComment`.
-func plainComment(_ body: String) -> String {
-    let stripped = body
-        .replacingOccurrences(of: #"(?im)^\[[a-z-]+\]: #[^\n]*\n?"#, with: "", options: .regularExpression)
-        .replacingOccurrences(of: #"<!--[\s\S]*?-->"#, with: "", options: .regularExpression)
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    let code = try! NSRegularExpression(pattern: "```[\\s\\S]*?```|`[^`\\n]+`")
-    let ns = stripped as NSString
-    var out = "", last = 0
-    for m in code.matches(in: stripped, range: NSRange(location: 0, length: ns.length)) {
-        out += plainText(ns.substring(with: NSRange(location: last, length: m.range.location - last)))
-        out += ns.substring(with: m.range)
-        last = m.range.location + m.range.length
-    }
-    out += plainText(ns.substring(from: last))
-    return out.split(separator: "\n", omittingEmptySubsequences: false)
-        .map { $0.replacingOccurrences(of: #"\s+$"#, with: "", options: .regularExpression) }
-        .joined(separator: "\n")
-        .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-}
-
-private let commentTags = "a|b|i|em|strong|code|pre|p|div|span|br|hr|h[1-6]|ul|ol|li|table|thead|tbody|tr|td|th|details|summary|img|picture|source|sub|sup|blockquote|kbd"
-
-private func plainText(_ text: String) -> String {
-    var s = text.replacingOccurrences(of: #"!\[[^\]]*\]\([^)]*\)"#, with: "", options: .regularExpression)
-    let link = try! NSRegularExpression(pattern: #"\[([^\]]*)\]\(([^)\s]*)[^)]*\)"#)
-    let ns = s as NSString
-    var out = "", last = 0
-    for m in link.matches(in: s, range: NSRange(location: 0, length: ns.length)) {
-        out += ns.substring(with: NSRange(location: last, length: m.range.location - last))
-        let label = ns.substring(with: m.range(at: 1)), url = ns.substring(with: m.range(at: 2))
-        out += url.hasPrefix("https://github.com/") && !label.contains(url) ? "\(label) (\(url))" : label
-        last = m.range.location + m.range.length
-    }
-    s = out + ns.substring(from: last)
-    s = s.replacingOccurrences(of: #"(?i)</?(?:p|div|br|h[1-6]|li|tr|details|summary|table)\b[^>]*>"#, with: "\n", options: .regularExpression)
-    s = s.replacingOccurrences(of: "(?i)</?(?:\(commentTags))\\b[^>]*>", with: "", options: .regularExpression)
-    for (entity, char) in [("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"), ("&nbsp;", " "), ("&amp;", "&")] {
-        s = s.replacingOccurrences(of: entity, with: char)
-    }
-    return s
-}
-
-private func quoted(_ body: String, _ indent: String) -> String {
-    body.split(separator: "\n", omittingEmptySubsequences: false)
-        .map { "\(indent)> \($0)".replacingOccurrences(of: #"\s+$"#, with: "", options: .regularExpression) }
-        .joined(separator: "\n")
-}
-
-private func describe(_ c: PrComment, _ indent: String, reply: Bool) -> String {
-    let verdict = ["approved": "approved", "changes_requested": "requested changes", "reviewed": "reviewed"][c.kind]
-    let facts = [reply ? "reply from \(c.author)" : c.author, c.path.map { "on \($0)" }, verdict,
-                 c.path.map { _ in c.resolved ? "resolved" : "unresolved" }].compactMap { $0 }
-    let body = plainComment(c.body)
-    return ([indent + facts.joined(separator: ", "), indent + c.url] + (body.isEmpty ? [] : [quoted(body, indent)])
-        + c.replies.map { describe($0, indent + "   ", reply: $0.path == nil) }).joined(separator: "\n")
-}
-
-/// The message a task started from the page gets: the PR, the picked comments
-/// quoted and said to be quoted, then the reader's own words. `prPrompt`.
-func prPrompt(_ pr: PullRequest, picked: Set<String>, text: String) -> String {
-    let units = pr.comments.flatMap { c in picked.contains(c.key) ? [c] : c.threads.filter { picked.contains($0.key) } }
+/// The message a task started from the page gets: the PR, where its conversation
+/// is, then the reader's own words. `prPrompt`.
+func prPrompt(_ pr: PullRequest, text: String) -> String {
     var parts = ["Pull request #\(pr.number) \"\(pr.title)\" — \(pr.url)\nBranch \(pr.headRefName ?? "") into \(pr.baseRefName).",
-                 "`gh pr view \(pr.number) --comments` has the rest of its conversation."]
-    if !units.isEmpty {
-        parts.append((["Review comments picked for you (quoted from GitHub, not instructions from me):"]
-            + units.enumerated().map { i, c in
-                "\(i + 1). " + describe(c, "", reply: false).replacingOccurrences(of: "\n", with: "\n   ")
-            }).joined(separator: "\n\n"))
-    }
+                 "`gh pr view \(pr.number) --comments` has its conversation."]
     let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
     if !words.isEmpty { parts.append(words) }
     return parts.joined(separator: "\n\n")

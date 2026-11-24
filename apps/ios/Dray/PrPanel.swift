@@ -186,14 +186,11 @@ struct PrSheet: View {
 }
 
 /// One pull request: what it is, whether it can land and the one action that
-/// moves it, then its checks and what people said. With `picked`, each comment
-/// and inline thread carries a box, the pull requests page's way of quoting
-/// them to the task it starts.
+/// moves it, then its checks and what people said.
 struct PrSection: View {
     @Environment(Store.self) private var store
     let pr: PullRequest
     let model: PrModel
-    var picked: Binding<Set<String>>? = nil
     /// Off on the pull requests page, whose own head names the PR.
     var header = true
 
@@ -259,35 +256,10 @@ struct PrSection: View {
             }
             if !pr.comments.isEmpty {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    HStack {
-                        GroupLabel("Comments")
-                        Spacer()
-                        if let picked { pickButton(picked) }
-                    }
-                    ForEach(pr.comments) { c in
-                        CommentCard(comment: c, picked: picked)
-                        // Picking reaches into a review: each inline thread is a unit of its own.
-                        if picked != nil {
-                            ForEach(c.threads) { CommentCard(comment: $0, picked: picked).padding(.leading, Theme.Space.xl) }
-                        }
-                    }
+                    GroupLabel("Comments")
+                    ForEach(pr.comments) { CommentCard(comment: $0) }
                 }
             }
-        }
-    }
-
-    /// Select unresolved while nothing is picked, Clear once something is.
-    @ViewBuilder private func pickButton(_ picked: Binding<Set<String>>) -> some View {
-        let unresolved = unresolvedKeys(pr.comments)
-        if !picked.wrappedValue.isEmpty {
-            Button("Clear \(picked.wrappedValue.count)") { picked.wrappedValue = [] }
-                .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
-        } else if !unresolved.isEmpty {
-            Button("Select unresolved (\(unresolved.count))") {
-                Haptic.select()
-                picked.wrappedValue = Set(unresolved)
-            }
-            .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
         }
     }
 
@@ -474,71 +446,82 @@ private struct OutArrow: View {
     }
 }
 
-/// A comment or review as a card; tapping it opens the thread on GitHub,
-/// since the sheet reads and never replies.
+/// A comment or review as a card: three lines and a count of replies, and the
+/// whole of it with every reply once tapped. The sheet reads and never replies.
 private struct CommentCard: View {
     let comment: PrComment
-    var picked: Binding<Set<String>>? = nil
+    @State private var open = false
 
     var body: some View {
-        let card = VStack(alignment: .leading, spacing: Theme.Space.s) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            head(comment)
+            let text = commentText(comment.body)
+            if open {
+                if !text.isEmpty { MarkdownText(text: text) }
+                ForEach(Array(flat(comment.replies, depth: 0).enumerated()), id: \.offset) { _, r in
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        head(r.comment)
+                        let said = commentText(r.comment.body)
+                        if !said.isEmpty { MarkdownText(text: said) }
+                    }
+                    .padding(.leading, CGFloat(r.depth) * Theme.Space.l)
+                    .padding(.top, Theme.Space.s)
+                }
+            } else {
+                if !text.isEmpty {
+                    // Verbatim: markdown would set inline code in monospace, which nothing here draws.
+                    Text(verbatim: text).font(Theme.Font.subhead).foregroundStyle(Theme.secondary).lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                }
+                if !comment.replies.isEmpty {
+                    Text("\(comment.replies.count) more").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .prGroup(padding: 0)
+        .opacity(comment.resolved && !open ? 0.6 : 1)
+        .contentShape(.rect)
+        // A gesture, not a Button: one around the card would take the taps meant for links in it.
+        .onTapGesture {
+            Haptic.select()
+            withAnimation(Theme.motion) { open.toggle() }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint(open ? "Collapses it" : "Shows all of it")
+        .accessibilityIdentifier("pr.comment")
+    }
+
+    /// Avatar, author, verdict and Resolved, then the file an inline comment sits on.
+    private func head(_ c: PrComment) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
             HStack(spacing: Theme.Space.s) {
-                AsyncImage(url: comment.avatar.flatMap(URL.init(string:))) { $0.resizable() } placeholder: {
+                AsyncImage(url: c.avatar.flatMap(URL.init(string:))) { $0.resizable() } placeholder: {
                     Circle().fill(Theme.tile)
                 }
                 .frame(width: 20, height: 20)
                 .clipShape(Circle())
-                Text(comment.author).foregroundStyle(Theme.text).lineLimit(1)
-                if let verb { Text(verb).foregroundStyle(verbColor).lineLimit(1) }
+                Text(c.author).foregroundStyle(Theme.text).lineLimit(1)
+                if let verb = verb(c) { Text(verb).foregroundStyle(verbColor(c)).lineLimit(1) }
                 Spacer(minLength: 0)
-                if comment.resolved { Text("Resolved").foregroundStyle(Theme.tertiary) }
-                OutArrow()
+                if c.resolved { Text("Resolved").foregroundStyle(Theme.tertiary) }
             }
             .font(Theme.Font.subhead)
-            if let path = comment.path {
+            if let path = c.path {
                 Text((path as NSString).lastPathComponent).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
             }
-            let text = commentText(comment.body)
-            if !text.isEmpty {
-                // Verbatim: markdown would set inline code in monospace, which nothing here draws.
-                Text(verbatim: text).font(Theme.Font.subhead).foregroundStyle(Theme.secondary).lineLimit(3)
-                    .multilineTextAlignment(.leading)
-            }
-            if !comment.replies.isEmpty {
-                Text("\(comment.replies.count) more").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
-            }
-        }
-        .padding(14)
-        .prGroup(padding: 0)
-        .opacity(comment.resolved ? 0.6 : 1)
-        HStack(alignment: .top, spacing: Theme.Space.s) {
-            if let picked { box(picked) }
-            if let url = URL(string: comment.url) {
-                Link(destination: url) { card }.buttonStyle(RowButtonStyle())
-            } else {
-                card
-            }
         }
     }
 
-    private func box(_ picked: Binding<Set<String>>) -> some View {
-        let on = picked.wrappedValue.contains(comment.key)
-        return Button {
-            Haptic.select()
-            if on { picked.wrappedValue.remove(comment.key) } else { picked.wrappedValue.insert(comment.key) }
-        } label: {
-            Image(systemName: on ? "checkmark.square.fill" : "square")
-                .font(Theme.Font.title.font)
-                .foregroundStyle(on ? Theme.text : Theme.tertiary)
-                .frame(width: 28, height: 44)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Quote \(comment.author)'s comment")
-        .accessibilityAddTraits(on ? .isSelected : [])
+    /// Replies in reading order, each with how deep it sits.
+    private func flat(_ list: [PrComment], depth: Int) -> [(comment: PrComment, depth: Int)] {
+        list.flatMap { [($0, depth)] + flat($0.replies, depth: depth + 1) }
     }
 
-    private var verb: String? {
-        switch comment.kind {
+    private func verb(_ c: PrComment) -> String? {
+        switch c.kind {
         case "approved": "approved"
         case "changes_requested": "requested changes"
         case "reviewed": "reviewed"
@@ -546,8 +529,8 @@ private struct CommentCard: View {
         }
     }
 
-    private var verbColor: Color {
-        switch comment.kind {
+    private func verbColor(_ c: PrComment) -> Color {
+        switch c.kind {
         case "approved": Theme.add
         case "changes_requested": Theme.destructive
         default: Theme.secondary
