@@ -1,6 +1,5 @@
 import { type CSSProperties, useEffect, useRef } from "react";
 
-import { useWelcomeSound } from "./state";
 import { playWelcomeSound } from "./welcomeSounds";
 import "./onboarding.css";
 
@@ -43,20 +42,17 @@ const MASK: CSSProperties = {
 /// Onboarding's first screen: the Dray wordmark, a light passing over it, the
 /// wordmark fading, then the welcome in its place, and on to setup by itself.
 export default function Welcome({ onNext }: { onNext: () => void }) {
-  const sound = useWelcomeSound();
   const next = useRef(onNext);
   next.current = onNext;
 
   useEffect(() => {
     // A tick late, so a mount React throws away at once never plays.
-    const play = setTimeout(() => playWelcomeSound(sound, SHINE_AT + 300), 0);
+    const play = setTimeout(() => playWelcomeSound(SHINE_AT + 300), 0);
     const advance = setTimeout(() => next.current(), NEXT_AT);
     return () => {
       clearTimeout(play);
       clearTimeout(advance);
     };
-    // Once per showing; a sound picked mid-welcome waits for the next replay.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

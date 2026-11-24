@@ -1,13 +1,12 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
+import welcomeVoiceUrl from "@/assets/welcome-voice.m4a";
 import AgentIcon from "@/components/AgentIcon";
 import BotAvatar from "@/components/BotAvatar";
 import GitHubIcon from "@/components/GitHubIcon";
 import WindowControls from "@/components/layout/WindowControls";
 import { GateCards } from "@/components/SignInGate";
 import { Continue } from "@/components/WhatsNewPage";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
-import { Switch } from "@/components/ui/switch";
 import { invoke, LOCAL } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { Bot } from "@/types/events";
@@ -15,23 +14,8 @@ import type { Bot } from "@/types/events";
 import BotTiles from "./BotTiles";
 import Welcome, { MUSIC_AT } from "./Welcome";
 import { type AgentSetup, type GithubSetup, type SetupState, useAgentSetup, useGithubSetup } from "./agents";
-import {
-  askToOpenDrayBot,
-  finishOnboarding,
-  replayOnboarding,
-  setFreshMachine,
-  setWelcomeSound,
-  setOnboardingMusic,
-  setWelcomeVoice,
-  useOnboardingMusic,
-  useWelcomeVoice,
-  WELCOME_VOICES,
-  type WelcomeVoice,
-  useFreshMachine,
-  useOnboarding,
-  useWelcomeSound,
-} from "./state";
-import { MUSIC_TRACKS, type MusicTrack, playWelcomeSound, startOnboardingMusic, WELCOME_SOUNDS } from "./welcomeSounds";
+import { askToOpenDrayBot, finishOnboarding, useOnboarding } from "./state";
+import { startOnboardingMusic } from "./welcomeSounds";
 import "./onboarding.css";
 
 /// How long a finished setup stays on screen before the flow moves on by itself.
@@ -46,20 +30,15 @@ const NEXT_REVEAL_MS = 260;
 /// reader meets it before signing in; nothing in it needs an account. Its
 /// Continue leads to the gate, and to Dray Bot's chat once the app is in.
 export default function Onboarding() {
-  const { on, run } = useOnboarding();
+  const on = useOnboarding();
+  if (!on) return null;
   return (
-    <>
-      {import.meta.env.DEV && <DevSwitch />}
-      {on && (
-        <Flow
-          key={run}
-          onStart={() => {
-            finishOnboarding();
-            askToOpenDrayBot();
-          }}
-        />
-      )}
-    </>
+    <Flow
+      onStart={() => {
+        finishOnboarding();
+        askToOpenDrayBot();
+      }}
+    />
   );
 }
 
@@ -75,27 +54,26 @@ function Flow({ onStart }: { onStart: () => void }) {
   }, []);
   const agents = useAgentSetup();
   const github = useGithubSetup();
-  const sound = useWelcomeSound();
-  const voicePick = useWelcomeVoice();
-  const musicPick = useOnboardingMusic();
-  // With the welcome line: the welcome said aloud once, the music low under it
-  // and up once it ends, playing on over every step. Leaving fades it out.
+  // With the welcome line: the welcome said aloud once, over a radio at half
+  // volume, the music under it and up once it ends, playing on over every step.
+  // Leaving fades it out.
   useEffect(() => {
-    if (sound === "none") return;
     let music: ReturnType<typeof startOnboardingMusic> | undefined;
     let voice: HTMLAudioElement | undefined;
     const lift = () => music?.lift();
     const timer = setTimeout(() => {
-      music = startOnboardingMusic(musicPick);
-      voice = playVoice(voicePick, lift);
+      music = startOnboardingMusic();
+      voice = new Audio(welcomeVoiceUrl);
+      voice.volume = 0.5;
+      voice.addEventListener("ended", lift);
+      voice.addEventListener("error", lift);
+      voice.play().catch(lift);
     }, MUSIC_AT);
     return () => {
       clearTimeout(timer);
       voice?.pause();
       music?.stop();
     };
-    // Once per showing, like the welcome sound.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
     // Above the sign-in gate (1000), which it comes before.
@@ -298,178 +276,3 @@ function MeetBot({ bot, onStart }: { bot: Bot | undefined; onStart: () => void }
     </main>
   );
 }
-
-/// Plays a welcome voice take at half volume; `onDone` runs when it ends or
-/// cannot play.
-function playVoice(id: WelcomeVoice, onDone?: () => void): HTMLAudioElement {
-  const audio = new Audio(WELCOME_VOICES.find((v) => v.id === id)?.url);
-  audio.volume = 0.5;
-  if (onDone) {
-    audio.addEventListener("ended", onDone);
-    audio.addEventListener("error", onDone);
-  }
-  audio.play().catch(() => onDone?.());
-  return audio;
-}
-
-let preview: HTMLAudioElement | undefined;
-let previewMusic: { id: MusicTrack; cut: () => void } | undefined;
-
-/// ⌘⇧O: play onboarding from the start or turn it off, and pick its sound.
-function DevSwitch() {
-  const [open, setOpen] = useState(false);
-  const { on } = useOnboarding();
-  const fresh = useFreshMachine();
-  const sound = useWelcomeSound();
-  const voice = useWelcomeVoice();
-  const music = useOnboardingMusic();
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.code === "KeyO") {
-        e.preventDefault();
-        e.stopPropagation();
-        setOpen((was) => !was);
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-      else if (e.key === "1") replayOnboarding();
-      else if (e.key === "0") finishOnboarding();
-      else return;
-      e.preventDefault();
-      e.stopPropagation();
-      setOpen(false);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [open]);
-
-  if (!open) return null;
-  const row = (label: string, key: string, onClick: () => void) => (
-    <button
-      key={key}
-      type="button"
-      onClick={() => {
-        onClick();
-        setOpen(false);
-      }}
-      className="flex h-8 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-ui hover:bg-muted"
-    >
-      <Kbd>{key}</Kbd>
-      <span className="flex-1">{label}</span>
-    </button>
-  );
-
-  return (
-    <div className="fixed top-12 right-3 z-[1020] flex w-72 flex-col rounded-xl bg-popover p-1.5 text-popover-foreground shadow-(--shadow-ring) backdrop-blur-xl animate-in fade-in zoom-in-95">
-      <div className="flex items-center justify-between px-2 pt-1 pb-1.5">
-        <span className="text-ui font-medium">Onboarding</span>
-        <KbdGroup>
-          <Kbd>⌘</Kbd>
-          <Kbd>⇧</Kbd>
-          <Kbd>O</Kbd>
-        </KbdGroup>
-      </div>
-      {row(on ? "Play again" : "Play", "1", replayOnboarding)}
-      {on && row("Turn off", "0", finishOnboarding)}
-      <div className="mt-1 flex flex-col gap-1.5 border-t border-hairline px-2 pt-2 pb-1">
-        <span className="text-xs text-muted-foreground">Welcome sound · click to hear</span>
-        <div className="flex flex-wrap gap-1">
-          {WELCOME_SOUNDS.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => {
-                setWelcomeSound(s.id);
-                playWelcomeSound(s.id, 600);
-              }}
-              className={cn(
-                "h-7 cursor-pointer rounded-md px-2.5 text-ui",
-                sound === s.id ? "bg-foreground text-background" : "bg-muted hover:bg-muted/70",
-              )}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="mt-1 flex flex-col gap-1.5 border-t border-hairline px-2 pt-2 pb-1">
-        <span className="text-xs text-muted-foreground">Welcome voice · click to hear</span>
-        <div className="flex flex-wrap gap-1">
-          {WELCOME_VOICES.map((v) => (
-            <button
-              key={v.id}
-              type="button"
-              onClick={() => {
-                setWelcomeVoice(v.id);
-                preview?.pause();
-                preview = playVoice(v.id);
-              }}
-              className={cn(
-                "h-7 cursor-pointer rounded-md px-2.5 text-ui",
-                voice === v.id ? "bg-foreground text-background" : "bg-muted hover:bg-muted/70",
-              )}
-            >
-              {v.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="mt-1 flex flex-col gap-1.5 border-t border-hairline px-2 pt-2 pb-1">
-        <span className="text-xs text-muted-foreground">Music · click to hear 8s</span>
-        <div className="flex flex-wrap gap-1">
-          {MUSIC_TRACKS.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              onClick={() => {
-                setOnboardingMusic(m.id);
-                // A click on the track already playing stops it; any other
-                // click cuts the playing one short and starts its own.
-                const again = previewMusic?.id === m.id;
-                previewMusic?.cut();
-                previewMusic = undefined;
-                if (again) return;
-                const { stop } = startOnboardingMusic(m.id, true);
-                const timer = setTimeout(() => {
-                  stop();
-                  previewMusic = undefined;
-                }, 8000);
-                previewMusic = {
-                  id: m.id,
-                  cut: () => {
-                    clearTimeout(timer);
-                    stop(0.05);
-                  },
-                };
-              }}
-              className={cn(
-                "h-7 cursor-pointer rounded-md px-2.5 text-ui",
-                music === m.id ? "bg-foreground text-background" : "bg-muted hover:bg-muted/70",
-              )}
-            >
-              {m.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      {/* The row takes the click and the switch only draws its state: a label
-          around the switch passed one click on as two and left it unchanged. */}
-      <div
-        onClick={() => setFreshMachine(!fresh)}
-        className="mt-1 flex h-9 cursor-pointer items-center gap-2 border-t border-hairline px-2 pt-1 text-ui"
-      >
-        <Switch checked={fresh} aria-label="Show setup as not done" className="pointer-events-none" />
-        Show setup as not done
-      </div>
-    </div>
-  );
-}
-

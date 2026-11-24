@@ -8,8 +8,6 @@ import { AGENT_LABELS, HARNESS_ORDER } from "@/lib/model";
 import { invoke, LOCAL } from "@/lib/transport";
 import type { AuthOption, Harness, IntegrationsView } from "@/types/events";
 
-import { useFreshMachine } from "./state";
-
 export type SetupState = "checking" | "ready" | "signin" | "install" | "installing" | "signing" | "failed";
 
 export type SetupRow = { harness: Harness; label: string; state: SetupState; error: string | null };
@@ -26,7 +24,6 @@ export type AgentSetup = {
 /// whatever onboarding is doing about each one right now.
 export function useAgentSetup(): AgentSetup {
   const { agents, refresh } = useAgentAccounts("", LOCAL);
-  const fresh = useFreshMachine();
   // What this screen started, keyed by agent: the accounts read can't say
   // "installing", and a login in Terminal reads as signed out until it lands.
   const [doing, setDoing] = useState<Partial<Record<Harness, { state: SetupState; error?: string }>>>({});
@@ -67,7 +64,7 @@ export function useAgentSetup(): AgentSetup {
 
   const rows = HARNESS_ORDER.map((harness): SetupRow => {
     const agent = agents?.find((a) => a.harness === harness);
-    const signedIn = !fresh && agent?.accounts.some((a) => a.state === "logged_in");
+    const signedIn = agent?.accounts.some((a) => a.state === "logged_in");
     const known: SetupState = !agent ? "checking" : !agent.installed ? "install" : signedIn ? "ready" : "signin";
     const now = doing[harness];
     // A sign-in that landed wins over "signing"; anything else this screen
@@ -104,7 +101,6 @@ export type GithubSetup = { state: SetupState; error: string | null; act: () => 
 /// `gh` on this Mac, installed and signed in, read the way Settings reads it
 /// and read again whenever the window comes back from Terminal or a browser.
 export function useGithubSetup(): GithubSetup {
-  const fresh = useFreshMachine();
   const [known, setKnown] = useState<SetupState>("checking");
   const [doing, setDoing] = useState<{ state: SetupState; error?: string } | null>(null);
 
@@ -125,8 +121,7 @@ export function useGithubSetup(): GithubSetup {
     invoke("run_gh_login", { server: null }, LOCAL).catch(() => setDoing(null));
   };
 
-  const shown = fresh && known === "ready" ? "signin" : known;
-  const state = shown === "ready" || !doing ? shown : doing.state;
+  const state = known === "ready" || !doing ? known : doing.state;
 
   const act = () => {
     if (state === "signin" || state === "signing") signIn();
