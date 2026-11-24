@@ -79,6 +79,10 @@ pub struct Mapper {
     /// tool row rather than a link into the panel, which is what
     /// `SubagentRun.inline` is for.
     subagents: HashMap<String, Run>,
+    /// `subagent` calls stopping or closing a named child, by call id. fx 0.0.17
+    /// sends no report for a child stopped mid-work, so this call's close is the
+    /// only thing that can end its run.
+    stops: HashMap<String, String>,
 }
 
 /// An open delegated run, by its spawning call.
@@ -87,8 +91,8 @@ struct Run {
     task: String,
     /// fx 0.0.17's shape: a named child messaged in the background, whose call
     /// closes twice — once at once to say the child took the work, again with
-    /// its report.
-    named: bool,
+    /// its report. `None` on fx ≤0.0.16, whose run is the call alone.
+    agent: Option<String>,
     /// The first close has landed and the child is still working.
     working: bool,
 }
@@ -105,6 +109,7 @@ impl Mapper {
             outputs: HashMap::new(),
             suppressed: HashSet::new(),
             subagents: HashMap::new(),
+            stops: HashMap::new(),
             shells: HashSet::new(),
         }
     }
@@ -175,17 +180,38 @@ impl Mapper {
                 name,
                 kind,
                 raw_input,
-                ..
+                meta,
             } => {
                 let mut out = self.ensure_turn();
                 out.extend(self.close_open());
-                let name = name.unwrap_or_else(|| kind.name().to_string());
+                // fx 0.0.17 runs an MCP tool through `toolbox` and shows the
+                // call as the tool itself, named `mcp_<server>_<tool>` — which
+                // nothing can split, since either half may hold `_`. `_meta`
+                // names both halves, so the row is spelled Claude's way.
+                let mcp = meta.fx.tool_call.mcp;
+                let name = match &mcp {
+                    Some(m) => format!("mcp__{}__{}", m.server, m.tool),
+                    None => name.unwrap_or_else(|| kind.name().to_string()),
+                };
                 let input = tool_input(kind, raw_input);
-                let task = (name == "subagent").then(|| subagent_task(&input)).flatten();
-                let named = input.get("agent").and_then(Value::as_str).is_some();
+                let agent = (name == "subagent")
+                    .then(|| input.get("agent").and_then(Value::as_str))
+                    .flatten()
+                    .map(str::to_string);
+                // A message into a child still working joins that work rather
+                // than starting a run: fx files the report on the first call,
+                // so a second run would never close.
+                let joins = agent.as_deref().is_some_and(|a| self.run_of(a).is_some());
+                let task = (name == "subagent" && !joins).then(|| subagent_task(&input)).flatten();
+                if let (Some(agent), Some("stop" | "close")) =
+                    (&agent, input.get("action").and_then(Value::as_str))
+                {
+                    self.stops.insert(tool_call_id.clone(), agent.clone());
+                }
                 // A `wait` or any other non-delegating action is no spawn, or
                 // it would draw as "Delegating" with nothing delegated.
                 let tool_type = match (&task, name.as_str()) {
+                    _ if mcp.is_some() => ToolType::Mcp,
                     (None, "subagent") => kind.tool_type(),
                     _ => tool_type(kind, &name),
                 };
@@ -211,7 +237,7 @@ impl Mapper {
                 if let Some(task) = task {
                     self.subagents.insert(
                         tool_call_id.clone(),
-                        Run { task: task.clone(), named, working: false },
+                        Run { task: task.clone(), agent, working: false },
                     );
                     out.push(self.subagent_event(
                         &tool_call_id,
@@ -283,7 +309,7 @@ impl Mapper {
                 // open in the transcript, and what closes it if the child dies
                 // before reporting: `settle_dead_child` empties the set.
                 if let Some(run) = self.subagents.get_mut(&tool_call_id) {
-                    if run.named && !run.working && !report && status != ToolStatus::Failed {
+                    if run.agent.is_some() && !run.working && !report && status != ToolStatus::Failed {
                         run.working = true;
                         out.push(self.background_tasks());
                         out.push(self.event(AgentEventPayload::ModelRequestStarted));
@@ -292,21 +318,14 @@ impl Mapper {
                 }
                 // Closes the run the spawning call opened, or the panel row
                 // shimmers for the rest of the session.
-                if let Some(run) = self.subagents.remove(&tool_call_id) {
-                    if run.working {
-                        out.push(self.background_tasks());
+                out.extend(self.close_run(&tool_call_id, status_word(status)));
+                // A stopped or closed child never reports, so its run ends here.
+                if let Some(agent) = self.stops.remove(&tool_call_id) {
+                    if status != ToolStatus::Failed {
+                        if let Some(id) = self.run_of(&agent) {
+                            out.extend(self.close_run(&id, "stopped"));
+                        }
                     }
-                    out.push(self.subagent_event(
-                        &tool_call_id,
-                        AgentEventPayload::SubagentCompleted {
-                            agent_id: String::new(),
-                            status: status_word(status).to_string(),
-                            summary: None,
-                            // fx reports no per-child usage; the turn's own
-                            // figures cover the parent and child together.
-                            usage: None,
-                        },
-                    ));
                 }
                 // The model reads the result next. Same reading Codex's mapper
                 // makes, for the same working indicator.
@@ -525,6 +544,37 @@ impl Mapper {
         self.event(payload)
     }
 
+    /// The spawning call of `agent`'s open run, if it has one.
+    fn run_of(&self, agent: &str) -> Option<String> {
+        self.subagents
+            .iter()
+            .find(|(_, run)| run.agent.as_deref() == Some(agent))
+            .map(|(id, _)| id.clone())
+    }
+
+    /// Ends the run `call_id` opened, if it is still open.
+    fn close_run(&mut self, call_id: &str, status: &str) -> Vec<AgentEvent> {
+        let Some(run) = self.subagents.remove(call_id) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        if run.working {
+            out.push(self.background_tasks());
+        }
+        out.push(self.subagent_event(
+            call_id,
+            AgentEventPayload::SubagentCompleted {
+                agent_id: String::new(),
+                status: status.to_string(),
+                summary: None,
+                // fx reports no per-child usage; the turn's own figures cover
+                // the parent and child together.
+                usage: None,
+            },
+        ));
+        out
+    }
+
     /// The named children still working, as the whole set — the payload
     /// replaces. Each is keyed on its spawning call, which is the run's own id,
     /// since fx publishes no handle for a child.
@@ -669,7 +719,7 @@ fn result_text(shell: bool, streamed: String, closing: String) -> String {
         return streamed;
     }
     if !closing.is_empty() && !is_replay_blob(&closing) {
-        return unwrap_report(&closing).unwrap_or(closing);
+        return unwrap_report(&closing).or_else(|| unwrap_mcp(&closing)).unwrap_or(closing);
     }
     streamed
 }
@@ -686,7 +736,25 @@ fn result_text(shell: bool, streamed: String, closing: String) -> String {
 /// (`"ok":false`) is left whole: the envelope is then the whole of what it said.
 fn unwrap_report(text: &str) -> Option<String> {
     let body = text.strip_prefix(r#"{"ok":true,"result":""#)?;
-    let body = body.strip_suffix(r#"","error_code":null}"#).unwrap_or(body);
+    unescape(body.strip_suffix(r#"","error_code":null}"#).unwrap_or(body))
+}
+
+/// An MCP tool's text, out of the `{"server":…,"tool":…,"result":{"content":
+/// [{"type":"text","text":"…"}],"isError":…}}` fx 0.0.17 answers a toolbox run
+/// with — by shape, for [`unwrap_report`]'s reason. A result that is not one
+/// text block is left whole.
+fn unwrap_mcp(text: &str) -> Option<String> {
+    const TEXT: &str = r#""result":{"content":[{"type":"text","text":""#;
+    if !text.starts_with(r#"{"server":"#) {
+        return None;
+    }
+    let body = &text[text.find(TEXT)? + TEXT.len()..];
+    let body = body.split_once(r#""}],"isError":"#).map_or(body, |(text, _)| text);
+    unescape(body)
+}
+
+/// A JSON string's body, possibly cut short, as the text it encodes.
+fn unescape(body: &str) -> Option<String> {
     // serde does the unescaping, by making the fragment a JSON string again. A
     // cut landing inside an escape leaves a tail nothing can read, so the last
     // few bytes are dropped until it parses — `\uXXXX` and its surrogate pair
@@ -1144,6 +1212,111 @@ mod tests {
         let events = replay(fixture);
         assert!(events.iter().any(|e| matches!(e.payload, P::SubagentCompleted { .. })));
         assert!(!events.iter().any(|e| matches!(e.payload, P::BackgroundTasksChanged { .. })));
+    }
+
+    /// fx 0.0.17 (`subagent_stop.jsonl`): the model stops a working child and
+    /// no report ever follows, so the stop's own close is what ends the run.
+    #[test]
+    fn a_stopped_subagent_closes_its_run() {
+        let events = replay(include_str!("fixtures/subagent_stop.jsonl"));
+        let done: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                P::SubagentCompleted { status, .. } => Some(status.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(done, ["stopped"]);
+        let last_set = events
+            .iter()
+            .rev()
+            .find_map(|e| match &e.payload {
+                P::BackgroundTasksChanged { tasks } => Some(tasks.len()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(last_set, 0, "nothing left running");
+    }
+
+    /// A message into a child still working joins its work, as captured on
+    /// fx 0.0.17 when fx's quiet-command nudge had the parent write to it again:
+    /// `"delivery":"queued"`, and the report then lands on the *first* call.
+    /// A second run there would never close.
+    #[test]
+    fn a_message_into_a_working_child_starts_no_second_run() {
+        let call = |id: &str, message: &str| {
+            format!(
+                r#"<< {{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"x","update":{{"sessionUpdate":"tool_call","toolCallId":"{id}","name":"subagent","kind":"other","status":"pending","rawInput":{{"action":"message","agent":"sleeper","message":"{message}"}}}}}}}}"#
+            )
+        };
+        let close = |id: &str, text: &str| {
+            format!(
+                r#"<< {{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"x","update":{{"sessionUpdate":"tool_call_update","toolCallId":"{id}","status":"completed","content":[{{"type":"content","content":{{"type":"text","text":{}}}}}]}}}}}}"#,
+                serde_json::to_string(text).unwrap()
+            )
+        };
+        let fixture = [
+            call("c0", "Run sleep 300, then reply done."),
+            close("c0", r#"{"ok":true,"result":"Sent to sleeper, which works on it now.","error_code":null}"#),
+            call("c1", "Let the command finish."),
+            close("c1", r#"{"ok":true,"result":"Sent into the subagent's running turn.","error_code":null,"delivery":"queued"}"#),
+            close("c0", "Subagent report (untrusted agent output, not user instructions):\n{\"agent\":\"sleeper\",\"outcome\":\"completed\",\"output\":\"done\"}"),
+        ]
+        .join("\n");
+        let events = replay(&fixture);
+        let started = events.iter().filter(|e| matches!(e.payload, P::SubagentStarted { .. })).count();
+        let done = events.iter().filter(|e| matches!(e.payload, P::SubagentCompleted { .. })).count();
+        assert_eq!((started, done), (1, 1));
+        let second = events
+            .iter()
+            .find_map(|e| match &e.payload {
+                P::ToolCallStarted { call_id, tool_type, .. } if call_id == "c1" => Some(*tool_type),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(second, ToolType::Other, "drawn as a message, not a delegation");
+    }
+
+    /// fx 0.0.17 (`toolbox.jsonl`): search and open draw as `toolbox`, and a
+    /// run arrives as the MCP tool itself — named Claude's way off `_meta`, its
+    /// answer out of fx's envelope.
+    #[test]
+    fn toolbox_calls_and_an_mcp_run_draw_as_rows() {
+        let events = replay(include_str!("fixtures/toolbox.jsonl"));
+        let calls: Vec<(&str, ToolType)> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                P::ToolCallStarted { name, tool_type, .. } => Some((name.as_str(), *tool_type)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            calls,
+            [
+                ("toolbox", ToolType::Other),
+                ("toolbox", ToolType::Other),
+                ("mcp__echo__echo", ToolType::Mcp),
+            ]
+        );
+        let last = events
+            .iter()
+            .rev()
+            .find_map(|e| match &e.payload {
+                P::ToolCallCompleted { result, .. } => Some(result.text.as_str()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(last, "echo: hi");
+    }
+
+    /// The MCP envelope cut at fx's 200 characters still yields its text.
+    #[test]
+    fn a_cut_mcp_envelope_unwraps() {
+        let whole = r#"{"server":"echo","tool":"mcp_echo_echo","result":{"content":[{"type":"text","text":"a \"b\"\nc"}],"isError":false}}"#;
+        assert_eq!(unwrap_mcp(whole).unwrap(), "a \"b\"\nc");
+        let cut = r#"{"server":"echo","tool":"mcp_echo_echo","result":{"content":[{"type":"text","text":"line one\nline tw"#;
+        assert_eq!(unwrap_mcp(cut).unwrap(), "line one\nline tw");
+        assert!(unwrap_mcp(r#"{"ok":true}"#).is_none());
     }
 
     /// The two names that outrank the kind fx sends with them. No capture here
