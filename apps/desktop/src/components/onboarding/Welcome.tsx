@@ -1,16 +1,15 @@
 import { type CSSProperties, useEffect, useRef } from "react";
 
-import { GateTiles } from "@/components/SignInGate";
-
 import { useWelcomeSound } from "./state";
 import { playWelcomeSound } from "./welcomeSounds";
 import "./onboarding.css";
 
-/// When, in ms, each beat of the welcome lands.
-const SHINE_AT = 600;
-const LOGO_OUT_AT = 1900;
-const TEXT_AT = 2400;
-const NEXT_AT = 4600;
+/// When, in ms, each beat of the welcome lands. The wordmark sits a while
+/// before and after its light, so it reads as a name and not a flash.
+const SHINE_AT = 1600;
+const LOGO_OUT_AT = 4400;
+const TEXT_AT = 5000;
+const NEXT_AT = 7400;
 
 /// The Dray wordmark, mark and letters, as apps/web's `Wordmark` draws it.
 const WORDMARK = [
@@ -55,27 +54,22 @@ export default function Welcome({ onNext }: { onNext: () => void }) {
   }, []);
 
   return (
-    <>
-      <div className="ob-rise pointer-events-none absolute inset-x-0 bottom-0 h-[300px]" style={delay(TEXT_AT)}>
-        <GateTiles />
-      </div>
-      <main className="relative grid flex-1 place-items-center pb-24">
-        <div className="ob-out col-start-1 row-start-1" style={delay(LOGO_OUT_AT)}>
-          <div className="ob-fade" style={delay(100)}>
-            <div className="relative h-8 w-[155px] overflow-hidden" style={MASK}>
-              <div className="absolute inset-0 bg-white/55" />
-              <div className="ob-shine absolute inset-y-0 -left-full w-[300%]" style={delay(SHINE_AT)} />
-            </div>
+    <main className="relative grid flex-1 place-items-center pb-24">
+      <div className="ob-out col-start-1 row-start-1" style={delay(LOGO_OUT_AT)}>
+        <div className="ob-fade" style={delay(100)}>
+          <div className="relative h-8 w-[155px] overflow-hidden" style={MASK}>
+            <div className="absolute inset-0 bg-white/55" />
+            <div className="ob-shine absolute inset-y-0 -left-full w-[300%]" style={delay(SHINE_AT)} />
           </div>
         </div>
-        <h1
-          className="ob-in col-start-1 row-start-1 text-[44px] leading-[52px] font-light tracking-[-0.03em] text-white"
-          style={delay(TEXT_AT)}
-        >
-          Welcome to Dray
-        </h1>
-      </main>
-    </>
+      </div>
+      <h1
+        className="ob-in col-start-1 row-start-1 text-[44px] leading-[52px] font-light tracking-[-0.03em] text-white"
+        style={delay(TEXT_AT)}
+      >
+        Welcome to Dray
+      </h1>
+    </main>
   );
 }
 

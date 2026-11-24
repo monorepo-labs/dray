@@ -30,17 +30,6 @@
   }
 }
 
-/* The tiles along the bottom rise into place. */
-.ob-rise {
-  animation: ob-rise 1.1s cubic-bezier(0.23, 1, 0.32, 1) both;
-}
-@keyframes ob-rise {
-  from {
-    opacity: 0;
-    transform: translateY(80px);
-  }
-}
-
 /* A band of light sweeps across the wordmark, inside its mask. */
 .ob-shine {
   background: linear-gradient(105deg, transparent 38%, rgb(255 255 255) 50%, transparent 62%);
@@ -59,7 +48,6 @@
   .ob-in,
   .ob-fade,
   .ob-out,
-  .ob-rise,
   .ob-shine {
     animation: none;
   }
