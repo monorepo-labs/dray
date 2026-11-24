@@ -41,12 +41,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.yogesh.dray.model.PrDetail
 import com.yogesh.dray.model.PrReviewer
 import com.yogesh.dray.model.PrUnavailable
@@ -244,7 +246,7 @@ private fun Header(pr: PullRequest, detail: PrDetail?, branch: String) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Dray.Space.s), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             StatePill(pr)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Avatar(detail?.authorAvatar, 20)
+                Avatar(detail?.authorAvatar, 20, pr.author)
                 Text(pr.author, style = Dray.Font.subhead.copy(color = Dray.secondary), maxLines = 1)
             }
         }
@@ -309,10 +311,21 @@ fun LabelChip(name: String, hex: String) {
     }
 }
 
+/**
+ * A person's round GitHub or tracker picture, their initial under it until it loads and where it
+ * never does. The picture stays invisible until loaded, since RemoteImage's own placeholder and
+ * failure icon would cover the initial.
+ */
 @Composable
-fun Avatar(url: String?, size: Int) {
-    Box(Modifier.size(size.dp).clip(CircleShape).background(Dray.tile)) {
-        url?.let { RemoteImage(ImageRef(url = it), Modifier.size(size.dp), contentScale = ContentScale.Crop) }
+fun Avatar(url: String?, size: Int, name: String = "") {
+    var loaded by remember(url) { mutableStateOf(false) }
+    Box(Modifier.size(size.dp).clip(CircleShape).background(Dray.tile), contentAlignment = Alignment.Center) {
+        if (!loaded) name.firstOrNull { it.isLetterOrDigit() }?.let {
+            Text(it.uppercase(), style = Dray.Font.footnoteStrong.copy(color = Dray.secondary, fontSize = (size * 0.5f).sp, lineHeight = (size * 0.5f).sp))
+        }
+        url?.let {
+            RemoteImage(ImageRef(url = it), Modifier.size(size.dp).alpha(if (loaded) 1f else 0f), contentScale = ContentScale.Crop, onLoaded = { loaded = true })
+        }
     }
 }
 
@@ -326,7 +339,7 @@ private fun Reviewers(reviewers: List<PrReviewer>) {
                 Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Dray.Space.m),
             ) {
-                Avatar(r.avatar, 22)
+                Avatar(r.avatar, 22, r.name)
                 Text(r.name, Modifier.weight(1f), style = Dray.Font.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val (word, tone) = when (r.state) {
                     "approved" -> "Approved" to Dray.add

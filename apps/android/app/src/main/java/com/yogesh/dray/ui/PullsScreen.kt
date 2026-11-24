@@ -304,12 +304,12 @@ private fun PullRowView(row: PullRow, task: SessionKey?, showRepo: Boolean, onCl
                 val foot = Dray.Font.footnote.copy(color = Dray.tertiary)
                 Text("#${row.mark.number}", style = foot, maxLines = 1)
                 if (showRepo) Text(row.repoName.substringAfterLast('/'), style = foot, maxLines = 1)
-                Text(l.author, style = foot, maxLines = 1)
+                Avatar(l.authorAvatar, 16, l.author)
                 if (l.commentCount > 0) Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(12.dp), tint = Dray.tertiary)
                     Text("${l.commentCount}", style = foot, maxLines = 1)
                 }
-                // Its latest task, so a PR nobody has worked on stands out; a bot's wears its face.
+                // Its latest task; a bot's wears its face. A PR with none says nothing.
                 val item = task?.let { store.items[it] }
                 if (item != null) {
                     val bot = store.botOf(task)
@@ -319,8 +319,8 @@ private fun PullRowView(row: PullRow, task: SessionKey?, showRepo: Boolean, onCl
                         bot?.let { "${it.name} · ${item.title}" } ?: item.title, Modifier.weight(1f, fill = false),
                         style = foot.copy(color = if (item.archived == true) Dray.tertiary else Dray.secondary), maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
-                } else {
-                    Text("· ${if (l.isCrossRepository) "Read only" else "No task"}", style = foot.copy(color = Dray.dim), maxLines = 1)
+                } else if (l.isCrossRepository) {
+                    Text("· Read only", style = foot.copy(color = Dray.dim), maxLines = 1)
                 }
             }
         }

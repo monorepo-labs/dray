@@ -193,7 +193,7 @@ fun IssueDetailScreen(server: String, id: String, identifier: String, back: () -
 @Composable
 private fun Person(p: IssuePerson, line: String) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
-        Avatar(p.avatar, 18)
+        Avatar(p.avatar, 18, p.name)
         Text(line, style = Dray.Font.subhead.copy(color = Dray.secondary))
     }
 }
@@ -202,7 +202,7 @@ private fun Person(p: IssuePerson, line: String) {
 private fun Comment(c: IssueComment) {
     Column(Modifier.prGroup(14.dp), verticalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Dray.Space.s)) {
-            Avatar(c.author.avatar, 20)
+            Avatar(c.author.avatar, 20, c.author.name)
             Text(c.author.name, Modifier.weight(1f), style = Dray.Font.subhead, maxLines = 1, overflow = TextOverflow.Ellipsis)
             parseDate(c.createdAt)?.let { Text(shortAge(it), style = Dray.Font.subhead.copy(color = Dray.tertiary)) }
         }
