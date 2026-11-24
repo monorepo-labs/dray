@@ -66,13 +66,12 @@ phone reads and drives it over the same WebSocket the desktop uses
   a **New task** button instead: the same dock fills the main pane, which
   shows it whenever no session is open. A sidebar laid over the pane shuts;
   one beside it stays, as a row tap does.
-- **A lone bot opens itself** (#1169): a cold launch where one bot is all
-  the list would draw — no other bot and no session shown —
-  opens its chat at once. It decides off the cached list, so the list never
-  shows first; a server with no cache waits on its index and its bots both,
-  and until both are in its rows stay hidden, or a bot's chat draws as a task.
+- **Open bot at launch** (Settings, Off by default): a cold launch opens the
+  picked bot's chat as its first screen, read off the cached list before the
+  first frame, so the list never shows first; Back is the list. A bot with no
+  chat cached waits on its server's index and bots, then opens its own page.
   Coming back from the background, a link, a tap first or ten seconds and the
-  list stays.
+  list stays. Nothing opens by itself with it Off, one bot or not.
 - **Pairing** by paste or by QR, and every server's name, token and removal
   in one Settings screen.
 - **Shared machines** (#847): a paired server that shares its list

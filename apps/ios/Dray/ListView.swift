@@ -31,7 +31,7 @@ struct SessionList: View {
     @Environment(NewTask.self) private var task
     @Binding var selection: SessionKey?
     @Binding var sheet: RootSheet?
-    /// This launch's one chance to open a lone bot's chat; anything the reader does first spends it.
+    /// This launch's one chance to open Settings' launch bot; anything the reader does first spends it.
     /// The root's, so the new task page's dock spends it too.
     @Binding var autoOpen: Bool
     /// The list is a split view's sidebar, beside an open chat, rather than the whole screen.
@@ -42,9 +42,10 @@ struct SessionList: View {
     @State private var mode = ListMode.live
     @State private var drafts: [(server: UUID, draft: DraftItem)] = []
     @State private var shown = Self.pageSize
-    /// A lone bot with no chat, opened on its own page at launch.
+    /// The launch bot with no chat yet, opened on its own page.
     @State private var starting: BotStart?
     @State private var newBot = false
+    @AppStorage(LaunchBot.key) private var launchBot = ""
     /// The pull requests or issues page, opened over the list.
     @State private var listPage: ListPage?
     @Environment(\.scenePhase) private var phase
@@ -354,19 +355,16 @@ struct SessionList: View {
         drafts = all.sorted { ($0.draft.created ?? "") > ($1.draft.created ?? "") }
     }
 
-    /// The bot to open at launch, where it would be the list's only row: one bot across every
-    /// server and no session shown beside it. Nil until every server's list is known, from the
-    /// cache or a read, so one still coming up never counts as empty — and the cache is what
-    /// lets a cold open go straight in without drawing the list first.
+    /// Settings' Open bot at launch, once its bot is on the list: the late path, for a bot with
+    /// no chat cached yet. A cached chat is the root's first screen already (`DrayApp.launch`).
     private var loneBot: BotStart? {
-        guard !store.live.isEmpty,
+        guard !launchBot.isEmpty, !store.live.isEmpty,
               store.live.allSatisfy({ store.known($0.id) }), store.awaitingShares.isEmpty,
-              store.allBots.count == 1, let b = store.allBots.first,
-              store.runs(project: nil).isEmpty else { return nil }
+              let b = LaunchBot.bot(store) else { return nil }
         return BotStart(server: b.server, bot: b.bot)
     }
 
-    /// Opens a lone bot as a tap on its row would, unanimated so the list never shows first.
+    /// Opens the launch bot as a tap on its row would, unanimated.
     private func open(_ b: BotStart?) {
         // A held orb is no tap, and a recording must not be carried off under the reader.
         guard let b, selection == nil, sheet == nil, starting == nil, !newBot, mode == .live,

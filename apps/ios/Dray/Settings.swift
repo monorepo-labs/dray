@@ -19,6 +19,7 @@ struct SettingsView: View {
     @State private var path: [SettingsPage]
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
     @AppStorage(Push.allowKey) private var notify = true
+    @AppStorage(LaunchBot.key) private var launchBot = ""
 
     init(focus: UUID?) { _path = State(initialValue: focus.map { [.server($0)] } ?? []) }
 
@@ -36,6 +37,10 @@ struct SettingsView: View {
                         RowDivider(inset: 48)
                         NavigationLink(value: SettingsPage.notifications) {
                             SettingsRow("Notifications", icon: "bell", value: notify ? "On" : "Off")
+                        }
+                        if !store.allBots.isEmpty || !launchBot.isEmpty {
+                            RowDivider(inset: 48)
+                            launchBotRow
                         }
                     }
                     .buttonStyle(RowButtonStyle())
@@ -75,6 +80,23 @@ struct SettingsView: View {
                 }
             }
             .task { await Releases.shared.refresh() }
+        }
+    }
+
+    /// Off, or the bot whose chat a launch opens; Back is the list as ever.
+    private var launchBotRow: some View {
+        let bots = store.allBots
+        let picked = bots.first { LaunchBot.id($0.server, $0.bot) == launchBot }
+        return Menu {
+            Picker("Open bot at launch", selection: $launchBot) {
+                Text("Off").tag("")
+                ForEach(bots, id: \.bot.id) { b in
+                    Text(store.live.count > 1 ? "\(b.bot.name) · \(store.name(of: b.server))" : b.bot.name)
+                        .tag(LaunchBot.id(b.server, b.bot))
+                }
+            }
+        } label: {
+            SettingsRow("Open bot at launch", icon: "bubble.left", value: picked?.bot.name ?? "Off", trailing: "chevron.up.chevron.down")
         }
     }
 
@@ -896,6 +918,19 @@ private struct KindSwitch: View {
 
     var body: some View {
         switchRow(label, Binding(get: { on }, set: { on = $0; Push.shared.kindsChanged() }))
+    }
+}
+
+/// Settings' Open bot at launch: the bot whose chat a launch opens, empty for off.
+enum LaunchBot {
+    static let key = "launch.bot"
+    /// What the pick is kept as: a bot's id on its own server.
+    static func id(_ server: UUID, _ bot: Bot) -> String { "\(server.uuidString)/\(bot.id)" }
+
+    /// The picked bot, from the list as it stands: the cache on a cold launch, before any server answers.
+    @MainActor static func bot(_ store: Store) -> (server: UUID, bot: Bot)? {
+        let pick = UserDefaults.standard.string(forKey: key) ?? ""
+        return pick.isEmpty ? nil : store.allBots.first { id($0.server, $0.bot) == pick }
     }
 }
 
