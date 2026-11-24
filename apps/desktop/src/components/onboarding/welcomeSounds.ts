@@ -126,7 +126,7 @@ function air(ctx: AudioContext, _out: AudioNode, hall: AudioNode, at: number) {
   });
 }
 
-function voice(ctx: AudioContext, to: AudioNode, hz: number, type: OscillatorType, cents: number, from: number, until: number, level: number) {
+function voice(ctx: BaseAudioContext, to: AudioNode, hz: number, type: OscillatorType, cents: number, from: number, until: number, level: number) {
   const osc = ctx.createOscillator();
   osc.type = type;
   osc.frequency.value = hz;
@@ -138,7 +138,7 @@ function voice(ctx: AudioContext, to: AudioNode, hz: number, type: OscillatorTyp
   osc.stop(until);
 }
 
-function filter(ctx: AudioContext, type: BiquadFilterType, hz: number) {
+function filter(ctx: BaseAudioContext, type: BiquadFilterType, hz: number) {
   const f = ctx.createBiquadFilter();
   f.type = type;
   f.frequency.value = hz;
@@ -182,6 +182,10 @@ const MUSIC_FADE_S = 4;
 /// The first bar is the arpeggio alone, then drums, bass and the hook come in.
 /// It starts low, under the voice, until `lift` brings it up; `stop` fades it
 /// out slowly.
+///
+/// Rendered ahead into buffers and looped by the audio engine itself: notes
+/// paced by a timer stalled whenever the window went to the background, which
+/// throttles timers, and the music stopped and started with every app switch.
 export function startOnboardingMusic(): { lift: () => void; stop: () => void } {
   let ctx: AudioContext;
   try {
@@ -191,11 +195,76 @@ export function startOnboardingMusic(): { lift: () => void; stop: () => void } {
   }
   const master = ctx.createGain();
   master.gain.setValueAtTime(0.0001, ctx.currentTime);
-  master.gain.exponentialRampToValueAtTime(MUSIC_LEVEL * 0.35, ctx.currentTime + 0.6);
-  const comp = ctx.createDynamicsCompressor();
-  comp.threshold.value = -18;
-  comp.ratio.value = 3;
-  master.connect(comp).connect(ctx.destination);
+  master.connect(ctx.destination);
+  let stopped = false;
+  let lifted = false;
+
+  const loopSteps = 64;
+  // The first pass: the intro bar and one whole loop, cut at the loop's end;
+  // the loop that follows carries that last bar's tail at its own start.
+  void Promise.all([renderSteps(0, 16 + loopSteps, 0), renderLoop(loopSteps)])
+    .then(([first, loop]) => {
+      if (stopped) return;
+      const at = ctx.currentTime + 0.05;
+      master.gain.setValueAtTime(0.0001, at);
+      master.gain.exponentialRampToValueAtTime(lifted ? MUSIC_LEVEL : MUSIC_LEVEL * 0.35, at + 0.6);
+      const head = ctx.createBufferSource();
+      head.buffer = first;
+      head.connect(master);
+      head.start(at);
+      const rest = ctx.createBufferSource();
+      rest.buffer = loop;
+      rest.loop = true;
+      rest.connect(master);
+      rest.start(at + first.duration);
+    })
+    .catch(() => {});
+
+  const lift = () => {
+    if (stopped) return;
+    lifted = true;
+    const now = ctx.currentTime;
+    master.gain.cancelScheduledValues(now);
+    master.gain.setValueAtTime(master.gain.value, now);
+    master.gain.linearRampToValueAtTime(MUSIC_LEVEL, now + 1.5);
+  };
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    const now = ctx.currentTime;
+    master.gain.cancelScheduledValues(now);
+    master.gain.setValueAtTime(master.gain.value, now);
+    master.gain.linearRampToValueAtTime(0, now + MUSIC_FADE_S);
+    setTimeout(() => void ctx.close(), (MUSIC_FADE_S + 0.3) * 1000);
+  };
+  return { lift, stop };
+}
+
+const RATE = 48000;
+
+/// The loop alone, its tail folded back onto its start so it repeats seamlessly.
+async function renderLoop(steps: number): Promise<AudioBuffer> {
+  const tail = 3;
+  const raw = await renderSteps(16, 16 + steps, tail);
+  const len = Math.round(steps * SIXTEENTH * RATE);
+  const out = new AudioBuffer({ numberOfChannels: 2, length: len, sampleRate: RATE });
+  for (let ch = 0; ch < 2; ch++) {
+    const src = raw.getChannelData(ch);
+    const dst = out.getChannelData(ch);
+    dst.set(src.subarray(0, len));
+    for (let i = len; i < src.length; i++) dst[i - len] += src[i];
+  }
+  return out;
+}
+
+/// Renders steps `from` to `to` (sixteenths, counted from the intro's first),
+/// with `tail` seconds after the last for it to ring out.
+function renderSteps(from: number, to: number, tail: number): Promise<AudioBuffer> {
+  const ctx = new OfflineAudioContext(2, Math.round(((to - from) * SIXTEENTH + tail) * RATE), RATE);
+  const master = ctx.createDynamicsCompressor();
+  master.threshold.value = -18;
+  master.ratio.value = 3;
+  master.connect(ctx.destination);
   const hall = makeHall(ctx, 2.5);
   const wet = ctx.createGain();
   wet.gain.value = 0.18;
@@ -243,60 +312,25 @@ export function startOnboardingMusic(): { lift: () => void; stop: () => void } {
     hit(t, "highpass", 3000, 0.25, 0.015);
   };
 
-  const play = (n: number, t: number) => {
-    const s = n % 64;
+  for (let n = from; n < to; n++) {
+    const t = (n - from) * SIXTEENTH;
+    const s = (n - 16 + 64) % 64;
     const bar = Math.floor(s / 16);
     const i = s % 16;
     pluck(CHORDS[bar][ARP[i % 8]] * (i >= 8 ? 2 : 1), t, "triangle", 0.07, 0.2, 5000, 0.4);
-    if (n < 16) return;
+    if (n < 16) continue;
     if (i % 4 === 0) kick(t);
     if (i % 4 === 2) hit(t, "highpass", 7000, 0.12, 0.05);
     if (i === 4 || i === 12) hit(t, "bandpass", 1600, 0.35, 0.14);
     if (i % 2 === 0) pluck(ROOTS[bar] * (i % 4 === 2 ? 2 : 1), t, "sawtooth", 0.14, 0.16, 1100);
     const note = i % 2 === 0 ? LEAD[bar][i / 2] : 0;
     if (note) pluck(note, t, "square", 0.045, 0.22, 3200, 0.5);
-  };
-
-  const start = ctx.currentTime + 0.05;
-  let step = 0;
-  const tick = () => {
-    while (start + step * SIXTEENTH < ctx.currentTime + 0.25) {
-      play(step, start + step * SIXTEENTH);
-      step++;
-    }
-  };
-  tick();
-  const timer = setInterval(tick, 60);
-  let stopped = false;
-  const lift = () => {
-    if (stopped) return;
-    const now = ctx.currentTime;
-    master.gain.cancelScheduledValues(now);
-    master.gain.setValueAtTime(master.gain.value, now);
-    master.gain.linearRampToValueAtTime(MUSIC_LEVEL, now + 1.5);
-  };
-  const stop = () => {
-    if (stopped) return;
-    stopped = true;
-    // The loop keeps playing under the fade; stopping it here went silent
-    // within the lookahead, whatever the fade's length.
-    const now = ctx.currentTime;
-    master.gain.cancelScheduledValues(now);
-    master.gain.setValueAtTime(master.gain.value, now);
-    master.gain.linearRampToValueAtTime(0, now + MUSIC_FADE_S);
-    setTimeout(
-      () => {
-        clearInterval(timer);
-        void ctx.close();
-      },
-      (MUSIC_FADE_S + 0.3) * 1000,
-    );
-  };
-  return { lift, stop };
+  }
+  return ctx.startRendering();
 }
 
 /// Decaying noise as an impulse: a large soft room.
-function makeHall(ctx: AudioContext, seconds: number) {
+function makeHall(ctx: BaseAudioContext, seconds: number) {
   const hall = ctx.createConvolver();
   const impulse = ctx.createBuffer(2, ctx.sampleRate * seconds, ctx.sampleRate);
   for (let ch = 0; ch < 2; ch++) {
