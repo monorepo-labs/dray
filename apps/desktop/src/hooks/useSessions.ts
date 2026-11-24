@@ -940,7 +940,10 @@ const handleSendMsg = async (
   }
   const sentAt = Date.now();
 
-  const existing = sessionId ? selected : undefined;
+  // Its row when the transcript is not loaded, as on a machine that is down:
+  // the picked project's path would send it to the wrong server, or past the
+  // resume a stopped sandbox needs.
+  const existing = sessionId ? (selected ?? sessionIndexItems.find((i) => i.sessionId === sessionId)) : undefined;
   // The backend reads the recorded cwd on resume, so this only has to be right
   // for a new session.
   let cwd = switching ? selected.cwd : isNewSession ? projectPath : existing?.cwd ?? projectPath;
