@@ -2109,6 +2109,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             crate::accounts::sign_out_agent(harness, provider).await;
         check_agent_updates() => ok(crate::agent_updates::check_agent_updates().await);
         update_agent(harness: Harness) => crate::agent_updates::update_agent(harness).await;
+        install_agent(harness: Harness) => crate::agent_updates::install_agent(harness).await;
+        recheck_agent(harness: Harness) => ok(crate::agent_updates::recheck_agent(harness).await);
 
         // Projects and settings.
         list_projects() => crate::projects::list_projects().await;
@@ -2218,6 +2220,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         reopen_pr(cwd: String, number: u64) => github::reopen_pr(cwd, number).await;
         mark_pr_ready(cwd: String, number: u64) => github::mark_pr_ready(cwd, number).await;
         recheck_gh() => ok(github::recheck_gh().await);
+        install_gh() => github::install_gh().await;
         merge_access(cwd: String) => ok(github::merge_access(cwd).await);
         get_integrations() => ok(issues::get_integrations().await);
         github_repo(cwd: String) => ok(issues::github_repo(cwd).await);

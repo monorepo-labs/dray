@@ -102,6 +102,7 @@ import StalledTasks from "@/components/chat/StalledTasks";
 import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/MergeCard";
 import { cardRepos } from "@/lib/mergeCard";
 import BotWelcome from "@/components/chat/BotWelcome";
+import { takeDrayBotAsk, useDrayBotAsk } from "@/components/onboarding/state";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import SplitPanes, { cardOrder, SplitFile } from "@/components/SplitPanes";
 import { pruneSplits, removeSplit, useLitGroup, useSplitGroups, useSplitPanes, useSplitWeight } from "@/lib/splitPanes";
@@ -3785,6 +3786,27 @@ function App() {
   // A bot whose empty chat opens on a welcome (Dray Bot) draws as a chat
   // already under way: the welcome in the transcript, the composer below it.
   const welcomeBot = newBot && greetingOf(newBot).length > 0 ? newBot : undefined;
+  // Onboarding (#1421) introduces Dray Bot and ends in its chat.
+  const drayBot = bots.find((b) => b.welcome) ?? bots[0];
+  const onDrayBot =
+    !!drayBot && ((welcomeBot?.id === drayBot.id && !selectedSessionId) || selectedBot?.id === drayBot.id);
+  // Focused once the bot's chat is on screen, which opening it takes a render.
+  const [focusBot, setFocusBot] = useState(false);
+  useEffect(() => {
+    if (!focusBot || !onDrayBot) return;
+    setFocusBot(false);
+    requestAnimationFrame(focusComposer);
+  }, [focusBot, onDrayBot]);
+  // Onboarding's Continue asks for it, often before sign-in, when this app was
+  // not yet mounted to hear it; the ask waits until there is a Dray Bot to open.
+  const drayBotAsked = useDrayBotAsk();
+  useEffect(() => {
+    if (!drayBotAsked || !drayBot) return;
+    takeDrayBotAsk();
+    setSettingsOpen(false);
+    if (!onDrayBot) openBot(drayBot);
+    setFocusBot(true);
+  }, [drayBotAsked, drayBot, onDrayBot, openBot]);
   // In a bot's chat `@` lists the other bots instead of files: those on its
   // own server, the only ones `dray bot send` reaches from there.
   const composerBot = selectedBot ?? newBot;

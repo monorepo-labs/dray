@@ -1,0 +1,65 @@
+/* Onboarding's motion. Every element starts hidden and plays once, on a delay
+   its own `animation-delay` sets, so `both` keeps it hidden until its turn. */
+.ob-in {
+  animation: ob-in 0.7s cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+@keyframes ob-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+    filter: blur(6px);
+  }
+}
+
+.ob-fade {
+  animation: ob-fade 0.6s ease-out both;
+}
+@keyframes ob-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.ob-out {
+  animation: ob-out 0.5s ease-in both;
+}
+@keyframes ob-out {
+  to {
+    opacity: 0;
+    filter: blur(4px);
+  }
+}
+
+/* The wordmark waits dim, and turns white as the light passes. */
+.ob-lit {
+  animation: ob-lit 0.9s ease-out both;
+}
+@keyframes ob-lit {
+  from {
+    opacity: 0.55;
+  }
+}
+
+/* A band of light sweeps across the wordmark, inside its mask. */
+.ob-shine {
+  background: linear-gradient(105deg, transparent 38%, rgb(255 255 255) 50%, transparent 62%);
+  animation: ob-shine 1.2s cubic-bezier(0.45, 0, 0.25, 1) both;
+}
+@keyframes ob-shine {
+  from {
+    transform: translateX(-34%);
+  }
+  to {
+    transform: translateX(34%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ob-in,
+  .ob-fade,
+  .ob-out,
+  .ob-lit,
+  .ob-shine {
+    animation: none;
+  }
+}

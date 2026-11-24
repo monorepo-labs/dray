@@ -115,6 +115,50 @@ pub async fn update_agent_in_terminal(harness: Harness) -> Result<(), String> {
     crate::apps::run_in_terminal(&line, "").await
 }
 
+/// Runs the vendor's installer for an agent that is not on this machine, then
+/// drops the cached miss so it reads as installed at once. `Err` carries the
+/// installer's last line, which names the step that failed.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn install_agent(harness: Harness) -> Result<(), String> {
+    let script = harness.install_command();
+    if script.is_empty() {
+        return Err(format!("Dray can't install {}", harness.label()));
+    }
+    if !binpath::agent_installed(harness).await {
+        let output = tokio::time::timeout(
+            UPDATE_TIMEOUT,
+            Command::new("/bin/sh").args(["-c", script]).stdin(Stdio::null()).kill_on_drop(true).output(),
+        )
+        .await
+        .map_err(|_| format!("{} install took too long", harness.label()))?
+        .map_err(|err| format!("could not install {}: {err}", harness.label()))?;
+        if !output.status.success() {
+            let text = format!("{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            let said = text.lines().map(str::trim).filter(|line| !line.is_empty()).last();
+            return Err(said.map_or_else(|| format!("{} install failed", harness.label()), String::from));
+        }
+    }
+    if recheck_agent(harness).await {
+        Ok(())
+    } else {
+        Err(format!("{} installed, but Dray can't find it", harness.label()))
+    }
+}
+
+/// The installer in Terminal, for when the in-app run failed.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn install_agent_in_terminal(harness: Harness) -> Result<(), String> {
+    crate::apps::run_in_terminal(harness.install_command(), "").await
+}
+
+/// Looks for the agent again rather than answering from the cache, for one the
+/// reader may have just installed in Terminal.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn recheck_agent(harness: Harness) -> bool {
+    binpath::forget_agent(harness).await;
+    binpath::agent_installed(harness).await
+}
+
 fn update_args(harness: Harness) -> &'static [&'static str] {
     match harness {
         Harness::ClaudeCode => &["update"],
