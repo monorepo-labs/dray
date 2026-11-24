@@ -68,8 +68,8 @@ class IssuesModel(private val store: Store, private val cache: Cache) {
         private set
     var loading by mutableStateOf(0)
         private set
-    /** Keys read this launch: a list from the cache still reads once behind what it shows. */
-    private val readNow = mutableSetOf<String>()
+    /** When each list last landed, this launch only: a kept list draws, then reads again once a minute old. */
+    private val readAt = mutableMapOf<String, Long>()
     /** Lists in the order they were read, so the file keeps the latest few. */
     private val order = ArrayDeque<String>()
 
@@ -90,8 +90,6 @@ class IssuesModel(private val store: Store, private val cache: Cache) {
         val snapshot = IssuesCache(kept.mapNotNull { k -> lists[k]?.let { k to it } }.toMap(), integrations.toMap(), filters.toMap(), home)
         store.scope.launch(Dispatchers.IO) { cache.writePage("issues", wireJson.encodeToString(IssuesCache.serializer(), snapshot)) }
     }
-
-    fun read(q: IssueQuery) = q.key in readNow
 
     suspend fun readIntegrations(server: String) {
         try {
@@ -124,13 +122,13 @@ class IssuesModel(private val store: Store, private val cache: Cache) {
 
     /** A failed read keeps what was on screen; the line above it says it is stale. */
     suspend fun list(q: IssueQuery, force: Boolean, withSettled: Boolean) {
-        if (!force && q.key in readNow) return
+        if (!force && System.currentTimeMillis() - (readAt[q.key] ?: 0) < 60_000) return
         loading++
         try {
             val read = decodeList<Issue>(store.call(q.server, "list_issues", jsonOf("query" to q.json(q.github && q.closed), "limit" to 100)))
             lists[q.key] = read
             errors.remove(q.key)
-            readNow += q.key
+            readAt[q.key] = System.currentTimeMillis()
             order.remove(q.key)
             order.addLast(q.key)
             settled.remove(q.key)
@@ -140,7 +138,6 @@ class IssuesModel(private val store: Store, private val cache: Cache) {
             throw e
         } catch (e: Exception) {
             errors[q.key] = IssueUnavailable.from(e)
-            readNow += q.key
         } finally {
             loading--
         }
@@ -153,13 +150,18 @@ class IssuesModel(private val store: Store, private val cache: Cache) {
         }.getOrDefault(emptyList())
     }
 
-    /** Puts an edited issue back where it now belongs in every list holding it: Linear's Done and Cancelled draw from [settled]. */
+    /**
+     * Puts an edited or freshly read issue back where it now belongs in every list holding it:
+     * GitHub's Open and Closed are two lists, Linear's Done and Cancelled draw from [settled].
+     */
     fun edited(next: Issue) {
-        val done = next.tracker == "linear" && next.state.kind in setOf("completed", "canceled")
+        val closed = next.state.kind in setOf("completed", "canceled")
+        val done = next.tracker == "linear" && closed
         for ((k, list) in lists.toMap()) {
             val i = list.indexOfFirst { it.id == next.id }
             if (i < 0) continue
-            lists[k] = if (done) list.filterNot { it.id == next.id } else list.toMutableList().also { it[i] = next }
+            val leaves = done || (next.tracker == "github" && closed != closedList(k))
+            lists[k] = if (leaves) list.filterNot { it.id == next.id } else list.toMutableList().also { it[i] = next }
             settled[k]?.let { s -> settled[k] = if (done) s.filterNot { it.id == next.id } + next else s.filterNot { it.id == next.id } }
         }
         for ((k, list) in settled.toMap()) {
@@ -171,6 +173,11 @@ class IssuesModel(private val store: Store, private val cache: Cache) {
         save()
     }
 
+    /** An issue's own read: a row listed before it moved on its tracker follows it, so the list never shows a closed issue open. */
+    fun refreshed(next: Issue) {
+        if ((lists.values + settled.values).any { l -> l.any { it.id == next.id && it.state.id != next.state.id } }) edited(next)
+    }
+
     /** A row any list holds, by its id: what an issue's page opens on before its own read lands. */
     fun issue(id: String): Issue? = (lists.values + settled.values).firstNotNullOfOrNull { l -> l.firstOrNull { it.id == id } }
 
@@ -179,5 +186,8 @@ class IssuesModel(private val store: Store, private val cache: Cache) {
 
     private companion object {
         const val KEEP = 24
+
+        /** Whether [IssueQuery.key] names GitHub's Closed list: `closed` is its fourth field. */
+        fun closedList(key: String) = key.split('\u0001').getOrNull(3) == "true"
     }
 }

@@ -75,6 +75,7 @@ import com.yogesh.dray.model.matches
 import com.yogesh.dray.model.priorityLabels
 import com.yogesh.dray.model.trackerColor
 import com.yogesh.dray.store.IssueQuery
+import com.yogesh.dray.store.trackerOr
 import com.yogesh.dray.store.trackerServer
 import com.yogesh.dray.wire.bool
 import com.yogesh.dray.wire.decodeOrNull
@@ -127,7 +128,7 @@ fun IssuesScreen(back: () -> Unit, open: (server: String, issue: Issue) -> Unit)
     val scopePick = if (github) picks.githubScope else picks.linearScope
     val live = store.trackerServer
     // Before any server is up, the last one read through stands in, so its answers draw.
-    val server = live ?: model.home
+    val server = store.trackerOr(model.home)
     val integrations = server?.let { model.integrations[it] }
     val connected = integrations?.let { if (github) it.github != null else it.linear != null }
     val q = server?.let { IssueQuery(it, picks.tracker, scopePick, github && closed, picks.repo, team, project, label, issueType, text.trim()) }
