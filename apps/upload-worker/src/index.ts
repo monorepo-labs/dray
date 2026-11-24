@@ -70,11 +70,11 @@ export default {
     const head = reader ? await readHead(reader, HEAD_BYTES) : [];
     const kind = sniff(concat(head));
     if (!kind) {
-      await reader?.cancel().catch(() => {});
+      if (reader) await drain(reader);
       return json({ error: "not_accepted", accepted: ACCEPTED }, 415);
     }
     if (length > kind.maxBytes) {
-      await reader?.cancel().catch(() => {});
+      if (reader) await drain(reader);
       return tooBig(kind.maxBytes);
     }
 
@@ -158,6 +158,16 @@ async function readHead(reader: ReadableStreamDefaultReader<Uint8Array>, want: n
     size += value.length;
   }
   return chunks;
+}
+
+/// Reads the rest of a refused body and drops it, so the answer goes out on a
+/// connection that is still whole. A body cancelled, or merely left, once read
+/// from has workerd close the socket with the upload still arriving: the client
+/// gets a reset instead of the answer. Bounded by the `MAX_BYTES` check.
+async function drain(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
+  try {
+    while (!(await reader.read()).done);
+  } catch {}
 }
 
 function concat(chunks: Uint8Array[]): Uint8Array {

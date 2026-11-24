@@ -1036,8 +1036,14 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Saves on `RunEvent::Exit`, which plugins see before the callback
-        // below ends the process with `_exit`.
-        .plugin(tauri_plugin_window_state::Builder::new().build())
+        // below ends the process with `_exit`. On a Mac `setup` restores the
+        // main window itself, to decide on full screen.
+        .plugin({
+            let state = tauri_plugin_window_state::Builder::new();
+            #[cfg(target_os = "macos")]
+            let state = state.skip_initial_state("main");
+            state.build()
+        })
         .manage(updater::PendingUpdate::default())
         .manage(quit::PendingQuit::default())
         .manage(transcription::TranscriptionState::default())
@@ -1089,6 +1095,29 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.remove_menu();
                 let _ = window.set_decorations(false);
+            }
+            // The window opens in full screen on the very first launch (no
+            // state file yet) and after quitting in full screen. The plugin
+            // saves the full-screen frame as the window's size, so restoring
+            // it left a screen-sized window behind full screen; the configured
+            // size, centred, is what leaving full screen gives instead.
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
+                let full = app.path().app_config_dir().is_ok_and(|dir| {
+                    match std::fs::read(dir.join(app.handle().filename())) {
+                        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+                        Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
+                            .is_ok_and(|v| v["main"]["fullscreen"] == true),
+                    }
+                });
+                if full {
+                    let frame = StateFlags::SIZE | StateFlags::POSITION | StateFlags::FULLSCREEN;
+                    let _ = window.restore_state(StateFlags::all() - frame);
+                    let _ = window.set_fullscreen(true);
+                } else {
+                    let _ = window.restore_state(StateFlags::all());
+                }
             }
             cli::install();
             // Dictations kept past a failure. Pruning on write alone left the
@@ -1270,6 +1299,7 @@ pub fn run() {
             apps::open_login_terminal,
             accounts::run_agent_login,
             agent_updates::update_agent_in_terminal,
+            agent_updates::install_agent_in_terminal,
             transcription::transcription_status,
             transcription::download_transcription_model,
             transcription::cancel_transcription_download,

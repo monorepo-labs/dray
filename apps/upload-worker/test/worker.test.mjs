@@ -256,6 +256,17 @@ describe("the upload Worker", () => {
     assert.equal((await upload(new Uint8Array())).status, 415);
   });
 
+  test("a refusal after the first bytes still answers a client mid-send", async () => {
+    // Refused once its head is read, with megabytes still on the way: the
+    // answer must arrive, not a reset connection.
+    for (let i = 0; i < 3; i++) {
+      const junk = await upload(Buffer.alloc(16 * MB, 1));
+      assert.deepEqual([junk.status, junk.json.error], [415, "not_accepted"]);
+      const image = await upload(Buffer.concat([png(""), Buffer.alloc(24 * MB)]));
+      assert.deepEqual([image.status, image.json.max_bytes], [413, 20 * MB]);
+    }
+  });
+
   test("a 25 MB mp4 streams through whole, past the old 4 MB cap", async () => {
     const body = mp4(25 * MB);
     const { status, json } = await upload(body);

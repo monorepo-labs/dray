@@ -4,6 +4,7 @@ import "streamdown/styles.css";
 import App from "./App";
 import AccountGate from "@/components/AccountGate";
 import CrashScreen from "@/components/CrashScreen";
+import Onboarding from "@/components/onboarding/Onboarding";
 import { trackActiveDay } from "@/lib/analytics";
 import { copyChipText } from "@/lib/chipCopy";
 import { onFocusChange } from "@/lib/focus";
@@ -52,6 +53,8 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       ) : (
         <App />
       )}
+      {/* Over the gate as well as the app: a new reader meets it first. */}
+      <Onboarding />
     </CrashScreen>
   </React.StrictMode>,
 );

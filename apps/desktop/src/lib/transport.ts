@@ -223,6 +223,7 @@ export const APP_COMMANDS = new Set([
   "open_login_terminal",
   "run_agent_login",
   "update_agent_in_terminal",
+  "install_agent_in_terminal",
   "transcription_status",
   "download_transcription_model",
   "cancel_transcription_download",

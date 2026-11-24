@@ -289,9 +289,9 @@ function pts(list: string, fill: string): [number, number, string][] {
   });
 }
 
-// Shared with What's New so the brand's two full-window pages read as one
-// family.
-export { Heading as GateHeading };
+// Shared with What's New and onboarding so the brand's full-window pages read
+// as one family.
+export { Heading as GateHeading, Cards as GateCards };
 
 function Tiles() {
   return (
