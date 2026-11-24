@@ -27,7 +27,7 @@ reads:
   to a line or two. A release with no highlights for an app gets the small
   card there instead, when it carries `notify`.
 
-## 0.34.0 · 2026-11-24 · notify
+## 0.34.1 · 2026-11-24 · notify
 
 ### New
 
