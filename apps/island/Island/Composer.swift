@@ -1192,6 +1192,8 @@ final class Composer {
                 "worktreeName": nil,
                 "baseRef": nil,
                 "isNewSession": true,
+                "device": .string(sendingDevice),
+                "sentAt": sentAt(),
         ]
         do {
             args["attachmentPaths"] = .array(try await landed(files, on: on).map { .string($0) })

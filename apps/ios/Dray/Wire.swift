@@ -1,5 +1,21 @@
 import Foundation
 
+/// The device `send_msg` names to the agent beside the reader's prompt. This file
+/// is compiled into Dray Island too, which is the only macOS build of it.
+#if os(macOS)
+let sendingDevice = "island"
+#else
+let sendingDevice = "iphone"
+#endif
+
+/// This device's wall clock with its UTC offset, as `send_msg`'s `sentAt`: a bot
+/// is told the reader's own time, not its server's.
+func sentAt() -> JSON {
+    let format = ISO8601DateFormatter()
+    format.timeZone = .current
+    return .string(format.string(from: Date()))
+}
+
 /// Any JSON value. Tool inputs are free-form, and call arguments go out as these.
 enum JSON: Codable, Hashable {
     case null, bool(Bool), number(Double), string(String), array([JSON]), object([String: JSON])

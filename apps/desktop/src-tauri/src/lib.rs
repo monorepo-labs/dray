@@ -234,6 +234,11 @@ async fn send_msg(
     // composer. `None` for everything else the composer sends.
     base_ref: Option<&str>,
     is_new_session: bool,
+    // Where the reader typed it, handed to the agent beside the prompt. Absent
+    // from a client older than the tag, and from a button's prompt.
+    device: Option<session::Device>,
+    // The client's clock with its offset, told to a bot alone.
+    sent_at: Option<String>,
     sink: Sink,
 ) -> Result<SendOutcome, Fail> {
     // The tolerant `Deserialize` reads a name this build doesn't know as
@@ -266,6 +271,21 @@ async fn send_msg(
         _ => None,
     };
 
+    // A bot's chat runs in its folder, its tasks elsewhere: only the chat is
+    // told the time, a bot being the one that keeps track of the reader's day.
+    let origin = match device {
+        Some(device) => {
+            let dir = match is_new_session {
+                true => None,
+                false => store::get_session_index_item(session_id).await.ok().flatten().map(|i| i.cwd),
+            };
+            let in_chat = bots::bot_at(dir.as_deref().unwrap_or(cwd)).await.is_some();
+            let sent_at = sent_at.as_deref().filter(|_| in_chat);
+            Some(session::Origin::new(device, sent_at, chrono::Local::now().date_naive()))
+        }
+        None => None,
+    };
+
     let outcome = manager()
         .send_msg(
             session_id,
@@ -293,6 +313,7 @@ async fn send_msg(
             false,
             None,
             None,
+            origin,
             None,
             &sink,
         )
@@ -385,6 +406,7 @@ async fn start_pr_session(
             true,
             parent.as_deref(),
             parent.is_some(),
+            None,
             None,
             None,
             None,

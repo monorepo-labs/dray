@@ -17,6 +17,7 @@ import com.yogesh.dray.wire.decodeList
 import com.yogesh.dray.wire.decodeOrNull
 import com.yogesh.dray.wire.get
 import com.yogesh.dray.wire.jsonOf
+import com.yogesh.dray.wire.sentFrom
 import com.yogesh.dray.wire.wireJson
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -294,6 +295,7 @@ class NewTask(private val store: Store, context: Context) {
                 // A draft's `--base`, resolved by the server as `dray session new --base` does.
                 "baseRef" to (if (worktree && bot == null) draftBase else null),
                 "isNewSession" to true,
+                *sentFrom(),
             ))
             decodeOrNull<SessionItem>(reply["snapshot"])?.let { store.created(server, it) }
             bot = null

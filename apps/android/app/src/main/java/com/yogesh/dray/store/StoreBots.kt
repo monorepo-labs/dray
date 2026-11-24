@@ -25,6 +25,7 @@ import com.yogesh.dray.wire.decodeOrNull
 import com.yogesh.dray.wire.get
 import com.yogesh.dray.wire.int
 import com.yogesh.dray.wire.jsonOf
+import com.yogesh.dray.wire.sentFrom
 import com.yogesh.dray.wire.parseDate
 import com.yogesh.dray.wire.str
 import kotlinx.coroutines.launch
@@ -200,7 +201,7 @@ suspend fun Store.botSend(
                 "harness" to harness, "model" to (model ?: Picks.defaultModel[harness] ?: ""), "effort" to effort,
                 "permissionMode" to Picks.stanceFor(harness, stance ?: fresh.permissionMode), "fast" to (fast ?: false),
                 "cwd" to fresh.cwd, "branch" to null, "useWorktree" to false, "worktreeName" to null, "baseRef" to null,
-                "isNewSession" to true,
+                "isNewSession" to true, *sentFrom(),
             ),
         )
         decodeOrNull<SessionItem>(reply["snapshot"])?.let { created(key.server, it) }

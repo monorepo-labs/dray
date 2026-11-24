@@ -238,6 +238,8 @@ final class NewTask {
                 // The server resolves it as `dray session new --base` does.
                 "baseRef": JSON(worktree && bot == nil ? worktreeBase : nil),
                 "isNewSession": true,
+                "device": .string(sendingDevice),
+                "sentAt": sentAt(),
             ])
             if let item = outcome.snapshot { store.created(server, item) }
             bot = nil

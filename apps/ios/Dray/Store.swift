@@ -1255,6 +1255,8 @@ final class Store {
                 "worktreeName": nil,
                 "baseRef": nil,
                 "isNewSession": .bool(isNew),
+                "device": .string(sendingDevice),
+                "sentAt": sentAt(),
             ]) { $1 })
             if let snapshot = outcome.snapshot { created(key.server, snapshot) }
             // The send wrote its picks to the index and announced nothing, and the dock falls back to

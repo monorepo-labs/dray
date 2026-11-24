@@ -51,6 +51,7 @@ import com.yogesh.dray.wire.SessionItem
 import com.yogesh.dray.wire.decodeOrNull
 import com.yogesh.dray.wire.get
 import com.yogesh.dray.wire.jsonOf
+import com.yogesh.dray.wire.sentFrom
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -102,6 +103,7 @@ fun BotStartScreen(server: String, bot: Bot, back: () -> Unit, started: (Session
                     "harness" to harness, "model" to (model?.id ?: ""), "effort" to model?.let { m: Model -> Picks.usableEffort(m, null) },
                     "permissionMode" to Picks.stanceFor(harness, "auto"), "fast" to false, "cwd" to bot.path,
                     "branch" to null, "useWorktree" to false, "worktreeName" to null, "baseRef" to null, "isNewSession" to true,
+                    *sentFrom(),
                 ))
                 decodeOrNull<SessionItem>(reply["snapshot"])?.let { store.created(server, it) }
                 store.drafts.remove(draft)
