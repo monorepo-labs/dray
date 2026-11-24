@@ -1,6 +1,9 @@
 package com.yogesh.dray.ui
 
 import android.content.Context
+import androidx.activity.compose.BackHandler
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,7 +27,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.outlined.FilterList
@@ -101,6 +103,7 @@ fun PullsScreen(back: () -> Unit, open: (PullRow) -> Unit) {
     val context = LocalContext.current
     val picks = remember { PullsPrefs(context) }
     var query by rememberSaveable { mutableStateOf("") }
+    var searching by rememberSaveable { mutableStateOf(false) }
     var filtering by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -148,11 +151,13 @@ fun PullsScreen(back: () -> Unit, open: (PullRow) -> Unit) {
             if (model.loading > 0 && rows.isNotEmpty()) {
                 CircularProgressIndicator(Modifier.padding(end = 8.dp).size(16.dp), color = Dray.tertiary, strokeWidth = 2.dp)
             }
+            SearchButton(searching) { searching = true }
             val any = picks.space.isNotEmpty() || picks.owner != null || repoShown != null
             IconButton({ filtering = true }) {
                 Icon(if (any) Icons.Filled.FilterList else Icons.Outlined.FilterList, "Filters", tint = if (any) Dray.text else Dray.secondary)
             }
         }
+        if (searching) SearchField(query, "Search title, number, author, branch", close = { query = ""; searching = false }) { query = it }
         PullToRefreshBox(
             isRefreshing = refreshing,
             onRefresh = { refreshing = true; scope.launch { read(force = true); refreshing = false } },
@@ -169,7 +174,6 @@ fun PullsScreen(back: () -> Unit, open: (PullRow) -> Unit) {
                         }
                     }
                 }
-                item("search") { SearchField(query, "Search title, number, author, branch") { query = it } }
                 for ((i, line) in errors.withIndex()) item("error-$i") {
                     Text(inlineMarkdown(line), Modifier.padding(horizontal = 20.dp, vertical = 4.dp), style = Dray.Font.footnote.copy(color = Dray.destructive))
                 }
@@ -251,9 +255,15 @@ private fun allRows(
 fun tasks(store: Store, row: PullRow): List<SessionKey> =
     sessionsForPr(row, store.items, { s, p -> store.repoOf(s, p) }) { store.serverState[it] == ConnState.Connected }
 
-/** The page's search box: a raised field with its glass, and a clear once there is something to clear. */
+/**
+ * A list page's search box, opened from its bar's search button: focused with the keyboard up as
+ * it appears. Close clears the words and hides it again.
+ */
 @Composable
-fun SearchField(value: String, hint: String, change: (String) -> Unit) {
+fun SearchField(value: String, hint: String, close: () -> Unit, change: (String) -> Unit) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    BackHandler(onBack = close)
     Row(
         Modifier.padding(horizontal = Dray.Space.l, vertical = Dray.Space.xs).fillMaxWidth().height(40.dp)
             .clip(RoundedCornerShape(Dray.Radius.md)).background(Dray.raised).padding(start = 12.dp, end = 4.dp),
@@ -264,15 +274,19 @@ fun SearchField(value: String, hint: String, change: (String) -> Unit) {
         Box(Modifier.weight(1f)) {
             if (value.isEmpty()) Text(hint, style = Dray.Font.subhead.copy(color = Dray.tertiary), maxLines = 1, overflow = TextOverflow.Ellipsis)
             BasicTextField(
-                value, change, Modifier.fillMaxWidth(), singleLine = true,
+                value, change, Modifier.fillMaxWidth().focusRequester(focus), singleLine = true,
                 textStyle = Dray.Font.subhead, cursorBrush = SolidColor(Dray.text),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             )
         }
-        if (value.isNotEmpty()) {
-            Icon(Icons.Filled.Close, "Clear search", Modifier.size(32.dp).clip(CircleShape).clickable { change("") }.padding(7.dp), tint = Dray.secondary)
-        }
+        Icon(Icons.Filled.Close, "Close search", Modifier.size(32.dp).clip(CircleShape).clickable(onClick = close).padding(7.dp), tint = Dray.secondary)
     }
+}
+
+/** The bar's search button: lit while the box is open or holds words. */
+@Composable
+fun SearchButton(on: Boolean, open: () -> Unit) {
+    IconButton(open) { Icon(Icons.Outlined.Search, "Search", tint = if (on) Dray.text else Dray.secondary) }
 }
 
 @Composable
@@ -304,10 +318,6 @@ private fun PullRowView(row: PullRow, task: SessionKey?, showRepo: Boolean, onCl
                 val foot = Dray.Font.footnote.copy(color = Dray.tertiary)
                 Text("#${row.mark.number}", style = foot, maxLines = 1)
                 if (showRepo) Text(row.repoName.substringAfterLast('/'), style = foot, maxLines = 1)
-                if (l.commentCount > 0) Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(12.dp), tint = Dray.tertiary)
-                    Text("${l.commentCount}", style = foot, maxLines = 1)
-                }
                 // Its latest task; a bot's wears its face. A PR with none says nothing.
                 val item = task?.let { store.items[it] }
                 if (item != null) {

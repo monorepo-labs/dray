@@ -117,6 +117,7 @@ fun IssuesScreen(back: () -> Unit, open: (server: String, issue: Issue) -> Unit)
     var label by rememberSaveable { mutableStateOf<String?>(null) }
     var issueType by rememberSaveable { mutableStateOf<String?>(null) }
     var text by rememberSaveable { mutableStateOf("") }
+    var searching by rememberSaveable { mutableStateOf(false) }
     var settledOpen by rememberSaveable { mutableStateOf(false) }
     var filtering by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
@@ -150,6 +151,7 @@ fun IssuesScreen(back: () -> Unit, open: (server: String, issue: Issue) -> Unit)
             if (model.loading > 0 && list != null) {
                 CircularProgressIndicator(Modifier.padding(end = 8.dp).size(16.dp), color = Dray.tertiary, strokeWidth = 2.dp)
             }
+            if (connected == true) SearchButton(searching) { searching = true }
             if (connected == true && filters != null) {
                 val any = if (github) picks.repo.isNotEmpty() && (label != null || issueType != null) else team != null || project != null
                 IconButton({ filtering = true }) {
@@ -157,6 +159,7 @@ fun IssuesScreen(back: () -> Unit, open: (server: String, issue: Issue) -> Unit)
                 }
             }
         }
+        if (searching) SearchField(text, "Search issues", close = { text = ""; searching = false }) { text = it }
         Segmented(listOf("github" to "GitHub", "linear" to "Linear"), picks.tracker) { picks.tracker = it; picks.save() }
         PullToRefreshBox(
             isRefreshing = refreshing,
@@ -203,7 +206,6 @@ fun IssuesScreen(back: () -> Unit, open: (server: String, issue: Issue) -> Unit)
                                 }
                             }
                         }
-                        item("search") { SearchField(text, "Search issues") { text = it } }
                         content(github, picks, filters, q!!, list, error, text, closed, scopePick, settledOpen,
                             pickRepo = { picks.repo = it; picks.save() },
                             toggleSettled = {
