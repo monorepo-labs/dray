@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { startOnboardingMusic } from "@/components/onboarding/welcomeSounds";
 import DemoThemeBar from "@/demo/ThemeBar";
 import { playCelebration, playDictationSound, playNotification } from "@/lib/sound";
 import { playSwipeTick } from "@/lib/tick";
@@ -60,6 +61,15 @@ const APP: Sound[] = [
     file: "src/assets/dictate-stop.wav",
     play: () => playDictationSound("stop"),
     where: ["The dictated words landed in the composer, not when the microphone closed. Text outcomes only."],
+  },
+  {
+    name: "Onboarding music",
+    file: "src/assets/onboarding-music.mp3",
+    play: () => startOnboardingMusic(0),
+    where: [
+      "Onboarding, from the logo on: silent at first, rising to full volume by 4.9s in. Plays once to its end, past onboarding and sign-in. Play does nothing while it plays.",
+      "The speaker at the top right of the Dray Bot step and the sign-in page mutes it for the rest of the run, and once the song is over plays it again.",
+    ],
   },
   {
     name: "Swipe tick",

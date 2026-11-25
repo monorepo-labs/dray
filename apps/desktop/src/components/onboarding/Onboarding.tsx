@@ -11,7 +11,8 @@ import { cn } from "@/lib/utils";
 import type { Bot } from "@/types/events";
 
 import BotTiles from "./BotTiles";
-import Welcome, { MUSIC_AT } from "./Welcome";
+import MuteButton from "./MuteButton";
+import Welcome, { MUSIC_UP_AT } from "./Welcome";
 import { type AgentSetup, type GithubSetup, type SetupState, useAgentSetup, useGithubSetup } from "./agents";
 import { askToOpenDrayBot, finishOnboarding, useOnboarding } from "./state";
 import { startOnboardingMusic } from "./welcomeSounds";
@@ -41,7 +42,9 @@ export default function Onboarding() {
   );
 }
 
-function Flow({ onStart }: { onStart: () => void }) {
+/// The flow itself, without the once-per-reader check; the onboarding-mute
+/// demo mounts it.
+export function Flow({ onStart }: { onStart: () => void }) {
   const [step, setStep] = useState<"welcome" | "setup" | "bot">("welcome");
   // Read here, not handed down by the app, which is not mounted before sign-in.
   // The first read is what makes Dray Bot.
@@ -53,20 +56,13 @@ function Flow({ onStart }: { onStart: () => void }) {
   }, []);
   const agents = useAgentSetup();
   const github = useGithubSetup();
-  // The music comes in with the welcome line and plays once; leaving before
-  // it ends fades it out.
-  useEffect(() => {
-    let music: ReturnType<typeof startOnboardingMusic> | undefined;
-    const timer = setTimeout(() => (music = startOnboardingMusic()), MUSIC_AT);
-    return () => {
-      clearTimeout(timer);
-      music?.stop();
-    };
-  }, []);
+  // The music starts with the logo and plays to its end, past onboarding.
+  useEffect(() => startOnboardingMusic(MUSIC_UP_AT), []);
   return (
     // Above the sign-in gate (1000), which it comes before.
     <div className="fixed inset-0 z-[1010] flex flex-col overflow-hidden bg-black text-white select-none">
       <header data-tauri-drag-region="deep" className="relative z-10 flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">
+        {step === "bot" && <MuteButton />}
         <WindowControls />
       </header>
       {step === "welcome" && <Welcome onNext={() => setStep("setup")} />}

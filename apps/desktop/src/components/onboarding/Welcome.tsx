@@ -8,10 +8,12 @@ import "./onboarding.css";
 const SHINE_AT = 1600;
 /// The light leaves the wordmark white behind it, about when it is halfway across.
 const LIT_AT = SHINE_AT + 500;
+/// The shimmer peaks just after the light sets off.
+const SHIMMER_AT = SHINE_AT + 300;
+/// The song runs silent under the logo and is up at full volume by this.
+export const MUSIC_UP_AT = 4900;
 const LOGO_OUT_AT = 4600;
 const TEXT_AT = 5200;
-/// The music comes in with the welcome line.
-export const MUSIC_AT = TEXT_AT;
 /// Each word of the welcome rises a beat after the one before it.
 const WORD_STEP = 120;
 const NEXT_AT = 9200;
@@ -47,7 +49,7 @@ export default function Welcome({ onNext }: { onNext: () => void }) {
 
   useEffect(() => {
     // A tick late, so a mount React throws away at once never plays.
-    const play = setTimeout(() => playWelcomeSound(SHINE_AT + 300), 0);
+    const play = setTimeout(() => playWelcomeSound(SHIMMER_AT), 0);
     const advance = setTimeout(() => next.current(), NEXT_AT);
     return () => {
       clearTimeout(play);
