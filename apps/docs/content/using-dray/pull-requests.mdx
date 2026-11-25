@@ -1,0 +1,131 @@
+---
+title: Pull requests
+description: See every open pull request involving you on the Pull requests page, filter and search it, read a PR's details, start a task or send it to a bot from a PR, and check, merge or reopen a session's own PR in its PR tab.
+sidebar:
+  order: 7
+---
+
+Dray shows pull requests in two places. The **Pull requests page** lists every open PR you care about, across repositories, and starts tasks from them. A session's **PR tab** shows the pull request opened from that session's branch, with its checks, comments and a Merge button.
+
+Both read GitHub through the GitHub CLI, `gh`, signed in as you. Without it, each shows the command that fixes it with a button to copy it: `brew install gh` (`dray setup` on a server), or `gh auth login` when `gh` is there but signed out. See [The PR tab asks for the GitHub CLI](/reference/troubleshooting#the-pr-tab-asks-for-the-github-cli).
+
+## Open the page
+
+Click **Pull requests** in the sidebar, under **Issues**, or press `⌘P`. The page fills the main column, as the Issues page does. Shortcuts here can be changed in Settings → Shortcuts.
+
+{/* screenshot: the Pull requests page with the Needs you and Ready to merge sections, one PR open in the details pane */}
+
+## Filter the list
+
+The chips on the left say whose pull requests you see:
+
+| Chip | Lists |
+|---|---|
+| **All** | Every open PR in the projects you added to Dray. |
+| **Involving me** (the default) | Every open PR on GitHub that involves you: one you opened, are assigned to, commented on or were mentioned in. |
+| **Mine** | Every open PR you opened, on any repository. |
+| **Review requested** | Every open PR waiting on your review. |
+
+The menus on the right narrow that further:
+
+- **This space** or **All spaces**: only repositories of the current [space](/using-dray/spaces)'s projects, or every one. Under **All spaces**, **Involving me**, **Mine** and **Review requested** also list repositories you never added to Dray. Repositories your bots' tasks work in always count, whatever space they sit in.
+- **All owners**: one user or organization. It offers you, your organizations, and every owner the list has turned up.
+- **All repositories**: one repository among those on the list.
+
+Your picks are kept across visits and restarts.
+
+## Search
+
+Type in **Search pull requests**, or press `⌘⇧F` to jump to it. It matches the title, the author and the branch name, and a number like `412` or `#412` finds that PR. `Escape` clears it.
+
+## Read the list
+
+The list is grouped by what each PR needs:
+
+1. **Needs you**: failing checks, a merge conflict, a review asked of you, or changes asked on a PR of yours.
+2. **Ready to merge**.
+3. **Checks running**.
+4. **Waiting on review**: everything else that is open.
+5. **Drafts**.
+
+A row shows the PR's state glyph, number and title, then, as room allows: the repository (when the list holds several), **Read only** for a PR from a fork, a spinning circle while checks run, the comment count, the lines added and removed, a chip for its tasks, the author and when it last changed. Merged and closed PRs are not listed.
+
+The task chip shows the newest task's mark: a bot's face for a bot's task, a chat bubble for your own, and a count when there are two or more. Click it to open the task, or with several, the PR's details, which list them all.
+
+- Click a row to open its details beside the list. `⌘E` closes the details, and opens them again on the PR you had open.
+- ⌘-click a row to open the PR on GitHub.
+- Press the circular arrow, or `⌘R`, to read the list again. Open, the page also refreshes by itself.
+
+## The details pane
+
+The pane shows the pull request itself:
+
+- Its state, who opened it and when, how many files it changes, and when it was last updated.
+- The branches: the base it merges into, and the branch it comes from.
+- Its labels, and its reviewers with where each stands: awaiting review, approved, requested changes or commented.
+- Its description.
+- Whether it can merge, with the same buttons as the [PR tab](#the-pr-tab), its checks, and its comments.
+
+Above it, **Task** names the PR's latest task. Click it to open it. **N earlier** lists the PR's other tasks, newest first. Settled tasks stay on the list, marked **Settled**, since they still hold their conversation. A bot's task shows the bot's face and name. A task matches a PR when it ran on the PR's branch in the same repository.
+
+## Start a task from a PR
+
+The box at the bottom of the pane starts a new task on the PR. It works on the PR's own branch, in a new worktree: "New worktree on `branch`, the PR's own branch". You stay on the page; the new task heads the **Task** line.
+
+<Steps>
+  <Step title="Pick comments (optional)">
+    Each comment and review thread has a box. Tick the ones the agent should act on, or click **Select unresolved** in the Comments header to tick every unresolved thread at once. **Clear** unticks them.
+  </Step>
+  <Step title="Say what to do (optional)">
+    Type in **What should the agent do with this pull request?** You can leave it empty: the PR and its picked comments are a task on their own.
+  </Step>
+  <Step title="Pick who does it">
+    The **Bot** / **Task** switch picks between a bot's task and one of your own. With one bot, the switch names it; with several, a menu beside it picks the bot. With no bots there is no switch, and the task is your own. Dray remembers both picks.
+  </Step>
+  <Step title="Start">
+    Press the arrow, or `⌘⏎`.
+  </Step>
+</Steps>
+
+The task's prompt names the PR, quotes each picked comment with its link and replies, and puts your text last. Dray writes nothing to GitHub.
+
+**A bot's task** ("Start task in" the bot) joins that bot's Tasks and runs on the bot's own agent and model, and the bot is told you started it. Only bots on the machine that holds the checkout are offered. A bot you have never written to has no chat yet, so write to it once first. See [Bots](/using-dray/bots).
+
+**Your own task** runs on the agent and model of the PR's latest task, or else those your last new task used. Change them in the model picker on the Task side. The permission mode is always Auto. The machine picker beside it picks where the task runs: a checkout of the repository on any connected machine, or a fresh clone on one that has none.
+
+Where the task runs needs a checkout of the repository:
+
+- A project you attached whose git remote is the repository is used as it is.
+- A checkout another task already uses is attached first. The pane says so: "Attaches *path* first, the checkout a task of this repo already uses."
+- With none, Dray clones the repository into `~/dray` first. The pane shows "Cloning *owner/repo*…" with git's progress until the task starts.
+
+A PR from a fork is **Read only**: "Read only. This branch lives in a fork, so an agent here can't push to it." It has no box.
+
+The page only starts tasks. To follow up on one, open it and write there, or to its bot.
+
+## The PR tab
+
+A session whose branch has a pull request gets a **PR** tab in its right panel. Open the panel with `⌘E`. The tab reads the session's own branch, so a [worktree](/using-dray/worktrees) session's PR is found from its worktree. When a branch has several PRs, each is a row you can fold, open ones first, and the tab shows how many are not merged.
+
+Each PR shows its state glyph, number, title, lines added and removed, and a button to open it on GitHub. Under that:
+
+- **Whether it can merge**, in a word or two: **Ready to merge**, **Checks not passing**, **Checking mergeability…**, **Blocked**, **Behind** *base*, **Conflicts with base**, **Draft**, **Merged** or **Closed without merging**. A line under it says what to do where something is in the way, and "into *base*" names where it lands.
+- **The button for its state**:
+  - An open PR has a green merge button. Its arrow picks **Squash and merge** (the default), **Create a merge commit** or **Rebase and merge**. A click asks you to confirm before it merges. A PR that isn't ready keeps the button, dimmed, so you can still try; the verdict beside it says why GitHub may refuse.
+  - A draft has **Ready for review**.
+  - A closed PR has **Reopen**.
+  - A merged or closed PR whose branch still exists on GitHub has **Delete branch**, which asks to confirm first.
+- **Checks**, with how many are failing, running and passed. Click one to open its log.
+- **Comments**: reviews, comments and inline threads. Each is folded to its first line; click to read it.
+
+The tab shows no description: on your own session it is your own text. The details pane on the Pull requests page shows it.
+
+The tab looks again when a turn ends, so a PR the agent just opened shows up without a refresh. While an open PR is on the tab and Dray is in front, it checks GitHub every 15 seconds while checks run, and every minute otherwise. A pull request turning ready to merge raises a card; see [Notifications](/settings/notifications).
+
+## Limits
+
+- Dray does not comment, reply to reviews, request reviews, approve or close PRs. Do those on GitHub.
+- Only github.com is read. GitHub Enterprise hosts are not supported.
+- When a machine is stopped, Dray reads its repositories' PRs from GitHub through this Mac instead. A project on a stopped machine whose repository Dray can't name is left out, with a line saying the machine is offline.
+- If your local copy of the PR's branch has commits the PR doesn't, starting a task is refused: rename or delete that branch first. The error gives the command.
+- Every `gh` call on your account shares one GitHub budget, the agents' own included. Dray reads a PR's details only when you click it.

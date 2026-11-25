@@ -1,6 +1,6 @@
 ---
 title: Worktrees
-description: Run a session in its own copy of the repository, see where it lives and what it starts from, and delete it when the work is done.
+description: Run a session in its own copy of the repository, start it from any branch, see where it lives and what it starts from, and delete it when the work is done.
 sidebar:
   order: 4
 ---
@@ -14,7 +14,10 @@ A worktree session runs in its own checkout of your repository, on its own branc
     Press `⌘N`, then pick a project in the composer.
   </Step>
   <Step title="Turn on Worktree">
-    Flip the **Worktree** switch in the composer's control row, or press `⌘⇧T`. The branch picker gives way to the base, for example "from origin/main".
+    Flip the **Worktree** switch in the composer's control row, or press `⌘⇧T`. The branch button now names where the worktree starts, for example "from origin/main".
+  </Step>
+  <Step title="Pick a branch (optional)">
+    Click "from origin/main" to start from another branch instead. See [What it starts from](#what-it-starts-from).
   </Step>
   <Step title="Send">
     Dray creates the worktree and the agent starts inside it.
@@ -23,25 +26,38 @@ A worktree session runs in its own checkout of your repository, on its own branc
 
 Worktree is a choice at creation. An existing session cannot move into or out of one.
 
-Sessions an agent starts with the `dray` command line always get a worktree.
+Sessions an agent starts with the `dray` command line get a worktree, unless it passes `--no-worktree`, which runs the session in the folder as it is, repo or not. `--base <branch>` picks the branch, as the composer does. See [Sessions](/cli/sessions#worktree-or-not).
 
 ## Where it lives
 
 | | |
 |---|---|
 | Folder | `<project>/.claude/worktrees/<name>` |
-| Branch | `worktree-<name>` |
+| Branch | `worktree-<name>`, or the branch you picked |
 
 The name is three random words, like `calm-navy-beacon`. Dray never reuses a name a session, a pending fork or an existing branch holds.
 
-The session's Changes, Files and PR tabs all read the worktree, not the project's main checkout.
+The session's Diff, Files, Changes and PR tabs all read the worktree, not the project's main checkout.
 
 ## What it starts from
 
-A new worktree starts from your remote's default branch, `origin/main` or whatever `origin` names as default, not from the branch you have checked out. Uncommitted work and local commits in your main checkout are not in it.
+By default a new worktree starts from your remote's default branch, `origin/main` or whatever `origin` names as default, not from the branch you have checked out. Uncommitted work and local commits in your main checkout are not in it.
 
-- **Claude Code** fetches first, so the base is the latest `origin/main`. If the fetch fails, it starts from your local `HEAD`.
-- **Codex, pi, fx, Grok and OpenCode** start from `origin/main` as your clone last fetched it; Dray does not fetch. A repo with no remote starts from `HEAD`.
+Dray fetches the default branch first, for every agent, so the worktree starts at the remote's newest commit and changes already upstream do not show up as the task's own work. If the fetch fails or takes longer than 20 seconds, the worktree starts from the branch as your clone last fetched it. A repo with no remote starts from the commit you have checked out, `HEAD`.
+
+### Start from another branch
+
+With Worktree on, click the branch button ("from origin/main") on the new-task composer and pick a branch. The list shows your default branch first, marked **latest**, then **Local** branches and those **On remote**. Past eight branches you can filter them.
+
+Picking a branch other than the default puts the worktree on that branch itself, not on a new `worktree-<name>` branch, so the agent's commits land on it:
+
+| The branch is | The worktree |
+|---|---|
+| Only on the remote | Fetched, then a local branch tracking it. |
+| Only local | Used as it is. |
+| On both, local behind | Fetched, and the local branch moved up to the remote. |
+| On both, local ahead | Used as it is, so no local commit is lost. |
+| Checked out in another folder | Starts at that branch's tip, detached, and the agent is told to push with `git push <remote> HEAD:<branch>`. |
 
 ## Delete a worktree
 
@@ -55,6 +71,8 @@ Nothing deletes worktrees on its own, so Dray offers to whenever you are done wi
 - If something is: it names the count, like "3 uncommitted files and 2 commits on no other branch will be deleted…". Buttons: **Keep it** and **Delete anyway**.
 
 **By deleting the session.** Deleting a session from the sidebar takes its worktree with it, with no second question.
+
+**A bot's tasks** lose their worktree without asking. Settling one, or merging its pull request from Dray, deletes its worktree and branch outright, uncommitted files included. See [Bots](/using-dray/bots#merge-and-settle).
 
 "On no other branch" means the commits are not reachable from any other local branch, remote branch or tag. A branch whose pull request was squash-merged still counts as unpushed, so the warning can show when the work is in fact safe.
 
@@ -72,6 +90,6 @@ If you remove a worktree outside Dray, Dray notices at its next launch and point
 
 ## Limits
 
-- From the app, the base is always the remote's default branch. Only `dray` started with a base can begin a worktree from other work (see the CLI docs).
+- The composer starts a worktree from a branch only. To start from another session's work, a tag or a commit, use `dray session new --base`.
 - A deletion that fails while deleting the whole session leaves the folder behind. Remove it with `git worktree remove <path>`.
 - `⌘⇧T` and `⌘⇧D` can be changed in Settings → Shortcuts.

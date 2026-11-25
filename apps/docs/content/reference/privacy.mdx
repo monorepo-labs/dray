@@ -7,13 +7,13 @@ sidebar:
 
 This is Dray's privacy policy. It covers the Dray desktop app, the Dray app for iPhone and iPad, Dray accounts, and drayhq.com with these docs. "We" and "us" here mean Dray.
 
-Last updated: 19 November 2026.
+Last updated: 25 November 2026.
 
 In short:
 
 - Your prompts, code, transcripts and files stay on your own machines.
 - The desktop app sends a few [anonymous usage events](#analytics-in-the-desktop-app). You can [turn them off](#turn-analytics-off).
-- The [iPhone and iPad app](#the-iphone-and-ipad-app) collects nothing.
+- The [iPhone and iPad app](#the-iphone-and-ipad-app) collects nothing. Its alerts pass through drayhq.com on their way to Apple, and are not stored.
 - A [Dray account](#your-dray-account) holds your name, email address and the machines you sign in on.
 - We sell nothing, show no ads and do not track you across other apps or sites.
 
@@ -50,11 +50,13 @@ Then each event adds its own:
 |---|---|---|
 | `app_started` | Each launch | Nothing more. |
 | `active_day` | At most once a day: on launch, when Dray comes to the front, when you send a message, or when you use Dray Island | Nothing more. Messages agents send each other do not count. |
-| `session_started` | You create a session | Agent, model, effort, permission mode, whether fast mode is on, whether it uses a worktree, whether another session started it, and where it runs: `local` or `remote` (below). |
+| `session_started` | You create a session | Agent, model, effort, permission mode, whether fast mode is on, whether it uses a worktree, whether another session started it, whether it is a bot's chat, a bot's task or a routine's run, and where it runs: `local` or `remote` (below). |
+| `bot_created` | You make a bot | The bot's agent and `app`, or `cli` with no agent when an agent made it with `dray bot new`. Never its name. The bot Dray makes for you is not counted. |
+| `routine_added` | A bot adds a routine | Whether it runs `every` so often or `at` set times, and whether it has a check. Never its name or prompt. |
 | `feature_used` | A feature works | Which feature, from a fixed list (below). |
 | `error` | Something breaks | Where it broke, never what it said (below). |
 
-`feature_used` names one of: `dictation` (with the dictation model's id, and where you dictated: `app`, `island` or `phone`), `island_open` (you opened Dray Island), `island_send` (you sent a message from it), `island_card` (you answered a permission or question card from it), `fork`, `pr_merged`, `linear_connected`, `space_created`, `worktree_deleted`, `settle`, `unsettle`, `pin`, `unpin`, `set_aside`, `unset_aside`, `handoff_commit`, `handoff_pr`, `handoff_runServer`, `handoff_custom` (you pressed a button of your own, never its label or prompt), `browser_open` (you opened a page in the browser, with `localhost` or `site` and never the address), `boat_resumed`, `boat_extended` (with how many minutes), `remote_access`, `share`, `server_added` and `server_connected`. The last three add how: `app` or `cli` for a share, `ssh` or `address` for a server. Never the port, the address or the server's name. `server_connected` is sent at most once a day per kind.
+`feature_used` names one of: `dictation` (with the dictation model's id, and where you dictated: `app`, `island` or `phone`), `island_open` (you opened Dray Island), `island_send` (you sent a message from it), `island_card` (you answered a permission or question card from it), `bot_message` (you sent a message in a bot's chat, from the app, Dray Island or your phone; a bot's messages, task reports and routines don't count), `routine_run` (a routine started a run), `fork`, `pr_merged`, `linear_connected`, `space_created`, `worktree_deleted`, `settle`, `unsettle`, `pin`, `unpin`, `set_aside`, `unset_aside`, `handoff_commit`, `handoff_pr`, `handoff_runServer`, `handoff_custom` (you pressed a button of your own, never its label or prompt), `browser_open` (you opened a page in the browser, with `localhost` or `site` and never the address), `boat_resumed`, `boat_extended` (with how many minutes), `github_starred`, `github_star_dismissed` and `github_star_fallback_opened` (how you answered the card asking you to star Dray on GitHub), `remote_access`, `share`, `server_added` and `server_connected`. The last three add how: `app` or `cli` for a share, `ssh` or `address` for a server. Never the port, the address or the server's name. `server_connected` is sent at most once a day per kind.
 
 ## What is never sent
 
@@ -64,6 +66,8 @@ Then each event adds its own:
 - Server names and addresses, ports and links.
 - The text of any error message.
 - Screens or recordings. Session recording and click tracking are off.
+
+None of these go out with analytics. The one place a line of a conversation leaves your machine is an alert to your own iPhone, if you turned alerts on there; see [The iPhone and iPad app](#the-iphone-and-ipad-app).
 
 ## Error reports
 
@@ -84,7 +88,7 @@ Now and then Dray may show a short survey card from PostHog, the analytics servi
 
 A Dray server you install on Linux sends no analytics. The Mac app counts `server_added` and `server_connected` when you add or connect one, as described above.
 
-When you start a session on another machine from the Mac app, the app sends that `session_started`, under your own install id, with `location` set to `remote` and `remote_os` set to `macos`, `linux` or `other`. The server's name, address and hostname are never sent. A Dray app on that other Mac does not count the session a second time. Sessions an agent starts there on its own are counted by that machine, or not at all on Linux.
+When you start a session on another machine from the Mac app, the app sends that `session_started`, under your own install id, with `location` set to `remote` and `remote_os` set to `macos`, `linux` or `other`. The same goes for a bot you make there and a message you send in its chat. The server's name, address and hostname are never sent. A Dray app on that other Mac does not count the session a second time. Sessions an agent starts there on its own, a bot's tasks and routines included, are counted by that machine, or not at all on Linux.
 
 ## The website and these docs
 
@@ -124,9 +128,10 @@ Change your name and username in your account settings on drayhq.com. To delete 
 
 The Dray app for iPhone and iPad collects nothing. It has no analytics, no crash reporting, no ads and no account.
 
-It talks to the Dray servers you add, and to nothing of ours. Your sessions, code and messages travel between the app and your own machines. Each server's address and token stay on your device, the token in the Keychain.
+It talks to the Dray servers you add, and to drayhq.com only for alerts (below). Your sessions, code and messages travel between the app and your own machines. Each server's address and token stay on your device, the token in the Keychain.
 
 - **Dictation.** On iOS 26 and later, your speech can be turned into text on the iPhone itself. Or, when you pick your Mac in Settings › Dictation, the recording goes to the Dray server on your Mac, which turns it into text there. Either way, your voice never reaches us.
+- **Alerts.** With notifications allowed, the app trades your iPhone's Apple push token with drayhq.com for a sealed handle, and gives that handle to your servers. When a task is done, asks permission or a question, or has a pull request ready to merge, your server sends the alert through drayhq.com to Apple. An alert holds the task's title or the bot's name and one line: the first line of the agent's reply, the question, or what it asks permission for. drayhq.com passes it on and does not store or log it. A server sends none while someone used its Mac in the last two minutes. Turn alerts off, or each kind, in the app's Settings › Notifications. See [Notifications](/settings/notifications).
 - **Camera.** Used only to scan a pairing QR code. The picture stays on the device.
 - **Photos.** The app only adds pictures you choose to save. It never reads your library.
 - **Other connections.** The app reads GitHub's public list of Dray releases, to tell you when a server is out of date. A picture in a transcript that points to a web address is loaded from that address. Links open in your browser.
@@ -140,7 +145,8 @@ Besides analytics, Dray connects to the network for:
 - **Your agents.** Each agent CLI talks to its own provider, as it does in a terminal. Dray also asks the session's own agent, on its cheapest model, to write each session's title from your first prompt. For fx, Dray reads Vercel's public model list to know each model's effort levels.
 - **Updates.** Checking for and downloading new versions of the app and the `dray` CLI.
 - **The changelog.** Reading what's new from drayhq.com.
-- **Your Dray account.** Signing in through drayhq.com, and checking now and then that the sign-in still holds.
+- **Your Dray account.** Signing in through drayhq.com, and checking now and then that the sign-in still holds. The sign-in and this machine's link to your org are kept in `~/.dray/account.json` and `~/.dray/org-link.json`.
+- **iPhone alerts,** only while an iPhone has asked this server for them: each alert goes through drayhq.com to Apple, as [above](#the-iphone-and-ipad-app).
 - **Downloads you trigger or need:** the Chromium framework for Dray's browser (from Spotify's CEF build server), dictation models (from Hugging Face).
 - **GitHub and Linear,** when you use pull requests or issues, through `gh` or your Linear key.
 - **OpenTunnel,** only while [Remote access](/reference/remote-access#remote-access) is on or a [public link](/reference/remote-access#share-a-dev-server) is live.
@@ -154,6 +160,7 @@ Dictation runs on your Mac. Your voice never leaves it, except when your iPhone 
 - **Railway** hosts the database that holds Dray accounts.
 - **GitHub** and **Google** sign you in, when you choose them.
 - **Bento** sends sign-in codes by email.
+- **Apple** delivers alerts to your iPhone.
 - **Dodo Payments** takes payments when you sponsor Dray. Your card details go to Dodo, never to us.
 
 We sell no data, show no ads, and share nothing beyond these services.

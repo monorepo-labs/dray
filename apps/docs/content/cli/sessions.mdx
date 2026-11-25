@@ -1,6 +1,6 @@
 ---
 title: Sessions
-description: Start, list and message Dray sessions from the command line, with every flag for model, effort, agent, base branch, issues and fast mode.
+description: Start, list and message Dray sessions from the command line, with every flag for model, effort, agent, base branch, worktree, issues and fast mode, and hand tasks to bots, post merge and issue cards, and react as a bot.
 sidebar:
   order: 2
 ---
@@ -8,6 +8,19 @@ sidebar:
 `dray session` starts and manages the same sessions you see in the sidebar. A session made here is an ordinary session: you can open it, read it, stop it or delete it like any other.
 
 Run from inside a Dray session, every command knows which session is calling. A new session is nested under the caller and inherits its settings. Run from your own terminal, there is no caller, so the app's defaults apply.
+
+| Command | What it does |
+|---|---|
+| [`new`](#start-a-session) | Start a session on a prompt. |
+| [`ls`](#list-sessions) | List sessions. |
+| [`send`](#send-a-message) | Message a session. |
+| [`model`](#switch-a-sessions-model) | Switch a session's model, effort or agent. |
+| [`rename`, `stop`, `settle`, `unsettle`, `set-aside`, `unset-aside`](#rename-stop-settle) | The sidebar's buttons. |
+| [`attach`, `detach`](#attach-and-detach) | Hand a task to a bot, or take it back. |
+| [`merge-card`](#merge-card) | Post a card for a task's pull request. |
+| [`issue-card`](#issue-card) | Post a card of GitHub issues. |
+| [`need`](#need-line) | Say what a bot's task needs from you. |
+| [`react`](#reaction) | React to your newest message, as a bot. |
 
 ## Start a session
 
@@ -21,11 +34,12 @@ Write the prompt for someone who has not read your conversation. The new session
 
 | Flag | What it does | Default |
 |---|---|---|
-| `--project <path>` | The repo to run in. | The git repo you are in, then the calling session's project. |
+| `--project <path>` | The repo to run in. With `--no-worktree`, any folder. | The git repo you are in, then the calling session's project. |
+| `--no-worktree` | Run in the project folder as it is, with no worktree or branch. See [Worktree or not](#worktree-or-not). | Off. |
 | `--model <alias>` | A model the agent knows, like `opus`, `sonnet`, `fable` or `haiku` on Claude Code, or a `provider/model` id on pi. | The calling session's model, if the agent is the same. Otherwise the agent's own default. |
 | `--effort <level>` | `low`, `medium`, `high`, `xhigh`, `max` or `ultra`. | The calling session's effort, if the agent is the same. Otherwise the model's default. |
 | `--harness <name>` | Which agent runs it: `claude_code`, `codex`, `pi`, `fx`, `grok` or `opencode`. | The calling session's agent, else Claude Code. |
-| `--base <session\|ref>` | Start the worktree from existing work: a session id, a branch, a tag or a commit. Committed work only. | `origin/<default branch>` |
+| `--base <session\|ref>` | Start the worktree from existing work: a session id, a branch, a tag or a commit. Committed work only. See [Start from existing work](#start-from-existing-work). | `origin/<default branch>` |
 | `--title <title>` | The session's title. | One generated from the prompt. |
 | `--issue <ID>` | An issue this work is against, like `DRA-53` or `owner/repo#12`. Repeat for several. | None. |
 | `--fast` | Run at the agent's faster tier, which uses more of your plan. | The calling session's setting, if the agent is the same. |
@@ -39,11 +53,42 @@ dray session new --model opus --fast "Rename the config keys listed below …"
 dray session new --issue DRA-53 --title "Add the issue panel" "Build the issue panel described in DRA-53"
 ```
 
-### Always a worktree
+Started from a bot, or from anything a bot started, the new session always runs hidden, whatever `--hidden` says, and reports back after every turn. If other bots have open tasks in the same project, `dray` prints a warning naming them, so the bot can check with them first.
 
-Every session made here gets its own git worktree on its own branch, `worktree-<name>`. There is no flag to turn that off and no flag to pick the name. Sessions started this way run at the same time, and two agents in one checkout overwrite each other.
+### Worktree or not
 
-The worktree starts at `origin/<default branch>`, not at the branch you are on. So a plain new session cannot see unpushed work. Pass `--base` to start it from a session's branch or any ref; see [Orchestration](/cli/orchestration#review-with-a-second-model).
+By default every session made here gets its own git worktree on its own branch, `worktree-<name>`. Sessions started this way run at the same time, and two agents in one checkout overwrite each other. There is no flag to pick the name.
+
+The worktree starts at `origin/<default branch>`, not at the branch you are on. So a plain new session cannot see unpushed work. Pass `--base` to start it from other work.
+
+`--no-worktree` runs the session in the `--project` folder as it is: a repo's own checkout, or a folder that is no repo at all. It is for work that changes no repo's files, like setting up a machine or research. Never use it to edit a repo: the session shares that checkout with you and every other session in it.
+
+```bash
+dray session new --no-worktree --project '~' "Set up Docker on this machine and report the version"
+dray session new --no-worktree --project ~/code/app "Find out why the dev server here fails to start"
+```
+
+`~` quoted is the home folder of the machine that runs the session, which matters with [`--machine`](#on-another-machine). `--no-worktree` cannot go with `--base`. The line printed says `in <folder>, no worktree`.
+
+A folder that is no git repository needs `--no-worktree`. A bot's own folder is never a project, so a bot always names one with `--project`.
+
+### Start from existing work
+
+```bash
+dray session new --base <session-id> "Review the work on this branch and report what you find"
+dray session new --base feature/login "Write tests for the login flow on this branch"
+```
+
+`--base` takes a session id, a branch, a tag or a commit.
+
+- **A session id or a tag or commit** gets a new `worktree-<name>` branch starting there. It never checks out that session's branch, so it cannot commit onto its work. The line printed says what the id resolved to: `based on worktree-brisk-jade`.
+- **A branch** is worked on by its own name, as the new-task composer's branch picker does, so the new session's commits land on it. The line says `on branch feature/login`.
+  - The default branch starts from `origin/<default branch>`, as with no `--base`.
+  - A branch only on the remote is fetched, and a local branch tracking it made.
+  - A branch in both places is fetched first. Behind its remote, it moves up; holding commits the remote lacks, it is used as it is.
+  - A branch already checked out elsewhere, in your own checkout or another session's, gets a tree at its tip with no branch checked out, and the agent is told how to push to it.
+
+Either way, only committed work is there. Changes not yet committed are not in the new worktree. See [Orchestration](/cli/orchestration#review-with-a-second-model) for using this to review.
 
 ### What a new session inherits
 
@@ -65,17 +110,19 @@ A session you start from the composer may create sessions. Those may create sess
 dray session ls
 ```
 
-One line per session: id, status, title, branch. A session created by another one also says `spawned by <id>`, and a hidden one says `hidden`.
+One line per session: id, status, title, branch. A session created by another one also says `spawned by <id>`, a hidden one says `hidden`, and one on another machine says `on <machine>`.
 
 | Flag | What it does |
 |---|---|
 | `--all` | Every project, not just this one. |
 | `--project <path>` | List this repo instead of the one you are in. |
-| `--json` | One JSON array, for scripts. Each entry carries `sessionId`, `title`, `cwd`, `projectPath`, `branch`, `worktreeName`, `status`, `modified`, `parentSessionId` and `hidden`. |
+| `--json` | One JSON array, for scripts. Each entry carries `sessionId`, `title`, `cwd`, `projectPath`, `branch`, `worktreeName`, `status`, `modified`, `parentSessionId` and `hidden`, and `machine` for a session on another machine. |
 
 Status is `idle`, `in_progress` or `completed`. `completed` means the turn finished and nobody has opened the session since. Settled sessions are not listed.
 
-Nothing reports back on its own when a session finishes. To find out, check `dray session ls`, or have the session [message you](#send-a-message).
+`dray --machine <name> session ls` lists another machine's sessions, and `dray session ls --machine all` lists this machine's and every connected machine's together.
+
+A session nobody watches reports back to nobody, unless a bot started it. To find out when one finishes, check `dray session ls`, or have the session [message you](#send-a-message).
 
 ## Send a message
 
@@ -105,7 +152,7 @@ Does what the model picker in the session's composer does. The new model and eff
 | `model <id> --effort <level>` | Changes the effort alone. |
 | `model <id>` | Prints the model and effort the session runs on. |
 
-The alias must be one the session's own agent knows. A session on another machine is found by its id, like `dray session send`.
+An alias the session's own agent does not know, but another installed agent does, moves the session to that agent, like `gpt-6-luna` on a Claude Code session. It keeps its worktree, branch and transcript, and the new agent is handed the conversation so far. A move is refused while a turn runs. See [Switch to another agent](/using-dray/composer#switch-to-another-agent).
 
 ## Rename, stop, settle
 
@@ -123,15 +170,28 @@ dray session unset-aside <id>
 |---|---|
 | `rename <id> <title>` | Renames the session. Your title stays: no generated one replaces it. |
 | `stop <id>` | Stops the running turn, like the Stop button. |
-| `settle <id>` | Stops the session and moves it out of the active list. Its worktree stays. Refused while a turn is running. |
-| `settle <id> --delete-worktree` | Also deletes the worktree and its branch, whatever they hold, uncommitted and unpushed work included. Nothing asks first. |
+| `settle <id>` | Stops the session and moves it out of the active list. Its worktree stays. Refused while a turn is running: stop it first, or wait. |
+| `settle <id> --delete-worktree` | Also deletes the worktree and its branch, whatever they hold, uncommitted and unpushed work included. Nothing asks first. Refused for a session with no worktree of its own. |
 | `unsettle <id>` | Brings a settled session back to the active list. |
 | `set-aside <id>` | Sinks the session to the bottom of the sidebar: started, not wanted now. |
 | `unset-aside <id>` | Takes it out of set-aside. |
 
-Both work on a session whose machine is offline, where this machine knows which one holds it: a task a bot started there, or one named with `--machine`. The change waits here and lands when the machine answers.
+These are the same as the sidebar's buttons. Settling a session also settles the hidden sessions it started, with one exception: the sub-tasks of a bot's task keep running, and report to the nearest open session above them.
 
-These are the same as the sidebar's buttons. Settling a session also settles the hidden sessions it started.
+`set-aside` and `unset-aside` also work on a session whose machine is offline, where this machine knows which one holds it: a task a bot started there, or one named with `--machine`. The change waits here and lands when the machine answers.
+
+## Attach and detach
+
+```bash
+dray session attach <task-id> --bot "Ops"
+dray session detach <task-id>
+```
+
+`attach` is the sidebar's **Attach to bot**. The task leaves the sidebar for the bot's Tasks tab, the bot gets a note saying where the task stands, and from then on the task reports to the bot after every turn. `--bot` takes the bot's name or id. The bot must be on the same machine as the task and have a chat already. A settled task, a bot's own chat, and a task already under a bot are refused.
+
+`detach` is **Detach from parent**, or **Detach from bot** for a bot's task. The task stops nesting under the session that started it, shows in the sidebar even if it ran hidden, and reports to nobody.
+
+See [Attach a task to a bot](/using-dray/bots#attach-a-task-to-a-bot).
 
 ## Merge card
 
@@ -139,13 +199,24 @@ These are the same as the sidebar's buttons. Settling a session also settles the
 dray session merge-card <task-id>
 ```
 
-Run from inside a session, this posts a card in that session's chat for the open pull request on another session's branch, usually a task it started. The card shows the task, the PR number, its live status, a **Merge** button and an **Open on GitHub** link, so you can merge without opening the task or the side panel. It is refused when the branch has no open pull request.
+Run from inside a session, this posts a card in that session's chat for the open pull request on another session's branch, usually a task it started. The card shows the task, the pull request's number and live status, and a **Merge** button, so you can merge without opening the task or the side panel. It is refused when the branch has no open pull request, and while the task is still mid-turn.
 
-Dray also posts the card on its own, once per pull request, in the chat of the session that started the task, as soon as GitHub says the PR can merge: its branch protection, required checks and required reviews pass, and no check is still running. A card already in the chat for that PR, by hand or not, stops a second.
+Dray also posts the card on its own, once per pull request, in the chat of the session that started the task. It waits until GitHub says the pull request can merge: its branch protection, required checks and required reviews pass, and no check is still running. It also waits for the task's turn to end. A card already in the chat for that pull request, posted by hand or not, stops a second. So agents post one by hand only when you ask.
 
 The task can run on another machine, such as a sandbox of its own. The card then reads and merges the pull request through the GitHub CLI on the chat's machine, so it keeps working after that machine is gone.
 
-In a bot's chat, Merge also settles the task and deletes its worktree when that holds nothing the merge did not take. In any other chat it only merges. The card shrinks to one line once the PR is merged, or after you have sent three more messages.
+In a bot's chat, Merge also settles the task and deletes its worktree. In any other chat it only merges. See [Merge cards](/using-dray/bots#merge-cards).
+
+## Issue card
+
+```bash
+dray session issue-card monorepo-labs/dray 12
+dray session issue-card monorepo-labs/dray 12 15 '#18'
+```
+
+Run from inside a session, this posts a card of GitHub issues in that session's chat: each issue's number, title and labels, in the order given, 20 at most. A closed issue's number shows in purple. Click an issue to open it on the Issues page. **Work on it** on an open issue sends the agent a message naming it, so it starts on it.
+
+Bots post a card whenever they show you GitHub issues.
 
 ## Need line
 
@@ -156,7 +227,7 @@ dray session need <task-id>
 
 Sets what a bot's task needs from you, in one line. It shows on the task's row in the **Waiting on you** card at the foot of the bot's chat, and clears once the task moves. With no text it clears now. Bots write it themselves when a task has sat waiting on you for 2 minutes.
 
-A task whose pull request is ready to merge gets a line only when it asked you to try or check something before merging. Otherwise its row shows **Merge** alone.
+A task whose pull request is ready to merge gets a line only when it asked you to try or check something before merging. Otherwise its row shows **Merge** alone. See [Waiting on you](/using-dray/bots#waiting-on-you).
 
 ## Reaction
 
@@ -168,19 +239,34 @@ Run by a bot when your message needs no words back. It puts one emoji on your ne
 
 | Emoji | Word | Means |
 |---|---|---|
-| 👀 | `seen` | seen, on it |
+| 👍 | `like` | got it, ok |
+| 👀 | `seen` | looking into it |
 | ✅ | `done` | done |
 | 🎉 | `celebrate` | good news |
-| 👍 | `like` | ok, agreed |
 | ❤️ | `love` | thanks |
 | 😂 | `laugh` | funny |
 | 😢 | `sad` | sorry to hear |
+| 👎 | `dislike` | dislike |
 
-The word works in place of the emoji. A new reaction on the same message replaces the old one. Claude Code bots use a built-in tool for the same thing.
+The word works in place of the emoji. A new reaction on the same message replaces the old one. It works only in a bot's chat. Claude Code bots use a built-in tool for the same thing. See [Reactions](/using-dray/bots#reactions).
+
+## On another machine
+
+```bash
+dray --machine vps session new "Run the load test" --title "Load test"
+dray --machine vps session ls
+dray session send <session-id> "Use the staging DB"
+```
+
+`--machine <name>` runs a session command on a machine from `dray machine ls`, through this machine's Dray server. A command that names a session id needs no `--machine`: an id this machine does not hold is looked for on every machine it reaches.
+
+A new session there runs in that machine's checkout of the same repository, found by its `origin` remote. Pass `--project <path on that machine>` where it has none. `--base <session-id>` names that session's branch, which the other machine can see only once it is pushed. Model, effort, agent and fast mode inherit as they do here.
+
+A session on another machine can message you back only if its machine has added this one. See [Servers](/cli/servers).
 
 ## Limits
 
-- No flag sets the permission mode, the worktree name, or turns the worktree off.
+- No flag sets the permission mode or the worktree name.
 - `--fast` can only turn fast mode on. Leaving it off inherits the caller's setting.
 - `--base` sees committed work only. Changes not yet committed are not in the new worktree.
 - A model that has no faster tier runs at its normal speed with `--fast`, and nothing says so.

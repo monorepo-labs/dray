@@ -1,11 +1,13 @@
 ---
 title: The composer
-description: Pick an agent, model, effort, fast mode and permission mode, send while a turn runs, stop a turn, and read how full the context is.
+description: Pick an agent, model, effort, fast mode and permission mode, start a worktree on any branch, switch a task to another agent, send while a turn runs, stop a turn, and read the More tab and how full the context is.
 sidebar:
   order: 1
 ---
 
 The composer is the box at the bottom of the window where you write to the agent. Its control row sets who does the work and how: the agent, the model, the effort, fast mode and the permission mode. Some of these can change mid-session and some are fixed once the session starts.
+
+In a bot's chat the composer also counts the bot's tasks; see [Bots](/using-dray/bots#task-counts-in-the-composer).
 
 {/* screenshot: the in-session composer with the control row under it */}
 
@@ -27,9 +29,18 @@ These controls appear on a new task only. Once the session starts they are gone,
 | Project (folder icon) | Picks the project. **Attach project…** at the bottom adds a folder. `⌘⇧P` steps to the next project. |
 | Server (server icon) | Shown when the project lives on a server. Picks which machine the task runs on. `⌘⇧S` steps to the next connected one. |
 | **Worktree** switch | Runs the session in its own copy of the repo. `⌘⇧T` flips it. See [Worktrees](/using-dray/worktrees). |
-| Branch (branch icon) | Which branch the project is on. Hidden while Worktree is on, where the row says "from origin/main" (or your default branch) instead. |
+| Branch (branch icon) | With Worktree off, the branch the project is on. With Worktree on, the branch the task starts from, like "from origin/main". |
 
-Picking a branch checks it out in the project for real. If the project has uncommitted files, Dray asks first:
+### Start a worktree on any branch
+
+With Worktree on, the branch button reads "from origin/main" (or your default branch). Click it to start the task from another branch. The list puts your default branch first, marked **latest**, then **Local** branches, then those **On remote** only. Past eight branches a **Filter branches** box sits at the top.
+
+- **The default branch**: the task starts from the remote's newest commit. Dray fetches it first, so work already upstream does not show up as the task's own. If the fetch fails, it starts from the branch as your clone last fetched it.
+- **Any other branch**: the task works on that branch itself. A branch only on the remote is fetched first. See [Worktrees](/using-dray/worktrees#what-it-starts-from).
+
+### Pick a branch without a worktree
+
+With Worktree off, picking a branch checks it out in the project for real. If the project has uncommitted files, Dray asks first:
 
 - **Stash changes**: the changes stay on the current branch, saved for later.
 - **Bring changes**: the changes move to the new branch with you.
@@ -39,7 +50,7 @@ Picking a branch checks it out in the project for real. If the project has uncom
 
 The model button shows the agent's mark, the model name, and the effort beside it. Click it to open the model menu.
 
-- **Agent.** On a new task, a row of agent marks sits at the top of the menu: Claude Code, Codex, pi, fx, Grok and OpenCode. `⌘⇧A` cycles them. An agent that is not installed carries a red dot; picking it shows how to install it under the composer. The agent is fixed once the session starts.
+- **Agent.** A row of agent marks sits at the top of the menu: Claude Code, Codex, pi, fx, Grok and OpenCode. `⌘⇧A` cycles them. An agent that is not installed carries a red dot; picking it shows how to install it under the composer. In a session, picking another agent moves the task there; see [Switch to another agent](#switch-to-another-agent).
 - **Model.** Click a model to pick it. Hover a model with effort levels to open its effort submenu.
 - **fx provider.** On fx, the top row also holds fx's providers. This one can change mid-session, but not while a turn runs ("Provider can't be changed mid-stream"). It also changes fx's own default provider on your machine.
 
@@ -50,6 +61,18 @@ The model button shows the agent's mark, the model name, and the effort beside i
 The menu shows a shortlist, not every model an agent offers. To change it, click **Shortlist models** at the bottom of the menu. The **Models** dialog lists everything the agent reports; turn on the ones you work with. Only those show in the picker and in the `Shift+Tab` cycle. The session's current model is always shown, shortlisted or not.
 
 Each agent starts with a default shortlist the first time its list loads. pi starts empty, so you pick your own. The **Refresh** button in the dialog reads the list again, for example after you log in to a new provider.
+
+## Switch to another agent
+
+A task can move to another agent mid-session and keep its conversation. Open the model menu, pick another agent's mark and one of its models, or press `⌘⇧A`. "Your next message goes to Codex" (or whichever agent you picked) shows above the composer. Your next send moves the task.
+
+- The task keeps its row, folder, worktree, branch and transcript. The chat draws no line for the switch.
+- The new agent is given the conversation so far: your messages and the replies in full, and each tool call as one short line without its output. A very long conversation keeps its start and its newest part.
+- Switching back to Claude Code, Grok or pi resumes that agent's own conversation and tells it only what happened since it left. Codex, fx and OpenCode start fresh each time, with the whole conversation.
+- You cannot switch while a turn runs: the agent marks and `⌘⇧A` do nothing until it ends.
+- Moving to an agent stops the old one, and with it any background tasks it was running.
+
+`dray session model` does the same from the command line when you name another agent's model; see [Sessions](/cli/sessions#switch-a-sessions-model).
 
 ## Effort
 
@@ -122,7 +145,18 @@ You do not have to wait. Type and press `⏎` during a turn, and the prompt is q
 
 ## Stop a turn
 
-While a turn runs and the box is empty, the send button turns into a square **Stop** button. It stops the turn. Background tasks the agent started, such as a dev server, keep running. While any run, the transcript shows a count like "2 Background Tasks". Click it to open the list in the right panel's **More** tab, where the square button on a row stops that task and **Stop all** stops every one. Settling the session stops them all.
+While a turn runs and the box is empty, the send button turns into a square **Stop** button. It stops the turn. Background tasks the agent started, such as a dev server, keep running. While any run, the transcript shows a count like "2 Background Tasks". Click it to open them in the right panel's [More tab](#the-more-tab). Settling the session stops them all.
+
+## The More tab
+
+The right panel's **More** tab (`⌘E` opens the panel) collects what a session has going on beside the chat. It shows only once there is something in it, and each section shows only when it has rows.
+
+- **The agent's task list**, when it keeps one.
+- **Subagents**, newest first, finished ones included. A running one shows its current step. Click a row to open its whole conversation as a tab beside the chat; you can also click an agent row in the chat. An fx subagent opens once it finishes.
+- **Background tasks**: shells and monitors still running. Click one to see the command it ran.
+- **Pictures and recordings** from the chat, newest first. **All**, **You** and **AI** filter by who sent them. It opens on ten, and **Load more** adds ten more, reaching back into older parts of the chat. Click one to open it full size and step through the set.
+
+The square button on a running row stops it ("Stop this task", "Stop this subagent"). **Stop all** sits on a section's heading when two or more are running.
 
 ## Escape
 
@@ -131,6 +165,11 @@ While a turn runs and the box is empty, the send button turns into a square **St
 1. Throws away a dictation that is recording.
 2. Closes an open picker (`/`, `@`, `#`, `&`) and keeps what you typed.
 3. Takes back the newest queued prompt.
+4. Takes the sidebar from the drafts or settled view back to the active list.
+
+## Which device sent it
+
+Dray tells the agent where each message you type came from, after your text: `[sent from Mac app]`, `[sent from iPhone]` and so on. In a bot's chat it adds your local time, like `[sent from iPhone, 14:32]`. The agent sees the tag; the chat does not show it.
 
 ## The context ring
 
@@ -156,7 +195,7 @@ They are suggestions to the agent, not commands Dray runs itself.
 | `Shift+Tab` | Next model |
 | `⌘⇧E` | Next effort level |
 | `⌘⇧F` | Toggle fast mode |
-| `⌘⇧A` | Next agent (new task) |
+| `⌘⇧A` | Next agent |
 | `⌘⇧P` | Next project (new task) |
 | `⌘⇧S` | Next server (new task) |
 | `⌘⇧T` | Toggle worktree (new task) |
@@ -167,6 +206,7 @@ You can change any of these in Settings → Shortcuts.
 
 ## Limits
 
-- Agent, project, branch and worktree are set at creation and cannot change later.
+- Project, branch and worktree are set at creation and cannot change later.
+- An agent switch waits for the turn to end.
 - On Claude Code, changing effort restarts the agent process at the next send.
 - fx's provider and permission mode are fx's own machine-wide settings, so changing them also changes fx in your terminal.

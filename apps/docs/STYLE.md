@@ -61,9 +61,9 @@ No imports needed. Use them sparingly.
 
 | Folder | Covers |
 |---|---|
-| `get-started/` | Install, first session, updates and channels |
-| `using-dray/` | Agents (one page for all five), composer, prompts, permissions, worktrees, sessions, spaces |
-| `cli/` | The `dray` command line, every command and flag, orchestration |
+| `get-started/` | Install, first launch and sign-in, first session, updates and channels |
+| `using-dray/` | Agents (one page for all six), composer, prompts, permissions, worktrees, sessions, bots, pull requests, spaces |
+| `cli/` | The `dray` command line, every command and flag, bots, orchestration |
 | `settings/` | Accounts, issue trackers, dictation, appearance, notifications, shortcuts |
 | `reference/` | Remote access and sharing, data on disk, privacy, troubleshooting |
 | `server.mdx` | Connecting a Linux server over SSH (kept at its URL) |
