@@ -19,6 +19,12 @@ Anywhere else, install it with:
 curl -fsSL https://www.drayhq.com/install.sh | sh
 ```
 
+On Windows, in PowerShell:
+
+```powershell
+irm https://www.drayhq.com/install.ps1 | iex
+```
+
 This puts `dray` (and `dray-serve`, the server) in `~/.local/bin`. Set `DRAY_INSTALL_DIR` to put them somewhere else. If that directory is not on your `PATH`, the installer says so and prints the line to add.
 
 It also installs the skill that teaches your agents to use `dray`. See [The skill](#the-skill).
