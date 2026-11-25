@@ -1,5 +1,5 @@
 /// Onboarding's sounds: a shimmer under the logo's light, made in code, then
-/// a recorded song from the logo on (#1567). The shimmer was picked by
+/// a recorded song once the shimmer is over (#1567). The shimmer was picked by
 /// ear (#1421) from takes that live in this file's history, as does the synth
 /// groove the song replaced.
 ///
@@ -57,16 +57,9 @@ function voice(ctx: BaseAudioContext, to: AudioNode, hz: number, type: Oscillato
   osc.stop(until);
 }
 
-/// How long the song takes to rise to full volume once the shimmer is over.
-const RISE_S = 1;
-/// The song's level under the shimmer.
-const UNDER_SHIMMER = 0;
-
 type MusicState = { playing: boolean; muted: boolean };
 const changed = channel<void>();
 let music: MusicState = { playing: false, muted: false };
-/// After the song's own level, so muting leaves the rise from under the
-/// shimmer running on schedule.
 let mute: GainNode | undefined;
 
 function setMusic(next: Partial<MusicState>) {
@@ -86,17 +79,16 @@ export function setOnboardingMusicMuted(muted: boolean) {
   setMusic({ muted });
 }
 
-/// Onboarding's song, "Welcome to Dray", from the logo on: silent until
-/// `quietMs` from now, when the shimmer is over, then at full volume. Played
-/// once, to its own ending, and never stopped: it outlives onboarding, so a
+/// Onboarding's song, "Welcome to Dray", from its first note `atMs` from now,
+/// once the shimmer is over, at full volume. Played once, to its own ending, and never stopped: it outlives onboarding, so a
 /// reader quick through setup and sign-in still hears it out. A second call
 /// while it plays does nothing, which is also what keeps StrictMode's second
 /// effect run from starting a second copy.
 ///
 /// Decoded into a buffer and scheduled on the audio clock rather than played
-/// by an `<audio>`, so the rise lands on time while the window is in the
+/// by an `<audio>`, so it starts on time while the window is in the
 /// background, where timers are throttled.
-export function startOnboardingMusic(quietMs: number) {
+export function startOnboardingMusic(atMs: number) {
   if (music.playing) return;
   let ctx: AudioContext;
   try {
@@ -109,14 +101,11 @@ export function startOnboardingMusic(quietMs: number) {
     setMusic({ playing: false });
     void ctx.close().catch(() => {});
   };
-  const master = ctx.createGain();
-  const rise = ctx.currentTime + quietMs / 1000;
-  master.gain.setValueAtTime(UNDER_SHIMMER, 0);
-  master.gain.setValueAtTime(UNDER_SHIMMER, rise);
-  master.gain.linearRampToValueAtTime(1, rise + RISE_S);
-  mute = ctx.createGain();
-  mute.gain.value = music.muted ? 0 : 1;
-  master.connect(mute).connect(ctx.destination);
+  const at = ctx.currentTime + atMs / 1000;
+  const out = ctx.createGain();
+  out.gain.value = music.muted ? 0 : 1;
+  out.connect(ctx.destination);
+  mute = out;
   setMusic({ playing: true });
 
   void fetch(musicUrl)
@@ -125,9 +114,9 @@ export function startOnboardingMusic(quietMs: number) {
     .then((music) => {
       const src = ctx.createBufferSource();
       src.buffer = music;
-      src.connect(master);
+      src.connect(out);
       src.onended = close;
-      src.start();
+      src.start(Math.max(at, ctx.currentTime));
     })
     .catch(close);
 }

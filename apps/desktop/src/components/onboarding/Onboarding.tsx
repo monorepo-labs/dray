@@ -56,7 +56,8 @@ export function Flow({ onStart }: { onStart: () => void }) {
   }, []);
   const agents = useAgentSetup();
   const github = useGithubSetup();
-  // The music starts with the logo and plays to its end, past onboarding.
+  // The music starts once the logo's shimmer is over and plays to its end,
+  // past onboarding.
   useEffect(() => startOnboardingMusic(SHIMMER_END), []);
   return (
     // Above the sign-in gate (1000), which it comes before.
