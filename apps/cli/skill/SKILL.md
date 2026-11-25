@@ -361,8 +361,8 @@ dray session merge-card <task-id>   # a card in your chat for that task's open P
 Dray posts this card in your chat on its own once GitHub says a task you started
 has a pull request ready to merge, on this machine or another. So don't post one
 yourself; run the command only when the user asks for a card. It lands in your own chat with the task's
-title, the PR number, its live status, a Merge button and an Open on GitHub
-link. It is refused when the task's branch has no open pull request, and while
+title, its live status, a Merge button (Fix conflicts when the branch
+conflicts) and the PR number, which opens the PR. It is refused when the task's branch has no open pull request, and while
 the task is still mid-turn.
 
 ## Showing the user GitHub issues
@@ -631,13 +631,6 @@ found by its `origin` remote; pass `--project <path on that machine>` where it
 has none. `--base <session-id>` names that session's branch, which the other
 machine can only see once it is pushed. Model, effort, agent and fast mode
 inherit from you as they do here.
-
-`--machine cloud` starts a session on a fresh Dray Cloud machine of its own:
-the app starts the machine, clones the project's GitHub repository there and
-starts the session in a worktree of it. It takes `session new` alone, needs
-Dray Cloud on with the app open, and can take a few minutes, so give the
-command a long timeout. The session's row names its machine (`cloud-…`), and
-settling it deletes the machine.
 
 **Reach follows tokens.** You reach a machine this one added; it reaches you
 only if it added this one too. A session you start there can message you back
