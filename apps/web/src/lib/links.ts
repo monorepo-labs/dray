@@ -6,6 +6,11 @@ export const REPO = "https://github.com/monorepo-labs/dray";
 /// it alone, the beta channel being the updater's and not this page's.
 export const DOWNLOAD = "https://downloads.drayhq.com/Dray_universal.dmg";
 
+/// The newest stable Windows installer and its MSI, on the dmg's R2 host under
+/// the names `windows-release.sh latest` copies each stable release to.
+export const WINDOWS_DOWNLOAD = "https://downloads.drayhq.com/Dray_x64-setup.exe";
+export const WINDOWS_MSI = "https://downloads.drayhq.com/Dray_x64.msi";
+
 /// The server install. `public/install.sh` resolves the newest `cli-v*` tag
 /// itself, so this line never needs a version in it.
 export const INSTALL_LINE = "curl -fsSL https://www.drayhq.com/install.sh | sh";

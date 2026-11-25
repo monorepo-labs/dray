@@ -73,9 +73,10 @@ const TONE = "fill-(--d) light:fill-(--l)";
 /// The 1440×900 pixel field, centred so its tiles line up with the 960 column
 /// at any width; a narrower screen crops it and a wider one gets its sides.
 /// Deep blues on black; in light the same tiles take pale blues on white.
-export function HeroBackdrop({ id = "hero" }: { id?: string }) {
+/// `top` moves the whole field down for a hero taller above its window.
+export function HeroBackdrop({ id = "hero", top = "top-0" }: { id?: string; top?: string }) {
   return (
-    <div aria-hidden className="pointer-events-none absolute top-0 left-1/2 h-[900px] w-[1440px] -translate-x-1/2">
+    <div aria-hidden className={`pointer-events-none absolute ${top} left-1/2 h-[900px] w-[1440px] -translate-x-1/2`}>
       <svg
         viewBox={`${-SIDE} 0 ${1440 + 2 * SIDE} 900`}
         width={1440 + 2 * SIDE}
