@@ -17,7 +17,7 @@ export function playWelcomeSound(momentMs: number) {
     master.threshold.value = -20;
     master.ratio.value = 2.5;
     const out = ctx.createGain();
-    out.gain.value = 0.5;
+    out.gain.value = 1;
     master.connect(out).connect(ctx.destination);
     const hall = makeHall(ctx, 4);
     const wet = ctx.createGain();
