@@ -1,8 +1,8 @@
 ---
 title: Orchestration
-description: Have one agent fan work out into several sessions, review its work with a second model, and pass messages between parent and child sessions.
+description: Have one agent fan work out into several sessions, on this machine or others, review its work with a second model, and pass messages between parent and child sessions.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 Orchestration is one agent starting other sessions with `dray`. You ask the agent in one session to "work through these four issues", and it starts four sessions, one per issue, each with its own worktree, branch and sidebar row. You watch them beside the conversation that started them.
@@ -21,7 +21,7 @@ Ask in the conversation, for example:
 
 The agent runs `dray session new` once per piece of work. Each new session:
 
-- gets its own worktree, starting at `origin/<default branch>`
+- gets its own worktree, starting at `origin/<default branch>`, unless the agent passes `--base` or `--no-worktree`
 - inherits the caller's agent, model, effort, fast mode and permission mode, unless the agent passes flags
 - starts working at once, on the prompt the agent wrote for it
 
@@ -37,19 +37,11 @@ The new session has none of the calling conversation. A good prompt carries the 
 
 ### Hidden sessions
 
-A session started with `--hidden` stays out of the sidebar. You see it only when it asks for permission or asks a question, as a card in the session that started it. The skill has agents hide review sessions by default.
+A session started with `--hidden` stays out of the sidebar. You see it only when it asks for permission or asks a question, as a card in the session that started it. The skill has agents hide review sessions by default. Everything a bot starts runs hidden, on any machine, whatever the flag says.
 
 ## Bots
 
-A bot is one ongoing chat you run everything from. It has its own instructions and its own memory, and everything it starts reports back to it on its own.
-
-- **Make one** with **New bot** in the sidebar: a name, a face, a colour, and the agent and model it runs on. Its chat opens with the bot introducing itself; tell it its job in reply. Bots sit above All Projects like an inbox, each with its face and its last message.
-- **It runs in its own folder**, not in a repository, and starts work in any project you name. Its folder holds `AGENTS.md` and a `memory` folder, both empty at first. The bot writes down its job in `AGENTS.md` from what you tell it, and the agent it runs on loads that file whenever its chat starts, as it would in any repository. An older bot's `INSTRUCTIONS.md` moves to `AGENTS.md`, rules and all, the next time it starts. It saves what is worth remembering as one dated file per memory, such as `2026-11-12-release-checklist.md`, and looks through them when it needs to.
-- **What it starts runs hidden.** Those sessions stay out of the sidebar. After every turn one of them ends, Dray sends its last message to the bot, so the bot always knows where its work stands. Their permission and question cards show in the bot's chat.
-- **The Tasks tab** in the bot's right panel lists everything it started, grouped Waiting on you, Working and Done. Click one to look inside.
-- **Right-click a bot** to start its chat fresh (instructions and memory stay) or to delete it.
-
-Bots live on this Mac.
+A bot is the same idea made permanent: one ongoing chat you run everything from, with its own instructions and memory. Every task it starts runs hidden, on whichever machine, and reports back to it after every turn on its own, so you do not poll. Its tasks' cards, pull requests and stalls come to its chat. See [Bots](/using-dray/bots), and [Bots](/cli/bots) for `dray bot`.
 
 ## Review with a second model
 
@@ -66,7 +58,7 @@ Ask for this in plain words: "have Codex review this". The reviewer reads the sa
 - **A new branch.** The reviewer works on its own `worktree-<name>` branch. It never checks out yours, so it cannot commit onto your work.
 - `dray` prints what the id resolved to: `Started "…" in worktree calm-owl, based on worktree-brisk-jade`.
 
-`--base` also takes a branch, tag or commit.
+`--base` also takes a tag or a commit, or a branch. A branch is different: the new session works on that branch by its own name, so its commits land there. See [Start from existing work](/cli/sessions#start-from-existing-work).
 
 ## Messages between sessions
 
@@ -84,7 +76,21 @@ Each message costs the receiver a whole turn, so agents should send one when the
 dray session ls
 ```
 
-Lists the project's sessions with their status. Nothing reports back on its own. If you want to know when sessions finish, watch the sidebar, or ask the children to send a summary when they are done.
+Lists the project's sessions with their status. Outside a bot, nothing reports back on its own. If you want to know when sessions finish, watch the sidebar, or ask the children to send a summary when they are done. A bot's tasks report to it after every turn without being asked.
+
+## Work outside a worktree
+
+Some work changes no repository: setting up a machine, reading logs, research. `--no-worktree` runs such a session in a folder as it is, with no worktree or branch:
+
+```bash
+dray session new --no-worktree --project '~' "Install Docker and report the version"
+```
+
+Never use it to edit a repo: the session shares that checkout with you and every other session in it. See [Worktree or not](/cli/sessions#worktree-or-not).
+
+## Fan out to other machines
+
+`dray --machine <name> session new` starts a session on another machine you have added, in its checkout of the same repository. A session id finds its machine on its own, so `send`, `model`, `stop` and the rest need no flag. See [On another machine](/cli/sessions#on-another-machine).
 
 ## Permission prompts
 
@@ -98,5 +104,5 @@ Answer those cards above the parent's composer, or open the session. To have chi
 
 - **Two levels deep.** A spawned session may start sessions; those may not. Start the next batch from a top-level session.
 - **No reading transcripts.** A session can create, list and message others, but cannot read what another session wrote. Ask it to send a summary.
-- **No shared checkout.** Every spawned session gets its own worktree. Two sessions cannot run in one directory.
+- **No shared worktree.** Every spawned session gets its own worktree, or none with `--no-worktree`. Two sessions never share a worktree.
 - **No permission flag.** Children always take the parent's permission mode.

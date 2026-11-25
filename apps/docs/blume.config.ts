@@ -41,7 +41,7 @@ export default defineConfig({
   agents: {
     llmsTxt: {
       details:
-        "Dray is a free, open-source macOS app that runs coding-agent CLIs (Claude Code, Codex, pi, fx, Grok Build and OpenCode) in one chat window, many sessions at once, each optionally in its own git worktree. Download it from https://www.drayhq.com. Its `dray` command line (`curl -fsSL https://www.drayhq.com/install.sh | sh`) lets you or an agent create, list and message sessions, save drafts, link issues, share a dev server by public link and drive the built-in browser. Dray can also run headless on a Linux server and be driven from the Mac app. Reach for these docs to answer what Dray can do, where in the app a feature lives, and the exact steps, commands and flags.",
+        "Dray is a free, open-source app for macOS, with a Linux beta, that runs coding-agent CLIs (Claude Code, Codex, pi, fx, Grok Build and OpenCode) in one chat window, many sessions at once, each optionally in its own git worktree. Bots are ongoing chats that start tasks and hear back from them. Download it from https://www.drayhq.com. Its `dray` command line (`curl -fsSL https://www.drayhq.com/install.sh | sh`) lets you or an agent create, list and message sessions, save drafts, link issues, share a dev server by public link and drive the built-in browser. Dray can also run headless on a Linux server and be driven from the Mac app. Reach for these docs to answer what Dray can do, where in the app a feature lives, and the exact steps, commands and flags.",
     },
   },
   github: { owner: "monorepo-labs", repo: "dray", dir: "apps/docs" },

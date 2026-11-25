@@ -1,6 +1,6 @@
 ---
 title: Issues
-description: "Connect Linear with an API key or GitHub through gh, browse and filter issues on the Issues page, change status and priority, tag issues in prompts with #, and see the issues linked to a session."
+description: "Connect Linear with an API key or GitHub through gh, browse and filter issues on the Issues page, start a task on an issue or send it to a bot, see which tasks work on each issue, change status and priority, tag issues in prompts with #, and see the issues linked to a session."
 sidebar:
   order: 2
 ---
@@ -33,7 +33,7 @@ The key fills Dray's own screens. It gives your agent nothing. For the agent to 
 Dray reads GitHub issues through the `gh` CLI and stores no GitHub credential of its own.
 
 1. If you don't have `gh`, install it: `brew install gh`.
-2. Run `gh auth login` in a terminal. You can also sign in from Settings → Accounts → GitHub, which opens Terminal for you.
+2. Run `gh auth login` in a terminal. You can also sign in from Settings → Agents → GitHub, which opens Terminal for you.
 3. Back on the Issues page, press **Check again**.
 
 If `gh` is still missing or signed out, the page stays as it is. Sign out with `gh auth logout` in your own terminal.
@@ -72,13 +72,22 @@ A row shows the identifier, the title, labels, and a pull-request mark with its 
 
 ### Start work on an issue
 
-You start work from the Issues page itself; it never takes you to the new-task page or into the task. A task for a GitHub issue runs in the attached project whose git remote is the issue's repository. With none attached, Dray clones the repository into `~/dray` first, as the pull requests page does. The task is linked to the issue.
+You start work from the Issues page itself; it never takes you to the new-task page or into the task. A task for a GitHub issue runs in the attached project whose git remote is the issue's repository. With none attached, Dray clones the repository into `~/dray` first, as the [Pull requests page](/using-dray/pull-requests#start-a-task-from-a-pr) does. The task is linked to the issue.
 
-- **Start task**, on a row when you hover it, starts a task at once on the agent, model, effort and worktree setting your last new task used. Its prompt is the issue's title, link and description.
-- **Send to bot**, beside it, sends the issue to the bot you last sent one to; its arrow lists your other bots, and picking one sends it there at once. The bot is told in a message you don't see, and starts on it when it is free. Nothing is written to GitHub or Linear.
-- The opened issue ends in the same box the pull requests page has. Its **Bot** / **Task** switch picks between sending the issue to a bot and starting a task yourself; with several bots a menu beside it picks the bot. Anything you type there goes along as a note; the issue itself is sent with it, unseen. On the Task side you can change the model, the machine and the worktree switch.
-- A Linear issue names no repository, so on the Task side you pick its project first. Start task on its row asks you to open the issue for that.
-- A row with work under way shows a small chip: a bot's face when a bot has it, a chat bubble for your own task, and a count when there are two or more. Click it to open the task, or with several, the issue's details, which list every task with its state.
+- **Start task**, on a row when you hover it, starts a task at once on the agent, model, effort, permission mode and worktree setting your last new task used. Its prompt is the issue's tag, link and description. The button reads **Started** once it has.
+- **Send to** and a bot's name, beside it, sends the issue to the bot you last sent one to. Its arrow lists your other bots, and picking one sends it there at once. The bot is told in a message you don't see, and starts on it when it is free. Nothing is written to GitHub or Linear.
+- The opened issue ends in the same box the Pull requests page has. Its **Bot** / **Task** switch picks between sending the issue to a bot and starting a task yourself. On the Bot side, the same **Send to** button sends it, its arrow picking another bot. On the Task side, you can change the model, the machine and the worktree switch, then press the arrow or `⌘⏎`. Anything you type in **Anything to add? The issue goes with it.** goes along as a note; the issue itself is sent with it, unseen.
+- A Linear issue names no repository, so on the Task side you pick its project first. **Start task** on its row is greyed out, and its tooltip asks you to open the issue to pick a project.
+
+### Tasks on an issue
+
+A row with tasks linked to its issue shows a small chip: a bot's face when the newest task is a bot's, a chat bubble when it is your own, and a count when there are two or more. Click it to open the task, or with several, the issue's details.
+
+The opened issue lists its tasks at the top, newest first, under **Task** or **Tasks · N**. Each shows whether it is Working, Waiting on you, Done, Idle or Settled. Click one to open it. A task counts once it is linked to the issue: started from this page, or linked by its agent or by you with [`dray issue link`](#how-issues-get-linked). Sending an issue to a bot links nothing by itself; the task the bot starts shows here once it is linked. A bot's own chat is never listed, only its tasks.
+
+### Issue cards in a bot's chat
+
+A bot can show GitHub issues as a card in its chat. Click an issue on the card to open it on this page; ⌘-click opens it on GitHub. The card itself is described on [Bots](/using-dray/bots).
 
 ## Change status and priority
 

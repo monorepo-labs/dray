@@ -1,11 +1,13 @@
 ---
 title: Sessions and the sidebar
-description: Find sessions in the sidebar, read its marks and groups, pin, settle, set aside, fork, rename and delete sessions, and move between them from the keyboard.
+description: Find sessions in the sidebar or its icon rail, read their marks, pin, settle, set aside, fork, rename and delete them, work in a session's tabs, Diff and Files, split tabs and sessions side by side, and move around from the keyboard.
 sidebar:
   order: 5
 ---
 
 Every conversation with an agent is a session, and the sidebar lists them. Dray calls them tasks on screen: **New Task**, "No tasks yet". The sidebar is ordered by what each session needs from you, so the ones waiting on you are at the top.
+
+When you have a bot, Dray opens on your first bot's chat. Otherwise it opens on the new-task composer.
 
 {/* screenshot: the sidebar with a yellow-marked row, a green-marked row and a pinned group */}
 
@@ -15,11 +17,53 @@ From the top:
 
 - **New Task** (`⌘N`) opens the new-task composer.
 - **Issues** (`⌘I`) opens the issues page.
-- **Search** (`⌘F`) filters the list by title. `Esc` clears it.
-- The **project filter** names the project the list shows, starting at **All Projects**. Click it to step to the next project, or swipe on the sidebar with two fingers on a Mac trackpad. `⌘⌥←` and `⌘⌥→` step it too.
-- Two buttons beside the filter switch the list: **Show drafts** (dashed circle) and **Show settled** (double tick). Each turns into **Show active** while its view is up.
+- **Pull requests** (`⌘P`) opens the [pull requests page](/using-dray/pull-requests).
+- **New bot** makes a bot.
+- Your bots, one row each. See [Bots in the sidebar](#bots-in-the-sidebar).
+- The **project filter**, with three buttons beside it: **Search** (magnifier), **Show drafts** (dashed circle) and **Show settled** (double tick). Drafts and settled each turn into **Show active** while their view is up.
+- The list of sessions.
+
+The space switcher and the settings gear sit at the top right of the sidebar, in the window's title row. See [Spaces](/using-dray/spaces).
 
 `⌘B` hides and shows the sidebar.
+
+### Search
+
+Click **Search** or press `⌘F` to open a field over the list. It narrows the list by title, and the drafts view by the draft's text. `Esc` clears the field and closes it.
+
+### The project filter
+
+The filter names the project the list shows, starting at **All Projects**.
+
+- Click it to step to the next project. The list wraps.
+- With three or more projects, rest the pointer on it to open a list and pick one.
+- `⌘⌥←` and `⌘⌥→` step it too, and so does a two-finger swipe on the sidebar on a Mac trackpad.
+
+Each filter remembers what you last had open under it, a task or a bot, and opens it again when you come back.
+
+With no project attached, the filter row and its buttons are hidden.
+
+### Leave Drafts or Settled
+
+Press `Esc` while the drafts or settled view is up to go back to the active list. It is the last thing `Esc` does: an open picker, menu or search field takes the key first.
+
+### Bots in the sidebar
+
+A bot's row shows its face, its name and its chat's newest line: the bot's reply, your own last message, or the bot's reaction to it. Typing dots stand in for the line while it works. A yellow dot on the face means it is waiting on you, and a number counts replies you have not read. Right-click a bot for **Edit…** and **Delete bot…**. More: [Bots](/using-dray/bots).
+
+### The icon rail
+
+Drag the sidebar's right edge to resize it. It stops at its normal width as you drag it narrower, then snaps to an icon rail once you drag past halfway. Drag it back out and it snaps to the normal width. Double-click the edge to put it back at the normal width. With the edge focused, the arrow keys resize it, and one press moves between the rail and the normal width.
+
+The rail keeps everything as an icon, with the name in a tooltip:
+
+- **New Task**, **Issues**, **Pull requests** and **New bot** at the top.
+- Your bots, as faces.
+- The project filter: a folder for All Projects, or the project's initial. Click to step, or hover for the list, as in the full sidebar.
+- Your sessions, one dot each, grouped as the list is. Yellow is waiting on you, green is finished and unread, and a shimmer runs over the dot while it works. Right-click a dot for the same menu a full row has.
+- At the bottom, the space switcher (once you have spaces) and the settings gear. A card such as What's new becomes a button here that opens beside the rail.
+
+`⌘F` widens the rail to the full sidebar while the search field is open, and folds it back when the field closes.
 
 ## Read a row
 
@@ -35,24 +79,28 @@ Yellow wins when both apply. Other things the row can show:
 - **Working orb** in place of the time: a turn is running.
 - **Pull request glyph** before the title: green open, grey draft, purple merged, red when checks failed on an open one. Hover for the number and state.
 - **Spinning dashed circle** in place of the time: the pull request's checks are running.
+- **Crossed-out signal** in place of the time, row faded: the session's server is not connected. Hover for the reason.
 - **Faded**: the session is set aside, or, in the settled view, last changed before today.
 - **Indented under another row**: a session another session started, for example with `dray new`.
 
 Hover a row for **Settle** (tick) and **More** (⋯), which opens the same menu as right-clicking.
 
+Pinning, settling, deleting and the other row actions taken in the iPhone app show in the sidebar at once.
+
 ## How the list is ordered
 
 The active list is grouped by stage across all projects, with a small gap between groups and no headings. From the top:
 
-1. **Pinned**, under its own heading.
-2. Waiting on you (yellow).
-3. Finished and unread (green).
-4. Idle.
-5. Unread, with an open pull request.
-6. Open or draft pull request.
-7. Pull request checks running.
-8. Pull request merged.
-9. Set aside.
+1. Split groups, each under its own heading, like **Group 1**. See [Several sessions side by side](#several-sessions-side-by-side).
+2. **Pinned**, under its own heading.
+3. Waiting on you (yellow).
+4. Finished and unread (green).
+5. Idle.
+6. Unread, with an open pull request.
+7. Open or draft pull request.
+8. Pull request checks running.
+9. Pull request merged.
+10. Set aside.
 
 A session that is working stays where it would sit at rest. A parent moves with the strongest stage of anything under it, so a child waiting on you pulls its parent up. Newest first within each group. A list of fewer than three sessions is not split at all.
 
@@ -75,6 +123,8 @@ Settle when you are done with a session: hover its row and click the tick (**Set
 Settling stops the session's agent and everything it started, such as background shells and dev servers, and closes its browser tabs. The session's browser profile is deleted, so its sign-ins are gone. The transcript stays. You cannot settle a session mid-turn; the button is hidden until the turn ends.
 
 A settled session moves to the settled view. Its composer is replaced by "Unsettle this task to send a follow-up." with an **Unsettle** button. If it ran in a worktree, settling offers to delete the worktree; see [Worktrees](/using-dray/worktrees#delete-a-worktree).
+
+A session on a server that is not connected cannot be settled, since only that server can stop its agent. Dray says so, and points you to removing the server in Settings → Servers, which clears its sessions from the sidebar.
 
 ### The settled view
 
@@ -103,13 +153,75 @@ Fork is disabled while the session's turn is running. If the original takes anot
 
 Dray titles a session from its first prompt, then replaces that with a short title the agent's cheapest model writes. Grok and OpenCode title their own sessions.
 
-To rename, double-click the session's title in the tab row above the transcript, or press `⏎` on it. `⏎` saves, `Esc` cancels.
+To rename, double-click the chat tab, the first tab above the transcript, or press `⏎` on it while it is the open tab. `⏎` saves, `Esc` cancels.
 
 ## Delete a session
 
 Right-click and choose **Delete**, then **Delete** again at "Are you sure?". This stops the agent and removes the transcript, its attached images and its worktree. It cannot be undone.
 
-**Detach from parent** on a nested row moves it to the top level.
+**Detach from parent** on a nested row moves it to the top level. **Attach to** hands a session to a bot on the same machine; see [Bots](/using-dray/bots#attach-a-task-to-a-bot).
+
+## Tabs
+
+An open session has a row of tabs along the top of the window, drawn like a browser's: the open tab joins the page under it, and the others sit flat until you hover them. In light themes the window frame takes the page's colour.
+
+{/* screenshot: a session's tab row with the chat, Diff, Files and two page tabs */}
+
+- **The chat** comes first, named by the session's title. It shows a working orb while a turn runs and you are on another tab.
+- **Diff** and **Files** follow by default. See [Files and Diff](#files-and-diff).
+- **Pages** in the session's browser, whether you or the agent opened them, each with its favicon.
+- **Files** you open, one tab each. A folder opens as a listing tab.
+- **Subagents** you open from the chat or the **More** tab, each with its whole conversation.
+
+Click **+** at the end of the row to add a tab: **Diff** or **Files** if you closed them, or **Browser** for a new page (`⌘T`). With Diff and Files both open, **+** is **New tab**. A new tab shows **Diff** and **Files** cards, which turn the tab into that view, plus the session's running dev servers and pages you visited recently.
+
+| To | Do |
+|---|---|
+| Open a tab | Click it. `⌘1` … `⌘8` pick by position, `⌘9` the last. |
+| Step through tabs | `⌘⇧[` and `⌘⇧]`. They wrap at the ends. |
+| Reorder | Drag a tab along the row. |
+| Close a tab | Click its cross, or `⌘W` for the open one. Diff and Files close too. |
+| Reopen a closed tab | `⌘⇧T`, newest first, up to 25 per session until you quit. |
+| Copy a page | Right-click its tab and choose **Duplicate tab**. |
+
+The branch the session is on sits at the far right of the row, and the server's name before it when the session runs on another machine.
+
+## Files and Diff
+
+**Diff** shows the session's whole repository: **Uncommitted**, **Branch** for this branch's own commits, and **History**. It reads and never writes; ask the agent to commit. The right panel's **Changes** tab answers a narrower question: what the latest turn changed.
+
+**Files** shows the session's folder as a tree, with a filter box, beside a viewer. Click a file to open it in its own tab, with its code highlighted.
+
+- A Markdown file opens rendered, with its links and images working. Its links open in Files. Switch to **Edit** to change it, then press `⌘S` or click **Save**. **Read** switches back. Closing a tab with unsaved edits asks "Close without saving?" first. A Markdown file over 1 MB shows as plain source and cannot be edited.
+- Other files are read-only.
+- A link to a folder in the chat opens its listing here. Click a file in it to open the file, or a folder to open that folder's listing.
+
+## Split panes
+
+Drag a tab out of the tab row and down into the view to open it beside what is on screen. A zone shows **Split left** or **Split right**; let go there. Keep dragging to add more panes to the same group.
+
+{/* screenshot: the chat with a Diff pane beside it, and the group drawn as one tab */}
+
+- **What splits**: Diff, an open file, and in a bot's chat its tasks and its Diff and Files tabs. On a Mac, browser pages split too. A new tab with no page, and Files with no file open, do not.
+- **The group** is one tab in the row, holding each pane's icon and title. Click it to bring the split back after you picked another tab. Hover a pane's title in it for a cross that closes that tab. `⌥`-drag a title to move its pane within the group; a plain drag moves the whole group along the row.
+- **Resize** by dragging the gap between two panes. A drop that would leave a pane too narrow does nothing.
+- **Close a pane** with the cross on its header, or, for a page, at the end of its address bar. Its tab goes back into the row where it was. A Markdown file's pane has its own **Read**/**Edit** and **Save**.
+
+`⌘W` with a group open closes its main tab, the one the others were dragged beside, and hands the view to the next pane.
+
+### Several sessions side by side
+
+Drag a session's row from the sidebar onto the chat to show two sessions at once. Where you let go decides the place: **Open on the left**, **Open on the right**, **Open above** or **Open below** at the edges, or **Replace** in the middle. Dragging a pane's header moves it the same way.
+
+The sessions form a group, listed at the top of the sidebar as **Group 1**, **Group 2** and so on. One composer serves the focused pane, marked by a bar at the start of its header; click a pane to focus it.
+
+- `⌘⌥1` … `⌘⌥9` focus a pane. Hold `⌘` to see the other panes' numbers.
+- `⌘⌥↑` and `⌘⌥↓` switch between groups.
+- The cross on a pane's header, or `⌘W`, takes that session out of the group.
+
+## Long chats
+
+A long chat opens at once on its latest turns. Older turns load as you scroll up.
 
 ## Move between sessions
 
@@ -117,11 +229,13 @@ Right-click and choose **Delete**, then **Delete** again at "Are you sure?". Thi
 |---|---|
 | `⌘N` | New task |
 | `⌘⇧↑` / `⌘⇧↓` | Previous / next session, in the order the sidebar draws |
-| `⌥1` … `⌥0` | Jump to a session; hold `⌥` to see each row's number |
+| `⌥1` … `⌥0` | Jump to a session or bot; hold `⌥` to see each row's number |
 | `⌘⌥↑` / `⌘⌥↓` | Jump to the previous / next group |
 | `⌘⌥←` / `⌘⌥→` | Previous / next project filter |
 | `⌘F` | Search sessions |
 | `⌘B` | Toggle sidebar |
+| `⌘I` | Issues |
+| `⌘P` | Pull requests |
 
 You can change any of these in Settings → Shortcuts.
 
@@ -133,3 +247,5 @@ The number on Dray's Dock icon counts sessions waiting on you plus sessions fini
 
 - A fork copies the whole conversation; there is no fork from a chosen message.
 - Unsettling does not bring back a deleted worktree or browser profile.
+- Diff and Files read only, apart from Markdown files.
+- A session on a server that is not connected cannot be settled.
