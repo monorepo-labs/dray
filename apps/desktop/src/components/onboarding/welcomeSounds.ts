@@ -60,7 +60,7 @@ function voice(ctx: BaseAudioContext, to: AudioNode, hz: number, type: Oscillato
 /// How long the song takes to rise to full volume once the shimmer is over.
 const RISE_S = 1;
 /// The song's level under the shimmer.
-const UNDER_SHIMMER = 0.3;
+const UNDER_SHIMMER = 0.1;
 
 type MusicState = { playing: boolean; muted: boolean };
 const changed = channel<void>();
@@ -86,7 +86,7 @@ export function setOnboardingMusicMuted(muted: boolean) {
   setMusic({ muted });
 }
 
-/// Onboarding's song, "Welcome to Dray", from the logo on: at 30% until
+/// Onboarding's song, "Welcome to Dray", from the logo on: at 10% until
 /// `quietMs` from now, when the shimmer is over, then at full volume. Played
 /// once, to its own ending, and never stopped: it outlives onboarding, so a
 /// reader quick through setup and sign-in still hears it out. A second call
