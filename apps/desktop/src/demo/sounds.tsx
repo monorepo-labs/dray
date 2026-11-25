@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { startOnboardingMusic } from "@/components/onboarding/welcomeSounds";
 import DemoThemeBar from "@/demo/ThemeBar";
 import { playCelebration, playDictationSound, playNotification } from "@/lib/sound";
 import { playSwipeTick } from "@/lib/tick";
@@ -20,6 +21,9 @@ import sendUrl from "../../../island/Island/send.wav?url";
 
 /// A local copy of a macOS sound; see above.
 const system = (name: string) => () => void new Audio(`/demo/system-sounds/${name}.wav`).play().catch(() => {});
+
+/// Play restarts the song rather than stacking a second copy on it.
+let onboardingMusic: ReturnType<typeof startOnboardingMusic> | undefined;
 
 type Sound = {
   name: string;
@@ -60,6 +64,17 @@ const APP: Sound[] = [
     file: "src/assets/dictate-stop.wav",
     play: () => playDictationSound("stop"),
     where: ["The dictated words landed in the composer, not when the microphone closed. Text outcomes only."],
+  },
+  {
+    name: "Onboarding music",
+    file: "src/assets/onboarding-music.mp3",
+    play: () => {
+      onboardingMusic?.stop();
+      onboardingMusic = startOnboardingMusic(0);
+    },
+    where: [
+      "Onboarding, from the welcome line on, once through at 30% volume. Leaving onboarding fades it out over 4 seconds.",
+    ],
   },
   {
     name: "Swipe tick",

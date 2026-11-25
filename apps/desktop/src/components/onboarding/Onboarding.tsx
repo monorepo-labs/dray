@@ -54,15 +54,8 @@ function Flow({ onStart }: { onStart: () => void }) {
   const agents = useAgentSetup();
   const github = useGithubSetup();
   // The music comes in with the welcome line and plays once; leaving before
-  // it ends fades it out.
-  useEffect(() => {
-    let music: ReturnType<typeof startOnboardingMusic> | undefined;
-    const timer = setTimeout(() => (music = startOnboardingMusic()), MUSIC_AT);
-    return () => {
-      clearTimeout(timer);
-      music?.stop();
-    };
-  }, []);
+  // it ends fades it out. Started now so the song is decoded by then.
+  useEffect(() => startOnboardingMusic(MUSIC_AT).stop, []);
   return (
     // Above the sign-in gate (1000), which it comes before.
     <div className="fixed inset-0 z-[1010] flex flex-col overflow-hidden bg-black text-white select-none">
