@@ -31,13 +31,20 @@ reads:
 
 ### New
 
+- **Switch a task's harness mid-session.** Pick another harness in the
+  composer and your next message moves the task there, with everything
+  said so far.
+  ![A chat Claude Code answered, Codex picked in the composer for the next message](changelog/harness.png)
+  <!-- highlight: desktop -->
+- **Your agents, in your pocket. Dray is now on iPhone.** Every task on
+  every machine, with questions to answer, permissions to allow and
+  alerts when one is ready to merge.
+  ![Dray's bot chat on an iPhone, beside a QR code for the App Store](changelog/iphone.png)
+  <!-- highlight: desktop -->
 - **OpenCode is now in Dray.** Pick OpenCode in the composer and run it
   like any other agent, with your own models and providers.
   ![OpenCode](changelog/opencode.png)
   <!-- highlight: desktop -->
-- **Switch a task's agent mid-session.** Pick another agent's model in
-  the composer and your next message moves the task there, with
-  everything said so far.
 - **Onboarding.** A first launch opens on a short welcome, sets up an
   agent and the GitHub CLI, installing them if they are missing, and
   introduces Dray Bot, all before you sign in.
