@@ -84,6 +84,9 @@ runs:
         key: ${{ steps.key.outputs.key }}
         restore-keys: ${{ steps.key.outputs.prefix }}
         lookup-only: ${{ inputs.lookup-only }}
+        # Or the Windows entry, saved on Windows, is invisible to warm-cli-cache's
+        # lookup on Linux and rebuilt on every push. A no-op off Windows.
+        enableCrossOsArchive: true
 
     - name: Build dray
       if: inputs.lookup-only != 'true'

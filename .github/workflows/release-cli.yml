@@ -100,6 +100,12 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-22.04-arm
             serve: true
+          # A zip, which install.ps1 unpacks with what Windows ships. Both
+          # binaries take the static CRT from their crate's .cargo/config.toml,
+          # so a fresh Windows needs no VC++ runtime.
+          - target: x86_64-pc-windows-msvc
+            os: windows-2025
+            serve: true
 
     runs-on: ${{ matrix.os == 'macos-latest' && fromJSON(needs.pick.outputs.mac) || matrix.os }}
 
@@ -119,7 +125,7 @@ jobs:
       # ponytail: ad-hoc signed, so every `dray update` is a new TCC identity;
       # sign with the Developer ID once headless Macs are a real target.
       - name: Strip dray-serve
-        if: matrix.serve
+        if: matrix.serve && runner.os != 'Windows'
         run: |
           cp "${{ steps.build.outputs.serve-bin }}" "apps/cli/target/${{ matrix.target }}/release/"
           strip "apps/cli/target/${{ matrix.target }}/release/dray-serve"
@@ -131,6 +137,7 @@ jobs:
       # it is about to execute. `shasum` on macOS, `sha256sum` on linux — the
       # runners differ, and the output format is the same either way.
       - name: Package
+        if: runner.os != 'Windows'
         working-directory: apps/cli
         run: |
           set -euo pipefail
@@ -145,12 +152,31 @@ jobs:
           fi
           cat "$archive.sha256"
 
+      # MSVC keeps symbols in a .pdb beside the exe, so there is nothing to
+      # strip. The checksum line is written in sha256sum's own text format, so
+      # `publish` checks it with the rest.
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: apps/cli
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $t = '${{ matrix.target }}'
+          $archive = "dray-$t.zip"
+          Copy-Item "../desktop/src-tauri/target/$t/serve/dray-serve.exe" "target/$t/release/"
+          Compress-Archive -Path "target/$t/release/dray.exe", "target/$t/release/dray-serve.exe" -DestinationPath $archive -Force
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$PWD/$archive.sha256", "$hash  $archive`n")
+          Get-Content "$archive.sha256"
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dray-${{ matrix.target }}
           path: |
             apps/cli/dray-${{ matrix.target }}.tar.gz
             apps/cli/dray-${{ matrix.target }}.tar.gz.sha256
+            apps/cli/dray-${{ matrix.target }}.zip
+            apps/cli/dray-${{ matrix.target }}.zip.sha256
           if-no-files-found: error
 
   # Where PROTOCOL_VERSION moved since the last CLI release, holds publishing
@@ -223,6 +249,8 @@ jobs:
           files: |
             artifacts/*.tar.gz
             artifacts/*.tar.gz.sha256
+            artifacts/*.zip
+            artifacts/*.zip.sha256
           # A label for people reading the releases page. install.sh never reads
           # it and goes by the tag's shape instead, so a release mislabelled
           # here cannot reach the wrong channel.
