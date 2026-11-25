@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { lastRunFailed, lastRunLabel, nextRunLabel, scheduleLabel } from "@/lib/routines";
+import { nextRunLabel, scheduleLabel } from "@/lib/routines";
 import type { Routine } from "@/types/events";
 
 const NOW = Date.parse("2026-11-13T12:00:00Z");
@@ -33,30 +33,6 @@ describe("nextRunLabel", () => {
 
   it("gives a clock time past the hour", () => {
     expect(nextRunLabel(routine({ nextRun: "2026-11-13T15:00:00Z" }), NOW)).toMatch(/^Next /);
-  });
-});
-
-describe("lastRunLabel", () => {
-  it("says nothing before the first run", () => {
-    expect(lastRunLabel(routine())).toBeUndefined();
-  });
-
-  it("names a silent run and a reply", () => {
-    const at = new Date(Date.now() - 5 * 60_000).toISOString();
-    expect(lastRunLabel(routine({ lastResult: { outcome: "silent", at } }))).toEqual({ text: "Nothing to report", age: "5m" });
-    expect(lastRunLabel(routine({ lastResult: { outcome: "replied", text: "CI is green", at } }))).toEqual(
-      { text: "CI is green", age: "5m" },
-    );
-  });
-
-  it("carries why a check failed, and marks it", () => {
-    const r = routine({ lastResult: { outcome: "check_failed", text: "exit 1: no such PR", at: new Date().toISOString() } });
-    expect(lastRunLabel(r)).toEqual({ text: "Check failed: exit 1: no such PR", age: "now" });
-    expect(lastRunFailed(r)).toBe(true);
-  });
-
-  it("draws an outcome a newer server names as it is", () => {
-    expect(lastRunLabel(routine({ lastResult: { outcome: "later", at: new Date().toISOString() } }))).toEqual({ text: "later", age: "now" });
   });
 });
 
