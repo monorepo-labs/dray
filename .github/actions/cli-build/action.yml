@@ -53,11 +53,13 @@ runs:
       shell: bash
       run: |
         strip_root() { awk 'skip { skip = 0; next } /^name = "dray"$/ { skip = 1 } { print }' "$1"; }
+        # Windows' Git Bash has no `shasum`; both print the same digest.
+        sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; }
         hash=$( {
           strip_root apps/cli/Cargo.lock
           strip_root apps/desktop/src-tauri/Cargo.lock
           cat "$GITHUB_ACTION_PATH/action.yml"
-        } | shasum -a 256 | cut -c1-16)
+        } | sha256 | cut -c1-16)
         prefix="cli-cargo-${{ inputs.target }}-${{ inputs.runner }}-${{ steps.rust.outputs.cachekey }}-"
         echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
         echo "key=$prefix$hash" >> "$GITHUB_OUTPUT"
