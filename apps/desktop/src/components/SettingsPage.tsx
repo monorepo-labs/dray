@@ -403,7 +403,7 @@ function OpenFilesRow() {
   const choices = fileOpenerChoices(apps ?? []);
   const pick = pickFileOpener(apps ?? [], stored);
   const editors = choices.filter((app) => app.kind === "editor");
-  // Finder on a Mac; on Linux whichever file manager the scan listed.
+  // Finder on a Mac; off it, whichever file manager the scan listed.
   const files = choices.find((app) => app.kind === "files")?.name ?? (IS_MAC ? "Finder" : "the file manager");
 
   const unavailable = !IS_MAC && !IS_LINUX && !IS_WINDOWS
@@ -1410,7 +1410,9 @@ function CaptureKeyRow({
             }}
           >
             {recording ? (
-              <span className="text-ui text-muted-foreground">Press a shortcut, ⌫ for none…</span>
+              <span className="text-ui text-muted-foreground">
+                Press a shortcut, {IS_MAC ? "⌫" : "Backspace"} for none…
+              </span>
             ) : capture ? (
               <KbdGroup>
                 {captureCaps(capture).map((cap) => (

@@ -28,7 +28,9 @@ Want to sponsor Dray? [drayhq.com/support](https://www.drayhq.com/support)
 
 ## Getting started
 
-You need Node with pnpm, a Rust toolchain, and cmake.
+You need Node with pnpm, a Rust toolchain, and cmake. The desktop app ships for
+macOS 11 or later (Apple silicon and Intel), Linux on x64 and arm64, and
+Windows 11 on x64; the Linux and Windows builds are beta.
 
 ```bash
 pnpm install
@@ -67,6 +69,10 @@ matching section in `apps/desktop/CHANGELOG.md`.
 **CLI:** tag `cli-vX.Y.Z` (stable) or `cli-vX.Y.Z-beta.N` (beta), matching the
 version in `apps/cli/Cargo.toml` exactly. Cut one beside every app release, beta
 included, so a server can run the core that release expects.
+
+App releases ship the Windows NSIS installer when the repo variable
+`RELEASE_WINDOWS` is `true`, plus an MSI on stable; Mac and Linux are released
+independently of it.
 
 ## Credits
 

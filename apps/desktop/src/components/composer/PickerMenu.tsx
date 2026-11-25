@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { CornerDownLeft } from "lucide-react";
 
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import { IS_MAC } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /// The list that opens over the composer while `/` or `@` is being typed.
@@ -209,7 +210,7 @@ export default function PickerMenu<T>({
       </KbdGroup>
       {keepOpenHint && (
         <KbdGroup>
-          <Kbd>⌘</Kbd>
+          <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
           <Kbd>
             <CornerDownLeft strokeWidth={2} />
           </Kbd>

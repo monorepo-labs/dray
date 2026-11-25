@@ -5,6 +5,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::path::{Component, Path};
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -117,10 +118,22 @@ impl ToolLine {
     }
 }
 
-/// The last two segments: enough to know a file by, beside the tool.
+/// The last two segments: enough to know a file by, beside the tool. Through
+/// `Path`, since an agent on Windows names files with backslashes. The join
+/// stays `/` on both: the Mac island draws the same shortened line.
 fn shorten(path: &str) -> String {
-    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    if parts.len() <= 2 { path.to_string() } else { parts[parts.len() - 2..].join("/") }
+    let parts: Vec<_> = Path::new(path)
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    if parts.len() <= 2 {
+        path.to_string()
+    } else {
+        parts[parts.len() - 2..].join("/")
+    }
 }
 
 /// What a permission answer says as the panel closes on it.
@@ -332,6 +345,19 @@ mod tests {
         let line = ToolLine::new(&p);
         assert_eq!(line.beside.as_deref(), Some("c/d.rs"));
         assert!(line.hidden.is_none());
+    }
+
+    /// An agent on Windows hands back backslashes; the card still names the
+    /// file by its last two parts as it does on Linux.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_path_is_shortened_too() {
+        let p = Permission {
+            tool_name: "Write".into(),
+            input: json!({ "file_path": r"C:\work\src\main.rs" }),
+            ..Default::default()
+        };
+        assert_eq!(ToolLine::new(&p).beside.as_deref(), Some("src/main.rs"));
     }
 
     #[test]

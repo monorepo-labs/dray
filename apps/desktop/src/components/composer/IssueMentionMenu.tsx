@@ -9,6 +9,7 @@ import MentionRepoPicker from "@/components/composer/MentionRepoPicker";
 import PickerMenu from "@/components/composer/PickerMenu";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { shortIdentifier } from "@/lib/issue";
+import { IS_MAC } from "@/lib/platform";
 import { setMentionKind, type MentionKind } from "@/lib/issueTracker";
 import type { Issue, IssueTracker, PrMark } from "@/types/events";
 
@@ -88,8 +89,8 @@ export default function IssueMentionMenu({
   );
   const hint = (
     <KbdGroup>
-      <Kbd>⇧</Kbd>
-      <Kbd>⇥</Kbd>
+      <Kbd>{IS_MAC ? "⇧" : "Shift"}</Kbd>
+      <Kbd>{IS_MAC ? "⇥" : "Tab"}</Kbd>
       <span className="ml-0.5">{kind === "issues" ? "PRs" : "issues"}</span>
     </KbdGroup>
   );

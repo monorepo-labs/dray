@@ -20,18 +20,26 @@ pub async fn boat_id() -> Option<String> {
     if let Some(id) = std::env::var("BOAT_ID").ok().filter(|id| sandbox_id(id)) {
         return Some(id);
     }
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-    // Behind a marker, since an rc file is free to print on its own.
-    let run = tokio::process::Command::new(shell)
-        .args(["-l", "-c", "echo __DRAY_BOAT__; printenv BOAT_ID"])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .output();
-    let out = tokio::time::timeout(Duration::from_secs(10), run).await.ok()?.ok()?;
-    let out = String::from_utf8(out.stdout).ok()?;
-    let id = out.rsplit_once("__DRAY_BOAT__\n")?.1.trim();
-    sandbox_id(id).then(|| id.to_string())
+    // A login shell is how the sandbox's unit passes its id here. Windows has
+    // no such shell, and waiting ten seconds for one to fail buys nothing.
+    #[cfg(not(unix))]
+    return None;
+
+    #[cfg(unix)]
+    {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+        // Behind a marker, since an rc file is free to print on its own.
+        let run = tokio::process::Command::new(shell)
+            .args(["-l", "-c", "echo __DRAY_BOAT__; printenv BOAT_ID"])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output();
+        let out = tokio::time::timeout(Duration::from_secs(10), run).await.ok()?.ok()?;
+        let out = String::from_utf8(out.stdout).ok()?;
+        let id = out.rsplit_once("__DRAY_BOAT__\n")?.1.trim();
+        sandbox_id(id).then(|| id.to_string())
+    }
 }
 
 /// boat's id shape, `bx_` and a few letters. Checked because the value lands

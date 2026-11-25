@@ -1608,15 +1608,18 @@ mod tests {
         assert!(endpoint().unwrap().ends_with("dray.sock"));
 
         // The socket follows the data directory, and an endpoint named
-        // outright still wins over it.
+        // outright still wins over it. Joined rather than spelled out: a
+        // Windows path uses a backslash here.
         std::env::set_var("DRAY_HOME", "/tmp/other-home");
-        assert_eq!(endpoint().as_deref(), Some("/tmp/other-home/dray.sock"));
+        let expected = PathBuf::from("/tmp/other-home").join(SOCKET_NAME);
+        assert_eq!(endpoint().as_deref(), Some(expected.to_string_lossy().as_ref()));
         std::env::set_var("DRAY_ENDPOINT", "/tmp/custom.sock");
         assert_eq!(endpoint().as_deref(), Some("/tmp/custom.sock"));
 
         std::env::set_var("DRAY_HOME", "");
         std::env::remove_var("DRAY_ENDPOINT");
-        assert!(endpoint().unwrap().ends_with(".dray/dray.sock"));
+        let tail = PathBuf::from(".dray").join(SOCKET_NAME);
+        assert!(endpoint().unwrap().ends_with(tail.to_string_lossy().as_ref()));
 
         std::env::remove_var("DRAY_HOME");
     }

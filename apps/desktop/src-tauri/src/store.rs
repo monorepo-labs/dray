@@ -696,15 +696,16 @@ fn project_root_of(project_path: &str) -> &str {
 /// it and answers `None`, which is right: the entry's recorded project is what
 /// names the repo in that case, and it is tried first anyway.
 ///
-/// A `/` separator rather than `Path::components`, because this reads paths the
-/// app itself wrote on the only platform it runs on: CEF, the app picker, the
-/// notification centre and the output mute are all macOS-only, and the release
-/// workflow builds `universal-apple-darwin` and nothing else. A Windows port
-/// has this to fix and a great deal more beside it.
+/// Both separators, since [`worktree_path`] writes with `Path::join` and git
+/// writes with `/` everywhere. Still a split rather than `Path::components`:
+/// the first `.claude/worktrees/` segment is what names the outermost repo,
+/// and the name after it must be a direct child.
 fn worktree_root_of(path: &str) -> Option<&str> {
-    let (root, name) = path.split_once("/.claude/worktrees/")?;
-    let name = name.trim_end_matches('/');
-    (!name.is_empty() && !name.contains('/')).then_some(root)
+    let (root, name) = path
+        .split_once("/.claude/worktrees/")
+        .or_else(|| path.split_once("\\.claude\\worktrees\\"))?;
+    let name = name.trim_end_matches(['/', '\\']);
+    (!name.is_empty() && !name.contains('/') && !name.contains('\\')).then_some(root)
 }
 
 impl SessionIndexItem {
@@ -4533,6 +4534,22 @@ mod tests {
         );
         assert_eq!(worktree_root_of("/repo/.claude/worktrees/"), None);
         assert_eq!(worktree_root_of("/repo"), None);
+    }
+
+    /// `worktree_path` writes backslashes on Windows, where the same repair
+    /// must find the root rather than leave a session pointing at a tree that
+    /// is gone.
+    #[test]
+    fn a_worktree_root_is_found_with_either_separator() {
+        assert_eq!(worktree_root_of(r"C:\repo\.claude\worktrees\calm-owl"), Some(r"C:\repo"));
+        assert_eq!(worktree_root_of(r"C:\repo\.claude\worktrees\calm-owl\"), Some(r"C:\repo"));
+        assert_eq!(worktree_root_of(r"C:\repo\.claude\worktrees\proj\subrepo"), None);
+        assert_eq!(
+            worktree_root_of(r"C:\repo\.claude\worktrees\caller\.claude\worktrees\mine"),
+            None
+        );
+        // git writes `/` even on Windows, so a path can carry either spelling.
+        assert_eq!(worktree_root_of(r"C:\repo/.claude/worktrees/calm-owl"), Some(r"C:\repo"));
     }
 
     /// The caller's worktree recorded as the project is usually a *live*

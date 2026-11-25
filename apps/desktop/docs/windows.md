@@ -12,8 +12,8 @@
 - **Git for Windows sets `core.autocrlf`.** Anything that reads back what git restored turns it off for its own calls, as the bots' folder does. `.gitattributes` keeps working trees LF, bar `.bat` and `.cmd`, which cmd.exe needs CRLF in.
 - **Git's `sh` is put on every child's `PATH`** (`<Git>\bin`): the installer adds only `<Git>\cmd`, and a routine's check runs through `sh -c`.
 - **The session index's cache stamp carries NTFS's file id** (`platform::file_id`): the mtime clock ticks every ~15.6ms, and creation time is carried onto a file renamed over another, which is how the index is written.
-- **Window chrome is Linux's**: undecorated, opaque, drawn controls, flat surfaces (`tauri.windows.conf.json`, `useGlass`).
-- **Dray Island is the Linux island's binary**, `apps/island-linux` with `win.rs` in place of `x11.rs`, the app's child as on Linux (`island.rs`). Its Windows rules are in that crate's PLAN.md. A dev app finds it in the crate's `target\debug`; no bundle carries it yet.
+- **Window chrome is undecorated and opaque**, with drawn controls: Linux's small round buttons, Windows' flat 44px caption buttons with the red close hover (`tauri.windows.conf.json`, `WindowControls.tsx`). A Mac keeps its traffic lights.
+- **Dray Island is the Linux island's binary**, `apps/island-linux` with `win.rs` in place of `x11.rs`, the app's child as on Linux (`island.rs`). Its Windows rules are in that crate's PLAN.md. A dev app finds it in the crate's `target\debug`; the release bundles it as a sidecar beside the app.
 - **Agents run through Git Bash.** Claude Code finds it on its own; it has a PowerShell tool besides, which anything denying Bash must deny too (`title.rs`).
 - **The static CRT** (`+crt-static` in `.cargo/config.toml`, `CMAKE_MSVC_RUNTIME_LIBRARY` for transcribe's CMake). CEF's wrapper is built `/MT`, one binary cannot mix it with `/MD`, and the exe then needs no VC++ runtime.
 - **The browser is a child `HWND` per tab, libcef.dll delay-loaded**, and the headless Chromium's DevTools pipe rides two inherited handles named on its command line. See [browser.md](browser.md).
