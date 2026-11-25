@@ -3790,9 +3790,9 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "opentunnel"
-version = "0.6.2"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fe519d5eff593d1ea11a86ab58c395f507de2eecdce9e6fc412f23281c04949"
+checksum = "ec8848d2418789f1a879b5c94d7e601c1bdd23e7a8a9ce366edb81cec58e5f73"
 dependencies = [
  "futures-util",
  "humantime",
@@ -6679,7 +6679,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
