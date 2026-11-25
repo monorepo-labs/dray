@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import type { Bot } from "@/types/events";
 
 import BotTiles from "./BotTiles";
-import Welcome from "./Welcome";
+import Welcome, { SHIMMER_END } from "./Welcome";
 import { type AgentSetup, type GithubSetup, type SetupState, useAgentSetup, useGithubSetup } from "./agents";
 import { askToOpenDrayBot, finishOnboarding, useOnboarding } from "./state";
 import { startOnboardingMusic } from "./welcomeSounds";
@@ -53,9 +53,8 @@ function Flow({ onStart }: { onStart: () => void }) {
   }, []);
   const agents = useAgentSetup();
   const github = useGithubSetup();
-  // The music starts with the logo and plays once; leaving before it ends
-  // fades it out.
-  useEffect(() => startOnboardingMusic().stop, []);
+  // The music starts with the logo and plays to its end, past onboarding.
+  useEffect(() => startOnboardingMusic(SHIMMER_END), []);
   return (
     // Above the sign-in gate (1000), which it comes before.
     <div className="fixed inset-0 z-[1010] flex flex-col overflow-hidden bg-black text-white select-none">

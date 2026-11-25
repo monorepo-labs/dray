@@ -22,9 +22,6 @@ import sendUrl from "../../../island/Island/send.wav?url";
 /// A local copy of a macOS sound; see above.
 const system = (name: string) => () => void new Audio(`/demo/system-sounds/${name}.wav`).play().catch(() => {});
 
-/// Play restarts the song rather than stacking a second copy on it.
-let onboardingMusic: ReturnType<typeof startOnboardingMusic> | undefined;
-
 type Sound = {
   name: string;
   file: string;
@@ -68,12 +65,9 @@ const APP: Sound[] = [
   {
     name: "Onboarding music",
     file: "src/assets/onboarding-music.mp3",
-    play: () => {
-      onboardingMusic?.stop();
-      onboardingMusic = startOnboardingMusic();
-    },
+    play: () => startOnboardingMusic(0),
     where: [
-      "Onboarding, from the logo on, once through at full volume. Leaving onboarding fades it out over 4 seconds.",
+      "Onboarding, from the logo on: 30% under the logo's shimmer, then full volume. Plays once to its end, past onboarding and sign-in. Play does nothing while it plays.",
     ],
   },
   {

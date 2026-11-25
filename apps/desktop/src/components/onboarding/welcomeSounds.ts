@@ -8,6 +8,9 @@
 
 import musicUrl from "@/assets/onboarding-music.mp3";
 
+/// How long the shimmer rings after its moment: its last voice's envelope.
+export const SHIMMER_MS = 3200;
+
 /// High soft sines drifting in like light on glass, landing as the logo's
 /// light passes, `momentMs` from now.
 export function playWelcomeSound(momentMs: number) {
@@ -51,34 +54,46 @@ function voice(ctx: BaseAudioContext, to: AudioNode, hz: number, type: Oscillato
   osc.stop(until);
 }
 
-/// How long the music takes to fade once onboarding ends.
-const MUSIC_FADE_S = 4;
+/// How long the song takes to rise to full volume once the shimmer is over.
+const RISE_S = 1;
+/// The song's level under the shimmer.
+const UNDER_SHIMMER = 0.3;
+let playing = false;
 
-/// Onboarding's song, "Welcome to Dray", at full volume as soon as it is
-/// decoded, and played once: it has its own build-in and ending, so nothing
-/// fades it but `stop`. Never looped, since a reader still installing an agent
-/// sits on setup for minutes.
+/// Onboarding's song, "Welcome to Dray", from the logo on: at 30% until
+/// `quietMs` from now, when the shimmer is over, then at full volume. Played
+/// once, to its own ending, and never stopped: it outlives onboarding, so a
+/// reader quick through setup and sign-in still hears it out. A second call
+/// while it plays does nothing, which is also what keeps StrictMode's second
+/// effect run from starting a second copy.
 ///
 /// Decoded into a buffer and scheduled on the audio clock rather than played
-/// by an `<audio>`: the fade on `stop` must run while the window is in the
+/// by an `<audio>`, so the rise lands on time while the window is in the
 /// background, where timers are throttled.
-export function startOnboardingMusic(): { stop: () => void } {
+export function startOnboardingMusic(quietMs: number) {
+  if (playing) return;
   let ctx: AudioContext;
   try {
     ctx = new AudioContext();
   } catch {
-    return { stop: () => {} };
+    return;
   }
-  const close = () => void ctx.close().catch(() => {});
+  playing = true;
+  const close = () => {
+    playing = false;
+    void ctx.close().catch(() => {});
+  };
   const master = ctx.createGain();
+  const rise = ctx.currentTime + quietMs / 1000;
+  master.gain.setValueAtTime(UNDER_SHIMMER, 0);
+  master.gain.setValueAtTime(UNDER_SHIMMER, rise);
+  master.gain.linearRampToValueAtTime(1, rise + RISE_S);
   master.connect(ctx.destination);
-  let stopped = false;
 
   void fetch(musicUrl)
     .then((res) => res.arrayBuffer())
     .then((bytes) => ctx.decodeAudioData(bytes))
     .then((music) => {
-      if (stopped) return;
       const src = ctx.createBufferSource();
       src.buffer = music;
       src.connect(master);
@@ -86,17 +101,6 @@ export function startOnboardingMusic(): { stop: () => void } {
       src.start();
     })
     .catch(close);
-
-  const stop = () => {
-    if (stopped) return;
-    stopped = true;
-    const now = ctx.currentTime;
-    master.gain.cancelScheduledValues(now);
-    master.gain.setValueAtTime(master.gain.value, now);
-    master.gain.linearRampToValueAtTime(0, now + MUSIC_FADE_S);
-    setTimeout(close, (MUSIC_FADE_S + 0.3) * 1000);
-  };
-  return { stop };
 }
 
 /// Decaying noise as an impulse: a large soft room.

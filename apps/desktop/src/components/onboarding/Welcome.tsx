@@ -1,6 +1,6 @@
 import { type CSSProperties, useEffect, useRef } from "react";
 
-import { playWelcomeSound } from "./welcomeSounds";
+import { playWelcomeSound, SHIMMER_MS } from "./welcomeSounds";
 import "./onboarding.css";
 
 /// When, in ms, each beat of the welcome lands. The wordmark sits a while
@@ -8,6 +8,10 @@ import "./onboarding.css";
 const SHINE_AT = 1600;
 /// The light leaves the wordmark white behind it, about when it is halfway across.
 const LIT_AT = SHINE_AT + 500;
+/// The shimmer peaks just after the light sets off.
+const SHIMMER_AT = SHINE_AT + 300;
+/// The song stays under the shimmer until it is over.
+export const SHIMMER_END = SHIMMER_AT + SHIMMER_MS;
 const LOGO_OUT_AT = 4600;
 const TEXT_AT = 5200;
 /// Each word of the welcome rises a beat after the one before it.
@@ -45,7 +49,7 @@ export default function Welcome({ onNext }: { onNext: () => void }) {
 
   useEffect(() => {
     // A tick late, so a mount React throws away at once never plays.
-    const play = setTimeout(() => playWelcomeSound(SHINE_AT + 300), 0);
+    const play = setTimeout(() => playWelcomeSound(SHIMMER_AT), 0);
     const advance = setTimeout(() => next.current(), NEXT_AT);
     return () => {
       clearTimeout(play);
