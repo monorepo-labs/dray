@@ -1089,31 +1089,8 @@ fn windows_start() -> Result<String, String> {
     let was_running = windows_server_pid().is_some();
     if !was_running {
         // Directly, not through `conhost --headless`, which exits at once when
-        // started with no console handles to host; a hidden console of its
-        // own serves the same.
-        let mut start = Command::new(&args[2]);
-        start.args(&args[3..]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-        // Out of this terminal's group and, where the job allows it, out of an
-        // SSH session's job, which takes its processes with it on disconnect.
-        #[cfg(windows)]
-        let started = {
-            use std::os::windows::process::CommandExt;
-            use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
-            use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
-            // Windows hands a child every inheritable handle, and this
-            // process's own stdio is an SSH session's pipes: inherited, the
-            // server would hold them open and the session would never end.
-            for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
-                // SAFETY: this process's own standard handles, flag cleared.
-                unsafe { SetHandleInformation(GetStdHandle(which), HANDLE_FLAG_INHERIT, 0) };
-            }
-            const FLAGS: u32 = 0x0800_0000 | 0x0000_0200; // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
-            const BREAKAWAY: u32 = 0x0100_0000; // CREATE_BREAKAWAY_FROM_JOB
-            start.creation_flags(FLAGS | BREAKAWAY).spawn().or_else(|_| start.creation_flags(FLAGS).spawn())
-        };
-        #[cfg(not(windows))]
-        let started = start.spawn();
-        started.map_err(|e| format!("could not start the server: {e}"))?;
+        // started with no console handles to host.
+        spawn_detached(&args[2..]).map_err(|e| format!("could not start the server: {e}"))?;
         // A server that cannot bind exits at once.
         std::thread::sleep(std::time::Duration::from_millis(2500));
         if windows_server_pid().is_none() {
@@ -1125,6 +1102,63 @@ fn windows_start() -> Result<String, String> {
         note += &already_running();
     }
     Ok(note)
+}
+
+/// Starts `args` with no window, out of this terminal's process group and,
+/// where the job allows it, out of an SSH session's job, which takes its
+/// processes with it on disconnect. Inheriting no handle at all: `std`
+/// spawns with every inheritable one, an SSH session's pipes among them
+/// (through the shell that ran `dray`), and a server holding those would keep
+/// the session from ever ending. The server writes to its `--log` instead.
+#[cfg(windows)]
+fn spawn_detached(args: &[&str]) -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        CreateProcessW, CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, PROCESS_INFORMATION,
+        STARTUPINFOW,
+    };
+    let mut line: Vec<u16> = dray_proto::login::command_line(args).encode_utf16().chain(Some(0)).collect();
+    let mut tried = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB;
+    loop {
+        // SAFETY: zeroed structs of the documented size; `line` is a mutable
+        // NUL-terminated buffer, as CreateProcessW requires.
+        let made = unsafe {
+            let mut startup: STARTUPINFOW = std::mem::zeroed();
+            startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+            let mut info: PROCESS_INFORMATION = std::mem::zeroed();
+            let ok = CreateProcessW(
+                std::ptr::null(),
+                line.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                tried,
+                std::ptr::null(),
+                std::ptr::null(),
+                &startup,
+                &mut info,
+            );
+            if ok != 0 {
+                CloseHandle(info.hProcess);
+                CloseHandle(info.hThread);
+            }
+            ok != 0
+        };
+        if made {
+            return Ok(());
+        }
+        // A job that forbids breaking away refuses the flag; stay inside it.
+        if tried & CREATE_BREAKAWAY_FROM_JOB != 0 {
+            tried &= !CREATE_BREAKAWAY_FROM_JOB;
+            continue;
+        }
+        return Err(std::io::Error::last_os_error());
+    }
+}
+
+#[cfg(not(windows))]
+fn spawn_detached(_: &[&str]) -> std::io::Result<()> {
+    Err(std::io::Error::other("Windows alone"))
 }
 
 /// The pid `serve-port` names, while it still runs a `dray-serve`: the file
