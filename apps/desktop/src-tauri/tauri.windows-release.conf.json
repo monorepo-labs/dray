@@ -6,7 +6,8 @@
     "shortDescription": "Desktop app for coding agents",
     "externalBin": ["target/cli/dray-cli", "target/island-linux/dray-island"],
     "windows": {
-      "nsis": { "installMode": "currentUser", "installerHooks": "windows/hooks.nsh" }
+      "nsis": { "installMode": "currentUser", "installerHooks": "windows/hooks.nsh" },
+      "wix": { "fragmentPaths": ["windows/run-key.wxs"], "componentRefs": ["DrayRunKey"] }
     }
   }
 }
