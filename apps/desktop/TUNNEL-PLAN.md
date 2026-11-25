@@ -209,6 +209,15 @@ the only way to new addresses. No account, no download, no child process.
   unit. On a Mac with the app, `dray server tunnel` is the This Mac button.
 - **The Mac's Remote access listener takes any free port**, since nothing
   needs to know it but the route.
+- **A network change reconnects a dropped tunnel at once** (#1558,
+  [netwatch.rs](src-tauri/src/netwatch.rs)). opentunnel retries with backoff
+  capped at 30s and has no "try now", so a new address or default route (read
+  off netlink, or `PF_ROUTE` on macOS) starts a tunnel that is not connected
+  over, same identity and address. A connected one is left alone, unless the
+  machine slept past the relay's 45s idle timeout. A WAN-only outage moves no
+  interface and still waits out the backoff. Measured in a network namespace,
+  interface down then up: back 1.2–1.3s after restore, against 0.3–17s before
+  for a 180s outage.
 
 Measured: Remote access through the relay, first start 25s (the certificate),
 a client admitted and an event delivered, off and on again the same address.
