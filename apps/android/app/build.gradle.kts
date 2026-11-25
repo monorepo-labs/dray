@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -7,6 +9,21 @@ plugins {
 // Push lights up once the Firebase project's `google-services.json` sits beside this file.
 // Without it the app still builds, and Settings → Notifications says push isn't set up.
 if (file("google-services.json").exists()) apply(plugin = "com.google.gms.google-services")
+
+// Play upload key: `keystore.properties` beside the project root, or the same four values as
+// DRAY_ANDROID_* env vars. Without them a release build still configures, just unsigned.
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun signingValue(key: String, env: String): String? =
+    keystoreProps.getProperty(key) ?: System.getenv(env)?.takeIf { it.isNotEmpty() }
+val uploadSigning = listOf(
+    signingValue("storeFile", "DRAY_ANDROID_STORE_FILE"),
+    signingValue("storePassword", "DRAY_ANDROID_STORE_PASSWORD"),
+    signingValue("keyAlias", "DRAY_ANDROID_KEY_ALIAS"),
+    signingValue("keyPassword", "DRAY_ANDROID_KEY_PASSWORD"),
+).takeIf { values -> values.all { it != null } }?.map { it!! }
 
 android {
     namespace = "com.yogesh.dray"
@@ -23,8 +40,19 @@ android {
         buildConfigField("String", "PUSH_RELAY", "\"https://drayhq.com\"")
     }
 
+    signingConfigs {
+        if (uploadSigning != null) create("upload") {
+            val (store, storePass, alias, keyPass) = uploadSigning
+            storeFile = rootProject.file(store)
+            storePassword = storePass
+            keyAlias = alias
+            keyPassword = keyPass
+        }
+    }
+
     buildTypes {
         release {
+            signingConfigs.findByName("upload")?.let { signingConfig = it }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
