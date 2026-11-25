@@ -32,6 +32,8 @@ use std::process::ExitCode;
 const SKILL: &str = include_str!("../skill/SKILL.md");
 
 const INSTALLER_URL: &str = "https://www.drayhq.com/install.sh";
+/// install.sh's Windows twin, which `dray update` runs there.
+const WINDOWS_INSTALLER_URL: &str = "https://www.drayhq.com/install.ps1";
 
 #[derive(Parser)]
 #[command(
@@ -1235,7 +1237,8 @@ fn print_table(sessions: &[SessionSummary]) {
 ///
 /// To a file first, not `curl | sh`: `pipefail` is not POSIX, so piped straight
 /// into a shell a failed download runs an empty script and reports success.
-/// curl or wget, the pair the installer itself accepts.
+/// curl or wget, the pair the installer itself accepts. On Windows, install.ps1
+/// through PowerShell, where a failed download throws and exits non-zero.
 fn update(args: Update) -> Result<(), String> {
     let exe = std::env::current_exe()
         .map_err(|e| format!("could not find the running dray binary: {e}"))?;
@@ -1254,17 +1257,11 @@ fn update(args: Update) -> Result<(), String> {
         return Ok(());
     }
 
-    let mut sh = std::process::Command::new("sh");
-    sh.args([
-        "-c",
-        "t=$(mktemp) && trap 'rm -f \"$t\"' EXIT && \
-         if command -v curl >/dev/null; then curl -fsSL \"$0\" -o \"$t\"; else wget -qO \"$t\" \"$0\"; fi && \
-         sh \"$t\"",
-        INSTALLER_URL,
-    ])
+    let mut sh = installer();
     // Where this binary lives, not ~/.local/bin. Renaming over a running
-    // unix binary is safe: the process keeps the inode it started from.
-    .env("DRAY_INSTALL_DIR", dir)
+    // binary is safe on both: a unix process keeps the inode it started from,
+    // and install.ps1 renames a running exe aside rather than writing over it.
+    sh.env("DRAY_INSTALL_DIR", dir)
     // An update is not a first install: no setup questions.
     .env("DRAY_UPDATING", "1")
     .env("DRAY_CHANNEL", args.channel.as_deref().unwrap_or(own_channel()));
@@ -1283,7 +1280,7 @@ fn update(args: Update) -> Result<(), String> {
 
     // The installer exits 0 on "already installed" too, so success alone says
     // nothing about the server being left behind. A replaced binary does.
-    let serve = dir.join("dray-serve");
+    let serve = dir.join(format!("dray-serve{}", std::env::consts::EXE_SUFFIX));
     let stamp = || std::fs::metadata(&serve).and_then(|meta| meta.modified()).ok();
     let before = stamp();
 
@@ -1302,6 +1299,30 @@ fn update(args: Update) -> Result<(), String> {
         Ok(status) => Err(format!("the installer failed ({status})")),
         Err(e) => Err(format!("could not run the installer: {e}")),
     }
+}
+
+/// The installer as a command: its URL fetched and run by the platform's shell.
+fn installer() -> std::process::Command {
+    if cfg!(windows) {
+        let mut ps = std::process::Command::new("powershell");
+        ps.args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &format!("$ErrorActionPreference = 'Stop'; iex (irm -UseBasicParsing '{WINDOWS_INSTALLER_URL}')"),
+        ]);
+        return ps;
+    }
+    let mut sh = std::process::Command::new("sh");
+    sh.args([
+        "-c",
+        "t=$(mktemp) && trap 'rm -f \"$t\"' EXIT && \
+         if command -v curl >/dev/null; then curl -fsSL \"$0\" -o \"$t\"; else wget -qO \"$t\" \"$0\"; fi && \
+         sh \"$t\"",
+        INSTALLER_URL,
+    ]);
+    sh
 }
 
 /// The release the `dray-serve` beside this binary was built as, for a machine
