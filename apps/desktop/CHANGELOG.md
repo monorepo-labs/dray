@@ -27,6 +27,33 @@ reads:
   to a line or two. A release with no highlights for an app gets the small
   card there instead, when it carries `notify`.
 
+## 0.35.0 · 2026-11-26 · notify
+
+### New
+
+- **Switch a task's harness mid-session.** Pick another harness in the
+  composer and your next message moves the task there, with everything
+  said so far.
+  ![A chat Claude Code answered, Codex picked in the composer for the next message](changelog/harness.png)
+  <!-- highlight: desktop -->
+- **Your agents, in your pocket. Dray is on iPhone and Android.** The
+  iPhone app is on the App Store. Android is in beta: message
+  @yogesharc on X or email support@drayhq.com to join. Every task on
+  every machine, with questions to answer, permissions to allow and
+  alerts when one is ready to merge.
+  ![Dray's bot chat on an iPhone, beside a QR code for the App Store](changelog/iphone.png)
+  <!-- highlight: desktop -->
+- **Dray on Windows (beta).** Windows 10 and 11 on x64: download
+  `Dray_x64-setup.exe`, or `Dray_x64.msi` for machines managed per
+  machine. It updates itself like the Mac app. The installer is not
+  signed yet, so SmartScreen may warn. Sessions keep running after you
+  quit and come back at sign-in, and `irm https://www.drayhq.com/install.ps1 | iex`
+  installs the `dray` CLI and server.
+
+### Fixed
+
+- The model picker is wide enough for every agent, so the switch-agent
+  shortcut no longer runs past its edge.
 ## 0.34.3 · 2026-11-25
 
 ### Improved
