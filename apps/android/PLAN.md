@@ -121,6 +121,19 @@ drawn in 3s as `PushService` would). Run the site with `FCM_ORIGIN` pointing
 at a stand-in and `token_uri` in the key file at one too, and every message the
 relay sends lands there to replay into the app.
 
+## Release signing
+
+**A Play bundle is `./gradlew :app:bundleRelease`, signed with the upload
+key.** The key's four values come from `apps/android/keystore.properties`
+(`storeFile`, `storePassword`, `keyAlias`, `keyPassword`; a relative
+`storeFile` resolves against `apps/android/`) or from the env vars
+`DRAY_ANDROID_STORE_FILE`, `DRAY_ANDROID_STORE_PASSWORD`,
+`DRAY_ANDROID_KEY_ALIAS` and `DRAY_ANDROID_KEY_PASSWORD`. With neither, the
+release build still configures and comes out unsigned, so CI needs nothing.
+The properties file, `*.jks` and `*.keystore` are gitignored. Play App Signing
+holds the real app key; a lost upload key is reset from Play Console, not
+fatal. Bump `versionCode` for every upload.
+
 ## Layout
 
 ```
