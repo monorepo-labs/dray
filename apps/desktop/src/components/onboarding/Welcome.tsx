@@ -10,8 +10,7 @@ const SHINE_AT = 1600;
 const LIT_AT = SHINE_AT + 500;
 /// The shimmer peaks just after the light sets off.
 const SHIMMER_AT = SHINE_AT + 300;
-/// The song comes in under the logo, and stays under the shimmer until it is over.
-export const SONG_AT = 2000;
+/// The song stays under the shimmer until it is over.
 export const SHIMMER_END = SHIMMER_AT + SHIMMER_MS;
 const LOGO_OUT_AT = 4600;
 const TEXT_AT = 5200;
