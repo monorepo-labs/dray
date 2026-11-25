@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { parseChangelog } from "../src/lib/changelog.ts";
@@ -53,4 +53,13 @@ test("refuses a highlight it cannot read", () => {
 test("the real CHANGELOG.md parses", () => {
   const releases = parseChangelog(readFileSync(new URL("../../desktop/CHANGELOG.md", import.meta.url), "utf8"));
   assert.ok(releases.length > 0);
+});
+
+test("every picture and video the real CHANGELOG.md names is in public/", () => {
+  const releases = parseChangelog(readFileSync(new URL("../../desktop/CHANGELOG.md", import.meta.url), "utf8"), "");
+  const missing = releases
+    .flatMap((r) => r.sections.flatMap((s) => s.items.flatMap((i) => i.media)))
+    .map((m) => m.url)
+    .filter((url) => !url.startsWith("http") && !existsSync(new URL(`../public${url}`, import.meta.url)));
+  assert.deepEqual(missing, []);
 });
