@@ -350,7 +350,7 @@ async fn move_agent(
         bail!("a bot chat moves to another agent from its own picker");
     }
     if !crate::binpath::agent_available(to).await {
-        bail!("{} isn't installed. Install it with `{}`, then send again.", to.label(), to.install_command());
+        bail!("{} isn't installed. {}, then send again.", to.label(), to.install_advice());
     }
     let id = &item.session_id;
     // Numbered off the old child's counter while one runs, since its reader
@@ -1315,9 +1315,9 @@ impl SessionManager {
             // again once the CLI is installed.
             if !crate::binpath::agent_available(harness).await {
                 bail!(
-                    "{} isn't installed. Install it with `{}`, then send again.",
+                    "{} isn't installed. {}, then send again.",
                     harness.label(),
-                    harness.install_command(),
+                    harness.install_advice(),
                 );
             }
             require_dir(cwd, "The project folder").await?;

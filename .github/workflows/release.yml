@@ -828,8 +828,12 @@ jobs:
           $ninja | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
       # The Mac's step: the CLI the overlay hands the bundler, which puts it
-      # beside the app as dray-cli.exe.
+      # beside the app as dray-cli.exe. The static CRT, as the app has it
+      # from src-tauri/.cargo/config.toml, which neither sidecar's crate
+      # reads: linked dynamically, each needs the VC++ runtime installed.
       - name: Build the dray CLI
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
         run: apps/desktop/scripts/cli-sidecar.sh apps/desktop/src-tauri/target/cli
 
       # The island, which island.rs starts from beside the app's own binary.
@@ -838,6 +842,8 @@ jobs:
       # as dray-island.exe.
       - name: Build Dray Island
         working-directory: apps/island-linux
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
         run: |
           set -euo pipefail
           t="$(rustc -vV | sed -n 's/^host: //p' | tr -d '\r')"

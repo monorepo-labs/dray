@@ -890,6 +890,7 @@ impl Harness {
     ///
     /// Run only for an agent that is not on the machine at all, so it never puts
     /// a second copy beside one the reader installed some other way.
+    #[cfg(not(windows))]
     pub fn install_command(self) -> &'static str {
         match self {
             Harness::ClaudeCode => "curl -fsSL https://claude.ai/install.sh | bash",
@@ -907,6 +908,31 @@ impl Harness {
             // is missing, this build is. A command guessed from the name would
             // be the one thing worse than no command.
             Harness::Other(_) => "",
+        }
+    }
+
+    /// On Windows, the PowerShell installer each vendor publishes beside its
+    /// `install.sh`, which Git Bash cannot stand in for: Claude Code's refuses
+    /// MINGW. fx and OpenCode publish none (both 404), so they answer empty and
+    /// the reader is sent to [`docs_url`](Self::docs_url) instead.
+    #[cfg(windows)]
+    pub fn install_command(self) -> &'static str {
+        match self {
+            Harness::ClaudeCode => "irm https://claude.ai/install.ps1 | iex",
+            Harness::Codex => "irm https://chatgpt.com/codex/install.ps1 | iex",
+            Harness::Pi => "irm https://pi.dev/install.ps1 | iex",
+            Harness::Grok => "irm https://x.ai/cli/install.ps1 | iex",
+            Harness::Fx | Harness::OpenCode | Harness::Other(_) => "",
+        }
+    }
+
+    /// "Install it with `…`", or the vendor's page where there is no command
+    /// to give, for a sentence that goes on to say what to do next.
+    pub fn install_advice(self) -> String {
+        match (self.install_command(), self.docs_url()) {
+            ("", "") => format!("Dray can't install {}", self.label()),
+            ("", docs) => format!("Install it from {docs}"),
+            (command, _) => format!("Install it with `{command}`"),
         }
     }
 

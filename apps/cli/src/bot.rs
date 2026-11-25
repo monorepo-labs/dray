@@ -1,6 +1,5 @@
 use clap::{Args, Subcommand};
 use dray_proto::{BotRef, BotSummary, CreateBot, RenameBot, Request, Response, SendToBot};
-use std::path::Path;
 
 use super::{parent_session_id, send, unexpected, MACHINE};
 
@@ -164,10 +163,10 @@ fn answered(response: Response) -> Result<BotSummary, String> {
     }
 }
 
-/// A project's own name, not the whole path. Through `Path`, since a Windows
-/// project path separates its parts with backslashes.
+/// A project's own name, not the whole path. Either separator, whatever this
+/// machine's: a bot's task can live on a Windows server named from a Mac.
 fn project_name(path: &str) -> &str {
-    Path::new(path).file_name().and_then(|n| n.to_str()).filter(|n| !n.is_empty()).unwrap_or(path)
+    path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or(path)
 }
 
 /// A colour by name, or a hue in degrees.
@@ -212,11 +211,9 @@ mod tests {
         assert!(hue("mauve").unwrap_err().contains("teal"));
     }
 
-    /// MAIN_SEPARATOR so one assertion pins both spellings without a cfg.
     #[test]
     fn a_task_names_its_project_not_its_whole_path() {
-        let sep = std::path::MAIN_SEPARATOR;
-        assert_eq!(project_name(&format!("C:{sep}work{sep}my repo")), "my repo");
-        assert_eq!(project_name("/work/my repo"), "my repo");
+        assert_eq!(project_name(r"C:\work\my repo"), "my repo");
+        assert_eq!(project_name("/work/my repo/"), "my repo");
     }
 }

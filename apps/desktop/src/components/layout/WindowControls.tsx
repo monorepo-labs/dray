@@ -19,9 +19,13 @@ const DRAWN = !IS_MAC && isTauri();
 ///
 /// Close asks the window to close, which lands on the same `CloseRequested` the
 /// manager's button raised, so the quit dialog still guards it. The row's deep
-/// drag region already lets a `<button>` keep its click; the strip opts out as
-/// well, so no press here can start a drag instead.
-export default function WindowControls() {
+/// drag region lets each `<button>` keep its click, and the gaps between them
+/// still drag the window.
+///
+/// `padded` says the header pads its right edge with `px-3`, which Windows'
+/// flush caption buttons pull back out of; a header with no padding would
+/// push Close past the window's edge.
+export default function WindowControls({ padded = false }: { padded?: boolean }) {
   const maximized = useMaximized();
   if (!DRAWN) return null;
 
@@ -38,11 +42,7 @@ export default function WindowControls() {
   const button = "shrink-0 text-muted-foreground transition-colors hover:text-foreground";
 
   return (
-    <div
-      // A click here is a button press, never a way to move the window.
-      data-tauri-drag-region="false"
-      className={cn("flex shrink-0 items-center gap-0.5", IS_WINDOWS && "-mr-3 gap-0")}
-    >
+    <div className={cn("flex shrink-0 items-center gap-0.5", IS_WINDOWS && "gap-0", IS_WINDOWS && padded && "-mr-3")}>
       <Button
         variant="ghost"
         size="icon-sm"

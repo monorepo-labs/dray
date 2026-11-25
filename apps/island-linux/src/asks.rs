@@ -5,7 +5,6 @@
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::path::{Component, Path};
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -118,22 +117,13 @@ impl ToolLine {
     }
 }
 
-/// The last two segments: enough to know a file by, beside the tool. Through
-/// `Path`, since an agent on Windows names files with backslashes. The join
-/// stays `/` on both: the Mac island draws the same shortened line.
+/// The last two segments: enough to know a file by, beside the tool. Split on
+/// either separator rather than through `Path`, which drops `.` and `..` and
+/// would draw `./src/a.rs` whole where the Mac island draws `src/a.rs`; a path
+/// from an agent on Windows uses backslashes. Joined with `/` on both.
 fn shorten(path: &str) -> String {
-    let parts: Vec<_> = Path::new(path)
-        .components()
-        .filter_map(|c| match c {
-            Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
-            _ => None,
-        })
-        .collect();
-    if parts.len() <= 2 {
-        path.to_string()
-    } else {
-        parts[parts.len() - 2..].join("/")
-    }
+    let parts: Vec<&str> = path.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
+    if parts.len() <= 2 { path.to_string() } else { parts[parts.len() - 2..].join("/") }
 }
 
 /// What a permission answer says as the panel closes on it.
@@ -348,16 +338,13 @@ mod tests {
     }
 
     /// An agent on Windows hands back backslashes; the card still names the
-    /// file by its last two parts as it does on Linux.
-    #[cfg(windows)]
+    /// file by its last two parts, and `./` never keeps a path whole.
     #[test]
-    fn a_windows_path_is_shortened_too() {
-        let p = Permission {
-            tool_name: "Write".into(),
-            input: json!({ "file_path": r"C:\work\src\main.rs" }),
-            ..Default::default()
-        };
-        assert_eq!(ToolLine::new(&p).beside.as_deref(), Some("src/main.rs"));
+    fn a_path_is_shortened_whichever_way_it_is_spelled() {
+        for (path, beside) in [(r"C:\work\src\main.rs", "src/main.rs"), ("./src/a.rs", "src/a.rs"), ("../x/y.rs", "x/y.rs")] {
+            let p = Permission { tool_name: "Write".into(), input: json!({ "file_path": path }), ..Default::default() };
+            assert_eq!(ToolLine::new(&p).beside.as_deref(), Some(beside), "{path}");
+        }
     }
 
     #[test]

@@ -36,8 +36,10 @@ import type { AgentAvailability } from "@/types/events";
 /// **The sentence is Rust's, and so is whether there are buttons at all.** An
 /// agent can be unavailable for a reason installing does not fix — a harness
 /// this build cannot drive yet — and offering an installer there sends the
-/// reader to fix something that is not broken. So a missing `installCommand`
-/// draws the sentence alone rather than a disabled pair.
+/// reader to fix something that is not broken. So a missing `docsUrl` draws
+/// the sentence alone rather than a disabled pair, and a missing
+/// `installCommand` beside one (fx on Windows, which has no installer) draws
+/// the guide alone.
 export default function AgentMissingNotice({ agent }: { agent: AgentAvailability }) {
   const [copied, copy] = useCopied();
 
@@ -45,12 +47,14 @@ export default function AgentMissingNotice({ agent }: { agent: AgentAvailability
     <div className="mb-2 flex items-center gap-3 rounded-xl border border-border/60 px-3 py-2">
       <p className="min-w-0 flex-1 truncate text-ui text-foreground">{agent.reason}</p>
 
-      {agent.installCommand && agent.docsUrl && (
+      {agent.docsUrl && (
         <div className="flex shrink-0 items-center gap-1.5">
-          <Button variant="secondary" size="sm" onClick={() => void copy(agent.installCommand!)}>
-            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-            {copied ? "Copied" : "Copy command"}
-          </Button>
+          {agent.installCommand && (
+            <Button variant="secondary" size="sm" onClick={() => void copy(agent.installCommand!)}>
+              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+              {copied ? "Copied" : "Copy command"}
+            </Button>
+          )}
           <Button variant="ghost" size="sm" onClick={() => void openUrl(agent.docsUrl!)}>
             Install guide
           </Button>

@@ -319,6 +319,21 @@ pub(super) async fn run_in_terminal(command: &str, cwd: &str) -> Result<(), Stri
     opened
 }
 
+/// One PowerShell line in a console of its own, left open so its last words
+/// stay readable.
+pub(super) async fn run_in_powershell(command: &str) -> Result<(), String> {
+    let dir = std::env::home_dir().unwrap_or_else(|| PathBuf::from("C:\\"));
+    let args = ["-NoExit", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command].map(String::from);
+    spawn(Path::new("powershell.exe"), &args, &dir, true, "PowerShell").await
+}
+
+/// `url` in the default browser, through Explorer, which hands a URL to
+/// whatever is registered for it.
+pub(super) async fn open_url(url: &str) -> Result<(), String> {
+    let dir = std::env::home_dir().unwrap_or_else(|| PathBuf::from("C:\\"));
+    spawn(Path::new("explorer.exe"), &[url.to_string()], &dir, false, "the browser").await
+}
+
 /// The program's own icon at 64px as a `data:` PNG, cached by path. `None`
 /// for one with no icon to give, `wt.exe`'s alias among them, which the
 /// button draws a glyph for.

@@ -4562,7 +4562,7 @@ function App() {
                   )}
                 </>
               )}
-          <WindowControls />
+          <WindowControls padded />
         </header>
       }
       panel={

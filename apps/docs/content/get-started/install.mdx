@@ -11,7 +11,7 @@ Dray runs on macOS, Linux and Windows. The Linux and Windows builds are in beta.
 
 - On a Mac: macOS 11 or later, Apple silicon or Intel. There is one universal download for both. Dray Island, the panel you can open over any app, needs macOS 15.
 - On Linux (beta): x64 or arm64. The `.deb` needs Ubuntu 22.04 or later, or Debian 12 or later. The AppImage runs on other distros with glibc 2.35 or later (most released since 2022) and needs no extra packages.
-- On Windows (beta): Windows 11 on x64. The NSIS installer installs for your user account, so it needs no administrator prompt. Dray Island works here too.
+- On Windows (beta): Windows 10 or 11 on x64. The NSIS installer installs for your user account, so it needs no administrator prompt. Dray Island works here too.
 - A Dray account. You make one the first time you [sign in](#sign-in), with GitHub, Google or email.
 - At least one agent CLI: Claude Code, Codex, pi, fx, Grok Build or OpenCode. First launch can install one for you. See [Agents](/using-dray/agents).
 - The GitHub CLI (`gh`), signed in. First launch sets it up too. Dray uses it to list your repositories when you attach a project, for pull requests and for GitHub issues.
@@ -55,7 +55,7 @@ Both update themselves, like the Mac app. A `.deb` asks for your password once p
 
 ### On Windows (beta)
 
-Get the installer from [drayhq.com/download](https://www.drayhq.com/download). Run `Dray_x64-setup.exe` and follow the prompts; the app installs under your user account and appears in the Start menu. Stable releases also offer an MSI (`Dray_x64_en-US.msi`) for machines managed per machine.
+The Windows build is not published yet, and drayhq.com/download has no Windows file. Once it is, the installer is [`Dray_x64-setup.exe`](https://downloads.drayhq.com/Dray_x64-setup.exe): run it and follow the prompts. The app installs under your user account and appears in the Start menu. Stable releases also offer an MSI, [`Dray_x64.msi`](https://downloads.drayhq.com/Dray_x64.msi), for machines managed per machine.
 
 The installer is not signed yet, so Windows may show a SmartScreen warning. Update to a signed build when one is available.
 
@@ -143,6 +143,8 @@ These are the commands Dray offers, and the ones first launch runs:
 | Grok Build | `curl -fsSL https://x.ai/cli/install.sh \| bash` |
 | OpenCode | `curl -fsSL https://opencode.ai/install \| bash` |
 
+On Windows, Dray offers each vendor's PowerShell installer instead, such as `irm https://claude.ai/install.ps1 | iex` for Claude Code. fx and OpenCode publish none, so there Dray only links their install page.
+
 Then sign in to the agent. [Agents](/using-dray/agents#signing-in) says how, and Settings → [Agents](/settings/accounts) shows who each agent runs as.
 
 :::note
@@ -153,7 +155,7 @@ Dray looks for each agent once and remembers the answer. If you install an agent
 
 Your sessions run in a background process, not in the window. Close the window or quit the app and the agents keep working. Open Dray again and you find them where you left them.
 
-When you quit (`⌘Q` on a Mac, `Ctrl+Q` on Windows and Linux, or the window's close button), Dray asks first:
+When you quit (`⌘Q` on a Mac, or the window's close button), Dray asks first:
 
 - **Quit** closes the app. Sessions keep running in the background.
 - **Quit completely** closes the app and stops every session too.

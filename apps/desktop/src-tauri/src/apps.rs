@@ -946,6 +946,20 @@ pub async fn open_login_terminal(harness: Harness, cwd: String) -> Result<(), St
     run_in_terminal(&command, &cwd).await
 }
 
+/// A PowerShell line in a console window of its own, left open on its last
+/// words. Windows alone: the vendors' Windows installers are PowerShell.
+#[cfg(windows)]
+pub(crate) async fn run_in_powershell(command: &str) -> Result<(), String> {
+    windows::run_in_powershell(command).await
+}
+
+/// `url` in the default browser, from Rust, where the frontend's opener is
+/// not the one asking.
+#[cfg(windows)]
+pub(crate) async fn open_url(url: &str) -> Result<(), String> {
+    windows::open_url(url).await
+}
+
 /// Runs one shell line in a terminal at `cwd`: Terminal.app on a Mac, the
 /// reader's own on Linux, a Git Bash console on Windows.
 ///
