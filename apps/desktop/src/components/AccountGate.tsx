@@ -2,6 +2,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import SignInGate, { type GateView } from "@/components/SignInGate";
+import { useQuitAtOnce } from "@/hooks/useQuitAtOnce";
 import { useLocalServer } from "@/lib/servers";
 import { ONBOARDED } from "@/lib/signInGate";
 import { invoke, listen, LOCAL } from "@/lib/transport";
@@ -157,7 +158,9 @@ export default function AccountGate({ children }: { children: ReactNode }) {
 
   // Until the server answers, a machine signed in last time draws the app,
   // which is nearly always right; anyone else sees the gate's empty frame.
-  if (signedIn || skipped || (!account && !failed && remembered)) return <>{children}</>;
+  const open = signedIn || skipped || (!account && !failed && remembered);
+  useQuitAtOnce(!open);
+  if (open) return <>{children}</>;
 
   let view: GateView | null = null;
   if (account?.signingIn) view = { kind: "waiting", method: account.signingIn, finishing: account.finishing };

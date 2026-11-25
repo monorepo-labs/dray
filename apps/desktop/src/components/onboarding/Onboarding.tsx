@@ -6,6 +6,7 @@ import GitHubIcon from "@/components/GitHubIcon";
 import WindowControls from "@/components/layout/WindowControls";
 import { GateCards } from "@/components/SignInGate";
 import { Continue } from "@/components/WhatsNewPage";
+import { useQuitAtOnce } from "@/hooks/useQuitAtOnce";
 import { invoke, LOCAL } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { Bot } from "@/types/events";
@@ -31,6 +32,7 @@ const NEXT_REVEAL_MS = 260;
 /// Continue leads to the gate, and to Dray Bot's chat once the app is in.
 export default function Onboarding() {
   const on = useOnboarding();
+  useQuitAtOnce(on);
   if (!on) return null;
   return (
     <Flow

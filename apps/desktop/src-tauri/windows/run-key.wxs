@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The sign-in entry the app writes on every launch (launchd.rs
+     `start_at_login`), owned by the MSI so its uninstall removes it, as
+     hooks.nsh does for NSIS: Windows Installer deletes a component's registry
+     value with it, and has no step for removing one it never wrote. So the
+     install writes a first one, which the app's first launch replaces with
+     its own. Referenced from tauri.windows-release.conf.json. -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="DrayRunKey" Guid="*">
+        <RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="Dray" Type="string"
+          Value="&quot;[INSTALLDIR]dray-app.exe&quot; --serve --log &quot;[%USERPROFILE]\.dray\server.log&quot;" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>
