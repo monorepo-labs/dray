@@ -287,7 +287,8 @@ fn saved_prompt(name: &str, path: &Path, kept: bool) -> String {
     };
     format!(
         "The user saved {name} for you through Dray's secret card. Its value is in the file {path}, readable only by this user. {life} \
-         Use it inside the command that needs it, like {name}=\"$(cat {path})\" <command>, or pass the file to a flag that reads one. \
+         Use it inside the command that needs it: redirect the file into a command that reads it on stdin (<command> < {path}), pass it to a flag that takes a file, \
+         or set it for that one command, like {name}=\"$(cat {path})\" <command>. A login command that stores the credential wants stdin: a variable set beside it can stop it storing anything. \
          Never print, echo or log the value, never copy it into another file, a commit or a message, and never ask the user for it in chat. \
          Carry on with what you needed it for."
     )
@@ -463,6 +464,7 @@ mod tests {
     fn the_prompts_name_the_path_and_never_ask_in_chat() {
         let once = saved_prompt("GH_TOKEN", Path::new("/h/.dray/secrets/once/GH_TOKEN-1"), false);
         assert!(once.contains("GH_TOKEN=\"$(cat /h/.dray/secrets/once/GH_TOKEN-1)\""));
+        assert!(once.contains("< /h/.dray/secrets/once/GH_TOKEN-1"));
         assert!(once.contains("24 hours"));
         let kept = saved_prompt("GH_TOKEN", Path::new("/p"), true);
         assert!(kept.contains("dray secret path GH_TOKEN"));

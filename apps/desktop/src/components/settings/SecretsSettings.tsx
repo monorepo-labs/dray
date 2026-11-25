@@ -74,7 +74,7 @@ function Machine({ server }: { server: ServerId }) {
       ) : secrets === null ? null : secrets.length === 0 ? (
         !adding && (
           <p className="text-ui text-muted-foreground">
-            None saved. When an agent asks for one in chat, Save as keeps it here for every task on this machine.
+            None saved. When an agent asks for one, Save as on its card keeps it here for every task on this machine.
           </p>
         )
       ) : (
