@@ -2,15 +2,15 @@ import { Clock } from "lucide-react";
 
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Switch } from "@/components/ui/switch";
-import { lastRunFailed, lastRunLabel, nextRunLabel, scheduleLabel } from "@/lib/routines";
+import { nextRunLabel, scheduleLabel } from "@/lib/routines";
 import { cn } from "@/lib/utils";
 import type { Routine } from "@/types/events";
 
 /// A bot's routines (#972), a section of the More tab: a card per scheduled
-/// check it made for itself, with its schedule, next run and last result. The
-/// reader turns one off with its switch and deletes it from the right-click
-/// menu; anything else — what it does, running it, changing it — they ask the
-/// bot for. Drawn only with a routine in it, as every More section is.
+/// check it made for itself, with its schedule and next run. The reader turns
+/// one off with its switch and deletes it from the right-click menu; anything
+/// else — what it does, running it, changing it — they ask the bot for. Drawn
+/// only with a routine in it, as every More section is.
 export default function RoutinesSection({
   routines,
   now,
@@ -51,7 +51,6 @@ function RoutineCard({
   onPause: (id: string, paused: boolean) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }) {
-  const last = lastRunLabel(routine);
   const { id, paused } = routine;
   return (
     <ContextMenu>
@@ -63,15 +62,6 @@ function RoutineCard({
             <span className="truncate text-foreground/60">
               {scheduleLabel(routine)} · {nextRunLabel(routine, now)}
             </span>
-            {last && (
-              <span
-                className={cn("flex min-w-0 gap-1", lastRunFailed(routine) ? "text-destructive/80" : "text-foreground/50")}
-                title={last.text}
-              >
-                <span className="min-w-0 truncate">{last.text}</span>
-                {last.age && <span className="shrink-0">· {last.age}</span>}
-              </span>
-            )}
           </div>
           <Switch
             checked={!paused}

@@ -1,4 +1,4 @@
-import { relativeTime, resetTime } from "@/lib/format";
+import { resetTime } from "@/lib/format";
 import type { Routine } from "@/types/events";
 
 /// When a routine runs next, as its row says it: "Paused", "Next in 34m",
@@ -12,31 +12,6 @@ export function nextRunLabel(routine: Routine, now: number): string {
   if (min < 60) return `Next in ${min}m`;
   return `Next ${resetTime(routine.nextRun!)}`;
 }
-
-/// How the last run ended, as its row says it, and how long ago apart, so a
-/// long reply truncates without taking the age with it. Nothing before the
-/// first run; a run still going is not shown.
-export function lastRunLabel(routine: Routine): { text: string; age?: string } | undefined {
-  const last = routine.lastResult;
-  if (!last) return undefined;
-  const words: Record<string, string> = {
-    silent: "Nothing to report",
-    no_change: "No change",
-    replied: last.text ?? "Told you",
-    failed: `Failed${last.text ? `: ${last.text}` : ""}`,
-    check_failed: `Check failed${last.text ? `: ${last.text}` : ""}`,
-    skipped: `Skipped${last.text ? `: ${last.text}` : ""}`,
-    // The server's text already says which slot and why.
-    missed: last.text ?? "Missed",
-    timed_out: last.text ?? "Timed out",
-  };
-  const text = words[last.outcome] ?? last.outcome;
-  return { text, age: relativeTime(last.at) };
-}
-
-/// Whether the last run went wrong, for its line's colour.
-export const lastRunFailed = (routine: Routine): boolean =>
-  ["failed", "check_failed", "timed_out"].includes(routine.lastResult?.outcome ?? "");
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 

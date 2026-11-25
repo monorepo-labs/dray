@@ -273,17 +273,11 @@ struct Routine: Decodable, Identifiable {
         let at: String?
         let days: [Int]?
     }
-    struct Result: Decodable {
-        let outcome: String
-        let text: String?
-        let at: String
-    }
     let id: String
     let name: String
     let schedule: Schedule
     var paused: Bool
     let nextRun: String?
-    let lastResult: Result?
 
     /// "Every 2h", "Weekdays at 09:00": the desktop's `scheduleLabel`.
     var scheduleLabel: String {
@@ -315,28 +309,9 @@ struct Routine: Decodable, Identifiable {
         if days == 1 { return "Next \(time) tomorrow" }
         return "Next \(time) on \(at.formatted(.dateTime.month(.abbreviated).day()))"
     }
-
-    /// How the last run ended, the desktop's `lastRunLabel`; nothing before the first.
-    var lastLabel: String? {
-        guard let last = lastResult else { return nil }
-        let why = last.text.map { ": \($0)" } ?? ""
-        return switch last.outcome {
-        case "silent": "Nothing to report"
-        case "no_change": "No change"
-        case "replied": last.text ?? "Told you"
-        case "failed": "Failed\(why)"
-        case "check_failed": "Check failed\(why)"
-        case "skipped": "Skipped\(why)"
-        case "missed": last.text ?? "Missed"
-        case "timed_out": last.text ?? "Timed out"
-        default: last.outcome
-        }
-    }
-
-    var lastFailed: Bool { ["failed", "check_failed", "timed_out"].contains(lastResult?.outcome ?? "") }
 }
 
-/// A bot's routines, as on desktop: each with its schedule, next run and last result.
+/// A bot's routines, as on desktop: each with its schedule and next run.
 /// The switch turns one off and on; Delete is in the long-press menu. Anything else —
 /// running it now, changing it — the reader asks the bot for. Drawn only with one in it.
 struct BotRoutines: View {
@@ -377,14 +352,6 @@ struct BotRoutines: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(r.name).font(Theme.Font.body).foregroundStyle(r.paused ? Theme.secondary : Theme.text).lineLimit(1)
                 Text("\(r.scheduleLabel) · \(r.nextLabel(now))").font(Theme.Font.footnote).foregroundStyle(Theme.secondary).lineLimit(1)
-                if let last = r.lastLabel {
-                    HStack(spacing: 4) {
-                        Text(last).lineLimit(1)
-                        if let date = r.lastResult.flatMap({ parseDate($0.at) }) { Text("· \(shortAge(date))").fixedSize() }
-                    }
-                    .font(Theme.Font.footnote)
-                    .foregroundStyle(r.lastFailed ? Theme.destructive : Theme.tertiary)
-                }
             }
             Spacer(minLength: 0)
             Toggle("", isOn: Binding(get: { !r.paused }, set: { on in Task { await setPaused(r, !on) } }))

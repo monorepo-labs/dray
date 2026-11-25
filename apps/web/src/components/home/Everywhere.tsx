@@ -6,16 +6,16 @@ import { Section, Title } from "./Section";
 /// Inline timing for a `motion.module.css` class, as fractions of one loop.
 const at = (s: number, l = 0.06) => ({ "--s": s, "--l": l }) as CSSProperties;
 
-// The iPad and iPhone move as one, the iPad alone marked coming soon.
-type Place = "macbook" | "mini" | "server" | "soon";
+// The iPad and iPhone move as one.
+type Place = "macbook" | "mini" | "server" | "mobile";
 
 // One per machine, in Paper's frame: where its line drops from the bus, and where it stops.
 const DROPS: { x: number; to: number; on: Place }[] = [
   { x: 390, to: 545, on: "macbook" },
   { x: 642.5, to: 670, on: "mini" },
   { x: 835, to: 550, on: "server" },
-  { x: 1017.5, to: 538, on: "soon" },
-  { x: 1155, to: 543, on: "soon" },
+  { x: 1017.5, to: 538, on: "mobile" },
+  { x: 1155, to: 543, on: "mobile" },
 ];
 const SERVER_LEDS = [583, 629, 675, 721];
 const MINI_LED = { cx: 700.5, cy: 711.2 };
@@ -50,7 +50,7 @@ const WIDE: Layout = {
   id: "everywhere",
   viewBox: "240 270 960 520",
   className: "w-full",
-  place: { macbook: [0, 0, 280], mini: [0, 0, 280], server: [0, 0, 280], soon: [0, 0, 280] },
+  place: { macbook: [0, 0, 280], mini: [0, 0, 280], server: [0, 0, 280], mobile: [0, 0, 280] },
   bus: "M390 280H1155",
   bands: [[240, 280, 960, 460]],
 };
@@ -159,14 +159,14 @@ function Server() {
   );
 }
 
-/// The iPad, marked coming soon, and the iPhone, out and lit.
-function ComingSoon() {
+/// The iPad and the iPhone, both out and lit.
+function Mobile() {
   return (
     <>
       <rect x="947.5" y="549.6" width="140" height="190.4" rx="12" fill="#2A2A2A" />
       <path d="M959.5 550.6H1075.5" fill="#000000" stroke="#4A4A4A" />
       <rect x="954.5" y="556.6" width="126" height="176.4" rx="6" fill="#0A0A0A" />
-      <g opacity="0.45">
+      <g>
         <rect x="954.5" y="556.6" width="35.3" height="176.4" fill="#141414" />
         <rect x="958.7" y="577.8" width="21.2" height="7.3" fill="#2E2E2E" />
         <rect x="958.7" y="602.9" width="26.8" height="7.3" fill="#1612F8" />
@@ -189,11 +189,6 @@ function ComingSoon() {
         <rect x="1123" y="704" width="64" height="16" rx="8" fill="#1F1F1F" />
       </g>
       <rect x="1122" y="740" width="66" height="3" fill="#141414" />
-
-      <path d="M1017.5 748V768" fill="none" stroke="#FFFFFF38" strokeDasharray="2 3" />
-      <text x="1017.5" y="780" textAnchor="middle" dominantBaseline="central" fontSize="12" letterSpacing="-0.04em" fill="#555555" className="font-mono uppercase">
-        Coming soon
-      </text>
     </>
   );
 }
@@ -208,7 +203,7 @@ function Machines({ layout: { id, viewBox, className, place, bus, bands } }: { l
       className={`h-auto overflow-visible ${className} ${m.timeline}`}
       style={{ "--dur": "10s" } as CSSProperties}
       role="img"
-      aria-label="A MacBook, a Mac mini, a Linux server, an iPad and an iPhone, each wired to one line. The iPad is marked coming soon."
+      aria-label="A MacBook, a Mac mini, a Linux server, an iPad and an iPhone, each wired to one line."
     >
       <defs>
         <linearGradient id={`${id}-shade`} x1="0" y1="0" x2="0" y2="1">
@@ -249,8 +244,8 @@ function Machines({ layout: { id, viewBox, className, place, bus, bands } }: { l
       <g transform={shift("server")}>
         <Server />
       </g>
-      <g transform={shift("soon")}>
-        <ComingSoon />
+      <g transform={shift("mobile")}>
+        <Mobile />
       </g>
     </svg>
   );

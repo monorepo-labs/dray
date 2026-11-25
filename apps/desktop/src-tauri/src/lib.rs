@@ -107,6 +107,7 @@ pub mod servers;
 pub mod session;
 pub mod share;
 pub mod tunnel;
+mod netwatch;
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod ssh;
 pub mod settings;

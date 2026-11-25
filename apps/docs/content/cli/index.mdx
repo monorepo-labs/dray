@@ -1,17 +1,17 @@
 ---
 title: The dray command
-description: Install the dray CLI, keep it up to date, and see every command it has for sessions, drafts, issues, the browser, sharing and servers.
+description: Install the dray CLI, keep it up to date, and see every command it has for sessions, bots, drafts, issues, the browser, media, sharing, servers and other machines.
 sidebar:
   order: 1
 ---
 
-`dray` is Dray's command line. It lets you, and the agents running inside Dray, do from a terminal what you would otherwise do in the app: start sessions, list them, message them, save drafts, tag issues, drive a session's browser, share a dev server, and set up a server. Its main use is letting one agent fan work out into several sessions, each with its own worktree and its own row in the sidebar.
+`dray` is Dray's command line. It lets you, and the agents running inside Dray, do from a terminal what you would otherwise do in the app: start sessions, list them, message them, make and message bots, save drafts, tag issues, drive a session's browser, share a dev server, and set up a server. Its main use is letting one agent fan work out into several sessions, each with its own worktree and its own row in the sidebar.
 
-Every command talks to the Dray app on the same machine, so the app has to be running. On a Linux server, it talks to the Dray server instead. See [Connect a server](/server).
+Every command talks to Dray on the same machine. On a Mac that is the background server the app runs, which keeps running after you quit the app. On a Linux server with no app, it is the Dray server. See [Connect a server](/server). To act on another machine, see [Other machines](#other-machines).
 
 ## Install
 
-On a Mac, the Dray app installs `dray` for you. Each time it starts, it puts the copy it ships in `~/.local/bin`, along with the skill. Agents in Dray find it there. To run it from your own terminal, add `~/.local/bin` to your `PATH` if it is not on it already.
+The Dray app installs `dray` for you, on a Mac and in the Linux app. Each time it starts, it puts the copy it ships in `~/.local/bin`, along with the skill. Agents in Dray find it there. To run it from your own terminal, add `~/.local/bin` to your `PATH` if it is not on it already.
 
 Anywhere else, install it with:
 
@@ -46,7 +46,7 @@ This finds the newest release and stops if you already have it, so it is safe to
 
 Leaving beta does not downgrade you: a beta build stays until a stable release is newer than it. To install one exact release, set `DRAY_VERSION` to its tag, like `DRAY_VERSION=cli-v0.12.1 dray update --force`.
 
-On a Mac with the Dray app, `dray update` does nothing and says so. The CLI comes with the app, so updating the app updates it.
+Where the Dray app installed it, `dray update` does nothing and says so. The CLI comes with the app, so updating the app updates it.
 
 If a background server is installed on this machine, `dray update` does not restart it, since that stops every running agent. It prints the command that does.
 
@@ -82,13 +82,17 @@ Prints a completion script for `bash`, `zsh`, `fish`, `elvish` or `powershell`.
 
 | Command | What it does | Page |
 |---|---|---|
-| `dray session` | Start, list, message, rename, stop, settle and set aside sessions, and post merge cards | [Sessions](/cli/sessions) |
+| `dray session` | Start, list, message, rename, stop, settle and set aside sessions, switch their model, hand them to bots, and post merge and issue cards | [Sessions](/cli/sessions) |
+| `dray bot` | Make, list, message, rename and delete bots, and manage their routines | [Bots](/cli/bots) |
 | `dray draft` | Save a task for later, list drafts, start or remove one | [Drafts](/cli/drafts) |
 | `dray issue` | Tag a session with the issues its work is against | [Issues](/cli/issues) |
 | `dray browser` | Drive a session's browser: open, read, click, type, screenshot, record | [Browser](/cli/browser) |
+| `dray video add` | Put a video in a session's chat, converting it to MP4 if needed | [Browser](/cli/browser#record-a-video) |
+| `dray image add` | Put a PNG or JPEG screenshot in a session's chat | [Browser](/cli/browser#record-a-video) |
 | `dray share` | Publish a session's dev server as a public link | [Share](/cli/share) |
 | `dray server` | Make this machine a Dray server | [Servers](/cli/servers) |
-| `dray machine` | The list of servers the app connects to | [Servers](/cli/servers) |
+| `dray login`, `dray logout` | Link this machine's Dray server to an org at drayhq.com, or unlink it | [Servers](/cli/servers#link-to-an-org) |
+| `dray machine` | The list of machines this one reaches | [Servers](/cli/servers) |
 | `dray update` | Install the newest release | above |
 | `dray skill install` | Write the skill for your agents | above |
 | `dray completion` | Print a shell completion script | above |
@@ -98,6 +102,18 @@ For how the session commands fit together, see [Orchestration](/cli/orchestratio
 A command group run on its own, like `dray session`, prints its help. Every command takes `--help`.
 
 Older spellings still work, so scripts and agents with an older skill keep running: `dray new`, `dray ls` and `dray send` are `dray session new`, `ls` and `send`; `dray setup` is `dray server install`; `dray serve` is `dray server run`; `dray share <port>` is `dray share start <port>`.
+
+## Other machines
+
+```bash
+dray --machine vps session ls
+dray --machine vps session new "Run the load test"
+dray session ls --machine all
+```
+
+`--machine <name>` runs a command on another machine from `dray machine ls`, through this machine's Dray server, with the app open or not. It takes `session`, `bot`, `draft`, `issue`, `browser` and `share` commands. `dray session ls --machine all` lists this machine's sessions and every connected machine's.
+
+A command that names a session id needs no `--machine`: an id this machine does not hold is looked for on every machine it reaches. You reach a machine this one added; it reaches you only if it added this one too. See [Servers](/cli/servers) for adding machines.
 
 ## Output and exit codes
 
@@ -124,6 +140,6 @@ Three messages, and only the second means the app is closed:
 
 ## Limits
 
-- `dray` needs the app, or a Dray server, running on the same machine. It does not reach a remote server.
+- `dray` needs the app, or a Dray server, running on the same machine. It reaches another machine only through that, with `--machine`.
 - You cannot read another session's transcript from the CLI. See [Orchestration](/cli/orchestration#limits).
 - `dray` never writes to your issue tracker. See [Issues](/cli/issues).

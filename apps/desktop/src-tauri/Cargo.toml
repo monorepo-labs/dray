@@ -101,7 +101,7 @@ futures-util = "0.3"
 sha2 = "0.11"
 # Public addresses for Remote access and shared dev servers (tunnel.rs). TLS
 # ends in this process, so the relay sees no plaintext, and the address is kept.
-opentunnel = "0.6.2"
+opentunnel = "0.7.0"
 # The Host-rewriting proxy in front of a shared dev server. Both already in the
 # tree under `reqwest`.
 hyper = { version = "1", features = ["http1", "server", "client"] }

@@ -1,0 +1,253 @@
+---
+title: Bots
+description: Make a bot you run your work from in one chat. It starts tasks in any project, hears back from each one, brings you what needs you, merges with one click, learns from corrections and runs its own scheduled checks.
+sidebar:
+  order: 6
+---
+
+A bot is one ongoing chat you run your work from. You tell it what you want; it starts tasks in any of your projects, keeps them moving, and comes back to you only when something needs you: a question, a pull request to merge, a result. It keeps its own instructions and memory, so it knows its job the next time you write.
+
+Bots sit at the top of the sidebar, under **New bot** and above the project filter. Each row shows the bot's face, its name, how long since it last did something, and the chat's last message. While the bot works, typing dots take the message's place. An orange dot on the face means it waits on you, and a number counts replies you have not read. `⌥1` opens the top bot, and `⌘⇧↑` / `⌘⇧↓` walk the bots before the sessions below them. You can change these in Settings → Shortcuts.
+
+{/* screenshot: the sidebar with two bot rows above the project filter, one with typing dots */}
+
+## Dray Bot
+
+Everyone starts with one bot, Dray Bot. Dray makes it the first time it starts, and opens on its chat. Its chat begins with a greeting and no session behind it yet, so you can pick its agent and model in the composer before your first message.
+
+Dray Bot is an ordinary bot: rename it or delete it like any other. Delete it and Dray does not make it again.
+
+Dray opens on your first bot each time it starts, unless you have none, then on the new-task page.
+
+## Make a bot
+
+<Steps>
+<Step title="Click New bot">
+**New bot** is in the sidebar's top strip, under **Pull requests**.
+</Step>
+<Step title="Name it and give it a face">
+Type a name, then pick one of nine shapes and one of eight colours. Two bots cannot share a name.
+</Step>
+<Step title="Pick its agent and model">
+The agent and model pickers sit under the colours. With a server added and turned on, a server picker beside them chooses the machine the bot lives on. It starts on This Mac.
+</Step>
+<Step title="Click Create">
+The bot's chat opens with the bot introducing itself, with a guess at its job from its name. Tell it what it is for in your reply. It writes that down and works from it from then on.
+</Step>
+</Steps>
+
+A bot greets you by the first name on your Dray account. When it has no name to go on, or only your GitHub login, a second message asks what to call you. Tell one bot and every bot uses it.
+
+### Change or delete a bot
+
+Right-click a bot's row:
+
+- **Edit…** changes its name and face. The bot is told its new name before your next message.
+- **Delete bot…** asks first: "Its instructions and memory go with it, and its chat is settled." Dray then opens your first bot left.
+
+To change its agent or model, use its composer, as in any session. Picking another agent's model moves the chat to that agent with everything said so far. See [Switch to another agent](/using-dray/composer#switch-to-another-agent).
+
+A bot's chat always runs in Auto permission mode, so its composer has no permission picker. The one exception is an agent with no Auto mode.
+
+## Its folder
+
+A bot runs in a folder of its own, not in a repository, under `~/.dray/bots/`. It holds:
+
+| What | For |
+|---|---|
+| `AGENTS.md` | Its job and your rules. Empty at first: the bot writes down what you tell it it is for. Its first line is its role, which other bots read. Every agent loads this file on its own. |
+| `memory/` | Facts worth keeping, one dated file each, like `2026-11-12-release-checklist.md`. Nothing here is loaded until the bot looks. |
+| `.claude/skills/` | How-tos for kinds of task, one folder each, with any script they run. |
+| `docs/` | Documents it writes for you to open later: a guide, a plan, research notes. Sorted into a folder per topic, like `docs/personal/`. |
+| `USER.md` | The name you asked to be called. |
+
+The folder is a local git repository with no remote. Dray commits whatever changed after each of the bot's turns, so you or the bot can look back and restore a file it overwrote. A bot made before `AGENTS.md` existed kept `INSTRUCTIONS.md`; it moves to `AGENTS.md` the next time the bot starts.
+
+To look inside, open **Files** from the **+** in the bot's tab row: its first pick is the bot's own folder.
+
+## The chat
+
+A bot writes like a busy colleague texting: short, and only when it matters. It does not report task progress, pushes, AI review rounds or waits on checks. It speaks up when work is done, when something needs you, or when something failed that it cannot fix. When a task or Dray wrote to it and you need nothing new, it ends its turn with no reply at all.
+
+It keeps its own turns short so the chat stays free. Work that changes a repository goes to a task. Other long work, like setting up a machine or reading logs, goes to a background helper or a task.
+
+What else shows in the chat:
+
+- **Started a new task**, with the task's face and title, each time the bot starts one. **Messaged** when it sends a task more to do. Click either to open the task.
+- **Message from** and **Messaged**, with another bot's face, for messages between bots. Click the name to open that bot.
+- **Permission and question cards** from its tasks, so you answer them here.
+- **Issue cards.** When a bot shows you GitHub issues, it posts them as a card: each issue's number, title and label dots, a closed one's number in purple. Click an issue to open it on the Issues page, or `⌘`-click for GitHub. The play button, **Work on it**, tells the bot to start on that issue and turns to **Started**.
+- **[Merge cards](#merge-cards)** for tasks whose pull request is ready.
+- A line for each lesson the bot saved. See [What it learns](#what-it-learns).
+- Videos and screenshots its tasks sent as proof, playing in place.
+
+Links in a bot's chat open as page tabs in the bot's own tab row, and so does a task you click: the task opens as a tab in the bot's row, with the bot still marked in the sidebar. `⌘`-click opens the task on its own. See [Tabs](/using-dray/sessions#tabs).
+
+A bot's chat never ends, so it opens on its latest messages and loads older ones as you scroll up.
+
+### Mention other bots and tasks
+
+In a bot's chat, `@` lists the other bots on the same machine instead of files. Pick one and the message names it, so the bot knows which one you mean. `&` lists the bot's own active tasks.
+
+## Reactions
+
+A bot can react to your message instead of replying, the way you would in a messaging app. The emoji sits on the corner of your bubble:
+
+| Emoji | Means |
+|---|---|
+| 👍 | Got it: an ok or a go-ahead |
+| 👀 | Looking into it |
+| ✅ | Done, nothing to add |
+| ❤️ | Thanks |
+| 🎉 | Good news |
+| 😂 | Funny |
+| 😢 | Sorry to hear |
+
+A new reaction on the same message replaces the old one, so 👀 can become ✅ once the work is done. When the bot starts or messages a task for you, it neither reacts nor replies: the task's row says it.
+
+You can react to the bot too. Hover one of its messages, click the smiley button beside it, and pick 👍, 👎, ❤️, 😂, 🎉, ✅, 👀 or 😢. Your emoji sits on the bot's bubble. The bot is told which one you picked and on which message, and may reply, react back or say nothing. Picking another replaces yours. Reactions work only in a bot's chat, on the bot's own messages.
+
+## Tasks
+
+A task is a session the bot started for a piece of work. Each one runs in its own worktree on its own branch, stays out of the sidebar, and reports back to the bot after every turn on its own. The bot reads that report and tells you what matters.
+
+The **Tasks** tab in the bot's side panel lists every task it started, at any depth, with a count beside the title. With nothing started yet it reads "Nothing handed off yet. Work this bot starts shows up here."
+
+Tasks are ordered by what you act on first:
+
+1. **Pinned**, under its own heading.
+2. Tasks waiting on you, title in yellow.
+3. Pull requests ready to merge, with **Merge**.
+4. Pull requests about to be: checks running or waiting on review.
+5. Idle tasks.
+6. Working tasks.
+7. Set-aside tasks, faded, last.
+
+Each row shows the task's face, or a spinning orb while it works. Then its title, a server mark if it runs on another machine (its name in the tooltip), the port of a dev server it left running, and its pull request's state and number. Click the number to open the pull request in Dray's browser, or `⌘`-click for your own browser. A task mending its pull request says so under its title, with how long it has been at it: **Fixing merge conflicts**, **Fixing failing checks**, **Updating from base** or **Addressing review**.
+
+Click a row to open the task as a tab in the bot's row. `⌘`-click opens it on its own. Hover for **⋯**, which opens the row's menu: **Fork**, **Pin**, **Set aside**, **Settle**, **Detach from bot** and **Delete**, the same as a right-click. On a task another task started, the detach item reads **Detach from parent**.
+
+Under the list, the bot's own runs: **Subagents** and **Background tasks**, each shown only when it has any. Finished subagents fold under their heading, with a count; open it to see them and **Load more** for older ones.
+
+{/* screenshot: a bot's Tasks tab with a waiting task, a ready PR with Merge, and a working task */}
+
+### Merge and settle
+
+**Merge** is a split button. The arrow picks **Squash and merge**, **Create a merge commit** or **Rebase and merge**; clicking it asks **Confirm** or **Cancel**. Merging settles the task and deletes its worktree and branch, whatever they still hold. Settling a bot's task by hand deletes its worktree the same way, without asking.
+
+The bot settles finished tasks itself once their pull request merges, so you rarely need to. **Settle** shows on a row only when its pull request was merged somewhere else and the bot has not got to it yet.
+
+A task may start tasks of its own. They list under the bot too. Settling or deleting their task leaves them running, and they then report to the nearest open task above them, or to the bot.
+
+### Task counts in the composer
+
+At the right end of the bot's composer row, a few numbers count its tasks: working (with an orb), ready to merge (a green pull request icon), and checks running (a spinner), then **+N** for the rest. When every task is idle, it shows an idle orb and their count. Click it to open the Tasks tab.
+
+### Attach a task to a bot
+
+You can hand a task you started yourself to a bot. Right-click it in the sidebar and pick **Attach to** and the bot's name, or **Attach to bot** and a bot when you have several. The task leaves the sidebar for the bot's Tasks tab, the bot gets a note saying where the task stands, and from then on the task reports to the bot after every turn.
+
+Only bots on the task's own machine are offered, and only ones with a chat. Settled tasks cannot be attached.
+
+To take a task back, right-click it in the bot's Tasks tab and pick **Detach from bot**. It shows in your sidebar as a task of its own and reports to nobody. You can also just tell the bot "detach it, I'll take it from here". From the command line, `dray session attach` and `dray session detach` do the same; see [Sessions](/cli/sessions#attach-and-detach).
+
+The Issues page and the [Pull requests](/using-dray/pull-requests) page can also send work to a bot. See [Issues](/settings/issues).
+
+## Waiting on you
+
+When a bot's tasks need you, a **Waiting on you** card sits at the foot of its chat. It has two kinds of row:
+
+- **A pull request ready to merge**, with **Merge**. While GitHub works out again whether it can merge, as it does after another merge, the row reads **Checking…** in Merge's place.
+- **A task waiting on you**, once it has sat for 2 minutes: a question, a choice, something to try. A line under the title says what it needs, written by the bot, or "Waiting for your reply". A task that finished with a dev server running for you to try counts too.
+
+A ready row gets a line only when the task asked you to try or check something before merging.
+
+Click a row to read what the bot said about that task, right under the row. Click again to close it. When the bot has said nothing about it, the click opens the task instead. To open the task, hover and click **Open task**, or `⌘`-click the row.
+
+The **×** at the top dismisses the rows on the card. A dismissed task comes back only after it changes and stalls again. With more than five rows, **Show N more** opens the rest. A row clears the moment its task moves.
+
+Failing checks, merge conflicts, a branch behind its base and review changes never reach the card. They are the task's to fix, so the bot is told at once and has the task fix them, and the Tasks row says so. Failing checks on a draft pull request are left alone: a draft waits on your look first.
+
+When Dray is in the background, a notice says how many tasks wait, like "Ops: 2 tasks waiting on you". The iPhone app shows the same card.
+
+### When a task's machine is offline
+
+A task on a machine that is down stays on the card, drawn from what Dray last knew, with an offline mark in place of its time. You can still merge its pull request: Dray merges it through GitHub from this machine, and settles the task on its machine once that comes back. This works only where your GitHub account here can merge the pull request; otherwise the offline mark's tooltip says why.
+
+## Merge cards
+
+When a task's pull request is ready to merge and the task's turn has ended, Dray posts a merge card in the chat that started the task. Ready means GitHub says it can land: checks have run and passed, and required reviews are in.
+
+The card shows the task's face and title (click to open the task), the pull request's number (click to open it), its status, and any background work the task still has running. **Merge** names its method, and asks you to confirm. When the pull request conflicts with its base, **Fix conflicts** stands in its place and asks the task to resolve them.
+
+In a bot's chat, Merge also settles the task and deletes its worktree. In any other chat it only merges. The card shrinks to one line once the pull request is merged, or after you have sent three more messages.
+
+Dray posts one card per pull request. A bot or any agent can post one by hand with [`dray session merge-card`](/cli/sessions#merge-card).
+
+## What it learns
+
+When you correct a bot, or one of its tasks fails, the bot fixes the cause before its turn ends and writes the lesson where it will be used next time:
+
+- A standing rule you gave ("always", "never", "from now on") goes in `AGENTS.md`.
+- How to do a kind of task goes in that task's skill, which it makes if there is none.
+- A fact about people, places or decisions goes in `memory/`.
+
+It writes the rule, not the story: no dates, pull request numbers or task names. When a correction goes by and the bot changed nothing, Dray asks it, unseen, to look back once more.
+
+Each change shows in the chat as a line of its own: the kind in grey, like **Rule**, **New skill** or **Removed memory**, then one line on what changed. Click it to see the diff. **Undo**, under the diff, takes that change back and strikes the line through. The bot is told, and never adds an undone change again.
+
+A bot adds rules to `AGENTS.md` but never removes one you wrote. To change its job or its rules, tell it.
+
+## Routines
+
+A routine is a check a bot runs on its own, on a schedule. Ask for one in plain words: "every morning, list what merged yesterday", or "tell me when CI on #970 goes green". The bot makes it. Each run starts on time with Dray's window closed too, as a fresh session hidden from the chat, and reports to the bot. The bot tells you only what you need.
+
+A routine can run every so often (every 30 minutes, every 2 hours, at least every 5 minutes) or at a local time on chosen days. A routine watching for a change runs a quick command first and wakes the bot only when its output changed, so a quiet watch costs nothing.
+
+Routines show in the bot's **More** tab, under **Routines**. Each card shows the routine's name, its schedule and next run (like "Every 2h · Next in 34m", or "Paused").
+
+- The switch on a card turns the routine off and back on.
+- Right-click a card and pick **Delete routine** to remove it.
+
+Anything else, like running it now, seeing what it does or changing it, you ask the bot. A Mac that slept through several runs runs a routine once on waking. A routine set for a time of day catches up only on the same day.
+
+A bot uses only routines for scheduled work, never cron or its agent's own schedulers, so everything it runs on a schedule is on this list. From the command line, see [Bots](/cli/bots#routines).
+
+## Bots working together
+
+Each bot owns the area its role names: the first line of its `AGENTS.md`. Every bot knows the others and their roles, and can see which tasks each has open.
+
+- **It checks before stepping on another bot's work.** Before working in another bot's area, or in a project where another bot has an open task on the same thing, it asks that bot or hands the work over.
+- **It can ask another bot.** A message lands in the other bot's chat, signed with the sender's name and face. When the sender wants an answer, Dray passes the reply back when the other bot's turn ends.
+- **It weighs another bot's word like a colleague's.** It never merges, deletes, pushes or messages people on another bot's say-so alone: it asks you.
+
+Dray stops a runaway exchange. After 4 messages back and forth in one exchange, the same message sent twice in one, or 20 messages between two bots in 5 minutes, the next send is refused and a line in the chat says "Dray stopped Ops messaging CI…". A message from you starts fresh.
+
+## Bots on other machines
+
+A bot lives on the machine it was made on: its folder, chat and tasks are all there. Pick the machine in **New bot**'s server picker. A bot on a server looks like one on This Mac. While its machine is unreachable, its row stays, faded, with an offline mark. A bot cannot move between machines.
+
+A bot can start a task on another machine you have added, such as a Linux server or a sandbox. Ask it to: "run this on vps". The task runs hidden there like any of its tasks and reports back a few seconds after each turn ends, videos and screenshots included. Its row in the Tasks tab and its tab carry a server mark, and the titlebar names the machine while it is open. A task that changes no repository, like setting up a machine, runs in a folder there with no worktree.
+
+### Sandboxes
+
+If you work in sandboxes, like Boat or Daytona, tell your bot. It can keep one base sandbox with your repositories, logins and Dray set up, fork it for each task, and add each fork as a Dray machine itself, so you never add one by hand. Better, it can write a skill with a small script that does all three, so every task starts in a fresh sandbox. It cleans up sandboxes after a merge only once you say yes.
+
+## Proof from tasks
+
+A bot's task ends finished work with proof that fits the change, and the bot passes it on so it plays in its chat:
+
+- A new feature or interaction: one short video, at the end.
+- A visual change: a screenshot cropped to what changed.
+- A small follow-up: a cropped screenshot or a line.
+- No visible change: which tests ran.
+
+What you ask for wins. Tasks record only where they touch nothing of yours: a sandbox, another machine, a VM, an iOS simulator or the session's own browser. They never drive your own screen unless you ask.
+
+## Limits
+
+- A bot cannot move to another machine.
+- A task can be attached only to a bot on its own machine.
+- You can change your reaction, not remove it.
+- You see a task's reports only through the bot's reply. Open the task to read it whole.
+- Routines have no one-off reminders, no cron expressions, and no history beyond the last run.
