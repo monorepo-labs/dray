@@ -11,7 +11,7 @@ const LIT_AT = SHINE_AT + 500;
 /// The shimmer peaks just after the light sets off.
 const SHIMMER_AT = SHINE_AT + 300;
 /// The song runs silent under the logo and is up at full volume by this.
-export const MUSIC_UP_AT = 4000;
+export const MUSIC_UP_AT = 4500;
 const LOGO_OUT_AT = 4600;
 const TEXT_AT = 5200;
 /// Each word of the welcome rises a beat after the one before it.
