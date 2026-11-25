@@ -406,9 +406,22 @@ mod install_tests {
     fn every_agent_names_its_own_cure() {
         for harness in Harness::ALL {
             assert!(!harness.label().is_empty());
+            #[cfg(not(windows))]
             assert!(
                 harness.install_command().starts_with("curl -fsSL "),
                 "{:?} has no copyable install command",
+                harness
+            );
+            // PowerShell on Windows, and nothing where the vendor publishes no
+            // installer there; the docs link below is the cure then.
+            #[cfg(windows)]
+            assert!(
+                matches!(harness, Harness::Fx | Harness::OpenCode)
+                    == harness.install_command().is_empty()
+                    && (harness.install_command().is_empty()
+                        || harness.install_command().starts_with("irm https://")
+                            && harness.install_command().ends_with(".ps1 | iex")),
+                "{:?} has the wrong Windows install command",
                 harness
             );
             assert!(
@@ -424,11 +437,13 @@ mod install_tests {
         // Codex's installer and this still passes.
         for (i, a) in Harness::ALL.iter().enumerate() {
             for b in &Harness::ALL[i + 1..] {
-                assert_ne!(
-                    a.install_command(),
-                    b.install_command(),
-                    "{a:?} and {b:?} share an install command"
-                );
+                if !a.install_command().is_empty() {
+                    assert_ne!(
+                        a.install_command(),
+                        b.install_command(),
+                        "{a:?} and {b:?} share an install command"
+                    );
+                }
                 assert_ne!(a.docs_url(), b.docs_url(), "{a:?} and {b:?} share a docs URL");
                 assert_ne!(a.label(), b.label(), "{a:?} and {b:?} share a label");
             }
@@ -446,6 +461,9 @@ mod install_tests {
                 .find(|a| a.id == harness.wire_name())
                 .unwrap_or_else(|| panic!("{harness:?} is missing from dray_proto::AGENTS"));
             assert_eq!(agent.name, harness.label());
+            // Windows' commands are PowerShell, and `dray setup` still runs
+            // these through `sh` there.
+            #[cfg(not(windows))]
             assert_eq!(agent.install, harness.install_command());
             assert_eq!(agent.login, harness.login_command());
         }
@@ -890,6 +908,7 @@ impl Harness {
     ///
     /// Run only for an agent that is not on the machine at all, so it never puts
     /// a second copy beside one the reader installed some other way.
+    #[cfg(not(windows))]
     pub fn install_command(self) -> &'static str {
         match self {
             Harness::ClaudeCode => "curl -fsSL https://claude.ai/install.sh | bash",
@@ -907,6 +926,31 @@ impl Harness {
             // is missing, this build is. A command guessed from the name would
             // be the one thing worse than no command.
             Harness::Other(_) => "",
+        }
+    }
+
+    /// On Windows, the PowerShell installer each vendor publishes beside its
+    /// `install.sh`, which Git Bash cannot stand in for: Claude Code's refuses
+    /// MINGW. fx and OpenCode publish none (both 404), so they answer empty and
+    /// the reader is sent to [`docs_url`](Self::docs_url) instead.
+    #[cfg(windows)]
+    pub fn install_command(self) -> &'static str {
+        match self {
+            Harness::ClaudeCode => "irm https://claude.ai/install.ps1 | iex",
+            Harness::Codex => "irm https://chatgpt.com/codex/install.ps1 | iex",
+            Harness::Pi => "irm https://pi.dev/install.ps1 | iex",
+            Harness::Grok => "irm https://x.ai/cli/install.ps1 | iex",
+            Harness::Fx | Harness::OpenCode | Harness::Other(_) => "",
+        }
+    }
+
+    /// "Install it with `…`", or the vendor's page where there is no command
+    /// to give, for a sentence that goes on to say what to do next.
+    pub fn install_advice(self) -> String {
+        match (self.install_command(), self.docs_url()) {
+            ("", "") => format!("Dray can't install {}", self.label()),
+            ("", docs) => format!("Install it from {docs}"),
+            (command, _) => format!("Install it with `{command}`"),
         }
     }
 

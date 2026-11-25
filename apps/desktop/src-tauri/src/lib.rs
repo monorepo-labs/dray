@@ -474,7 +474,10 @@ async fn agent_availability() -> Vec<AgentAvailability> {
             available: binpath::agent_available(harness).await,
             label: harness.label().to_string(),
             reason,
-            install_command: curable.then(|| harness.install_command().to_string()),
+            // None where there is no command, as for fx on Windows: the notice
+            // then offers the docs alone rather than copying nothing.
+            install_command: (curable && !harness.install_command().is_empty())
+                .then(|| harness.install_command().to_string()),
             docs_url: curable.then(|| harness.docs_url().to_string()),
             login_command: harness.login_command().to_string(),
             login_hint: harness.login_hint().map(str::to_string),

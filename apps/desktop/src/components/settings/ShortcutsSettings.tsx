@@ -40,7 +40,7 @@ import {
   useAnyModsOverride,
   useMods,
 } from "@/lib/digitChords";
-import { HAS_ISLAND, IS_MAC, IS_WINDOWS } from "@/lib/platform";
+import { HAS_ISLAND, IS_MAC } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /// Who already answers `mods` plus one of the first `slots` digits: another
@@ -140,10 +140,8 @@ function DigitRow({ id, label, slots }: { id: DigitChordId; label: string; slots
               e.preventDefault();
               e.stopPropagation();
               peak.current = null;
-              if (!usableMods(next))
-                return setRefused(
-                  IS_MAC ? "Hold ⌘, ⌃ or ⌥." : IS_WINDOWS ? "Hold Ctrl, Alt or Win." : "Hold Ctrl, Alt or Super.",
-                );
+              // Off a Mac the OS owns Win or Super plus a digit, so those go unsuggested.
+              if (!usableMods(next)) return setRefused(IS_MAC ? "Hold ⌘, ⌃ or ⌥." : "Hold Ctrl or Alt.");
               const by = digitClash(next, slots, id);
               if (by) return setRefused(`Already used by ${by}.`);
               setMods(id, next);

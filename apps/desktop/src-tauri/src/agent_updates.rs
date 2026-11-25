@@ -25,28 +25,32 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 /// button spinning until the app restarted.
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Vendor installers are POSIX shell scripts. Windows runs them under the Git
-/// Bash that ships with Git for Windows; without one, the caller sends the
-/// reader to the vendor's own instructions instead.
-#[cfg(windows)]
-fn installer_shell() -> Option<(std::path::PathBuf, &'static str)> {
-    for (root, relative) in [
-        ("ProgramFiles", "Git/bin/bash.exe"),
-        ("ProgramFiles(x86)", "Git/bin/bash.exe"),
-        ("LOCALAPPDATA", "Programs/Git/bin/bash.exe"),
-    ] {
-        let Some(dir) = std::env::var_os(root) else { continue };
-        let candidate = std::path::Path::new(&dir).join(relative);
-        if candidate.is_file() {
-            return Some((candidate, "-c"));
-        }
-    }
-    None
+/// The vendor's installer, run with no window: `/bin/sh` off Windows, and on it
+/// the PowerShell `install.ps1` each vendor publishes for it, which Windows'
+/// own PowerShell 5.1 runs.
+#[cfg(not(windows))]
+fn installer(script: &str) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", script]);
+    command
 }
 
-#[cfg(not(windows))]
-fn installer_shell() -> Option<(std::path::PathBuf, &'static str)> {
-    Some((std::path::PathBuf::from("/bin/sh"), "-c"))
+#[cfg(windows)]
+fn installer(script: &str) -> Command {
+    let mut command = Command::new("powershell");
+    command
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .creation_flags(crate::platform::CREATE_NO_WINDOW);
+    command
+}
+
+/// Why there is nothing to run, with the vendor's page where there is one: on
+/// Windows, fx and OpenCode publish no installer.
+fn no_installer(harness: Harness) -> String {
+    match harness.docs_url() {
+        "" => format!("Dray can't install {}", harness.label()),
+        docs => format!("Dray can't install {} here. Install it yourself: {docs}", harness.label()),
+    }
 }
 
 #[derive(Serialize, TS, Clone)]
@@ -146,15 +150,12 @@ pub async fn update_agent_in_terminal(harness: Harness) -> Result<(), String> {
 pub async fn install_agent(harness: Harness) -> Result<(), String> {
     let script = harness.install_command();
     if script.is_empty() {
-        return Err(format!("Dray can't install {}", harness.label()));
+        return Err(no_installer(harness));
     }
     if !binpath::agent_installed(harness).await {
-        let (shell, flag) = installer_shell().ok_or_else(|| {
-            format!("Dray needs Git Bash to install {}. Install it yourself: {}", harness.label(), harness.docs_url())
-        })?;
         let output = tokio::time::timeout(
             UPDATE_TIMEOUT,
-            Command::new(shell).args([flag, script]).stdin(Stdio::null()).kill_on_drop(true).output(),
+            installer(script).stdin(Stdio::null()).kill_on_drop(true).output(),
         )
         .await
         .map_err(|_| format!("{} install took too long", harness.label()))?
@@ -172,9 +173,18 @@ pub async fn install_agent(harness: Harness) -> Result<(), String> {
     }
 }
 
-/// The installer in Terminal, for when the in-app run failed.
+/// The installer in Terminal, for when the in-app run failed. On Windows a
+/// PowerShell window, since the command is PowerShell there, or the vendor's
+/// page where it publishes no installer.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_agent_in_terminal(harness: Harness) -> Result<(), String> {
+    #[cfg(windows)]
+    return match (harness.install_command(), harness.docs_url()) {
+        ("", "") => Err(no_installer(harness)),
+        ("", docs) => crate::apps::open_url(docs).await,
+        (command, _) => crate::apps::run_in_powershell(command).await,
+    };
+    #[cfg(not(windows))]
     crate::apps::run_in_terminal(harness.install_command(), "").await
 }
 

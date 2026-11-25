@@ -701,9 +701,8 @@ fn project_root_of(project_path: &str) -> &str {
 /// the first `.claude/worktrees/` segment is what names the outermost repo,
 /// and the name after it must be a direct child.
 fn worktree_root_of(path: &str) -> Option<&str> {
-    let (root, name) = path
-        .split_once("/.claude/worktrees/")
-        .or_else(|| path.split_once("\\.claude\\worktrees\\"))?;
+    let at = [path.find("/.claude/worktrees/"), path.find("\\.claude\\worktrees\\")].into_iter().flatten().min()?;
+    let (root, name) = (&path[..at], &path[at + "/.claude/worktrees/".len()..]);
     let name = name.trim_end_matches(['/', '\\']);
     (!name.is_empty() && !name.contains('/') && !name.contains('\\')).then_some(root)
 }
@@ -4550,6 +4549,8 @@ mod tests {
         );
         // git writes `/` even on Windows, so a path can carry either spelling.
         assert_eq!(worktree_root_of(r"C:\repo/.claude/worktrees/calm-owl"), Some(r"C:\repo"));
+        // The outermost segment names the repo whichever spelling each carries.
+        assert_eq!(worktree_root_of(r"C:\repo\.claude\worktrees\caller/.claude/worktrees/mine"), None);
     }
 
     /// The caller's worktree recorded as the project is usually a *live*

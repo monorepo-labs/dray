@@ -477,8 +477,7 @@ fn known_dirs() -> Vec<PathBuf> {
         local.as_ref().map(|l| l.join("pnpm")),
         Some(home.join(".bun").join("bin")),
         local.as_ref().map(|l| l.join("Microsoft").join("WinGet").join("Links")),
-        // Git for Windows installed for this user alone: agent_updates.rs runs
-        // vendor installers under its bash, and only `Git\cmd` reaches PATH.
+        // Git for Windows installed for this user alone, for its `sh` as below.
         local.map(|l| l.join("Programs").join("Git").join("bin")),
         std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("nodejs")),
         std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("Git").join("cmd")),

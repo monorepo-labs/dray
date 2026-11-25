@@ -155,7 +155,8 @@ async fn read_commands(
     bail!("opencode exited before publishing its commands")
 }
 
-#[cfg(test)]
+// Unix alone: the stand-in agent is an `sh` script, which Windows has no `sh` for.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

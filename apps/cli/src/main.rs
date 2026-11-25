@@ -1605,10 +1605,6 @@ fn resolve_project(explicit: Option<PathBuf>) -> Option<String> {
 /// A leading `~` as this user's home, for a path the shell left unexpanded.
 fn expand_home(path: PathBuf) -> PathBuf {
     let Ok(rest) = path.strip_prefix("~") else { return path };
-    // A quoted `~\dir` on Windows keeps the separator after `~`, which would
-    // make the join below absolute from the drive root instead of under home.
-    #[cfg(windows)]
-    let rest = PathBuf::from(rest.to_string_lossy().trim_start_matches(['\\', '/']));
     match std::env::home_dir() {
         Some(home) if rest.as_os_str().is_empty() => home,
         Some(home) => home.join(rest),
