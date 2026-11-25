@@ -13,6 +13,53 @@ pub fn pid_alive(pid: u32) -> bool {
     imp::pid_alive(pid)
 }
 
+/// Takes the flags a login `Run` command carries ([`dray_proto::login`]) off a
+/// server's arguments and applies them: `--env` pairs into this process's
+/// environment, `--log` as its stdout and stderr, appended to. Called before
+/// any thread starts. Answers the arguments left.
+pub fn apply_launch_args(args: Vec<String>) -> Vec<String> {
+    let (env, log, rest) = dray_proto::login::take_launch_args(args);
+    for (key, value) in env {
+        std::env::set_var(key, value);
+    }
+    if let Some(log) = log {
+        let opened = std::fs::OpenOptions::new().create(true).append(true).open(&log);
+        match opened {
+            Ok(file) => redirect_std(file),
+            Err(e) => eprintln!("could not open the log {log}: {e}"),
+        }
+    }
+    rest
+}
+
+/// This process's stdout and stderr to `file` from here on, for itself and
+/// every child it lets inherit them.
+fn redirect_std(file: std::fs::File) {
+    #[cfg(unix)]
+    {
+        use std::os::fd::IntoRawFd;
+        let fd = file.into_raw_fd();
+        // SAFETY: plain descriptor duplication onto the two standard ones.
+        unsafe {
+            libc::dup2(fd, 1);
+            libc::dup2(fd, 2);
+        }
+    }
+    // Rust asks `GetStdHandle` on every write, so swapping the handles is
+    // enough; `hidden_console` keeps what it finds here.
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::IntoRawHandle;
+        use windows_sys::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
+        let handle = file.into_raw_handle();
+        // SAFETY: a handle this process owns and never closes.
+        unsafe {
+            SetStdHandle(STD_OUTPUT_HANDLE, handle);
+            SetStdHandle(STD_ERROR_HANDLE, handle);
+        }
+    }
+}
+
 /// Kills `pid` outright: `SIGKILL`, or `TerminateProcess` on Windows. A pid
 /// already gone is not an error.
 pub fn kill(pid: u32) {

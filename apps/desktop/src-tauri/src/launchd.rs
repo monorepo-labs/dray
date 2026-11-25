@@ -16,7 +16,8 @@ fn label() -> &'static str {
 }
 
 /// Whether the server is this app's child rather than a launchd job: a dev
-/// build, and any build off a Mac, where there is no launchd to run one.
+/// build, and any build off a Mac, where there is no launchd to run one. A
+/// Windows release's is also started at sign-in ([`start_at_login`]).
 pub(crate) fn as_child() -> bool {
     crate::is_dev() || cfg!(not(target_os = "macos"))
 }
@@ -97,13 +98,17 @@ static PENDING: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 pub async fn ensure() -> Result<()> {
     let exe = crate::serve::executable().context("no path to this binary")?;
     let log = crate::store::get_home_app_dir().await?.join(crate::serve::SERVER_LOG);
-    if as_child() {
-        return spawn_dev(&exe, &log);
-    }
     let env: Vec<(&str, String)> = ["DRAY_HOME", "DRAY_NO_ANALYTICS"]
         .into_iter()
         .filter_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()).map(|v| (k, v)))
         .collect();
+    #[cfg(windows)]
+    if !crate::is_dev() {
+        start_at_login(&exe, &log, &env);
+    }
+    if as_child() {
+        return spawn_dev(&exe, &log);
+    }
     let wanted = plist(&exe.to_string_lossy(), &log.to_string_lossy(), &env);
     let path = plist_path()?;
     let loaded = launchctl(&["print", &target()]).await?.status.success();
@@ -171,6 +176,32 @@ async fn bootstrap(path: &std::path::Path) -> Result<()> {
 
 #[cfg(windows)]
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+/// Windows' launchd: the user's `Run` key starts this binary with `--serve` at
+/// every sign-in, so after a reboot the server is back without the app
+/// opening. Per user, no admin. Written on every launch, so it follows the
+/// app's path and environment as the plist does; nothing restarts a server
+/// that dies between sign-ins but the app's own reconnect, which starts one
+/// as a child. Quit and stop sessions leaves the value, so a stopped server
+/// stays stopped until the next launch or sign-in, as `bootout` does. The
+/// uninstaller removes it (windows/hooks.nsh).
+#[cfg(windows)]
+fn start_at_login(exe: &std::path::Path, log: &std::path::Path, env: &[(&str, String)]) {
+    use dray_proto::login;
+    let (exe, log) = (exe.to_string_lossy(), log.to_string_lossy());
+    let pairs: Vec<String> = env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    let mut args = vec![exe.as_ref(), "--serve", "--log", log.as_ref()];
+    for pair in &pairs {
+        args.extend(["--env", pair.as_str()]);
+    }
+    let wanted = login::command_line(&args);
+    if login::read(login::APP_VALUE).as_deref() == Some(wanted.as_str()) {
+        return;
+    }
+    if let Err(e) = login::write(login::APP_VALUE, &wanted) {
+        eprintln!("[launchd] could not start the server at login: {e}");
+    }
+}
 
 /// Set by [`stop`], or the reconnect loop would start a dev server again in
 /// the moment between it stopping and the app exiting.
