@@ -3,7 +3,9 @@
 // IPC mocked so every agent and `gh` read as ready and the flow walks itself
 // to the Dray Bot step in about 13s. `?page=signin` mounts the real sign-in
 // page with the song started under it. The song plays for real wherever the
-// browser lets a page start audio; the button shows either way.
+// browser lets a page start audio; the button shows either way. `&ended`
+// makes every play end after 1.5s, for the play-again state, since a page
+// the browser holds silent never reaches the song's end.
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import React from "react";
@@ -38,7 +40,13 @@ mockIPC(
   { shouldMockEvents: true },
 );
 
-const page = new URLSearchParams(location.search).get("page") ?? "bot";
+const query = new URLSearchParams(location.search);
+const page = query.get("page") ?? "bot";
+if (query.has("ended")) {
+  AudioBufferSourceNode.prototype.start = function (this: AudioBufferSourceNode) {
+    setTimeout(() => this.onended?.(new Event("ended")), 1500);
+  };
+}
 if (page === "signin") startOnboardingMusic(0);
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

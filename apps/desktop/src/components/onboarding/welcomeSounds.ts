@@ -57,9 +57,11 @@ function voice(ctx: BaseAudioContext, to: AudioNode, hz: number, type: Oscillato
 /// How long the song takes to rise from silent to full volume.
 const RISE_S = 1;
 
-type MusicState = { playing: boolean; muted: boolean };
+/// `played` holds once the song has started in this run, so its control
+/// outlives the song and offers it again.
+type MusicState = { played: boolean; playing: boolean; muted: boolean };
 const changed = channel<void>();
-let music: MusicState = { playing: false, muted: false };
+let music: MusicState = { played: false, playing: false, muted: false };
 /// After the song's own level, so muting leaves the rise running on schedule.
 let mute: GainNode | undefined;
 
@@ -68,7 +70,7 @@ function setMusic(next: Partial<MusicState>) {
   changed.emit();
 }
 
-/// Whether the song is playing, and whether the reader muted it.
+/// Whether the song has played, is playing, and whether the reader muted it.
 export function useOnboardingMusic(): MusicState {
   return useSyncExternalStore(changed.subscribe, () => music);
 }
@@ -80,9 +82,15 @@ export function setOnboardingMusicMuted(muted: boolean) {
   setMusic({ muted });
 }
 
+/// Plays the song again from its first note, at full volume and unmuted.
+export function replayOnboardingMusic() {
+  setMusic({ muted: false });
+  startOnboardingMusic(0);
+}
+
 /// Onboarding's song, "Welcome to Dray", from the logo on: silent at first,
-/// rising to reach full volume `fullAtMs` from now. Played
-/// once, to its own ending, and never stopped: it outlives onboarding, so a
+/// rising to reach full volume `fullAtMs` from now. Played once, to its own
+/// ending, and never stopped: it outlives onboarding, so a
 /// reader quick through setup and sign-in still hears it out. A second call
 /// while it plays does nothing, which is also what keeps StrictMode's second
 /// effect run from starting a second copy.
@@ -111,7 +119,7 @@ export function startOnboardingMusic(fullAtMs: number) {
   mute = ctx.createGain();
   mute.gain.value = music.muted ? 0 : 1;
   master.connect(mute).connect(ctx.destination);
-  setMusic({ playing: true });
+  setMusic({ played: true, playing: true });
 
   void fetch(musicUrl)
     .then((res) => res.arrayBuffer())

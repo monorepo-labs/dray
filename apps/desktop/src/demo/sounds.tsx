@@ -68,7 +68,7 @@ const APP: Sound[] = [
     play: () => startOnboardingMusic(0),
     where: [
       "Onboarding, from the logo on: silent at first, rising to full volume by 4.9s in. Plays once to its end, past onboarding and sign-in. Play does nothing while it plays.",
-      "The speaker at the top right of the Dray Bot step and the sign-in page mutes it for the rest of the run.",
+      "The speaker at the top right of the Dray Bot step and the sign-in page mutes it for the rest of the run, and once the song is over plays it again.",
     ],
   },
   {
