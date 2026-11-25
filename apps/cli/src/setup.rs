@@ -1088,16 +1088,19 @@ fn windows_start() -> Result<String, String> {
 
     let was_running = windows_server_pid().is_some();
     if !was_running {
-        let mut start = Command::new(args[0]);
-        start.args(&args[1..]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        // Directly, not through `conhost --headless`, which exits at once when
+        // started with no console handles to host; a hidden console of its
+        // own serves the same.
+        let mut start = Command::new(&args[2]);
+        start.args(&args[3..]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         // Out of this terminal's group and, where the job allows it, out of an
         // SSH session's job, which takes its processes with it on disconnect.
         #[cfg(windows)]
         let started = {
             use std::os::windows::process::CommandExt;
-            const DETACHED: u32 = 0x0000_0008 | 0x0000_0200; // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            const FLAGS: u32 = 0x0800_0000 | 0x0000_0200; // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
             const BREAKAWAY: u32 = 0x0100_0000; // CREATE_BREAKAWAY_FROM_JOB
-            start.creation_flags(DETACHED | BREAKAWAY).spawn().or_else(|_| start.creation_flags(DETACHED).spawn())
+            start.creation_flags(FLAGS | BREAKAWAY).spawn().or_else(|_| start.creation_flags(FLAGS).spawn())
         };
         #[cfg(not(windows))]
         let started = start.spawn();
