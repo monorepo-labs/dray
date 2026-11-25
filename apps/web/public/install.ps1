@@ -142,8 +142,11 @@ function Install-Dray {
     if ($expected -ne $actual) { throw "checksum mismatch, refusing to install.`n    expected $expected`n    got      $actual" }
     Write-Host "Checksum verified."
 
+    # .NET's unzip rather than Expand-Archive, whose progress bar Windows
+    # PowerShell 5.1 draws over the output whatever $ProgressPreference says.
     $unpacked = Join-Path $tmp "unpacked"
-    Expand-Archive -Path (Join-Path $tmp $archive) -DestinationPath $unpacked -Force
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::ExtractToDirectory((Join-Path $tmp $archive), $unpacked)
     if (-not (Test-Path (Join-Path $unpacked "dray.exe"))) { throw "the archive did not contain dray.exe" }
 
     New-Item -ItemType Directory -Force $installDir | Out-Null
