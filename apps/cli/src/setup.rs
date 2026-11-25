@@ -1098,6 +1098,15 @@ fn windows_start() -> Result<String, String> {
         #[cfg(windows)]
         let started = {
             use std::os::windows::process::CommandExt;
+            use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+            use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
+            // Windows hands a child every inheritable handle, and this
+            // process's own stdio is an SSH session's pipes: inherited, the
+            // server would hold them open and the session would never end.
+            for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+                // SAFETY: this process's own standard handles, flag cleared.
+                unsafe { SetHandleInformation(GetStdHandle(which), HANDLE_FLAG_INHERIT, 0) };
+            }
             const FLAGS: u32 = 0x0800_0000 | 0x0000_0200; // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
             const BREAKAWAY: u32 = 0x0100_0000; // CREATE_BREAKAWAY_FROM_JOB
             start.creation_flags(FLAGS | BREAKAWAY).spawn().or_else(|_| start.creation_flags(FLAGS).spawn())
