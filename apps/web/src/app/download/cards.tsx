@@ -113,7 +113,7 @@ export function DownloadCards() {
         <LinuxMenu from="downloads" icon={<TuxMark className="size-4" />} className={BUTTON} />
       </Card>
 
-      <Card art={<ServerGlyph className={ART} />} name="Server" line="Copy the install command, run it over SSH.">
+      <Card art={<ServerGlyph className={ART} />} name="Server" line="Run tasks on a remote or headless machine. Install the CLI over SSH.">
         <CopyCommand />
       </Card>
 

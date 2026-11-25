@@ -42,7 +42,7 @@ export function Closing() {
               <WindowsButton from="cta" beta="text-white/70" className="inline-flex h-10 items-center gap-2 rounded-[6px] border border-white/30 px-4 text-[14px] leading-5 font-medium text-white transition-colors hover:bg-white/10" />
             </div>
           </Way>
-          <Way label="On a server" title="Install the CLI.">
+          <Way label="On a server" title="Install the CLI." line="Run tasks on a remote or headless machine.">
             <CopyLine />
           </Way>
         </div>
@@ -69,12 +69,23 @@ export function Closing() {
 }
 
 /// One of the two ways in: a label, a line, and the thing to do at the foot.
-function Way({ label, title, children }: { label: string; title: string; children: React.ReactNode }) {
+function Way({
+  label,
+  title,
+  line,
+  children,
+}: {
+  label: string;
+  title: string;
+  line?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex min-h-[200px] min-w-0 flex-col justify-between gap-8 bg-white/10 p-6">
       <div className="flex flex-col gap-1.5">
         <p className={LABEL}>{label}</p>
         <h3 className={CARD_TITLE}>{title}</h3>
+        {line && <p className="text-[15px] leading-[22px] text-white/70">{line}</p>}
       </div>
       {children}
     </div>

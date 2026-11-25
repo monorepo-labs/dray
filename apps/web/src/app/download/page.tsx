@@ -9,7 +9,7 @@ import { H1, LEDE } from "./styles";
 export const metadata: Metadata = {
   title: "Download - Dray",
   description:
-    "Download Dray for Mac, Windows (beta), Linux (beta), iPhone and Android (beta), or install it on a server. Free and open source.",
+    "Download Dray for Mac, Windows (beta), Linux (beta), iPhone and Android (beta), or install it on a server to run tasks on a remote or headless machine. Free and open source.",
 };
 
 /// Every way to get Dray, and nothing else: no ask, no auto-start. The
@@ -26,7 +26,7 @@ export default function Downloads() {
           <SiteNav bare current="download" />
           <div className="lg:ml-[102px] lg:max-w-[756px]">
             <h1 className={H1}>Download Dray</h1>
-            <p className={`mt-4 leading-6 tracking-[-0.01em] ${LEDE}`}>For Mac, Windows, Linux, servers, iPhone and Android.</p>
+            <p className={`mt-4 leading-6 tracking-[-0.01em] ${LEDE}`}>For Mac, Windows, Linux, iPhone, Android, and remote or headless servers.</p>
           </div>
           <div className="mt-16">
             <DownloadCards />
