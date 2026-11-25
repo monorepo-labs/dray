@@ -27,6 +27,19 @@ reads:
   to a line or two. A release with no highlights for an app gets the small
   card there instead, when it carries `notify`.
 
+## 0.34.2 · 2026-11-25
+
+### Improved
+
+- A bot's routine rows show the name, schedule and next run, without
+  the last-run line.
+
+### Fixed
+
+- Remote access comes back about a second after the network returns or
+  the computer wakes, instead of your phone showing "Can't reach" for up
+  to half a minute.
+
 ## 0.34.1 · 2026-11-24 · notify
 
 ### New
