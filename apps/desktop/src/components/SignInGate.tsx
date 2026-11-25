@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import WindowControls from "@/components/layout/WindowControls";
+import MuteButton from "@/components/onboarding/MuteButton";
 import type { SignInMethod } from "@/types/events";
 
 /// What the gate is showing. `revoked` is a saved sign-in the site turned
@@ -40,6 +41,7 @@ export default function SignInGate({
     <div className="fixed inset-0 z-[1000] flex flex-col overflow-hidden bg-black text-white select-none">
       <Tiles />
       <header data-tauri-drag-region="deep" className="relative flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">
+        <MuteButton />
         <WindowControls />
       </header>
       {view && (

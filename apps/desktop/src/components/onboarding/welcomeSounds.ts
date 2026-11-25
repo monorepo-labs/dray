@@ -6,7 +6,10 @@
 /// Every voice stays above ~140Hz or leans on harmonics, since a laptop's
 /// speakers drop anything lower.
 
+import { useSyncExternalStore } from "react";
+
 import musicUrl from "@/assets/onboarding-music.mp3";
+import { channel } from "@/lib/channel";
 
 /// How long the shimmer rings after its moment: its last voice's envelope.
 export const SHIMMER_MS = 3200;
@@ -58,7 +61,30 @@ function voice(ctx: BaseAudioContext, to: AudioNode, hz: number, type: Oscillato
 const RISE_S = 1;
 /// The song's level under the shimmer.
 const UNDER_SHIMMER = 0.3;
-let playing = false;
+
+type MusicState = { playing: boolean; muted: boolean };
+const changed = channel<void>();
+let music: MusicState = { playing: false, muted: false };
+/// After the song's own level, so muting leaves the rise from under the
+/// shimmer running on schedule.
+let mute: GainNode | undefined;
+
+function setMusic(next: Partial<MusicState>) {
+  music = { ...music, ...next };
+  changed.emit();
+}
+
+/// Whether the song is playing, and whether the reader muted it.
+export function useOnboardingMusic(): MusicState {
+  return useSyncExternalStore(changed.subscribe, () => music);
+}
+
+/// Mutes or unmutes the song for the rest of this run.
+export function setOnboardingMusicMuted(muted: boolean) {
+  // A short glide, since a jump to silence clicks.
+  if (mute) mute.gain.setTargetAtTime(muted ? 0 : 1, mute.context.currentTime, 0.03);
+  setMusic({ muted });
+}
 
 /// Onboarding's song, "Welcome to Dray", from the logo on: at 30% until
 /// `quietMs` from now, when the shimmer is over, then at full volume. Played
@@ -71,16 +97,16 @@ let playing = false;
 /// by an `<audio>`, so the rise lands on time while the window is in the
 /// background, where timers are throttled.
 export function startOnboardingMusic(quietMs: number) {
-  if (playing) return;
+  if (music.playing) return;
   let ctx: AudioContext;
   try {
     ctx = new AudioContext();
   } catch {
     return;
   }
-  playing = true;
   const close = () => {
-    playing = false;
+    mute = undefined;
+    setMusic({ playing: false });
     void ctx.close().catch(() => {});
   };
   const master = ctx.createGain();
@@ -88,7 +114,10 @@ export function startOnboardingMusic(quietMs: number) {
   master.gain.setValueAtTime(UNDER_SHIMMER, 0);
   master.gain.setValueAtTime(UNDER_SHIMMER, rise);
   master.gain.linearRampToValueAtTime(1, rise + RISE_S);
-  master.connect(ctx.destination);
+  mute = ctx.createGain();
+  mute.gain.value = music.muted ? 0 : 1;
+  master.connect(mute).connect(ctx.destination);
+  setMusic({ playing: true });
 
   void fetch(musicUrl)
     .then((res) => res.arrayBuffer())

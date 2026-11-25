@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import type { Bot } from "@/types/events";
 
 import BotTiles from "./BotTiles";
+import MuteButton from "./MuteButton";
 import Welcome, { SHIMMER_END } from "./Welcome";
 import { type AgentSetup, type GithubSetup, type SetupState, useAgentSetup, useGithubSetup } from "./agents";
 import { askToOpenDrayBot, finishOnboarding, useOnboarding } from "./state";
@@ -41,7 +42,9 @@ export default function Onboarding() {
   );
 }
 
-function Flow({ onStart }: { onStart: () => void }) {
+/// The flow itself, without the once-per-reader check; the onboarding-mute
+/// demo mounts it.
+export function Flow({ onStart }: { onStart: () => void }) {
   const [step, setStep] = useState<"welcome" | "setup" | "bot">("welcome");
   // Read here, not handed down by the app, which is not mounted before sign-in.
   // The first read is what makes Dray Bot.
@@ -59,6 +62,7 @@ function Flow({ onStart }: { onStart: () => void }) {
     // Above the sign-in gate (1000), which it comes before.
     <div className="fixed inset-0 z-[1010] flex flex-col overflow-hidden bg-black text-white select-none">
       <header data-tauri-drag-region="deep" className="relative z-10 flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">
+        {step === "bot" && <MuteButton />}
         <WindowControls />
       </header>
       {step === "welcome" && <Welcome onNext={() => setStep("setup")} />}
