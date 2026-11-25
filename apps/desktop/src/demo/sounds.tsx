@@ -70,10 +70,10 @@ const APP: Sound[] = [
     file: "src/assets/onboarding-music.mp3",
     play: () => {
       onboardingMusic?.stop();
-      onboardingMusic = startOnboardingMusic(0);
+      onboardingMusic = startOnboardingMusic();
     },
     where: [
-      "Onboarding, from the welcome line on, once through at 30% volume. Leaving onboarding fades it out over 4 seconds.",
+      "Onboarding, from the logo on, once through at full volume. Leaving onboarding fades it out over 4 seconds.",
     ],
   },
   {

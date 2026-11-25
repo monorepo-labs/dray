@@ -1,5 +1,5 @@
 /// Onboarding's sounds: a shimmer under the logo's light, made in code, then
-/// a recorded song from the welcome line on (#1567). The shimmer was picked by
+/// a recorded song from the logo on (#1567). The shimmer was picked by
 /// ear (#1421) from takes that live in this file's history, as does the synth
 /// groove the song replaced.
 ///
@@ -51,31 +51,26 @@ function voice(ctx: BaseAudioContext, to: AudioNode, hz: number, type: Oscillato
   osc.stop(until);
 }
 
-/// Brings the song to the level the synth it replaced played at: -18.4dB
-/// gated RMS against the synth's -29dB.
-const MUSIC_LEVEL = 0.3;
 /// How long the music takes to fade once onboarding ends.
 const MUSIC_FADE_S = 4;
 
-/// Onboarding's song, "Welcome to Dray", starting `delayMs` from now and
-/// played once: it has its own build-in and ending, so nothing fades it but
-/// `stop`. Never looped, since a reader still installing an agent sits on
-/// setup for minutes.
+/// Onboarding's song, "Welcome to Dray", at full volume as soon as it is
+/// decoded, and played once: it has its own build-in and ending, so nothing
+/// fades it but `stop`. Never looped, since a reader still installing an agent
+/// sits on setup for minutes.
 ///
 /// Decoded into a buffer and scheduled on the audio clock rather than played
 /// by an `<audio>`: the fade on `stop` must run while the window is in the
 /// background, where timers are throttled.
-export function startOnboardingMusic(delayMs: number): { stop: () => void } {
+export function startOnboardingMusic(): { stop: () => void } {
   let ctx: AudioContext;
   try {
     ctx = new AudioContext();
   } catch {
     return { stop: () => {} };
   }
-  const due = ctx.currentTime + delayMs / 1000;
   const close = () => void ctx.close().catch(() => {});
   const master = ctx.createGain();
-  master.gain.value = MUSIC_LEVEL;
   master.connect(ctx.destination);
   let stopped = false;
 
@@ -88,7 +83,7 @@ export function startOnboardingMusic(delayMs: number): { stop: () => void } {
       src.buffer = music;
       src.connect(master);
       src.onended = close;
-      src.start(Math.max(due, ctx.currentTime + 0.05));
+      src.start();
     })
     .catch(close);
 

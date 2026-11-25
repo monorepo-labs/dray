@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import type { Bot } from "@/types/events";
 
 import BotTiles from "./BotTiles";
-import Welcome, { MUSIC_AT } from "./Welcome";
+import Welcome from "./Welcome";
 import { type AgentSetup, type GithubSetup, type SetupState, useAgentSetup, useGithubSetup } from "./agents";
 import { askToOpenDrayBot, finishOnboarding, useOnboarding } from "./state";
 import { startOnboardingMusic } from "./welcomeSounds";
@@ -53,9 +53,9 @@ function Flow({ onStart }: { onStart: () => void }) {
   }, []);
   const agents = useAgentSetup();
   const github = useGithubSetup();
-  // The music comes in with the welcome line and plays once; leaving before
-  // it ends fades it out. Started now so the song is decoded by then.
-  useEffect(() => startOnboardingMusic(MUSIC_AT).stop, []);
+  // The music starts with the logo and plays once; leaving before it ends
+  // fades it out.
+  useEffect(() => startOnboardingMusic().stop, []);
   return (
     // Above the sign-in gate (1000), which it comes before.
     <div className="fixed inset-0 z-[1010] flex flex-col overflow-hidden bg-black text-white select-none">
