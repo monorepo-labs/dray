@@ -38,7 +38,7 @@ export function Hero() {
             <div className="flex flex-wrap items-center gap-3">
               <DownloadButton from="hero" className="inline-flex h-10 items-center gap-2 rounded-[6px] bg-white px-4 text-[14px] leading-5 font-medium text-[#0B0B0F] shadow-[inset_0_-1px_0_#4D4C4C,0_1px_2px_#00000040,0_10px_28px_-10px_#00000099] transition-opacity hover:opacity-90 [&>svg]:-mt-0.5 light:bg-[#0A0A0A] light:text-white light:shadow-[inset_0_-1px_0_#000,0_1px_2px_#00000040]" />
               <LinuxMenu className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-[6px] border border-white/20 px-4 text-[14px] leading-5 font-medium text-white transition-colors hover:bg-white/10 light:border-black/15 light:text-[#0A0A0A] light:hover:bg-black/5" />
-              <WindowsButton from="hero" className="inline-flex h-10 items-center gap-2 rounded-[6px] border border-white/20 px-4 text-[14px] leading-5 font-medium text-white transition-colors hover:bg-white/10 light:border-black/15 light:text-[#0A0A0A] light:hover:bg-black/5" />
+              <WindowsButton from="hero" beta="text-[#A1A1A1] light:text-[#6B6B6B]" className="inline-flex h-10 items-center gap-2 rounded-[6px] border border-white/20 px-4 text-[14px] leading-5 font-medium text-white transition-colors hover:bg-white/10 light:border-black/15 light:text-[#0A0A0A] light:hover:bg-black/5" />
             </div>
           </div>
           <PhonesLine className="mt-4 text-[14px] leading-5 tracking-[-0.01em] text-white/50 light:text-black/50" />

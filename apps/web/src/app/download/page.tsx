@@ -9,7 +9,7 @@ import { H1, LEDE } from "./styles";
 export const metadata: Metadata = {
   title: "Download - Dray",
   description:
-    "Download Dray for Mac, Windows, Linux (beta), iPhone and Android (beta), or install it on a server. Free and open source.",
+    "Download Dray for Mac, Windows (beta), Linux (beta), iPhone and Android (beta), or install it on a server. Free and open source.",
 };
 
 /// Every way to get Dray, and nothing else: no ask, no auto-start. The

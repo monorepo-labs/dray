@@ -95,6 +95,7 @@ export function DownloadCards() {
       <Card
         art={<WindowsGlyph className={ART} />}
         name="Windows"
+        beta
         line={
           <>
             x64. Windows 10 and 11. Also as an{" "}
