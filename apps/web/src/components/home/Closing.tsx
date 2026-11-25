@@ -43,7 +43,7 @@ export function Closing() {
               <WindowsButton from="cta" beta="text-white/70" className="inline-flex h-10 items-center gap-2 max-sm:w-full max-sm:justify-center rounded-[6px] border border-white/30 px-4 text-[14px] leading-5 font-medium text-white transition-colors hover:bg-white/10" />
             </div>
           </Way>
-          <Way label="On a server" title="Install the CLI." line="Run tasks on a remote or headless machine.">
+          <Way label="On a server" title="Install the CLI." line="Run tasks on a remote Linux or macOS machine.">
             <CopyLine />
           </Way>
         </div>
