@@ -461,10 +461,9 @@ mod install_tests {
                 .find(|a| a.id == harness.wire_name())
                 .unwrap_or_else(|| panic!("{harness:?} is missing from dray_proto::AGENTS"));
             assert_eq!(agent.name, harness.label());
-            // Windows' commands are PowerShell, and `dray setup` still runs
-            // these through `sh` there.
-            #[cfg(not(windows))]
-            assert_eq!(agent.install, harness.install_command());
+            let install = if cfg!(windows) { agent.install_windows } else { agent.install };
+            assert_eq!(install, harness.install_command());
+            assert_eq!(agent.docs, harness.docs_url());
             assert_eq!(agent.login, harness.login_command());
         }
     }

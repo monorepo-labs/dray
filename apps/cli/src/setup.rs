@@ -538,13 +538,36 @@ fn install(tool: &Tool, tty: Option<&File>) -> Result<(), InstallError> {
         "gh" if LINUX => GH_LINUX.to_string(),
         "gh" if find("brew").is_some() => "brew install gh".to_string(),
         "gh" => return Err(Failed("get it from https://cli.github.com".into())),
-        id => dray_proto::AGENTS.iter().find(|a| a.id == id).map(|a| a.install.to_string()).unwrap_or_default(),
+        id => match dray_proto::AGENTS.iter().find(|a| a.id == id) {
+            Some(agent) => return install_agent(agent, stdin()),
+            None => String::new(),
+        },
     };
     sh(&script, stdin())
 }
 
+/// The vendor's own installer: `install.sh` through `sh`, and on Windows the
+/// `install.ps1` it publishes there, since Claude Code's `install.sh` exits
+/// under Git Bash. Where a vendor publishes none, its install page.
+fn install_agent(agent: &dray_proto::Agent, stdin: Stdio) -> Result<(), InstallError> {
+    if !cfg!(windows) {
+        return sh(agent.install, stdin);
+    }
+    if agent.install_windows.is_empty() {
+        return Err(Failed(format!("no Windows installer; see {}", agent.docs)));
+    }
+    ran(Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", agent.install_windows])
+        .stdin(stdin)
+        .status())
+}
+
 fn sh(script: &str, stdin: Stdio) -> Result<(), InstallError> {
-    match Command::new("sh").args(["-c", script]).stdin(stdin).status() {
+    ran(Command::new("sh").args(["-c", script]).stdin(stdin).status())
+}
+
+fn ran(status: std::io::Result<std::process::ExitStatus>) -> Result<(), InstallError> {
+    match status {
         Ok(s) if s.success() => Ok(()),
         Ok(s) => Err(Failed(s.to_string())),
         Err(e) => Err(Failed(e.to_string())),
@@ -555,6 +578,9 @@ fn sh(script: &str, stdin: Stdio) -> Result<(), InstallError> {
 /// the command — a password prompt in the middle of an installer is easy to
 /// miss and easy to fat-finger.
 fn install_git(stdin: Stdio) -> Result<(), InstallError> {
+    if cfg!(windows) {
+        return Err(Failed("get it from https://git-scm.com/downloads/win".into()));
+    }
     if !LINUX {
         return Err(Manual("xcode-select --install".into()));
     }

@@ -1260,14 +1260,19 @@ pub fn encode_line<T: Serialize>(value: &T) -> serde_json::Result<String> {
 }
 
 /// An agent CLI as `dray setup` installs it. Not wire, but this is the one
-/// crate both sides compile, and the app's `Harness::install_command` and
-/// `login_command` are pinned to it by a test there.
+/// crate both sides compile, and the app's `Harness::install_command`,
+/// `docs_url` and `login_command` are pinned to it by a test there.
 pub struct Agent {
     /// `Harness::wire_name`, and what `dray setup --install` takes.
     pub id: &'static str,
     pub name: &'static str,
     pub bin: &'static str,
     pub install: &'static str,
+    /// The vendor's PowerShell installer, run on Windows in place of
+    /// `install`, whose `install.sh` Git Bash cannot stand in for. Empty where
+    /// the vendor publishes none, and then `docs` is the way.
+    pub install_windows: &'static str,
+    pub docs: &'static str,
     pub login: &'static str,
 }
 
@@ -1277,6 +1282,8 @@ pub const AGENTS: [Agent; 6] = [
         name: "Claude Code",
         bin: "claude",
         install: "curl -fsSL https://claude.ai/install.sh | bash",
+        install_windows: "irm https://claude.ai/install.ps1 | iex",
+        docs: "https://code.claude.com/docs/en/quickstart",
         login: "claude auth login",
     },
     Agent {
@@ -1284,6 +1291,8 @@ pub const AGENTS: [Agent; 6] = [
         name: "Codex",
         bin: "codex",
         install: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+        install_windows: "irm https://chatgpt.com/codex/install.ps1 | iex",
+        docs: "https://learn.chatgpt.com/docs/codex/cli",
         login: "codex login",
     },
     Agent {
@@ -1291,6 +1300,8 @@ pub const AGENTS: [Agent; 6] = [
         name: "pi",
         bin: "pi",
         install: "curl -fsSL https://pi.dev/install.sh | sh",
+        install_windows: "irm https://pi.dev/install.ps1 | iex",
+        docs: "https://pi.dev/docs/latest",
         login: "pi",
     },
     Agent {
@@ -1298,6 +1309,8 @@ pub const AGENTS: [Agent; 6] = [
         name: "fx",
         bin: "fx",
         install: "curl -fsSL https://fx.sh/setup.sh | bash",
+        install_windows: "",
+        docs: "https://fx.sh/docs/getting-started/installation",
         login: "fx login",
     },
     Agent {
@@ -1305,6 +1318,8 @@ pub const AGENTS: [Agent; 6] = [
         name: "Grok Build",
         bin: "grok",
         install: "curl -fsSL https://x.ai/cli/install.sh | bash",
+        install_windows: "irm https://x.ai/cli/install.ps1 | iex",
+        docs: "https://docs.x.ai/build/quickstart",
         login: "grok login",
     },
     Agent {
@@ -1312,6 +1327,8 @@ pub const AGENTS: [Agent; 6] = [
         name: "OpenCode",
         bin: "opencode",
         install: "curl -fsSL https://opencode.ai/install | bash",
+        install_windows: "",
+        docs: "https://opencode.ai/docs/",
         login: "opencode auth login",
     },
 ];
