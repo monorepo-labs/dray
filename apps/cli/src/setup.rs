@@ -1214,7 +1214,7 @@ struct RawTerminal<'a> {
     #[cfg(unix)]
     saved: String,
     #[cfg(windows)]
-    saved: (u32, u32),
+    saved: (u32, u32, u32),
 }
 
 #[cfg(unix)]
@@ -1239,24 +1239,29 @@ impl<'a> RawTerminal<'a> {
 /// Windows' console has no `stty`: line input and echo come off the input
 /// handle's mode, and virtual terminal input makes an arrow the same three
 /// bytes a Unix terminal sends. Ctrl-C arrives as a byte too, with processed
-/// input off, so the picker cancels on it as it does elsewhere.
+/// input off, so the picker cancels on it as it does elsewhere. Output goes
+/// to `CONOUT$` as bytes, read in the console's code page, so that is UTF-8
+/// while the picker draws, or `│` lands as `Γöé`.
 #[cfg(windows)]
 impl<'a> RawTerminal<'a> {
     fn enter(tty: &'a Tty) -> Result<Self, String> {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::System::Console::{
-            GetConsoleMode, SetConsoleMode, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
-            ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+            GetConsoleMode, GetConsoleOutputCP, SetConsoleMode, SetConsoleOutputCP, ENABLE_ECHO_INPUT,
+            ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_VIRTUAL_TERMINAL_INPUT,
+            ENABLE_VIRTUAL_TERMINAL_PROCESSING,
         };
+        const CP_UTF8: u32 = 65001;
         let (input, output) = (tty.input.as_raw_handle(), tty.output.as_raw_handle());
         let (mut i, mut o) = (0, 0);
         if unsafe { GetConsoleMode(input, &mut i) } == 0 || unsafe { GetConsoleMode(output, &mut o) } == 0 {
             return Err("could not read the terminal's settings".into());
         }
-        let this = Self { tty, saved: (i, o) };
+        let this = Self { tty, saved: (i, o, unsafe { GetConsoleOutputCP() }) };
         let raw = (i & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT)) | ENABLE_VIRTUAL_TERMINAL_INPUT;
         if unsafe { SetConsoleMode(input, raw) } == 0
             || unsafe { SetConsoleMode(output, o | ENABLE_VIRTUAL_TERMINAL_PROCESSING) } == 0
+            || unsafe { SetConsoleOutputCP(CP_UTF8) } == 0
         {
             return Err("could not set up the terminal".into());
         }
@@ -1265,10 +1270,11 @@ impl<'a> RawTerminal<'a> {
 
     fn restore(&self) {
         use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::System::Console::SetConsoleMode;
+        use windows_sys::Win32::System::Console::{SetConsoleMode, SetConsoleOutputCP};
         unsafe {
             SetConsoleMode(self.tty.input.as_raw_handle(), self.saved.0);
             SetConsoleMode(self.tty.output.as_raw_handle(), self.saved.1);
+            SetConsoleOutputCP(self.saved.2);
         }
     }
 }
