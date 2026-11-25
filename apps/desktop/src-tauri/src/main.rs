@@ -33,6 +33,11 @@ fn main() {
             }
         }
     }
+    // A Windows login `Run` command names its environment and log as flags,
+    // having no plist to carry them. Before tokio's threads exist.
+    if std::env::args().nth(1).as_deref() == Some("--serve") {
+        ade_lib::platform::apply_launch_args(std::env::args().skip(2).collect());
+    }
     run()
 }
 

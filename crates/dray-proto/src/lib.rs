@@ -12,6 +12,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub mod login;
+
 /// Bumped when an old side would answer a new request *wrongly and silently* —
 /// the server refuses a version it doesn't know rather than guessing at it.
 ///

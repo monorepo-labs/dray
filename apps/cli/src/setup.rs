@@ -247,6 +247,11 @@ fn may_serve() -> Result<(), String> {
     if app_runs_this_home() {
         return Err("the Dray app runs this Mac's server".into());
     }
+    // The Windows app starts its own at sign-in, on the same home; a second
+    // would only lose `serve.lock` to it.
+    if cfg!(windows) && app_updates_this_cli() {
+        return Err("the Dray app runs this machine's server".into());
+    }
     Ok(())
 }
 
@@ -484,20 +489,25 @@ pub fn setup(args: Install) -> Result<(), String> {
         done("Sign in where you have not yet", &logins.join(&format!("\n{BAR}  ")));
     }
 
-    // Windows has no service manager this sets up: the app runs its server as
-    // a child, as on a Linux desktop.
-    if cfg!(windows) {
-        let how = if app_ships_this_cli() {
-            "The Dray app runs this machine's server while it is open."
-        } else {
-            "Windows has no background service for the server yet. Run it in a window you keep open: dray server run"
-        };
-        println!("\x1b[90m└\x1b[0m  Done. {how}");
+    if may_serve().is_err() {
+        println!("\x1b[90m└\x1b[0m  Done. The Dray app runs this {} server.", if MAC { "Mac's" } else { "machine's" });
         return Ok(());
     }
-    if may_serve().is_err() {
-        println!("\x1b[90m└\x1b[0m  Done. The Dray app runs this Mac's server.");
-        return Ok(());
+    // No SSH line to paste: the app adds a server over SSH with a Unix shell
+    // on the other end, which Windows' OpenSSH does not give it.
+    if cfg!(windows) {
+        match windows_start() {
+            Ok(note) => {
+                done("Server running in the background", &note);
+                println!("\x1b[90m└\x1b[0m  Done.");
+                return Ok(());
+            }
+            Err(why) => {
+                warn(&why);
+                println!("\x1b[90m└\x1b[0m");
+                return Err("the server is not running".into());
+            }
+        }
     }
     match service_start() {
         Ok(note) => done("Server running in the background", &note),
@@ -747,6 +757,9 @@ fn beside(name: &str) -> Result<PathBuf, String> {
 pub fn service(command: ServiceCommand) -> Result<(), String> {
     if MAC {
         return agent_service(command);
+    }
+    if cfg!(windows) {
+        return windows_service(command);
     }
     match command {
         ServiceCommand::Start => {
@@ -1002,9 +1015,168 @@ fn already_running() -> String {
     )
 }
 
+/// `dray server` on Windows: the user's `Run` key in place of a unit, so the
+/// server starts at each sign-in with no admin ([`dray_proto::login`]).
+fn windows_service(command: ServiceCommand) -> Result<(), String> {
+    match command {
+        ServiceCommand::Start => {
+            let note = windows_start()?;
+            println!("The server is running in the background.\n{note}");
+        }
+        ServiceCommand::Status => {
+            may_serve()?;
+            let pid = windows_server_pid().ok_or("the server is not running")?;
+            println!("The server is running, pid {pid}. Log: {}", dray_home()?.join("server.log").display());
+            if let Some(url) = tunnel_address()? {
+                println!("\n{}", connect_text(&url)?);
+            }
+        }
+        ServiceCommand::Tunnel { state: OnOff::On } => tunnel_on()?,
+        ServiceCommand::Tunnel { state: OnOff::Off } => {
+            tunnel_off()?;
+            println!("The tunnel is down.");
+        }
+        ServiceCommand::Uninstall => {
+            #[cfg(windows)]
+            let installed = dray_proto::login::read(dray_proto::login::CLI_VALUE).is_some();
+            #[cfg(not(windows))]
+            let installed = false;
+            // The tree, so the agents go with it, as systemd's stop takes them.
+            let stopped = windows_server_pid()
+                .map(|pid| Command::new("taskkill").args(["/T", "/F", "/PID", &pid]).output().is_ok_and(|o| o.status.success()))
+                .unwrap_or(false);
+            #[cfg(windows)]
+            dray_proto::login::remove(dray_proto::login::CLI_VALUE)
+                .map_err(|e| format!("could not remove the server from sign-in: {e}"))?;
+            println!(
+                "{}",
+                match (installed, stopped) {
+                    (true, _) => "Removed the background server.",
+                    (false, true) => "Stopped the background server.",
+                    (false, false) => "No background server is installed.",
+                }
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Starts `dray-serve` at every sign-in through the `Run` key, and now where
+/// none runs. Headless `conhost`, since `dray-serve` is a console program and
+/// would otherwise open a window at each sign-in; its own `--log`, since a
+/// `Run` command has nowhere to send output. Rewritten every time, so it
+/// follows wherever `dray` was last run from, and never restarts a running
+/// server — that would stop its agents.
+fn windows_start() -> Result<String, String> {
+    may_serve()?;
+    let serve = beside("dray-serve")?;
+    let home = std::path::absolute(dray_home()?).map_err(|e| format!("could not resolve DRAY_HOME: {e}"))?;
+    std::fs::create_dir_all(&home).map_err(|e| format!("could not create {}: {e}", home.display()))?;
+    let log = home.join("server.log");
+    let conhost = PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into()))
+        .join("System32")
+        .join("conhost.exe");
+    let (serve, log, conhost) = (serve.display().to_string(), log.display().to_string(), conhost.display().to_string());
+    let home_pair = format!("DRAY_HOME={}", home.display());
+    let mut args = vec![conhost.as_str(), "--headless", serve.as_str(), "--log", log.as_str()];
+    if own_home() {
+        args.extend(["--env", home_pair.as_str()]);
+    }
+    #[cfg(windows)]
+    dray_proto::login::write(dray_proto::login::CLI_VALUE, &dray_proto::login::command_line(&args))
+        .map_err(|e| format!("could not start the server at sign-in: {e}"))?;
+
+    let was_running = windows_server_pid().is_some();
+    if !was_running {
+        // Directly, not through `conhost --headless`, which exits at once when
+        // started with no console handles to host.
+        spawn_detached(&args[2..]).map_err(|e| format!("could not start the server: {e}"))?;
+        // A server that cannot bind exits at once.
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        if windows_server_pid().is_none() {
+            return Err(format!("The server did not stay up. See why: Get-Content -Tail 20 \"{log}\""));
+        }
+    }
+    let mut note = format!("dray server status\n{BAR}  It starts again each time you sign in to Windows.");
+    if was_running {
+        note += &already_running();
+    }
+    Ok(note)
+}
+
+/// Starts `args` with no window, out of this terminal's process group and,
+/// where the job allows it, out of an SSH session's job, which takes its
+/// processes with it on disconnect. Inheriting no handle at all: `std`
+/// spawns with every inheritable one, an SSH session's pipes among them
+/// (through the shell that ran `dray`), and a server holding those would keep
+/// the session from ever ending. The server writes to its `--log` instead.
+#[cfg(windows)]
+fn spawn_detached(args: &[&str]) -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        CreateProcessW, CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, PROCESS_INFORMATION,
+        STARTUPINFOW,
+    };
+    let mut line: Vec<u16> = dray_proto::login::command_line(args).encode_utf16().chain(Some(0)).collect();
+    let mut tried = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB;
+    loop {
+        // SAFETY: zeroed structs of the documented size; `line` is a mutable
+        // NUL-terminated buffer, as CreateProcessW requires.
+        let made = unsafe {
+            let mut startup: STARTUPINFOW = std::mem::zeroed();
+            startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+            let mut info: PROCESS_INFORMATION = std::mem::zeroed();
+            let ok = CreateProcessW(
+                std::ptr::null(),
+                line.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                tried,
+                std::ptr::null(),
+                std::ptr::null(),
+                &startup,
+                &mut info,
+            );
+            if ok != 0 {
+                CloseHandle(info.hProcess);
+                CloseHandle(info.hThread);
+            }
+            ok != 0
+        };
+        if made {
+            return Ok(());
+        }
+        // A job that forbids breaking away refuses the flag; stay inside it.
+        if tried & CREATE_BREAKAWAY_FROM_JOB != 0 {
+            tried &= !CREATE_BREAKAWAY_FROM_JOB;
+            continue;
+        }
+        return Err(std::io::Error::last_os_error());
+    }
+}
+
+#[cfg(not(windows))]
+fn spawn_detached(_: &[&str]) -> std::io::Result<()> {
+    Err(std::io::Error::other("Windows alone"))
+}
+
+/// The pid `serve-port` names, while it still runs a `dray-serve`: the file
+/// outlives a server that died, and its pid can be anything's by now.
+fn windows_server_pid() -> Option<String> {
+    let written = std::fs::read_to_string(dray_home().ok()?.join("serve-port")).ok()?;
+    let pid = written.lines().nth(2)?.trim().to_string();
+    pid.parse::<u32>().ok()?;
+    let list = output("tasklist", &["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])?;
+    list.to_ascii_lowercase().contains("\"dray-serve.exe\"").then_some(pid)
+}
+
 /// How the reader restarts the background server onto the `dray-serve` now on
 /// disk, if one is installed.
 pub fn installed_restart() -> Option<String> {
+    #[cfg(windows)]
+    return dray_proto::login::read(dray_proto::login::CLI_VALUE).map(|_| restart_command());
+    #[allow(unreachable_code)]
     let installed = if MAC { agent_plist_path() } else { unit_path() }.is_ok_and(|p| p.exists());
     installed.then(restart_command)
 }
@@ -1015,6 +1187,8 @@ fn restart_command() -> String {
     if MAC {
         let plist = agent_plist_path().map(|p| sh_quote(&p.display().to_string())).unwrap_or_default();
         format!("launchctl bootout {} && launchctl bootstrap {} {plist}", agent_target(), agent_domain())
+    } else if cfg!(windows) {
+        "dray server stop; dray server start".into()
     } else {
         "systemctl --user restart dray".into()
     }

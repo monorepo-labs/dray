@@ -498,10 +498,52 @@ async fn shut_down(code: i32) -> ! {
     for pid in tree.into_iter().filter(|&p| p != me) {
         crate::platform::kill(pid);
     }
+    #[cfg(all(windows, not(feature = "desktop")))]
+    if code == RESTART_CODE {
+        respawn();
+    }
     // `_exit`, not `process::exit`: once a phone's dictation has loaded a
     // model, ggml-metal's atexit handler aborts (lib.rs's `RunEvent::Exit`
     // says how), which would end every stop and restart as 134, not `code`.
     unsafe { libc::_exit(code) }
+}
+
+/// Named to the server [`respawn`] starts: the pid it waits out before taking
+/// `serve.lock`, which the old one holds until it is gone.
+#[cfg(windows)]
+const RESTART_AFTER: &str = "DRAY_RESTART_AFTER";
+
+/// Windows has no systemd to bring back a server that exits [`RESTART_CODE`],
+/// so it starts its own successor, with the arguments it was given — a login
+/// `Run` command's `--log` and `--env` among them — and no window. Started
+/// after the tree is killed, or it would be killed with it.
+#[cfg(all(windows, not(feature = "desktop")))]
+fn respawn() {
+    use std::os::windows::process::CommandExt;
+    let Ok(exe) = std::env::current_exe() else { return };
+    let started = std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .env(RESTART_AFTER, std::process::id().to_string())
+        .stdin(std::process::Stdio::null())
+        .creation_flags(crate::platform::CREATE_NO_WINDOW | 0x0000_0200) // CREATE_NEW_PROCESS_GROUP
+        .spawn();
+    if let Err(e) = started {
+        eprintln!("[serve] could not start the next server: {e}");
+    }
+}
+
+/// Waits for the server this one replaces to exit, up to 30s, then forgets
+/// its pid so no agent inherits the variable.
+#[cfg(windows)]
+async fn wait_for_predecessor() {
+    let Some(pid) = std::env::var(RESTART_AFTER).ok().and_then(|p| p.parse::<u32>().ok()) else { return };
+    std::env::remove_var(RESTART_AFTER);
+    for _ in 0..300 {
+        if !crate::platform::pid_alive(pid) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 }
 
 /// Removes the browser profiles of deleted and settled sessions, the backlog
@@ -536,6 +578,8 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     // each other's socket and rewrite one index whole, each over the other.
     // A socket that answers is a Dray already living here.
     let home = store::get_home_app_dir().await?;
+    #[cfg(windows)]
+    wait_for_predecessor().await;
     // Held for the life of the process. The socket check below alone lets
     // two servers starting at once both pass it, since neither has bound yet.
     let held = std::fs::OpenOptions::new()
