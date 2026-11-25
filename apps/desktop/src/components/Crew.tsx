@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import PermissionRequest from "@/components/chat/PermissionRequest";
 import QuestionRequest from "@/components/chat/QuestionRequest";
+import SecretRequest from "@/components/chat/SecretRequest";
 import type { PaneChat } from "@/components/SplitView";
 import type { PaneState } from "@/hooks/useSessions";
 import { RANK_CREW } from "@/lib/cardKeys";
@@ -156,7 +157,17 @@ function PendingCard({
 
   return (
     <div ref={cardRef} className="px-3 pb-3">
-      {ask.type === "questions_asked" ? (
+      {ask.type === "secret_requested" ? (
+        <SecretRequest
+          sessionId={sessionId}
+          requestId={ask.requestId}
+          name={ask.name}
+          label={ask.label}
+          reason={ask.reason}
+          url={ask.url}
+          autoFocus={false}
+        />
+      ) : ask.type === "questions_asked" ? (
         // `autoFocus` off: this card arrives in a column the reader was not
         // looking at, and taking the caret would put their next keystroke in
         // another session's form.

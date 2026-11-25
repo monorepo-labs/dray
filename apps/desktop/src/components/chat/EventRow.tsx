@@ -5,8 +5,9 @@ import UserMessage from "@/components/chat/UserMessage";
 import FileEdits from "@/components/chat/FileEdits";
 import IssueCard from "@/components/chat/IssueCard";
 import MergeCard from "@/components/chat/MergeCard";
+import { KeyRound } from "lucide-react";
 import { compactTokens, resetTime } from "@/lib/format";
-import { drawsFailure } from "@/lib/transcript";
+import { drawsFailure, drawsSecretAnswer } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 import type { AgentEvent, Bot, FileEdit, ToolResult } from "@/types/events";
 
@@ -32,6 +33,20 @@ function Notice({
       )}
     >
       <span className={wrap ? "min-w-0 wrap-anywhere" : "truncate"}>{children}</span>
+    </p>
+  );
+}
+
+/// A closed secret card: what happened, never the value or where it went.
+export function SecretAnswer({ name, outcome, kept }: { name: string; outcome: string; kept?: boolean }) {
+  const said =
+    outcome === "declined"
+      ? <>Declined <span className="font-mono">{name}</span></>
+      : <>Saved <span className="font-mono">{name}</span> privately{kept ? " on this machine" : " for 24 hours"}</>;
+  return (
+    <p className="flex items-center gap-2 text-chat text-muted-foreground">
+      <KeyRound className="size-3.5 shrink-0" aria-hidden />
+      <span className="truncate">{said}</span>
     </p>
   );
 }
@@ -166,6 +181,9 @@ export default function EventRow({
     // The harness's own sentence — a refusal, a safeguard notice — as written.
     case "notice":
       return <Notice wrap>{payload.text}</Notice>;
+
+    case "secret_answered":
+      return drawsSecretAnswer(payload.outcome) ? <SecretAnswer name={payload.name} outcome={payload.outcome} kept={payload.kept} /> : null;
 
     case "rate_limited": {
       // Only actionable reports reach here — the mapper drops the healthy ones

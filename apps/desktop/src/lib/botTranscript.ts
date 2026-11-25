@@ -1,5 +1,5 @@
 import { stripSenderPrefix } from "@/lib/relay";
-import { drawsFailure } from "@/lib/transcript";
+import { drawsFailure, drawsSecretAnswer } from "@/lib/transcript";
 import type { AgentEvent, Harness, LearnedFile } from "@/types/events";
 import type { JsonValue } from "@/types/serde_json/JsonValue";
 
@@ -359,6 +359,8 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       items.push({ kind: "notice", event });
     } else if (p.type === "merge_card" || p.type === "issue_card") {
       items.push({ kind: "card", event });
+    } else if (p.type === "secret_answered" && drawsSecretAnswer(p.outcome)) {
+      items.push({ kind: "notice", event });
     } else if (p.type === "task_started") {
       const title = cardTitles.get(p.taskId) ?? p.title;
       items.push({ kind: "task", key: event.id, sessionId: p.taskId, ts: event.ts, title });

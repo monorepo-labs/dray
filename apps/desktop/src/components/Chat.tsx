@@ -10,6 +10,7 @@ import ApiRetryIndicator from "@/components/chat/ApiRetryIndicator";
 import PermissionRequest from "@/components/chat/PermissionRequest";
 import QueuedMessages from "@/components/chat/QueuedMessages";
 import QuestionRequest from "@/components/chat/QuestionRequest";
+import SecretRequest from "@/components/chat/SecretRequest";
 import { ReactionsContext, type Reactions } from "@/components/chat/Reactions";
 import Reasoning from "@/components/chat/Reasoning";
 import WorkingIndicator, { OrbLine } from "@/components/chat/WorkingIndicator";
@@ -847,7 +848,18 @@ export default function Chat({
             ))}
 
             {cards.map((ask) =>
-              ask.type === "questions_asked" ? (
+              ask.type === "secret_requested" ? (
+                <SecretRequest
+                  key={ask.requestId}
+                  sessionId={session.sessionId}
+                  requestId={ask.requestId}
+                  name={ask.name}
+                  label={ask.label}
+                  reason={ask.reason}
+                  url={ask.url}
+                  autoFocus={active}
+                />
+              ) : ask.type === "questions_asked" ? (
                 <QuestionRequest
                   key={ask.requestId}
                   requestId={ask.requestId}

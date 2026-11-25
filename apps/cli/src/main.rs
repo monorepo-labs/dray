@@ -14,6 +14,7 @@ mod bot;
 mod draft;
 mod machine;
 mod routine;
+mod secret;
 mod setup;
 mod upload;
 use draft::DraftCommand;
@@ -72,6 +73,9 @@ enum Command {
     /// Make, list, message, rename and delete bots.
     #[command(subcommand, arg_required_else_help = true)]
     Bot(bot::BotCommand),
+    /// Ask the user for a token or password privately, and find saved ones.
+    #[command(subcommand, arg_required_else_help = true)]
+    Secret(secret::SecretCommand),
     /// Drive this session's browser: open pages, read them, click and type.
     Browser(BrowserCommand),
     /// Put a video where this session's chat plays it.
@@ -546,6 +550,7 @@ fn run() -> Result<(), String> {
         Command::Issue(IssueCommand::Unlink(args)) => link_issues(args, true),
         Command::Draft(command) => draft::run(command),
         Command::Bot(command) => bot::run(command),
+        Command::Secret(command) => secret::run(command),
         Command::Browser(args) => browser(args),
         Command::Video(VideoCommand::Add(args)) => add_media(args.file, args.name, args.session, false),
         Command::Image(ImageCommand::Add(args)) => add_media(args.file, args.name, args.session, true),

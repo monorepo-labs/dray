@@ -480,6 +480,33 @@ pub enum AgentEventPayload {
         number: u64,
     },
 
+    /// The agent asked the user for a secret with `dray secret request`. Draws
+    /// a masked card until a [`SecretAnswered`](Self::SecretAnswered) with the
+    /// same `request_id` retires it. Logged, unlike a permission card: the
+    /// answer goes to a file and a fresh prompt, never to the child that
+    /// asked, so a card outlives the turn, the child and a restart alike.
+    SecretRequested {
+        request_id: String,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        label: Option<String>,
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        url: Option<String>,
+    },
+    /// How a [`SecretRequested`](Self::SecretRequested) card was closed. Never
+    /// carries the value, nor the file's path.
+    SecretAnswered {
+        request_id: String,
+        name: String,
+        outcome: SecretOutcome,
+        /// Kept on this machine under `name` rather than deleted after a day.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        kept: bool,
+    },
+
     /// What a bot's turn changed in its instructions, skills or memory, read
     /// off the commit Dray made of its folder. Drawn as "Learned" rows with
     /// View diff and Undo, so a lesson the bot gave itself is never silent.
@@ -628,6 +655,20 @@ pub enum PermissionOptionKind {
     SwitchMode,
     /// Refuse. Always offered, always last.
     Deny,
+}
+
+/// How a secret card closed. `Other` reads an outcome a later build adds, so
+/// the line still parses and the card still closes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "snake_case")]
+pub enum SecretOutcome {
+    Saved,
+    Declined,
+    /// A newer card for the same name took its place.
+    Replaced,
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

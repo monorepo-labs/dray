@@ -1546,6 +1546,7 @@ pub async fn unlink_session_issue(session_id: &str, key: &str) -> Result<Vec<Iss
 /// Index first: a log with no entry is invisible, an entry with no log reads
 /// back as a session with no events. Only one of those is a lie the UI shows.
 pub async fn delete_session(session_id: &str) -> Result<bool> {
+    crate::secrets::forget(session_id).await;
     let existed = {
         let _guard = INDEX_LOCK.lock().await;
 
@@ -3030,7 +3031,8 @@ pub async fn clear_fork_from(session_id: &str) -> Result<bool> {
 /// calls plus a `create_dir_all` were ~10 thread handoffs per event. No handle
 /// is kept between events: delete, fork repointing and worktree relocation all
 /// rely on each append opening the file afresh.
-pub async fn append_session_event(session_id: &str, event: AgentEvent) -> Result<()> {
+pub async fn append_session_event(session_id: &str, mut event: AgentEvent) -> Result<()> {
+    crate::secrets::mask(&mut event);
     let dir = get_home_app_dir().await?.join("sessions");
     let path = dir.join(format!("{session_id}.jsonl"));
     let mut line = serde_json::to_vec(&event)?;

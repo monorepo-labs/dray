@@ -2401,7 +2401,8 @@ impl SessionManager {
     /// [`post_event`](Self::post_event) for a note made outside any turn, such
     /// as an Undo: marked as posted it would leave the next silent turn
     /// counted as an answered one.
-    pub async fn log_event(&self, session_id: &str, harness: Harness, payload: AgentEventPayload, app: &Sink) -> Result<()> {
+    /// Answers the event as logged, for a caller that keeps it.
+    pub async fn log_event(&self, session_id: &str, harness: Harness, payload: AgentEventPayload, app: &Sink) -> Result<AgentEvent> {
         let slot = self.slot(session_id).await;
         let guard = slot.lock().await;
         let (harness, seq) = match guard.as_ref() {
@@ -2411,7 +2412,8 @@ impl SessionManager {
         note_reaction(session_id, &payload);
         let event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
         app.emit("agent_event", &event)?;
-        append_session_event(session_id, event).await
+        append_session_event(session_id, event.clone()).await?;
+        Ok(event)
     }
 
     /// The agent process's pid, for finding what it started (a dev server is a
@@ -2462,6 +2464,7 @@ impl SessionManager {
     /// and a child left running behind a settled row was a dev server and a
     /// page nobody could see.
     pub async fn settle(&self, session_id: &str) -> Result<()> {
+        crate::secrets::forget(session_id).await;
         let running = self.take(session_id).await;
         // The tabs close whatever the kill answered: the session is already
         // out of the map, so nothing would come back to close them.
@@ -4241,6 +4244,7 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
     if let AgentEventPayload::ToolCallCompleted { ref mut result, .. } = agent_event.payload {
         crate::attachments::archive_result_images(ctx.session_id, &mut result.images).await;
     }
+    crate::secrets::mask(&mut agent_event);
 
     // Read before the event is moved into the log below. These three are
     // the turn's boundaries in the sense that matters here: each is a point

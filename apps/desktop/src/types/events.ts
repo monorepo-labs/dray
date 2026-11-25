@@ -390,7 +390,11 @@ repo?: string, } | { "type": "issue_card", title?: string,
 /**
  * `owner/name`.
  */
-repo: string, issues: Array<IssueCardRow>, } | { "type": "issue_approved", cardId: string, number: number, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "reaction", 
+repo: string, issues: Array<IssueCardRow>, } | { "type": "issue_approved", cardId: string, number: number, } | { "type": "secret_requested", requestId: string, name: string, label?: string, reason: string, url?: string, } | { "type": "secret_answered", requestId: string, name: string, outcome: SecretOutcome, 
+/**
+ * Kept on this machine under `name` rather than deleted after a day.
+ */
+kept?: boolean, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "reaction", 
 /**
  * The event reacted to, always in this same session: a `user_message`,
  * or with `by_user` an `assistant_text`.
@@ -2092,6 +2096,12 @@ repo: string,
  * searches it by (`org:` or `user:`), membership or not.
  */
 ownerIsOrg: boolean, mark: PrMark, };
+
+/**
+ * How a secret card closed. `Other` reads an outcome a later build adds, so
+ * the line still parses and the card still closes.
+ */
+export type SecretOutcome = "saved" | "declined" | "replaced" | "other";
 
 /**
  * What a send did. The two fields are mutually exclusive in practice — a

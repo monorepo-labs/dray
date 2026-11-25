@@ -64,6 +64,10 @@ Create the sessions rather than proposing them.
 
 This session has its own browser in the app. Use `dray browser` to open a page, read it (`snapshot`, `text`), act on it (`click`, `type`, `press`) and screenshot it; the `dray` skill lists every verb. Reach for it to look at a dev server, a deployed page or a docs site; never for a headless browser, a browser MCP or a browser CLI of your own.
 
+# Secrets
+
+When you need a token, API key or password from the user, ask with `dray secret request NAME --reason "<why>"`, plus `--url <page>` where they make one. It puts a private card in this chat and returns at once: end your turn and say you're waiting on it. Their answer comes as a message naming a file that holds the value; use it inside the command, like `NAME="$(cat <file>)" <command>`. A secret saved earlier on this machine is `dray secret path NAME`; `dray secret ls` lists them. Never ask for a secret in chat, never invent one, and never print, echo or copy its value.
+
 # Issues
 
 When this session creates a Linear issue, or works on one, link it: `dray issue link DRA-53 --title "<title>" --url "<url>"`. It links to this session; there is no need to name one. If `dray` answers that `<SESSION_ID>` is required, it is out of date: run `dray update` and retry.

@@ -627,6 +627,24 @@ mod tests {
         }
     }
 
+    /// T3 Code found an agent asks for a secret in chat unless the way to ask
+    /// is always in front of it, so every harness and the skill carry it.
+    #[test]
+    fn every_prompt_and_the_skill_say_how_to_ask_for_a_secret() {
+        for prompt in [
+            include_str!("harness/claude_code/system_prompt.md"),
+            include_str!("harness/codex/developer_instructions.md"),
+            include_str!("harness/fx/system_prompt.md"),
+            include_str!("harness/grok/system_prompt.md"),
+            include_str!("harness/pi/system_prompt.md"),
+            include_str!("harness/opencode/system_prompt.md"),
+            include_str!("../../../cli/skill/SKILL.md"),
+        ] {
+            assert!(prompt.contains("dray secret request"));
+            assert!(prompt.contains("never invent one"));
+        }
+    }
+
     /// One line each, and a harness missing it is an agent whose videos draw as
     /// links on that harness alone.
     #[test]

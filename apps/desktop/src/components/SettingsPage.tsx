@@ -10,6 +10,7 @@ import {
   Square3Stack3DIcon,
   PaintBrushIcon,
   KeyIcon,
+  LockClosedIcon,
   NewspaperIcon,
   ServerStackIcon,
 } from "@heroicons/react/16/solid";
@@ -63,6 +64,7 @@ import AppShell from "@/components/layout/AppShell";
 import WindowControls from "@/components/layout/WindowControls";
 import { SettingsHeaderSlot } from "@/components/settings/headerAction";
 import ServersSettings from "@/components/settings/ServersSettings";
+import SecretsSettings from "@/components/settings/SecretsSettings";
 import HandoffSettings from "@/components/settings/HandoffSettings";
 import SettingRow from "@/components/settings/SettingRow";
 import ShortcutsSettings from "@/components/settings/ShortcutsSettings";
@@ -233,6 +235,7 @@ export default function SettingsPage({
         ),
         servers: <ServersSettings />,
         accounts: <AccountsSettings cwd={cwd} />,
+        secrets: <SecretsSettings />,
         transcription: (
           <TranscriptionSettings
             status={transcription.status}
@@ -1460,6 +1463,7 @@ const TAB_LOOKS: Record<SettingsTab, { label: string; Icon: typeof PaintBrushIco
   spaces: { label: "Spaces", Icon: Square3Stack3DIcon },
   servers: { label: "Servers", Icon: ServerStackIcon },
   accounts: { label: "Agents", Icon: KeyIcon },
+  secrets: { label: "Secrets", Icon: LockClosedIcon },
   transcription: { label: "Transcription", Icon: MicrophoneIcon },
   integrations: { label: "Integrations", Icon: PuzzlePieceIcon },
   shortcuts: { label: "Shortcuts", Icon: BoltIcon },
@@ -1481,6 +1485,7 @@ const TAB_SUBTITLES: Partial<Record<SettingsTab, string>> = {
   accounts: "Manage each harness's sign-in. Switch one off to hide it from the model picker.",
   composer:
     "The buttons that rise out of the composer's top edge on hover. Each sends its prompt as if you had typed it.",
+  secrets: "Tokens and passwords saved on each machine, by name. Any task there can use one; nobody can read one back here.",
   // Agents add machines with `dray machine add`, which nothing here would say.
   servers: "Ask your bot or any session to set one up for you. No need to add each by hand.",
   // Nothing on the island says it has a menu.
