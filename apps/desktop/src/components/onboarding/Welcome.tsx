@@ -1,6 +1,6 @@
 import { type CSSProperties, useEffect, useRef } from "react";
 
-import { playWelcomeSound, SHIMMER_MS } from "./welcomeSounds";
+import { playWelcomeSound } from "./welcomeSounds";
 import "./onboarding.css";
 
 /// When, in ms, each beat of the welcome lands. The wordmark sits a while
@@ -10,8 +10,8 @@ const SHINE_AT = 1600;
 const LIT_AT = SHINE_AT + 500;
 /// The shimmer peaks just after the light sets off.
 const SHIMMER_AT = SHINE_AT + 300;
-/// The song starts once the shimmer is over.
-export const SHIMMER_END = SHIMMER_AT + SHIMMER_MS;
+/// The song runs silent under the logo and is up at full volume by this.
+export const MUSIC_UP_AT = 3000;
 const LOGO_OUT_AT = 4600;
 const TEXT_AT = 5200;
 /// Each word of the welcome rises a beat after the one before it.
