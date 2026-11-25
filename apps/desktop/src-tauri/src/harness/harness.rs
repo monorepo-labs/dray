@@ -406,9 +406,22 @@ mod install_tests {
     fn every_agent_names_its_own_cure() {
         for harness in Harness::ALL {
             assert!(!harness.label().is_empty());
+            #[cfg(not(windows))]
             assert!(
                 harness.install_command().starts_with("curl -fsSL "),
                 "{:?} has no copyable install command",
+                harness
+            );
+            // PowerShell on Windows, and nothing where the vendor publishes no
+            // installer there; the docs link below is the cure then.
+            #[cfg(windows)]
+            assert!(
+                matches!(harness, Harness::Fx | Harness::OpenCode)
+                    == harness.install_command().is_empty()
+                    && (harness.install_command().is_empty()
+                        || harness.install_command().starts_with("irm https://")
+                            && harness.install_command().ends_with(".ps1 | iex")),
+                "{:?} has the wrong Windows install command",
                 harness
             );
             assert!(
@@ -424,11 +437,13 @@ mod install_tests {
         // Codex's installer and this still passes.
         for (i, a) in Harness::ALL.iter().enumerate() {
             for b in &Harness::ALL[i + 1..] {
-                assert_ne!(
-                    a.install_command(),
-                    b.install_command(),
-                    "{a:?} and {b:?} share an install command"
-                );
+                if !a.install_command().is_empty() {
+                    assert_ne!(
+                        a.install_command(),
+                        b.install_command(),
+                        "{a:?} and {b:?} share an install command"
+                    );
+                }
                 assert_ne!(a.docs_url(), b.docs_url(), "{a:?} and {b:?} share a docs URL");
                 assert_ne!(a.label(), b.label(), "{a:?} and {b:?} share a label");
             }
@@ -446,6 +461,9 @@ mod install_tests {
                 .find(|a| a.id == harness.wire_name())
                 .unwrap_or_else(|| panic!("{harness:?} is missing from dray_proto::AGENTS"));
             assert_eq!(agent.name, harness.label());
+            // Windows' commands are PowerShell, and `dray setup` still runs
+            // these through `sh` there.
+            #[cfg(not(windows))]
             assert_eq!(agent.install, harness.install_command());
             assert_eq!(agent.login, harness.login_command());
         }
