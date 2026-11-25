@@ -21,8 +21,10 @@ export function Hero() {
   return (
     <>
     <header id="hero" className="relative overflow-clip bg-black px-5 pb-14 sm:px-8 sm:pb-10 light:bg-white">
-      {/* Down by the "Also on" line's 36px, so the field still starts under it. */}
-      <HeroBackdrop top="top-9" />
+      {/* Down by the "Also on" line's 36px, so the field still starts under
+          it. A phone's buttons come one or two to a column, so its field
+          hangs off the window instead, below. */}
+      <HeroBackdrop top="top-9 max-sm:hidden" />
 
       <div className="relative mx-auto w-full max-w-[960px]">
         <SiteNav />
@@ -31,7 +33,7 @@ export function Hero() {
             headline stays where it was. */}
         <div className="pt-7 sm:pt-[81px] lg:ml-[102px] lg:max-w-[756px]">
           <p className="mb-4 text-[14px] leading-5 tracking-[-0.01em] text-white/30 light:text-black/40">Free and open source</p>
-          <h1 className="font-inter text-[36px] leading-[40px] font-[350] tracking-[-0.03em] text-balance text-white sm:text-[46px] light:text-[#0A0A0A] sm:leading-[54px]">
+          <h1 className="font-inter text-[30px] leading-[34px] font-[350] tracking-[-0.03em] text-balance text-white sm:text-[46px] light:text-[#0A0A0A] sm:leading-[54px]">
             Work on dozens of coding tasks without getting overwhelmed.
           </h1>
           {/* A phone gets its own apps; the desktop ones are a line under them. */}
@@ -47,6 +49,9 @@ export function Hero() {
         </div>
 
         <div className="relative mt-12 sm:left-1/2 sm:w-[min(1200px,calc(100vw-64px))] sm:-translate-x-1/2 lg:rounded-[12px] lg:shadow-[0_2px_50px_12px_#0000004D] light:lg:shadow-none">
+          {/* The field's top edge 22px above the window, where the desktop
+              one lands. */}
+          <HeroBackdrop id="hero-phone" top="-top-[382px] sm:hidden" />
           {/* The live window wants a desktop's width; a phone gets a still of
               it instead of a sideways-scrolling miniature. */}
           <div className={`relative max-sm:hidden ${h.liveCursor}`}>
@@ -61,7 +66,7 @@ export function Hero() {
             width={1200}
             height={786}
             loading="lazy"
-            className="h-auto w-full rounded-[6px] sm:hidden light:hidden"
+            className="relative h-auto w-full rounded-[6px] sm:hidden light:hidden"
           />
           <img
             src="/hero-mobile-light.webp"
@@ -69,7 +74,7 @@ export function Hero() {
             width={1440}
             height={920}
             loading="lazy"
-            className="hidden h-auto w-full rounded-[6px] shadow-[0_0_0_1px_#00000014] light:block light:sm:hidden"
+            className="relative hidden h-auto w-full rounded-[6px] shadow-[0_0_0_1px_#00000014] light:block light:sm:hidden"
           />
         </div>
 

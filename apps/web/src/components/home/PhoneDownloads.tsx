@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 
 import { AndroidGlyph } from "@/components/AndroidGlyph";
 import { AppleGlyph } from "@/components/AppleGlyph";
-import { BetaTag } from "@/components/BetaTag";
 import { APP_STORE } from "@/lib/links";
 import { posthog } from "@/lib/posthog";
 
@@ -14,7 +13,6 @@ const OUTLINE =
   "inline-flex h-10 items-center gap-2 rounded-[6px] border border-white/20 px-4 text-[14px] leading-5 font-medium text-white transition-colors hover:bg-white/10 light:border-black/15 light:text-[#0A0A0A] light:hover:bg-black/5";
 const LINK =
   "text-white underline decoration-white/30 underline-offset-4 transition-colors hover:decoration-white light:text-[#0A0A0A] light:decoration-black/30 light:hover:decoration-black";
-const BETA = "text-[#A1A1A1] light:text-[#6B6B6B]";
 
 type Phone = "ios" | "android" | "other";
 
@@ -29,39 +27,61 @@ function phone(): Phone {
 
 /// The hero's buttons on a phone: the app for this phone's OS, both where it
 /// can't tell, and a line pointing at the desktop apps. Renders both until it
-/// has read the user agent, so the server's HTML never guesses wrong; every
-/// case is one row of buttons, so the swap moves nothing below it.
+/// has read the user agent, so the server's HTML never guesses wrong.
 export function PhoneDownloads({ className = "" }: { className?: string }) {
   const [os, setOs] = useState<Phone>("other");
-  useEffect(() => setOs(phone()), []);
+  // TEMPORARY: `?v=b` shows the side-by-side take for comparison; drop once picked.
+  const [side, setSide] = useState(false);
+  useEffect(() => {
+    setOs(phone());
+    setSide(new URLSearchParams(location.search).get("v") === "b");
+  }, []);
 
+  const full = "w-full justify-center";
   const iphone = (
     <a
       href={APP_STORE}
       target="_blank"
       rel="noopener noreferrer"
       onClick={() => posthog.capture("app_store_click", { from: "hero" }, { transport: "sendBeacon" })}
-      className={FILLED}
+      className={`${FILLED} ${full}`}
     >
       <AppleGlyph className="-mt-0.5 size-4" />
-      {os === "ios" ? "Download for iPhone" : "iPhone"}
+      {side ? "App Store" : "Download for iPhone"}
     </a>
   );
   const android = (
-    <a href="/download#android" className={os === "android" ? FILLED : OUTLINE}>
+    <a href="/download#android" className={`${os === "android" ? FILLED : OUTLINE} ${full}`}>
       <AndroidGlyph className="size-4" />
-      {os === "android" ? "Get the Android beta" : "Android"}
-      {os !== "android" && <BetaTag className={BETA} />}
+      {side ? "Android beta" : "Get the Android beta"}
     </a>
   );
+  const all = (
+    <a href="/download" className={`${OUTLINE} ${full} ${os === "other" ? "col-span-2" : ""}`}>
+      All downloads
+    </a>
+  );
+  const helper = "mt-4 text-[14px] leading-5 tracking-[-0.01em] text-white/50 light:text-black/50";
+
+  if (side)
+    return (
+      <div className={className}>
+        <div className="mt-8 grid grid-cols-2 gap-3">
+          {os !== "android" && iphone}
+          {os !== "ios" && android}
+          {all}
+        </div>
+        <p className={helper}>Also on Mac, Windows and Linux.</p>
+      </div>
+    );
 
   return (
     <div className={className}>
-      <div className="mt-8 flex flex-wrap items-center gap-3">
+      <div className="mt-8 flex flex-col gap-3">
         {os !== "android" && iphone}
         {os !== "ios" && android}
       </div>
-      <p className="mt-4 text-[14px] leading-5 tracking-[-0.01em] text-white/50 light:text-black/50">
+      <p className={helper}>
         Also on Mac, Windows and Linux.{" "}
         <a href="/download" className={LINK}>
           All downloads
