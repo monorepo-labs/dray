@@ -517,20 +517,16 @@ export default function ModelSelector({
 
       <DropdownMenuContent
         align="start"
-        // Fixed, not `min-w`: the base class sizes the menu to
-        // `--radix-dropdown-menu-trigger-width`, so the trigger's own label set
-        // the width — and fx's gateway names a model by its vendor too
-        // (`anthropic/claude-opus-5`), which made the menu visibly wider on
-        // that one harness for no reason a reader could see. Rows truncate.
-        //
-        // **The agent track is what sets the number, not the rows.** It is the
-        // one thing here that cannot truncate: five marks at `size-6` are 120px
-        // before the ⌘/Shift/A caps beside them, and at 200px the chord's last
-        // cap was clipped by the menu's edge. 8 (menu `p-1`) + 8 (track `p-1`)
-        // + 120 + 4 (`gap-1`) + 86 (three caps at `gap-1`, "Shift" spelled out)
-        // = 226. A sixth agent costs another 24 and wants this raised again —
-        // or the hint dropped, which is what the fx arm below already does.
-        className="w-[232px]"
+        // **The agent track sets the width, never the rows.** It is the one
+        // thing here that cannot truncate, and its width moves with the agents
+        // enabled, fx's providers, the platform (⌘ or Ctrl) and a rebound
+        // chord, so a fixed number clipped the chord's last cap each time an
+        // agent was added. `w-max` sizes the menu to it; every other child
+        // takes `contain: inline-size`, so it fills that width and adds none —
+        // a model row widening the menu is what the trigger-width base did
+        // (fx's `anthropic/claude-opus-5`), and rows truncate instead. 232px
+        // keeps the old shape when few agents are on.
+        className="w-max min-w-[232px] max-w-(--radix-dropdown-menu-content-available-width) [&>:not(:first-child)]:[contain:inline-size]"
       >
         {/* Not menu items: a segmented control says "one of these two" where
             two stacked rows would read as two more models. Plain buttons, so
@@ -616,8 +612,10 @@ export default function ModelSelector({
             />
           ) : (
             /* Inside the track, in the width the marks leave: a hint you have
-               to hover to find is one nobody finds. */
-            <ShortcutKeys ids={["harness.next"]} className="ml-auto pr-0.5" />
+               to hover to find is one nobody finds. `pl-1.5` holds it apart
+               from the marks once the track is what sizes the menu and
+               `ml-auto` has no slack left to give. */
+            <ShortcutKeys ids={["harness.next"]} className="ml-auto pl-1.5 pr-0.5" />
           )}
         </div>
 
