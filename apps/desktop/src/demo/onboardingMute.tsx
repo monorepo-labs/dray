@@ -39,7 +39,7 @@ mockIPC(
 );
 
 const page = new URLSearchParams(location.search).get("page") ?? "bot";
-if (page === "signin") startOnboardingMusic(0);
+if (page === "signin") startOnboardingMusic(0, 0);
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
