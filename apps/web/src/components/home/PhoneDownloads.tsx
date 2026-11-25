@@ -30,58 +30,31 @@ function phone(): Phone {
 /// has read the user agent, so the server's HTML never guesses wrong.
 export function PhoneDownloads({ className = "" }: { className?: string }) {
   const [os, setOs] = useState<Phone>("other");
-  // TEMPORARY: `?v=b` shows the side-by-side take for comparison; drop once picked.
-  const [side, setSide] = useState(false);
-  useEffect(() => {
-    setOs(phone());
-    setSide(new URLSearchParams(location.search).get("v") === "b");
-  }, []);
-
-  const full = "w-full justify-center";
-  const iphone = (
-    <a
-      href={APP_STORE}
-      target="_blank"
-      rel="noopener noreferrer"
-      onClick={() => posthog.capture("app_store_click", { from: "hero" }, { transport: "sendBeacon" })}
-      className={`${FILLED} ${full}`}
-    >
-      <AppleGlyph className="-mt-0.5 size-4" />
-      {side ? "App Store" : "Download for iPhone"}
-    </a>
-  );
-  const android = (
-    <a href="/download#android" className={`${os === "android" ? FILLED : OUTLINE} ${full}`}>
-      <AndroidGlyph className="size-4" />
-      {side ? "Android beta" : "Get the Android beta"}
-    </a>
-  );
-  const all = (
-    <a href="/download" className={`${OUTLINE} ${full} ${os === "other" ? "col-span-2" : ""}`}>
-      All downloads
-    </a>
-  );
-  const helper = "mt-4 text-[14px] leading-5 tracking-[-0.01em] text-white/50 light:text-black/50";
-
-  if (side)
-    return (
-      <div className={className}>
-        <div className="mt-8 grid grid-cols-2 gap-3">
-          {os !== "android" && iphone}
-          {os !== "ios" && android}
-          {all}
-        </div>
-        <p className={helper}>Also on Mac, Windows and Linux.</p>
-      </div>
-    );
+  useEffect(() => setOs(phone()), []);
 
   return (
     <div className={className}>
       <div className="mt-8 flex flex-col gap-3">
-        {os !== "android" && iphone}
-        {os !== "ios" && android}
+        {os !== "android" && (
+          <a
+            href={APP_STORE}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => posthog.capture("app_store_click", { from: "hero" }, { transport: "sendBeacon" })}
+            className={`${FILLED} w-full justify-center`}
+          >
+            <AppleGlyph className="-mt-0.5 size-4" />
+            Download for iPhone
+          </a>
+        )}
+        {os !== "ios" && (
+          <a href="/download#android" className={`${os === "android" ? FILLED : OUTLINE} w-full justify-center`}>
+            <AndroidGlyph className="size-4" />
+            Get the Android beta
+          </a>
+        )}
       </div>
-      <p className={helper}>
+      <p className="mt-4 text-[14px] leading-5 tracking-[-0.01em] text-white/50 light:text-black/50">
         Also on Mac, Windows and Linux.{" "}
         <a href="/download" className={LINK}>
           All downloads
