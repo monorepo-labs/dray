@@ -441,7 +441,7 @@ pub fn setup(args: Install) -> Result<(), String> {
         done("Found", &names.join(", "));
     }
 
-    let tty = OpenOptions::new().read(true).write(true).open("/dev/tty").ok();
+    let tty = open_tty();
     let picked: Vec<&Tool> = if missing.is_empty() || !args.tools.is_empty() {
         missing.into_iter().filter(|t| args.tools.iter().any(|n| n == t.id)).collect()
     } else if let Some(tty) = &tty {
@@ -468,7 +468,7 @@ pub fn setup(args: Install) -> Result<(), String> {
     let mut todo = Vec::new();
     for tool in picked {
         println!("{BAR}\n\x1b[36m●\x1b[0m  Installing {}", tool.name);
-        match install(tool, tty.as_ref()) {
+        match install(tool, tty.as_ref().map(|t| &t.input)) {
             Ok(()) if present(tool) => done(&format!("{} installed", tool.name), ""),
             Ok(()) => warn(&format!("{} installed, but not where dray can see it yet", tool.name)),
             Err(Manual(command)) => todo.push(command),
@@ -484,6 +484,17 @@ pub fn setup(args: Install) -> Result<(), String> {
         done("Sign in where you have not yet", &logins.join(&format!("\n{BAR}  ")));
     }
 
+    // Windows has no service manager this sets up: the app runs its server as
+    // a child, as on a Linux desktop.
+    if cfg!(windows) {
+        let how = if app_ships_this_cli() {
+            "The Dray app runs this machine's server while it is open."
+        } else {
+            "Windows has no background service for the server yet. Run it in a window you keep open: dray server run"
+        };
+        println!("\x1b[90m└\x1b[0m  Done. {how}");
+        return Ok(());
+    }
     if may_serve().is_err() {
         println!("\x1b[90m└\x1b[0m  Done. The Dray app runs this Mac's server.");
         return Ok(());
@@ -1178,27 +1189,103 @@ fn linger() -> bool {
         || quiet(Command::new("sudo").args(["-n", "loginctl", "enable-linger", &user]))
 }
 
+/// The terminal itself, apart from stdin, which under `curl | sh` is the
+/// installer. One file on Unix; Windows' console is two, `CONIN$` and
+/// `CONOUT$`, since neither end of it can do the other's job.
+struct Tty {
+    input: File,
+    output: File,
+}
+
+fn open_tty() -> Option<Tty> {
+    let open = |path: &str| OpenOptions::new().read(true).write(true).open(path).ok();
+    if cfg!(windows) {
+        return Some(Tty { input: open("CONIN$")?, output: open("CONOUT$")? });
+    }
+    let tty = open("/dev/tty")?;
+    Some(Tty { output: tty.try_clone().ok()?, input: tty })
+}
+
+/// The terminal in raw mode for as long as this lives: keys one at a time,
+/// unechoed. Put back on every way out, panics included, or the reader's
+/// shell is left with no echo.
+struct RawTerminal<'a> {
+    tty: &'a Tty,
+    #[cfg(unix)]
+    saved: String,
+    #[cfg(windows)]
+    saved: (u32, u32),
+}
+
+#[cfg(unix)]
+fn stty(tty: &File, args: &[&str]) -> Option<String> {
+    let out = Command::new("stty").args(args).stdin(tty.try_clone().ok()?).output().ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+#[cfg(unix)]
+impl<'a> RawTerminal<'a> {
+    fn enter(tty: &'a Tty) -> Result<Self, String> {
+        let saved = stty(&tty.input, &["-g"]).ok_or("could not read the terminal's settings")?;
+        stty(&tty.input, &["raw", "-echo"]).ok_or("could not set up the terminal")?;
+        Ok(Self { tty, saved })
+    }
+
+    fn restore(&self) {
+        stty(&self.tty.input, &[self.saved.as_str()]);
+    }
+}
+
+/// Windows' console has no `stty`: line input and echo come off the input
+/// handle's mode, and virtual terminal input makes an arrow the same three
+/// bytes a Unix terminal sends. Ctrl-C arrives as a byte too, with processed
+/// input off, so the picker cancels on it as it does elsewhere.
+#[cfg(windows)]
+impl<'a> RawTerminal<'a> {
+    fn enter(tty: &'a Tty) -> Result<Self, String> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::Console::{
+            GetConsoleMode, SetConsoleMode, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
+            ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+        };
+        let (input, output) = (tty.input.as_raw_handle(), tty.output.as_raw_handle());
+        let (mut i, mut o) = (0, 0);
+        if unsafe { GetConsoleMode(input, &mut i) } == 0 || unsafe { GetConsoleMode(output, &mut o) } == 0 {
+            return Err("could not read the terminal's settings".into());
+        }
+        let this = Self { tty, saved: (i, o) };
+        let raw = (i & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT)) | ENABLE_VIRTUAL_TERMINAL_INPUT;
+        if unsafe { SetConsoleMode(input, raw) } == 0
+            || unsafe { SetConsoleMode(output, o | ENABLE_VIRTUAL_TERMINAL_PROCESSING) } == 0
+        {
+            return Err("could not set up the terminal".into());
+        }
+        Ok(this)
+    }
+
+    fn restore(&self) {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::Console::SetConsoleMode;
+        unsafe {
+            SetConsoleMode(self.tty.input.as_raw_handle(), self.saved.0);
+            SetConsoleMode(self.tty.output.as_raw_handle(), self.saved.1);
+        }
+    }
+}
+
+impl Drop for RawTerminal<'_> {
+    fn drop(&mut self) {
+        let _ = write!(&self.tty.output, "\x1b[?25h");
+        self.restore();
+    }
+}
+
 /// A checklist in the `npx skills` style, read off the terminal rather than
 /// stdin, which under `curl | sh` is the installer itself. Arrows move, space
 /// ticks, enter confirms; ctrl-c cancels.
-fn multiselect(tty: &File, title: &str, items: &[(String, bool)]) -> Result<Vec<bool>, String> {
-    let stty = |args: &[&str]| -> Option<String> {
-        let out = Command::new("stty").args(args).stdin(tty.try_clone().ok()?).output().ok()?;
-        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-    };
-    let saved = stty(&["-g"]).ok_or("could not read the terminal's settings")?;
-    stty(&["raw", "-echo"]).ok_or("could not set up the terminal")?;
-    // Restored on every way out, panics included, or the reader's shell is
-    // left with no echo.
-    struct Restore<'a>(&'a dyn Fn(&[&str]) -> Option<String>, String, &'a File);
-    impl Drop for Restore<'_> {
-        fn drop(&mut self) {
-            (self.0)(&[self.1.as_str()]);
-            let _ = write!(self.2, "\x1b[?25h");
-        }
-    }
-    let _restore = Restore(&stty, saved, tty);
-    let (mut out, mut input) = (tty, tty);
+fn multiselect(tty: &Tty, title: &str, items: &[(String, bool)]) -> Result<Vec<bool>, String> {
+    let _raw = RawTerminal::enter(tty)?;
+    let (mut out, mut input) = (&tty.output, &tty.input);
 
     let mut on: Vec<bool> = items.iter().map(|(_, on)| *on).collect();
     let mut at = 0;
