@@ -72,7 +72,7 @@ data class SecretSummary(val name: String, val modified: String = "", val always
 
 private val NAME = Regex("^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
-/** Settings › Secrets: a machine picked at the top, its saved names, Auto per name, Replace and Delete. */
+/** Settings › Vault: a machine picked at the top, its saved names, Auto per name, Replace and Delete. */
 @Composable
 fun SecretsSettings(back: () -> Unit) {
     val store = LocalStore.current
@@ -100,7 +100,7 @@ fun SecretsSettings(back: () -> Unit) {
         runCatching { block() }.onFailure { error = it.message ?: "Couldn't change it" }
     }
 
-    SettingsPage("Secrets", back) {
+    SettingsPage("Vault", back) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             RowGroup {
                 Box {

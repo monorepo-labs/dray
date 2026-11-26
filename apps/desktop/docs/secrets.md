@@ -43,7 +43,7 @@ Asking again for a name whose card is still open in that session closes the old 
 
 ## Phones
 
-**Android draws the card and Settings › Secrets** (#1604, [SecretCard.kt](../../android/app/src/main/java/com/yogesh/dray/ui/SecretCard.kt), [SecretsSettings.kt](../../android/app/src/main/java/com/yogesh/dray/ui/SecretsSettings.kt)). The card sits in `Store.asks` beside permission cards but survives `strand`, since a turn ending must not drop it; `live_state`'s `secrets` refills it. Its lines sit outside the folds. The phone hides Dray's own kickoff prompt as the desktop does, or the answer's hidden prompt drew as a bubble.
+**Android draws the card and Settings › Vault** (#1604, [SecretCard.kt](../../android/app/src/main/java/com/yogesh/dray/ui/SecretCard.kt), [SecretsSettings.kt](../../android/app/src/main/java/com/yogesh/dray/ui/SecretsSettings.kt)). The card sits in `Store.asks` beside permission cards but survives `strand`, since a turn ending must not drop it; `live_state`'s `secrets` refills it. Its lines sit outside the folds. The phone hides Dray's own kickoff prompt as the desktop does, or the answer's hidden prompt drew as a bubble.
 
 ## Not yet
 

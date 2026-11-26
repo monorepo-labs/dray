@@ -293,7 +293,7 @@ fun SecretCard(key: SessionKey, request: SecretRequest, asker: SecretParty?, mod
                 }
 
                 Column {
-                    if (pasting) SwitchLine("Save", keeps, enabled = !busy && !auto) { keep = it }
+                    if (pasting) SwitchLine("Save to Vault", keeps, enabled = !busy && !auto) { keep = it }
                     SwitchLine("Let agents use it without asking you", auto, enabled = !busy) { auto = it }
                 }
 

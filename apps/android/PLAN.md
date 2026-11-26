@@ -86,7 +86,7 @@ reads and drives it over the same WebSocket the desktop and iOS use
 - **Secrets** (#1604, the desktop's [secrets.md](../desktop/docs/secrets.md)):
   `dray secret request`'s card (`SecretCard.kt`) in the chat, a bot's chat and
   under the row, answered through `answer_secret_request`; its closed lines in
-  both chats; Settings › Secrets (`SecretsSettings.kt`), one machine at a time.
+  both chats; Settings › Vault (`SecretsSettings.kt`), one machine at a time.
   A value lives in plain `remember`, never saved state, and is cleared once sent.
 
 Left for the tasks building on this: New task (Run with), bots and bot chat,

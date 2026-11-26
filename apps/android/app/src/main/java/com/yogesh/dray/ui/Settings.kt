@@ -132,7 +132,7 @@ fun SettingsScreen(focus: String?, back: () -> Unit, dictation: () -> Unit = {},
                 SettingsRow("Notifications", icon = { Icon(Icons.Outlined.Notifications, null, Modifier.size(20.dp), tint = Dray.secondary) },
                     value = if (com.yogesh.dray.push.Push.enabled && com.yogesh.dray.push.Push.available) "On" else "Off", onClick = notifications)
                 OpenBotRow()
-                SettingsRow("Secrets", icon = { Icon(Icons.Outlined.Key, null, Modifier.size(20.dp), tint = Dray.secondary) }) { pages.add(Page.Secrets) }
+                SettingsRow("Vault", icon = { Icon(Icons.Outlined.Key, null, Modifier.size(20.dp), tint = Dray.secondary) }) { pages.add(Page.Secrets) }
             }
             About()
         }
