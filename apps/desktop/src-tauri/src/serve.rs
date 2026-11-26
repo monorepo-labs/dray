@@ -2040,8 +2040,11 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         react_to_message(session_id: String, message_id: String, emoji: String) =>
             crate::bots::react::react_to_message(session_id, message_id, emoji, sink).await;
         // The value rides this call alone and goes straight to a file.
-        answer_secret_request(session_id: String, request_id: String, value: Option<String>, keep: bool) =>
-            crate::secrets::answer_secret_request(session_id, request_id, value, keep, sink).await;
+        answer_secret_request(
+            session_id: String, request_id: String, value: Option<String>, keep: bool,
+            use_saved: Option<bool>, always: Option<bool>,
+        ) => crate::secrets::answer_secret_request(session_id, request_id, value, keep, use_saved, always, sink).await;
+        set_secret_always(name: String, on: bool) => crate::secrets::set_secret_always(name, on, sink).await;
         list_secrets() => crate::secrets::list_secrets().await;
         save_secret(name: String, value: String) => crate::secrets::save_secret(name, value, sink).await;
         delete_secret(name: String) => crate::secrets::delete_secret(name, sink).await;

@@ -38,11 +38,33 @@ function Notice({
 }
 
 /// A closed secret card: what happened, never the value or where it went.
-export function SecretAnswer({ name, outcome, kept }: { name: string; outcome: string; kept?: boolean }) {
+export function SecretAnswer({
+  name,
+  outcome,
+  kept,
+  always,
+  auto,
+}: {
+  name: string;
+  outcome: string;
+  kept?: boolean;
+  always?: boolean;
+  auto?: boolean;
+}) {
+  const id = <span className="font-mono">{name}</span>;
   const said =
-    outcome === "declined"
-      ? <>Declined <span className="font-mono">{name}</span></>
-      : <>Saved <span className="font-mono">{name}</span> privately{kept ? " on this machine" : " for 24 hours"}</>;
+    outcome === "declined" ? (
+      <>Declined {id}</>
+    ) : auto ? (
+      <>Used saved {id}, always allowed</>
+    ) : outcome === "used" ? (
+      <>Used saved {id}{always ? ", always allowed from now on" : ""}</>
+    ) : (
+      <>
+        Saved {id} privately{kept ? " on this machine" : " for 24 hours"}
+        {always ? ", always allowed" : ""}
+      </>
+    );
   return (
     <p className="flex items-center gap-2 text-chat text-muted-foreground">
       <KeyRound className="size-3.5 shrink-0" aria-hidden />
@@ -183,7 +205,7 @@ export default function EventRow({
       return <Notice wrap>{payload.text}</Notice>;
 
     case "secret_answered":
-      return drawsSecretAnswer(payload.outcome) ? <SecretAnswer name={payload.name} outcome={payload.outcome} kept={payload.kept} /> : null;
+      return drawsSecretAnswer(payload.outcome) ? <SecretAnswer {...payload} /> : null;
 
     case "rate_limited": {
       // Only actionable reports reach here — the mapper drops the healthy ones

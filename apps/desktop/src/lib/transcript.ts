@@ -361,7 +361,7 @@ const RENDERS = new Set([
 
 /// A card a newer one replaced closes silently: the newer card is the row.
 export function drawsSecretAnswer(outcome: string): boolean {
-  return outcome === "saved" || outcome === "declined";
+  return outcome === "saved" || outcome === "declined" || outcome === "used";
 }
 
 /// Whether an item draws a row. A group always does — it is built from tool

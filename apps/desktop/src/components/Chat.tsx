@@ -857,6 +857,7 @@ export default function Chat({
                   label={ask.label}
                   reason={ask.reason}
                   url={ask.url}
+                  saved={ask.saved}
                   autoFocus={active}
                 />
               ) : ask.type === "questions_asked" ? (

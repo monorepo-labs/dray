@@ -7,10 +7,15 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { invoke } from "@/lib/transport";
 
+type Answer = "paste" | "saved" | "decline";
+
 /// An agent asking for a token or password with `dray secret request`. The
 /// value goes from this field to the session's server, which writes it to an
 /// owner-only file and tells the agent the path; it never enters the
 /// transcript, so nothing here keeps it in state or saves a draft of it.
+///
+/// Where `saved`, the machine already holds one by this name, offered in one
+/// click. Always allow makes later requests for the name skip the card.
 export default function SecretRequest({
   sessionId,
   requestId,
@@ -18,6 +23,7 @@ export default function SecretRequest({
   label,
   reason,
   url,
+  saved = false,
   autoFocus = true,
 }: {
   sessionId: string;
@@ -26,30 +32,41 @@ export default function SecretRequest({
   label?: string;
   reason: string;
   url?: string;
+  saved?: boolean;
   /// False in the crew column, where the caret belongs to another session.
   autoFocus?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [filled, setFilled] = useState(false);
   const [keep, setKeep] = useState(false);
-  const [sending, setSending] = useState<"save" | "decline" | null>(null);
+  const [always, setAlways] = useState(false);
+  const [sending, setSending] = useState<Answer | null>(null);
   const [error, setError] = useState<string | null>(null);
   const keepId = useId();
+  const alwaysId = useId();
   // Enter and a click can both submit before a render.
   const inFlight = useRef(false);
 
+  // A saved one is the likely answer, so the button has the focus there.
   useEffect(() => {
-    if (autoFocus) inputRef.current?.focus({ preventScroll: true });
-  }, [autoFocus]);
+    if (autoFocus && !saved) inputRef.current?.focus({ preventScroll: true });
+  }, [autoFocus, saved]);
 
-  const send = async (save: boolean) => {
-    const value = save ? inputRef.current?.value.trim() ?? "" : null;
-    if (inFlight.current || (save && !value)) return;
+  const send = async (answer: Answer) => {
+    const value = answer === "paste" ? inputRef.current?.value.trim() ?? "" : null;
+    if (inFlight.current || (answer === "paste" && !value)) return;
     inFlight.current = true;
-    setSending(save ? "save" : "decline");
+    setSending(answer);
     setError(null);
     try {
-      await invoke("answer_secret_request", { sessionId, requestId, value, keep: save && keep });
+      await invoke("answer_secret_request", {
+        sessionId,
+        requestId,
+        value,
+        keep: answer === "paste" && (keep || always),
+        useSaved: answer === "saved",
+        always: answer !== "decline" && always,
+      });
       if (inputRef.current) inputRef.current.value = "";
     } catch (e) {
       setError(String(e));
@@ -61,10 +78,17 @@ export default function SecretRequest({
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
-    void send(true);
+    void send("paste");
   };
 
   const busy = sending !== null;
+  const footnote = always
+    ? `Later requests for ${name} skip this card; turn that off in Settings → Secrets.`
+    : keep
+      ? " until you delete it in Settings → Secrets."
+      : saved
+        ? ". A new one pasted here lasts 24 hours unless it replaces the saved one."
+        : " for 24 hours.";
   return (
     <form
       onSubmit={onSubmit}
@@ -91,6 +115,23 @@ export default function SecretRequest({
         )}
       </div>
 
+      {saved && (
+        <div className="flex min-w-0 items-center justify-between gap-2 rounded-lg border border-border px-3 py-2">
+          <span className="min-w-0 truncate text-ui">
+            <span className="font-mono">{name}</span> is saved on this machine
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            autoFocus={autoFocus}
+            disabled={busy}
+            onClick={() => void send("saved")}
+          >
+            {sending === "saved" ? "Sending…" : `Use saved ${name}`}
+          </Button>
+        </div>
+      )}
+
       <div className="flex min-w-0 items-center gap-2">
         <Input
           ref={inputRef}
@@ -99,7 +140,7 @@ export default function SecretRequest({
           type="text"
           name={`dray-secret-${requestId}`}
           aria-label={label ?? name}
-          placeholder="Paste the value"
+          placeholder={saved ? "Or paste a new one" : "Paste the value"}
           className="[-webkit-text-security:disc] font-mono"
           autoComplete="off"
           autoCorrect="off"
@@ -113,15 +154,28 @@ export default function SecretRequest({
           aria-invalid={error !== null || undefined}
           onChange={(e) => setFilled(e.currentTarget.value.trim() !== "")}
         />
-        <Button type="submit" size="sm" disabled={busy || !filled}>
-          {sending === "save" ? "Saving…" : "Save securely"}
+        <Button type="submit" size="sm" variant={saved ? "outline" : "default"} disabled={busy || !filled}>
+          {sending === "paste" ? "Saving…" : "Save securely"}
         </Button>
       </div>
 
-      <label htmlFor={keepId} className="flex w-fit items-center gap-2 text-ui text-muted-foreground">
-        <Switch id={keepId} checked={keep} onCheckedChange={setKeep} disabled={busy} />
-        Save as <span className="font-mono">{name}</span> on this machine
-      </label>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+        <label htmlFor={keepId} className="flex w-fit items-center gap-2 text-ui text-muted-foreground">
+          {/* Always allow keeps a pasted one, so on a first card this reads as
+              on while that is. On a saved card it would read as overwriting. */}
+          <Switch
+            id={keepId}
+            checked={keep || (always && !saved)}
+            onCheckedChange={setKeep}
+            disabled={busy || (always && !saved)}
+          />
+          {saved ? "Replace saved" : "Save as"} <span className="font-mono">{name}</span>
+        </label>
+        <label htmlFor={alwaysId} className="flex w-fit items-center gap-2 text-ui text-muted-foreground">
+          <Switch id={alwaysId} checked={always} onCheckedChange={setAlways} disabled={busy} />
+          Always allow
+        </label>
+      </div>
 
       {error && (
         <p role="alert" className="text-ui text-destructive wrap-anywhere">
@@ -134,7 +188,8 @@ export default function SecretRequest({
           <ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden />
           <span>
             Kept out of chat, in a private file on the machine running this task. The agent's commands can read it
-            {keep ? " until you delete it in Settings → Secrets." : " for 24 hours."}
+            {always ? ". " : ""}
+            {footnote}
           </span>
         </p>
         <Button
@@ -143,7 +198,7 @@ export default function SecretRequest({
           variant="ghost"
           className="shrink-0 text-muted-foreground"
           disabled={busy}
-          onClick={() => void send(false)}
+          onClick={() => void send("decline")}
         >
           Decline
         </Button>

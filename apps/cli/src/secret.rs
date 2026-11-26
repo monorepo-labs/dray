@@ -13,8 +13,8 @@ pub enum SecretCommand {
     /// chat itself. Returns at once: end your turn, and the answer reaches you
     /// as a message naming the file the value was saved to.
     Request(RequestArgs),
-    /// Print the path of a secret saved on this machine, for
-    /// NAME="$(cat "$(dray secret path NAME)")".
+    /// Print the path of a saved secret the user always allows. Any other
+    /// saved one is asked for with `request`, which offers it in one click.
     Path(NameArg),
     /// List the secrets saved on this machine, by name.
     Ls,
@@ -58,7 +58,8 @@ pub fn run(command: SecretCommand) -> Result<(), String> {
             }
             Response::Secrets { secrets } => {
                 for secret in secrets {
-                    println!("{}", secret.name);
+                    let always = if secret.always { "  (always allowed)" } else { "" };
+                    println!("{}{always}", secret.name);
                 }
                 Ok(())
             }
@@ -73,6 +74,14 @@ fn request(args: RequestArgs) -> Result<(), String> {
         parent_session_id().ok_or("run this from inside a Dray session: the card goes in its chat.")?;
     let ask = RequestSecret { session_id, name: args.name, label: args.label, reason: args.reason, url: args.url };
     match send(Request::RequestSecret(ask))? {
+        Response::SecretRequested { name, path: Some(path), .. } => {
+            println!(
+                "{name} is saved on this machine and the user always allows it, so no card went up. Its value is in {path}. \
+                 Use it inside the command that needs it, like <command> < {path}, or {name}=\"$(cat {path})\" <command>. \
+                 Never print, echo or copy the value."
+            );
+            Ok(())
+        }
         Response::SecretRequested { name, replaced, .. } => {
             let again = if replaced { " It replaces the card you posted for it before." } else { "" };
             println!(

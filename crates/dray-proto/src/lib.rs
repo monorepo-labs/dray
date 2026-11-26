@@ -381,6 +381,9 @@ pub struct SecretSummary {
     pub name: String,
     /// When it was last saved, RFC 3339.
     pub modified: String,
+    /// Agents get it without a card.
+    #[serde(default)]
+    pub always: bool,
 }
 
 /// A bot's emoji on the user's newest message in its chat, in place of a reply.
@@ -1138,7 +1141,16 @@ pub enum Response {
     IssueCard { issues: Vec<String> },
     /// A secret card is up. `replaced` names an open card for the same name
     /// that this one closed.
-    SecretRequested { request_id: String, name: String, #[serde(default)] replaced: bool },
+    SecretRequested {
+        request_id: String,
+        name: String,
+        #[serde(default)]
+        replaced: bool,
+        /// Set where no card went up: the saved secret is always allowed,
+        /// and this is its file.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
     /// Where a saved secret's file is on this machine.
     SecretPath { name: String, path: String },
     Secrets { secrets: Vec<SecretSummary> },

@@ -8,7 +8,8 @@
 //!
 //! One-time by default: `once/` files are swept a day after they are written.
 //! "Save as NAME" writes `saved/NAME` instead, which any task here can find
-//! with `dray secret path NAME` and Settings lists by name.
+//! through `dray secret request NAME`, handed over in one click or, where
+//! the user always allows it, at once; Settings lists them by name.
 //!
 //! An open card is kept in `pending.json` beside them (what was asked, never
 //! a value), so it still answers after a restart and every client is told of
@@ -195,6 +196,27 @@ async fn write_pending(open: Vec<AgentEvent>) -> Result<()> {
     Ok(())
 }
 
+/// Saved names agents get without a card, in `always.json`: names alone.
+async fn read_always() -> Vec<String> {
+    let Ok(path) = dir(None).await.map(|d| d.join("always.json")) else { return Vec::new() };
+    tokio::fs::read(path).await.ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+async fn set_always(name: &str, on: bool) -> Result<()> {
+    let mut names = read_always().await;
+    names.retain(|n| n != name);
+    if on {
+        names.push(name.to_string());
+        names.sort();
+    }
+    write_private(dir(None).await?.join("always.json"), serde_json::to_string(&names)?).await
+}
+
+async fn saved_path(name: &str) -> Result<Option<PathBuf>> {
+    let path = dir(Some("saved")).await?.join(name);
+    Ok(tokio::fs::try_exists(&path).await.unwrap_or(false).then_some(path))
+}
+
 /// Drops a settled or deleted session's open cards: nobody waits on them.
 pub async fn forget(session_id: &str) {
     let _held = LOCK.lock().await;
@@ -245,6 +267,21 @@ pub async fn request(ask: RequestSecret, app: &Sink) -> Result<Response> {
         .with_context(|| format!("no session {}", ask.session_id))?;
 
     let _held = LOCK.lock().await;
+    let saved = saved_path(&name).await?;
+    if let (Some(path), true) = (&saved, read_always().await.contains(&name)) {
+        // Always allowed: no card, and the path goes back in the tool's own answer.
+        let payload = AgentEventPayload::SecretAnswered {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            name: name.clone(),
+            outcome: SecretOutcome::Used,
+            kept: true,
+            always: true,
+            auto: true,
+        };
+        manager().log_event(&chat.session_id, chat.harness, payload, app).await?;
+        let path = path.display().to_string();
+        return Ok(Response::SecretRequested { request_id: String::new(), name, replaced: false, path: Some(path) });
+    }
     let mut open = read_pending().await?;
     let mut replaced = false;
     for old in open.iter().filter(|e| e.session_id == chat.session_id) {
@@ -255,6 +292,8 @@ pub async fn request(ask: RequestSecret, app: &Sink) -> Result<Response> {
                     name: name.clone(),
                     outcome: SecretOutcome::Replaced,
                     kept: false,
+                    always: false,
+                    auto: false,
                 };
                 manager().log_event(&chat.session_id, chat.harness, payload, app).await?;
                 replaced = true;
@@ -269,24 +308,27 @@ pub async fn request(ask: RequestSecret, app: &Sink) -> Result<Response> {
         label: tidy(ask.label),
         reason,
         url,
+        saved: saved.is_some(),
     };
     let event = manager().log_event(&chat.session_id, chat.harness, payload, app).await?;
     open.push(event);
     write_pending(open).await?;
-    Ok(Response::SecretRequested { request_id, name, replaced })
+    Ok(Response::SecretRequested { request_id, name, replaced, path: None })
 }
 
 /// What the agent is told once the user saved it. Hidden, like an issue
 /// hand-off.
-fn saved_prompt(name: &str, path: &Path, kept: bool) -> String {
+fn saved_prompt(name: &str, path: &Path, kept: bool, always: bool) -> String {
     let path = path.display();
-    let life = if kept {
-        format!("It is saved on this machine as {name}, so a later task here finds it with `dray secret path {name}`.")
-    } else {
-        "It is one-time: the file is deleted after 24 hours.".to_string()
+    let life = match (kept, always) {
+        (true, true) => format!(
+            "It is saved on this machine as {name} and always allowed: a later `dray secret request {name}` answers with its path at once, no card."
+        ),
+        (true, false) => format!("It is saved on this machine as {name}: a later `dray secret request {name}` lets the user hand it over in one click."),
+        _ => "It is one-time: the file is deleted after 24 hours.".to_string(),
     };
     format!(
-        "The user saved {name} for you through Dray's secret card. Its value is in the file {path}, readable only by this user. {life} \
+        "The user gave you {name} through Dray's secret card. Its value is in the file {path}, readable only by this user. {life} \
          Use it inside the command that needs it: redirect the file into a command that reads it on stdin (<command> < {path}), pass it to a flag that takes a file, \
          or set it for that one command, like {name}=\"$(cat {path})\" <command>. A login command that stores the credential wants stdin: a variable set beside it can stop it storing anything. \
          Never print, echo or log the value, never copy it into another file, a commit or a message, and never ask the user for it in chat. \
@@ -309,8 +351,14 @@ pub async fn answer_secret_request(
     request_id: String,
     value: Option<String>,
     keep: bool,
+    use_saved: Option<bool>,
+    always: Option<bool>,
     sink: Sink,
 ) -> Result<(), Fail> {
+    let use_saved = use_saved.unwrap_or(false);
+    let always = always.unwrap_or(false);
+    // Always allowed only makes sense for a secret that stays.
+    let keep = keep || always;
     let _held = LOCK.lock().await;
     let mut open = read_pending().await?;
     let at = open
@@ -326,6 +374,10 @@ pub async fn answer_secret_request(
     }
 
     let (prompt, written, outcome) = match value {
+        _ if use_saved => {
+            let path = saved_path(&name).await?.with_context(|| format!("{name} is no longer saved here; paste it instead"))?;
+            (saved_prompt(&name, &path, true, always), None, SecretOutcome::Used)
+        }
         Some(value) => {
             let value = value.trim().to_string();
             if value.is_empty() {
@@ -341,7 +393,7 @@ pub async fn answer_secret_request(
             };
             write_private(path.clone(), value.clone()).await?;
             remember(&value);
-            (saved_prompt(&name, &path, keep), Some(path), SecretOutcome::Saved)
+            (saved_prompt(&name, &path, keep, always), Some(path), SecretOutcome::Saved)
         }
         None => (declined_prompt(&name), None, SecretOutcome::Declined),
     };
@@ -352,8 +404,12 @@ pub async fn answer_secret_request(
         }
         return Err(e.into());
     }
-    let kept = keep && outcome == SecretOutcome::Saved;
-    let payload = AgentEventPayload::SecretAnswered { request_id, name, outcome, kept };
+    let kept = (keep && outcome == SecretOutcome::Saved) || outcome == SecretOutcome::Used;
+    let always = always && kept;
+    if always {
+        set_always(&name, true).await?;
+    }
+    let payload = AgentEventPayload::SecretAnswered { request_id, name, outcome, kept, always, auto: false };
     manager().log_event(&session_id, item.harness, payload, &sink).await?;
     open.remove(at);
     write_pending(open).await?;
@@ -371,6 +427,7 @@ pub async fn list_secrets() -> Result<Vec<SecretSummary>, Fail> {
 
 async fn saved() -> Result<Vec<SecretSummary>> {
     let dir = dir(Some("saved")).await?;
+    let always = read_always().await;
     let mut entries = tokio::fs::read_dir(&dir).await?;
     let mut out = Vec::new();
     while let Some(entry) = entries.next_entry().await? {
@@ -384,7 +441,8 @@ async fn saved() -> Result<Vec<SecretSummary>> {
             .and_then(|m| m.modified())
             .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
             .unwrap_or_default();
-        out.push(SecretSummary { name, modified });
+        let always = always.contains(&name);
+        out.push(SecretSummary { name, modified, always });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
@@ -408,9 +466,22 @@ pub async fn save_secret(name: String, value: String, sink: Sink) -> Result<(), 
     Ok(())
 }
 
+/// Settings' Always allow switch on a saved secret.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn set_secret_always(name: String, on: bool, sink: Sink) -> Result<(), Fail> {
+    check_name(&name)?;
+    if on && saved_path(&name).await?.is_none() {
+        return Err(anyhow::anyhow!("{name} is not saved here").into());
+    }
+    set_always(&name, on).await?;
+    sink.emit(SECRETS_CHANGED, ()).ok();
+    Ok(())
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_secret(name: String, sink: Sink) -> Result<(), Fail> {
     check_name(&name)?;
+    set_always(&name, false).await?;
     match tokio::fs::remove_file(dir(Some("saved")).await?.join(&name)).await {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -420,12 +491,17 @@ pub async fn delete_secret(name: String, sink: Sink) -> Result<(), Fail> {
     Ok(())
 }
 
-/// `dray secret path NAME`.
+/// `dray secret path NAME`: answers only for a name the user always allows,
+/// since a saved secret is otherwise the user's to hand over each time.
 pub async fn path_of(name: &str) -> Result<Response> {
     check_name(name)?;
-    let path = dir(Some("saved")).await?.join(name);
-    if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+    let Some(path) = saved_path(name).await? else {
         bail!("no secret saved here as {name}. Ask the user for it with `dray secret request {name} --reason \"…\"`, never in chat.");
+    };
+    if !read_always().await.iter().any(|n| n == name) {
+        bail!(
+            "{name} is saved here, but the user hands it over each time. Ask with `dray secret request {name} --reason \"…\"`: they give it in one click."
+        );
     }
     Ok(Response::SecretPath { name: name.to_string(), path: path.display().to_string() })
 }
@@ -462,12 +538,13 @@ mod tests {
 
     #[test]
     fn the_prompts_name_the_path_and_never_ask_in_chat() {
-        let once = saved_prompt("GH_TOKEN", Path::new("/h/.dray/secrets/once/GH_TOKEN-1"), false);
+        let once = saved_prompt("GH_TOKEN", Path::new("/h/.dray/secrets/once/GH_TOKEN-1"), false, false);
         assert!(once.contains("GH_TOKEN=\"$(cat /h/.dray/secrets/once/GH_TOKEN-1)\""));
         assert!(once.contains("< /h/.dray/secrets/once/GH_TOKEN-1"));
         assert!(once.contains("24 hours"));
-        let kept = saved_prompt("GH_TOKEN", Path::new("/p"), true);
-        assert!(kept.contains("dray secret path GH_TOKEN"));
+        let kept = saved_prompt("GH_TOKEN", Path::new("/p"), true, false);
+        assert!(kept.contains("one click"));
+        assert!(saved_prompt("GH_TOKEN", Path::new("/p"), true, true).contains("always allowed"));
         assert!(declined_prompt("GH_TOKEN").contains("Don't ask for it in chat"));
     }
 

@@ -165,6 +165,7 @@ function PendingCard({
           label={ask.label}
           reason={ask.reason}
           url={ask.url}
+          saved={ask.saved}
           autoFocus={false}
         />
       ) : ask.type === "questions_asked" ? (

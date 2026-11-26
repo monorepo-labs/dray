@@ -4,10 +4,11 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { CancelOrConfirm } from "@/components/settings/InRowConfirm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { serverName, useServers } from "@/lib/servers";
 import { invoke, listen, LOCAL, type ServerId } from "@/lib/transport";
 
-type SecretSummary = { name: string; modified: string };
+type SecretSummary = { name: string; modified: string; always?: boolean };
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
@@ -106,8 +107,23 @@ function SecretRow({ server, secret }: { server: ServerId; secret: SecretSummary
       <div className="flex min-h-7 items-center gap-3">
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="truncate font-mono text-ui">{secret.name}</span>
-          <span className="text-ui text-muted-foreground">Saved {when(secret.modified)}</span>
+          <span className="text-ui text-muted-foreground">
+            Saved {when(secret.modified)}
+            {secret.always ? ". Agents get it without asking." : ""}
+          </span>
         </div>
+        {mode === "idle" && (
+          <label className="flex shrink-0 items-center gap-2 text-ui text-muted-foreground">
+            Always allow
+            <Switch
+              aria-label={`Always allow ${secret.name}`}
+              checked={!!secret.always}
+              onCheckedChange={(on) =>
+                void invoke("set_secret_always", { name: secret.name, on }, server).catch((e) => setError(String(e)))
+              }
+            />
+          </label>
+        )}
         {mode === "delete" ? (
           <CancelOrConfirm verb="Delete" busy={busy} autoFocus onCancel={() => setMode("idle")} onConfirm={remove} />
         ) : (

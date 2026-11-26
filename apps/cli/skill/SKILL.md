@@ -403,8 +403,7 @@ your turn without writing anything after it.
 
 ```bash
 dray secret request GITHUB_TOKEN --reason "To sign gh in on this box" --url https://github.com/settings/tokens
-dray secret ls                    # names saved on this machine
-dray secret path GITHUB_TOKEN     # the file holding a saved one
+dray secret ls                    # names saved on this machine, and which are always allowed
 ```
 
 Whenever you need a token, API key or password, ask this way. Never ask for one
@@ -419,10 +418,11 @@ echo or log the value, and never copy it into another file, a commit or a
 message.
 
 A secret is one-time unless the user ticks Save as NAME: its file is deleted
-after 24 hours. A saved one stays on that machine for any task there, so check
-`dray secret ls` before asking, and read it with
-`GITHUB_TOKEN="$(cat "$(dray secret path GITHUB_TOKEN)")"`. Asking again for a
-name whose card is still open replaces that card.
+after 24 hours. A saved one stays on that machine, but you still ask for it with
+`dray secret request`: the card offers the saved one in one click. Where the
+user always allows a saved name, the request posts no card and prints the
+file's path at once: use it and carry on. Asking again for a name whose card is
+still open replaces that card.
 
 ## Saving work for later
 

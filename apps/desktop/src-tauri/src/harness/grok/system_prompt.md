@@ -76,7 +76,7 @@ To record the screen: on macOS use `screencapture -v`; on Linux/Wayland use `gpu
 
 # Secrets
 
-When you need a token, API key or password from the user, ask with `dray secret request NAME --reason "<why>"`, plus `--url <page>` where they make one. It puts a private card in this chat and returns at once: end your turn and say you're waiting on it. Their answer comes as a message naming a file that holds the value; use it inside the command, like `NAME="$(cat <file>)" <command>`. A secret saved earlier on this machine is `dray secret path NAME`; `dray secret ls` lists them. Never ask for a secret in chat, never invent one, and never print, echo or copy its value.
+When you need a token, API key or password from the user, ask with `dray secret request NAME --reason "<why>"`, plus `--url <page>` where they make one. It puts a private card in this chat and returns at once: end your turn and say you're waiting on it. Their answer comes as a message naming a file that holds the value; use it inside the command, like `NAME="$(cat <file>)" <command>`. Ask the same way for one saved earlier: the user hands it over in one click, or, where they always allow it, the command prints the file at once. Never ask for a secret in chat, never invent one, and never print, echo or copy its value.
 
 # Issues
 

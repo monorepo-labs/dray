@@ -495,6 +495,10 @@ pub enum AgentEventPayload {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         url: Option<String>,
+        /// A secret by this name is already saved on the machine, so the
+        /// card offers it in one click beside pasting a new one.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        saved: bool,
     },
     /// How a [`SecretRequested`](Self::SecretRequested) card was closed. Never
     /// carries the value, nor the file's path.
@@ -505,6 +509,12 @@ pub enum AgentEventPayload {
         /// Kept on this machine under `name` rather than deleted after a day.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         kept: bool,
+        /// Later requests for `name` skip the card and get the saved file.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        always: bool,
+        /// No card was shown: an always-allowed secret answered on its own.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        auto: bool,
     },
 
     /// What a bot's turn changed in its instructions, skills or memory, read
@@ -667,6 +677,8 @@ pub enum SecretOutcome {
     Declined,
     /// A newer card for the same name took its place.
     Replaced,
+    /// The secret already saved under `name` was handed over.
+    Used,
     #[serde(other)]
     Other,
 }
