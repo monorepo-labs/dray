@@ -13,7 +13,7 @@ pub enum SecretCommand {
     /// chat itself. Returns at once: end your turn, and the answer reaches you
     /// as a message naming the file the value was saved to.
     Request(RequestArgs),
-    /// Print the path of a saved secret the user always allows. Any other
+    /// Print the path of a saved secret agents may use without asking. Any other
     /// saved one is asked for with `request`, which offers it in one click.
     Path(NameArg),
     /// List the secrets saved on this machine, by name.
@@ -58,7 +58,7 @@ pub fn run(command: SecretCommand) -> Result<(), String> {
             }
             Response::Secrets { secrets } => {
                 for secret in secrets {
-                    let always = if secret.always { "  (always allowed)" } else { "" };
+                    let always = if secret.always { "  (used without asking)" } else { "" };
                     println!("{}{always}", secret.name);
                 }
                 Ok(())
@@ -76,9 +76,17 @@ fn request(args: RequestArgs) -> Result<(), String> {
     match send(Request::RequestSecret(ask))? {
         Response::SecretRequested { name, path: Some(path), .. } => {
             println!(
-                "{name} is saved on this machine and the user always allows it, so no card went up. Its value is in {path}. \
+                "{name} is saved on this machine and the user lets agents use it without asking, so no card went up. Its value is in {path}. \
                  Use it inside the command that needs it, like <command> < {path}, or {name}=\"$(cat {path})\" <command>. \
                  Never print, echo or copy the value."
+            );
+            Ok(())
+        }
+        Response::SecretRequested { name, bot: true, .. } => {
+            println!(
+                "Asked the user for {name} in your bot's chat: your bot's machine keeps the secrets you use. End your turn \
+                 now and say you're waiting on it. Their answer reaches you as a message: the path of a file here holding \
+                 the value, or that they declined. Never ask for it in chat."
             );
             Ok(())
         }

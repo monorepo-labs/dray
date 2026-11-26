@@ -499,6 +499,16 @@ pub enum AgentEventPayload {
         /// card offers it in one click beside pasting a new one.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         saved: bool,
+        /// The task's own record of asking its bot, whose chat on another
+        /// machine draws the card and whose machine keeps the secrets. Draws
+        /// a line here, never a card.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        bot: bool,
+        /// Set on the bot's side: the card answers this task on another
+        /// machine, which gets the value as a one-time file there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        task: Option<SecretTask>,
     },
     /// How a [`SecretRequested`](Self::SecretRequested) card was closed. Never
     /// carries the value, nor the file's path.
@@ -512,9 +522,13 @@ pub enum AgentEventPayload {
         /// Later requests for `name` skip the card and get the saved file.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         always: bool,
-        /// No card was shown: an always-allowed secret answered on its own.
+        /// No card was shown: a secret agents may use without asking answered on its own.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         auto: bool,
+        /// The task on another machine it went to, by title.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        to: Option<String>,
     },
 
     /// What a bot's turn changed in its instructions, skills or memory, read
@@ -665,6 +679,21 @@ pub enum PermissionOptionKind {
     SwitchMode,
     /// Refuse. Always offered, always last.
     Deny,
+}
+
+/// The task on another machine a bot's secret card answers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SecretTask {
+    pub session_id: String,
+    pub title: String,
+    /// The machine's name, for the card.
+    pub machine: String,
+    /// Its id in `servers.json`, which the answer is sent through.
+    pub machine_id: String,
+    /// The task's own request there.
+    pub request_id: String,
 }
 
 /// How a secret card closed. `Other` reads an outcome a later build adds, so

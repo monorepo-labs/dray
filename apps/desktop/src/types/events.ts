@@ -395,7 +395,18 @@ repo: string, issues: Array<IssueCardRow>, } | { "type": "issue_approved", cardI
  * A secret by this name is already saved on the machine, so the
  * card offers it in one click beside pasting a new one.
  */
-saved?: boolean, } | { "type": "secret_answered", requestId: string, name: string, outcome: SecretOutcome, 
+saved?: boolean, 
+/**
+ * The task's own record of asking its bot, whose chat on another
+ * machine draws the card and whose machine keeps the secrets. Draws
+ * a line here, never a card.
+ */
+bot?: boolean, 
+/**
+ * Set on the bot's side: the card answers this task on another
+ * machine, which gets the value as a one-time file there.
+ */
+task?: SecretTask, } | { "type": "secret_answered", requestId: string, name: string, outcome: SecretOutcome, 
 /**
  * Kept on this machine under `name` rather than deleted after a day.
  */
@@ -405,9 +416,13 @@ kept?: boolean,
  */
 always?: boolean, 
 /**
- * No card was shown: an always-allowed secret answered on its own.
+ * No card was shown: a secret agents may use without asking answered on its own.
  */
-auto?: boolean, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "reaction", 
+auto?: boolean, 
+/**
+ * The task on another machine it went to, by title.
+ */
+to?: string, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "reaction", 
 /**
  * The event reacted to, always in this same session: a `user_message`,
  * or with `by_user` an `assistant_text`.
@@ -2115,6 +2130,23 @@ ownerIsOrg: boolean, mark: PrMark, };
  * the line still parses and the card still closes.
  */
 export type SecretOutcome = "saved" | "declined" | "replaced" | "used" | "other";
+
+/**
+ * The task on another machine a bot's secret card answers.
+ */
+export type SecretTask = { sessionId: string, title: string, 
+/**
+ * The machine's name, for the card.
+ */
+machine: string, 
+/**
+ * Its id in `servers.json`, which the answer is sent through.
+ */
+machineId: string, 
+/**
+ * The task's own request there.
+ */
+requestId: string, };
 
 /**
  * What a send did. The two fields are mutually exclusive in practice — a

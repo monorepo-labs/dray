@@ -5,7 +5,9 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { invoke } from "@/lib/transport";
+import { serverName } from "@/lib/servers";
+import { invoke, serverOfSession } from "@/lib/transport";
+import type { SecretTask } from "@/types/events";
 
 type Answer = "paste" | "saved" | "decline";
 
@@ -15,7 +17,7 @@ type Answer = "paste" | "saved" | "decline";
 /// transcript, so nothing here keeps it in state or saves a draft of it.
 ///
 /// Where `saved`, the machine already holds one by this name, offered in one
-/// click. Always allow makes later requests for the name skip the card.
+/// click. Letting agents use it without asking makes later requests skip the card.
 export default function SecretRequest({
   sessionId,
   requestId,
@@ -24,6 +26,8 @@ export default function SecretRequest({
   reason,
   url,
   saved = false,
+  task,
+  title,
   autoFocus = true,
 }: {
   sessionId: string;
@@ -33,6 +37,11 @@ export default function SecretRequest({
   reason: string;
   url?: string;
   saved?: boolean;
+  /// A bot's task on another machine asked; this machine is the bot's, and
+  /// keeps the secrets its tasks use.
+  task?: SecretTask;
+  /// The asking session's title, for the line saying where the value goes.
+  title?: string;
   /// False in the crew column, where the caret belongs to another session.
   autoFocus?: boolean;
 }) {
@@ -82,7 +91,16 @@ export default function SecretRequest({
   };
 
   const busy = sending !== null;
-  const footnote = always
+  const where = task
+    ? `Kept out of chat, sent encrypted to ${task.machine} into a private file the task's commands can read for 24 hours`
+    : "Kept out of chat, in a private file on the machine running this task. The agent's commands can read it";
+  const footnote = task
+    ? always
+      ? `. Saved here for your bot's tasks, which get it without this card from now on.`
+      : keep
+        ? ". Saved here too, for your bot's other tasks."
+        : "."
+    : always
     ? `Later requests for ${name} skip this card; turn that off in Settings → Secrets.`
     : keep
       ? " until you delete it in Settings → Secrets."
@@ -100,6 +118,10 @@ export default function SecretRequest({
         <p className="flex items-center gap-2 text-chat font-medium">
           <KeyRound className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           <span className="truncate">{label ?? name}</span>
+        </p>
+        {/* Every card says where the value lands before anything is pasted. */}
+        <p className="truncate text-ui text-muted-foreground">
+          For {task?.title ?? title ?? "this task"} on {task?.machine ?? serverName(serverOfSession(sessionId))}
         </p>
         <p className="text-chat leading-snug wrap-anywhere text-muted-foreground">{reason}</p>
         {url && (
@@ -161,7 +183,7 @@ export default function SecretRequest({
 
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
         <label htmlFor={keepId} className="flex w-fit items-center gap-2 text-ui text-muted-foreground">
-          {/* Always allow keeps a pasted one, so on a first card this reads as
+          {/* Using it without asking keeps a pasted one, so on a first card this reads as
               on while that is. On a saved card it would read as overwriting. */}
           <Switch
             id={keepId}
@@ -173,7 +195,7 @@ export default function SecretRequest({
         </label>
         <label htmlFor={alwaysId} className="flex w-fit items-center gap-2 text-ui text-muted-foreground">
           <Switch id={alwaysId} checked={always} onCheckedChange={setAlways} disabled={busy} />
-          Always allow
+          Let agents use it without asking
         </label>
       </div>
 
@@ -187,8 +209,8 @@ export default function SecretRequest({
         <p className="flex min-w-0 items-start gap-1.5 text-ui text-muted-foreground">
           <ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden />
           <span>
-            Kept out of chat, in a private file on the machine running this task. The agent's commands can read it
-            {always ? ". " : ""}
+            {where}
+            {always && !task ? ". " : ""}
             {footnote}
           </span>
         </p>

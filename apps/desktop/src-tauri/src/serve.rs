@@ -2091,6 +2091,10 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         // A bot's server collecting what its tasks here said (#958).
         parent_reports(children: Vec<String>, ack: Vec<String>, forget: Option<Vec<String>>) =>
             crate::remote_reports::take(children, ack, forget.unwrap_or_default()).await;
+        // A bot's server answering its task's ask for a secret: the value
+        // rides this call alone and goes straight to a one-time file.
+        secret_deliver(session_id: String, request_id: String, value: Option<String>) =>
+            crate::secrets::deliver(session_id, request_id, value, sink).await;
         // An asking server collecting its questions' answers here (#1463).
         bot_answers(asks: Vec<String>, ack: Vec<String>, undelivered: Vec<String>) =>
             crate::remote_asks::take(asks, ack, undelivered, &sink).await;

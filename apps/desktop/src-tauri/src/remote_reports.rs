@@ -73,6 +73,9 @@ pub struct Taken {
     /// too, which is `gone`: a settle is one of them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub acts: Vec<KeptAct>,
+    /// Those tasks' open asks for a secret, which the bot's machine answers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<crate::secrets::BotAsk>,
 }
 
 /// Both files are rewritten whole by more than one task.
@@ -192,6 +195,7 @@ pub async fn take(children: Vec<String>, ack: Vec<String>, forget: Vec<String>) 
         save_outbox(&outbox).await.map_err(|e| format!("{e:#}"))?;
     }
     drop(_guard);
+    taken.secrets = crate::secrets::asks_for(&children).await;
     #[cfg(any(feature = "serve", feature = "desktop"))]
     if !children.is_empty() {
         let owed: Vec<String> = live.into_iter().filter(|c| !taken.gone.contains(c)).collect();
@@ -218,7 +222,7 @@ impl Outbox {
         self.owed.retain(|c| !gone.contains(c));
         self.pending.retain(|r| !gone.contains(&r.child));
         let reports = self.pending.iter().filter(|r| children.contains(&r.child)).cloned().collect();
-        Taken { reports, gone, facts: None, acts }
+        Taken { reports, gone, facts: None, acts, secrets: Vec::new() }
     }
 
     /// Answers whether anything went.
@@ -472,6 +476,11 @@ mod collect {
             }
         }
         crate::stalls::remote_answered(&saved.id, &saved.name, taken.facts.clone()).await;
+        for ask in &taken.secrets {
+            if let Some((_, to)) = open.iter().find(|(r, _)| r.child == ask.child) {
+                crate::secrets::relay(saved, ask.clone(), to, app).await;
+            }
+        }
         untrack(&closed).await;
         // Only this machine's own tasks: an answer naming another
         // machine's is not its to close.

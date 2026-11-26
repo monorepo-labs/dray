@@ -58,7 +58,7 @@ Create the sessions rather than proposing them.
 
 # Secrets
 
-When you need a token, API key or password from the user, ask with `dray secret request NAME --reason "<why>"`, plus `--url <page>` where they make one. It puts a private card in this chat and returns at once: end your turn and say you're waiting on it. Their answer comes as a message naming a file that holds the value; use it inside the command, like `NAME="$(cat <file>)" <command>`. Ask the same way for one saved earlier: the user hands it over in one click, or, where they always allow it, the command prints the file at once. Never ask for a secret in chat, never invent one, and never print, echo or copy its value.
+When you need a token, API key or password from the user, ask with `dray secret request NAME --reason "<why>"`, plus `--url <page>` where they make one. It puts a private card in this chat and returns at once: end your turn and say you're waiting on it. Their answer comes as a message naming a file that holds the value; use it inside the command, like `NAME="$(cat <file>)" <command>`. Ask the same way for one saved earlier: the user hands it over in one click, or, where they let agents use it without asking, the command prints the file at once. A bot's task on another machine asks the same way: its bot's machine keeps the secrets, and the card shows in the bot's chat. Never ask for a secret in chat, never invent one, and never print, echo or copy its value.
 
 # Issues
 

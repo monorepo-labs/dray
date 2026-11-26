@@ -403,7 +403,7 @@ your turn without writing anything after it.
 
 ```bash
 dray secret request GITHUB_TOKEN --reason "To sign gh in on this box" --url https://github.com/settings/tokens
-dray secret ls                    # names saved on this machine, and which are always allowed
+dray secret ls                    # names saved on this machine, and which agents use without asking
 ```
 
 Whenever you need a token, API key or password, ask this way. Never ask for one
@@ -420,9 +420,13 @@ message.
 A secret is one-time unless the user ticks Save as NAME: its file is deleted
 after 24 hours. A saved one stays on that machine, but you still ask for it with
 `dray secret request`: the card offers the saved one in one click. Where the
-user always allows a saved name, the request posts no card and prints the
-file's path at once: use it and carry on. Asking again for a name whose card is
-still open replaces that card.
+user lets agents use a saved name without asking, the request posts no card and
+prints the file's path at once: use it and carry on. Asking again for a name
+whose card is still open replaces that card.
+
+A bot's task on another machine asks the same way. Its bot's machine keeps the
+secrets, the card shows in the bot's chat, and the value arrives as a one-time
+file on the task's own machine.
 
 ## Saving work for later
 

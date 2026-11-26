@@ -1150,6 +1150,10 @@ pub enum Response {
         /// and this is its file.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
+        /// The card went to the bot's chat on another machine, whose
+        /// secrets this task uses.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        bot: bool,
     },
     /// Where a saved secret's file is on this machine.
     SecretPath { name: String, path: String },

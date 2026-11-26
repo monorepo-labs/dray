@@ -1485,7 +1485,8 @@ const TAB_SUBTITLES: Partial<Record<SettingsTab, string>> = {
   accounts: "Manage each harness's sign-in. Switch one off to hide it from the model picker.",
   composer:
     "The buttons that rise out of the composer's top edge on hover. Each sends its prompt as if you had typed it.",
-  secrets: "Tokens and passwords saved on each machine, by name. Any task there can use one; nobody can read one back here.",
+  secrets:
+    "Tokens and passwords saved on each machine, by name; nobody can read one back here. A task uses its own machine's, except a bot's task, which uses the bot's machine's wherever it runs.",
   // Agents add machines with `dray machine add`, which nothing here would say.
   servers: "Ask your bot or any session to set one up for you. No need to add each by hand.",
   // Nothing on the island says it has a menu.

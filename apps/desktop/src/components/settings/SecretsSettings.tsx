@@ -31,6 +31,13 @@ function Machine({ server }: { server: ServerId }) {
   const [secrets, setSecrets] = useState<SecretSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  // The bots here: their tasks use these secrets on whichever machine they run.
+  const [bots, setBots] = useState<string[]>([]);
+  useEffect(() => {
+    invoke<{ name: string }[]>("list_bots", {}, server)
+      .then((list) => setBots(list.map((b) => b.name)))
+      .catch(() => setBots([]));
+  }, [server]);
 
   const read = useCallback(() => {
     invoke<SecretSummary[]>("list_secrets", {}, server)
@@ -69,6 +76,11 @@ function Machine({ server }: { server: ServerId }) {
           </Button>
         )}
       </div>
+      {bots.length > 0 && (
+        <p className="text-ui text-muted-foreground">
+          {bots.join(", ")}: {bots.length === 1 ? "its" : "their"} tasks use these on every machine.
+        </p>
+      )}
       {adding && <ValueForm server={server} onDone={() => setAdding(false)} />}
       {error ? (
         <p className="text-ui text-destructive">{error}</p>
@@ -109,14 +121,14 @@ function SecretRow({ server, secret }: { server: ServerId; secret: SecretSummary
           <span className="truncate font-mono text-ui">{secret.name}</span>
           <span className="text-ui text-muted-foreground">
             Saved {when(secret.modified)}
-            {secret.always ? ". Agents get it without asking." : ""}
+            {secret.always ? ". Agents here and the bots' tasks elsewhere get it without asking." : ""}
           </span>
         </div>
         {mode === "idle" && (
           <label className="flex shrink-0 items-center gap-2 text-ui text-muted-foreground">
-            Always allow
+            Let agents use it without asking
             <Switch
-              aria-label={`Always allow ${secret.name}`}
+              aria-label={`Let agents use ${secret.name} without asking`}
               checked={!!secret.always}
               onCheckedChange={(on) =>
                 void invoke("set_secret_always", { name: secret.name, on }, server).catch((e) => setError(String(e)))

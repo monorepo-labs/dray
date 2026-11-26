@@ -44,25 +44,35 @@ export function SecretAnswer({
   kept,
   always,
   auto,
+  to,
 }: {
   name: string;
   outcome: string;
   kept?: boolean;
   always?: boolean;
   auto?: boolean;
+  /// The task on another machine it went to.
+  to?: string;
 }) {
   const id = <span className="font-mono">{name}</span>;
+  const forTask = to ? <> to {to}</> : null;
   const said =
     outcome === "declined" ? (
-      <>Declined {id}</>
+      <>Declined {id}{to ? <> for {to}</> : null}</>
+    ) : to ? (
+      <>
+        Sent {outcome === "used" ? "saved " : ""}{id}{forTask}
+        {kept && outcome === "saved" ? ", saved here" : ""}
+        {auto ? " without asking" : always ? ", used without asking from now on" : ""}
+      </>
     ) : auto ? (
-      <>Used saved {id}, always allowed</>
+      <>Used saved {id} without asking</>
     ) : outcome === "used" ? (
-      <>Used saved {id}{always ? ", always allowed from now on" : ""}</>
+      <>Used saved {id}{always ? ", without asking from now on" : ""}</>
     ) : (
       <>
         Saved {id} privately{kept ? " on this machine" : " for 24 hours"}
-        {always ? ", always allowed" : ""}
+        {always ? ", used without asking from now on" : ""}
       </>
     );
   return (
@@ -203,6 +213,17 @@ export default function EventRow({
     // The harness's own sentence — a refusal, a safeguard notice — as written.
     case "notice":
       return <Notice wrap>{payload.text}</Notice>;
+
+    case "secret_requested":
+      // The card is in the bot's chat on another machine; here, only where it went.
+      return payload.bot ? (
+        <p className="flex items-center gap-2 text-chat text-muted-foreground">
+          <KeyRound className="size-3.5 shrink-0" aria-hidden />
+          <span className="truncate">
+            Asked for <span className="font-mono">{payload.name}</span> in the bot's chat
+          </span>
+        </p>
+      ) : null;
 
     case "secret_answered":
       return drawsSecretAnswer(payload.outcome) ? <SecretAnswer {...payload} /> : null;

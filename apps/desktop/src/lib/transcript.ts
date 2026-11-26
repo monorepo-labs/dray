@@ -378,6 +378,7 @@ export function rendersRow(item: WorkItem): boolean {
   // content it is no row: it must not split a tool run or take a live slot.
   if (payload.type === "reasoning") return !payload.encrypted && payload.text.trim() !== "";
   if (payload.type === "secret_answered") return drawsSecretAnswer(payload.outcome);
+  if (payload.type === "secret_requested") return !!payload.bot;
   return RENDERS.has(payload.type);
 }
 
@@ -698,6 +699,14 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
       current.cards.push(event);
       continue;
     }
+    // Where a secret went is always in view, never folded behind tool calls.
+    if (
+      (event.payload.type === "secret_answered" && drawsSecretAnswer(event.payload.outcome)) ||
+      (event.payload.type === "secret_requested" && event.payload.bot)
+    ) {
+      current.cards.push(event);
+      continue;
+    }
     // Drawn on its card, never as a row of its own.
     if (event.payload.type === "issue_approved") continue;
     if (event.payload.type === "tool_call_started") current.toolCalls += 1;
@@ -883,7 +892,8 @@ function build(
     if (event.payload.type === "permission_decided" || event.payload.type === "secret_answered") {
       asks.delete(event.payload.requestId);
     }
-    if (event.payload.type === "secret_requested") asks.set(event.payload.requestId, event.payload);
+    // A task's ask of its bot on another machine is that chat's card, not this one's.
+    if (event.payload.type === "secret_requested" && !event.payload.bot) asks.set(event.payload.requestId, event.payload);
   }
 
   const pendingAsks = [...asks.values()];

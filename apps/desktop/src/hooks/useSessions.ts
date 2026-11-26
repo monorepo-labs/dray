@@ -2708,7 +2708,7 @@ useEffect(() => {
               announce(agentEvent.sessionId, "asking", asking);
             }
 
-            if (agentEvent.payload.type === "secret_requested") {
+            if (agentEvent.payload.type === "secret_requested" && !agentEvent.payload.bot) {
               const { requestId } = agentEvent.payload;
               setSecretAsks((prev) => {
                 const cur = prev[agentEvent.sessionId] ?? [];

@@ -8,10 +8,20 @@
 - **This keeps a secret out of chat; it does not hide it from the agent**, which can read the file. The card says so.
 - One-time files are swept a day after they are written, at start and hourly. Saved ones stay until Settings → Secrets deletes them, and reach a task only through `request` (below). `dray secret path NAME` answers for an always-allowed name alone: answering for any saved one let an agent skip the card the user had not waived. `SecretPath` and `ListSecrets` are `this_machine_only`: a path is this machine's.
 
-## Saved and always allowed
+## Saved, and used without asking
 
 - **A name already saved here** puts `saved` on the card, which then offers Use saved NAME in one click above the paste field. The agent gets the saved file's path in the same hidden prompt.
-- **Always allow** (on the card beside Save as, and per row in Settings → Secrets) puts the name in `<home>/secrets/always.json`. It implies Save as, since only a kept secret can be handed over later. A later `dray secret request NAME` then posts no card: it logs `secret_answered` with `auto` (drawn as "Used saved NAME, always allowed") and answers the CLI with the path, so the agent carries on in the same turn. Deleting the secret drops it from the list.
+- **Let agents use it without asking** (on the card beside Save as, and per row in Settings → Secrets) puts the name in `<home>/secrets/always.json`. It implies Save as, since only a kept secret can be handed over later. A later `dray secret request NAME` then posts no card: it logs `secret_answered` with `auto` (drawn as "Used saved NAME without asking") and answers the CLI with the path, so the agent carries on in the same turn. Deleting the secret drops it from the list.
+
+## A bot's tasks use the bot's machine
+
+A task the user started keeps its own machine's secrets. **A task in a bot's tree on another machine uses the bot's machine's** (`bot_root`: it, or a task above it on that machine, is `remote_reports::owed`), so one bot holds one vault for every machine it runs work on.
+
+- The task still runs `dray secret request`. Its server posts no card: it logs `secret_requested` with `bot`, drawn in the task's chat as "Asked for NAME in the bot's chat", and keeps it in `pending.json`, left out of `live_state` and the asking flags.
+- The bot's server collects those asks with the task's reports (`parent_reports` answers `secrets`, every 10s) and checks its own vault. A name agents may use without asking goes straight back; anything else draws the card in the bot's chat, carrying `task` (title, machine, and the task's request id).
+- The answer goes back with `secret_deliver` over `machines::call_private`, which refuses a plain `ws://` address off the host: SSH forwards and `wss://` only. The task's server writes the usual one-time `0600` file and tells the task its path. Save as and the switch keep the value on the bot's machine, never the task's.
+- Each delivery is a line in the bot's chat, "Sent GH_TOKEN to <task>", never the value. Like every secret line, it sits outside the folded tool-call group (`turn.cards`).
+- One switch covers both: a name agents may use without asking on the bot's machine reaches that bot's tasks on any machine with no card.
 
 ## Why logged, unlike a permission card
 
