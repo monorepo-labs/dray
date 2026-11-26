@@ -1,7 +1,7 @@
 {
   "name": "@dray/brand-video",
   "private": true,
-  "license": "Apache-2.0",
+  "license": "UNLICENSED",
   "version": "0.0.0",
   "type": "module",
   "scripts": {
