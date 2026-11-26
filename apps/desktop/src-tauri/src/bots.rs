@@ -1985,7 +1985,7 @@ pub async fn browser_owner(session_id: &str) -> String {
 }
 
 /// Component-wise, so `bots/bb` is not inside `bots/b`.
-fn holds(dir: &str, path: &str) -> bool {
+pub(crate) fn holds(dir: &str, path: &str) -> bool {
     Path::new(path).starts_with(dir)
 }
 

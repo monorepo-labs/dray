@@ -1087,7 +1087,13 @@ pub(crate) mod elsewhere {
                     forward.sender = Some(MessageSender { machine: Some(this_machine().await), ..from });
                 }
             }
-            Request::ListSessions(list) | Request::ListDrafts(list) | Request::ListShares(list) => {
+            Request::ListDrafts(list) => {
+                list.project_path = draft_scope_here(list).await;
+                list.all = list.project_path.is_none();
+                project = list.project_path.clone();
+                list.parent_session_id = None;
+            }
+            Request::ListSessions(list) | Request::ListShares(list) => {
                 list.project_path = match list.all {
                     true => None,
                     false => scope_of(list).await?,
@@ -2428,6 +2434,7 @@ async fn create_draft(create: CreateDraft, caller: Option<&Caller>, app: &Sink) 
     let parent = calling(create.parent_session_id.as_deref(), caller).await?.map(|c| c.0);
     let project_path = project_from(create.project_path.as_deref(), parent.as_ref())
         .context("no project — run this inside a git repo or pass --project")?;
+    refuse_bot_folder(&project_path).await?;
     let harness = resolve_harness(create.harness.as_deref(), parent.as_ref())?;
     // Checked now so a typo fails here rather than when the reader starts it;
     // stored as written, and resolved again at the start.
@@ -2452,9 +2459,10 @@ async fn create_draft(create: CreateDraft, caller: Option<&Caller>, app: &Sink) 
     Ok(Response::Draft { draft: summarize_draft(draft) })
 }
 
-/// Drafts in the caller's project, or every one with `--all`, newest first.
+/// Every draft `start` can start, newest first, or those of the project
+/// `--project` names.
 async fn list_drafts(list: ListSessions) -> Result<Response> {
-    let scope = scope_of(&list).await?;
+    let scope = draft_scope_here(&list).await;
     let mut drafts: Vec<_> = drafts::stored()
         .await?
         .into_iter()
@@ -2462,6 +2470,27 @@ async fn list_drafts(list: ListSessions) -> Result<Response> {
         .collect();
     drafts.sort_by(|a, b| b.created.cmp(&a.created));
     Ok(Response::Drafts { drafts: drafts.into_iter().map(summarize_draft).collect() })
+}
+
+/// [`draft_scope`] against this server's bots.
+async fn draft_scope_here(list: &ListSessions) -> Option<String> {
+    let bots = crate::bots::bots_here().await;
+    draft_scope(list, &bots.iter().map(|b| b.path.as_str()).collect::<Vec<_>>())
+}
+
+/// The project a draft listing is narrowed to, or `None` for every draft.
+///
+/// Only a path the caller named narrows it, never the calling session's
+/// project: drafts are one list in the sidebar, and `start` takes any of them.
+/// Scoped by caller, a bot's chat listed only its own folder, which holds no
+/// drafts, and answered "No drafts." over a full file. A CLI from before that
+/// sends the folder it ran in as the path, so a bot's folder is no scope either.
+fn draft_scope(list: &ListSessions, bot_folders: &[&str]) -> Option<String> {
+    if list.all {
+        return None;
+    }
+    let scope = project_from(list.project_path.as_deref(), None)?;
+    (!bot_folders.iter().any(|bot| crate::bots::holds(bot, &scope))).then_some(scope)
 }
 
 /// The project a listing is narrowed to, or `None` for `--all`.
@@ -3724,6 +3753,24 @@ mod tests {
         );
         assert_eq!(project_from(None, Some(&parent)).as_deref(), Some("/p"));
         assert_eq!(project_from(None, None), None);
+    }
+
+    /// `dray draft ls` in a bot's chat answered "No drafts." over a full file:
+    /// it was scoped to the bot's folder. Only a project named narrows it now.
+    #[test]
+    fn a_draft_listing_narrows_only_to_a_named_project() {
+        let list = |all, path: Option<&str>| ListSessions {
+            all,
+            project_path: path.map(str::to_string),
+            parent_session_id: Some("bot-chat".into()),
+        };
+        let bots = ["/home/u/.dray/bots/ops"];
+        assert_eq!(draft_scope(&list(false, None), &bots), None);
+        assert_eq!(draft_scope(&list(true, Some("/repo")), &bots), None);
+        assert_eq!(draft_scope(&list(false, Some("/repo")), &bots).as_deref(), Some("/repo"));
+        // What an older CLI sends from a bot's chat: the folder it ran in.
+        assert_eq!(draft_scope(&list(false, Some("/home/u/.dray/bots/ops")), &bots), None);
+        assert_eq!(draft_scope(&list(false, Some("/home/u/.dray/bots/ops/notes")), &bots), None);
     }
 
     /// The prefix is the receiving agent's only signal, so its two facts are
