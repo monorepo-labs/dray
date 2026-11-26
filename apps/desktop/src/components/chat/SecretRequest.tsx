@@ -217,13 +217,13 @@ export default function SecretRequest({
           </div>
         ) : (
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <div className="flex min-w-0 gap-2">
+            <div className="flex min-w-0 gap-0.5">
               <Button
                 type="submit"
                 autoFocus={autoFocus}
                 disabled={busy}
                 size="sm"
-                className="h-8 min-w-0"
+                className={cn("h-8 min-w-0", savedNames.length > 1 && "rounded-r-none")}
               >
                 <KeyIcon className="size-4" />
                 <span className="truncate">
@@ -238,7 +238,7 @@ export default function SecretRequest({
                       aria-label="Pick another saved secret"
                       disabled={busy}
                       size="icon-sm"
-                      className="size-8"
+                      className="size-8 rounded-l-none"
                     >
                       <ChevronDown />
                     </Button>
