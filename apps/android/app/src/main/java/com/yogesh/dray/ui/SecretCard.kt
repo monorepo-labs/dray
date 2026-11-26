@@ -13,16 +13,18 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
@@ -32,9 +34,11 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.outlined.Dns
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -67,7 +71,9 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.yogesh.dray.model.Item
+import com.yogesh.dray.model.SECRET_SEARCH_AFTER
 import com.yogesh.dray.model.SessionKey
+import com.yogesh.dray.model.matchSecrets
 import com.yogesh.dray.store.Store
 import com.yogesh.dray.wire.Bot
 import com.yogesh.dray.wire.SecretAnswer
@@ -268,26 +274,12 @@ fun SecretCard(key: SessionKey, request: SecretRequest, asker: SecretParty?, mod
                                 modifier = Modifier.widthIn(max = 240.dp),
                                 icon = { Icon(Icons.Filled.Key, null, Modifier.size(16.dp), tint = Dray.onPrimary) },
                             ) { send(Answer.Saved) }
-                            if (split) Box {
-                                Box(
-                                    Modifier.size(CONTROL).clip(RoundedCornerShape(topEnd = Dray.Radius.md, bottomEnd = Dray.Radius.md))
-                                        .background(Dray.primary).clickable(enabled = !busy) { picking = true }
-                                        .semantics { contentDescription = "Pick another saved secret" },
-                                    contentAlignment = Alignment.Center,
-                                ) { Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.size(20.dp), tint = Dray.onPrimary) }
-                                DropdownMenu(picking, { picking = false }, Modifier.widthIn(min = 220.dp), containerColor = Dray.raised) {
-                                    Text(
-                                        "Saved on ${store.name(key.server)}",
-                                        Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                                        style = Dray.Font.footnote.copy(color = Dray.tertiary),
-                                    )
-                                    for (n in saved) DropdownMenuItem(
-                                        text = { Text(n, style = Dray.Font.subhead.copy(fontFamily = FontFamily.Monospace)) },
-                                        onClick = { pick = n; picking = false },
-                                        leadingIcon = { Box(Modifier.width(18.dp)) { if (n == pick) Icon(Icons.Filled.Check, null, Modifier.size(18.dp), tint = Dray.text) } },
-                                    )
-                                }
-                            }
+                            if (split) Box(
+                                Modifier.size(CONTROL).clip(RoundedCornerShape(topEnd = Dray.Radius.md, bottomEnd = Dray.Radius.md))
+                                    .background(Dray.primary).clickable(enabled = !busy) { picking = true }
+                                    .semantics { contentDescription = "Pick another saved secret" },
+                                contentAlignment = Alignment.Center,
+                            ) { Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.size(20.dp), tint = Dray.onPrimary) }
                         }
                         Text(
                             "Paste a new one",
@@ -307,6 +299,76 @@ fun SecretCard(key: SessionKey, request: SecretRequest, asker: SecretParty?, mod
             }
         }
         if (pasting) Text(lifeLine(keeps, request.task), Modifier.padding(horizontal = 16.dp), style = Dray.Font.footnote.copy(color = Dray.tertiary))
+    }
+    if (picking) SecretPicker(saved, pick, request.name, store.name(key.server), { pick = it }) { picking = false }
+}
+
+/**
+ * The card's ⌄: every secret saved on the answering machine, the current pick ticked. Picking one
+ * makes it the card's Use saved; nothing is sent until that is tapped. A search sits on top once
+ * there are more than [SECRET_SEARCH_AFTER].
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SecretPicker(names: List<String>, pick: String, asked: String, machine: String, choose: (String) -> Unit, close: () -> Unit) {
+    val haptics = LocalHapticFeedback.current
+    val searchable = names.size > SECRET_SEARCH_AFTER
+    var query by remember { mutableStateOf("") }
+    val shown = matchSecrets(names, query)
+    // Open full height where a search is, so the keyboard never sits over the list.
+    ModalBottomSheet(close, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = searchable), containerColor = Dray.card) {
+        Column(Modifier.imePadding().padding(horizontal = Dray.Space.l), verticalArrangement = Arrangement.spacedBy(Dray.Space.m)) {
+            Column(Modifier.padding(horizontal = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Use a saved secret", style = Dray.Font.headline)
+                Text(
+                    buildAnnotatedString {
+                        append("Saved on $machine. The agent gets it as ")
+                        withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append(asked) }
+                        append(".")
+                    },
+                    style = Dray.Font.footnote.copy(color = Dray.secondary),
+                )
+            }
+            if (searchable) Row(
+                Modifier.fillMaxWidth().height(CONTROL).clip(controlShape).background(Dray.raised).padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(Icons.Outlined.Search, null, Modifier.size(18.dp), tint = Dray.tertiary)
+                Box(Modifier.weight(1f)) {
+                    if (query.isEmpty()) Text("Search secrets", style = Dray.Font.subhead.copy(color = Dray.tertiary), maxLines = 1)
+                    BasicTextField(
+                        query, { query = it }, Modifier.fillMaxWidth().semantics { contentDescription = "Search secrets" },
+                        singleLine = true, textStyle = Dray.Font.subhead, cursorBrush = SolidColor(Dray.text),
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Search,
+                        ),
+                        keyboardActions = KeyboardActions(onSearch = { shown.firstOrNull()?.let { choose(it); close() } }),
+                    )
+                }
+            }
+            Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = Dray.Space.xxl)) {
+                if (shown.isEmpty()) Text("No saved secret matches.", Modifier.padding(horizontal = 4.dp, vertical = 8.dp), style = Dray.Font.subhead.copy(color = Dray.tertiary))
+                else PickCard {
+                    shown.forEachIndexed { i, n ->
+                        if (i > 0) PickDivider()
+                        Row(
+                            Modifier.clickable {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                choose(n)
+                                close()
+                            }.rowFrame(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Icon(Icons.Filled.Key, null, Modifier.size(16.dp), tint = Dray.tertiary)
+                            Text(n, Modifier.weight(1f), style = Dray.Font.body.copy(fontFamily = FontFamily.Monospace), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (n == pick) Icon(Icons.Filled.Check, "Picked", Modifier.size(18.dp), tint = Dray.text)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
