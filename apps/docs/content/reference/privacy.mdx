@@ -7,7 +7,7 @@ sidebar:
 
 This is Dray's privacy policy. It covers the Dray desktop app, the Dray app for iPhone and iPad, Dray accounts, and drayhq.com with these docs. "We" and "us" here mean Dray.
 
-Last updated: 25 November 2026.
+Last updated: 26 November 2026.
 
 In short:
 
@@ -48,8 +48,13 @@ Then each event adds its own:
 
 | Event | When | Adds |
 |---|---|---|
-| `app_started` | Each launch | Nothing more. |
-| `active_day` | At most once a day: on launch, when Dray comes to the front, when you send a message, or when you use Dray Island | Nothing more. Messages agents send each other do not count. |
+| `app_started` | Each launch | Whether this machine is signed in to a Dray account, as yes or no. |
+| `active_day` | At most once a day: on launch, when Dray comes to the front, when you send a message, or when you use Dray Island | Whether this machine is signed in, as yes or no. Messages agents send each other do not count. |
+| `sign_in_gate_shown` | The sign-in screen comes up | Why: `first_launch` (not yet signed in or skipped), `settings` (you pressed Sign in), `required` (sign-in is now needed to keep going) or `signed_out`. |
+| `sign_in_skipped` | You skip signing in | Why the screen was up, as above. |
+| `sign_in_started` | You pick a way to sign in | `github`, `google` or `email`. |
+| `sign_in_completed` | The sign-in finishes | The way you picked. |
+| `sign_in_failed` | A sign-in ends without signing in | The way you picked, and why, from a fixed list: `offline`, `cancelled` (in Dray), `declined` (in the browser), `timed_out` or `exchange` (finishing failed). Never the error's text. |
 | `session_started` | You create a session | Agent, model, effort, permission mode, whether fast mode is on, whether it uses a worktree, whether another session started it, whether it is a bot's chat, a bot's task or a routine's run, and where it runs: `local` or `remote` (below). |
 | `bot_created` | You make a bot | The bot's agent and `app`, or `cli` with no agent when an agent made it with `dray bot new`. Never its name. The bot Dray makes for you is not counted. |
 | `routine_added` | A bot adds a routine | Whether it runs `every` so often or `at` set times, and whether it has a check. Never its name or prompt. |
@@ -118,7 +123,7 @@ Your account holds:
 
 Sign-in codes reach you by email, sent through Bento.
 
-Your account is kept apart from analytics. The desktop app's events carry its random install id, never your account, and the website never tells PostHog who you are.
+Your account is kept apart from analytics. The desktop app's events carry its random install id, never your account. They say whether the app is signed in and how a sign-in went, never as whom: no account id, name or email. The website never tells PostHog who you are.
 
 ### Change or delete your account
 
