@@ -154,7 +154,7 @@ export default function SecretRequest({
           <TooltipContent side="top">Decline</TooltipContent>
         </Tooltip>
       </div>
-      <div className="flex min-w-0 flex-col gap-1">
+      <div className="flex min-w-0 flex-col gap-1.5">
         <p className="text-sm leading-5 font-medium wrap-anywhere">{label ?? name}</p>
         <p className="flex min-w-0 flex-wrap items-center gap-x-1 text-sm leading-5">
           <span className="text-muted-foreground">{reason}</span>
