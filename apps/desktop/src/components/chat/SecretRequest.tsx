@@ -304,7 +304,7 @@ export default function SecretRequest({
 /// own machine, whatever this one keeps. "Out of chat and logs" and no more:
 /// the agent can read the file, so it could still print it.
 function lifeLine(keeps: boolean, task?: SecretTask): string {
-  const out = "Dray keeps it out of chat and logs.";
+  const out = "Kept out of chat and logs.";
   if (task) return `${out} On ${task.machine} for 24 hours.`;
   return keeps ? `${out} Saved on this machine.` : `${out} Deleted in 24 hours.`;
 }
