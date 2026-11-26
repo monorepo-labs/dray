@@ -178,7 +178,7 @@ export default function SecretRequest({
         {pasting ? (
           <div className="flex min-w-0 items-center gap-2">
             {closest && (
-              <Button type="button" variant="ghost" size="sm" className="h-9 shrink-0 text-muted-foreground" disabled={busy} onClick={() => setPasting(false)}>
+              <Button type="button" variant="ghost" size="sm" className="h-8 shrink-0 text-muted-foreground" disabled={busy} onClick={() => setPasting(false)}>
                 <ChevronLeft />
                 Use saved
               </Button>
@@ -191,7 +191,7 @@ export default function SecretRequest({
               name={`dray-secret-${requestId}`}
               aria-label={label ?? name}
               placeholder="Paste the value"
-              className="h-9 rounded-lg px-2.5 font-mono text-sm leading-[18px] [-webkit-text-security:disc] placeholder:font-sans md:text-sm"
+              className="h-8 rounded-lg px-2.5 font-mono text-sm leading-[18px] [-webkit-text-security:disc] placeholder:font-sans md:text-sm"
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="off"
@@ -216,7 +216,7 @@ export default function SecretRequest({
                 autoFocus={autoFocus}
                 disabled={busy}
                 size="sm"
-                className={cn("h-9 min-w-0", savedNames.length > 1 && "rounded-r-none")}
+                className={cn("h-8 min-w-0", savedNames.length > 1 && "rounded-r-none")}
               >
                 <KeyIcon className="size-4" />
                 <span className="truncate">
@@ -231,7 +231,7 @@ export default function SecretRequest({
                       aria-label="Pick another saved secret"
                       disabled={busy}
                       size="icon-sm"
-                      className="size-9 rounded-l-none border-l border-primary-foreground/20"
+                      className="size-8 rounded-l-none border-l border-primary-foreground/20"
                     >
                       <ChevronDown />
                     </Button>
@@ -251,7 +251,7 @@ export default function SecretRequest({
                 </DropdownMenu>
               )}
             </div>
-            <Button type="button" variant="ghost" size="sm" className="h-9 shrink-0 text-muted-foreground" disabled={busy} onClick={() => setPasting(true)}>
+            <Button type="button" variant="ghost" size="sm" className="h-8 shrink-0 text-muted-foreground" disabled={busy} onClick={() => setPasting(true)}>
               Paste a new one
             </Button>
           </div>
@@ -290,7 +290,7 @@ export function SendSecurelyButton({
 }: ComponentProps<typeof Button> & { icon?: ComponentType<SVGProps<SVGSVGElement>> }) {
   return (
     // The permission card's Allow once: the app's own button, small.
-    <Button size="sm" className={cn("h-9 shrink-0 disabled:opacity-100", className)} {...props}>
+    <Button size="sm" className={cn("h-8 shrink-0 disabled:opacity-100", className)} {...props}>
       <Icon className="size-4" aria-hidden />
       {children}
     </Button>
