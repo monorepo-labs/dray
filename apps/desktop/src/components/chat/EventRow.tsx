@@ -5,6 +5,7 @@ import UserMessage from "@/components/chat/UserMessage";
 import FileEdits from "@/components/chat/FileEdits";
 import IssueCard from "@/components/chat/IssueCard";
 import MergeCard from "@/components/chat/MergeCard";
+import { KeyRound } from "lucide-react";
 import { PartyChip, type Party } from "@/components/chat/PartyChip";
 import { useSecretParties } from "@/hooks/useSecretParties";
 import { isModClick } from "@/lib/platform";
@@ -45,11 +46,13 @@ export function SecretAnswer({
   name,
   outcome,
   task,
+  kept,
   auto,
 }: {
   name: string;
   outcome: string;
   task?: SecretTask;
+  kept?: boolean;
   auto?: boolean;
 }) {
   const parties = useSecretParties();
@@ -65,10 +68,12 @@ export function SecretAnswer({
     ) : outcome === "used" ? (
       <>Used saved {id}{auto ? " without asking" : ""}</>
     ) : (
-      <>Saved {id}</>
+      <>Saved {id}{kept ? " on this machine" : " for 24 hours"}</>
     );
   return (
     <div className="flex max-w-full items-center gap-0.5 self-start text-ui text-muted-foreground">
+      {/* A chip carries the line's face; a line without one takes the card's key. */}
+      {!chip && <KeyRound className="mr-1.5 size-3.5 shrink-0" aria-hidden />}
       <span className="shrink-0">{said}</span>
       {chip}
     </div>
@@ -231,7 +236,7 @@ export default function EventRow({
 
     case "secret_answered":
       return drawsSecretAnswer(payload.outcome) ? (
-        <SecretAnswer name={payload.name} outcome={payload.outcome} task={payload.task} auto={payload.auto} />
+        <SecretAnswer name={payload.name} outcome={payload.outcome} task={payload.task} kept={payload.kept} auto={payload.auto} />
       ) : null;
 
     case "rate_limited": {

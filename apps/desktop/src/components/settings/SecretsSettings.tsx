@@ -99,7 +99,7 @@ function Machine({ server, machines, onPick }: { server: ServerId; machines: Ser
       {error ? (
         <p className="text-ui text-destructive">{error}</p>
       ) : secrets === null ? null : secrets.length === 0 ? (
-        !adding && <p className="text-ui text-muted-foreground">None saved on {serverName(server)}.</p>
+        !adding && <p className="text-ui text-muted-foreground">None saved yet.</p>
       ) : (
         <ul className="flex flex-col gap-1">
           {secrets.map((s) => (
