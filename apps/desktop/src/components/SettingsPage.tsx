@@ -1463,7 +1463,7 @@ const TAB_LOOKS: Record<SettingsTab, { label: string; Icon: typeof PaintBrushIco
   spaces: { label: "Spaces", Icon: Square3Stack3DIcon },
   servers: { label: "Servers", Icon: ServerStackIcon },
   accounts: { label: "Agents", Icon: KeyIcon },
-  secrets: { label: "Secrets", Icon: LockClosedIcon },
+  secrets: { label: "Vault", Icon: LockClosedIcon },
   transcription: { label: "Transcription", Icon: MicrophoneIcon },
   integrations: { label: "Integrations", Icon: PuzzlePieceIcon },
   shortcuts: { label: "Shortcuts", Icon: BoltIcon },

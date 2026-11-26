@@ -24,7 +24,7 @@ const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
 /// Saved secrets on one machine at a time, picked at the top. A value is
 /// written here and never read back: the server answers names alone. Agents
-/// ask for new ones with a card in chat, and Save as there lands one here.
+/// ask for new ones with a card in chat, and Save to Vault there lands one here.
 export default function SecretsSettings() {
   const remotes = useServers().filter((s) => !s.cloud && s.status === "connected");
   const machines: ServerId[] = [LOCAL, ...remotes.map((s) => s.id)];
