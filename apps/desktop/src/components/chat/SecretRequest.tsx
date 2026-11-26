@@ -6,16 +6,9 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
 import type { Party } from "@/components/chat/PartyChip";
+import SecretPicker from "@/components/chat/SecretPicker";
 import MachineMark from "@/components/MachineMark";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -23,7 +16,7 @@ import { useSecretParties } from "@/hooks/useSecretParties";
 import { seededAvatar } from "@/lib/botAvatar";
 import { isModClick } from "@/lib/platform";
 import { serverName } from "@/lib/servers";
-import { invoke, serverOfSession } from "@/lib/transport";
+import { invoke, LOCAL, serverOfSession } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { SecretTask } from "@/types/events";
 
@@ -69,6 +62,7 @@ export default function SecretRequest({
   const asker: Party | null = task ? { id: task.sessionId, title: task.title, machine: task.machine } : null;
   const [pasting, setPasting] = useState(!closest);
   const [pick, setPick] = useState(closest ?? savedNames[0] ?? name);
+  const [picking, setPicking] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const [filled, setFilled] = useState(false);
   const [keep, setKeep] = useState(false);
@@ -244,31 +238,16 @@ export default function SecretRequest({
                   </span>
                 </Button>
                 {savedNames.length > 1 && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        type="button"
-                        aria-label="Pick another saved secret"
-                        disabled={busy}
-                        size="icon-sm"
-                        className="size-8 rounded-l-none"
-                      >
-                        <ChevronDown />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="min-w-52">
-                      <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-                        Saved on {serverName(serverOfSession(sessionId))}
-                      </DropdownMenuLabel>
-                      <DropdownMenuRadioGroup value={pick} onValueChange={setPick}>
-                        {savedNames.map((n) => (
-                          <DropdownMenuRadioItem key={n} value={n} className="font-mono">
-                            {n}
-                          </DropdownMenuRadioItem>
-                        ))}
-                      </DropdownMenuRadioGroup>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  <Button
+                    type="button"
+                    aria-label="Pick another saved secret"
+                    disabled={busy}
+                    size="icon-sm"
+                    className="size-8 rounded-l-none"
+                    onClick={() => setPicking(true)}
+                  >
+                    <ChevronDown />
+                  </Button>
                 )}
               </div>
               <Button type="button" variant="ghost" size="sm" className="h-8 shrink-0 text-muted-foreground" disabled={busy} onClick={() => setPasting(true)}>
@@ -298,8 +277,24 @@ export default function SecretRequest({
         </div>
       </form>
       {pasting && <p className="px-[15px] text-ui text-muted-foreground">{lifeLine(keeps, task)}</p>}
+      {picking && (
+        <SecretPicker
+          names={savedNames}
+          pick={pick}
+          asked={name}
+          machine={machineOf(sessionId)}
+          onPick={setPick}
+          onClose={() => setPicking(false)}
+        />
+      )}
     </div>
   );
+}
+
+/// Where the card's saved secrets live, as Settings → Vault names it.
+function machineOf(sessionId: string): string {
+  const server = serverOfSession(sessionId);
+  return server === LOCAL ? "this machine" : serverName(server);
 }
 
 /// What happens to a pasted value, as the server does it: a file deleted after

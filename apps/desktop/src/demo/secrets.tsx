@@ -194,6 +194,18 @@ function Demo() {
             </Pasting>
           </Section>
 
+          <Section title="Eight saved" note="More than six saved, so the ⌄ dialog opens with a search.">
+            <SecretRequest
+              sessionId={TASK}
+              {...base}
+              name="GITHUB_TOKEN"
+              reason="Sign gh in"
+              savedNames={["AWS_ACCESS_KEY_ID", "CLOUDFLARE_API_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN", "OPENAI_API_KEY", "SENTRY_AUTH_TOKEN", "STRIPE_SECRET_KEY"]}
+              closest="GITHUB_TOKEN"
+              autoFocus={false}
+            />
+          </Section>
+
           <Section title="Name mismatch" note="The agent asked for GH_TOKEN; GITHUB_TOKEN is the nearest saved. The agent gets it as GH_TOKEN.">
             <SecretRequest
               sessionId={TASK}
