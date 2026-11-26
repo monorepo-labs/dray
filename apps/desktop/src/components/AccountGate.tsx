@@ -220,6 +220,7 @@ export default function AccountGate({ children }: { children: ReactNode }) {
       error: error === "offline" ? null : error ? (ERRORS[error] ?? error) : failed,
       emailOff: account?.emailOff ?? false,
       lastUsed,
+      required,
       // Never locked out by the network: a failure trying again can't fix
       // opens the way past a required gate.
       canSkip: !required || blocksSignIn(error) || failed !== null,

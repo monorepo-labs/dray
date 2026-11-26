@@ -16,6 +16,8 @@ export type GateView =
       offline: boolean;
       emailOff: boolean;
       lastUsed: SignInMethod | null;
+      /// Sign-in is required now (#1590): its own words, and no Skip.
+      required: boolean;
       /// False once sign-in is required, unless a failure opens the way.
       canSkip: boolean;
     }
@@ -73,17 +75,26 @@ function body(
         </Cards>
       </>
     );
-  const { error, offline, revoked, emailOff, lastUsed, canSkip } = view;
+  const { error, offline, revoked, emailOff, lastUsed, required, canSkip } = view;
   const tag = (method: SignInMethod) => lastUsed === method && <LastUsed />;
   const failed = !offline && error;
-  const label = failed ? failed : revoked ? "You've been signed out" : "Welcome to Dray";
+  // True as said: the agents run in the background server, never this window.
+  const label = failed
+    ? failed
+    : required
+      ? "Your agents are still running in the background"
+      : revoked
+        ? "You've been signed out"
+        : "Welcome to Dray";
   const heading = offline
     ? "Check your connection, or skip for now."
     : failed
       ? "Pick an account to try again."
-      : revoked
-        ? "Sign in again. Your agents are still running."
-        : "Pick an account to sign in with.";
+      : required
+        ? "Sign in to keep using Dray."
+        : revoked
+          ? "Sign in again. Your agents are still running."
+          : "Pick an account to sign in with.";
   return (
     <>
       <Label danger={Boolean(failed)}>{label}</Label>
