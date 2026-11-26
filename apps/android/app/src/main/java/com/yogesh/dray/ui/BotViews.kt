@@ -365,6 +365,7 @@ private fun BotRowView(key: SessionKey, row: BotRow, late: Boolean, openTask: (S
                     ),
                 )
             }
+            is BotItem.Secret -> SecretAnswerLine(item.answer, key.server)
             is BotItem.Sent -> {}
         }
     }
@@ -372,7 +373,7 @@ private fun BotRowView(key: SessionKey, row: BotRow, late: Boolean, openTask: (S
 
 /** A face and a name, inline in a line of the chat; a tap opens it where there is something to open. */
 @Composable
-private fun Chip(seed: String, bot: Bot?, title: String, open: (() -> Unit)?, size: androidx.compose.ui.unit.Dp = 18.dp) {
+internal fun Chip(seed: String, bot: Bot?, title: String, open: (() -> Unit)?, size: androidx.compose.ui.unit.Dp = 18.dp) {
     Row(
         Modifier.clip(RoundedCornerShape(6.dp)).clickable(enabled = open != null) { open?.invoke() },
         verticalAlignment = Alignment.CenterVertically,

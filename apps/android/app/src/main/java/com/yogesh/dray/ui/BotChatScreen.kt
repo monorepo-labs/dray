@@ -58,6 +58,7 @@ import com.yogesh.dray.store.botTasks
 import com.yogesh.dray.store.hiddenAsks
 import com.yogesh.dray.wire.Bot
 import com.yogesh.dray.wire.ImageRef
+import com.yogesh.dray.wire.Payload
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -180,7 +181,9 @@ fun BotChatScreen(opened: SessionKey, bot: Bot, back: () -> Unit, openTask: (Ses
                             taskAsks.reversed().forEach { (k, e) ->
                                 item("task-ask-${e.id}") {
                                     MaxWidth {
-                                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        // A secret card names its task inside it, on its asker row.
+                                        if (e.payload is Payload.SecretRequested) AskCard(k, e, asker = store.secretSessionParty(k))
+                                        else Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                             Text(store.items[k]?.title ?: "Task", Modifier.padding(start = 2.dp), style = Dray.Font.footnote.copy(color = Dray.secondary), maxLines = 1)
                                             AskCard(k, e)
                                         }

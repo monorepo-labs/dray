@@ -3,6 +3,7 @@ package com.yogesh.dray.model
 import com.yogesh.dray.wire.AgentEvent
 import com.yogesh.dray.wire.ImageRef
 import com.yogesh.dray.wire.Payload
+import com.yogesh.dray.wire.SecretAnswer
 import com.yogesh.dray.wire.ToolResult
 import com.yogesh.dray.wire.isCut
 import kotlinx.serialization.json.JsonElement
@@ -62,6 +63,11 @@ sealed interface Item {
     /** A prompt typed into the running turn: the reader's own words, kept on screen through a collapse. */
     data class Prompt(override val id: String, val text: String, val from: String?, val images: List<ImageRef>) : Item
     data class Failure(override val id: String, val text: String) : Item
+    /**
+     * Where a secret went: a closed card, or a task's ask its bot's chat on another machine draws
+     * (`askedName`). Never folded behind tool calls, so it is drawn beside a stretch, not inside it.
+     */
+    data class Secret(override val id: String, val answer: SecretAnswer?, val askedName: String? = null) : Item
 
     /** Moves whenever the row grows: a group keeps its first call's id but gains calls. */
     val newestId: String get() = if (this is Group) calls.lastOrNull()?.id ?: id else id
@@ -83,21 +89,27 @@ data class Turn(
     val finalLifted: Boolean = false,
 ) {
     val running: Boolean get() = !completed
-    /** Rows a collapse would hide: queued prompts stay on screen. */
-    val rows: Int get() = work.count { it !is Item.Prompt }
+    /** Rows a collapse would hide: queued prompts and secret lines stay on screen. */
+    val rows: Int get() = work.count { it !is Item.Prompt && it !is Item.Secret }
 
     /** Stretches between queued prompts, each folding on its own so a prompt stays where it was typed. */
     val segments: List<Segment>
         get() {
             val out = mutableListOf<Segment>()
             var items = mutableListOf<Item>()
+            var cards = mutableListOf<Item.Secret>()
             for (item in work) {
-                if (item is Item.Prompt) {
-                    out += Segment(items, item)
-                    items = mutableListOf()
-                } else items += item
+                when (item) {
+                    is Item.Prompt -> {
+                        out += Segment(items, item, cards)
+                        items = mutableListOf()
+                        cards = mutableListOf()
+                    }
+                    is Item.Secret -> cards += item
+                    else -> items += item
+                }
             }
-            out += Segment(items, null)
+            out += Segment(items, null, cards)
             return out
         }
 
@@ -119,7 +131,7 @@ data class Turn(
                 is Item.Group -> out += calls(item.calls)
                 is Item.Prompt -> out += attached(item.images)
                 is Item.Text -> out += shown(item.text)
-                is Item.Failure -> {}
+                is Item.Failure, is Item.Secret -> {}
             }
             if (finalLifted && finalText != null) out += shown(finalText)
             // One page per picture: a tap finds it by ref, so a repeat would open on the first.
@@ -128,7 +140,8 @@ data class Turn(
         }
 }
 
-data class Segment(val items: List<Item>, val prompt: Item.Prompt?)
+/** `cards`: the stretch's secret lines, drawn after it whether it is folded or not. */
+data class Segment(val items: List<Item>, val prompt: Item.Prompt?, val cards: List<Item.Secret> = emptyList())
 
 /** One picture in a turn's gallery, and the line naming where it came from: "Read /tmp/hero.png". */
 data class Shot(val ref: ImageRef, val verb: String, val target: String?)
@@ -188,6 +201,8 @@ fun buildTurns(events: List<AgentEvent>, busy: Boolean): List<Turn> {
     val turns = mutableListOf<Turn>()
     var current: Turn? = null
     val calls = mutableListOf<ToolCall>()
+    // Secret lines landing inside a run of calls, held so the run stays one group; they follow it.
+    val held = mutableListOf<Item.Secret>()
 
     fun append(item: Item) { current = current?.let { it.copy(work = it.work + item) } }
 
@@ -202,20 +217,25 @@ fun buildTurns(events: List<AgentEvent>, busy: Boolean): List<Turn> {
             append(Item.Tool(calls[0]))
         }
         calls.clear()
+        held.forEach(::append)
+        held.clear()
     }
+
+    fun secret(item: Item.Secret) { if (calls.isEmpty()) append(item) else held += item }
 
     fun close() {
         flushCalls()
         var turn = current ?: return
         current = null
-        // The harness says a failure twice; the red row wins.
-        val last = turn.work.lastOrNull()
+        // Secret lines sit outside the folds, so the turn's last row is read past them.
+        val last = turn.work.lastOrNull { it !is Item.Secret }
         if (turn.failure != null && last is Item.Text && last.text.trim() == turn.failure!!.trim()) {
-            turn = turn.copy(work = turn.work.dropLast(1))
+            // The harness says a failure twice; the red row wins.
+            turn = turn.copy(work = turn.work - last)
         }
-        val tail = turn.work.lastOrNull()
+        val tail = turn.work.lastOrNull { it !is Item.Secret }
         if (turn.completed && tail is Item.Text) {
-            turn = turn.copy(finalText = tail.text, finalLifted = true, work = turn.work.dropLast(1))
+            turn = turn.copy(finalText = tail.text, finalLifted = true, work = turn.work - tail)
         } else if (turn.completed) {
             // Cut short with a call after its last message: that message still ends the fold.
             turn.work.lastOrNull { it is Item.Text }?.let { turn = turn.copy(finalText = (it as Item.Text).text) }
@@ -232,10 +252,21 @@ fun buildTurns(events: List<AgentEvent>, busy: Boolean): List<Turn> {
                 if (p.queued && current != null) {
                     flushCalls()
                     append(Item.Prompt(e.id, shown, p.fromTitle, p.images))
+                } else if (p.kickoff && current?.let { it.prompt == null && it.work.isNotEmpty() && it.work.all { w -> w is Item.Secret } } == true) {
+                    // The answered card's own prompt: the turn its line opened carries on.
                 } else {
                     close()
-                    current = Turn(e.id, TurnPrompt(shown, p.fromTitle, p.images))
+                    // Dray's own prompt — a secret's path, a review — draws no bubble, as on the desktop.
+                    current = Turn(e.id, if (p.kickoff) null else TurnPrompt(shown, p.fromTitle, p.images))
                 }
+            }
+            is Payload.SecretAnswered -> if (p.answer.draws) {
+                ensureTurn(e)
+                secret(Item.Secret(e.id, p.answer))
+            }
+            is Payload.SecretRequested -> if (p.request.bot) {
+                ensureTurn(e)
+                secret(Item.Secret(e.id, null, p.request.name))
             }
             is Payload.AssistantText -> if (p.text.isNotBlank()) {
                 ensureTurn(e)

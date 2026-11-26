@@ -47,12 +47,20 @@ import kotlinx.coroutines.launch
 private val itemShape = RoundedCornerShape(Dray.Radius.md)
 private fun itemFill(picked: Boolean) = Color.White.copy(alpha = if (picked) 0.2f else 0.08f)
 
-/** A card the agent is stopped on, answered in place: a permission, or questions. */
+/**
+ * A card the agent is stopped on, answered in place: a permission, questions, or a secret. `asker`
+ * names the task where a secret card sits in its bot's chat rather than its own.
+ */
 @Composable
-fun AskCard(key: SessionKey, event: AgentEvent, modifier: Modifier = Modifier) {
+fun AskCard(key: SessionKey, event: AgentEvent, modifier: Modifier = Modifier, asker: SecretParty? = null) {
+    val store = LocalStore.current
     // Keyed by the event, so a card's picks never carry over to the next one.
     key(event.id) {
-        Box(modifier.fillMaxWidth().clip(RoundedCornerShape(Dray.Radius.lg)).background(Dray.well).padding(12.dp)) {
+        val secret = event.payload as? Payload.SecretRequested
+        if (secret != null) {
+            val party = asker ?: secret.request.task?.let { store.secretTaskParty(key.server, it) }
+            SecretCard(key, secret.request, party, modifier)
+        } else Box(modifier.fillMaxWidth().clip(RoundedCornerShape(Dray.Radius.lg)).background(Dray.well).padding(12.dp)) {
             when (val p = event.payload) {
                 is Payload.PermissionRequested -> PermissionCard(key, p.request)
                 is Payload.QuestionsAsked -> QuestionsCard(key, p.request)

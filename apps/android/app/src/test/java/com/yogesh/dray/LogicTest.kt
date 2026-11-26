@@ -114,6 +114,40 @@ class LogicTest {
     }
 
     @Test
+    fun secretEventsDecodeAndTheirLinesStayOutOfTheFold() {
+        val asked = event("2", """{"type":"secret_requested","requestId":"r1","name":"GH_TOKEN","reason":"push","savedNames":["GITHUB_TOKEN"],"closest":"GITHUB_TOKEN"}""")
+        val request = (asked.payload as Payload.SecretRequested).request
+        assertEquals("r1", asked.payload.askId)
+        assertEquals("GITHUB_TOKEN", request.closest)
+        assertEquals(false, request.bot)
+        val turns = buildTurns(listOf(
+            event("1", """{"type":"user_message","text":"go"}"""),
+            asked,
+            tool("3", "c1"), result("3r", "c1"),
+            event("4", """{"type":"assistant_text","text":"Asked for it."}"""),
+            event("5", """{"type":"turn_completed","status":"success"}"""),
+            event("6", """{"type":"secret_answered","requestId":"r1","name":"GH_TOKEN","outcome":"used","from":"GITHUB_TOKEN"}"""),
+            // The answer's own prompt is Dray's: no bubble, and the line's turn carries on.
+            event("7", """{"type":"user_message","text":"The secret is at /x","kickoff":true}"""),
+            tool("8", "c2"), result("8r", "c2"),
+            tool("9", "c3"), result("9r", "c3"),
+            event("10", """{"type":"secret_answered","requestId":"r0","name":"OLD","outcome":"replaced"}"""),
+            tool("11", "c4"), result("11r", "c4"),
+            event("12", """{"type":"assistant_text","text":"Done."}"""),
+            event("13", """{"type":"turn_completed","status":"success"}"""),
+        ), busy = false)
+        assertEquals(2, turns.size)
+        val second = turns[1]
+        assertNull(second.prompt)
+        assertEquals("Done.", second.finalText)
+        // A replaced card draws nothing and splits no run.
+        assertEquals(3, (second.work.single { it is Item.Group } as Item.Group).calls.size)
+        val line = second.segments.single().cards.single()
+        assertEquals("used", line.answer?.outcome)
+        assertEquals(1, second.rows)
+    }
+
+    @Test
     fun aMovedPlanTaskStaysPlanOnPi() {
         assertEquals("plan", Picks.taskStance("pi", "plan"))
         assertEquals("bypassPermissions", Picks.taskStance("pi", "auto"))
