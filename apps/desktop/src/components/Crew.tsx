@@ -93,7 +93,6 @@ export default function Crew({ rows, paneState, onOpen, chat, stacked = false }:
         </div>
         <PendingCard
           sessionId={row.item.sessionId}
-          title={row.item.title}
           events={paneState(row.item.sessionId).session?.events}
           chat={chat}
           onOpen={() => onOpen(row.item.sessionId)}
@@ -118,13 +117,11 @@ export default function Crew({ rows, paneState, onOpen, chat, stacked = false }:
 /// The card one session is waiting on.
 function PendingCard({
   sessionId,
-  title,
   events,
   chat,
   onOpen,
 }: {
   sessionId: string;
-  title?: string;
   events: AgentEvent[] | undefined;
   onOpen: () => void;
   chat: Pick<PaneChat, "onRespondPermission" | "onAnswerQuestions">;
@@ -168,9 +165,9 @@ function PendingCard({
           label={ask.label}
           reason={ask.reason}
           url={ask.url}
-          saved={ask.saved}
+          savedNames={ask.savedNames}
+          closest={ask.closest}
           task={ask.task}
-          title={title}
           autoFocus={false}
         />
       ) : ask.type === "questions_asked" ? (

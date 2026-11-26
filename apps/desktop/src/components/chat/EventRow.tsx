@@ -5,11 +5,13 @@ import UserMessage from "@/components/chat/UserMessage";
 import FileEdits from "@/components/chat/FileEdits";
 import IssueCard from "@/components/chat/IssueCard";
 import MergeCard from "@/components/chat/MergeCard";
-import { KeyRound } from "lucide-react";
+import { PartyChip, type Party } from "@/components/chat/PartyChip";
+import { useSecretParties } from "@/hooks/useSecretParties";
+import { isModClick } from "@/lib/platform";
 import { compactTokens, resetTime } from "@/lib/format";
 import { drawsFailure, drawsSecretAnswer } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
-import type { AgentEvent, Bot, FileEdit, ToolResult } from "@/types/events";
+import type { AgentEvent, Bot, FileEdit, SecretTask, ToolResult } from "@/types/events";
 
 /// A quiet single line for the events that are context rather than content.
 function Notice({
@@ -37,50 +39,59 @@ function Notice({
   );
 }
 
-/// A closed secret card: what happened, never the value or where it went.
+/// A closed secret card, in the words and size of "Started a new task": what
+/// happened and who to, never the value or where it went.
 export function SecretAnswer({
   name,
   outcome,
-  kept,
-  always,
+  task,
   auto,
-  to,
 }: {
   name: string;
   outcome: string;
-  kept?: boolean;
-  always?: boolean;
+  task?: SecretTask;
   auto?: boolean;
-  /// The task on another machine it went to.
-  to?: string;
 }) {
+  const parties = useSecretParties();
   const id = <span className="font-mono">{name}</span>;
-  const forTask = to ? <> to {to}</> : null;
+  const chip = task && (
+    <SecretChip party={{ id: task.sessionId, title: task.title, machine: task.machine }} open={parties.open} />
+  );
   const said =
     outcome === "declined" ? (
-      <>Declined {id}{to ? <> for {to}</> : null}</>
-    ) : to ? (
-      <>
-        Sent {outcome === "used" ? "saved " : ""}{id}{forTask}
-        {kept && outcome === "saved" ? ", saved here" : ""}
-        {auto ? " without asking" : always ? ", used without asking from now on" : ""}
-      </>
-    ) : auto ? (
-      <>Used saved {id} without asking</>
+      chip ? <>Declined {id} for</> : <>Declined {id}</>
+    ) : chip ? (
+      <>Sent {id} to</>
     ) : outcome === "used" ? (
-      <>Used saved {id}{always ? ", without asking from now on" : ""}</>
+      <>Used saved {id}{auto ? " without asking" : ""}</>
     ) : (
-      <>
-        Saved {id} privately{kept ? " on this machine" : " for 24 hours"}
-        {always ? ", used without asking from now on" : ""}
-      </>
+      <>Saved {id}</>
     );
   return (
-    <p className="flex items-center gap-2 text-chat text-muted-foreground">
-      <KeyRound className="size-3.5 shrink-0" aria-hidden />
-      <span className="truncate">{said}</span>
-    </p>
+    <div className="flex max-w-full items-center gap-0.5 self-start text-ui text-muted-foreground">
+      <span className="shrink-0">{said}</span>
+      {chip}
+    </div>
   );
+}
+
+/// A bot's task on another machine asked its bot: the line in the task's chat.
+function SecretAsked({ sessionId, name }: { sessionId: string; name: string }) {
+  const parties = useSecretParties();
+  const bot = parties.botOf(sessionId);
+  return (
+    <div className="flex max-w-full items-center gap-0.5 self-start text-ui text-muted-foreground">
+      <span className="shrink-0">Asked</span>
+      {bot ? <SecretChip party={bot} open={parties.open} /> : <span className="shrink-0 px-1">its bot</span>}
+      <span className="shrink-0">
+        for <span className="font-mono">{name}</span>
+      </span>
+    </div>
+  );
+}
+
+function SecretChip({ party, open }: { party: Party; open: (party: Party, alone: boolean) => void }) {
+  return <PartyChip parties={[party]} onClick={(e) => open(party, isModClick(e))} />;
 }
 
 /// The one place event payloads become UI. Every variant is handled; the default
@@ -216,17 +227,12 @@ export default function EventRow({
 
     case "secret_requested":
       // The card is in the bot's chat on another machine; here, only where it went.
-      return payload.bot ? (
-        <p className="flex items-center gap-2 text-chat text-muted-foreground">
-          <KeyRound className="size-3.5 shrink-0" aria-hidden />
-          <span className="truncate">
-            Asked for <span className="font-mono">{payload.name}</span> in the bot's chat
-          </span>
-        </p>
-      ) : null;
+      return payload.bot ? <SecretAsked sessionId={event.sessionId} name={payload.name} /> : null;
 
     case "secret_answered":
-      return drawsSecretAnswer(payload.outcome) ? <SecretAnswer {...payload} /> : null;
+      return drawsSecretAnswer(payload.outcome) ? (
+        <SecretAnswer name={payload.name} outcome={payload.outcome} task={payload.task} auto={payload.auto} />
+      ) : null;
 
     case "rate_limited": {
       // Only actionable reports reach here — the mapper drops the healthy ones

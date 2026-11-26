@@ -1,10 +1,10 @@
 import { Undo2 } from "lucide-react";
-import { memo, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import BotAvatar from "@/components/BotAvatar";
 import AssistantMessage from "@/components/chat/AssistantMessage";
 import DiffView from "@/components/chat/DiffView";
 import EventRow from "@/components/chat/EventRow";
+import { PartyChip, type Party } from "@/components/chat/PartyChip";
 import { Reactable } from "@/components/chat/Reactions";
 import { Button } from "@/components/ui/button";
 import UserMessage from "@/components/chat/UserMessage";
@@ -33,7 +33,7 @@ import { streamingCall } from "@/lib/streaming";
 import { streamingLabel, toolArgument, toolLabel } from "@/lib/tools";
 import { invoke } from "@/lib/transport";
 import { cn } from "@/lib/utils";
-import type { AgentEvent, Bot, BotAvatar as Avatar, LearnedDiff, LearnedFile, ToolResult } from "@/types/events";
+import type { AgentEvent, Bot, LearnedDiff, LearnedFile, ToolResult } from "@/types/events";
 
 /// A task a bot started, as its card names it.
 /// A task as its chat draws it. `sessionId` is the full id, since the bot may
@@ -285,8 +285,6 @@ const ChatRow = memo(function ChatRow({ item, time, tight, isNew, bots, taskOf, 
   );
 }, sameRow);
 
-/// Who a line names: a task, by its session id, or a bot, with its own face.
-type Party = { id: string; title: string; avatar?: Avatar | null };
 
 /// The task a message went to or came from. A send may name its task by an id
 /// prefix, which `taskOf` resolves.
@@ -387,50 +385,6 @@ function TalkLine({
         ))}
     </>
   );
-}
-
-/// Who a line is about: one task's face and name, or several faces stacked
-/// and a count.
-export function PartyChip({
-  parties,
-  expanded,
-  onClick,
-}: {
-  parties: Party[];
-  /// Set where the chip opens messages rather than a task.
-  expanded?: boolean;
-  onClick: (e: React.MouseEvent) => void;
-}) {
-  const single = parties.length === 1 ? parties[0] : null;
-  return (
-    <button
-      type="button"
-      aria-expanded={expanded}
-      onClick={onClick}
-      className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded-full py-0.5 pr-1.5 pl-1 transition-colors hover:bg-(--party-wash) hover:text-(--party-ink)"
-      style={single ? partyColours(single) : NEUTRAL}
-    >
-      <span className="flex shrink-0 -space-x-2">
-        {parties.slice(0, 3).map((p) => (
-          <span key={p.id} className="size-5">
-            <BotAvatar still seed={p.id} avatar={p.avatar ?? seededAvatar(p.id)} className="block size-5 scale-[1.18]" />
-          </span>
-        ))}
-      </span>
-      <span className="truncate">{single ? single.title : `${parties.length} tasks`}</span>
-    </button>
-  );
-}
-
-const NEUTRAL = { "--party-wash": "var(--muted)", "--party-ink": "var(--foreground)" } as CSSProperties;
-
-/// A party's name, on hover, in a pill of its own face's colour.
-function partyColours(party: Party): CSSProperties {
-  const { hue } = party.avatar ?? seededAvatar(party.id);
-  return {
-    "--party-wash": `oklch(0.7 0.12 ${hue} / 0.16)`,
-    "--party-ink": `oklch(0.78 0.12 ${hue})`,
-  } as CSSProperties;
 }
 
 /// The time a run of messages began, centred and quiet, as a messenger draws it.

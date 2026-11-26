@@ -402,11 +402,14 @@ your turn without writing anything after it.
 ## Asking the user for a secret
 
 ```bash
-dray secret request GITHUB_TOKEN --reason "To sign gh in on this box" --url https://github.com/settings/tokens
 dray secret ls                    # names saved on this machine, and which agents use without asking
+dray secret request GITHUB_TOKEN --reason "Sign gh in" --url https://github.com/settings/tokens
 ```
 
-Whenever you need a token, API key or password, ask this way. Never ask for one
+Whenever you need a token, API key or password, ask this way. Run `dray secret
+ls` first and ask by a saved name where one fits, so the user hands it over in
+one click; the card offers the nearest saved one either way. Keep the reason to
+a few words: the card shows who is asking. Never ask for one
 in chat, never invent one. The request puts a masked card in your chat with
 your reason and link and returns at once: end your turn and say you're waiting.
 The user pastes the value there, or declines. Either way the answer reaches you

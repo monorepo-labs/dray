@@ -218,6 +218,74 @@ async fn saved_path(name: &str) -> Result<Option<PathBuf>> {
     Ok(tokio::fs::try_exists(&path).await.unwrap_or(false).then_some(path))
 }
 
+/// The names saved here.
+async fn saved_names() -> Vec<String> {
+    saved().await.map(|list| list.into_iter().map(|s| s.name).collect()).unwrap_or_default()
+}
+
+/// Words that say what kind of secret, never whose: two names sharing only
+/// these are not the same secret.
+const KIND_WORDS: [&str; 8] = ["TOKEN", "KEY", "API", "SECRET", "PAT", "PASSWORD", "ACCESS", "AUTH"];
+
+/// The saved name nearest `name` by its words, with GH read as GITHUB and so
+/// on: they must share a word that is not a kind word, and half their words.
+fn closest_name(name: &str, saved: &[String]) -> Option<String> {
+    if saved.iter().any(|s| s == name) {
+        return Some(name.to_string());
+    }
+    let words = |n: &str| -> std::collections::BTreeSet<String> {
+        n.split('_')
+            .filter(|w| !w.is_empty())
+            .map(|w| match w.to_ascii_uppercase().as_str() {
+                "GH" => "GITHUB".to_string(),
+                "GL" => "GITLAB".to_string(),
+                "CF" => "CLOUDFLARE".to_string(),
+                "PASS" | "PW" | "PWD" => "PASSWORD".to_string(),
+                other => other.to_string(),
+            })
+            .collect()
+    };
+    let asked = words(name);
+    saved
+        .iter()
+        .filter_map(|s| {
+            let theirs = words(s);
+            let shared: Vec<&String> = asked.intersection(&theirs).collect();
+            if !shared.iter().any(|w| !KIND_WORDS.contains(&w.as_str())) {
+                return None;
+            }
+            let score = shared.len() as f32 / asked.union(&theirs).count() as f32;
+            (score >= 0.5).then_some((score, s))
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0).then_with(|| b.1.len().cmp(&a.1.len())))
+        .map(|(_, s)| s.clone())
+}
+
+/// Which saved secret a request for one name was answered with before, by
+/// name: `aliases.json`, names alone.
+async fn read_aliases() -> std::collections::BTreeMap<String, String> {
+    let Ok(path) = dir(None).await.map(|d| d.join("aliases.json")) else { return Default::default() };
+    tokio::fs::read(path).await.ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+async fn set_alias(name: &str, to: Option<&str>) -> Result<()> {
+    let mut aliases = read_aliases().await;
+    match to {
+        Some(to) if to != name => aliases.insert(name.to_string(), to.to_string()),
+        _ => aliases.remove(name),
+    };
+    write_private(dir(None).await?.join("aliases.json"), serde_json::to_string(&aliases)?).await
+}
+
+/// The saved secret a request for `name` answers with: itself where saved,
+/// else the one picked for it before, while that is still saved.
+async fn resolve(name: &str, saved: &[String]) -> Option<String> {
+    if saved.iter().any(|s| s == name) {
+        return Some(name.to_string());
+    }
+    read_aliases().await.remove(name).filter(|to| saved.contains(to))
+}
+
 /// Drops a settled or deleted session's open cards: nobody waits on them.
 pub async fn forget(session_id: &str) {
     let _held = LOCK.lock().await;
@@ -277,8 +345,13 @@ pub async fn request(ask: RequestSecret, app: &Sink) -> Result<Response> {
     }
 
     let _held = LOCK.lock().await;
-    let saved = saved_path(&name).await?;
-    if let (Some(path), true) = (&saved, read_always().await.contains(&name)) {
+    let names = saved_names().await;
+    let resolved = resolve(&name, &names).await;
+    let auto = match &resolved {
+        Some(r) if read_always().await.contains(r) => saved_path(r).await?,
+        _ => None,
+    };
+    if let Some(path) = &auto {
         // Used without asking: no card, and the path goes back in the tool's own answer.
         let payload = AgentEventPayload::SecretAnswered {
             request_id: uuid::Uuid::new_v4().to_string(),
@@ -287,7 +360,8 @@ pub async fn request(ask: RequestSecret, app: &Sink) -> Result<Response> {
             kept: true,
             always: true,
             auto: true,
-            to: None,
+            task: None,
+            from: resolved.clone().filter(|r| *r != name),
         };
         manager().log_event(&chat.session_id, chat.harness, payload, app).await?;
         let path = path.display().to_string();
@@ -305,7 +379,8 @@ pub async fn request(ask: RequestSecret, app: &Sink) -> Result<Response> {
                     kept: false,
                     always: false,
                     auto: false,
-                    to: None,
+                    task: None,
+                    from: None,
                 };
                 manager().log_event(&chat.session_id, chat.harness, payload, app).await?;
                 replaced = true;
@@ -320,7 +395,9 @@ pub async fn request(ask: RequestSecret, app: &Sink) -> Result<Response> {
         label,
         reason,
         url,
-        saved: saved.is_some(),
+        saved: names.contains(&name),
+        closest: resolved.or_else(|| closest_name(&name, &names)),
+        saved_names: names,
         bot: false,
         task: None,
     };
@@ -367,9 +444,13 @@ pub async fn answer_secret_request(
     keep: bool,
     use_saved: Option<bool>,
     always: Option<bool>,
+    from: Option<String>,
     sink: Sink,
 ) -> Result<(), Fail> {
     let use_saved = use_saved.unwrap_or(false);
+    if let Some(from) = &from {
+        check_name(from)?;
+    }
     let always = always.unwrap_or(false);
     // Using it without asking only makes sense for a secret that stays.
     let keep = keep || always;
@@ -383,7 +464,7 @@ pub async fn answer_secret_request(
     #[cfg(any(feature = "serve", feature = "desktop"))]
     if let AgentEventPayload::SecretRequested { task: Some(task), .. } = &open[at].payload {
         let task = task.clone();
-        let answer = Relayed { value, keep, use_saved, always };
+        let answer = Relayed { value, keep, use_saved, always, from };
         answer_relayed(&session_id, &request_id, &name, task, answer, &sink).await?;
         open.remove(at);
         write_pending(open).await?;
@@ -398,7 +479,9 @@ pub async fn answer_secret_request(
 
     let (prompt, written, outcome) = match value {
         _ if use_saved => {
-            let path = saved_path(&name).await?.with_context(|| format!("{name} is no longer saved here; paste it instead"))?;
+            let from = from.clone().unwrap_or_else(|| name.clone());
+            let path = saved_path(&from).await?.with_context(|| format!("{from} is no longer saved here; paste it instead"))?;
+            set_alias(&name, Some(&from)).await?;
             (saved_prompt(&name, &path, true, always), None, SecretOutcome::Used)
         }
         Some(value) => {
@@ -429,10 +512,13 @@ pub async fn answer_secret_request(
     }
     let kept = (keep && outcome == SecretOutcome::Saved) || outcome == SecretOutcome::Used;
     let always = always && kept;
+    // The saved secret it was answered with, which the switch belongs to.
+    let used = if outcome == SecretOutcome::Used { from.clone().unwrap_or_else(|| name.clone()) } else { name.clone() };
     if always {
-        set_always(&name, true).await?;
+        set_always(&used, true).await?;
     }
-    let payload = AgentEventPayload::SecretAnswered { request_id, name, outcome, kept, always, auto: false, to: None };
+    let from = (used != name).then_some(used);
+    let payload = AgentEventPayload::SecretAnswered { request_id, name, outcome, kept, always, auto: false, task: None, from };
     manager().log_event(&session_id, item.harness, payload, &sink).await?;
     open.remove(at);
     write_pending(open).await?;
@@ -505,6 +591,13 @@ pub async fn set_secret_always(name: String, on: bool, sink: Sink) -> Result<(),
 pub async fn delete_secret(name: String, sink: Sink) -> Result<(), Fail> {
     check_name(&name)?;
     set_always(&name, false).await?;
+    let mut aliases = read_aliases().await;
+    let before = aliases.len();
+    aliases.retain(|_, to| *to != name);
+    if aliases.len() != before {
+        let json = serde_json::to_string(&aliases).map_err(anyhow::Error::from)?;
+        write_private(dir(None).await?.join("aliases.json"), json).await?;
+    }
     match tokio::fs::remove_file(dir(Some("saved")).await?.join(&name)).await {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -573,7 +666,8 @@ async fn ask_bot(
                     kept: false,
                     always: false,
                     auto: false,
-                    to: None,
+                    task: None,
+                    from: None,
                 };
                 manager().log_event(&chat.session_id, chat.harness, payload, app).await?;
                 replaced = true;
@@ -589,6 +683,8 @@ async fn ask_bot(
         reason,
         url,
         saved: false,
+        saved_names: Vec::new(),
+        closest: None,
         bot: true,
         task: None,
     };
@@ -663,7 +759,7 @@ pub async fn deliver(session_id: String, request_id: String, value: Option<Strin
         return Err(e.into());
     }
     let payload =
-        AgentEventPayload::SecretAnswered { request_id, name, outcome, kept: false, always: false, auto: false, to: None };
+        AgentEventPayload::SecretAnswered { request_id, name, outcome, kept: false, always: false, auto: false, task: None, from: None };
     manager().log_event(&session_id, item.harness, payload, &sink).await?;
     open.remove(at);
     write_pending(open).await?;
@@ -690,6 +786,7 @@ struct Relayed {
     keep: bool,
     use_saved: bool,
     always: bool,
+    from: Option<String>,
 }
 
 /// The bot's server, given a task's ask collected from `saved`: an
@@ -721,29 +818,37 @@ async fn relay_one(saved: &crate::machines::Saved, ask: BotAsk, chat: &str, app:
         machine_id: saved.id.clone(),
         request_id: ask.request_id.clone(),
     };
-    let saved_here = saved_path(&ask.name).await?;
-    if let (Some(path), true) = (&saved_here, read_always().await.contains(&ask.name)) {
+    let names = saved_names().await;
+    let resolved = resolve(&ask.name, &names).await;
+    let auto = match &resolved {
+        Some(r) if read_always().await.contains(r) => saved_path(r).await?,
+        _ => None,
+    };
+    if let Some(path) = &auto {
         let value = tokio::fs::read_to_string(path).await?;
         send_to_task(&task, Some(value)).await.map_err(anyhow::Error::msg)?;
         let payload = AgentEventPayload::SecretAnswered {
             request_id: uuid::Uuid::new_v4().to_string(),
+            from: resolved.clone().filter(|r| *r != ask.name),
             name: ask.name,
             outcome: SecretOutcome::Used,
             kept: true,
             always: true,
             auto: true,
-            to: Some(ask.title),
+            task: Some(task),
         };
         manager().log_event(&chat_item.session_id, chat_item.harness, payload, app).await?;
         return Ok(());
     }
     let payload = AgentEventPayload::SecretRequested {
         request_id: uuid::Uuid::new_v4().to_string(),
+        saved: names.contains(&ask.name),
+        closest: resolved.or_else(|| closest_name(&ask.name, &names)),
         name: ask.name,
         label: ask.label,
         reason: ask.reason,
         url: ask.url,
-        saved: saved_here.is_some(),
+        saved_names: names,
         bot: false,
         task: Some(task),
     };
@@ -777,10 +882,12 @@ async fn answer_relayed(
     answer: Relayed,
     sink: &Sink,
 ) -> Result<(), Fail> {
-    let Relayed { value, keep, use_saved, always } = answer;
+    let Relayed { value, keep, use_saved, always, from } = answer;
+    let used = from.unwrap_or_else(|| name.to_string());
     let (value, outcome) = match value {
         _ if use_saved => {
-            let path = saved_path(name).await?.with_context(|| format!("{name} is no longer saved here; paste it instead"))?;
+            let path = saved_path(&used).await?.with_context(|| format!("{used} is no longer saved here; paste it instead"))?;
+            set_alias(name, Some(&used)).await?;
             (Some(tokio::fs::read_to_string(path).await.map_err(anyhow::Error::from)?), SecretOutcome::Used)
         }
         Some(value) => {
@@ -808,8 +915,9 @@ async fn answer_relayed(
         _ => false,
     };
     let always = always && kept;
+    let used = if outcome == SecretOutcome::Used { used } else { name.to_string() };
     if always {
-        set_always(name, true).await?;
+        set_always(&used, true).await?;
     }
     let item = store::get_session_index_item(chat).await?.context("no such session")?;
     let payload = AgentEventPayload::SecretAnswered {
@@ -819,7 +927,8 @@ async fn answer_relayed(
         kept,
         always,
         auto: false,
-        to: Some(task.title),
+        from: (used != name).then_some(used),
+        task: Some(task),
     };
     manager().log_event(chat, item.harness, payload, sink).await?;
     if kept {
@@ -842,6 +951,16 @@ mod tests {
         for bad in ["ws://203.0.113.7:7317", "ws://box.lan", "http://127.0.0.1", "ws://127.0.0.1.evil.com:1"] {
             assert!(!private_url(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_closest_saved_name_shares_a_real_word() {
+        let saved = ["GITHUB_TOKEN".to_string(), "NPM_TOKEN".to_string(), "OPENAI_API_KEY".to_string()];
+        assert_eq!(closest_name("GITHUB_TOKEN", &saved).as_deref(), Some("GITHUB_TOKEN"));
+        assert_eq!(closest_name("GH_TOKEN", &saved).as_deref(), Some("GITHUB_TOKEN"));
+        assert_eq!(closest_name("OPENAI_KEY", &saved).as_deref(), Some("OPENAI_API_KEY"));
+        assert_eq!(closest_name("CARGO_TOKEN", &saved), None, "TOKEN alone is no match");
+        assert_eq!(closest_name("STRIPE_KEY", &[]), None);
     }
 
     #[test]

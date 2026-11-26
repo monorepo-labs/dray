@@ -2042,8 +2042,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         // The value rides this call alone and goes straight to a file.
         answer_secret_request(
             session_id: String, request_id: String, value: Option<String>, keep: bool,
-            use_saved: Option<bool>, always: Option<bool>,
-        ) => crate::secrets::answer_secret_request(session_id, request_id, value, keep, use_saved, always, sink).await;
+            use_saved: Option<bool>, always: Option<bool>, from: Option<String>,
+        ) => crate::secrets::answer_secret_request(session_id, request_id, value, keep, use_saved, always, from, sink).await;
         set_secret_always(name: String, on: bool) => crate::secrets::set_secret_always(name, on, sink).await;
         list_secrets() => crate::secrets::list_secrets().await;
         save_secret(name: String, value: String) => crate::secrets::save_secret(name, value, sink).await;

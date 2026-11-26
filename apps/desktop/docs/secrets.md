@@ -13,6 +13,14 @@
 - **A name already saved here** puts `saved` on the card, which then offers Use saved NAME in one click above the paste field. The agent gets the saved file's path in the same hidden prompt.
 - **Let agents use it without asking** (on the card beside Save as, and per row in Settings → Secrets) puts the name in `<home>/secrets/always.json`. It implies Save as, since only a kept secret can be handed over later. A later `dray secret request NAME` then posts no card: it logs `secret_answered` with `auto` (drawn as "Used saved NAME without asking") and answers the CLI with the path, so the agent carries on in the same turn. Deleting the secret drops it from the list.
 
+## Offering a saved one
+
+- The card carries `saved_names` (every name saved on the machine that answers) and `closest`: the name asked for where saved, else the one picked for it before (`aliases.json`, names alone), else the nearest by words (`closest_name`: GH reads as GITHUB, and two names must share a word that is not TOKEN, KEY, API and the like). It opens on Use saved CLOSEST, with a picker for any other saved one and Paste a new one beside it; pasting has a Use saved back button.
+- Using a saved one under another name answers with `from` and records the alias, so the next request for that name offers, or with Auto hands over, the same one. The agent always gets it under the name it asked for. Auto (the switch the reader sees; `always` on the wire) belongs to the saved secret used.
+- Prompts and the skill tell agents to run `dray secret ls` and ask by a saved name where one fits. A bot's task on another machine lists its own machine's names there, not the bot's; the card's nearest match covers that.
+- Who is asking is a chip at the card's top, the bot for its own chat and the task otherwise, with the server mark for a task elsewhere (`SecretPartiesContext`, filled by `App`). Decline is the × beside it. The lines a closed card leaves are "Started a new task"'s size and use its `PartyChip`.
+- Settings → Secrets shows one machine at a time, picked at the top, each row with Auto and a ⋯ for Replace and Delete. [secrets.html](../demo/secrets.html) mounts all of it.
+
 ## A bot's tasks use the bot's machine
 
 A task the user started keeps its own machine's secrets. **A task in a bot's tree on another machine uses the bot's machine's** (`bot_root`: it, or a task above it on that machine, is `remote_reports::owed`), so one bot holds one vault for every machine it runs work on.

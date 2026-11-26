@@ -499,6 +499,16 @@ pub enum AgentEventPayload {
         /// card offers it in one click beside pasting a new one.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         saved: bool,
+        /// Every secret saved on the machine that answers, so the card can
+        /// offer another than the one named.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        saved_names: Vec<String>,
+        /// The saved one the card offers first: `name` itself, the one picked
+        /// for it before, or the nearest by its words (GITHUB_TOKEN for
+        /// GH_TOKEN). Absent where none comes close.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        closest: Option<String>,
         /// The task's own record of asking its bot, whose chat on another
         /// machine draws the card and whose machine keeps the secrets. Draws
         /// a line here, never a card.
@@ -525,10 +535,14 @@ pub enum AgentEventPayload {
         /// No card was shown: a secret agents may use without asking answered on its own.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         auto: bool,
-        /// The task on another machine it went to, by title.
+        /// The task on another machine it went to.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        to: Option<String>,
+        task: Option<SecretTask>,
+        /// The saved secret handed over, where it is saved under another name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        from: Option<String>,
     },
 
     /// What a bot's turn changed in its instructions, skills or memory, read

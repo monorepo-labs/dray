@@ -397,6 +397,17 @@ repo: string, issues: Array<IssueCardRow>, } | { "type": "issue_approved", cardI
  */
 saved?: boolean, 
 /**
+ * Every secret saved on the machine that answers, so the card can
+ * offer another than the one named.
+ */
+savedNames?: Array<string>, 
+/**
+ * The saved one the card offers first: `name` itself, the one picked
+ * for it before, or the nearest by its words (GITHUB_TOKEN for
+ * GH_TOKEN). Absent where none comes close.
+ */
+closest?: string, 
+/**
  * The task's own record of asking its bot, whose chat on another
  * machine draws the card and whose machine keeps the secrets. Draws
  * a line here, never a card.
@@ -420,9 +431,13 @@ always?: boolean,
  */
 auto?: boolean, 
 /**
- * The task on another machine it went to, by title.
+ * The task on another machine it went to.
  */
-to?: string, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "reaction", 
+task?: SecretTask, 
+/**
+ * The saved secret handed over, where it is saved under another name.
+ */
+from?: string, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "reaction", 
 /**
  * The event reacted to, always in this same session: a `user_message`,
  * or with `by_user` an `assistant_text`.

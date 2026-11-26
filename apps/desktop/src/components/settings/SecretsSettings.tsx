@@ -1,10 +1,19 @@
-import { Plus } from "lucide-react";
+import { ChevronDown, MoreHorizontal, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
 import { CancelOrConfirm } from "@/components/settings/InRowConfirm";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { serverName, useServers } from "@/lib/servers";
 import { invoke, listen, LOCAL, type ServerId } from "@/lib/transport";
 
@@ -12,32 +21,22 @@ type SecretSummary = { name: string; modified: string; always?: boolean };
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
-/// Saved secrets on each machine, by name. A value is written here and never
-/// read back: the server answers names alone. Agents ask for new ones with a
-/// card in chat, and Save as there lands one in this list.
+/// Saved secrets on one machine at a time, picked at the top. A value is
+/// written here and never read back: the server answers names alone. Agents
+/// ask for new ones with a card in chat, and Save as there lands one here.
 export default function SecretsSettings() {
   const remotes = useServers().filter((s) => !s.cloud && s.status === "connected");
-  return (
-    <div className="flex flex-col gap-6">
-      <Machine server={LOCAL} />
-      {remotes.map((s) => (
-        <Machine key={s.id} server={s.id} />
-      ))}
-    </div>
-  );
+  const machines: ServerId[] = [LOCAL, ...remotes.map((s) => s.id)];
+  const [picked, setPicked] = useState<ServerId>(LOCAL);
+  // A machine that went away takes the pick back to this one.
+  const server = machines.includes(picked) ? picked : LOCAL;
+  return <Machine key={server} server={server} machines={machines} onPick={setPicked} />;
 }
 
-function Machine({ server }: { server: ServerId }) {
+function Machine({ server, machines, onPick }: { server: ServerId; machines: ServerId[]; onPick: (s: ServerId) => void }) {
   const [secrets, setSecrets] = useState<SecretSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  // The bots here: their tasks use these secrets on whichever machine they run.
-  const [bots, setBots] = useState<string[]>([]);
-  useEffect(() => {
-    invoke<{ name: string }[]>("list_bots", {}, server)
-      .then((list) => setBots(list.map((b) => b.name)))
-      .catch(() => setBots([]));
-  }, [server]);
 
   const read = useCallback(() => {
     invoke<SecretSummary[]>("list_secrets", {}, server)
@@ -64,40 +63,51 @@ function Machine({ server }: { server: ServerId }) {
     };
   }, [server, read]);
 
-  const name = serverName(server);
   return (
-    <section className="flex flex-col gap-1">
-      <div className="flex min-h-7 items-center justify-between gap-3">
-        <h3 className="text-ui font-medium">{name}</h3>
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-4">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" className="-ml-2 max-w-64 gap-1 px-2 text-ui font-medium">
+              <span className="truncate">{serverName(server)}</span>
+              <ChevronDown className="size-3 shrink-0 opacity-60" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuRadioGroup value={server} onValueChange={(v) => onPick(v as ServerId)}>
+              {machines.map((m) => (
+                <DropdownMenuRadioItem key={m} value={m}>
+                  {serverName(m)}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
         {!adding && (
-          <Button variant="ghost" size="sm" onClick={() => setAdding(true)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setAdding(true)}
+            className="h-7 gap-1 px-2 text-ui text-muted-foreground hover:text-foreground"
+          >
             <Plus className="size-3.5" />
             Add secret
           </Button>
         )}
       </div>
-      {bots.length > 0 && (
-        <p className="text-ui text-muted-foreground">
-          {bots.join(", ")}: {bots.length === 1 ? "its" : "their"} tasks use these on every machine.
-        </p>
-      )}
       {adding && <ValueForm server={server} onDone={() => setAdding(false)} />}
       {error ? (
         <p className="text-ui text-destructive">{error}</p>
       ) : secrets === null ? null : secrets.length === 0 ? (
-        !adding && (
-          <p className="text-ui text-muted-foreground">
-            None saved. When an agent asks for one, Save as on its card keeps it here for every task on this machine.
-          </p>
-        )
+        !adding && <p className="text-ui text-muted-foreground">None saved on {serverName(server)}.</p>
       ) : (
-        <ul className="flex flex-col">
+        <ul className="flex flex-col gap-1">
           {secrets.map((s) => (
             <SecretRow key={s.name} server={server} secret={s} />
           ))}
         </ul>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -107,48 +117,48 @@ function SecretRow({ server, secret }: { server: ServerId; secret: SecretSummary
   const [error, setError] = useState<string | null>(null);
   const remove = () => {
     setBusy(true);
-    invoke("delete_secret", { name: secret.name }, server)
-      .catch((e) => {
-        setError(String(e));
-        setBusy(false);
-        setMode("idle");
-      });
+    invoke("delete_secret", { name: secret.name }, server).catch((e) => {
+      setError(String(e));
+      setBusy(false);
+      setMode("idle");
+    });
   };
+  const setAuto = (on: boolean) =>
+    void invoke("set_secret_always", { name: secret.name, on }, server).catch((e) => setError(String(e)));
   return (
-    <li className="flex flex-col gap-2 py-1.5">
-      <div className="flex min-h-7 items-center gap-3">
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="truncate font-mono text-ui">{secret.name}</span>
-          <span className="text-ui text-muted-foreground">
-            Saved {when(secret.modified)}
-            {secret.always ? ". Agents here and the bots' tasks elsewhere get it without asking." : ""}
-          </span>
+    <li className="flex flex-col gap-2">
+      <div className="flex min-h-7 items-center gap-4 py-2">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate font-mono text-ui font-medium">{secret.name}</span>
+          <span className="truncate text-ui text-muted-foreground">Saved {when(secret.modified)}</span>
         </div>
-        {mode === "idle" && (
-          <label className="flex shrink-0 items-center gap-2 text-ui text-muted-foreground">
-            Let agents use it without asking
-            <Switch
-              aria-label={`Let agents use ${secret.name} without asking`}
-              checked={!!secret.always}
-              onCheckedChange={(on) =>
-                void invoke("set_secret_always", { name: secret.name, on }, server).catch((e) => setError(String(e)))
-              }
-            />
-          </label>
-        )}
         {mode === "delete" ? (
           <CancelOrConfirm verb="Delete" busy={busy} autoFocus onCancel={() => setMode("idle")} onConfirm={remove} />
         ) : (
-          mode === "idle" && (
-            <div className="flex items-center gap-1.5">
-              <Button variant="ghost" size="sm" onClick={() => setMode("replace")}>
-                Replace
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setMode("delete")}>
-                Delete
-              </Button>
-            </div>
-          )
+          <div className="flex shrink-0 items-center gap-3">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <label className="flex items-center gap-2 text-ui text-muted-foreground">
+                  Auto
+                  <Switch aria-label={`Let agents use ${secret.name} without asking`} checked={!!secret.always} onCheckedChange={setAuto} />
+                </label>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Let agents use it without asking</TooltipContent>
+            </Tooltip>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label={`${secret.name} options`} className="text-muted-foreground">
+                  <MoreHorizontal className="size-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-36">
+                <DropdownMenuItem onSelect={() => setMode("replace")}>Replace</DropdownMenuItem>
+                <DropdownMenuItem variant="destructive" onSelect={() => setMode("delete")}>
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         )}
       </div>
       {mode === "replace" && <ValueForm server={server} name={secret.name} onDone={() => setMode("idle")} />}
