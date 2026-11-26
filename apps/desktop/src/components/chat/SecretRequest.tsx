@@ -125,7 +125,7 @@ export default function SecretRequest({
       onSubmit={onSubmit}
       autoComplete="off"
       data-secret-card
-      className="flex flex-col gap-5 rounded-[18px] border border-[var(--card-edge,var(--border))] bg-[var(--permission-card,var(--card))] px-[15px] pt-[13px] pb-[15px] shadow-[var(--shadow-raised-card,var(--shadow-card))]"
+      className="flex flex-col gap-4 rounded-[18px] border border-[var(--card-edge,var(--border))] bg-[var(--permission-card,var(--card))] px-[15px] pt-[13px] pb-[15px] shadow-[var(--shadow-raised-card,var(--shadow-card))]"
     >
       <div className="flex flex-col gap-3">
         <div className="flex items-center gap-3">
