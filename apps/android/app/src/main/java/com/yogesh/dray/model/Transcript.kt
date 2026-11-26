@@ -249,7 +249,9 @@ fun buildTurns(events: List<AgentEvent>, busy: Boolean): List<Turn> {
         when (val p = e.payload) {
             is Payload.UserMessage -> {
                 val shown = stripSender(p.text, p.fromTitle, p.fromId, p.fromBot != null)
-                if (p.queued && current != null) {
+                if (p.kickoff && p.queued && current != null) {
+                    // Dray's own prompt typed into a running turn — an answered secret's path — draws nothing.
+                } else if (p.queued && current != null) {
                     flushCalls()
                     append(Item.Prompt(e.id, shown, p.fromTitle, p.images))
                 } else if (p.kickoff && current?.let { it.prompt == null && it.work.isNotEmpty() && it.work.all { w -> w is Item.Secret } } == true) {

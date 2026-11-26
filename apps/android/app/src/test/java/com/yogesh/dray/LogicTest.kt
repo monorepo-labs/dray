@@ -148,6 +148,19 @@ class LogicTest {
     }
 
     @Test
+    fun aKickoffQueuedIntoARunningTurnDrawsNothing() {
+        val turn = buildTurns(listOf(
+            event("1", """{"type":"user_message","text":"go"}"""),
+            tool("2", "c1"), result("2r", "c1"),
+            event("3", """{"type":"user_message","text":"The secret X is at /x","kickoff":true,"queued":true}"""),
+            event("4", """{"type":"secret_answered","requestId":"r1","name":"X","outcome":"saved"}"""),
+            tool("5", "c2"), result("5r", "c2"),
+        ), busy = true).single()
+        assertTrue(turn.work.none { it is Item.Prompt })
+        assertEquals("saved", turn.segments.single().cards.single().answer?.outcome)
+    }
+
+    @Test
     fun aMovedPlanTaskStaysPlanOnPi() {
         assertEquals("plan", Picks.taskStance("pi", "plan"))
         assertEquals("bypassPermissions", Picks.taskStance("pi", "auto"))
