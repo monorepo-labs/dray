@@ -96,6 +96,9 @@ function body(
         )}
         {offline && <Card icon={<SkipIcon />} label="Skip for now" onClick={act.onSkip} />}
       </Cards>
+      {/* Online, a way past the gate that doesn't compete with the three ways
+          in (#1590). Offline it is the fourth card above. */}
+      {!offline && <QuietSkip onClick={act.onSkip} />}
     </>
   );
 }
@@ -176,6 +179,22 @@ function Card({
       className={`${cls} cursor-pointer outline-none transition-colors hover:bg-[#242424] focus-visible:bg-[#242424] focus-visible:ring-1 focus-visible:ring-white/40`}
     >
       {inner}
+    </button>
+  );
+}
+
+/// Skip without an account, in the label's own quiet type.
+function QuietSkip({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="mt-6 ml-[102px] flex cursor-pointer items-center gap-1.5 self-start font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white/50 uppercase outline-none transition-colors hover:text-white/80 focus-visible:text-white/80 max-lg:ml-0"
+    >
+      Skip for now
+      <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden>
+        <path d="M4 12h14M12 5l7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" />
+      </svg>
     </button>
   );
 }

@@ -25,7 +25,7 @@ import { Input } from "@/components/ui/input";
 import Spinner from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { useCopied } from "@/hooks/useCopied";
-import { useDrayAccount, useOrgLink } from "@/hooks/useOrgLink";
+import { useOrgLink } from "@/hooks/useOrgLink";
 import { boatAsleep, resumeBoat } from "@/lib/boat";
 import { relativeTime } from "@/lib/format";
 import { MACHINE } from "@/lib/platform";
@@ -492,8 +492,6 @@ function ThisMacRow() {
   const [pairing, setPairing] = useState(false);
   const connected = server?.status === "connected";
   const link = useOrgLink(LOCAL, connected);
-  // Signing in is what links This Mac, so Link is offered only once signed in.
-  const account = useDrayAccount(connected);
   const [unlinking, setUnlinking] = useState(false);
 
   useEffect(() => {
@@ -543,7 +541,9 @@ function ThisMacRow() {
       onUnlink={connected && link.state?.linked ? () => setUnlinking(true) : undefined}
       action={
         <>
-          {connected && (account?.user || link.state?.pending) && <LinkAction link={link} />}
+          {/* Signing in links This Mac too, but a reader who skipped sign-in
+              (#1590) links here: the site's /link page asks them to sign in. */}
+          {connected && <LinkAction link={link} />}
           {remote.on ? (
             <Button variant="secondary" size="sm" onClick={() => setOn(false)}>
               <GlobeOff />

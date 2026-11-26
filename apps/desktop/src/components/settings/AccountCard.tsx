@@ -98,8 +98,8 @@ const EMAIL = { id: "email", label: "email", Icon: Mail };
 /// of Settings' list: picture or initials, name and email. Its menu says how
 /// the account signs in and offers Sign out, which forgets the account,
 /// leaves this machine's link alone, and lands on the sign-in gate. Draws
-/// nothing while signed out, which happens after Skip for now offline and in a
-/// dev build with no saved account, since dev has no gate.
+/// nothing while signed out: after Skip on the gate, and in a dev build with
+/// no saved account, since dev has no gate.
 export default function AccountCard() {
   const local = useLocalServer();
   const connected = local?.status === "connected";
@@ -147,7 +147,7 @@ export default function AccountCard() {
           <AlertDialogHeader>
             <AlertDialogTitle>Sign out of Dray?</AlertDialogTitle>
             <AlertDialogDescription>
-              You'll need to sign in again to use Dray.{linked && ` This ${MACHINE} stays linked.`}
+              You can sign in again, or skip and keep using Dray.{linked && ` This ${MACHINE} stays linked.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

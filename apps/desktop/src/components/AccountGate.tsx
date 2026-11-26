@@ -15,8 +15,9 @@ export const SIGNED_IN = "dray.signedIn";
 /// The way in this app last signed in with, for the gate's "Last used" tag.
 /// Here and not on the server: it describes this app's reader, not the account.
 const LAST_METHOD = "dray.lastSignInMethod";
-/// How often a skipped gate asks whether drayhq.com is back.
-const PROBE_MS = 10_000;
+/// Set once the reader skips sign-in, so later launches open on the app. Kept
+/// until they sign in, which clears it, so signing out asks again.
+const SKIPPED = "dray.signInSkipped";
 /// The server's own recheck interval with drayhq.com.
 const RECHECK_MS = 60_000;
 
@@ -33,17 +34,16 @@ const ERRORS: Record<string, string> = {
   timed_out: "Sign-in timed out",
 };
 
-/// Everyone signs in before using Dray (#1277). Draws the app while this
-/// machine's server says someone is signed in, and the sign-in gate
-/// otherwise. The app is not mounted behind the gate, so nothing in it can be
-/// reached by a shortcut. Offline, the gate offers Skip for now; once the
-/// site answers again, the gate is back.
+/// The sign-in gate (#1277), which a reader may skip (#1590). Draws the app
+/// while this machine's server says someone is signed in or the reader
+/// skipped, and the gate otherwise. The app is not mounted behind the gate,
+/// so nothing in it can be reached by a shortcut.
 export default function AccountGate({ children }: { children: ReactNode }) {
   const local = useLocalServer();
   const connected = local?.status === "connected";
   const [account, setAccount] = useState<DrayAccountState | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
-  const [skipped, setSkipped] = useState(false);
+  const [skipped, setSkipped] = useState(() => localStorage.getItem(SKIPPED) === "1");
   const [remembered] = useState(() => localStorage.getItem(SIGNED_IN) === "1");
   // Signed in at some point, this run or a past one: losing it now is
   // "You've been signed out", unless the reader chose Sign out.
@@ -106,6 +106,7 @@ export default function AccountGate({ children }: { children: ReactNode }) {
       localStorage.setItem(SIGNED_IN, "1");
       localStorage.setItem(ONBOARDED, "1");
       readerSignedOut = false;
+      localStorage.removeItem(SKIPPED);
       setSkipped(false);
     } else if (readerSignedOut) {
       localStorage.removeItem(SIGNED_IN);
@@ -123,22 +124,6 @@ export default function AccountGate({ children }: { children: ReactNode }) {
     wasSignedIn.current = signedIn;
   }, [signedIn, account]);
 
-  useEffect(() => {
-    if (!skipped) return;
-    const timer = setInterval(() => {
-      void invoke<boolean>("account_reachable", {}, LOCAL)
-        .then(async (up) => {
-          if (!up) return;
-          // Clears the `offline` the skip was taken under, so the gate comes
-          // back as a plain sign-in rather than offering Skip again.
-          await invoke("account_sign_in_cancel", {}, LOCAL).catch(() => {});
-          setSkipped(false);
-        })
-        .catch(() => {});
-    }, PROBE_MS);
-    return () => clearInterval(timer);
-  }, [skipped]);
-
   const pick = useCallback(async (method: SignInMethod) => {
     setFailed(null);
     try {
@@ -155,6 +140,12 @@ export default function AccountGate({ children }: { children: ReactNode }) {
     else if (account?.signingIn) void pick(account.signingIn);
   }, [account, pick]);
   const cancel = useCallback(() => void invoke("account_sign_in_cancel", {}, LOCAL).catch(() => {}), []);
+  const skip = useCallback(() => {
+    localStorage.setItem(SKIPPED, "1");
+    // Clears an `offline` or failed sign-in, so a later gate opens fresh.
+    void invoke("account_sign_in_cancel", {}, LOCAL).catch(() => {});
+    setSkipped(true);
+  }, []);
 
   // Until the server answers, a machine signed in last time draws the app,
   // which is nearly always right; anyone else sees the gate's empty frame.
@@ -175,7 +166,7 @@ export default function AccountGate({ children }: { children: ReactNode }) {
       lastUsed,
     };
   }
-  return <SignInGate view={view} onPick={pick} onOpenAgain={openAgain} onCancel={cancel} onSkip={() => setSkipped(true)} />;
+  return <SignInGate view={view} onPick={pick} onOpenAgain={openAgain} onCancel={cancel} onSkip={skip} />;
 }
 
 function storedMethod(value: string | null): SignInMethod | null {
