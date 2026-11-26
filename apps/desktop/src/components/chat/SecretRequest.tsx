@@ -294,20 +294,19 @@ export default function SecretRequest({
           )}
         </div>
       </form>
-      <p className="px-[15px] text-ui text-muted-foreground">{lifeLine(pasting, keeps, task)}</p>
+      {pasting && <p className="px-[15px] text-ui text-muted-foreground">{lifeLine(keeps, task)}</p>}
     </div>
   );
 }
 
-/// What happens to the value, as the server does it: a pasted one is a file
-/// deleted after a day unless saved, and a relayed task always gets that
-/// day-long copy on its own machine, whatever this one keeps.
-function lifeLine(pasting: boolean, keeps: boolean, task?: SecretTask): string {
-  const never = "The value never shows in chat.";
-  if (task) return `${never} The task gets a copy on ${task.machine} for 24 hours.`;
-  if (!pasting) return `${never} It stays saved on this machine.`;
-  if (keeps) return `${never} Saved on this machine until you delete it.`;
-  return `${never} The agent's file is deleted after 24 hours.`;
+/// What happens to a pasted value, as the server does it: a file deleted after
+/// a day unless saved, and a relayed task always gets that day-long copy on its
+/// own machine, whatever this one keeps. "Out of chat and logs" and no more:
+/// the agent can read the file, so it could still print it.
+function lifeLine(keeps: boolean, task?: SecretTask): string {
+  const out = "Dray keeps it out of chat and logs.";
+  if (task) return `${out} On ${task.machine} for 24 hours.`;
+  return keeps ? `${out} Saved on this machine.` : `${out} Deleted in 24 hours.`;
 }
 
 /// The card's main answer: the light button with a solid icon. `icon` is
