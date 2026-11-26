@@ -268,12 +268,15 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
         switch e.payload {
         case .userMessage(let text, let fromTitle, let fromId, let queued, let images, let kickoff, let fromBot):
             let shown = stripSender(text, title: fromTitle, id: fromId, bot: fromBot != nil)
+            // Dray's own prompt, a secret's path among them, is the desktop's `isKickoff`: no
+            // bubble, queued into a running turn or opening one.
             if queued, current != nil {
-                flushCalls()
-                current?.work.append(.prompt(id: e.id, text: shown, from: fromTitle, images: images))
+                if !kickoff {
+                    flushCalls()
+                    current?.work.append(.prompt(id: e.id, text: shown, from: fromTitle, images: images))
+                }
             } else {
                 close()
-                // Dray's own prompt, a secret's path among them, is the desktop's `isKickoff`: no bubble.
                 begin(Turn(id: e.id, prompt: kickoff ? nil : (shown, fromTitle, images)))
             }
         case .assistantText(let text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:

@@ -35,6 +35,20 @@ final class SecretTests: XCTestCase {
         }
     }
 
+    /// Answered while the agent still works: the path's prompt is queued into that turn, and still no bubble.
+    func testQueuedPathDrawsNoBubble() throws {
+        let turns = buildTurns(try events([
+            ("p", #"{"type":"user_message","text":"log in"}"#),
+            ("q", asked),
+            ("t", #"{"type":"assistant_text","text":"Asked; carrying on."}"#),
+            ("k", #"{"type":"user_message","text":"GH_TOKEN is at /x","queued":true,"kickoff":true}"#),
+            ("a", answered("saved")),
+        ]), busy: true)
+        XCTAssertEqual(turns.count, 1)
+        XCTAssertFalse(turns[0].work.contains { $0.isPrompt }, "the queued path drew a bubble")
+        XCTAssertEqual(turns[0].secrets.map(\.id), ["a"])
+    }
+
     func testReplacedCardDrawsNothing() throws {
         let turns = buildTurns(try events([("p", #"{"type":"user_message","text":"x"}"#), ("a", answered("replaced"))]), busy: false)
         XCTAssertTrue(turns.allSatisfy { $0.secrets.isEmpty && $0.lead.isEmpty })
