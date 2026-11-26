@@ -12,6 +12,12 @@ import { cn } from "@/lib/utils";
 /// `dray-serve` has its own window and no native one for these to move.
 const DRAWN = !IS_MAC && isTauri();
 
+/// The room this strip takes from the window's right edge in a `padded`
+/// header, plus one 8px gap: `--tabs-lead`'s mirror. Linux's 12px padding and
+/// three 28px buttons 2px apart; Windows' three 44px buttons flush to the
+/// edge. `AppShell` notches a page's sheet round it. `null` where nothing is drawn.
+export const CONTROLS_TRAIL: string | null = DRAWN ? (IS_WINDOWS ? "8.75rem" : "6.75rem") : null;
+
 /// Minimize, maximize and close, at the titlebar strip's right end. Windows and
 /// Linux drop the window manager's own bar (`decorations: false` in their
 /// configs), since keeping it drew two titlebars, and these stand in for its

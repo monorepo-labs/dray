@@ -5,6 +5,13 @@ import { cn } from "@/lib/utils";
 import { EMPTY_VIEW } from "@/lib/groups";
 import { SPLIT_CARD, SPLIT_HOST } from "@/lib/splitPanes";
 
+import { CONTROLS_TRAIL } from "./WindowControls";
+
+/// Which ends of a page's lit tab curve round a corner of the header (the
+/// sidebar toggle's, the window buttons') rather than running straight down
+/// the card's side.
+type Notch = { left: boolean; right: boolean };
+
 type AppShellProps = {
   sidebar: ReactNode;
   /// The sidebar is drawn. Shut, a strip of the frame still holds the sheet
@@ -78,17 +85,22 @@ export default function AppShell({
   children,
 }: AppShellProps) {
   // Sidebar shut, a tall page sits under the header as a task view does, so nothing moves twice between them.
-  const notched = pageTall && !sidebarOpen && !!lead;
-  const tall = pageTall && !notched;
-  const pageTab = (leftmost: boolean) => notched && leftmost;
+  const leftNotch = pageTall && !sidebarOpen && !!lead;
+  // Linux and Windows draw their window buttons at the header's right end, where a tall sheet would run up under them.
+  const rightNotch = pageTall && !!CONTROLS_TRAIL;
+  const tall = pageTall && !leftNotch && !rightNotch;
   const mainLeftmost = !(panelLeft && panelOpen) && (!mainCard || mainCard.order === 0);
+  const mainRightmost = !(!panelLeft && panelOpen) && !mainCard;
+  // The leftmost card wears the page's lit tab, notched round whatever of the header's ends it reaches.
+  const pageTab = (leftmost: boolean, rightmost: boolean): Notch | null =>
+    pageTall && !tall && leftmost ? { left: leftNotch, right: rightNotch && rightmost } : null;
   // A card of its own beside the sheet, with the frame showing between. Kept
   // mounted while shut, since the pane hides rather than unmounts.
   const gap = <div className="w-1.5 shrink-0 bg-surface-frame" />;
   const panelCard = panel && (
     <div className={cn("flex shrink-0", !panelOpen && "hidden")}>
       {!panelLeft && gap}
-      <Sheet tall={tall} pageTab={pageTab(panelLeft)}>
+      <Sheet tall={tall} pageTab={pageTab(panelLeft, false)}>
         {panel}
       </Sheet>
       {panelLeft && gap}
@@ -102,7 +114,7 @@ export default function AppShell({
     <div
       className="relative flex h-full w-full flex-col overflow-hidden"
       data-shell=""
-      style={lead ? ({ "--tabs-lead": lead } as React.CSSProperties) : undefined}
+      style={{ "--tabs-lead": lead, "--tabs-trail": CONTROLS_TRAIL ?? undefined } as React.CSSProperties}
     >
       {/* Always floating, so the sheet's top can glide between under the
           header and behind it; the strip above the sheet is the header's fill. */}
@@ -147,7 +159,7 @@ export default function AppShell({
             <Sheet
               className="flex-1"
               tall={tall}
-              pageTab={pageTab(mainLeftmost)}
+              pageTab={pageTab(mainLeftmost, mainRightmost)}
               style={
                 mainCard
                   ? { flexGrow: mainCard.grow, order: mainCard.order, minWidth: mainCard.minWidth }
@@ -223,7 +235,7 @@ export default function AppShell({
 export function Sheet({
   className,
   tall = false,
-  pageTab = false,
+  pageTab = null,
   style,
   children,
   ...attrs
@@ -234,14 +246,16 @@ export function Sheet({
   [attr: `data-${string}`]: string;
   /// Reaching up behind the header: its contents start below it all the same.
   tall?: boolean;
-  /// A lit tab over its top from where a task view's first tab starts: a
-  /// page's stand-in for one (`page-tab` in App.css).
-  pageTab?: boolean;
+  /// A lit tab over its top, a page's stand-in for a task view's first one
+  /// (`page-tab` in App.css). A notched end stops short of the header's
+  /// corner and flares onto the card; the other runs down the card's side.
+  pageTab?: Notch | null;
   children: ReactNode;
 }) {
   const corner = "pointer-events-none absolute z-20 size-2";
   // A card too narrow for the page's tab keeps its round corners. The tab is laid out either way (`visibility`, never `display`), so it measures; a hidden shell's 0 keeps the last answer.
   const box = useRef<HTMLDivElement>(null);
+  const hasTab = !!pageTab;
   const [roomy, setRoomy] = useState(true);
   useLayoutEffect(() => {
     const tab = box.current?.querySelector<HTMLElement>(".page-tab");
@@ -254,13 +268,16 @@ export function Sheet({
     const ro = new ResizeObserver(measure);
     ro.observe(tab);
     return () => ro.disconnect();
-  }, [pageTab]);
+  }, [hasTab]);
   return (
     <div
       ref={box}
       className={cn("relative flex min-h-0 min-w-0", className)}
       style={style}
-      {...(pageTab && roomy && { "data-notch": "" })}
+      {...(pageTab &&
+        roomy && {
+          "data-notch": [pageTab.left && "left", pageTab.right && "right"].filter(Boolean).join(" "),
+        })}
       {...attrs}
     >
       {pageTab && <span aria-hidden data-lit="" className="tab-strip page-tab" />}

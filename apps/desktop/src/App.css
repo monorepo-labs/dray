@@ -1829,27 +1829,63 @@ body.session-drag * {
   );
 }
 
-/* A tabless page with the sidebar shut wears one lit tab over its leftmost card, its right side running straight into the card's: the flush first tab mirrored. */
-[data-notch] {
-  --sheet-tr: 0px;
+/* A tabless page wears one lit tab over its leftmost card (`data-notch`). Each
+   end either notches, stopping short of what sits in the header's corner and
+   flaring onto the card — the sidebar toggle at the left (`left`), the Linux
+   and Windows window buttons at the right (`right`) — or runs straight down
+   into the card's side, which gives up its corner: the flush first tab. */
+[data-notch]:not([data-notch~="left"]) {
+  --sheet-tl: 0px;
+}
 
-  /* The right side alone rises 2px under the tab's join, so its drop starts there at full strength; the left corner stays round. */
+[data-notch]:not([data-notch~="right"]) {
+  --sheet-tr: 0px;
+}
+
+/* A flush side's drop rises 2px under the tab's join, so it starts there at
+   full strength; a round corner stays where it is. One side flush: the body
+   box keeps its round corner and a second box raised 2px draws the flush side
+   alone. */
+[data-notch="left"] > .sheet-foot {
+  mask-image: linear-gradient(transparent 7px, black 7px), linear-gradient(to right, black 7px, transparent 7px),
+    linear-gradient(to left, black 7px, transparent 7px);
+
+  &::before {
+    clip-path: inset(-8px 0 -8px -8px);
+  }
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 6px 8px 8px;
+    border-radius: 8px 0 8px 8px;
+    box-shadow: var(--sheet-foot, none);
+    clip-path: inset(0 -8px -8px 100%);
+  }
+}
+
+[data-notch="right"] > .sheet-foot {
+  &::before {
+    clip-path: inset(-8px -8px -8px 0);
+  }
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 6px 8px 8px;
+    border-radius: 0 8px 8px 8px;
+    box-shadow: var(--sheet-foot, none);
+    clip-path: inset(0 100% -8px -8px);
+  }
+}
+
+/* Both flush: both corners square, so the one box rises. */
+[data-notch=""] {
+  --foot-top: 6px;
+
   > .sheet-foot {
     mask-image: linear-gradient(transparent 7px, black 7px), linear-gradient(to right, black 7px, transparent 7px),
       linear-gradient(to left, black 7px, transparent 7px);
-
-    &::before {
-      clip-path: inset(-8px 0 -8px -8px);
-    }
-
-    &::after {
-      content: "";
-      position: absolute;
-      inset: 6px 8px 8px;
-      border-radius: 8px 0 8px 8px;
-      box-shadow: var(--sheet-foot, none);
-      clip-path: inset(0 -8px -8px 100%);
-    }
   }
 }
 
@@ -1857,21 +1893,42 @@ body.session-drag * {
   position: absolute;
   top: calc(2px - var(--titlebar-h));
   height: calc(var(--titlebar-h) - 2px);
-  /* Where a task view's first tab starts, less the 8px of frame left of the card. */
-  left: calc(var(--tabs-lead) - 0.25rem - 0.5rem);
+  left: -1px;
   right: -1px;
   z-index: 22;
   padding: 0;
   pointer-events: none;
   visibility: hidden;
-  /* Cut at the card's top and its right border, or its drops draw lines across the card. */
-  clip-path: inset(-12px 0 0 -12px);
+  /* Cut at the card's top and at a flush side's border, or its drops draw
+     lines across the card; a notched side keeps its foot and drop. */
+  clip-path: inset(-12px var(--notch-r, 0px) 0 var(--notch-l, 0px));
 
+  &::before,
   &::after {
     --tab-r: 0px;
   }
 
   [data-notch] > & {
     visibility: visible;
+  }
+
+  /* Where a task view's first tab starts, less the 8px of frame left of the
+     card; the right end mirrors it off the window buttons. */
+  [data-notch~="left"] > & {
+    left: calc(var(--tabs-lead) - 0.25rem - 0.5rem);
+    --notch-l: -12px;
+
+    &::before {
+      --tab-r: 10px;
+    }
+  }
+
+  [data-notch~="right"] > & {
+    right: calc(var(--tabs-trail) - 0.25rem - 0.5rem);
+    --notch-r: -12px;
+
+    &::after {
+      --tab-r: 10px;
+    }
   }
 }
