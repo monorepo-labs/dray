@@ -27,6 +27,21 @@ reads:
   to a line or two. A release with no highlights for an app gets the small
   card there instead, when it carries `notify`.
 
+## 0.36.1 · 2026-11-26
+
+### Improved
+
+- **Saved secrets are now called the Vault.** The secret card's switch
+  reads Save to Vault, and Settings → Vault lists what is saved on each
+  machine.
+- Picking a different saved secret on the secret card opens a dialog
+  listing them, with search once there are more than a few.
+
+### Fixed
+
+- Messaging a task on another machine no longer fails with "no session"
+  when that machine's connection went stale.
+
 ## 0.36.0 · 2026-11-26 · notify
 
 ### New
