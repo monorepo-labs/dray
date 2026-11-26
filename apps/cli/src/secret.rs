@@ -40,6 +40,7 @@ pub struct NameArg {
     name: String,
 }
 
+/// `dray secret request|ls|path`, against the server named by the socket.
 pub fn run(command: SecretCommand) -> Result<(), String> {
     match command {
         SecretCommand::Request(args) => request(args),

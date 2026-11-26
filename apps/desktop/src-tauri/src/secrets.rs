@@ -63,6 +63,14 @@ fn check_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// A link on a card must be http(s): the card opens it in the system browser.
+fn check_url(url: Option<&str>) -> Result<()> {
+    if url.is_some_and(|u| !u.starts_with("https://") && !u.starts_with("http://")) {
+        bail!("--url takes an http or https link");
+    }
+    Ok(())
+}
+
 /// `<home>/secrets/<sub>`, each level `0700`.
 async fn dir(sub: Option<&str>) -> Result<PathBuf> {
     let root = store::app_subdir("secrets").await?;
@@ -333,9 +341,7 @@ pub async fn request(ask: RequestSecret, app: &Sink) -> Result<Response> {
     }
     let tidy = |s: Option<String>| s.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let url = tidy(ask.url);
-    if url.as_deref().is_some_and(|u| !u.starts_with("https://") && !u.starts_with("http://")) {
-        bail!("--url takes an http or https link");
-    }
+    check_url(url.as_deref())?;
     let chat = store::get_session_index_item(&ask.session_id)
         .await?
         .with_context(|| format!("no session {}", ask.session_id))?;
@@ -587,6 +593,7 @@ pub async fn set_secret_always(name: String, on: bool, sink: Sink) -> Result<(),
     Ok(())
 }
 
+/// Settings' Delete: the saved file, its Auto mark and any alias naming it.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_secret(name: String, sink: Sink) -> Result<(), Fail> {
     check_name(&name)?;
@@ -810,7 +817,6 @@ async fn relay_one(saved: &crate::machines::Saved, ask: BotAsk, chat: &str, app:
     if open.iter().any(carded) {
         return Ok(());
     }
-    let chat_item = store::get_session_index_item(chat).await?.with_context(|| format!("no session {chat}"))?;
     let task = crate::events::SecretTask {
         session_id: ask.session_id.clone(),
         title: ask.title.clone(),
@@ -818,6 +824,14 @@ async fn relay_one(saved: &crate::machines::Saved, ask: BotAsk, chat: &str, app:
         machine_id: saved.id.clone(),
         request_id: ask.request_id.clone(),
     };
+    // The task's server is the other side's word: a name becomes a path under
+    // the vault and the link is opened, so both are held to what `request`
+    // takes. Declined back, or the ask comes round again on every collect.
+    if let Err(e) = check_name(&ask.name).and_then(|()| check_url(ask.url.as_deref())) {
+        let _ = send_to_task(&task, None).await;
+        return Err(e.context(format!("refused an ask from {}", saved.name)));
+    }
+    let chat_item = store::get_session_index_item(chat).await?.with_context(|| format!("no session {chat}"))?;
     let names = saved_names().await;
     let resolved = resolve(&ask.name, &names).await;
     let auto = match &resolved {
@@ -826,19 +840,24 @@ async fn relay_one(saved: &crate::machines::Saved, ask: BotAsk, chat: &str, app:
     };
     if let Some(path) = &auto {
         let value = tokio::fs::read_to_string(path).await?;
-        send_to_task(&task, Some(value)).await.map_err(anyhow::Error::msg)?;
-        let payload = AgentEventPayload::SecretAnswered {
-            request_id: uuid::Uuid::new_v4().to_string(),
-            from: resolved.clone().filter(|r| *r != ask.name),
-            name: ask.name,
-            outcome: SecretOutcome::Used,
-            kept: true,
-            always: true,
-            auto: true,
-            task: Some(task),
-        };
-        manager().log_event(&chat_item.session_id, chat_item.harness, payload, app).await?;
-        return Ok(());
+        // A delivery that fails here would leave the task waiting on a card
+        // nobody sees, so the reader gets the card and its error instead.
+        if let Err(e) = send_to_task(&task, Some(value)).await {
+            eprintln!("[secrets] auto-use to {} failed, drawing the card: {e}", saved.name);
+        } else {
+            let payload = AgentEventPayload::SecretAnswered {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                from: resolved.clone().filter(|r| *r != ask.name),
+                name: ask.name,
+                outcome: SecretOutcome::Used,
+                kept: true,
+                always: true,
+                auto: true,
+                task: Some(task),
+            };
+            manager().log_event(&chat_item.session_id, chat_item.harness, payload, app).await?;
+            return Ok(());
+        }
     }
     let payload = AgentEventPayload::SecretRequested {
         request_id: uuid::Uuid::new_v4().to_string(),
@@ -970,6 +989,16 @@ mod tests {
         }
         for bad in ["", "1ABC", "has space", "../etc", "a/b", "a.b", "toolong".repeat(10).as_str()] {
             assert!(!valid_name(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_card_link_is_http_or_https() {
+        for ok in [None, Some("https://github.com/settings/tokens"), Some("http://localhost:3000")] {
+            assert!(check_url(ok).is_ok(), "{ok:?}");
+        }
+        for bad in ["javascript:alert(1)", "file:///etc/passwd", "ssh://host", "github.com"] {
+            assert!(check_url(Some(bad)).is_err(), "{bad}");
         }
     }
 
