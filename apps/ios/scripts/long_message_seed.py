@@ -1,5 +1,5 @@
 """Seeds a dray-serve home for LongMessageTests (#1594): one task whose first prompt is
-a pasted wall, well past twenty lines, and whose second is a short one that must not clamp.
+a pasted wall, well past twelve lines, and whose second is a short one that must not clamp.
 
     python3 scripts/long_message_seed.py           # prints the token
     DRAY_HOME=/private/tmp/dray-long dray-serve --port <port> &

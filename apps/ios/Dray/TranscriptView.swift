@@ -618,7 +618,7 @@ struct UserBubble: View {
     }
 }
 
-/// A bubble's text stopped at twenty lines, with Show more under it inside the bubble: the
+/// A bubble's text stopped at twelve lines, with Show more under it inside the bubble: the
 /// desktop's `ClampedBody`. A paste otherwise fills the transcript and buries its answer.
 struct ClampedText: View {
     let text: String
@@ -629,11 +629,12 @@ struct ClampedText: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             Text(text)
-                .lineLimit(open ? nil : 20)
+                .lineLimit(open ? nil : 12)
                 .textSelection(.enabled)
                 .onGeometryChange(for: CGFloat.self, of: \.size.height) { shown = $0 }
-                // Measured rather than counted off newlines: whether twenty lines hold it depends
-                // on the width, and a Show more opening onto the same lines does nothing.
+                // Measured rather than counted off newlines: whether twelve lines hold it depends
+                // on the width, and a Show more opening onto the same lines does nothing. Twelve, not
+                // the desktop's twenty, which took half a phone screen (Android's too, #1597).
                 .background(alignment: .top) {
                     Text(text).fixedSize(horizontal: false, vertical: true).hidden()
                         .onGeometryChange(for: CGFloat.self, of: \.size.height) { full = $0 }
