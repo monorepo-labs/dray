@@ -156,7 +156,7 @@ struct SessionList: View {
                                         nested: row.item.parentSessionId.map { listed.contains(SessionKey(server: row.key.server, id: $0)) } ?? false,
                                         opened: { selection = $0 }, delete: { deleting = row })
                             }
-                        if mode == .live, let ask = store.asks[row.key]?.first {
+                        if mode == .live, let ask = store.cards(row.key).first {
                             AskCard(key: row.key, event: ask)
                                 .padding(EdgeInsets(top: 2, leading: 14, bottom: Theme.Space.m, trailing: Theme.Space.m))
                                 .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 8))

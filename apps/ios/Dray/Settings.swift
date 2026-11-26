@@ -3,15 +3,16 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
-/// Where Settings can go: a server's page, every server, Dictation, Notifications.
+/// Where Settings can go: a server's page, every server, Dictation, Notifications, Vault.
 enum SettingsPage: Hashable {
     case server(UUID)
     case servers
     case dictation
     case notifications
+    case secrets
 }
 
-/// The one Settings screen: a card per server, then Add server, Dictation, Notifications
+/// The one Settings screen: a card per server, then Add server, Dictation, Notifications, Vault
 /// and about. Opened on one server's page when a banner's Fix asks.
 struct SettingsView: View {
     @Environment(Store.self) private var store
@@ -37,6 +38,10 @@ struct SettingsView: View {
                         RowDivider(inset: 48)
                         NavigationLink(value: SettingsPage.notifications) {
                             SettingsRow("Notifications", icon: "bell", value: notify ? "On" : "Off")
+                        }
+                        RowDivider(inset: 48)
+                        NavigationLink(value: SettingsPage.secrets) {
+                            SettingsRow("Vault", icon: "lock")
                         }
                         if !store.allBots.isEmpty || !launchBot.isEmpty {
                             RowDivider(inset: 48)
@@ -77,6 +82,7 @@ struct SettingsView: View {
                         .navigationBarTitleDisplayMode(.inline)
                 case .dictation: DictationSettings()
                 case .notifications: NotificationSettings()
+                case .secrets: SecretsSettings()
                 }
             }
             .task { await Releases.shared.refresh() }
@@ -934,7 +940,7 @@ enum LaunchBot {
     }
 }
 
-private func switchRow(_ label: String, _ on: Binding<Bool>) -> some View {
+func switchRow(_ label: String, _ on: Binding<Bool>) -> some View {
     Toggle(label, isOn: on)
         .toggleStyle(SwitchStyle())
         .font(Theme.Font.body)

@@ -42,7 +42,7 @@ struct TranscriptView: View {
         let botTasks = bot.map { store.botTasks(store.botChat(key.server, $0)) } ?? []
         // Set-aside tasks are listed but not counted, as on the Tasks sheet and the desktop.
         let taskCount = botTasks.filter { store.items[$0]?.aside != true }.count
-        let asks = store.asks[key] ?? []
+        let asks = store.cards(key)
         let taskAsks = store.hiddenAsks(bot == nil ? store.botTasks([key]) : botTasks)
         let segments = segments(bot)
         let chat = bot == nil ? [] : chatItems(segments)
@@ -63,7 +63,7 @@ struct TranscriptView: View {
                         .frame(minHeight: 420)
                     }
                     if bot != nil { BotChatRows(key: key, items: chat, newFrom: newFrom ?? nil) }
-                    ForEach(turns) { TurnView(turn: $0).heldRow($0.id) }
+                    ForEach(turns) { TurnView(key: key, turn: $0).heldRow($0.id) }
                     ForEach(store.queued[key] ?? [], id: \.id) { q in
                         UserBubble(text: q.text, from: nil, queued: true)
                     }
@@ -99,11 +99,17 @@ struct TranscriptView: View {
                     ForEach(asks) { AskCard(key: key, event: $0) }
                     // Answered by the task's own key, so the reply reaches its server, not this chat's.
                     ForEach(taskAsks, id: \.event.id) { t in
-                        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                            Text(store.items[t.key]?.title ?? "Task")
-                                .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
-                                .lineLimit(1).padding(.leading, 2)
-                            AskCard(key: t.key, event: t.event)
+                        let title = store.items[t.key]?.title ?? "Task"
+                        // A secret card names its asker inside, beside its Decline.
+                        if case .secretRequested = t.event.payload {
+                            AskCard(key: t.key, event: t.event, asker: SecretParty(id: t.key.id, title: title, key: t.key))
+                        } else {
+                            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                                Text(title)
+                                    .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
+                                    .lineLimit(1).padding(.leading, 2)
+                                AskCard(key: t.key, event: t.event)
+                            }
                         }
                     }
                     // One child with what a scroll to the end lands on, so the stack's spacing above it is the
@@ -380,6 +386,7 @@ struct TranscriptView: View {
 /// One turn: the prompt, its work folded behind a summary line once the
 /// turn has finished, and the final answer. The desktop's `TurnBlock`.
 struct TurnView: View {
+    let key: SessionKey
     let turn: Turn
     /// Per stretch between queued prompts, by index: a running turn only appends.
     @State private var open: Set<Int> = []
@@ -398,6 +405,7 @@ struct TurnView: View {
         }.map(open.contains) ?? false
         VStack(alignment: .leading, spacing: 14) {
             if let prompt = turn.prompt { UserBubble(text: prompt.text, from: prompt.from, images: prompt.images) }
+            ForEach(turn.lead) { SecretLine(key: key, event: $0) }
             if collapsible || turn.running {
                 ForEach(Array(segments.enumerated()), id: \.offset) { i, segment in
                     let isOpen = open.contains(i)
@@ -424,6 +432,7 @@ struct TurnView: View {
                 MarkdownText(text: text)
             }
             if let failure = turn.failure { FailureRow(text: failure) }
+            ForEach(turn.secrets) { SecretLine(key: key, event: $0) }
         }
         .environment(\.openImage) { ref in
             let shots = turn.gallery

@@ -6,8 +6,19 @@ import SwiftUI
 struct AskCard: View {
     let key: SessionKey
     let event: AgentEvent
+    /// A secret card's asker, where it sits in someone else's chat.
+    var asker: SecretParty?
 
     var body: some View {
+        // A secret card is its own surface, with a line under it.
+        if case .secretRequested(let r) = event.payload {
+            SecretAsk(key: key, request: r, asker: asker).id(event.id).transition(.opacity)
+        } else {
+            ask
+        }
+    }
+
+    private var ask: some View {
         Group {
             switch event.payload {
             case .permissionRequested(let r): PermissionAsk(key: key, request: r)

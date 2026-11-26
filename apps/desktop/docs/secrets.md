@@ -46,6 +46,8 @@ Asking again for a name whose card is still open in that session closes the old 
 
 **Android draws the card and Settings › Vault** (#1604, [SecretCard.kt](../../android/app/src/main/java/com/yogesh/dray/ui/SecretCard.kt), [SecretsSettings.kt](../../android/app/src/main/java/com/yogesh/dray/ui/SecretsSettings.kt)). The card sits in `Store.asks` beside permission cards but survives `strand`, since a turn ending must not drop it; `live_state`'s `secrets` refills it. Its lines sit outside the folds. The phone hides Dray's own kickoff prompt as the desktop does, or the answer's hidden prompt drew as a bubble.
 
+**iOS draws them too** (#1605, [Secrets.swift](../../ios/Dray/Secrets.swift), [PLAN.md](../../ios/PLAN.md)). Its cards sit in `Store.secretAsks`, apart from `asks`, since Dray Island shares that store and has no card for them; the rest follows Android.
+
 ## Not yet
 
-The iOS card and 1Password `op://` references.
+1Password `op://` references.

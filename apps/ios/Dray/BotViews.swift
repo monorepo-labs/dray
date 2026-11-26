@@ -319,6 +319,8 @@ private struct BotRowView: View {
                         .strikethrough(undone).lineLimit(1)
                 }
                 .font(Theme.Font.subhead)
+            case .secret(let e):
+                SecretLine(key: key, event: e)
             }
         }
     }
