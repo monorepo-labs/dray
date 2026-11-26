@@ -127,6 +127,20 @@ function Demo() {
             </p>
           </div>
 
+          <Section title="Yogesh's card" note="His Paper example, at his 720px.">
+            <div data-yogesh-card style={{ width: 720 }}>
+              <SecretRequest
+                sessionId={BOT_CHAT}
+                requestId="v"
+                name="VERCEL_TOKEN"
+                label="Vercel token"
+                reason="To link apps/docs to Vercel and run the first deploy."
+                url="https://vercel.com/account/settings/tokens"
+                autoFocus={false}
+              />
+            </div>
+          </Section>
+
           <Section title="Beside a permission card" note="The real PermissionRequest first, then a first ask, as they would stack in a chat.">
             <div className="flex flex-col gap-4">
               <PermissionRequest

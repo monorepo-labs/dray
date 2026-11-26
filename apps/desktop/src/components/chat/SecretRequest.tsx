@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ChevronDown, ChevronLeft, ExternalLink, Lock, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ExternalLink, KeyRound, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
@@ -115,159 +115,165 @@ export default function SecretRequest({
   const busy = sending !== null;
   // Using it without asking keeps a pasted one, so this reads as on while that is.
   const keeps = keep || auto;
+  // Yogesh's card (Paper): 18px corners, 14/16/16 inset less the 1px border, 24 between the two
+  // halves. The fill and ring are the permission card's tokens, which is what
+  // his dark values are, so light mode follows.
+  const big = "h-9 rounded-lg px-2.5 text-ui font-medium";
   return (
-    // PermissionRequest's card: the same surface, inset and type, so a secret
-    // reads as one more thing the agent is waiting on.
     <form
       onSubmit={onSubmit}
       autoComplete="off"
       data-secret-card
-      className="rounded-2xl border border-[var(--card-edge,var(--border))] bg-[var(--permission-card,var(--card))] p-4 shadow-[var(--shadow-raised-card,var(--shadow-card))]"
+      className="flex flex-col gap-6 rounded-[18px] border border-[var(--card-edge,var(--border))] bg-[var(--permission-card,var(--card))] px-[15px] pt-[13px] pb-[15px] shadow-[var(--shadow-raised-card,var(--shadow-card))]"
     >
-      <div className="flex min-w-0 items-start gap-2">
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-3">
           <button
             type="button"
             onClick={(e) => parties.open(asker, isModClick(e))}
-            className="flex w-fit max-w-full cursor-pointer items-center gap-1.5 text-ui text-muted-foreground hover:text-foreground"
+            className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-sm leading-5 text-muted-foreground hover:text-foreground"
           >
             <BotAvatar still seed={asker.id} avatar={asker.avatar ?? seededAvatar(asker.id)} className="block size-4 shrink-0 scale-[1.18]" />
             <span className="truncate">{asker.title}</span>
             {asker.machine && <MachineMark machine={asker.machine} />}
           </button>
-          <p className="text-chat leading-snug font-medium wrap-anywhere">{label ?? name}</p>
-          <p className="text-chat leading-snug wrap-anywhere text-muted-foreground">{reason}</p>
-          {url && (
-            // The system browser, never the session's: the agent can drive that one.
-            <button
-              type="button"
-              onClick={() => void openUrl(url).catch(console.error)}
-              className="flex w-fit max-w-full cursor-pointer items-center gap-1 text-ui text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-            >
-              <span className="truncate">{hostOf(url)}</span>
-              <ExternalLink className="size-3 shrink-0" aria-hidden />
-            </button>
-          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Decline"
+                className="shrink-0 rounded-lg text-muted-foreground"
+                disabled={busy}
+                onClick={() => void send("decline")}
+              >
+                <X className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">Decline</TooltipContent>
+          </Tooltip>
         </div>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Decline"
-              className="-mt-0.5 -mr-1 shrink-0 text-muted-foreground"
-              disabled={busy}
-              onClick={() => void send("decline")}
-            >
-              <X />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">Decline</TooltipContent>
-        </Tooltip>
-      </div>
-
-      {pasting ? (
-        <div className="mt-3 flex min-w-0 items-center gap-1.5">
-          {closest && (
-            <Button type="button" size="sm" variant="outline" className="h-7 shrink-0" disabled={busy} onClick={() => setPasting(false)}>
-              <ChevronLeft />
-              Use saved
-            </Button>
-          )}
-          <Input
-            ref={inputRef}
-            // Masked text rather than a password field, so no password manager
-            // offers to save it or fill it in.
-            type="text"
-            name={`dray-secret-${requestId}`}
-            aria-label={label ?? name}
-            placeholder="Paste the value"
-            // The buttons' height, so the row reads as one control.
-            className="h-7 [-webkit-text-security:disc] font-mono placeholder:font-sans"
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-            spellCheck={false}
-            data-1p-ignore
-            data-lpignore="true"
-            data-bwignore
-            data-form-type="other"
-            disabled={busy}
-            aria-invalid={error !== null || undefined}
-            onChange={(e) => setFilled(e.currentTarget.value.trim() !== "")}
-          />
-          <Button type="submit" size="sm" className="h-7 shrink-0" disabled={busy || !filled}>
-            <Lock />
-            {sending === "paste" ? "Saving…" : "Save securely"}
-          </Button>
-        </div>
-      ) : (
-        <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5">
-          <div className="flex min-w-0">
-            <Button
-              type="submit"
-              size="sm"
-              autoFocus={autoFocus}
-              disabled={busy}
-              className={cn("h-7 min-w-0", savedNames.length > 1 && "rounded-r-none")}
-            >
-              <span className="truncate">
-                Use saved <span className="font-mono">{pick}</span>
-              </span>
-            </Button>
-            {savedNames.length > 1 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    aria-label="Pick another saved secret"
-                    disabled={busy}
-                    className="rounded-l-none border-l border-primary-foreground/20"
-                  >
-                    <ChevronDown />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="min-w-52">
-                  <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-                    Saved on {serverName(serverOfSession(sessionId))}
-                  </DropdownMenuLabel>
-                  <DropdownMenuRadioGroup value={pick} onValueChange={setPick}>
-                    {savedNames.map((n) => (
-                      <DropdownMenuRadioItem key={n} value={n} className="font-mono">
-                        {n}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
+        <div className="flex min-w-0 flex-col gap-1">
+          <p className="text-[15px] leading-[22px] font-medium wrap-anywhere">{label ?? name}</p>
+          <p className="flex min-w-0 flex-wrap items-center gap-x-1 text-sm leading-5">
+            <span className="text-muted-foreground">{reason}</span>
+            {url && (
+              // The system browser, never the session's: the agent can drive that one.
+              <button
+                type="button"
+                onClick={() => void openUrl(url).catch(console.error)}
+                className="flex min-w-0 cursor-pointer items-center gap-1 underline-offset-4 hover:underline"
+              >
+                <ExternalLink className="size-3 shrink-0" aria-hidden />
+                <span className="truncate">{hostOf(url)}</span>
+              </button>
             )}
-          </div>
-          <Button type="button" size="sm" variant="outline" className="h-7 shrink-0" disabled={busy} onClick={() => setPasting(true)}>
-            Paste a new one
-          </Button>
+          </p>
         </div>
-      )}
-
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-ui text-muted-foreground">
-        {pasting && (
-          <label htmlFor={keepId} className="flex items-center gap-2">
-            <Switch id={keepId} checked={keeps} onCheckedChange={setKeep} disabled={busy || auto} />
-            {savedNames.includes(name) ? "Replace saved" : "Save as"} <span className="font-mono">{name}</span>
-          </label>
-        )}
-        <label htmlFor={autoId} className="flex items-center gap-2">
-          <Switch id={autoId} checked={auto} onCheckedChange={setAuto} disabled={busy} />
-          Let agents use it without asking
-        </label>
       </div>
 
-      {error && (
-        <p role="alert" className="mt-2 text-ui text-destructive wrap-anywhere">
-          {error}
-        </p>
-      )}
+      <div className="flex flex-col gap-4">
+        {pasting ? (
+          <div className="flex min-w-0 items-center gap-2">
+            {closest && (
+              <Button type="button" variant="ghost" className={cn(big, "shrink-0 text-muted-foreground")} disabled={busy} onClick={() => setPasting(false)}>
+                <ChevronLeft />
+                Use saved
+              </Button>
+            )}
+            <Input
+              ref={inputRef}
+              // Masked text rather than a password field, so no password manager
+              // offers to save it or fill it in.
+              type="text"
+              name={`dray-secret-${requestId}`}
+              aria-label={label ?? name}
+              placeholder="Paste the value"
+              className="h-9 rounded-lg px-2.5 font-mono text-sm leading-[18px] [-webkit-text-security:disc] placeholder:font-sans md:text-sm"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              data-1p-ignore
+              data-lpignore="true"
+              data-bwignore
+              data-form-type="other"
+              disabled={busy}
+              aria-invalid={error !== null || undefined}
+              onChange={(e) => setFilled(e.currentTarget.value.trim() !== "")}
+            />
+            <Button type="submit" className={cn(big, "shrink-0 gap-1.5")} disabled={busy || !filled}>
+              <KeyRound className="size-4" />
+              {sending === "paste" ? "Sending…" : "Send securely"}
+            </Button>
+          </div>
+        ) : (
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <div className="flex min-w-0">
+              <Button
+                type="submit"
+                autoFocus={autoFocus}
+                disabled={busy}
+                className={cn(big, "min-w-0 gap-1.5", savedNames.length > 1 && "rounded-r-none")}
+              >
+                <KeyRound className="size-4" />
+                <span className="truncate">
+                  Use saved <span className="font-mono">{pick}</span>
+                </span>
+              </Button>
+              {savedNames.length > 1 && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      aria-label="Pick another saved secret"
+                      disabled={busy}
+                      className="size-9 rounded-l-none rounded-r-lg border-l border-primary-foreground/20 p-0"
+                    >
+                      <ChevronDown />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="min-w-52">
+                    <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+                      Saved on {serverName(serverOfSession(sessionId))}
+                    </DropdownMenuLabel>
+                    <DropdownMenuRadioGroup value={pick} onValueChange={setPick}>
+                      {savedNames.map((n) => (
+                        <DropdownMenuRadioItem key={n} value={n} className="font-mono">
+                          {n}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </div>
+            <Button type="button" variant="ghost" className={cn(big, "shrink-0 text-muted-foreground")} disabled={busy} onClick={() => setPasting(true)}>
+              Paste a new one
+            </Button>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm leading-5 text-muted-foreground">
+          {pasting && (
+            <label htmlFor={keepId} className="flex items-center gap-2">
+              <Switch id={keepId} checked={keeps} onCheckedChange={setKeep} disabled={busy || auto} />
+              Save
+            </label>
+          )}
+          <label htmlFor={autoId} className="flex items-center gap-2">
+            <Switch id={autoId} checked={auto} onCheckedChange={setAuto} disabled={busy} />
+            Let agents use it without asking you
+          </label>
+        </div>
+
+        {error && (
+          <p role="alert" className="text-ui text-destructive wrap-anywhere">
+            {error}
+          </p>
+        )}
+      </div>
     </form>
   );
 }
