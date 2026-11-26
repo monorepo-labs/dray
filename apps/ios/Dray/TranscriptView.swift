@@ -598,10 +598,9 @@ struct UserBubble: View {
             // A message of pictures alone has no bubble, so the badge rides the first one.
             if !images.isEmpty { Thumbnails(images: images, reaction: text.isEmpty ? reaction : nil) }
             if !text.isEmpty {
-                Text(text)
+                ClampedText(text: text)
                     .font(Theme.Font.body)
                     .foregroundStyle(Theme.onSent)
-                    .textSelection(.enabled)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(Theme.sent, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
@@ -616,6 +615,38 @@ struct UserBubble: View {
         .opacity(queued ? 0.55 : 1)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 48)
+    }
+}
+
+/// A bubble's text stopped at twelve lines, with Show more under it inside the bubble: the
+/// desktop's `ClampedBody`. A paste otherwise fills the transcript and buries its answer.
+struct ClampedText: View {
+    let text: String
+    @State private var open = false
+    @State private var shown: CGFloat = 0
+    @State private var full: CGFloat = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            Text(text)
+                .lineLimit(open ? nil : 12)
+                .textSelection(.enabled)
+                .onGeometryChange(for: CGFloat.self, of: \.size.height) { shown = $0 }
+                // Measured rather than counted off newlines: whether twelve lines hold it depends
+                // on the width, and a Show more opening onto the same lines does nothing. Twelve, not
+                // the desktop's twenty, which took half a phone screen (Android's too, #1597).
+                .background(alignment: .top) {
+                    Text(text).fixedSize(horizontal: false, vertical: true).hidden()
+                        .onGeometryChange(for: CGFloat.self, of: \.size.height) { full = $0 }
+                }
+            // Drawn while open too, or the bubble opens with no way back.
+            if open || full > shown + 1 {
+                Button(open ? "Show less" : "Show more") { open.toggle() }
+                    .buttonStyle(.plain)
+                    .font(Theme.Font.footnote)
+                    .opacity(0.7)
+            }
+        }
     }
 }
 
