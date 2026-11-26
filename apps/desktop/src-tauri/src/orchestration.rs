@@ -567,20 +567,27 @@ async fn route_to(request: Request, app: &Sink) -> Result<Response> {
     if let Some(id) = session_named(&request) {
         if store::get_session_index_item(id).await?.is_none() {
             // Where this server already knows the machine — a bot's task
-            // started there, or a flag held for it — asked straight, since a
-            // sweep cannot find one whose machine is down and set-aside holds
-            // it then (#1050).
-            if let Request::SetAside(aside) = &request {
-                let known = match crate::held_flags::machine_of(id).await {
-                    Some(machine) => Some(machine),
-                    None => crate::remote_reports::machine_of(id).await,
+            // started there, or a flag held for it — asked straight, with a
+            // call's whole budget as `--machine` gets: a sweep cannot find one
+            // whose machine is down or slow, and set-aside holds it then (#1050).
+            let known = match crate::held_flags::machine_of(id).await {
+                Some(machine) => Some(machine),
+                None => crate::remote_reports::machine_of(id).await,
+            };
+            if let Some(machine) = known {
+                return match request {
+                    Request::SetAside(aside) => elsewhere::set_aside(&machine, aside, app).await,
+                    request => on_machine(&machine, request, app).await,
                 };
-                if let Some(machine) = known {
-                    return elsewhere::set_aside(&machine, aside.clone(), app).await;
-                }
             }
-            if let Some(machine) = elsewhere::locate(id).await {
-                return on_machine(&machine, request, app).await;
+            match elsewhere::locate(id).await {
+                elsewhere::Located::On(machine) => return on_machine(&machine, request, app).await,
+                // Not asked is not absent, so "no session" says which went unasked.
+                elsewhere::Located::Missing(unasked) if !unasked.is_empty() => {
+                    let note = elsewhere::unasked_note(&unasked);
+                    return dispatch(request, app).await.map_err(|e| anyhow::anyhow!("{e:#}{note}"));
+                }
+                elsewhere::Located::Missing(_) => {}
             }
         }
     }
@@ -927,17 +934,56 @@ pub(crate) mod elsewhere {
         let _ = crate::serve::host_call("drop_cloud_machine", json!({ "id": id })).await;
     }
 
+    /// Where a sweep for one session id landed.
+    #[derive(Debug, PartialEq)]
+    pub enum Located {
+        /// The id of the machine holding it.
+        On(String),
+        /// On no machine that answered. Each that did not, by name, with why.
+        Missing(Vec<(String, String)>),
+    }
+
     /// The machine holding session `id`, where one does. Every machine is
     /// asked at once, each given [`machines::SWEEP`].
-    pub async fn locate(id: &str) -> Option<String> {
+    pub async fn locate(id: &str) -> Located {
         let list: Vec<_> = machines::load().await.into_iter().filter(|m| !m.off).collect();
         let asks = list.iter().map(|m| async move {
             let row =
                 tokio::time::timeout(machines::SWEEP, machines::call(m, "session_index_item", json!({ "sessionId": id })))
-                    .await;
-            matches!(row, Ok(Ok(ref row)) if !row.is_null()).then(|| m.id.clone())
+                    .await
+                    .unwrap_or_else(|_| Err(format!("{} did not answer in time", m.name)));
+            (m.id.clone(), m.name.clone(), row)
         });
-        futures_util::future::join_all(asks).await.into_iter().flatten().next()
+        located(futures_util::future::join_all(asks).await)
+    }
+
+    /// Sorts a sweep's answers: a row is the session, `null` a machine
+    /// without it, and an error a machine that may still hold it.
+    pub(crate) fn located(answers: Vec<(String, String, Result<serde_json::Value, String>)>) -> Located {
+        let mut unasked = Vec::new();
+        for (id, name, row) in answers {
+            match row {
+                Ok(row) if !row.is_null() => return Located::On(id),
+                Ok(_) => {}
+                Err(why) => unasked.push((name, why)),
+            }
+        }
+        Located::Missing(unasked)
+    }
+
+    /// What "no session" adds for the machines a sweep could not ask.
+    pub(crate) fn unasked_note(unasked: &[(String, String)]) -> String {
+        let named: Vec<String> = unasked
+            .iter()
+            .map(|(name, why)| {
+                let why = why.strip_prefix(&format!("{name}: ")).unwrap_or(why);
+                format!("{name} ({why})")
+            })
+            .collect();
+        format!(
+            " here or on any machine that answered — {} could not be asked, so try again, or name its machine with --machine",
+            named.join(", ")
+        )
     }
 
     /// Session `id`'s row on the machine holding it, with that machine's id and
@@ -3627,6 +3673,33 @@ fn summarize(item: SessionIndexItem) -> SessionSummary {
 mod tests {
     use super::*;
     use crate::models::Effort;
+
+    /// A machine that failed to answer may hold the session, so a sweep never
+    /// reads it as one without, and "no session" names it.
+    #[test]
+    fn a_sweep_tells_a_machine_without_the_session_from_one_not_asked() {
+        use elsewhere::{located, unasked_note, Located};
+        let answer = |id: &str, row: Result<serde_json::Value, String>| (id.to_string(), format!("{id}-name"), row);
+
+        let found = located(vec![
+            answer("a", Err("a-name: a-name did not answer in time".into())),
+            answer("b", Ok(serde_json::json!({ "sessionId": "s" }))),
+        ]);
+        assert_eq!(found, Located::On("b".into()));
+
+        assert_eq!(located(vec![answer("a", Ok(serde_json::Value::Null))]), Located::Missing(vec![]));
+
+        let Located::Missing(unasked) = located(vec![
+            answer("a", Ok(serde_json::Value::Null)),
+            answer("b", Err("b-name: could not reach ws://127.0.0.1:9: refused".into())),
+            answer("c", Err("c-name did not answer in time".into())),
+        ]) else {
+            panic!("found where nothing held it");
+        };
+        let note = unasked_note(&unasked);
+        assert!(note.contains("b-name (could not reach ws://127.0.0.1:9: refused), c-name (c-name did not answer in time)"), "{note}");
+        assert!(!note.contains("a-name"), "{note}");
+    }
 
     /// A forwarded `'~'` is the home of the machine that runs the task.
     #[test]
