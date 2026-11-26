@@ -45,6 +45,13 @@ phone reads and drives it over the same WebSocket the desktop uses
 - **Permission and question cards**, answered in place. A hidden task's card,
   a bot's above all, draws at the foot of the chat that started it under the
   task's title, on whichever machine the task runs, and lights the bot's face.
+- **Secret cards** (#1605), the desktop's `SecretRequest` ([secrets.md](../desktop/docs/secrets.md)):
+  paste and Share, Save to Vault, Use saved with its picker, Decline. Held in
+  `Store.secretAsks`, apart from `asks`, since they are logged and close only
+  on their own `secret_answered`, and the Island, which shares the store, has
+  no card for them. A closed card's line leads the turn its answer opens, and
+  that turn's prompt (Dray's own, carrying the path) draws no bubble.
+  Settings › Vault lists, adds, replaces and deletes saved ones per machine.
 - **Reactions in a bot's chat** (#1416), never a task's: a long press on the
   bot's message opens the seven emoji and nothing else, so its words cannot be
   copied there while the chat is open (`react_to_message`). The pick is a badge

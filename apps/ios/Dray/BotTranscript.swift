@@ -22,12 +22,15 @@ enum BotItem: Identifiable {
     /// "Messaged" another bot, by the id `dray bot send` printed where it did.
     case botSent(id: String, name: String, botId: String?, ts: String?)
     case learned(id: String, lesson: Lesson, commit: String, undone: Bool, ts: String?)
+    /// A closed secret card: "Saved GH_TOKEN for 24 hours", "Sent GH_TOKEN to <task>".
+    case secret(AgentEvent)
 
     var id: String {
         switch self {
         case .user(let id, _, _, _, _), .assistant(let id, _, _, _, _), .notice(let id, _, _), .card(let id, _, _),
              .issues(let id, _, _, _, _), .task(let id, _, _, _), .sent(let id, _, _), .botMessage(let id, _, _, _, _), .botSent(let id, _, _, _),
              .learned(let id, _, _, _, _): id
+        case .secret(let e): e.id
         }
     }
 
@@ -36,6 +39,7 @@ enum BotItem: Identifiable {
         case .user(_, _, _, _, let ts), .assistant(_, _, _, _, let ts), .notice(_, _, let ts), .card(_, _, let ts),
              .issues(_, _, _, _, let ts), .task(_, _, _, let ts), .sent(_, _, let ts), .botMessage(_, _, _, _, let ts), .botSent(_, _, _, let ts),
              .learned(_, _, _, _, let ts): ts
+        case .secret(let e): e.ts
         }
     }
 }
@@ -106,6 +110,8 @@ func botItems(_ events: [AgentEvent]) -> [BotItem] {
             items.append(.card(id: e.id, card, ts: e.ts))
         case .issueCard(let card):
             items.append(.issues(id: e.id, card, sessionId: e.sessionId, started: started[e.id] ?? [], ts: e.ts))
+        case .secretAnswered(let a) where a.draws:
+            items.append(.secret(e))
         case .taskStarted(let taskId, let title):
             items.append(.task(id: e.id, sessionId: taskId.lowercased(), title: title, ts: e.ts))
         case .learned(let commit, let files):

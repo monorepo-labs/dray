@@ -285,6 +285,9 @@ struct LiveState: Decodable {
     /// Every bot's "Waiting on you" card on this server; absent from a server
     /// that predates #1259, whose cards the phone judges itself.
     let stalls: [Lenient<BotStalls>]?
+    /// Open secret cards (#1578), apart from `asks`: logged, so no turn ending strands them.
+    /// Absent from a server that predates them.
+    let secrets: [AgentEvent]?
 }
 
 /// One entry that may fail alone, so a bad one costs itself and not its list.
@@ -484,6 +487,44 @@ struct QuestionsRequest: Decodable, Hashable {
     let questions: [Question]
 }
 
+/// `dray secret request`'s card (#1578). Logged, unlike a permission card, and
+/// closed only by a `secret_answered` naming its `requestId`.
+struct SecretRequest: Decodable, Hashable {
+    let requestId: String
+    let name: String
+    let label: String?
+    let reason: String
+    let url: String?
+    /// Every secret saved on the machine that answers.
+    let savedNames: [String]?
+    /// The saved one offered first; absent where none comes close.
+    let closest: String?
+    /// The task's own record of asking its bot on another machine: a line here, never a card.
+    let bot: Bool?
+    /// Set in a bot's chat: the task on another machine the card answers.
+    let task: SecretTask?
+}
+
+/// The task on another machine a bot's secret card answers.
+struct SecretTask: Decodable, Hashable {
+    let sessionId: String
+    let title: String
+    let machine: String
+}
+
+/// How a secret card closed: `saved`, `declined`, `replaced` or `used`. Never the value.
+struct SecretAnswer: Decodable, Hashable {
+    let requestId: String
+    let name: String
+    let outcome: String
+    let kept: Bool?
+    let auto: Bool?
+    let task: SecretTask?
+
+    /// A card a newer one replaced closes silently: the newer card is the row.
+    var draws: Bool { ["saved", "declined", "used"].contains(outcome) }
+}
+
 /// A picture on a prompt or a tool result. `path` is the archived copy under
 /// `~/.dray/attachments`, read through the server's `/file`.
 struct ImageRef: Decodable, Hashable {
@@ -551,6 +592,8 @@ enum Payload: Decodable {
     case reaction(messageId: String, emoji: String, byUser: Bool = false)
     /// The task moved to another agent (#1414). Draws nothing: the reader picked it.
     case agentSwitched(to: String)
+    case secretRequested(SecretRequest)
+    case secretAnswered(SecretAnswer)
     case error(String)
     case other(String)
 
@@ -633,6 +676,10 @@ enum Payload: Decodable {
                                  byUser: (try? c.decode(Bool.self, forKey: "byUser")) ?? false)
             case "agent_switched":
                 self = .agentSwitched(to: try c.decode(String.self, forKey: "to"))
+            case "secret_requested":
+                self = .secretRequested(try SecretRequest(from: decoder))
+            case "secret_answered":
+                self = .secretAnswered(try SecretAnswer(from: decoder))
             default:
                 self = .other(type)
             }

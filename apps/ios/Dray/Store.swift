@@ -90,6 +90,12 @@ final class Store {
     var draftsRevision = 0
     /// Bumped by `routines_changed`, which a bot's routines section re-reads on.
     var routinesRevision = 0
+    /// Bumped by `secrets_changed`, which Settings › Secrets re-reads on.
+    var secretsRevision = 0
+    /// Open secret cards (#1578), apart from `asks`: logged and closed only by
+    /// their own answer, so no turn ending or task draining may strand them. Not
+    /// in `asks` either because the Island, which shares this store, has no card for them.
+    private(set) var secretAsks: [SessionKey: [AgentEvent]] = [:]
     var lastError: String?
     /// False while the device has no network at all, which every server shares.
     private(set) var online = true
@@ -311,6 +317,7 @@ final class Store {
         serverState[id] = nil
         for key in items.keys where key.server == id { items[key] = nil }
         for key in asks.keys where key.server == id { asks[key] = nil }
+        for key in secretAsks.keys where key.server == id { secretAsks[key] = nil }
         for key in marks.keys where key.server == id { marks[key] = nil }
         // Or a reconnect inside the poll's gap skips the read that would bring them back.
         for key in marksAt.keys where key.server == id { marksAt[key] = nil }
@@ -709,8 +716,11 @@ final class Store {
     /// The first card each hidden one of `tasks` is stopped on. A hidden task has no
     /// row of its own, so its card is drawn in the chat that started it, the desktop's crew.
     func hiddenAsks(_ tasks: [SessionKey]) -> [(key: SessionKey, event: AgentEvent)] {
-        tasks.compactMap { k in items[k]?.hidden == true ? asks[k]?.first.map { (k, $0) } : nil }
+        tasks.compactMap { k in items[k]?.hidden == true ? cards(k).first.map { (k, $0) } : nil }
     }
+
+    /// Every card a session is stopped on: permission and question cards, then secret ones.
+    func cards(_ key: SessionKey) -> [AgentEvent] { (asks[key] ?? []) + (secretAsks[key] ?? []) }
 
     /// Each bot chat's newest reply and unread count, read off the log's end by its server.
     private(set) var previews: [SessionKey: BotPreview] = [:] { didSet { keepList() } }
@@ -912,7 +922,7 @@ final class Store {
         return open.checksState == "RUNNING" ? .checks : .pr
     }
 
-    func isAsking(_ key: SessionKey) -> Bool { !(asks[key]?.isEmpty ?? true) }
+    func isAsking(_ key: SessionKey) -> Bool { !(asks[key]?.isEmpty ?? true) || !(secretAsks[key]?.isEmpty ?? true) }
 
     /// Background work the agent waits on: tasks, unless they are only a
     /// server left up for the reader, which waits on the reader instead.
@@ -1031,6 +1041,7 @@ final class Store {
         deleted.insert(key)
         items[key] = nil
         asks[key] = nil
+        secretAsks[key] = nil
     }
 
     /// Lets go of every transcript held but `kept`'s. The Island's close: held, each
@@ -1323,6 +1334,18 @@ final class Store {
         }
     }
 
+    /// Answers a secret card on the session's own server, which writes the value to an
+    /// owner-only file and tells the agent its path. `value` is the pasted one, nil to use a
+    /// saved one (`from`) or to decline. The card closes on the `secret_answered` that follows.
+    func answerSecret(_ key: SessionKey, requestId: String, value: String?, keep: Bool,
+                      useSaved: Bool, always: Bool, from: String?) async throws {
+        _ = try await call(key.server, "answer_secret_request", [
+            "sessionId": .string(key.id), "requestId": .string(requestId),
+            "value": value.map(JSON.string) ?? .null, "keep": .bool(keep),
+            "useSaved": .bool(useSaved), "always": .bool(always), "from": from.map(JSON.string) ?? .null,
+        ], as: JSON.self)
+    }
+
     private func retire(_ key: SessionKey, _ requestId: String) {
         asks[key]?.removeAll { $0.payload.askId == requestId }
     }
@@ -1341,6 +1364,12 @@ final class Store {
             for key in asks.keys where key.server == server { asks[key] = nil }
             for key in tasks.keys where key.server == server { tasks[key] = nil }
             for a in live.asks { asks[SessionKey(server: server, id: a.sessionId), default: []].append(a) }
+            for key in secretAsks.keys where key.server == server { secretAsks[key] = nil }
+            for s in live.secrets ?? [] {
+                if case .secretRequested(let r) = s.payload, r.bot != true {
+                    secretAsks[SessionKey(server: server, id: s.sessionId), default: []].append(s)
+                }
+            }
             for t in live.tasks {
                 if case .backgroundTasks(let list) = t.payload { tasks[SessionKey(server: server, id: t.sessionId)] = list }
             }
@@ -1406,6 +1435,8 @@ final class Store {
             draftsRevision += 1
         case "routines_changed":
             routinesRevision += 1
+        case "secrets_changed":
+            secretsRevision += 1
         case "machines_shared":
             guard let sharing = try? decoder.decode(EventFrame<Sharing>.self, from: data).payload else { return }
             share(server, sharing.machines)
@@ -1447,6 +1478,11 @@ final class Store {
             }
         case .permissionDecided(let id):
             retire(key, id)
+        // A task's ask of its bot on another machine is that chat's card, not this one's.
+        case .secretRequested(let r) where r.bot != true:
+            if !(secretAsks[key]?.contains { $0.id == e.id } ?? false) { secretAsks[key, default: []].append(e) }
+        case .secretAnswered(let a):
+            secretAsks[key]?.removeAll { if case .secretRequested(let r) = $0.payload { r.requestId == a.requestId } else { false } }
         case .backgroundTasks(let list):
             tasks[key] = list
             serving[key] = nil

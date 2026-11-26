@@ -43,4 +43,4 @@ Asking again for a name whose card is still open in that session closes the old 
 
 ## Not yet
 
-Phone cards (iOS, Android) and 1Password `op://` references. The wire is ready for the phones: two logged events and one command with plain arguments.
+The Android card and 1Password `op://` references. The wire is ready for it: two logged events and one command with plain arguments. iOS has the card and Settings › Vault (#1605, [PLAN.md](../../ios/PLAN.md)).

@@ -72,6 +72,10 @@ struct Turn: Identifiable {
     /// `finalText` was the last row of `work` and is dropped from it, so it
     /// draws in the same place whether the fold is open or not.
     var finalLifted = false
+    /// Where a secret went, or that a bot was asked for one: always in view, never folded.
+    var secrets: [AgentEvent] = []
+    /// The same, for a card answered before this turn began: drawn first.
+    var lead: [AgentEvent] = []
 
     var running: Bool { !completed }
     /// Rows a collapse would hide: queued prompts stay on screen.
@@ -245,23 +249,39 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
         turns.append(turn)
     }
 
+    // A card answered between turns: its line leads the turn its answer opens (a prompt
+    // Dray sent, drawn as no bubble, logged just before the answer), or else closes the turn that asked.
+    var carried: [AgentEvent] = []
+    func secretLine(_ e: AgentEvent) {
+        if current == nil { carried.append(e) }
+        else if current?.work.isEmpty == true && calls.isEmpty { current?.lead.append(e) }
+        else { current?.secrets.append(e) }
+    }
+    func begin(_ turn: Turn) {
+        var turn = turn
+        if turn.prompt == nil || turns.isEmpty { turn.lead = carried } else { turns[turns.count - 1].secrets += carried }
+        carried = []
+        current = turn
+    }
+
     for e in main {
         switch e.payload {
-        case .userMessage(let text, let fromTitle, let fromId, let queued, let images, _, let fromBot):
+        case .userMessage(let text, let fromTitle, let fromId, let queued, let images, let kickoff, let fromBot):
             let shown = stripSender(text, title: fromTitle, id: fromId, bot: fromBot != nil)
             if queued, current != nil {
                 flushCalls()
                 current?.work.append(.prompt(id: e.id, text: shown, from: fromTitle, images: images))
             } else {
                 close()
-                current = Turn(id: e.id, prompt: (shown, fromTitle, images))
+                // Dray's own prompt, a secret's path among them, is the desktop's `isKickoff`: no bubble.
+                begin(Turn(id: e.id, prompt: kickoff ? nil : (shown, fromTitle, images)))
             }
         case .assistantText(let text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
-            if current == nil { current = Turn(id: "head-\(e.id)") }
+            if current == nil { begin(Turn(id: "head-\(e.id)")) }
             flushCalls()
             current?.work.append(.text(id: e.id, text: text))
         case .toolStarted(let callId, let name, let toolType, let input, let title):
-            if current == nil { current = Turn(id: "head-\(e.id)") }
+            if current == nil { begin(Turn(id: "head-\(e.id)")) }
             let r = results[callId]
             let state: ToolState = r.map { $0.isError ? .failed : .done }
                 ?? (busy && !abandoned.contains(callId) ? .pending : .done)
@@ -275,11 +295,11 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
             calls.append(call)
             if alone { flushCalls() }
         case .error(let message):
-            if current == nil { current = Turn(id: "head-\(e.id)") }
+            if current == nil { begin(Turn(id: "head-\(e.id)")) }
             flushCalls()
             current?.work.append(.failure(id: e.id, text: message))
         case .turnCompleted(let failed, let finalText):
-            if current == nil { current = Turn(id: "head-\(e.id)") }
+            if current == nil { begin(Turn(id: "head-\(e.id)")) }
             current?.completed = true
             if failed {
                 // Empty as well as absent, as the desktop reads it: a harness can
@@ -288,11 +308,19 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
                 current?.failure = said.isEmpty ? "Turn failed" : said
             }
             close()
+        case .secretAnswered(let a) where a.draws:
+            secretLine(e)
+        case .secretRequested(let r) where r.bot == true:
+            secretLine(e)
         default:
             break
         }
     }
     close()
+    if !carried.isEmpty {
+        if turns.isEmpty { turns.append(Turn(id: "head-\(carried[0].id)", completed: true, lead: carried)) }
+        else { turns[turns.count - 1].secrets += carried }
+    }
     return turns
 }
 
