@@ -1,3 +1,5 @@
+import { KeyIcon } from "@heroicons/react/16/solid";
+
 import AssistantMessage from "@/components/chat/AssistantMessage";
 import Reasoning from "@/components/chat/Reasoning";
 import ToolCall from "@/components/chat/ToolCall";
@@ -5,10 +7,13 @@ import UserMessage from "@/components/chat/UserMessage";
 import FileEdits from "@/components/chat/FileEdits";
 import IssueCard from "@/components/chat/IssueCard";
 import MergeCard from "@/components/chat/MergeCard";
+import { PartyChip, type Party } from "@/components/chat/PartyChip";
+import { useSecretParties } from "@/hooks/useSecretParties";
+import { isModClick } from "@/lib/platform";
 import { compactTokens, resetTime } from "@/lib/format";
-import { drawsFailure } from "@/lib/transcript";
+import { drawsFailure, drawsSecretAnswer } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
-import type { AgentEvent, Bot, FileEdit, ToolResult } from "@/types/events";
+import type { AgentEvent, Bot, FileEdit, SecretTask, ToolResult } from "@/types/events";
 
 /// A quiet single line for the events that are context rather than content.
 function Notice({
@@ -34,6 +39,70 @@ function Notice({
       <span className={wrap ? "min-w-0 wrap-anywhere" : "truncate"}>{children}</span>
     </p>
   );
+}
+
+/// A closed secret card, in the words and size of "Started a new task": what
+/// happened and who to, never the value or where it went.
+export function SecretAnswer({
+  name,
+  outcome,
+  task,
+  kept,
+  auto,
+}: {
+  name: string;
+  outcome: string;
+  task?: SecretTask;
+  kept?: boolean;
+  auto?: boolean;
+}) {
+  const parties = useSecretParties();
+  const id = <span className="font-mono">{name}</span>;
+  const chip = task && (
+    <SecretChip party={{ id: task.sessionId, title: task.title, machine: task.machine }} open={parties.open} />
+  );
+  const said =
+    outcome === "declined" ? (
+      chip ? <>Declined {id} for</> : <>Declined {id}</>
+    ) : chip ? (
+      <>Sent {id} to</>
+    ) : outcome === "used" ? (
+      <>Used saved {id}{auto ? " without asking" : ""}</>
+    ) : (
+      <>Saved {id}{kept ? " on this machine" : " for 24 hours"}</>
+    );
+  return (
+    <div className="flex max-w-full items-center gap-0.5 self-start text-ui text-muted-foreground">
+      <SecretKey />
+      <span className="shrink-0">{said}</span>
+      {chip}
+    </div>
+  );
+}
+
+/// A bot's task on another machine asked its bot: the line in the task's chat.
+function SecretAsked({ sessionId, name }: { sessionId: string; name: string }) {
+  const parties = useSecretParties();
+  const bot = parties.botOf(sessionId);
+  return (
+    <div className="flex max-w-full items-center gap-0.5 self-start text-ui text-muted-foreground">
+      <SecretKey />
+      <span className="shrink-0">Asked</span>
+      {bot ? <SecretChip party={bot} open={parties.open} /> : <span className="shrink-0 px-1">its bot</span>}
+      <span className="shrink-0">
+        for <span className="font-mono">{name}</span>
+      </span>
+    </div>
+  );
+}
+
+/// Marks a line as a secret's, the card's own key at the line's text size.
+function SecretKey() {
+  return <KeyIcon className="mr-1 size-3.5 shrink-0" aria-hidden />;
+}
+
+function SecretChip({ party, open }: { party: Party; open: (party: Party, alone: boolean) => void }) {
+  return <PartyChip parties={[party]} onClick={(e) => open(party, isModClick(e))} />;
 }
 
 /// The one place event payloads become UI. Every variant is handled; the default
@@ -166,6 +235,15 @@ export default function EventRow({
     // The harness's own sentence — a refusal, a safeguard notice — as written.
     case "notice":
       return <Notice wrap>{payload.text}</Notice>;
+
+    case "secret_requested":
+      // The card is in the bot's chat on another machine; here, only where it went.
+      return payload.bot ? <SecretAsked sessionId={event.sessionId} name={payload.name} /> : null;
+
+    case "secret_answered":
+      return drawsSecretAnswer(payload.outcome) ? (
+        <SecretAnswer name={payload.name} outcome={payload.outcome} task={payload.task} kept={payload.kept} auto={payload.auto} />
+      ) : null;
 
     case "rate_limited": {
       // Only actionable reports reach here — the mapper drops the healthy ones

@@ -14,6 +14,9 @@ export type LiveState = {
   queued?: QueueChangedEvent[];
   /// Every session left only serving. Absent from a server that predates it.
   serving?: SessionServingEvent[];
+  /// Open secret cards. Logged, so already in the transcript: these only say
+  /// who is waiting. Absent from a server that predates them.
+  secrets?: AgentEvent[];
 };
 
 /// The logged events a client missed: everything in `fetched` (a log tail, in

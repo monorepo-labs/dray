@@ -7,6 +7,7 @@ export const ALL_SETTINGS_TABS = [
   "spaces",
   "servers",
   "accounts",
+  "secrets",
   "transcription",
   "integrations",
   "shortcuts",

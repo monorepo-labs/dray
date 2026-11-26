@@ -625,6 +625,7 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     crate::auto_continue::rearm(&sink).await;
 
     crate::remote_asks::forget_unanswered().await;
+    crate::secrets::start().await;
     tokio::spawn(crate::remote_reports::run(sink.clone()));
     tokio::spawn(crate::remote_asks::run(sink.clone()));
     tokio::spawn(crate::stalls::run(sink.clone()));
@@ -1036,13 +1037,20 @@ impl Live {
         // Always present, so a client tells a server that judges stalls from
         // one too old to, whose `live_state` has no such key.
         let stalls: Vec<&Value> = self.stalls.values().collect();
-        json!({ "asks": self.asks, "tasks": tasks, "queued": queued, "serving": serving, "boat": self.boat, "stalls": stalls })
+        // Logged cards, so apart from `asks`, which a client merges into the
+        // transcript: these are already there, and only mark who is waiting.
+        let secrets = crate::secrets::open_cards();
+        json!({ "asks": self.asks, "tasks": tasks, "queued": queued, "serving": serving, "boat": self.boat, "stalls": stalls, "secrets": secrets })
     }
 
     fn flags(&self) -> LiveFlags {
         let ids = |m: &HashMap<String, Value>| m.keys().cloned().collect();
         LiveFlags {
-            asking: self.asks.iter().filter_map(|a| a["sessionId"].as_str().map(String::from)).collect(),
+            asking: self.asks
+                .iter()
+                .filter_map(|a| a["sessionId"].as_str().map(String::from))
+                .chain(crate::secrets::asking())
+                .collect(),
             tasks: ids(&self.tasks),
             serving: ids(&self.serving),
         }
@@ -2075,6 +2083,15 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         push_unregister(handle: String) => crate::push::push_unregister(handle).await;
         react_to_message(session_id: String, message_id: String, emoji: String) =>
             crate::bots::react::react_to_message(session_id, message_id, emoji, sink).await;
+        // The value rides this call alone and goes straight to a file.
+        answer_secret_request(
+            session_id: String, request_id: String, value: Option<String>, keep: bool,
+            use_saved: Option<bool>, always: Option<bool>, from: Option<String>,
+        ) => crate::secrets::answer_secret_request(session_id, request_id, value, keep, use_saved, always, from, sink).await;
+        set_secret_always(name: String, on: bool) => crate::secrets::set_secret_always(name, on, sink).await;
+        list_secrets() => crate::secrets::list_secrets().await;
+        save_secret(name: String, value: String) => crate::secrets::save_secret(name, value, sink).await;
+        delete_secret(name: String) => crate::secrets::delete_secret(name, sink).await;
         approve_issue(session_id: String, card_id: String, number: u64) =>
             crate::issues::card::approve_issue(session_id, card_id, number, sink).await;
         send_issue_to_bot(bot_id: String, issue: crate::issues::IssueRef, note: Option<String>) =>
@@ -2118,6 +2135,10 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         // A bot's server collecting what its tasks here said (#958).
         parent_reports(children: Vec<String>, ack: Vec<String>, forget: Option<Vec<String>>) =>
             crate::remote_reports::take(children, ack, forget.unwrap_or_default()).await;
+        // A bot's server answering its task's ask for a secret: the value
+        // rides this call alone and goes straight to a one-time file.
+        secret_deliver(session_id: String, request_id: String, value: Option<String>) =>
+            crate::secrets::deliver(session_id, request_id, value, sink).await;
         // An asking server collecting its questions' answers here (#1463).
         bot_answers(asks: Vec<String>, ack: Vec<String>, undelivered: Vec<String>) =>
             crate::remote_asks::take(asks, ack, undelivered, &sink).await;

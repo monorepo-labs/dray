@@ -442,6 +442,10 @@ export function useSessions() {
     // themselves are: no child survives a restart, so a request that outlived
     // one could never be answered.
     const [asksBySession, setAsksBySession] = useState<Record<string, string[]>>({});
+    // Open secret cards, apart from the asks above: they are logged, outlive
+    // the turn and the child, and close only on their own `secret_answered`,
+    // so no turn ending or task draining may strand them.
+    const [secretAsks, setSecretAsks] = useState<Record<string, string[]>>({});
     const [error, setError] = useState<string | null>(null);
     // Bumped by every navigation, so an action started before it and rejecting
     // after it can be told from one the reader is still standing next to.
@@ -2704,6 +2708,24 @@ useEffect(() => {
               announce(agentEvent.sessionId, "asking", asking);
             }
 
+            if (agentEvent.payload.type === "secret_requested" && !agentEvent.payload.bot) {
+              const { requestId } = agentEvent.payload;
+              setSecretAsks((prev) => {
+                const cur = prev[agentEvent.sessionId] ?? [];
+                return cur.includes(requestId) ? prev : { ...prev, [agentEvent.sessionId]: [...cur, requestId] };
+              });
+              announce(agentEvent.sessionId, "asking", "Needs a secret");
+            }
+            if (agentEvent.payload.type === "secret_answered") {
+              const { requestId } = agentEvent.payload;
+              setSecretAsks((prev) => {
+                const cur = prev[agentEvent.sessionId];
+                if (!cur?.includes(requestId)) return prev;
+                return { ...prev, [agentEvent.sessionId]: cur.filter((id) => id !== requestId) };
+              });
+              if (!asksBySessionRef.current[agentEvent.sessionId]?.length) dismissNotice(agentEvent.sessionId, "asking");
+            }
+
             // The card is answered, so both the rail mark and the notice
             // pointing at it have nothing left to point at.
             if (agentEvent.payload.type === "permission_decided") {
@@ -2865,6 +2887,8 @@ const sessionsRef = useRef(sessions);
 sessionsRef.current = sessions;
 const asksBySessionRef = useRef(asksBySession);
 asksBySessionRef.current = asksBySession;
+const secretAsksRef = useRef(secretAsks);
+secretAsksRef.current = secretAsks;
 
 /// Appends what a session's log gained since `held` — what the socket to a
 /// `dray-serve` missed while down, or what a kept transcript missed while
@@ -2971,7 +2995,7 @@ const missedFromTail = async (sessionId: string, held: AgentEvent[]) => {
 /// statuses are that server's to say, and its socket never dropped.
 useEffect(() => {
   const listenerPromise = listen<LiveState>("live_state", ({ payload, server }) => {
-    const { asks, tasks } = payload;
+    const { asks, tasks, secrets = [] } = payload;
     for (const e of [...asks, ...tasks]) noteSession(e.sessionId, server);
     const ours = (sessionId: string) => serverOfSession(sessionId) === server;
     const without = <T,>(map: Record<string, T>): Record<string, T> =>
@@ -2995,10 +3019,16 @@ useEffect(() => {
         (open[ask.sessionId] ??= []).push(ask.payload.requestId);
       }
     }
-    for (const id of Object.keys(asksBySessionRef.current)) {
-      if (ours(id) && !open[id]) dismissNotice(id, "asking");
+    const secretOpen: Record<string, string[]> = {};
+    for (const card of secrets) {
+      noteSession(card.sessionId, server);
+      if (card.payload.type === "secret_requested") (secretOpen[card.sessionId] ??= []).push(card.payload.requestId);
+    }
+    for (const id of new Set([...Object.keys(asksBySessionRef.current), ...Object.keys(secretAsksRef.current)])) {
+      if (ours(id) && !open[id] && !secretOpen[id]) dismissNotice(id, "asking");
     }
     setAsksBySession((prev) => ({ ...without(prev), ...open }));
+    setSecretAsks((prev) => ({ ...without(prev), ...secretOpen }));
     setTasksBySession((prev) => ({
       ...without(prev),
       ...Object.fromEntries(
@@ -3420,6 +3450,7 @@ const evictSessions = (force?: { sessionId: string; status?: SessionStatus }) =>
       || s.sessionId === selectionRequestRef.current
       || status === "in_progress"
       || (asksBySessionRef.current[s.sessionId]?.length ?? 0) > 0
+      || (secretAsksRef.current[s.sessionId]?.length ?? 0) > 0
     );
   };
   setSessions((prev) => {
@@ -3920,19 +3951,24 @@ const busy = selectedStatus === "in_progress";
 // The sessions standing still behind a card the reader has to answer. A set
 // rather than the id lists themselves: the sidebar only asks whether a row is
 // waiting, and passing the lists would re-render every row on each request.
+const allAsks = useMemo(() => {
+  const merged: Record<string, string[]> = { ...asksBySession };
+  for (const [id, ids] of Object.entries(secretAsks)) merged[id] = [...(merged[id] ?? []), ...ids];
+  return merged;
+}, [asksBySession, secretAsks]);
 const askingSessions = useMemo(
   () =>
     new Set(
-      Object.entries(asksBySession)
+      Object.entries(allAsks)
         .filter(([, ids]) => ids.length > 0)
         .map(([sessionId]) => sessionId),
     ),
-  [asksBySession],
+  [allAsks],
 );
 
 // The dock badge counts the same rows the rail marks, so it lives beside the
 // two maps that decide them rather than in `App`.
-useDockBadge(statusBySession, asksBySession, sessionIndexItems);
+useDockBadge(statusBySession, allAsks, sessionIndexItems);
 
 // Prompts typed into the running turn and not yet handed to the CLI. Not gated
 // on `busy` like the live state below: a queue only exists while a turn runs,

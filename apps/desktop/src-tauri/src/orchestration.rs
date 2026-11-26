@@ -604,6 +604,7 @@ fn session_named(request: &Request) -> Option<&str> {
         Request::Browser(r) => Some(&r.session_id),
         Request::MergeCard(r) => Some(&r.session_id),
         Request::IssueCard(r) => Some(&r.session_id),
+        Request::RequestSecret(r) => Some(&r.session_id),
         Request::SetNeed(r) => Some(&r.session_id),
         Request::React(r) => Some(&r.session_id),
         Request::SetModel(r) => Some(&r.session_id),
@@ -632,6 +633,9 @@ fn this_machine_only(request: &Request) -> bool {
             | Request::Login
             | Request::LinkStatus
             | Request::Logout
+            // A path is this machine's, and another may not learn its secrets.
+            | Request::SecretPath(_)
+            | Request::ListSecrets
     )
 }
 
@@ -1213,6 +1217,9 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::AddImage(image) => add_video(image, true).await,
         Request::MergeCard(card) => post_merge_card(card, app).await,
         Request::IssueCard(card) => crate::issues::card::post(card, app).await,
+        Request::RequestSecret(ask) => crate::secrets::request(ask, app).await,
+        Request::SecretPath(secret) => crate::secrets::path_of(&secret.name).await,
+        Request::ListSecrets => crate::secrets::list().await,
         Request::React(react) => {
             let chat = store::get_session_index_item(&react.session_id)
                 .await?

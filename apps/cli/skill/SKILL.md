@@ -399,6 +399,38 @@ checking), ✅ done, 🎉 celebrate, ❤️ thanks, 😂 funny, 😢 sorry to he
 react to starting or messaging a task: the chat already shows that row. A new one on the same message replaces the old. End
 your turn without writing anything after it.
 
+## Asking the user for a secret
+
+```bash
+dray secret ls                    # names saved on this machine, and which agents use without asking
+dray secret request GITHUB_TOKEN --reason "Sign gh in" --url https://github.com/settings/tokens
+```
+
+Whenever you need a token, API key or password, ask this way. Run `dray secret
+ls` first and ask by a saved name where one fits, so the user hands it over in
+one click; the card offers the nearest saved one either way. Keep the reason to
+a few words: the card shows who is asking. Never ask for one
+in chat, never invent one. The request puts a masked card in your chat with
+your reason and link and returns at once: end your turn and say you're waiting.
+The user pastes the value there, or declines. Either way the answer reaches you
+as a message of its own. A saved value lives in a file only this user can read,
+on the machine this session runs on, and the message names it: use it inside
+the command that needs it, like `GITHUB_TOKEN="$(cat <file>)" gh auth login
+--with-token <<< "$GITHUB_TOKEN"` or a flag that reads a file. Never print,
+echo or log the value, and never copy it into another file, a commit or a
+message.
+
+A secret is one-time unless the user ticks Save as NAME: its file is deleted
+after 24 hours. A saved one stays on that machine, but you still ask for it with
+`dray secret request`: the card offers the saved one in one click. Where the
+user lets agents use a saved name without asking, the request posts no card and
+prints the file's path at once: use it and carry on. Asking again for a name
+whose card is still open replaces that card.
+
+A bot's task on another machine asks the same way. Its bot's machine keeps the
+secrets, the card shows in the bot's chat, and the value arrives as a one-time
+file on the task's own machine.
+
 ## Saving work for later
 
 ```bash

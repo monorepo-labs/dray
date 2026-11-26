@@ -425,6 +425,30 @@ fn drop_login(id: &str, url: &str) {
     }
 }
 
+/// [`call`], refused where the link would carry `args` in the clear: a
+/// `ws://` address off this host. Loopback covers an SSH login's forward.
+pub async fn call_private(saved: &Saved, cmd: &str, args: Value) -> Result<Value, String> {
+    let (url, _) = reach(saved).await?;
+    if !private_url(&url) {
+        return Err(format!(
+            "{} is reached over unencrypted {url}, so no secret goes there. Reach it over SSH or a wss:// address.",
+            saved.name
+        ));
+    }
+    call(saved, cmd, args).await
+}
+
+/// `wss://`, or `ws://` to this host alone.
+pub(crate) fn private_url(url: &str) -> bool {
+    if url.starts_with("wss://") {
+        return true;
+    }
+    let Some(rest) = url.strip_prefix("ws://") else { return false };
+    let host = rest.split('/').next().unwrap_or_default();
+    let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
+    matches!(host, "127.0.0.1" | "localhost" | "[::1]")
+}
+
 /// Runs serve command `cmd` on `saved`: connect, ask, close.
 pub async fn call(saved: &Saved, cmd: &str, args: Value) -> Result<Value, String> {
     let mut ws = connect(saved).await.map_err(|e| format!("{}: {e}", saved.name))?;

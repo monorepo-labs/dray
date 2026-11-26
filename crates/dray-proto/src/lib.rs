@@ -53,8 +53,8 @@ pub mod login;
 /// routine verbs. v24 added `ask` on a bot send: an older app delivers the
 /// message and passes no answer back, so the asking bot waits on nothing.
 /// v25 added `detach_session`, which an older app reads as a broken CLI, and
-/// v26 `attach_session`, v27 `issue_card`.
-pub const PROTOCOL_VERSION: u32 = 27;
+/// v26 `attach_session`, v27 `issue_card`, v28 the secret verbs.
+pub const PROTOCOL_VERSION: u32 = 28;
 
 /// Remote MCP (#863), held out of release builds until Dray accounts (#874)
 /// land (#900). Gates `/mcp`, the assistant commands and the CLI's `assistant`
@@ -151,6 +151,7 @@ impl Request {
             Request::DetachSession(_) => 25,
             Request::AttachSession(_) => 26,
             Request::IssueCard(_) => 27,
+            Request::RequestSecret(_) | Request::SecretPath(_) | Request::ListSecrets => 28,
         }
     }
 }
@@ -210,6 +211,9 @@ pub enum Request {
     /// Hands a task to a bot, the sidebar's Attach to bot: detach's reverse.
     AttachSession(AttachSession),
     IssueCard(IssueCard),
+    RequestSecret(RequestSecret),
+    SecretPath(SecretName),
+    ListSecrets,
 }
 
 /// `dray session attach`: the task, and the bot by id or name.
@@ -342,6 +346,46 @@ pub struct IssueCard {
     /// A short heading over the rows, like "Ready for review".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+}
+
+/// An agent asking the user for a secret through a masked card in
+/// `session_id`'s chat. The value never comes back on this wire: the answer
+/// reaches the agent later as a message naming the file it was saved to.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestSecret {
+    /// The chat the card goes in: the calling session.
+    pub session_id: String,
+    /// What the agent calls it, like `GITHUB_TOKEN`, and the name "Save as"
+    /// keeps it under.
+    pub name: String,
+    /// The card's heading, where it should differ from `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Why, in a sentence the user reads before pasting.
+    pub reason: String,
+    /// Where the user makes or finds one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+/// A secret saved on this machine, by name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretName {
+    pub name: String,
+}
+
+/// A saved secret as the CLI and Settings list it: never its value.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretSummary {
+    pub name: String,
+    /// When it was last saved, RFC 3339.
+    pub modified: String,
+    /// Agents get it without a card.
+    #[serde(default)]
+    pub always: bool,
 }
 
 /// A bot's emoji on the user's newest message in its chat, in place of a reply.
@@ -1097,6 +1141,25 @@ pub enum Response {
     Reacted { emoji: String },
     /// The issues an issue card lists, as `#number title`, in its order.
     IssueCard { issues: Vec<String> },
+    /// A secret card is up. `replaced` names an open card for the same name
+    /// that this one closed.
+    SecretRequested {
+        request_id: String,
+        name: String,
+        #[serde(default)]
+        replaced: bool,
+        /// Set where no card went up: the saved secret is always allowed,
+        /// and this is its file.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        /// The card went to the bot's chat on another machine, whose
+        /// secrets this task uses.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        bot: bool,
+    },
+    /// Where a saved secret's file is on this machine.
+    SecretPath { name: String, path: String },
+    Secrets { secrets: Vec<SecretSummary> },
     /// The model and effort a session runs its next turn on, by label.
     /// `changed` is false for a read, or a pick it already had.
     Model { session: SessionSummary, model: String, effort: Option<String>, changed: bool },
@@ -1550,6 +1613,14 @@ mod tests {
         assert_eq!(Envelope::new(attach.clone()).v, 26);
         let issues = Request::IssueCard(Default::default());
         assert_eq!(Envelope::new(issues.clone()).v, 27);
+        let secrets = [
+            Request::RequestSecret(Default::default()),
+            Request::SecretPath(Default::default()),
+            Request::ListSecrets,
+        ];
+        for request in &secrets {
+            assert_eq!(Envelope::new(request.clone()).v, 28, "{request:?}");
+        }
         let newest = old
             .iter()
             .chain(&drafts)
@@ -1563,6 +1634,7 @@ mod tests {
             .chain([&card, &need, &react, &image, &model])
             .chain(&routines)
             .chain([&ask, &detach, &attach, &issues])
+            .chain(&secrets)
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));

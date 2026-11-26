@@ -149,6 +149,7 @@ import BotAvatar from "@/components/BotAvatar";
 import Orb from "@/components/Orb";
 import PickTarget, { type PickOption } from "@/components/PickTarget";
 import { seededAvatar } from "@/lib/botAvatar";
+import { SecretPartiesContext, type SecretParties } from "@/hooks/useSecretParties";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
@@ -4035,6 +4036,20 @@ function App() {
     },
   };
 
+  // Who a secret card or line names: a bot's chat is the bot, a task itself,
+  // and a task on another machine has the server mark beside its name.
+  const secretParties: SecretParties = {
+    botOf: (sessionId) => {
+      const bot = botOf(bots, sessionIndexItems, sessionId);
+      return bot ? { id: bot.id, title: bot.name, avatar: bot.avatar ?? seededAvatar(bot.id) } : null;
+    },
+    open: (party, alone) => {
+      const bot = bots.find((b) => b.id === party.id);
+      if (bot) openBot(bot);
+      else paneChat.onOpenSession(party.id, alone);
+    },
+  };
+
   const paneChat: PaneChat = {
     onOpenSubagent: openSubagent,
     onOpenSession: (id, alone) =>
@@ -4170,6 +4185,7 @@ function App() {
 
   return (
     <TooltipProvider>
+    <SecretPartiesContext value={secretParties}>
     <MergeCardHostContext value={mergeCardHost}>
     <IssueStartContext value={issueStarter}>
     <DiffWorkerPool pair={codeThemePair}>
@@ -5322,6 +5338,7 @@ function App() {
     </DiffWorkerPool>
     </IssueStartContext>
     </MergeCardHostContext>
+    </SecretPartiesContext>
     </TooltipProvider>
   );
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTranscript, canOpenTab, drawsSameTurn, hiddenInBotChat, isToolGroup, opensTab, runningRuns, segmentMedia, segmentWork, sessionMedia, type Turn } from "@/lib/transcript";
+import { buildTranscript, canOpenTab, drawsSameTurn, hiddenInBotChat, isToolGroup, opensTab, rendersRow, runningRuns, segmentMedia, segmentWork, sessionMedia, type Turn } from "@/lib/transcript";
 import type { AgentEvent, AgentEventPayload, ToolResult } from "@/types/events";
 
 /// Only the envelope fields `buildTranscript` orders and keys by are filled;
@@ -925,6 +925,32 @@ describe("a pending ask", () => {
   // #301: a respawned Codex child numbered its requests from 0 again.
   it("is not retired by a decision made before it under the same id", () => {
     expect(pending([ask(0, "0"), decided(1, "0"), ask(2, "0")])).toEqual(["0"]);
+  });
+});
+
+describe("a secret card", () => {
+  const asked = (seq: number, requestId: string) =>
+    event(seq, { type: "secret_requested", requestId, name: "GH_TOKEN", reason: "gh login" });
+  const answered = (seq: number, requestId: string, outcome: "saved" | "declined" | "replaced" | "used") =>
+    event(seq, { type: "secret_answered", requestId, name: "GH_TOKEN", outcome });
+  const pending = (events: AgentEvent[], live: boolean) =>
+    buildTranscript(events, live).pendingAsks.map((a) => a.requestId);
+
+  it("stays open past its turn and with no child running", () => {
+    expect(pending([prompt(0, "log in", false), asked(1, "r"), completed(2)], false)).toEqual(["r"]);
+  });
+
+  it("closes on its own answer, whatever the outcome", () => {
+    for (const outcome of ["saved", "declined", "replaced", "used"] as const) {
+      expect(pending([asked(0, "r"), answered(1, "r", outcome)], true)).toEqual([]);
+    }
+  });
+
+  it("draws a row for a saved or declined answer, none for a replaced one or the ask", () => {
+    const draws = (outcome: "saved" | "declined" | "replaced" | "used") => rendersRow(answered(0, "r", outcome));
+    expect([draws("saved"), draws("declined"), draws("used"), draws("replaced"), rendersRow(asked(0, "r"))]).toEqual([
+      true, true, true, false, false,
+    ]);
   });
 });
 

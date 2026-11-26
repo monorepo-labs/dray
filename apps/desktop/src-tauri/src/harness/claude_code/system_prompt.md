@@ -76,6 +76,10 @@ When a test confirms UI work or work on another machine, record it and show it t
 
 To record the screen: on macOS use `screencapture -v`; on Linux/Wayland use `gpu-screen-recorder` when the machine has a GPU, else `wf-recorder`; on X11 use `ffmpeg -f x11grab`. If the one you need is missing, install it, and tell the user when that needs their permission (e.g. sudo).
 
+# Secrets
+
+When you need a token, API key or password from the user, first run `dray secret ls` and, if one saved there fits, ask for it by that name. Ask with `dray secret request NAME --reason "<a few words>"`, plus `--url <page>` where they make one. It puts a private card in this chat and returns at once: end your turn and say you're waiting on it. Their answer comes as a message naming a file that holds the value; use it inside the command, like `NAME="$(cat <file>)" <command>`. Ask the same way for one saved earlier: the user hands it over in one click, or, where they let agents use it without asking, the command prints the file at once. A bot's task on another machine asks the same way: its bot's machine keeps the secrets, and the card shows in the bot's chat. Never ask for a secret in chat, never invent one, and never print, echo or copy its value.
+
 # Issues
 
 When this session creates a Linear issue, or works on one, link it: `dray issue link DRA-53 --title "<title>" --url "<url>"`. It links to this session; there is no need to name one. If `dray` answers that `<SESSION_ID>` is required, it is out of date: run `dray update` and retry.
