@@ -229,7 +229,7 @@ function Demo() {
             </div>
           </Section>
 
-          <Section title="Settings → Secrets" note="The machine picker at the top; Auto is the switch; ⋯ holds Replace and Delete, Replace and Add secret open the dialogs below.">
+          <Section title="Settings → Vault" note="The machine picker at the top; Auto is the switch; ⋯ holds Replace and Delete, Replace and Add secret open the dialogs below.">
             <div className="max-w-xl rounded-xl border border-border p-6">
               <SecretsSettings />
             </div>
