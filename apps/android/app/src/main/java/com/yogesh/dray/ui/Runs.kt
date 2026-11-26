@@ -383,7 +383,7 @@ fun SubagentChat(key: SessionKey, id: String, back: () -> Unit) {
     }
     val list = rememberLazyListState()
     LaunchedEffect(items.size, run?.done) { if (items.isNotEmpty()) list.scrollToItem(0) }
-    CompositionLocalProviderCallSession(key) {
+    CompositionLocalProviderCallSession(key) { androidx.compose.runtime.CompositionLocalProvider(LocalChatList provides list) {
         Column(Modifier.fillMaxSize().background(Dray.page).statusBarsPadding().navigationBarsPadding()) {
             Row(Modifier.fillMaxWidth().height(56.dp).padding(end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Dray.text) }
@@ -413,5 +413,5 @@ fun SubagentChat(key: SessionKey, id: String, back: () -> Unit) {
                 }
             }
         }
-    }
+    } }
 }

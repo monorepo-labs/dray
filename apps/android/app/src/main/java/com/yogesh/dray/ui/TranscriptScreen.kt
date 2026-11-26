@@ -98,6 +98,7 @@ fun TranscriptScreen(key: SessionKey, back: () -> Unit, openChanges: () -> Unit 
     CompositionLocalProvider(
         LocalImageServer provides key.server,
         LocalCallSession provides key,
+        LocalChatList provides list,
         LocalOpenRun provides { id: String ->
             val run = store.runsOf(key).firstOrNull { it.id == id }
             when {
