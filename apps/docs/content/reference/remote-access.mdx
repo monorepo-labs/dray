@@ -63,7 +63,6 @@ Each remote row has a switch and a `⋯` menu:
 - **The switch** connects or disconnects the app. Off keeps the row, shows `Off`, and leaves the server and its agents running.
 - **Rename** changes the name drawn in the sidebar. Leave it empty to go back to the address.
 - **Check for updates**, **Join beta** / **Leave beta**: see [Update remote servers](#update-remote-servers).
-- **Link** links the server to your Dray org, and `⋯` → **Unlink from org** undoes it. See [Link to an org](/cli/servers#link-to-an-org).
 - **Remove** forgets the server, after you confirm in the row. It does not stop or uninstall Dray on that machine. If tasks there last looked unfinished (running, waiting on you, or with an unmerged PR), the row names them first. Removing clears them from this device; anything still running keeps running there. Removing is also how you clear the tasks of a server that is gone for good: a task on a server that isn't connected can't be settled.
 
 When a connect fails, the row shows why and offers **Try again**. Some failures come with a command to copy, such as the `ssh-copy-id` line when SSH asks for a password.
