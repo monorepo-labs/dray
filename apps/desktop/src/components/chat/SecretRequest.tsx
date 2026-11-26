@@ -125,51 +125,53 @@ export default function SecretRequest({
       onSubmit={onSubmit}
       autoComplete="off"
       data-secret-card
-      className="flex flex-col gap-4 rounded-[18px] border border-[var(--card-edge,var(--border))] bg-[var(--permission-card,var(--card))] px-[15px] pt-[13px] pb-[15px] shadow-[var(--shadow-raised-card,var(--shadow-card))]"
+      className="flex flex-col gap-[18px] rounded-[18px] border border-[var(--card-edge,var(--border))] bg-[var(--permission-card,var(--card))] px-[15px] pt-[13px] pb-[15px] shadow-[var(--shadow-raised-card,var(--shadow-card))]"
     >
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={(e) => parties.open(asker, isModClick(e))}
-          className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-sm leading-5 text-muted-foreground hover:text-foreground"
-        >
-          <BotAvatar still seed={asker.id} avatar={asker.avatar ?? seededAvatar(asker.id)} className="block size-4 shrink-0 scale-[1.18]" />
-          <span className="truncate">{asker.title}</span>
-          {asker.machine && <MachineMark machine={asker.machine} />}
-        </button>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Decline"
-              className="shrink-0 rounded-lg text-muted-foreground"
-              disabled={busy}
-              onClick={() => void send("decline")}
-            >
-              <X className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">Decline</TooltipContent>
-        </Tooltip>
-      </div>
-      <div className="flex min-w-0 flex-col gap-1.5">
-        <p className="text-sm leading-5 font-medium wrap-anywhere">{label ?? name}</p>
-        <p className="flex min-w-0 flex-wrap items-center gap-x-1 text-sm leading-5">
-          <span className="text-muted-foreground">{reason}</span>
-          {url && (
-            // The system browser, never the session's: the agent can drive that one.
-            <button
-              type="button"
-              onClick={() => void openUrl(url).catch(console.error)}
-              className="flex min-w-0 cursor-pointer items-center gap-1 underline-offset-4 hover:underline"
-            >
-              <ExternalLink className="size-3 shrink-0" aria-hidden />
-              <span className="truncate">{hostOf(url)}</span>
-            </button>
-          )}
-        </p>
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={(e) => parties.open(asker, isModClick(e))}
+            className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-sm leading-5 text-muted-foreground hover:text-foreground"
+          >
+            <BotAvatar still seed={asker.id} avatar={asker.avatar ?? seededAvatar(asker.id)} className="block size-4 shrink-0 scale-[1.18]" />
+            <span className="truncate">{asker.title}</span>
+            {asker.machine && <MachineMark machine={asker.machine} />}
+          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Decline"
+                className="shrink-0 rounded-lg text-muted-foreground"
+                disabled={busy}
+                onClick={() => void send("decline")}
+              >
+                <X className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">Decline</TooltipContent>
+          </Tooltip>
+        </div>
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <p className="text-sm leading-5 font-medium wrap-anywhere">{label ?? name}</p>
+          <p className="flex min-w-0 flex-wrap items-center gap-x-1 text-sm leading-5">
+            <span className="text-muted-foreground">{reason}</span>
+            {url && (
+              // The system browser, never the session's: the agent can drive that one.
+              <button
+                type="button"
+                onClick={() => void openUrl(url).catch(console.error)}
+                className="flex min-w-0 cursor-pointer items-center gap-1 underline-offset-4 hover:underline"
+              >
+                <ExternalLink className="size-3 shrink-0" aria-hidden />
+                <span className="truncate">{hostOf(url)}</span>
+              </button>
+            )}
+          </p>
+        </div>
       </div>
 
       <div className="flex flex-col gap-3">
