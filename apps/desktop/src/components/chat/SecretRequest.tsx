@@ -290,7 +290,7 @@ export function SendSecurelyButton({
 }: ComponentProps<typeof Button> & { icon?: ComponentType<SVGProps<SVGSVGElement>> }) {
   return (
     // The permission card's Allow once: the app's own button, small.
-    <Button size="sm" className={cn("h-9 shrink-0", className)} {...props}>
+    <Button size="sm" className={cn("h-9 shrink-0 disabled:opacity-100", className)} {...props}>
       <Icon className="size-4" aria-hidden />
       {children}
     </Button>
