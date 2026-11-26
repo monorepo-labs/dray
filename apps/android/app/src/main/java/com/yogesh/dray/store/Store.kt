@@ -692,6 +692,8 @@ class Store(private val context: Context) {
     /** Why the last settled read failed on a server, so the settled view offers Retry rather than "Nothing settled." */
     /** Moves when any client saves a draft or this one drops one: the drafts view reads again. */
     var draftsRevision by mutableIntStateOf(0)
+    /** Per server, moves on each `secrets_changed`. */
+    val secretsRevision = mutableStateMapOf<String, Int>()
 
     var settledError by mutableStateOf<String?>(null)
         private set
@@ -981,6 +983,23 @@ class Store(private val context: Context) {
         false
     }
 
+    /**
+     * Answers `dray secret request`: a pasted `value`, the saved one named `from`, or neither to
+     * decline. The value goes to the session's own server and nowhere else on the phone.
+     */
+    suspend fun answerSecret(
+        key: SessionKey, requestId: String, value: String?, keep: Boolean, useSaved: Boolean, always: Boolean, from: String?,
+    ) {
+        call(
+            key.server, "answer_secret_request",
+            jsonOf(
+                "sessionId" to key.id, "requestId" to requestId, "value" to value, "keep" to keep,
+                "useSaved" to useSaved, "always" to always, "from" to from,
+            ),
+        )
+        retire(key, requestId)
+    }
+
     private fun retire(key: SessionKey, requestId: String) {
         asks[key]?.let { list -> asks[key] = list.filter { it.payload.askId != requestId } }
     }
@@ -1005,9 +1024,10 @@ class Store(private val context: Context) {
                 // Replaces what is held: a card answered while the socket was down goes.
                 asks.keys.filter { it.server == server }.forEach { asks.remove(it) }
                 tasks.keys.filter { it.server == server }.forEach { tasks.remove(it) }
-                for (a in AgentEvent.list(live["asks"])) {
+                // Open secret cards ride apart from `asks`, logged and outliving the turn; absent from an older server.
+                for (a in AgentEvent.list(live["asks"]) + AgentEvent.list(live["secrets"])) {
                     val k = SessionKey(server, a.sessionId)
-                    asks[k] = asks[k].orEmpty() + a
+                    if (asks[k].orEmpty().none { it.payload.askId == a.payload.askId }) asks[k] = asks[k].orEmpty() + a
                 }
                 for (t in AgentEvent.list(live["tasks"])) {
                     (t.payload as? Payload.BackgroundTasks)?.let { tasks[SessionKey(server, t.sessionId)] = it.tasks }
@@ -1049,6 +1069,8 @@ class Store(private val context: Context) {
             "bots_changed" -> scope.launch { loadBots(server) }
             // Any client saved or dropped a draft, the CLI included: the drafts view reads again.
             "drafts_changed" -> draftsRevision++
+            // Saved secrets moved on that server, from any client or a card: Settings › Secrets reads again.
+            "secrets_changed" -> secretsRevision[server] = (secretsRevision[server] ?: 0) + 1
             "clone_progress" -> decodeOrNull<com.yogesh.dray.model.CloneProgress>(payload)?.let { p ->
                 cloneProgress[server] = cloneProgress[server].orEmpty() + (p.slug to p.line)
             }
@@ -1081,6 +1103,10 @@ class Store(private val context: Context) {
             is Payload.PermissionRequested, is Payload.QuestionsAsked ->
                 if (asks[key].orEmpty().none { it.payload.askId == p.askId }) asks[key] = asks[key].orEmpty() + e
             is Payload.PermissionDecided -> retire(key, p.requestId)
+            // A task's ask of its bot on another machine is that chat's card, never this one's.
+            is Payload.SecretRequested ->
+                if (!p.request.bot && asks[key].orEmpty().none { it.payload.askId == p.askId }) asks[key] = asks[key].orEmpty() + e
+            is Payload.SecretAnswered -> retire(key, p.answer.requestId)
             is Payload.BackgroundTasks -> {
                 tasks[key] = p.tasks
                 serving.remove(key)
@@ -1106,9 +1132,14 @@ class Store(private val context: Context) {
         if (p.harness == item.harness && (bot(key) == null || p.model == item.model)) botState.unsent.remove(key)
     }
 
-    /** Drops a session's cards once nothing could answer them: no turn running and no task left — the server's own rule. */
+    /**
+     * Drops a session's cards once nothing could answer them: no turn running and no task left — the
+     * server's own rule. A secret card stays: its answer goes to a file and a fresh prompt, not the child.
+     */
     private fun strand(key: SessionKey) {
-        if (items[key]?.busy != true && tasks[key].isNullOrEmpty()) asks.remove(key)
+        if (items[key]?.busy == true || !tasks[key].isNullOrEmpty()) return
+        val kept = asks[key].orEmpty().filter { it.payload is Payload.SecretRequested }
+        if (kept.isEmpty()) asks.remove(key) else asks[key] = kept
     }
 
     /** `/file`'s URL for a path on a server, without the token: images send it as a header. */

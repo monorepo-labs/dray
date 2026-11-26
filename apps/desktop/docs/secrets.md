@@ -41,6 +41,10 @@ Asking again for a name whose card is still open in that session closes the old 
 
 `secrets::mask` blanks any value saved here (6 characters or more) out of each event before it is emitted and before it is logged, matching the raw and the JSON-escaped form. A value split across deltas, encoded or reformatted gets through, and the model has already seen whatever a command printed. Nothing relies on it.
 
+## Phones
+
+**Android draws the card and Settings › Vault** (#1604, [SecretCard.kt](../../android/app/src/main/java/com/yogesh/dray/ui/SecretCard.kt), [SecretsSettings.kt](../../android/app/src/main/java/com/yogesh/dray/ui/SecretsSettings.kt)). The card sits in `Store.asks` beside permission cards but survives `strand`, since a turn ending must not drop it; `live_state`'s `secrets` refills it. Its lines sit outside the folds. The phone hides Dray's own kickoff prompt as the desktop does, or the answer's hidden prompt drew as a bubble.
+
 ## Not yet
 
-Phone cards (iOS, Android) and 1Password `op://` references. The wire is ready for the phones: two logged events and one command with plain arguments.
+The iOS card and 1Password `op://` references.

@@ -43,6 +43,7 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material3.AlertDialog
@@ -110,6 +111,7 @@ private sealed interface Page {
     data object Root : Page
     data object Servers : Page
     data class Server(val id: String) : Page
+    data object Secrets : Page
 }
 
 /**
@@ -130,6 +132,7 @@ fun SettingsScreen(focus: String?, back: () -> Unit, dictation: () -> Unit = {},
                 SettingsRow("Notifications", icon = { Icon(Icons.Outlined.Notifications, null, Modifier.size(20.dp), tint = Dray.secondary) },
                     value = if (com.yogesh.dray.push.Push.enabled && com.yogesh.dray.push.Push.available) "On" else "Off", onClick = notifications)
                 OpenBotRow()
+                SettingsRow("Vault", icon = { Icon(Icons.Outlined.Key, null, Modifier.size(20.dp), tint = Dray.secondary) }) { pages.add(Page.Secrets) }
             }
             About()
         }
@@ -137,6 +140,7 @@ fun SettingsScreen(focus: String?, back: () -> Unit, dictation: () -> Unit = {},
             ServerCards(null, open = { pages.add(Page.Server(it)) }, all = {}, add = add)
         }
         is Page.Server -> ServerDetail(page.id, ::pop)
+        Page.Secrets -> SecretsSettings(::pop)
     }
 }
 
@@ -179,7 +183,7 @@ private fun OpenBotRow() {
 
 /** A page: its bar, then its groups on the card fill, 28dp apart. */
 @Composable
-private fun SettingsPage(title: String, back: () -> Unit, fill: Color = Dray.card, content: @Composable ColumnScope.() -> Unit) {
+internal fun SettingsPage(title: String, back: () -> Unit, fill: Color = Dray.card, content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxSize().background(fill).statusBarsPadding().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().height(56.dp).padding(end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Dray.text) }
@@ -321,7 +325,7 @@ fun GroupLabel(text: String) = Text(text, Modifier.padding(horizontal = 12.dp), 
 
 /** One 52dp row: an icon, a label, its value on the same line, and where it goes. */
 @Composable
-private fun SettingsRow(
+internal fun SettingsRow(
     label: String, icon: (@Composable () -> Unit)? = null, value: String? = null, trailing: Boolean = true,
     external: Boolean = false, onClick: (() -> Unit)? = null,
 ) {
@@ -353,7 +357,7 @@ private fun SwitchRow(label: String, on: Boolean, content: (@Composable () -> Un
 
 /** A labelled field, 52dp: the label in a 72dp lane, the value beside it at the same size. */
 @Composable
-private fun FieldRow(label: String, value: String, prompt: String, done: () -> Unit = {}, onChange: (String) -> Unit) {
+internal fun FieldRow(label: String, value: String, prompt: String, done: () -> Unit = {}, onChange: (String) -> Unit) {
     Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(label, Modifier.width(72.dp), style = Dray.Font.body.copy(color = Dray.secondary))

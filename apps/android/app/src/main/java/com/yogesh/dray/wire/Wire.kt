@@ -206,6 +206,46 @@ data class Question(
 @Serializable
 data class QuestionsRequest(val requestId: String, val questions: List<Question> = emptyList())
 
+/** The task on another machine a bot's secret card answers: `events.rs`'s `SecretTask`. */
+@Serializable
+data class SecretTask(
+    val sessionId: String,
+    val title: String = "",
+    val machine: String = "",
+    val machineId: String? = null,
+    val requestId: String? = null,
+)
+
+/**
+ * `dray secret request`'s card. `bot` marks the task's own line for an ask its bot's chat on another
+ * machine answers; `task` is set on that bot's side. Logged, and closed only by its `secret_answered`.
+ */
+@Serializable
+data class SecretRequest(
+    val requestId: String,
+    val name: String,
+    val label: String? = null,
+    val reason: String = "",
+    val url: String? = null,
+    val savedNames: List<String> = emptyList(),
+    val closest: String? = null,
+    val bot: Boolean = false,
+    val task: SecretTask? = null,
+)
+
+/** How a secret card closed, never the value. `replaced` draws nothing: the newer card is the row. */
+@Serializable
+data class SecretAnswer(
+    val requestId: String,
+    val name: String,
+    val outcome: String,
+    val kept: Boolean = false,
+    val auto: Boolean = false,
+    val task: SecretTask? = null,
+) {
+    val draws: Boolean get() = outcome == "saved" || outcome == "declined" || outcome == "used"
+}
+
 data class ToolResult(val text: String, val isError: Boolean, val images: List<ImageRef>, val cut: Boolean)
 
 /** Whether a call's `input`, or its result's `structured`, was cut by the server: thin.rs's `CUT` mark. */
@@ -226,6 +266,8 @@ sealed interface Payload {
     data class PermissionRequested(val request: PermissionRequest) : Payload
     data class QuestionsAsked(val request: QuestionsRequest) : Payload
     data class PermissionDecided(val requestId: String) : Payload
+    data class SecretRequested(val request: SecretRequest) : Payload
+    data class SecretAnswered(val answer: SecretAnswer) : Payload
     data class BackgroundTasks(val tasks: List<BackgroundTask>) : Payload
     /** A subagent or backgrounded shell's lifecycle; which run is on the event's `subagent`. */
     data class SubagentStarted(val agentId: String, val label: String?, val description: String?) : Payload
@@ -255,6 +297,7 @@ sealed interface Payload {
         get() = when (this) {
             is PermissionRequested -> request.requestId
             is QuestionsAsked -> request.requestId
+            is SecretRequested -> request.requestId
             else -> null
         }
 
@@ -296,6 +339,8 @@ sealed interface Payload {
             "permission_requested" -> PermissionRequested(wireJson.decodeFromJsonElement(PermissionRequest.serializer(), o))
             "questions_asked" -> QuestionsAsked(wireJson.decodeFromJsonElement(QuestionsRequest.serializer(), o))
             "permission_decided" -> PermissionDecided(o["requestId"].str ?: return null)
+            "secret_requested" -> SecretRequested(wireJson.decodeFromJsonElement(SecretRequest.serializer(), o))
+            "secret_answered" -> SecretAnswered(wireJson.decodeFromJsonElement(SecretAnswer.serializer(), o))
             "background_tasks_changed" -> BackgroundTasks(decodeList(o["tasks"]))
             "subagent_started" -> SubagentStarted(o["agentId"].str ?: "", o["label"].str, o["description"].str)
             "subagent_progress" -> SubagentProgress(o["agentId"].str ?: "", o["description"].str)
