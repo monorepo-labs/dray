@@ -1,5 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ChevronDown, ChevronLeft, ExternalLink, KeyRound, X } from "lucide-react";
+import { KeyIcon } from "@heroicons/react/16/solid";
+import { ChevronDown, ChevronLeft, ExternalLink, X } from "lucide-react";
+import type { ComponentProps, ComponentType, SVGProps } from "react";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
@@ -118,7 +120,6 @@ export default function SecretRequest({
   // Yogesh's card (Paper): 18px corners, 14/16/16 inset less the 1px border, 24 between the two
   // halves. The fill and ring are the permission card's tokens, which is what
   // his dark values are, so light mode follows.
-  const big = "h-9 rounded-lg px-2.5 text-ui font-medium";
   return (
     <form
       onSubmit={onSubmit}
@@ -177,7 +178,7 @@ export default function SecretRequest({
         {pasting ? (
           <div className="flex min-w-0 items-center gap-2">
             {closest && (
-              <Button type="button" variant="ghost" className={cn(big, "shrink-0 text-muted-foreground")} disabled={busy} onClick={() => setPasting(false)}>
+              <Button type="button" variant="ghost" size="sm" className="shrink-0 text-muted-foreground" disabled={busy} onClick={() => setPasting(false)}>
                 <ChevronLeft />
                 Use saved
               </Button>
@@ -190,7 +191,7 @@ export default function SecretRequest({
               name={`dray-secret-${requestId}`}
               aria-label={label ?? name}
               placeholder="Paste the value"
-              className="h-9 rounded-lg px-2.5 font-mono text-sm leading-[18px] [-webkit-text-security:disc] placeholder:font-sans md:text-sm"
+              className="h-7 rounded-lg px-2.5 font-mono text-sm leading-[18px] [-webkit-text-security:disc] placeholder:font-sans md:text-sm"
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="off"
@@ -203,10 +204,9 @@ export default function SecretRequest({
               aria-invalid={error !== null || undefined}
               onChange={(e) => setFilled(e.currentTarget.value.trim() !== "")}
             />
-            <Button type="submit" className={cn(big, "shrink-0 gap-1.5")} disabled={busy || !filled}>
-              <KeyRound className="size-4" />
+            <SendSecurelyButton type="submit" disabled={busy || !filled}>
               {sending === "paste" ? "Sending…" : "Send securely"}
-            </Button>
+            </SendSecurelyButton>
           </div>
         ) : (
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -215,9 +215,10 @@ export default function SecretRequest({
                 type="submit"
                 autoFocus={autoFocus}
                 disabled={busy}
-                className={cn(big, "min-w-0 gap-1.5", savedNames.length > 1 && "rounded-r-none")}
+                size="sm"
+                className={cn("min-w-0", savedNames.length > 1 && "rounded-r-none")}
               >
-                <KeyRound className="size-4" />
+                <KeyIcon className="size-4" />
                 <span className="truncate">
                   Use saved <span className="font-mono">{pick}</span>
                 </span>
@@ -229,7 +230,8 @@ export default function SecretRequest({
                       type="button"
                       aria-label="Pick another saved secret"
                       disabled={busy}
-                      className="size-9 rounded-l-none rounded-r-lg border-l border-primary-foreground/20 p-0"
+                      size="icon-sm"
+                      className="rounded-l-none border-l border-primary-foreground/20"
                     >
                       <ChevronDown />
                     </Button>
@@ -249,7 +251,7 @@ export default function SecretRequest({
                 </DropdownMenu>
               )}
             </div>
-            <Button type="button" variant="ghost" className={cn(big, "shrink-0 text-muted-foreground")} disabled={busy} onClick={() => setPasting(true)}>
+            <Button type="button" variant="ghost" size="sm" className="shrink-0 text-muted-foreground" disabled={busy} onClick={() => setPasting(true)}>
               Paste a new one
             </Button>
           </div>
@@ -275,6 +277,23 @@ export default function SecretRequest({
         )}
       </div>
     </form>
+  );
+}
+
+/// The card's main answer: the light button with a solid icon. `icon` is
+/// there so the demo can put the candidates side by side.
+export function SendSecurelyButton({
+  icon: Icon = KeyIcon,
+  className,
+  children = "Send securely",
+  ...props
+}: ComponentProps<typeof Button> & { icon?: ComponentType<SVGProps<SVGSVGElement>> }) {
+  return (
+    // The permission card's Allow once: the app's own button, small.
+    <Button size="sm" className={cn("shrink-0", className)} {...props}>
+      <Icon className="size-4" aria-hidden />
+      {children}
+    </Button>
   );
 }
 

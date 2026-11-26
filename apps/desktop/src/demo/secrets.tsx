@@ -4,13 +4,22 @@ import ReactDOM from "react-dom/client";
 
 import EventRow from "@/components/chat/EventRow";
 import PermissionRequest from "@/components/chat/PermissionRequest";
-import SecretRequest from "@/components/chat/SecretRequest";
+import SecretRequest, { SendSecurelyButton } from "@/components/chat/SecretRequest";
 import SecretsSettings from "@/components/settings/SecretsSettings";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
 import { SecretPartiesContext, type SecretParties } from "@/hooks/useSecretParties";
 import type { AgentEvent, ServerInfo } from "@/types/events";
+import { FingerPrintIcon, KeyIcon, LockClosedIcon, PaperAirplaneIcon, ShieldCheckIcon } from "@heroicons/react/16/solid";
 import "../App.css";
+
+const ICONS = [
+  ["key", KeyIcon],
+  ["lock-closed", LockClosedIcon],
+  ["shield-check", ShieldCheckIcon],
+  ["paper-airplane", PaperAirplaneIcon],
+  ["finger-print", FingerPrintIcon],
+] as const;
 
 /// Every state of a secret card, the lines a closed one leaves, and Settings →
 /// Secrets, through the real components. The server is faked in the page:
@@ -104,12 +113,12 @@ function Pasting({ children }: { children: ReactNode }) {
 
 function Section({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
   return (
-    <section className="flex flex-col gap-2">
-      <div>
+    <section className="flex flex-col gap-3 px-6">
+      <div className="border-t border-border pt-4">
         <h2 className="text-ui font-medium">{title}</h2>
         {note && <p className="text-ui text-muted-foreground">{note}</p>}
       </div>
-      <div className="rounded-xl border border-border px-6 py-6">{children}</div>
+      {children}
     </section>
   );
 }
@@ -120,24 +129,21 @@ function Demo() {
     <TooltipProvider>
       <SecretPartiesContext value={parties}>
         <div className="mx-auto flex max-w-3xl flex-col gap-8 px-0 py-10 pb-28">
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1 px-6">
             <h1 className="text-lg font-medium">Secrets</h1>
             <p className="text-ui text-muted-foreground">
               The real card, lines and Settings page. Answering waits as the server would and changes nothing else.
             </p>
           </div>
 
-          <Section title="Yogesh's card" note="His Paper example, at his 720px.">
-            <div data-yogesh-card style={{ width: 720 }}>
-              <SecretRequest
-                sessionId={BOT_CHAT}
-                requestId="v"
-                name="VERCEL_TOKEN"
-                label="Vercel token"
-                reason="To link apps/docs to Vercel and run the first deploy."
-                url="https://vercel.com/account/settings/tokens"
-                autoFocus={false}
-              />
+          <Section title="Send securely, solid icons" note="Heroicons 16 solid on the real button. Key is what the card uses now.">
+            <div className="flex flex-wrap gap-6">
+              {ICONS.map(([label, Icon]) => (
+                <div key={label} className="flex flex-col items-start gap-2">
+                  <SendSecurelyButton type="button" icon={Icon} />
+                  <span className="text-ui text-muted-foreground">{label}</span>
+                </div>
+              ))}
             </div>
           </Section>
 
@@ -223,7 +229,7 @@ function Demo() {
           </Section>
 
           <Section title="Settings → Secrets" note="The machine picker at the top; Auto is the switch; ⋯ holds Replace and Delete.">
-            <div className="max-w-xl">
+            <div className="max-w-xl rounded-xl border border-border p-6">
               <SecretsSettings />
             </div>
           </Section>
