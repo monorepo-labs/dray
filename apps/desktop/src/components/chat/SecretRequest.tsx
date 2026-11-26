@@ -165,7 +165,7 @@ export default function SecretRequest({
           <div className="flex min-w-0 flex-col gap-1.5">
             <div className="flex items-start gap-3">
               <div className="flex min-w-0 flex-1 items-start gap-1.5">
-                <KeyIcon className="my-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+                <KeyIcon className="my-0.5 size-4 shrink-0" aria-hidden />
                 <p className="min-w-0 text-sm leading-5 font-medium wrap-anywhere">{label ?? name}</p>
               </div>
               {!asker && decline}
