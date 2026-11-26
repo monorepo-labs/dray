@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { countUseDay, gatesSignIn, nudgeDue, useDays } from "./signInGate";
+import { blocksSignIn, countUseDay, gatesSignIn, nudgeDue, useDays } from "./signInGate";
 
 describe("gatesSignIn", () => {
   it("gates a release build", () => {
@@ -43,7 +43,7 @@ describe("countUseDay", () => {
 });
 
 describe("nudgeDue", () => {
-  const due = { skipped: true, days: 3, merged: true, nudged: false };
+  const due = { skipped: true, days: 3, merged: true };
 
   it("asks a reader who skipped, after three days and a merged PR", () => {
     expect(nudgeDue(due)).toBe(true);
@@ -54,11 +54,20 @@ describe("nudgeDue", () => {
     expect(nudgeDue({ ...due, merged: false })).toBe(false);
   });
 
-  it("asks once", () => {
-    expect(nudgeDue({ ...due, nudged: true })).toBe(false);
-  });
-
   it("never asks a reader who did not skip", () => {
     expect(nudgeDue({ ...due, skipped: false })).toBe(false);
+  });
+});
+
+describe("blocksSignIn", () => {
+  it("lets a reader past on a failure trying again can't fix", () => {
+    expect(blocksSignIn("offline")).toBe(true);
+    expect(blocksSignIn("Couldn't reach drayhq.com")).toBe(true);
+  });
+
+  it("keeps the gate shut on their own cancel or an idle browser", () => {
+    expect(blocksSignIn("cancelled")).toBe(false);
+    expect(blocksSignIn("timed_out")).toBe(false);
+    expect(blocksSignIn(null)).toBe(false);
   });
 });

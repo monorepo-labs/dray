@@ -5,8 +5,8 @@ import SignInGate, { type GateView } from "@/components/SignInGate";
 import { useQuitAtOnce } from "@/hooks/useQuitAtOnce";
 import { useLocalServer } from "@/lib/servers";
 import { onFocusChange } from "@/lib/focus";
-import { ONBOARDED } from "@/lib/signInGate";
-import { markNudged, signInAsked, signInNudgeDue, SKIPPED } from "@/lib/signInNudge";
+import { blocksSignIn, ONBOARDED } from "@/lib/signInGate";
+import { signInAsked, signInRequired, SKIPPED } from "@/lib/signInNudge";
 import { invoke, listen, LOCAL } from "@/lib/transport";
 import type { DrayAccountState, SignInMethod, SignInStarted } from "@/types/events";
 
@@ -41,10 +41,12 @@ const ERRORS: Record<string, string> = {
 /// skipped, and the gate otherwise. The app is not mounted behind that gate,
 /// so nothing in it can be reached by a shortcut.
 ///
-/// A skipped reader meets the same gate again over the app: from Settings'
-/// Sign in, and once on its own when `signInNudgeDue`, at launch or when the
-/// window comes back after a while away. The app stays mounted under it, so
-/// nothing open is lost, and keys are held back from it.
+/// A skipped reader meets the gate again from Settings' Sign in, drawn over
+/// the app, which stays mounted with keys held back from it. Once their use
+/// makes sign-in required (`signInRequired`) the gate loses Skip: in front of
+/// the app at launch, or over it when the window comes back after a while
+/// away. Only a sign-in the network won't let finish lets them past, for
+/// this run alone.
 export default function AccountGate({ children }: { children: ReactNode }) {
   const local = useLocalServer();
   const connected = local?.status === "connected";
@@ -147,13 +149,22 @@ export default function AccountGate({ children }: { children: ReactNode }) {
     else if (account?.signingIn) void pick(account.signingIn);
   }, [account, pick]);
   const cancel = useCallback(() => void invoke("account_sign_in_cancel", {}, LOCAL).catch(() => {}), []);
-  // The gate drawn over a skipped reader's app, until they sign in or skip.
+  // Required at launch: the gate stands in front of the app as on a first
+  // launch, only without Skip.
+  const [shut] = useState(() => signInRequired());
+  // Required now, which may have come due while the app ran.
+  const [required, setRequired] = useState(shut);
+  // Let past a required gate by a sign-in the network wouldn't let finish:
+  // this run only, so the gate is back at the next launch or calm moment.
+  const [bypassed, setBypassed] = useState(false);
+  // The gate drawn over the app, which stays mounted under it.
   const [over, setOver] = useState(false);
   const skip = useCallback(() => {
     localStorage.setItem(SKIPPED, "1");
     // Clears an `offline` or failed sign-in, so a later gate opens fresh.
     void invoke("account_sign_in_cancel", {}, LOCAL).catch(() => {});
     setSkipped(true);
+    setBypassed(true);
     setOver(false);
   }, []);
 
@@ -163,26 +174,21 @@ export default function AccountGate({ children }: { children: ReactNode }) {
   }, [signedIn]);
 
   // Only once the server has said no one is signed in, so a slow answer
-  // can't put the gate over a signed-in reader.
+  // can't put the gate over a signed-in reader. A calm moment is the window
+  // coming back after a while away: the reader is returning, not mid-sentence.
   const signedOut = Boolean(account && !account.user);
-  const nudge = useCallback(() => {
-    if (!signInNudgeDue()) return;
-    markNudged();
-    setOver(true);
-  }, []);
-  // At launch.
-  useEffect(() => {
-    if (signedOut && skipped) nudge();
-  }, [signedOut, skipped, nudge]);
-  // Or the window coming back after a while away.
   useEffect(() => {
     if (!signedOut || !skipped) return;
     let leftAt: number | null = null;
     return onFocusChange((focused) => {
       if (!focused) leftAt = Date.now();
-      else if (leftAt !== null && Date.now() - leftAt >= AWAY_MS) nudge();
+      else if (leftAt !== null && Date.now() - leftAt >= AWAY_MS && signInRequired()) {
+        setRequired(true);
+        setBypassed(false);
+        setOver(true);
+      }
     });
-  }, [signedOut, skipped, nudge]);
+  }, [signedOut, skipped]);
 
   // Keys stay with the gate while it covers the app: no shortcut, and no
   // typing into a composer the reader can't see.
@@ -200,7 +206,7 @@ export default function AccountGate({ children }: { children: ReactNode }) {
 
   // Until the server answers, a machine signed in last time draws the app,
   // which is nearly always right; anyone else sees the gate's empty frame.
-  const open = signedIn || skipped || (!account && !failed && remembered);
+  const open = signedIn || (skipped && (!shut || bypassed)) || (!account && !failed && remembered);
   useQuitAtOnce(!open);
 
   let view: GateView | null = null;
@@ -214,6 +220,9 @@ export default function AccountGate({ children }: { children: ReactNode }) {
       error: error === "offline" ? null : error ? (ERRORS[error] ?? error) : failed,
       emailOff: account?.emailOff ?? false,
       lastUsed,
+      // Never locked out by the network: a failure trying again can't fix
+      // opens the way past a required gate.
+      canSkip: !required || blocksSignIn(error) || failed !== null,
     };
   }
   const gate = <SignInGate view={view} onPick={pick} onOpenAgain={openAgain} onCancel={cancel} onSkip={skip} />;

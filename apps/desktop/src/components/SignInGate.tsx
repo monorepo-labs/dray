@@ -16,6 +16,8 @@ export type GateView =
       offline: boolean;
       emailOff: boolean;
       lastUsed: SignInMethod | null;
+      /// False once sign-in is required, unless a failure opens the way.
+      canSkip: boolean;
     }
   | { kind: "waiting"; method: SignInMethod; finishing: boolean };
 
@@ -71,7 +73,7 @@ function body(
         </Cards>
       </>
     );
-  const { error, offline, revoked, emailOff, lastUsed } = view;
+  const { error, offline, revoked, emailOff, lastUsed, canSkip } = view;
   const tag = (method: SignInMethod) => lastUsed === method && <LastUsed />;
   const failed = !offline && error;
   const label = failed ? failed : revoked ? "You've been signed out" : "Welcome to Dray";
@@ -94,11 +96,11 @@ function body(
         ) : (
           <Card icon={<MailIcon />} label="Email" tag={tag("email")} corner onClick={() => act.onPick("email")} />
         )}
-        {offline && <Card icon={<SkipIcon />} label="Skip for now" onClick={act.onSkip} />}
+        {offline && canSkip && <Card icon={<SkipIcon />} label="Skip for now" onClick={act.onSkip} />}
       </Cards>
       {/* Online, a way past the gate that doesn't compete with the three ways
           in (#1590). Offline it is the fourth card above. */}
-      {!offline && <QuietSkip onClick={act.onSkip} />}
+      {!offline && canSkip && <QuietSkip onClick={act.onSkip} />}
     </>
   );
 }

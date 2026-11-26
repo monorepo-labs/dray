@@ -7,8 +7,10 @@ export const SKIPPED = "dray.signInSkipped";
 const USE_DAYS = "dray.useDays";
 /// Set once any task's PR reads merged, however it was merged.
 const PR_MERGED = "dray.taskPrMerged";
-/// Set once the gate came back for a skipped reader, so it comes back once.
-const NUDGED = "dray.signInNudged";
+/// Set once a skipped reader's use made sign-in due: from then on the gate
+/// offers no Skip, bar a sign-in the network won't let finish. Kept after a
+/// sign-in, so signing out later doesn't bring Skip back.
+const REQUIRED = "dray.signInRequired";
 
 /// Asks the gate to come up over the app: Settings' Sign in, or the nudge.
 export const signInAsked = channel<void>();
@@ -34,18 +36,16 @@ export function prMergedNoted(): boolean {
   return localStorage.getItem(PR_MERGED) === "1";
 }
 
-/// Whether the gate is due to come back for a reader who skipped it.
-export function signInNudgeDue(): boolean {
-  return nudgeDue({
+/// Whether sign-in is required: already, or due now, which records it.
+export function signInRequired(): boolean {
+  if (localStorage.getItem(REQUIRED) === "1") return true;
+  const due = nudgeDue({
     skipped: localStorage.getItem(SKIPPED) === "1",
     days: useDays(localStorage.getItem(USE_DAYS)),
     merged: prMergedNoted(),
-    nudged: localStorage.getItem(NUDGED) === "1",
   });
-}
-
-export function markNudged() {
-  localStorage.setItem(NUDGED, "1");
+  if (due) localStorage.setItem(REQUIRED, "1");
+  return due;
 }
 
 function localDay(): string {

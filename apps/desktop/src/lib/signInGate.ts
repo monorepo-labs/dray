@@ -42,9 +42,15 @@ function readDays(stored: string | null): { n: number; last: string } {
   }
 }
 
-/// Whether a reader who skipped sign-in is shown the gate again (#1590):
-/// once, after a few days of use and a task's PR merged, so they have seen
-/// Dray do real work first.
-export function nudgeDue(s: { skipped: boolean; days: number; merged: boolean; nudged: boolean }): boolean {
-  return s.skipped && !s.nudged && s.merged && s.days >= NUDGE_DAYS;
+/// Whether a reader who skipped sign-in must now sign in (#1590): after a few
+/// days of use and a task's PR merged, so they have seen Dray do real work
+/// first.
+export function nudgeDue(s: { skipped: boolean; days: number; merged: boolean }): boolean {
+  return s.skipped && s.merged && s.days >= NUDGE_DAYS;
+}
+
+/// Sign-in errors a reader can't fix by trying again, which let them past a
+/// gate with no Skip: anything bar their own cancel or a browser left idle.
+export function blocksSignIn(error: string | null): boolean {
+  return error !== null && error !== "cancelled" && error !== "timed_out";
 }
