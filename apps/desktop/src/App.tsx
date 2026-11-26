@@ -192,6 +192,7 @@ import { onCloud, setCloudFailure, useCloud, useCloudFailure, usePlacing } from 
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout, nextCheckout } from "@/lib/projectGroups";
 import { cloudServer, serverConnected, serverName, shownOffline, useServers } from "@/lib/servers";
+import { notePrMerged, prMergedNoted } from "@/lib/signInNudge";
 import { canTagFrom } from "@/lib/sessionTag";
 import { useReachableSessions } from "@/hooks/useReachableSessions";
 import AgentUpdateLine from "@/components/composer/AgentUpdateLine";
@@ -1570,6 +1571,12 @@ function App() {
   // The same marks, turned into a merge card in the chat that started a task,
   // so landing it never waits on an agent remembering to post one.
   useAutoMergeCards({ items: sessionIndexItems, bots, prFor: prMarks.prFor, readAt: prMarks.readAt, statusBySession });
+  // A task's PR merged, from the app, a bot or GitHub: one of the two things
+  // the sign-in nudge waits on.
+  useEffect(() => {
+    if (prMergedNoted()) return;
+    if (sessionIndexItems.some((i) => prMarks.prFor(i.projectPath, sessionBranch(i))?.state === "MERGED")) notePrMerged();
+  }, [sessionIndexItems, prMarks.prFor]);
 
   // Each bot's tasks that have sat untouched: drawn at the foot of its chat,
   // and a banner per bot when new ones land while the window is away.

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronsUpDown, Mail } from "lucide-react";
+import { ChevronsUpDown, Mail, UserRound } from "lucide-react";
 
 import { markSignOut } from "@/components/AccountGate";
 import GitHubIcon from "@/components/GitHubIcon";
@@ -24,6 +24,8 @@ import {
 import { useDrayAccount, useOrgLink } from "@/hooks/useOrgLink";
 import { MACHINE } from "@/lib/platform";
 import { useLocalServer } from "@/lib/servers";
+import { gatesSignIn } from "@/lib/signInGate";
+import { askSignIn } from "@/lib/signInNudge";
 import { invoke, LOCAL } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { DrayUser } from "@/types/events";
@@ -86,6 +88,29 @@ function GoogleIcon({ className }: { className?: string }) {
   );
 }
 
+/// The gate is what signs in, so a build without one (dev) offers no row.
+const CAN_SIGN_IN = gatesSignIn(import.meta.env);
+
+/// The card's place while signed out (#1590): the one way back to the sign-in
+/// gate after Skip, drawn over the app.
+function SignInRow() {
+  return (
+    <button
+      type="button"
+      onClick={askSignIn}
+      className="mb-3 flex w-full cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-(--fill-soft,var(--sidebar-accent))"
+    >
+      <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted-foreground/15 text-muted-foreground">
+        <UserRound className="size-4" />
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-ui font-medium text-foreground">Sign in</span>
+        <span className="truncate text-xs text-muted-foreground">Not signed in</span>
+      </div>
+    </button>
+  );
+}
+
 /// The sign-ins the site reports. An account with neither signed in with
 /// email, the only other way in.
 const PROVIDERS = [
@@ -97,16 +122,17 @@ const EMAIL = { id: "email", label: "email", Icon: Mail };
 /// The Dray account the app is signed in to (#874, #1277, #1314), at the top
 /// of Settings' list: picture or initials, name and email. Its menu says how
 /// the account signs in and offers Sign out, which forgets the account,
-/// leaves this machine's link alone, and lands on the sign-in gate. Draws
-/// nothing while signed out: after Skip on the gate, and in a dev build with
-/// no saved account, since dev has no gate.
+/// leaves this machine's link alone, and lands on the sign-in gate. Signed
+/// out, after Skip, it is a Sign in row instead; a dev build with no gate
+/// draws nothing.
 export default function AccountCard() {
   const local = useLocalServer();
   const connected = local?.status === "connected";
-  const user = useDrayAccount(connected)?.user;
+  const account = useDrayAccount(connected);
+  const user = account?.user;
   const linked = !!useOrgLink(LOCAL, connected).state?.linked;
   const [asking, setAsking] = useState(false);
-  if (!user) return null;
+  if (!user) return account && CAN_SIGN_IN ? <SignInRow /> : null;
   // A local server still on the previous build, waiting for its turns to end
   // before it restarts, sends no `providers` at all.
   const linkedIds = user.providers ?? [];

@@ -38,7 +38,7 @@ export default function SignInGate({
   onSkip: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-[1000] flex flex-col overflow-hidden bg-black text-white select-none">
+    <div data-sign-in-gate className="fixed inset-0 z-[1000] flex flex-col overflow-hidden bg-black text-white select-none">
       <Tiles />
       <header data-tauri-drag-region="deep" className="relative flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">
         <MuteButton />
