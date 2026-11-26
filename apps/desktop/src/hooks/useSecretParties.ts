@@ -7,8 +7,6 @@ import type { Party } from "@/components/chat/PartyChip";
 /// reports to a bot whose chat lives elsewhere. `App` answers from the index
 /// and the bot list; a demo answers with fakes.
 export type SecretParties = {
-  /// Who is asking in `sessionId`'s chat.
-  asker: (sessionId: string) => Party;
   /// The bot `sessionId` reports to, at any depth, where there is one.
   botOf: (sessionId: string) => Party | null;
   /// Opens a party's chat, as a task row or a bot's line does.
@@ -16,7 +14,6 @@ export type SecretParties = {
 };
 
 export const SecretPartiesContext = createContext<SecretParties>({
-  asker: (sessionId) => ({ id: sessionId, title: "This task" }),
   botOf: () => null,
   open: () => {},
 });

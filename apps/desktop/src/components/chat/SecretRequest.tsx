@@ -64,9 +64,9 @@ export default function SecretRequest({
   autoFocus?: boolean;
 }) {
   const parties = useSecretParties();
-  const asker: Party = task
-    ? { id: task.sessionId, title: task.title, machine: task.machine }
-    : parties.asker(sessionId);
+  // Named only when the card is someone else's: in its own chat the asker is
+  // the chat, so a row saying so is noise.
+  const asker: Party | null = task ? { id: task.sessionId, title: task.title, machine: task.machine } : null;
   const [pasting, setPasting] = useState(!closest);
   const [pick, setPick] = useState(closest ?? savedNames[0] ?? name);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -115,6 +115,25 @@ export default function SecretRequest({
   };
 
   const busy = sending !== null;
+  const decline = (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Decline"
+          // Its 24px box rides the title's 20px line, centred on it.
+          className="-my-0.5 shrink-0 rounded-lg text-muted-foreground"
+          disabled={busy}
+          onClick={() => void send("decline")}
+        >
+          <X className="size-3.5" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top">Decline</TooltipContent>
+    </Tooltip>
+  );
   // Using it without asking keeps a pasted one, so this reads as on while that is.
   const keeps = keep || auto;
   // Yogesh's card (Paper): 18px corners, 14/16/16 inset less the 1px border, 24 between the two
@@ -128,35 +147,25 @@ export default function SecretRequest({
       className="flex w-full max-w-lg flex-col gap-[18px] self-start rounded-[18px] border border-[var(--card-edge,var(--border))] bg-[var(--permission-card,var(--card))] px-[15px] pt-[13px] pb-[15px] shadow-[var(--shadow-raised-card,var(--shadow-card))]"
     >
       <div className="flex flex-col gap-3">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={(e) => parties.open(asker, isModClick(e))}
-            className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-sm leading-5 text-muted-foreground hover:text-foreground"
-          >
-            <BotAvatar still seed={asker.id} avatar={asker.avatar ?? seededAvatar(asker.id)} className="block size-4 shrink-0 scale-[1.18]" />
-            <span className="truncate">{asker.title}</span>
-            {asker.machine && <MachineMark machine={asker.machine} />}
-          </button>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                aria-label="Decline"
-                className="shrink-0 rounded-lg text-muted-foreground"
-                disabled={busy}
-                onClick={() => void send("decline")}
-              >
-                <X className="size-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top">Decline</TooltipContent>
-          </Tooltip>
-        </div>
+        {asker && (
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={(e) => parties.open(asker, isModClick(e))}
+              className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-sm leading-5 text-muted-foreground hover:text-foreground"
+            >
+              <BotAvatar still seed={asker.id} avatar={asker.avatar ?? seededAvatar(asker.id)} className="block size-4 shrink-0 scale-[1.18]" />
+              <span className="truncate">{asker.title}</span>
+              {asker.machine && <MachineMark machine={asker.machine} />}
+            </button>
+            {decline}
+          </div>
+        )}
         <div className="flex min-w-0 flex-col gap-1.5">
-          <p className="text-sm leading-5 font-medium wrap-anywhere">{label ?? name}</p>
+          <div className="flex items-start gap-3">
+            <p className="min-w-0 flex-1 text-sm leading-5 font-medium wrap-anywhere">{label ?? name}</p>
+            {!asker && decline}
+          </div>
           <p className="flex min-w-0 flex-wrap items-center gap-x-1 text-sm leading-5">
             <span className="text-muted-foreground">{reason}</span>
             {url && (
@@ -211,9 +220,9 @@ export default function SecretRequest({
               aria-invalid={error !== null || undefined}
               onChange={(e) => setFilled(e.currentTarget.value.trim() !== "")}
             />
-            <SendSecurelyButton type="submit" disabled={busy || !filled}>
-              {sending === "paste" ? "Sending…" : "Send securely"}
-            </SendSecurelyButton>
+            <ShareSecurelyButton type="submit" disabled={busy || !filled}>
+              {sending === "paste" ? "Sharing…" : "Share securely"}
+            </ShareSecurelyButton>
           </div>
         ) : (
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -289,10 +298,10 @@ export default function SecretRequest({
 
 /// The card's main answer: the light button with a solid icon. `icon` is
 /// there so the demo can put the candidates side by side.
-export function SendSecurelyButton({
+export function ShareSecurelyButton({
   icon: Icon = ShieldCheckIcon,
   className,
-  children = "Send securely",
+  children = "Share securely",
   ...props
 }: ComponentProps<typeof Button> & { icon?: ComponentType<SVGProps<SVGSVGElement>> }) {
   return (

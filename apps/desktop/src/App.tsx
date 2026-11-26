@@ -4032,13 +4032,6 @@ function App() {
   // Who a secret card or line names: a bot's chat is the bot, a task itself,
   // and a task on another machine has the server mark beside its name.
   const secretParties: SecretParties = {
-    asker: (sessionId) => {
-      const item = sessionIndexItems.find((i) => i.sessionId === sessionId);
-      const bot = item ? botAt(bots, item.cwd) : undefined;
-      if (bot) return { id: bot.id, title: bot.name, avatar: bot.avatar ?? seededAvatar(bot.id) };
-      const server = serverOfSession(sessionId);
-      return { id: sessionId, title: item?.title ?? "This task", machine: server === LOCAL ? null : serverName(server) };
-    },
     botOf: (sessionId) => {
       const bot = botOf(bots, sessionIndexItems, sessionId);
       return bot ? { id: bot.id, title: bot.name, avatar: bot.avatar ?? seededAvatar(bot.id) } : null;

@@ -22,7 +22,6 @@ const REMOTE_TASK = "01a21700-demo-remote-task";
 const BOT = { id: "01a213f2-8a97-775f-b633-8793b2e29311", title: "Dray Bot", avatar: { shape: "round", hue: 210 } };
 
 const parties: SecretParties = {
-  asker: (sessionId) => (sessionId === BOT_CHAT ? BOT : { id: sessionId, title: "Log gh in on this box" }),
   botOf: () => BOT,
   open: (party) => console.info("open", party.title),
 };
@@ -143,7 +142,7 @@ function Demo() {
             </div>
           </Section>
 
-          <Section title="First ask" note="Nothing saved on the machine.">
+          <Section title="First ask" note="Nothing saved on the machine. Asked in its own chat, so no name row: × sits beside the title.">
             <SecretRequest sessionId={TASK} {...base} name="GITHUB_TOKEN" reason="Sign gh in" autoFocus={false} />
           </Section>
 
@@ -185,7 +184,7 @@ function Demo() {
             />
           </Section>
 
-          <Section title="Bot's card for a task on another machine" note="In the bot's chat; the value goes to remotebox.">
+          <Section title="Bot's card for a task on another machine" note="In the bot's chat, asked by one of its tasks, so the task is named above the title; the value goes to remotebox.">
             <SecretRequest
               sessionId={BOT_CHAT}
               requestId="q"
