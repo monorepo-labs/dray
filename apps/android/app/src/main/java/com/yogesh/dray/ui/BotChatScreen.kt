@@ -143,6 +143,7 @@ fun BotChatScreen(opened: SessionKey, bot: Bot, back: () -> Unit, openTask: (Ses
     CompositionLocalProvider(
         LocalImageServer provides key.server,
         LocalCallSession provides key,
+        LocalChatList provides list,
         LocalOpenImage provides { ref: ImageRef ->
             val shots = items.filterIsInstance<BotItem.User>().flatMap { it.images }.map { Shot(it, "Image", it.path ?: it.url) }
                 .ifEmpty { listOf(Shot(ref, "Image", ref.path ?: ref.url)) }

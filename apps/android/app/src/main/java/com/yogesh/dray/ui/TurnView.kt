@@ -165,10 +165,10 @@ fun UserBubble(prompt: TurnPrompt, queued: Boolean = false) {
         }
         Thumbnails(prompt.images, end = true)
         if (prompt.text.isNotBlank()) {
-            Text(
+            ClampedText(
                 prompt.text,
+                Dray.Font.body.copy(color = Dray.onSent),
                 Modifier.clip(RoundedCornerShape(Dray.Radius.xl)).background(Dray.sent).padding(horizontal = 14.dp, vertical = 10.dp),
-                style = Dray.Font.body.copy(color = Dray.onSent),
             )
         }
         if (queued) Text("Queued", style = Dray.Font.footnote.copy(color = Dray.tertiary))
