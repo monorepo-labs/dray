@@ -5,7 +5,6 @@ import UserMessage from "@/components/chat/UserMessage";
 import FileEdits from "@/components/chat/FileEdits";
 import IssueCard from "@/components/chat/IssueCard";
 import MergeCard from "@/components/chat/MergeCard";
-import { KeyRound } from "lucide-react";
 import { PartyChip, type Party } from "@/components/chat/PartyChip";
 import { useSecretParties } from "@/hooks/useSecretParties";
 import { isModClick } from "@/lib/platform";
@@ -72,8 +71,6 @@ export function SecretAnswer({
     );
   return (
     <div className="flex max-w-full items-center gap-0.5 self-start text-ui text-muted-foreground">
-      {/* A chip carries the line's face; a line without one takes the card's key. */}
-      {!chip && <KeyRound className="mr-1.5 size-3.5 shrink-0" aria-hidden />}
       <span className="shrink-0">{said}</span>
       {chip}
     </div>

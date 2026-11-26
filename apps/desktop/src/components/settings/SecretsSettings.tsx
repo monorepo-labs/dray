@@ -129,13 +129,13 @@ function SecretRow({ server, secret }: { server: ServerId; secret: SecretSummary
     <li className="flex flex-col gap-2">
       <div className="flex min-h-7 items-center gap-4 py-2">
         <div className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate font-mono text-ui font-medium">{secret.name}</span>
+          <span className="truncate text-ui font-medium">{secret.name}</span>
           <span className="truncate text-ui text-muted-foreground">Saved {when(secret.modified)}</span>
         </div>
         {mode === "delete" ? (
           <CancelOrConfirm verb="Delete" busy={busy} autoFocus onCancel={() => setMode("idle")} onConfirm={remove} />
         ) : (
-          <div className="flex shrink-0 items-center gap-3">
+          <div className="flex shrink-0 items-center gap-1.5">
             <Tooltip>
               <TooltipTrigger asChild>
                 <label className="flex items-center gap-2 text-ui text-muted-foreground">
@@ -147,7 +147,7 @@ function SecretRow({ server, secret }: { server: ServerId; secret: SecretSummary
             </Tooltip>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm" aria-label={`${secret.name} options`} className="text-muted-foreground">
+                <Button variant="ghost" size="sm" aria-label={`${secret.name} options`}>
                   <MoreHorizontal className="size-3.5" />
                 </Button>
               </DropdownMenuTrigger>

@@ -3,6 +3,7 @@ import React, { useEffect, useRef, type ReactNode } from "react";
 import ReactDOM from "react-dom/client";
 
 import EventRow from "@/components/chat/EventRow";
+import PermissionRequest from "@/components/chat/PermissionRequest";
 import SecretRequest from "@/components/chat/SecretRequest";
 import SecretsSettings from "@/components/settings/SecretsSettings";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -108,7 +109,7 @@ function Section({ title, note, children }: { title: string; note?: string; chil
         <h2 className="text-ui font-medium">{title}</h2>
         {note && <p className="text-ui text-muted-foreground">{note}</p>}
       </div>
-      <div className="rounded-xl border border-border px-6 py-5">{children}</div>
+      <div className="rounded-xl border border-border px-6 py-6">{children}</div>
     </section>
   );
 }
@@ -118,13 +119,29 @@ function Demo() {
   return (
     <TooltipProvider>
       <SecretPartiesContext value={parties}>
-        <div className="mx-auto flex max-w-3xl flex-col gap-8 p-10 pb-28">
+        <div className="mx-auto flex max-w-3xl flex-col gap-8 px-0 py-10 pb-28">
           <div className="flex flex-col gap-1">
             <h1 className="text-lg font-medium">Secrets</h1>
             <p className="text-ui text-muted-foreground">
               The real card, lines and Settings page. Answering waits as the server would and changes nothing else.
             </p>
           </div>
+
+          <Section title="Beside a permission card" note="The real PermissionRequest first, then a first ask, as they would stack in a chat.">
+            <div className="flex flex-col gap-4">
+              <PermissionRequest
+                description="Install wrangler in apps/upload-worker"
+                argument="pnpm add -D wrangler"
+                options={[
+                  { id: "once", label: "Allow once", kind: "once", behavior: "allow" },
+                  { id: "rule", label: "Always allow pnpm add", kind: "always_rule", behavior: "allow" },
+                  { id: "deny", label: "Deny", kind: "deny", behavior: "deny" },
+                ]}
+                onRespond={() => {}}
+              />
+              <SecretRequest sessionId={TASK} {...base} name="CLOUDFLARE_API_TOKEN" reason="Deploy with wrangler" url="https://dash.cloudflare.com/profile/api-tokens" autoFocus={false} />
+            </div>
+          </Section>
 
           <Section title="First ask" note="Nothing saved on the machine.">
             <SecretRequest sessionId={TASK} {...base} name="GITHUB_TOKEN" reason="Sign gh in" autoFocus={false} />

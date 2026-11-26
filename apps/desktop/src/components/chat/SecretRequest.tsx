@@ -1,8 +1,10 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ChevronDown, ChevronLeft, ExternalLink, KeyRound, Lock } from "lucide-react";
+import { ChevronDown, ChevronLeft, ExternalLink, Lock, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 
-import { PartyChip, type Party } from "@/components/chat/PartyChip";
+import BotAvatar from "@/components/BotAvatar";
+import type { Party } from "@/components/chat/PartyChip";
+import MachineMark from "@/components/MachineMark";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -14,10 +16,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSecretParties } from "@/hooks/useSecretParties";
+import { seededAvatar } from "@/lib/botAvatar";
 import { isModClick } from "@/lib/platform";
 import { serverName } from "@/lib/servers";
 import { invoke, serverOfSession } from "@/lib/transport";
+import { cn } from "@/lib/utils";
 import type { SecretTask } from "@/types/events";
 
 type Answer = "paste" | "saved" | "decline";
@@ -110,60 +115,62 @@ export default function SecretRequest({
   const busy = sending !== null;
   // Using it without asking keeps a pasted one, so this reads as on while that is.
   const keeps = keep || auto;
-  const decline = (
-    <Button
-      type="button"
-      variant="ghost"
-      className="shrink-0 text-muted-foreground"
-      disabled={busy}
-      onClick={() => void send("decline")}
-    >
-      Decline
-    </Button>
-  );
   return (
+    // PermissionRequest's card: the same surface, inset and type, so a secret
+    // reads as one more thing the agent is waiting on.
     <form
       onSubmit={onSubmit}
       autoComplete="off"
       data-secret-card
-      className="flex flex-col gap-3 rounded-2xl border border-[var(--card-edge,var(--border))] bg-[var(--permission-card,var(--card))] p-4 shadow-[var(--shadow-raised-card,var(--shadow-card))]"
+      className="rounded-2xl border border-[var(--card-edge,var(--border))] bg-[var(--permission-card,var(--card))] p-4 shadow-[var(--shadow-raised-card,var(--shadow-card))]"
     >
-      <div className="flex min-w-0 flex-col gap-1">
-        {/* The chip's own inset would push the face off the card's edge line. */}
-        <div className="-ml-1 flex min-w-0 text-ui text-muted-foreground">
-          <PartyChip parties={[asker]} onClick={(e) => parties.open(asker, isModClick(e))} />
-        </div>
-        <p className="flex min-w-0 items-center gap-2 text-chat font-medium">
-          <KeyRound className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          <span className="wrap-anywhere">{label ?? name}</span>
-        </p>
-      </div>
-
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <p className="text-chat leading-snug wrap-anywhere text-muted-foreground">{reason}</p>
-        {url && (
-          // The system browser, never the session's: the agent can drive that one.
+      <div className="flex min-w-0 items-start gap-2">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
           <button
             type="button"
-            onClick={() => void openUrl(url).catch(console.error)}
-            className="flex w-fit max-w-full cursor-pointer items-center gap-1 text-ui text-foreground underline-offset-4 hover:underline"
+            onClick={(e) => parties.open(asker, isModClick(e))}
+            className="flex w-fit max-w-full cursor-pointer items-center gap-1.5 text-ui text-muted-foreground hover:text-foreground"
           >
-            <span className="truncate">{hostOf(url)}</span>
-            <ExternalLink className="size-3 shrink-0" aria-hidden />
+            <BotAvatar still seed={asker.id} avatar={asker.avatar ?? seededAvatar(asker.id)} className="block size-4 shrink-0 scale-[1.18]" />
+            <span className="truncate">{asker.title}</span>
+            {asker.machine && <MachineMark machine={asker.machine} />}
           </button>
-        )}
-      </div>
-
-      {pasting ? (
-        <div className="flex min-w-0 items-center gap-2">
-          {closest && (
+          <p className="text-chat leading-snug font-medium wrap-anywhere">{label ?? name}</p>
+          <p className="text-chat leading-snug wrap-anywhere text-muted-foreground">{reason}</p>
+          {url && (
+            // The system browser, never the session's: the agent can drive that one.
+            <button
+              type="button"
+              onClick={() => void openUrl(url).catch(console.error)}
+              className="flex w-fit max-w-full cursor-pointer items-center gap-1 text-ui text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              <span className="truncate">{hostOf(url)}</span>
+              <ExternalLink className="size-3 shrink-0" aria-hidden />
+            </button>
+          )}
+        </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
             <Button
               type="button"
               variant="ghost"
-              className="-ml-2 shrink-0 px-2 text-muted-foreground"
+              size="icon-xs"
+              aria-label="Decline"
+              className="-mt-0.5 -mr-1 shrink-0 text-muted-foreground"
               disabled={busy}
-              onClick={() => setPasting(false)}
+              onClick={() => void send("decline")}
             >
+              <X />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">Decline</TooltipContent>
+        </Tooltip>
+      </div>
+
+      {pasting ? (
+        <div className="mt-3 flex min-w-0 items-center gap-1.5">
+          {closest && (
+            <Button type="button" size="sm" variant="outline" className="h-7 shrink-0" disabled={busy} onClick={() => setPasting(false)}>
               <ChevronLeft />
               Use saved
             </Button>
@@ -176,7 +183,8 @@ export default function SecretRequest({
             name={`dray-secret-${requestId}`}
             aria-label={label ?? name}
             placeholder="Paste the value"
-            className="[-webkit-text-security:disc] font-mono"
+            // The buttons' height, so the row reads as one control.
+            className="h-7 [-webkit-text-security:disc] font-mono placeholder:font-sans"
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
@@ -189,22 +197,21 @@ export default function SecretRequest({
             aria-invalid={error !== null || undefined}
             onChange={(e) => setFilled(e.currentTarget.value.trim() !== "")}
           />
-          <Button type="submit" className="shrink-0" disabled={busy || !filled}>
+          <Button type="submit" size="sm" className="h-7 shrink-0" disabled={busy || !filled}>
             <Lock />
             {sending === "paste" ? "Saving…" : "Save securely"}
           </Button>
-          {decline}
         </div>
       ) : (
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5">
           <div className="flex min-w-0">
             <Button
               type="submit"
+              size="sm"
               autoFocus={autoFocus}
               disabled={busy}
-              className={savedNames.length > 1 ? "min-w-0 rounded-r-none" : "min-w-0"}
+              className={cn("h-7 min-w-0", savedNames.length > 1 && "rounded-r-none")}
             >
-              <KeyRound />
               <span className="truncate">
                 Use saved <span className="font-mono">{pick}</span>
               </span>
@@ -214,7 +221,7 @@ export default function SecretRequest({
                 <DropdownMenuTrigger asChild>
                   <Button
                     type="button"
-                    size="icon"
+                    size="icon-sm"
                     aria-label="Pick another saved secret"
                     disabled={busy}
                     className="rounded-l-none border-l border-primary-foreground/20"
@@ -237,20 +244,13 @@ export default function SecretRequest({
               </DropdownMenu>
             )}
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            className="shrink-0 text-muted-foreground"
-            disabled={busy}
-            onClick={() => setPasting(true)}
-          >
+          <Button type="button" size="sm" variant="outline" className="h-7 shrink-0" disabled={busy} onClick={() => setPasting(true)}>
             Paste a new one
           </Button>
-          <div className="ml-auto">{decline}</div>
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-ui text-muted-foreground">
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-ui text-muted-foreground">
         {pasting && (
           <label htmlFor={keepId} className="flex items-center gap-2">
             <Switch id={keepId} checked={keeps} onCheckedChange={setKeep} disabled={busy || auto} />
@@ -264,7 +264,7 @@ export default function SecretRequest({
       </div>
 
       {error && (
-        <p role="alert" className="text-ui text-destructive wrap-anywhere">
+        <p role="alert" className="mt-2 text-ui text-destructive wrap-anywhere">
           {error}
         </p>
       )}
