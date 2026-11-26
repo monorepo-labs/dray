@@ -796,7 +796,7 @@ jobs:
     runs-on: windows-2025
     # `manifest` waits for this job, and release-cli's publish gate waits 45
     # minutes for `manifest`. A cold build is ~20.
-    timeout-minutes: 35
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
