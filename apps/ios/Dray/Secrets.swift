@@ -45,6 +45,8 @@ struct SecretAsk: View {
     @State private var auto = false
     @State private var sending: Answer?
     @State private var error: String?
+    /// The saved-secret sheet, open from ⌄: a menu of ten names is a bad read.
+    @State private var choosing = false
 
     init(key: SessionKey, request: SecretRequest, asker: SecretParty? = nil) {
         self.key = key
@@ -88,6 +90,10 @@ struct SecretAsk: View {
         }
         .disabled(busy)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .sheet(isPresented: $choosing) {
+            NavigationStack { SavedSecretPicker(names: saved, machine: store.name(of: key.server), pick: $pick) }
+                .presentationDetents([.medium, .large])
+        }
     }
 
     private var head: some View {
@@ -200,18 +206,9 @@ struct SecretAsk: View {
             }
             .buttonStyle(FilledStyle(trailing: picker ? 0 : Theme.Radius.md))
             if picker {
-                Menu {
-                    Section("Saved on \(store.name(of: key.server))") {
-                        Picker("Saved secret", selection: $pick) {
-                            ForEach(saved, id: \.self) { Text($0).monospaced().tag($0) }
-                        }
-                        .pickerStyle(.inline)
-                    }
-                } label: {
-                    Image(systemName: "chevron.down")
-                }
-                .buttonStyle(FilledStyle(leading: 0, width: 36))
-                .accessibilityLabel("Pick another saved secret")
+                Button { choosing = true } label: { Image(systemName: "chevron.down") }
+                    .buttonStyle(FilledStyle(leading: 0, width: 36))
+                    .accessibilityLabel("Pick another saved secret")
             }
         }
     }
@@ -262,6 +259,54 @@ struct SecretAsk: View {
     private func host(_ url: URL) -> String {
         guard let h = url.host() else { return url.absoluteString }
         return url.path() == "/" || url.path().isEmpty ? h : h + url.path()
+    }
+}
+
+/// Past this many saved secrets the picker sheet gets a search field.
+let secretSearchAfter = 6
+
+/// Every secret saved on the answering machine, as a list rather than a menu: a
+/// vault of ten names read badly in one. A tap picks it for Use saved and closes.
+private struct SavedSecretPicker: View {
+    let names: [String]
+    let machine: String
+    @Binding var pick: String
+    @State private var query = ""
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let shown = query.isEmpty ? names : names.filter { $0.localizedCaseInsensitiveContains(query) }
+        let list = List {
+            Section("Saved on \(machine)") {
+                ForEach(shown, id: \.self) { name in
+                    Button {
+                        pick = name
+                        Haptic.select()
+                        dismiss()
+                    } label: {
+                        HStack {
+                            Text(name).monospaced().foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            if name == pick {
+                                Image(systemName: "checkmark").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
+                            }
+                        }
+                        .font(Theme.Font.body)
+                    }
+                    .accessibilityAddTraits(name == pick ? .isSelected : [])
+                }
+                if shown.isEmpty { Text("No secret matches").foregroundStyle(Theme.secondary) }
+            }
+        }
+        .themedList()
+        .navigationTitle("Saved secrets")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+        if names.count > secretSearchAfter {
+            list.searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search secrets")
+        } else {
+            list
+        }
     }
 }
 

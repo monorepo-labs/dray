@@ -126,6 +126,41 @@ final class SecretCardTests: XCTestCase {
         }
     }
 
+    /// 4. The ⌄ picker is a sheet, with search past `secretSearchAfter` saved. A task asking for
+    /// DEMO_API_KEY titled `TEST_RUNNER_DRAY_TITLE`, with `TEST_RUNNER_DRAY_SAVED` secrets saved.
+    func testPickerSheet() throws {
+        try pair()
+        let saved = Int(env["DRAY_SAVED"] ?? "2") ?? 2
+        open(env["DRAY_TITLE"] ?? "Secret D")
+        let use = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Use saved")).firstMatch
+        XCTAssertTrue(use.waitForExistence(timeout: 15), "no Use saved")
+        app.buttons["Pick another saved secret"].tap()
+        XCTAssertTrue(app.navigationBars["Saved secrets"].waitForExistence(timeout: 5), "no sheet")
+        sleep(1)
+        attach("\(saved)-sheet")
+        let search = app.searchFields.firstMatch
+        if saved > 6 {
+            XCTAssertTrue(search.exists, "no search with \(saved) saved")
+            search.tap()
+            search.typeText("TOK")
+            sleep(1)
+            attach("\(saved)-search")
+        } else {
+            XCTAssertFalse(search.exists, "search with only \(saved) saved")
+        }
+        app.buttons["OTHER_TOKEN"].tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "OTHER_TOKEN")).firstMatch.waitForExistence(timeout: 5),
+                      "the pick did not reach Use saved")
+        sleep(1)
+        attach("\(saved)-picked")
+        // Back to the one asked for, and use it, so the card closes for the next run.
+        app.buttons["Pick another saved secret"].tap()
+        XCTAssertTrue(app.buttons["DEMO_API_KEY"].waitForExistence(timeout: 5))
+        app.buttons["DEMO_API_KEY"].tap()
+        use.tap()
+        XCTAssertTrue(waitFor("label CONTAINS %@", "Used saved", timeout: 15), "no Used saved line")
+    }
+
     private func attach(_ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
