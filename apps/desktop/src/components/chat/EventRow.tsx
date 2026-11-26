@@ -1,3 +1,5 @@
+import { KeyIcon } from "@heroicons/react/16/solid";
+
 import AssistantMessage from "@/components/chat/AssistantMessage";
 import Reasoning from "@/components/chat/Reasoning";
 import ToolCall from "@/components/chat/ToolCall";
@@ -71,6 +73,7 @@ export function SecretAnswer({
     );
   return (
     <div className="flex max-w-full items-center gap-0.5 self-start text-ui text-muted-foreground">
+      <SecretKey />
       <span className="shrink-0">{said}</span>
       {chip}
     </div>
@@ -83,6 +86,7 @@ function SecretAsked({ sessionId, name }: { sessionId: string; name: string }) {
   const bot = parties.botOf(sessionId);
   return (
     <div className="flex max-w-full items-center gap-0.5 self-start text-ui text-muted-foreground">
+      <SecretKey />
       <span className="shrink-0">Asked</span>
       {bot ? <SecretChip party={bot} open={parties.open} /> : <span className="shrink-0 px-1">its bot</span>}
       <span className="shrink-0">
@@ -90,6 +94,11 @@ function SecretAsked({ sessionId, name }: { sessionId: string; name: string }) {
       </span>
     </div>
   );
+}
+
+/// Marks a line as a secret's, the card's own key at the line's text size.
+function SecretKey() {
+  return <KeyIcon className="mr-1 size-3.5 shrink-0" aria-hidden />;
 }
 
 function SecretChip({ party, open }: { party: Party; open: (party: Party, alone: boolean) => void }) {
