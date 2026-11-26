@@ -965,4 +965,15 @@ mod tests {
         assert_eq!(r.schedule, Schedule::default());
         assert_eq!(r.schedule.next_after(Local::now()), None);
     }
+
+    /// A run being created, as `fire` marks it before the send, is not its
+    /// bot's chat, so `mark_new_chat` leaves the chat's agent running (#1588).
+    #[test]
+    fn a_run_being_created_is_not_its_bots_chat() {
+        let id = "01a2165d-run-being-created";
+        assert!(bots::opens_chat(id));
+        PENDING.lock().unwrap().insert(id.into(), "r1".into());
+        assert!(!bots::opens_chat(id));
+        PENDING.lock().unwrap().remove(id);
+    }
 }

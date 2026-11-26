@@ -333,6 +333,9 @@ async fn mark_welcome(session_id: &str, bot: &Bot) {
 /// Marks a new chat in `cwd`: for the conversation so far where the bot has
 /// talked before, which is an agent switch, else for its welcome.
 pub async fn mark_new_chat(session_id: &str, cwd: &str, harness: Harness) {
+    if !opens_chat(session_id) {
+        return;
+    }
     let Some(bot) = bot_at(cwd).await else { return };
     let earlier: Vec<SessionIndexItem> = chat_sessions(&bot.path)
         .await
@@ -350,6 +353,14 @@ pub async fn mark_new_chat(session_id: &str, cwd: &str, harness: Harness) {
     }
     let text = handover_prompt(&earlier, harness).await;
     restore_handover(session_id, text);
+}
+
+/// Whether new session `session_id` in a bot's folder is the chat itself. A
+/// routine's run shares the folder but is never the chat: read as an agent
+/// switch, every run killed the chat's agent mid-turn and was handed the whole
+/// conversation (#1588).
+pub(crate) fn opens_chat(session_id: &str) -> bool {
+    crate::routines::pending_run(session_id).is_none()
 }
 
 /// Marks a chat being resumed that took over from an earlier agent and has no
