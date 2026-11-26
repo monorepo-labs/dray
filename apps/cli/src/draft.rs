@@ -45,15 +45,23 @@ pub struct NewDraft {
 
 #[derive(Args)]
 pub struct DraftLs {
-    /// Every project, not just this one.
-    #[arg(long)]
+    /// Every project, which is the default now; kept so older scripts run.
+    #[arg(long, hide = true)]
     all: bool,
     /// One JSON array, for reading with a program.
     #[arg(long)]
     json: bool,
-    /// Repo to list. Defaults to the calling session's project.
+    /// Only this repo's drafts. Defaults to every draft.
     #[arg(long)]
     project: Option<PathBuf>,
+}
+
+/// Every draft unless `--project` names one repo. Scoped to where the caller
+/// stands, a bot's chat listed its own folder and saw none of the drafts
+/// `start` could start.
+fn ls_request(args: &DraftLs) -> ListSessions {
+    let project_path = args.project.clone().and_then(|p| resolve_project(Some(p)));
+    ListSessions { all: args.all || project_path.is_none(), project_path, parent_session_id: None }
 }
 
 #[derive(Args)]
@@ -87,17 +95,12 @@ pub fn run(command: DraftCommand) -> Result<(), String> {
             }
         }
         DraftCommand::Ls(args) => {
-            let request = Request::ListDrafts(ListSessions {
-                all: args.all,
-                project_path: resolve_project(args.project),
-                parent_session_id: parent_session_id(),
-            });
-            match send(request)? {
+            match send(Request::ListDrafts(ls_request(&args)))? {
                 Response::Drafts { drafts } => {
                     if args.json {
                         println!("{}", serde_json::to_string_pretty(&drafts).unwrap_or_default());
                     } else if drafts.is_empty() {
-                        eprintln!("No drafts.");
+                        eprintln!("No drafts{}.", if args.project.is_some() { " in that project" } else { "" });
                     } else {
                         for draft in &drafts {
                             println!("{}", line(draft));
@@ -159,4 +162,28 @@ fn line(draft: &DraftSummary) -> String {
 
 fn first_line(prompt: &str) -> &str {
     prompt.trim().lines().next().unwrap_or("")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ls(project: Option<&str>, all: bool) -> ListSessions {
+        ls_request(&DraftLs { all, json: false, project: project.map(PathBuf::from) })
+    }
+
+    #[test]
+    fn ls_lists_every_draft_unless_a_project_is_named() {
+        let every = ls(None, false);
+        assert!(every.all);
+        assert_eq!(every.project_path, None);
+        assert_eq!(every.parent_session_id, None, "the caller's project never narrows it");
+
+        let repo = std::env::temp_dir().to_string_lossy().into_owned();
+        let one = ls(Some(&repo), false);
+        assert!(!one.all);
+        assert_eq!(one.project_path, Some(repo.clone()));
+
+        assert!(ls(Some(&repo), true).all);
+    }
 }
