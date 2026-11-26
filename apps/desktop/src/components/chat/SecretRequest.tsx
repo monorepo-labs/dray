@@ -164,7 +164,10 @@ export default function SecretRequest({
           )}
           <div className="flex min-w-0 flex-col gap-1.5">
             <div className="flex items-start gap-3">
-              <p className="min-w-0 flex-1 text-sm leading-5 font-medium wrap-anywhere">{label ?? name}</p>
+              <div className="flex min-w-0 flex-1 items-start gap-1.5">
+                <KeyIcon className="my-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+                <p className="min-w-0 text-sm leading-5 font-medium wrap-anywhere">{label ?? name}</p>
+              </div>
               {!asker && decline}
             </div>
             <p className="flex min-w-0 flex-wrap items-center gap-x-1 text-sm leading-5">
@@ -221,9 +224,9 @@ export default function SecretRequest({
                 aria-invalid={error !== null || undefined}
                 onChange={(e) => setFilled(e.currentTarget.value.trim() !== "")}
               />
-              <ShareSecurelyButton type="submit" disabled={busy || !filled}>
-                {sending === "paste" ? "Sharing…" : "Share securely"}
-              </ShareSecurelyButton>
+              <ShareButton type="submit" disabled={busy || !filled}>
+                {sending === "paste" ? "Sharing…" : "Share"}
+              </ShareButton>
             </div>
           ) : (
             <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -311,10 +314,10 @@ function lifeLine(keeps: boolean, task?: SecretTask): string {
 
 /// The card's main answer: the light button with a solid icon. `icon` is
 /// there so the demo can put the candidates side by side.
-export function ShareSecurelyButton({
+export function ShareButton({
   icon: Icon = ShieldCheckIcon,
   className,
-  children = "Share securely",
+  children = "Share",
   ...props
 }: ComponentProps<typeof Button> & { icon?: ComponentType<SVGProps<SVGSVGElement>> }) {
   return (
