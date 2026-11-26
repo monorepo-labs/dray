@@ -4,22 +4,13 @@ import ReactDOM from "react-dom/client";
 
 import EventRow from "@/components/chat/EventRow";
 import PermissionRequest from "@/components/chat/PermissionRequest";
-import SecretRequest, { SendSecurelyButton } from "@/components/chat/SecretRequest";
+import SecretRequest from "@/components/chat/SecretRequest";
 import SecretsSettings from "@/components/settings/SecretsSettings";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
 import { SecretPartiesContext, type SecretParties } from "@/hooks/useSecretParties";
 import type { AgentEvent, ServerInfo } from "@/types/events";
-import { FingerPrintIcon, KeyIcon, LockClosedIcon, PaperAirplaneIcon, ShieldCheckIcon } from "@heroicons/react/16/solid";
 import "../App.css";
-
-const ICONS = [
-  ["key", KeyIcon],
-  ["lock-closed", LockClosedIcon],
-  ["shield-check", ShieldCheckIcon],
-  ["paper-airplane", PaperAirplaneIcon],
-  ["finger-print", FingerPrintIcon],
-] as const;
 
 /// Every state of a secret card, the lines a closed one leaves, and Settings →
 /// Secrets, through the real components. The server is faked in the page:
@@ -135,17 +126,6 @@ function Demo() {
               The real card, lines and Settings page. Answering waits as the server would and changes nothing else.
             </p>
           </div>
-
-          <Section title="Send securely, solid icons" note="Heroicons 16 solid on the real button. Key is what the card uses now.">
-            <div className="flex flex-wrap gap-6">
-              {ICONS.map(([label, Icon]) => (
-                <div key={label} className="flex flex-col items-start gap-2">
-                  <SendSecurelyButton type="button" icon={Icon} />
-                  <span className="text-ui text-muted-foreground">{label}</span>
-                </div>
-              ))}
-            </div>
-          </Section>
 
           <Section title="Beside a permission card" note="The real PermissionRequest first, then a first ask, as they would stack in a chat.">
             <div className="flex flex-col gap-4">

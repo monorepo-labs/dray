@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { KeyIcon } from "@heroicons/react/16/solid";
+import { KeyIcon, ShieldCheckIcon } from "@heroicons/react/16/solid";
 import { ChevronDown, ChevronLeft, ExternalLink, X } from "lucide-react";
 import type { ComponentProps, ComponentType, SVGProps } from "react";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
@@ -125,7 +125,7 @@ export default function SecretRequest({
       onSubmit={onSubmit}
       autoComplete="off"
       data-secret-card
-      className="flex flex-col gap-6 rounded-[18px] border border-[var(--card-edge,var(--border))] bg-[var(--permission-card,var(--card))] px-[15px] pt-[13px] pb-[15px] shadow-[var(--shadow-raised-card,var(--shadow-card))]"
+      className="flex flex-col gap-5 rounded-[18px] border border-[var(--card-edge,var(--border))] bg-[var(--permission-card,var(--card))] px-[15px] pt-[13px] pb-[15px] shadow-[var(--shadow-raised-card,var(--shadow-card))]"
     >
       <div className="flex flex-col gap-3">
         <div className="flex items-center gap-3">
@@ -156,7 +156,7 @@ export default function SecretRequest({
           </Tooltip>
         </div>
         <div className="flex min-w-0 flex-col gap-1">
-          <p className="text-[15px] leading-[22px] font-medium wrap-anywhere">{label ?? name}</p>
+          <p className="text-sm leading-5 font-medium wrap-anywhere">{label ?? name}</p>
           <p className="flex min-w-0 flex-wrap items-center gap-x-1 text-sm leading-5">
             <span className="text-muted-foreground">{reason}</span>
             {url && (
@@ -174,11 +174,11 @@ export default function SecretRequest({
         </div>
       </div>
 
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-3">
         {pasting ? (
           <div className="flex min-w-0 items-center gap-2">
             {closest && (
-              <Button type="button" variant="ghost" size="sm" className="shrink-0 text-muted-foreground" disabled={busy} onClick={() => setPasting(false)}>
+              <Button type="button" variant="ghost" size="sm" className="h-9 shrink-0 text-muted-foreground" disabled={busy} onClick={() => setPasting(false)}>
                 <ChevronLeft />
                 Use saved
               </Button>
@@ -191,7 +191,7 @@ export default function SecretRequest({
               name={`dray-secret-${requestId}`}
               aria-label={label ?? name}
               placeholder="Paste the value"
-              className="h-7 rounded-lg px-2.5 font-mono text-sm leading-[18px] [-webkit-text-security:disc] placeholder:font-sans md:text-sm"
+              className="h-9 rounded-lg px-2.5 font-mono text-sm leading-[18px] [-webkit-text-security:disc] placeholder:font-sans md:text-sm"
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="off"
@@ -216,7 +216,7 @@ export default function SecretRequest({
                 autoFocus={autoFocus}
                 disabled={busy}
                 size="sm"
-                className={cn("min-w-0", savedNames.length > 1 && "rounded-r-none")}
+                className={cn("h-9 min-w-0", savedNames.length > 1 && "rounded-r-none")}
               >
                 <KeyIcon className="size-4" />
                 <span className="truncate">
@@ -231,7 +231,7 @@ export default function SecretRequest({
                       aria-label="Pick another saved secret"
                       disabled={busy}
                       size="icon-sm"
-                      className="rounded-l-none border-l border-primary-foreground/20"
+                      className="size-9 rounded-l-none border-l border-primary-foreground/20"
                     >
                       <ChevronDown />
                     </Button>
@@ -251,7 +251,7 @@ export default function SecretRequest({
                 </DropdownMenu>
               )}
             </div>
-            <Button type="button" variant="ghost" size="sm" className="shrink-0 text-muted-foreground" disabled={busy} onClick={() => setPasting(true)}>
+            <Button type="button" variant="ghost" size="sm" className="h-9 shrink-0 text-muted-foreground" disabled={busy} onClick={() => setPasting(true)}>
               Paste a new one
             </Button>
           </div>
@@ -283,14 +283,14 @@ export default function SecretRequest({
 /// The card's main answer: the light button with a solid icon. `icon` is
 /// there so the demo can put the candidates side by side.
 export function SendSecurelyButton({
-  icon: Icon = KeyIcon,
+  icon: Icon = ShieldCheckIcon,
   className,
   children = "Send securely",
   ...props
 }: ComponentProps<typeof Button> & { icon?: ComponentType<SVGProps<SVGSVGElement>> }) {
   return (
     // The permission card's Allow once: the app's own button, small.
-    <Button size="sm" className={cn("shrink-0", className)} {...props}>
+    <Button size="sm" className={cn("h-9 shrink-0", className)} {...props}>
       <Icon className="size-4" aria-hidden />
       {children}
     </Button>
