@@ -1,19 +1,17 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
+import { useOnboarding } from "@/components/onboarding/state";
 import SignInGate, { type GateView } from "@/components/SignInGate";
 import { useQuitAtOnce } from "@/hooks/useQuitAtOnce";
+import { type GateReason, trackSignInGate } from "@/lib/analytics";
 import { useLocalServer } from "@/lib/servers";
 import { onFocusChange } from "@/lib/focus";
-import { blocksSignIn, ONBOARDED } from "@/lib/signInGate";
+import { blocksSignIn, ONBOARDED, SIGNED_IN } from "@/lib/signInGate";
 import { signInAsked, signInRequired, SKIPPED } from "@/lib/signInNudge";
 import { invoke, listen, LOCAL } from "@/lib/transport";
 import type { DrayAccountState, SignInMethod, SignInStarted } from "@/types/events";
 
-/// Set while this app has been signed in, so the next launch draws the app at
-/// once rather than the gate, and a sign-in that later vanishes reads as
-/// "You've been signed out" rather than a first visit.
-export const SIGNED_IN = "dray.signedIn";
 /// The way in this app last signed in with, for the gate's "Last used" tag.
 /// Here and not on the server: it describes this app's reader, not the account.
 const LAST_METHOD = "dray.lastSignInMethod";
@@ -157,20 +155,23 @@ export default function AccountGate({ children }: { children: ReactNode }) {
   // Let past a required gate by a sign-in the network wouldn't let finish:
   // this run only, so the gate is back at the next launch or calm moment.
   const [bypassed, setBypassed] = useState(false);
-  // The gate drawn over the app, which stays mounted under it.
-  const [over, setOver] = useState(false);
+  // The gate drawn over the app, which stays mounted under it, and why.
+  const [over, setOver] = useState<GateReason | null>(null);
+  // Why the gate on screen is up, for its analytics.
+  const reason = useRef<GateReason | null>(null);
   const skip = useCallback(() => {
+    if (reason.current) trackSignInGate("skipped", reason.current);
     localStorage.setItem(SKIPPED, "1");
     // Clears an `offline` or failed sign-in, so a later gate opens fresh.
     void invoke("account_sign_in_cancel", {}, LOCAL).catch(() => {});
     setSkipped(true);
     setBypassed(true);
-    setOver(false);
+    setOver(null);
   }, []);
 
-  useEffect(() => signInAsked.subscribe(() => setOver(true)), []);
+  useEffect(() => signInAsked.subscribe(() => setOver("settings")), []);
   useEffect(() => {
-    if (signedIn) setOver(false);
+    if (signedIn) setOver(null);
   }, [signedIn]);
 
   // Only once the server has said no one is signed in, so a slow answer
@@ -185,15 +186,16 @@ export default function AccountGate({ children }: { children: ReactNode }) {
       else if (leftAt !== null && Date.now() - leftAt >= AWAY_MS && signInRequired()) {
         setRequired(true);
         setBypassed(false);
-        setOver(true);
+        setOver("required");
       }
     });
   }, [signedOut, skipped]);
 
   // Keys stay with the gate while it covers the app: no shortcut, and no
   // typing into a composer the reader can't see.
+  const covering = over !== null;
   useEffect(() => {
-    if (!over) return;
+    if (!covering) return;
     (document.activeElement as HTMLElement | null)?.blur?.();
     const hold = (e: KeyboardEvent) => {
       if ((e.target as Element | null)?.closest?.("[data-sign-in-gate]")) return;
@@ -202,7 +204,7 @@ export default function AccountGate({ children }: { children: ReactNode }) {
     };
     window.addEventListener("keydown", hold, true);
     return () => window.removeEventListener("keydown", hold, true);
-  }, [over]);
+  }, [covering]);
 
   // Until the server answers, a machine signed in last time draws the app,
   // which is nearly always right; anyone else sees the gate's empty frame.
@@ -226,6 +228,21 @@ export default function AccountGate({ children }: { children: ReactNode }) {
       canSkip: !required || blocksSignIn(error) || failed !== null,
     };
   }
+  // In front of the app, required at launch, a sign-in gone, or a reader who
+  // has neither signed in nor skipped; over it, whatever brought it up.
+  const front: GateReason = shut ? "required" : everSignedIn.current ? "signed_out" : "first_launch";
+  const showing = !view ? null : !open ? front : over && !signedIn ? over : null;
+  reason.current = showing;
+  // Counted once it can be seen: onboarding draws over the gate on a first
+  // launch, and the gate's empty frame waiting on the server is not it yet.
+  const onboarding = useOnboarding();
+  const counted = useRef<GateReason | null>(null);
+  useEffect(() => {
+    if (onboarding || counted.current === showing) return;
+    counted.current = showing;
+    if (showing) trackSignInGate("shown", showing);
+  }, [onboarding, showing]);
+
   const gate = <SignInGate view={view} onPick={pick} onOpenAgain={openAgain} onCancel={cancel} onSkip={skip} />;
   if (!open) return gate;
   // One shape whether or not the gate is up, so the app never remounts.

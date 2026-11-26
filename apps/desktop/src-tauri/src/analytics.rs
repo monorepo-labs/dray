@@ -1,8 +1,9 @@
 //! Anonymous usage analytics over PostHog.
 //!
 //! A launch, a day the app was used, a session starting, a feature being
-//! used, something breaking, a bot made and a routine set up — carrying no
-//! content and no identity beyond a random id minted on this machine. What they answer is how many people run Dray, on which version,
+//! used, something breaking, a bot made, a routine set up and the sign-in
+//! gate's funnel — carrying no content and no identity beyond a random id
+//! minted on this machine. What they answer is how many people run Dray, on which version,
 //! whether they come back, which of the things built here anybody actually
 //! uses, and whether the build is failing under them in a way nothing else
 //! would ever tell us.
@@ -32,10 +33,11 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use ts_rs::TS;
 
+use crate::dray_account::SignInMethod;
 use crate::harness::Harness;
 use crate::settings;
 use crate::store::SessionIndexItem;
@@ -241,6 +243,92 @@ fn claim_day(key: String, day: String) -> bool {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn track_active_day() {
     track_daily("active_day", "active_day".into(), json!({}));
+}
+
+/// The events that say whether this machine is signed in to a Dray account,
+/// so a launch or a day of use can be split by it.
+const CARRIES_SIGN_IN: [&str; 2] = ["app_started", "active_day"];
+
+/// `properties` with `signed_in` added where `event` carries it. Read off
+/// `account.json` alone, never the site, and only once the event is sure to
+/// go. A yes or no, never who: the account's id, name and email stay here.
+async fn with_sign_in(event: &'static str, mut properties: Value) -> Value {
+    if CARRIES_SIGN_IN.contains(&event) {
+        if let Value::Object(props) = &mut properties {
+            let signed_in = crate::dray_account::signed_in_user().await.is_some();
+            props.insert("signed_in".into(), signed_in.into());
+        }
+    }
+    properties
+}
+
+/// Why the sign-in gate is up: a reader who never signed in, Settings' Sign
+/// in, sign-in now required (#1590), or a sign-in that went away.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum GateReason {
+    FirstLaunch,
+    Settings,
+    Required,
+    SignedOut,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateStep {
+    Shown,
+    Skipped,
+}
+
+/// Reports the sign-in gate coming up or being skipped. Only the webview
+/// knows either, since Skip is kept in its local storage. Both arguments are
+/// enums, so it can send its few words and nothing else.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn track_sign_in_gate(step: GateStep, reason: GateReason) {
+    let event = match step {
+        GateStep::Shown => "sign_in_gate_shown",
+        GateStep::Skipped => "sign_in_skipped",
+    };
+    track(event, json!({ "reason": reason }));
+}
+
+/// A step of a browser sign-in, reported by the server that runs it.
+#[derive(Debug, Clone, Copy)]
+pub enum SignInStep {
+    Started,
+    Completed,
+    Failed(SignInFailure),
+}
+
+/// Why a sign-in ended without one: a closed set, never the error's text,
+/// which can carry the site's answer.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SignInFailure {
+    /// The site was unreachable, so no browser was opened.
+    Offline,
+    /// Cancel in Dray, or Skip, while the browser was out.
+    Cancelled,
+    /// The browser came back with an error: turned down on the site.
+    Declined,
+    /// Ten minutes with no answer from the browser.
+    TimedOut,
+    /// The browser came back and trading its code failed.
+    Exchange,
+}
+
+/// Reports a sign-in step with the way in the reader picked.
+pub fn sign_in(step: SignInStep, method: SignInMethod) {
+    let (event, props) = sign_in_event(step, method);
+    track(event, props);
+}
+
+fn sign_in_event(step: SignInStep, method: SignInMethod) -> (&'static str, Value) {
+    match step {
+        SignInStep::Started => ("sign_in_started", json!({ "method": method })),
+        SignInStep::Completed => ("sign_in_completed", json!({ "method": method })),
+        SignInStep::Failed(why) => ("sign_in_failed", json!({ "method": method, "error": why })),
+    }
 }
 
 /// Reports a feature being reached for.
@@ -465,7 +553,7 @@ async fn send(event: &'static str, daily_key: Option<String>, properties: Value)
     let Some(key) = api_key() else {
         // A dev build has no key, so this is the only way to see what it would send.
         if cfg!(debug_assertions) && !env_opt_out() {
-            eprintln!("[analytics] would send {event} {properties}");
+            eprintln!("[analytics] would send {event} {}", with_sign_in(event, properties).await);
         }
         return;
     };
@@ -485,6 +573,7 @@ async fn send(event: &'static str, daily_key: Option<String>, properties: Value)
         }
     }
 
+    let properties = with_sign_in(event, properties).await;
     let mut props = base_properties().clone();
     // PostHog judges bot traffic at query time off this *property*, never the
     // request's User-Agent header, and reads a missing one as automation — so
@@ -617,6 +706,42 @@ mod tests {
         let remote = session_properties(&item(), BotRole { bot: true, by_bot: false }, Some(Some("linux")));
         assert_eq!(remote["location"], json!("remote"));
         assert_eq!(flags(remote), (yes, no.clone(), no));
+    }
+
+    /// A sign-in reports the way in and, on failure, a closed kind: nothing a
+    /// site's answer or an account could put there.
+    #[test]
+    fn a_sign_in_carries_its_method_and_a_closed_failure() {
+        assert_eq!(
+            sign_in_event(SignInStep::Started, SignInMethod::Github),
+            ("sign_in_started", json!({ "method": "github" }))
+        );
+        assert_eq!(
+            sign_in_event(SignInStep::Completed, SignInMethod::Email),
+            ("sign_in_completed", json!({ "method": "email" }))
+        );
+        assert_eq!(
+            sign_in_event(SignInStep::Failed(SignInFailure::TimedOut), SignInMethod::Google),
+            ("sign_in_failed", json!({ "method": "google", "error": "timed_out" }))
+        );
+    }
+
+    /// The webview names a reason in the gate's own words, and nothing else
+    /// parses.
+    #[test]
+    fn the_gate_reason_is_a_closed_word() {
+        let reason: GateReason = serde_json::from_value(json!("first_launch")).unwrap();
+        assert_eq!(reason, GateReason::FirstLaunch);
+        assert_eq!(json!(GateReason::SignedOut), json!("signed_out"));
+        assert!(serde_json::from_value::<GateReason>(json!("someone@example.com")).is_err());
+    }
+
+    /// Only a launch and a day of use say whether the machine is signed in.
+    #[tokio::test]
+    async fn only_launch_and_activity_carry_signed_in() {
+        assert!(with_sign_in("app_started", json!({})).await.get("signed_in").is_some());
+        assert!(with_sign_in("active_day", json!({})).await.get("signed_in").is_some());
+        assert!(with_sign_in("feature_used", json!({ "feature": "fork" })).await.get("signed_in").is_none());
     }
 
     /// The kind is what the breakdown is read by, so a call site's own

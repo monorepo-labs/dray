@@ -7,6 +7,12 @@
 /// in at all, so onboarding plays once: a quit before signing in reopens on the
 /// gate, and a reader who later signs out is never shown it again.
 export const ONBOARDED = "dray.onboarded";
+/// Set while this app has been signed in, so the next launch draws the app at
+/// once rather than the gate, and a sign-in that later vanishes reads as
+/// "You've been signed out" rather than a first visit. Here rather than in
+/// `AccountGate`, which reads onboarding's state: an import back from there
+/// would be a cycle.
+export const SIGNED_IN = "dray.signedIn";
 
 export function gatesSignIn(env: { DEV: boolean; VITE_DRAY_SIGN_IN?: string }): boolean {
   return !env.DEV || env.VITE_DRAY_SIGN_IN === "1";

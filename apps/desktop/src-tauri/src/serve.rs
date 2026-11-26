@@ -2191,6 +2191,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         track_feature(feature: String, target: Option<crate::BrowserTarget>) => ok(crate::track_feature(feature, target));
         track_render_error(code: Option<u32>, frames: Vec<String>) => ok(crate::track_render_error(code, frames));
         track_active_day() => ok(crate::analytics::track_active_day());
+        track_sign_in_gate(step: crate::analytics::GateStep, reason: crate::analytics::GateReason) => ok(crate::analytics::track_sign_in_gate(step, reason));
         // The panel opening, which nothing else reaches the server for; counted
         // by `island_used` off the connection, so the call itself does nothing.
         island_opened() => ok(());

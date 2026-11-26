@@ -1,8 +1,7 @@
 import { useSyncExternalStore } from "react";
 
-import { SIGNED_IN } from "@/components/AccountGate";
 import { channel } from "@/lib/channel";
-import { gatesSignIn, ONBOARDED } from "@/lib/signInGate";
+import { gatesSignIn, ONBOARDED, SIGNED_IN } from "@/lib/signInGate";
 
 const changed = channel<void>();
 
