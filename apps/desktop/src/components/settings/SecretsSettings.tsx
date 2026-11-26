@@ -1,8 +1,9 @@
 import { ChevronDown, MoreHorizontal, Plus } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { CancelOrConfirm } from "@/components/settings/InRowConfirm";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,7 +37,8 @@ export default function SecretsSettings() {
 function Machine({ server, machines, onPick }: { server: ServerId; machines: ServerId[]; onPick: (s: ServerId) => void }) {
   const [secrets, setSecrets] = useState<SecretSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
+  // The dialog open: `{}` adds, a secret replaces that one.
+  const [editing, setEditing] = useState<{ secret?: SecretSummary } | null>(null);
 
   const read = useCallback(() => {
     invoke<SecretSummary[]>("list_secrets", {}, server)
@@ -83,36 +85,36 @@ function Machine({ server, machines, onPick }: { server: ServerId; machines: Ser
             </DropdownMenuRadioGroup>
           </DropdownMenuContent>
         </DropdownMenu>
-        {!adding && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setAdding(true)}
-            className="h-7 gap-1 px-2 text-ui text-muted-foreground hover:text-foreground"
-          >
-            <Plus className="size-3.5" />
-            Add secret
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setEditing({})}
+          className="h-7 gap-1 px-2 text-ui text-muted-foreground hover:text-foreground"
+        >
+          <Plus className="size-3.5" />
+          Add secret
+        </Button>
       </div>
-      {adding && <ValueForm server={server} onDone={() => setAdding(false)} />}
       {error ? (
         <p className="text-ui text-destructive">{error}</p>
       ) : secrets === null ? null : secrets.length === 0 ? (
-        !adding && <p className="text-ui text-muted-foreground">None saved yet.</p>
+        <p className="text-ui text-muted-foreground">None saved yet.</p>
       ) : (
         <ul className="flex flex-col gap-1">
           {secrets.map((s) => (
-            <SecretRow key={s.name} server={server} secret={s} />
+            <SecretRow key={s.name} server={server} secret={s} onReplace={() => setEditing({ secret: s })} />
           ))}
         </ul>
+      )}
+      {editing && (
+        <SecretDialog server={server} secret={editing.secret} saved={secrets ?? []} onClose={() => setEditing(null)} />
       )}
     </div>
   );
 }
 
-function SecretRow({ server, secret }: { server: ServerId; secret: SecretSummary }) {
-  const [mode, setMode] = useState<"idle" | "replace" | "delete">("idle");
+function SecretRow({ server, secret, onReplace }: { server: ServerId; secret: SecretSummary; onReplace: () => void }) {
+  const [mode, setMode] = useState<"idle" | "delete">("idle");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const remove = () => {
@@ -152,7 +154,7 @@ function SecretRow({ server, secret }: { server: ServerId; secret: SecretSummary
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-36">
-                <DropdownMenuItem onSelect={() => setMode("replace")}>Replace</DropdownMenuItem>
+                <DropdownMenuItem onSelect={onReplace}>Replace</DropdownMenuItem>
                 <DropdownMenuItem variant="destructive" onSelect={() => setMode("delete")}>
                   Delete
                 </DropdownMenuItem>
@@ -161,88 +163,145 @@ function SecretRow({ server, secret }: { server: ServerId; secret: SecretSummary
           </div>
         )}
       </div>
-      {mode === "replace" && <ValueForm server={server} name={secret.name} onDone={() => setMode("idle")} />}
       {error && <p className="text-ui text-destructive">{error}</p>}
     </li>
   );
 }
 
-/// A name (for a new one) and a masked value. The value is read off the field
-/// at save and never held in state.
-function ValueForm({ server, name, onDone }: { server: ServerId; name?: string; onDone: () => void }) {
+/// Adds a secret, or replaces `secret`'s value with its name fixed. The value
+/// is read off the field at save and never held in state. Auto is set after
+/// the value lands, since the server only takes it for a saved name.
+export function SecretDialog({
+  server,
+  secret,
+  saved,
+  onClose,
+}: {
+  server: ServerId;
+  secret?: SecretSummary;
+  saved: SecretSummary[];
+  onClose: () => void;
+}) {
+  const replacing = secret !== undefined;
   const [newName, setNewName] = useState("");
   const [filled, setFilled] = useState(false);
+  const [auto, setAuto] = useState(!!secret?.always);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const valueRef = useRef<HTMLInputElement>(null);
-  const finalName = name ?? newName.trim();
-  const nameOk = NAME.test(finalName);
+  const name = secret?.name ?? newName.trim();
+  const nameOk = NAME.test(name);
+  // Adding under a saved name overwrites it, which the reader should know.
+  const existing = saved.find((s) => s.name === name);
 
-  const submit = (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
     const value = valueRef.current?.value.trim() ?? "";
     if (!nameOk || !value || busy) return;
     setBusy(true);
     setError(null);
-    invoke("save_secret", { name: finalName, value }, server)
-      .then(() => {
-        if (valueRef.current) valueRef.current.value = "";
-        onDone();
-      })
-      .catch((err) => {
-        setError(String(err));
-        setBusy(false);
-      });
+    try {
+      await invoke("save_secret", { name, value }, server);
+      if (valueRef.current) valueRef.current.value = "";
+      if (auto !== !!existing?.always) await invoke("set_secret_always", { name, on: auto }, server);
+      onClose();
+    } catch (err) {
+      setError(String(err));
+      setBusy(false);
+    }
   };
 
   return (
-    <form onSubmit={submit} autoComplete="off" className="flex flex-col gap-1.5 pb-1.5">
-      <div className="flex items-center gap-2">
-        {name === undefined && (
-          <Input
-            autoFocus
-            placeholder="NAME"
-            aria-label="Name"
-            className="w-48 shrink-0 font-mono"
-            value={newName}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            onChange={(e) => setNewName(e.currentTarget.value)}
-            aria-invalid={(newName.trim() !== "" && !nameOk) || undefined}
-          />
-        )}
-        <Input
-          ref={valueRef}
-          autoFocus={name !== undefined}
-          type="text"
-          name={`dray-secret-${name ?? "new"}`}
-          aria-label="Value"
-          placeholder={name ? `New value for ${name}` : "Value"}
-          className="[-webkit-text-security:disc] font-mono"
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="off"
-          spellCheck={false}
-          data-1p-ignore
-          data-lpignore="true"
-          data-bwignore
-          data-form-type="other"
-          disabled={busy}
-          onChange={(e) => setFilled(e.currentTarget.value.trim() !== "")}
-        />
-        <Button type="button" variant="ghost" size="sm" onClick={onDone} disabled={busy}>
-          Cancel
-        </Button>
-        <Button type="submit" size="sm" disabled={busy || !filled || !nameOk}>
-          Save
-        </Button>
-      </div>
-      {newName.trim() !== "" && !nameOk && (
-        <p className="text-ui text-muted-foreground">Letters, digits and _, like GITHUB_TOKEN.</p>
-      )}
-      {error && <p className="text-ui text-destructive">{error}</p>}
-    </form>
+    <Dialog open onOpenChange={(next) => !next && !busy && onClose()}>
+      <DialogContent
+        className="grid-cols-[minmax(0,1fr)]"
+        showClose={false}
+        // Radix focuses the first field, which on Replace is the fixed name.
+        onOpenAutoFocus={(e) => {
+          if (!replacing) return;
+          e.preventDefault();
+          valueRef.current?.focus();
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>{replacing ? "Replace secret" : "Add secret"}</DialogTitle>
+          <DialogDescription>
+            Saved on {server === LOCAL ? "this machine" : serverName(server)}. Its value can't be read back.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={(e) => void submit(e)} autoComplete="off" className="flex flex-col gap-3">
+          <Field
+            label="Name"
+            hint={
+              !replacing && newName.trim() !== "" && !nameOk
+                ? "Letters, digits and _, like GITHUB_TOKEN."
+                : !replacing && existing
+                  ? `${name} is saved already; this replaces it.`
+                  : undefined
+            }
+          >
+            <Input
+              autoFocus={!replacing}
+              readOnly={replacing}
+              tabIndex={replacing ? -1 : undefined}
+              placeholder="GITHUB_TOKEN"
+              className="font-mono read-only:text-muted-foreground"
+              value={secret?.name ?? newName}
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              onChange={(e) => setNewName(e.currentTarget.value)}
+              aria-invalid={(!replacing && newName.trim() !== "" && !nameOk) || undefined}
+            />
+          </Field>
+          <Field label="Value">
+            <Input
+              ref={valueRef}
+              // Masked text rather than a password field, so no password
+              // manager offers to save it or fill it in.
+              type="text"
+              name={`dray-secret-${secret?.name ?? "new"}`}
+              placeholder="Paste the value"
+              className="[-webkit-text-security:disc]"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              data-1p-ignore
+              data-lpignore="true"
+              data-bwignore
+              data-form-type="other"
+              disabled={busy}
+              onChange={(e) => setFilled(e.currentTarget.value.trim() !== "")}
+            />
+          </Field>
+          <label className="flex items-center gap-2 text-ui text-muted-foreground">
+            <Switch checked={auto} onCheckedChange={setAuto} disabled={busy} />
+            Let agents use it without asking you
+          </label>
+          {error && <p className="text-ui text-destructive">{error}</p>}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={busy || !filled || !nameOk}>
+              {busy ? "Saving…" : replacing ? "Replace" : "Save"}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/// A labelled field, as Settings' server dialogs lay them out.
+function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1.5">
+      <span className="text-ui font-medium">{label}</span>
+      {children}
+      {hint && <span className="text-ui text-muted-foreground">{hint}</span>}
+    </label>
   );
 }
 

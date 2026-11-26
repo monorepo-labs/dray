@@ -1,11 +1,12 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
-import React, { useEffect, useRef, type ReactNode } from "react";
+import React, { useEffect, useRef, useState, type ReactNode } from "react";
 import ReactDOM from "react-dom/client";
 
 import EventRow from "@/components/chat/EventRow";
 import PermissionRequest from "@/components/chat/PermissionRequest";
 import SecretRequest from "@/components/chat/SecretRequest";
-import SecretsSettings from "@/components/settings/SecretsSettings";
+import SecretsSettings, { SecretDialog } from "@/components/settings/SecretsSettings";
+import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
 import { SecretPartiesContext, type SecretParties } from "@/hooks/useSecretParties";
@@ -113,6 +114,27 @@ function Section({ title, note, children }: { title: string; note?: string; chil
   );
 }
 
+/// Settings' two dialogs, the real one each time; `?dialog=add` or
+/// `?dialog=replace` opens one on load for a screenshot.
+function Dialogs() {
+  const [open, setOpen] = useState(() => new URLSearchParams(location.search).get("dialog"));
+  const saved = SAVED.local;
+  return (
+    <div className="flex gap-2">
+      <Button variant="secondary" size="sm" onClick={() => setOpen("add")}>
+        Add secret
+      </Button>
+      <Button variant="secondary" size="sm" onClick={() => setOpen("replace")}>
+        Replace NPM_TOKEN
+      </Button>
+      {open === "add" && <SecretDialog server="local" saved={saved} onClose={() => setOpen(null)} />}
+      {open === "replace" && (
+        <SecretDialog server="local" secret={saved[1]} saved={saved} onClose={() => setOpen(null)} />
+      )}
+    </div>
+  );
+}
+
 function Demo() {
   const base = { requestId: "q", url: "https://github.com/settings/tokens" };
   return (
@@ -207,10 +229,13 @@ function Demo() {
             </div>
           </Section>
 
-          <Section title="Settings → Secrets" note="The machine picker at the top; Auto is the switch; ⋯ holds Replace and Delete.">
+          <Section title="Settings → Secrets" note="The machine picker at the top; Auto is the switch; ⋯ holds Replace and Delete, Replace and Add secret open the dialogs below.">
             <div className="max-w-xl rounded-xl border border-border p-6">
               <SecretsSettings />
             </div>
+          </Section>
+          <Section title="Add and replace dialogs" note="Add takes a name; Replace keeps it fixed. A name already saved says it will be replaced.">
+            <Dialogs />
           </Section>
         </div>
         <DemoThemeBar />
