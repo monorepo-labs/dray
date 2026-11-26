@@ -50,6 +50,10 @@ type TrustHost = Extract<Fix, { kind: "trust_host" }>;
 /// `dray_proto::REMOTE_MCP` is the server's half; flip both together.
 const REMOTE_MCP = import.meta.env.DEV;
 
+/// Link and Unlink from org, hidden until readers need orgs. Linking still
+/// runs through sign-in and `dray login`, so a linked row still names its org.
+const ORG_LINK_ACTIONS = false;
+
 const STAGE_LABELS: Record<Stage, string> = {
   connecting: "Connecting…",
   finding: "Finding the server…",
@@ -124,7 +128,7 @@ function LinkAction({ link }: { link: OrgLink }) {
         Cancel
       </Button>
     );
-  if (!link.state || link.state.linked) return null;
+  if (!ORG_LINK_ACTIONS || !link.state || link.state.linked) return null;
   return (
     <Button variant="secondary" size="sm" onClick={() => void link.start()}>
       <Link2 className="size-3.5" />
@@ -238,7 +242,7 @@ export default function ServersSettings() {
               ) : undefined
             }
             onUnlink={
-              server.status === "connected" && link.state?.linked
+              ORG_LINK_ACTIONS && server.status === "connected" && link.state?.linked
                 ? () => {
                     setRenaming(null);
                     setConfirming(`unlink:${server.id}`);
@@ -538,11 +542,9 @@ function ThisMacRow() {
         setUnlinking(false);
         void link.unlink();
       }}
-      onUnlink={connected && link.state?.linked ? () => setUnlinking(true) : undefined}
+      onUnlink={ORG_LINK_ACTIONS && connected && link.state?.linked ? () => setUnlinking(true) : undefined}
       action={
         <>
-          {/* Signing in links This Mac too, but a reader who skipped sign-in
-              (#1590) links here: the site's /link page asks them to sign in. */}
           {connected && <LinkAction link={link} />}
           {remote.on ? (
             <Button variant="secondary" size="sm" onClick={() => setOn(false)}>
