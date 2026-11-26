@@ -1,6 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { KeyIcon, ShieldCheckIcon } from "@heroicons/react/16/solid";
-import { ChevronDown, ChevronLeft, ExternalLink, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ExternalLink, X } from "lucide-react";
 import type { ComponentProps, ComponentType, SVGProps } from "react";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 
@@ -178,9 +178,16 @@ export default function SecretRequest({
         {pasting ? (
           <div className="flex min-w-0 items-center gap-2">
             {closest && (
-              <Button type="button" variant="ghost" size="sm" className="h-8 shrink-0 text-muted-foreground" disabled={busy} onClick={() => setPasting(false)}>
-                <ChevronLeft />
-                Use saved
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="Use saved"
+                className="-ml-2 shrink-0 text-muted-foreground"
+                disabled={busy}
+                onClick={() => setPasting(false)}
+              >
+                <ArrowLeft />
               </Button>
             )}
             <Input
@@ -210,13 +217,13 @@ export default function SecretRequest({
           </div>
         ) : (
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <div className="flex min-w-0">
+            <div className="flex min-w-0 gap-2">
               <Button
                 type="submit"
                 autoFocus={autoFocus}
                 disabled={busy}
                 size="sm"
-                className={cn("h-8 min-w-0", savedNames.length > 1 && "rounded-r-none")}
+                className="h-8 min-w-0"
               >
                 <KeyIcon className="size-4" />
                 <span className="truncate">
@@ -231,7 +238,7 @@ export default function SecretRequest({
                       aria-label="Pick another saved secret"
                       disabled={busy}
                       size="icon-sm"
-                      className="size-8 rounded-l-none border-l border-primary-foreground/20"
+                      className="size-8"
                     >
                       <ChevronDown />
                     </Button>
