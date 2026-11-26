@@ -87,6 +87,8 @@ private enum class Answer { Paste, Saved, Decline }
 
 /** The card's buttons and field: one height, the item radius AskCard's rows use. */
 private val CONTROL = 40.dp
+/** The title's key sits in a small tile of its own, as Yogesh asked. */
+private val KEY_TILE = 28.dp
 private val controlShape = RoundedCornerShape(Dray.Radius.md)
 private val fieldFill = Color.White.copy(alpha = 0.08f)
 
@@ -188,11 +190,15 @@ fun SecretCard(key: SessionKey, request: SecretRequest, asker: SecretParty?, mod
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(verticalAlignment = Alignment.Top) {
-                        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(Icons.Filled.Key, null, Modifier.padding(top = 2.dp).size(16.dp), tint = Dray.text)
-                            Text(title, style = Dray.Font.subhead.copy(fontWeight = FontWeight.SemiBold))
+                        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Box(
+                                Modifier.size(KEY_TILE).clip(RoundedCornerShape(Dray.Radius.sm)).background(Dray.raised),
+                                contentAlignment = Alignment.Center,
+                            ) { Icon(Icons.Filled.Key, null, Modifier.size(16.dp), tint = Dray.text) }
+                            // Its first line centred on the tile; a long title wraps under it.
+                            Text(title, Modifier.padding(top = (KEY_TILE - 20.dp) / 2), style = Dray.Font.subhead.copy(fontWeight = FontWeight.SemiBold))
                         }
-                        if (asker == null) decline()
+                        if (asker == null) Box(Modifier.height(KEY_TILE), contentAlignment = Alignment.Center) { decline() }
                     }
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         if (request.reason.isNotBlank()) Text(request.reason, style = Dray.Font.subhead.copy(color = Dray.secondary))
