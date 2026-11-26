@@ -3,3 +3,27 @@ https://www.drayhq.com
 https://github.com/monorepo-labs/dray
 
 Copyright 2026 Yogesh Dhakal
+
+Brand and website: all rights reserved
+--------------------------------------
+
+The Apache 2.0 license covers the code in this repository. It does not cover
+the paths below, which are Copyright 2026 Yogesh Dhakal, all rights reserved:
+
+  apps/web/                      the website: design, images, illustrations
+  apps/brand-video/
+  apps/desktop/src-tauri/icons/  app icons
+  apps/desktop/public/assets/    logo and mark
+  apps/gpui/assets/icons/dray-logo.svg
+  apps/docs/public/logo.svg
+  apps/docs/public/icon.png
+  apps/ios/Dray/Assets.xcassets/AppIcon.appiconset/
+  apps/ios/Dray/Assets.xcassets/LaunchMark.imageset/
+  apps/android/app/src/main/res/mipmap-*/ic_launcher*
+  apps/android/app/src/main/res/drawable*/ic_launcher_*
+  apps/android/app/src/main/res/drawable/ic_notification.xml
+  apps/android/app/src/main/res/drawable/splash_mark.xml
+
+The Dray name and logo are not licensed, wherever they appear in this
+repository, code included: Apache 2.0 section 6 grants no trademark rights.
+Do not use them without written permission.
