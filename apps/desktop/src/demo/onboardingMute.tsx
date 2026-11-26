@@ -54,7 +54,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <TooltipProvider>
       {page === "signin" ? (
         <SignInGate
-          view={{ kind: "choose", revoked: false, error: null, offline: false, emailOff: false, lastUsed: null }}
+          view={{ kind: "choose", revoked: false, error: null, offline: false, emailOff: false, lastUsed: null, required: false, canSkip: true }}
           onPick={() => {}}
           onOpenAgain={() => {}}
           onCancel={() => {}}

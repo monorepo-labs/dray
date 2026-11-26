@@ -16,6 +16,10 @@ export type GateView =
       offline: boolean;
       emailOff: boolean;
       lastUsed: SignInMethod | null;
+      /// Sign-in is required now (#1590): its own words, and no Skip.
+      required: boolean;
+      /// False once sign-in is required, unless a failure opens the way.
+      canSkip: boolean;
     }
   | { kind: "waiting"; method: SignInMethod; finishing: boolean };
 
@@ -38,7 +42,7 @@ export default function SignInGate({
   onSkip: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-[1000] flex flex-col overflow-hidden bg-black text-white select-none">
+    <div data-sign-in-gate className="fixed inset-0 z-[1000] flex flex-col overflow-hidden bg-black text-white select-none">
       <Tiles />
       <header data-tauri-drag-region="deep" className="relative flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">
         <MuteButton />
@@ -71,17 +75,26 @@ function body(
         </Cards>
       </>
     );
-  const { error, offline, revoked, emailOff, lastUsed } = view;
+  const { error, offline, revoked, emailOff, lastUsed, required, canSkip } = view;
   const tag = (method: SignInMethod) => lastUsed === method && <LastUsed />;
   const failed = !offline && error;
-  const label = failed ? failed : revoked ? "You've been signed out" : "Welcome to Dray";
+  // True as said: the agents run in the background server, never this window.
+  const label = failed
+    ? failed
+    : required
+      ? "Your agents are still running in the background"
+      : revoked
+        ? "You've been signed out"
+        : "Welcome to Dray";
   const heading = offline
     ? "Check your connection, or skip for now."
     : failed
       ? "Pick an account to try again."
-      : revoked
-        ? "Sign in again. Your agents are still running."
-        : "Pick an account to sign in with.";
+      : required
+        ? "Sign in to keep using Dray."
+        : revoked
+          ? "Sign in again. Your agents are still running."
+          : "Pick an account to sign in with.";
   return (
     <>
       <Label danger={Boolean(failed)}>{label}</Label>
@@ -94,8 +107,11 @@ function body(
         ) : (
           <Card icon={<MailIcon />} label="Email" tag={tag("email")} corner onClick={() => act.onPick("email")} />
         )}
-        {offline && <Card icon={<SkipIcon />} label="Skip for now" onClick={act.onSkip} />}
+        {offline && canSkip && <Card icon={<SkipIcon />} label="Skip for now" onClick={act.onSkip} />}
       </Cards>
+      {/* Online, a way past the gate that doesn't compete with the three ways
+          in (#1590). Offline it is the fourth card above. */}
+      {!offline && canSkip && <QuietSkip onClick={act.onSkip} />}
     </>
   );
 }
@@ -176,6 +192,22 @@ function Card({
       className={`${cls} cursor-pointer outline-none transition-colors hover:bg-[#242424] focus-visible:bg-[#242424] focus-visible:ring-1 focus-visible:ring-white/40`}
     >
       {inner}
+    </button>
+  );
+}
+
+/// Skip without an account, in the label's own quiet type.
+function QuietSkip({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="mt-6 ml-[102px] flex cursor-pointer items-center gap-1.5 self-start font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white/50 uppercase outline-none transition-colors hover:text-white/80 focus-visible:text-white/80 max-lg:ml-0"
+    >
+      Skip for now
+      <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden>
+        <path d="M4 12h14M12 5l7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" />
+      </svg>
     </button>
   );
 }

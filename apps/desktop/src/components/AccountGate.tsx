@@ -4,7 +4,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import SignInGate, { type GateView } from "@/components/SignInGate";
 import { useQuitAtOnce } from "@/hooks/useQuitAtOnce";
 import { useLocalServer } from "@/lib/servers";
-import { ONBOARDED } from "@/lib/signInGate";
+import { onFocusChange } from "@/lib/focus";
+import { blocksSignIn, ONBOARDED } from "@/lib/signInGate";
+import { signInAsked, signInRequired, SKIPPED } from "@/lib/signInNudge";
 import { invoke, listen, LOCAL } from "@/lib/transport";
 import type { DrayAccountState, SignInMethod, SignInStarted } from "@/types/events";
 
@@ -15,10 +17,11 @@ export const SIGNED_IN = "dray.signedIn";
 /// The way in this app last signed in with, for the gate's "Last used" tag.
 /// Here and not on the server: it describes this app's reader, not the account.
 const LAST_METHOD = "dray.lastSignInMethod";
-/// How often a skipped gate asks whether drayhq.com is back.
-const PROBE_MS = 10_000;
 /// The server's own recheck interval with drayhq.com.
 const RECHECK_MS = 60_000;
+/// How long the window must have been away for its return to be a calm moment
+/// for the nudge: the reader is coming back, not mid-sentence.
+const AWAY_MS = 10 * 60_000;
 
 let readerSignedOut = false;
 
@@ -33,17 +36,23 @@ const ERRORS: Record<string, string> = {
   timed_out: "Sign-in timed out",
 };
 
-/// Everyone signs in before using Dray (#1277). Draws the app while this
-/// machine's server says someone is signed in, and the sign-in gate
-/// otherwise. The app is not mounted behind the gate, so nothing in it can be
-/// reached by a shortcut. Offline, the gate offers Skip for now; once the
-/// site answers again, the gate is back.
+/// The sign-in gate (#1277), which a reader may skip (#1590). Draws the app
+/// while this machine's server says someone is signed in or the reader
+/// skipped, and the gate otherwise. The app is not mounted behind that gate,
+/// so nothing in it can be reached by a shortcut.
+///
+/// A skipped reader meets the gate again from Settings' Sign in, drawn over
+/// the app, which stays mounted with keys held back from it. Once their use
+/// makes sign-in required (`signInRequired`) the gate loses Skip: in front of
+/// the app at launch, or over it when the window comes back after a while
+/// away. Only a sign-in the network won't let finish lets them past, for
+/// this run alone.
 export default function AccountGate({ children }: { children: ReactNode }) {
   const local = useLocalServer();
   const connected = local?.status === "connected";
   const [account, setAccount] = useState<DrayAccountState | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
-  const [skipped, setSkipped] = useState(false);
+  const [skipped, setSkipped] = useState(() => localStorage.getItem(SKIPPED) === "1");
   const [remembered] = useState(() => localStorage.getItem(SIGNED_IN) === "1");
   // Signed in at some point, this run or a past one: losing it now is
   // "You've been signed out", unless the reader chose Sign out.
@@ -106,6 +115,7 @@ export default function AccountGate({ children }: { children: ReactNode }) {
       localStorage.setItem(SIGNED_IN, "1");
       localStorage.setItem(ONBOARDED, "1");
       readerSignedOut = false;
+      localStorage.removeItem(SKIPPED);
       setSkipped(false);
     } else if (readerSignedOut) {
       localStorage.removeItem(SIGNED_IN);
@@ -123,22 +133,6 @@ export default function AccountGate({ children }: { children: ReactNode }) {
     wasSignedIn.current = signedIn;
   }, [signedIn, account]);
 
-  useEffect(() => {
-    if (!skipped) return;
-    const timer = setInterval(() => {
-      void invoke<boolean>("account_reachable", {}, LOCAL)
-        .then(async (up) => {
-          if (!up) return;
-          // Clears the `offline` the skip was taken under, so the gate comes
-          // back as a plain sign-in rather than offering Skip again.
-          await invoke("account_sign_in_cancel", {}, LOCAL).catch(() => {});
-          setSkipped(false);
-        })
-        .catch(() => {});
-    }, PROBE_MS);
-    return () => clearInterval(timer);
-  }, [skipped]);
-
   const pick = useCallback(async (method: SignInMethod) => {
     setFailed(null);
     try {
@@ -155,12 +149,65 @@ export default function AccountGate({ children }: { children: ReactNode }) {
     else if (account?.signingIn) void pick(account.signingIn);
   }, [account, pick]);
   const cancel = useCallback(() => void invoke("account_sign_in_cancel", {}, LOCAL).catch(() => {}), []);
+  // Required at launch: the gate stands in front of the app as on a first
+  // launch, only without Skip.
+  const [shut] = useState(() => signInRequired());
+  // Required now, which may have come due while the app ran.
+  const [required, setRequired] = useState(shut);
+  // Let past a required gate by a sign-in the network wouldn't let finish:
+  // this run only, so the gate is back at the next launch or calm moment.
+  const [bypassed, setBypassed] = useState(false);
+  // The gate drawn over the app, which stays mounted under it.
+  const [over, setOver] = useState(false);
+  const skip = useCallback(() => {
+    localStorage.setItem(SKIPPED, "1");
+    // Clears an `offline` or failed sign-in, so a later gate opens fresh.
+    void invoke("account_sign_in_cancel", {}, LOCAL).catch(() => {});
+    setSkipped(true);
+    setBypassed(true);
+    setOver(false);
+  }, []);
+
+  useEffect(() => signInAsked.subscribe(() => setOver(true)), []);
+  useEffect(() => {
+    if (signedIn) setOver(false);
+  }, [signedIn]);
+
+  // Only once the server has said no one is signed in, so a slow answer
+  // can't put the gate over a signed-in reader. A calm moment is the window
+  // coming back after a while away: the reader is returning, not mid-sentence.
+  const signedOut = Boolean(account && !account.user);
+  useEffect(() => {
+    if (!signedOut || !skipped) return;
+    let leftAt: number | null = null;
+    return onFocusChange((focused) => {
+      if (!focused) leftAt = Date.now();
+      else if (leftAt !== null && Date.now() - leftAt >= AWAY_MS && signInRequired()) {
+        setRequired(true);
+        setBypassed(false);
+        setOver(true);
+      }
+    });
+  }, [signedOut, skipped]);
+
+  // Keys stay with the gate while it covers the app: no shortcut, and no
+  // typing into a composer the reader can't see.
+  useEffect(() => {
+    if (!over) return;
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    const hold = (e: KeyboardEvent) => {
+      if ((e.target as Element | null)?.closest?.("[data-sign-in-gate]")) return;
+      e.stopPropagation();
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", hold, true);
+    return () => window.removeEventListener("keydown", hold, true);
+  }, [over]);
 
   // Until the server answers, a machine signed in last time draws the app,
   // which is nearly always right; anyone else sees the gate's empty frame.
-  const open = signedIn || skipped || (!account && !failed && remembered);
+  const open = signedIn || (skipped && (!shut || bypassed)) || (!account && !failed && remembered);
   useQuitAtOnce(!open);
-  if (open) return <>{children}</>;
 
   let view: GateView | null = null;
   if (account?.signingIn) view = { kind: "waiting", method: account.signingIn, finishing: account.finishing };
@@ -173,9 +220,21 @@ export default function AccountGate({ children }: { children: ReactNode }) {
       error: error === "offline" ? null : error ? (ERRORS[error] ?? error) : failed,
       emailOff: account?.emailOff ?? false,
       lastUsed,
+      required,
+      // Never locked out by the network: a failure trying again can't fix
+      // opens the way past a required gate.
+      canSkip: !required || blocksSignIn(error) || failed !== null,
     };
   }
-  return <SignInGate view={view} onPick={pick} onOpenAgain={openAgain} onCancel={cancel} onSkip={() => setSkipped(true)} />;
+  const gate = <SignInGate view={view} onPick={pick} onOpenAgain={openAgain} onCancel={cancel} onSkip={skip} />;
+  if (!open) return gate;
+  // One shape whether or not the gate is up, so the app never remounts.
+  return (
+    <>
+      {children}
+      {over && !signedIn ? gate : null}
+    </>
+  );
 }
 
 function storedMethod(value: string | null): SignInMethod | null {
