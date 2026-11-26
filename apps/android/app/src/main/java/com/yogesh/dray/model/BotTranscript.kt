@@ -7,6 +7,7 @@ import com.yogesh.dray.wire.Lesson
 import com.yogesh.dray.wire.MergeCard
 import com.yogesh.dray.wire.Payload
 import com.yogesh.dray.wire.PrMark
+import com.yogesh.dray.wire.SecretAnswer
 import com.yogesh.dray.wire.arr
 import com.yogesh.dray.wire.get
 import com.yogesh.dray.wire.str
@@ -45,6 +46,8 @@ sealed interface BotItem {
     /** "Messaged" another bot, by the id `dray bot send` printed where it did. */
     data class BotSent(override val id: String, val name: String, val botId: String?, override val ts: String?) : BotItem
     data class Learned(override val id: String, val lesson: Lesson, val commit: String, val undone: Boolean, override val ts: String?) : BotItem
+    /** A closed secret card: "Sent GH_TOKEN to <task>", "Saved…", "Declined…". Never the value. */
+    data class Secret(override val id: String, val answer: SecretAnswer, override val ts: String?) : BotItem
 }
 
 /** A drawn row: an item, or a run of sends folded into one "Messaged" line. */
@@ -98,6 +101,7 @@ fun botItems(events: List<AgentEvent>): List<BotItem> {
             is Payload.MergeCardPosted -> items += BotItem.Card(e.id, p.card, e.ts)
             is Payload.IssueCardPosted -> items += BotItem.Issues(e.id, e.sessionId, p.card, started[e.id].orEmpty(), e.ts)
             is Payload.TaskStarted -> items += BotItem.Task(e.id, p.taskId.lowercase(), p.title, e.ts)
+            is Payload.SecretAnswered -> if (p.answer.draws) items += BotItem.Secret(e.id, p.answer, e.ts)
             is Payload.Learned -> for (f in p.files) {
                 items += BotItem.Learned("${e.id}:${f.path}", f, p.commit, "${p.commit}\u0000${f.path}" in undone, e.ts)
             }

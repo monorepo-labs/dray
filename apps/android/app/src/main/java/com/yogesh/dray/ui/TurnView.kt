@@ -96,6 +96,7 @@ fun TurnView(turn: Turn) {
                     // A finished long turn's answer shows while the stretch holding it is shut.
                     if (!turn.finalLifted && collapsible && i == segments.lastIndex && !isOpen) finalShown = true
                 }
+                seg.cards.forEach { ItemRow(it) }
                 seg.prompt?.let { UserBubble(TurnPrompt(it.text, it.from, it.images), queued = false) }
             }
         } else {
@@ -123,6 +124,7 @@ fun ItemRow(item: Item) {
         is Item.Group -> GroupRow(item)
         is Item.Prompt -> UserBubble(TurnPrompt(item.text, item.from, item.images))
         is Item.Failure -> FailureRow(item.text)
+        is Item.Secret -> SecretItemLine(item)
     }
 }
 

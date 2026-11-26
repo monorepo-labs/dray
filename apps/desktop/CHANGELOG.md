@@ -27,6 +27,32 @@ reads:
   to a line or two. A release with no highlights for an app gets the small
   card there instead, when it carries `notify`.
 
+## 0.36.0 · 2026-11-26 · notify
+
+### New
+
+- **Agents ask for secrets through a private card.** When an agent needs
+  a token or password, it asks with a card in the chat instead of in
+  the conversation. The value goes to a private file on the task's
+  machine, never into the chat, logs or the model's context. Save one to
+  reuse it with a click, or let agents use it without asking. Settings →
+  Secrets lists what is saved on each machine.
+- **Sign-in is optional for now.** Skip it at launch and keep using
+  Dray; Settings has a Sign in row for later. Once you have used Dray
+  for a few days and merged a task's PR, it asks you to sign in.
+
+### Improved
+
+- On Linux and Windows, the sheet's top-right corner curves round the
+  window buttons on New Task, Issues, Pull requests, bot pages and
+  Settings.
+- Settings → Servers no longer shows Link or Unlink from org.
+
+### Fixed
+
+- A bot's routine run no longer stops the bot's chat mid-turn.
+- `dray draft ls` lists every draft, including from a bot's chat.
+
 ## 0.35.0 · 2026-11-26 · notify
 
 ### New

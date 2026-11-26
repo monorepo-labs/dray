@@ -146,7 +146,7 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
     val context = LocalContext.current
     val task = remember { NewTask(store, context.applicationContext) }
 
-    CompositionLocalProvider(LocalNewTask provides task) { Box(Modifier.fillMaxSize()) {
+    CompositionLocalProvider(LocalNewTask provides task, LocalOpenSession provides { push(Route.Session(it)) }) { Box(Modifier.fillMaxSize()) {
         AnimatedContent(
             stack.last(),
             transitionSpec = {

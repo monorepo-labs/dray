@@ -281,7 +281,7 @@ export default function SecretRequest({
             {pasting && (
               <label htmlFor={keepId} className="flex items-center gap-2">
                 <Switch id={keepId} checked={keeps} onCheckedChange={setKeep} disabled={busy || auto} />
-                Save
+                Save to Vault
               </label>
             )}
             <label htmlFor={autoId} className="flex items-center gap-2">
