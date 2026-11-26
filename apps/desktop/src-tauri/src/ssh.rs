@@ -201,6 +201,23 @@ impl Tunnel {
     pub fn said(&self) -> Option<String> {
         last_line(&self.stderr.lock().unwrap_or_else(|e| e.into_inner()))
     }
+
+    /// A login whose `ssh` is a `cat` that stays up, its forward said to be at
+    /// `port`, for tests of a kept login gone stale.
+    #[cfg(test)]
+    pub fn standing_in(port: u16) -> Tunnel {
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let (stderr, _) = drain_stderr(&mut child);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        Tunnel { child, _stdin: stdin, _stdout: stdout, port, token: "t".into(), address: None, address_coming: false, boat: None, stderr }
+    }
 }
 
 /// The script the login runs. Single-quoted whole by the caller, so it holds no

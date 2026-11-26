@@ -404,14 +404,21 @@ async fn admit(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
 }
 
 /// An admitted socket to `saved`. A kept login the server refuses — its token
-/// moved, its forward died — is dropped, so the next call logs in afresh.
+/// moved, its forward died with a dropped link or a restart there — is dropped
+/// and logged into afresh at once: failing the call instead made every machine
+/// read as holding nothing to a bare id's sweep after a laptop woke.
 async fn connect(saved: &Saved) -> Result<Socket, String> {
+    let was_kept = saved.ssh.is_some() && kept(&saved.id).is_some();
     let (url, token) = reach(saved).await?;
     match admit(&url, &token).await {
         Ok((ws, _)) => Ok(ws),
         Err(e) => {
             drop_login(&saved.id, &url);
-            Err(e)
+            if !was_kept {
+                return Err(e);
+            }
+            let (url, token) = reach(saved).await?;
+            admit(&url, &token).await.map(|(ws, _)| ws).inspect_err(|_| drop_login(&saved.id, &url))
         }
     }
 }
@@ -735,6 +742,44 @@ pub async fn set_on(name: &str, on: bool) -> Result<Row, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A kept login whose forward went dead — a dropped link, a restart there —
+    /// heals inside the call that finds it, rather than failing that call and
+    /// so reading to a bare id's sweep as a machine holding nothing.
+    #[tokio::test]
+    async fn a_kept_login_gone_stale_logs_in_again_within_the_call() {
+        let dead = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead_port = dead.local_addr().unwrap().port();
+        drop(dead);
+        let live = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", live.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (tcp, _) = live.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            ws.next().await;
+            ws.send(Message::text(json!({ "v": crate::serve::PROTOCOL }).to_string())).await.unwrap();
+            while ws.next().await.is_some() {}
+        });
+        // The fresh login fails at once (nothing on port 1), and so falls back
+        // to the Remote access address its last login read: the live server.
+        let saved = Saved {
+            id: format!("stale-{}", uuid::Uuid::new_v4().simple()),
+            name: "vps".into(),
+            url,
+            ssh: Some(ssh::Target { dest: "nobody@127.0.0.1".into(), port: Some(1) }),
+            off: false,
+            beta: false,
+            ignored: None,
+            boat: None,
+            cloud: None,
+            unknown: Default::default(),
+        };
+        tunnels().insert(saved.id.clone(), ssh::Tunnel::standing_in(dead_port));
+
+        let ws = connect(&saved).await;
+        assert!(ws.is_ok(), "{:?}", ws.err());
+        assert!(kept(&saved.id).is_none(), "the stale login is gone");
+    }
 
     /// A stopped machine's tasks can't be settled, so unsettled alone says
     /// nothing; only running, waiting or an open PR counts.
