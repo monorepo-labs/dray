@@ -27,6 +27,22 @@ reads:
   to a line or two. A release with no highlights for an app gets the small
   card there instead, when it carries `notify`.
 
+## 0.36.2 · 2026-11-27
+
+### Improved
+
+- **OpenCode 2 support.** Dray runs the newest OpenCode installed on
+  your machine and reads OpenCode 2's models, sign-ins and updates.
+  OpenCode 1 still works.
+- Settings → Agents → OpenCode can add an account for any provider and
+  sign out of one.
+
+### Fixed
+
+- On OpenCode 2, question cards and subagents work, a message sent
+  mid-turn joins the running turn, and subagents' permission cards
+  show.
+
 ## 0.36.1 · 2026-11-26
 
 ### Improved
