@@ -476,7 +476,15 @@ async fn save() -> Result<(), String> {
 /// writes itself while this app is not connected to it (#760). Its server
 /// asks for this as the app connects, and after any write landing meanwhile.
 pub async fn reload() {
-    let saved = crate::machines::load().await;
+    // A file that fails to read is no list at all, not an empty one: taken as
+    // empty it would drop every connection and its kept rows.
+    let saved = match crate::machines::try_load().await {
+        Ok(saved) => saved,
+        Err(e) => {
+            eprintln!("[servers reload err] {e:#}");
+            return;
+        }
+    };
     let mut dropped = Vec::new();
     {
         let mut list = conns();
@@ -1716,6 +1724,11 @@ async fn serve(id: &str, ws: Socket) {
                 let _ = waiter.send(reply);
             }
         } else if let (Some(event), Some(sink)) = (frame.get("event").and_then(Value::as_str), SINK.get()) {
+            // Heard as any client, since the `reload_servers` call reaches the
+            // host alone and this app may not be it (#1629).
+            if id == LOCAL && event == crate::machines::SERVERS_WRITTEN {
+                tokio::spawn(reload());
+            }
             let payload = frame.get("payload").cloned().unwrap_or(Value::Null);
             let _ = sink.emit("server_event", json!({ "server": id, "event": event, "payload": payload }));
         }
