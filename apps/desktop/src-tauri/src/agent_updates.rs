@@ -114,8 +114,10 @@ pub async fn update_agent(harness: Harness) -> Result<Option<AgentUpdate>, Strin
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        let said = text.lines().map(str::trim).filter(|line| !line.is_empty()).last();
-        return Err(said.map_or_else(|| format!("{} update failed", harness.label()), String::from));
+        // Colour codes out first: OpenCode ends on a bare `ESC[0m`, which was
+        // the whole message.
+        let said = text.lines().map(crate::title::readable).filter(|line| !line.is_empty()).last();
+        return Err(said.unwrap_or_else(|| format!("{} update failed", harness.label())));
     }
     // "Updated" is read back, never assumed, so a recheck that cannot answer
     // is a failure rather than the success its silence would look like.

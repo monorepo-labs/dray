@@ -29,11 +29,12 @@ pub mod commands;
 pub mod mapper;
 pub mod models;
 pub mod parser;
+pub mod questions;
 
 use crate::attachments::PreparedImage;
 use crate::events::{AgentEventPayload, ApprovalPolicy};
 use crate::harness::acp::{self, PermissionChoice};
-use crate::harness::claude_code::permissions::{rpc_request_id, PendingPermissions};
+use crate::harness::claude_code::permissions::{rpc_request_id, PendingPermissions, PendingRequest, Reply};
 use crate::harness::codex::rpc::{Incoming, RpcClient};
 use crate::harness::{read_stderr, record_failure, Harness::OpenCode};
 use crate::models::{Effort, Model};
@@ -42,6 +43,7 @@ use crate::sink::Sink;
 use crate::store::{self, next_seq_by_session_id};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -112,6 +114,9 @@ pub async fn init(
     // `permission` is the same global list, appended after each agent's.
     if v2 {
         config["permission"] = global.clone();
+        // 2 ships `todowrite` off; it is what fills Dray's task list, as 1's
+        // did by default.
+        config["experimental"] = json!({"todo": true});
     }
     let mut command = Command::new(&bin);
     if let Some(endpoint) = crate::orchestration::child_endpoint() {
@@ -413,8 +418,9 @@ async fn open_session(
             json!({
                 "protocolVersion": 1,
                 // No `fs` and no `terminal`: OpenCode reads and writes through
-                // its own tools.
-                "clientCapabilities": {},
+                // its own tools. `elicitation.form` is what lets OpenCode 2's
+                // `question` tool reach the reader; 1 ignores it.
+                "clientCapabilities": {"elicitation": {"form": {}}},
                 "clientInfo": {"name": "dray", "title": "Dray", "version": env!("CARGO_PKG_VERSION")},
             }),
         )
@@ -648,7 +654,10 @@ async fn read_stdout(
                                 record_failure(OpenCode, &handles.session_id, "unknown_subtype", &kind, &line).await;
                                 continue;
                             }
-                            update => parser::OpenCodeEvent::Update(update),
+                            update => match note.child {
+                                Some(child) => parser::OpenCodeEvent::ChildUpdate { child, update },
+                                None => parser::OpenCodeEvent::Update(update),
+                            },
                         }
                     }
                     Err(parser::ParseOutcome::Unknown) => {
@@ -833,6 +842,13 @@ async fn answer_request(
                 let _ = handles.client.respond(rpc_id, json!({"outcome": {"outcome": "cancelled"}}));
             }
         }
+        "elicitation/create" => {
+            if let Err(err) = raise_question(handles, mapper, rpc_id, &params) {
+                record_failure(OpenCode, &handles.session_id, "unsupported_request", &err.to_string(), line).await;
+                // `cancel` ends the form and the turn moves on.
+                let _ = handles.client.respond(rpc_id, json!({"action": "cancel"}));
+            }
+        }
         // OpenCode writes the file itself, then asks the client to write it
         // too — unadvertised, so an editor client can refresh its buffer.
         // Refused quietly: measured, the edit has already landed.
@@ -884,6 +900,31 @@ fn raise_permission(handles: &ReaderHandles, mapper: &mapper::Mapper, rpc_id: i6
         options,
     });
     // Emitted, never logged — only the child that asked can answer.
+    handles.app.emit("agent_event", &event)?;
+    Ok(())
+}
+
+/// Holds an OpenCode 2 question form and draws the question card. The pending
+/// entry's `input` is what [`questions::answer`] maps the answers back with.
+fn raise_question(handles: &ReaderHandles, mapper: &mapper::Mapper, rpc_id: i64, params: &Value) -> Result<()> {
+    let (questions, lookup) = questions::read(params).context("a form the question card cannot draw")?;
+    let tool_use_id = params.get("toolCallId").and_then(Value::as_str).unwrap_or_default().to_string();
+    let request_id = rpc_request_id();
+    handles.pending.lock().expect("pending permissions mutex poisoned").insert(
+        request_id.clone(),
+        PendingRequest {
+            tool_use_id: tool_use_id.clone(),
+            tool_name: "question".to_string(),
+            input: lookup,
+            options: HashMap::new(),
+            reply: Reply::Rpc(rpc_id),
+        },
+    );
+    let event = mapper.synthesize(AgentEventPayload::QuestionsAsked {
+        request_id,
+        tool_use_id,
+        questions,
+    });
     handles.app.emit("agent_event", &event)?;
     Ok(())
 }

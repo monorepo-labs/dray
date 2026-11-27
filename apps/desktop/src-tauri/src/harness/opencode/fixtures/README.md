@@ -27,5 +27,7 @@ only `build` and `plan`. Paths are rewritten to `/tmp/opencode-probe`.
 | `models_verbose.txt` | Three rows of `opencode models --verbose`: a ladder, a ladder with OpenCode's own `none`, and a model id holding a slash of its own. |
 | `live_turn_v2.jsonl` | **OpenCode 2.4.1**: one turn under `OPENCODE_CONFIG_CONTENT`'s `permission`, with `shell` and `patch` each raising a card. The patch's input is patch text; its file is only in `locations` and its diff only in `rawOutput.metadata.files`. |
 | `models_api.json` | **OpenCode 2.4.1**: three rows of `opencode api GET /api/model`, `variants` and `capabilities.input` as lists. |
+| `subagent_v2.jsonl` | **OpenCode 2.4.2**: a `subagent` call that answers at once with "working in the background (sessionID: …)", the child's reply as an `agent_message_chunk` on the parent's id tagged `_meta["opencode/child-session"]`, then two parent messages, each its own `messageId`. |
+| `question_v2.jsonl` | **OpenCode 2.4.2**, `elicitation.form` advertised: the `question` call, the `elicitation/create` form it raises (`q0`, `q0_custom`), answered `accept` with `{"q0": "Blue"}`, and the call's close naming the answer. |
 
 `src/fixtures/opencode_integrations.json` is OpenCode 2.4.1's `opencode api GET /api/integration` cut to seven providers, credential ids rewritten, for the Accounts tab.

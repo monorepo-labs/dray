@@ -423,7 +423,7 @@ fn said(stderr: &[u8]) -> String {
 /// intermediates (`0x20`–`0x2F`) up to one final byte, which is a charset
 /// designation like `ESC ( B` — read as two bytes it leaves its `B` in the
 /// text.
-fn readable(line: &str) -> String {
+pub(crate) fn readable(line: &str) -> String {
     let mut out = String::new();
     let mut chars = line.chars().peekable();
 

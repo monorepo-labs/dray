@@ -3615,6 +3615,12 @@ impl Session {
                 let result = crate::harness::grok::permissions::question_answer(&answers);
                 session.client.respond(*rpc_id, result)?;
             }
+            // OpenCode 2's `elicitation/create`: answers go back on the form's
+            // own field keys, held on the entry when the card was raised.
+            (Transport::OpenCode(session), Reply::Rpc(rpc_id)) => {
+                let result = crate::harness::opencode::questions::answer(&pending.input, &answers);
+                session.client.respond(*rpc_id, result)?;
+            }
             _ => {
                 write_line(
                     self.stdin.lines()?,
