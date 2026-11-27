@@ -7,8 +7,8 @@
 //! one block runs until an update of another kind arrives.
 
 use crate::events::{
-    usage::ContextWindow, AgentEvent, AgentEventPayload, BlockType, DeltaEvent, SessionInfo, Subagent, ToolResult,
-    ToolType, TurnStatus, Usage,
+    usage::ContextWindow, AgentEvent, AgentEventPayload, BlockType, DeltaEvent, FileChange, FileEdit, SessionInfo,
+    Subagent, ToolResult, ToolType, TurnStatus, Usage,
 };
 use crate::harness::acp::{self, block_ref, OpenBlock};
 use crate::harness::{mentions_any, Harness};
@@ -21,8 +21,19 @@ use super::parser::{OpenCodeEvent, OpenCodeUpdate, PromptResponse, RawOutput, To
 
 /// What a refused prompt says when the provider credential is the problem.
 /// Written to under-match for [`mentions_any`]'s reason; read off the live
-/// refusal, which named a reset API key.
-const LOGIN_NEEDLES: &[&str] = &["api key", "unauthorized", "authentication", "auth login"];
+/// refusal, which named a reset API key, and the dead logins on a real
+/// machine: "Invalid credential", "OAuth access token is invalid", "xAI token
+/// refresh failed", "Reconnect OpenCode Console to continue".
+const LOGIN_NEEDLES: &[&str] = &[
+    "api key",
+    "unauthorized",
+    "authentication",
+    "auth login",
+    "invalid credential",
+    "access token",
+    "refresh token",
+    "reconnect opencode",
+];
 
 /// A call seen opening and not yet drawn: the row waits for its arguments.
 struct OpeningCall {
@@ -104,6 +115,7 @@ impl Mapper {
                 status,
                 kind,
                 raw_input,
+                locations,
                 content,
                 raw_output,
             } => {
@@ -116,8 +128,16 @@ impl Mapper {
                         out.extend(self.ensure_turn());
                         out.extend(self.close_open());
                         let kind = kind.unwrap_or(call.kind);
-                        let input = tool_input(raw_input);
+                        let mut input = tool_input(raw_input);
                         let tool_type = tool_type(&call.name, kind);
+                        // OpenCode 2's `patch` carries patch text, its file
+                        // only in `locations`; the row titles itself off
+                        // `file_path`.
+                        if let ([one], ToolType::FileEdit, None) =
+                            (locations.as_slice(), &tool_type, input.get("file_path"))
+                        {
+                            input["file_path"] = json!(one.path);
+                        }
                         let run = (tool_type == ToolType::SubagentSpawn).then(|| started_run(&input));
                         self.running.insert(tool_call_id.clone(), input.clone());
                         out.push(self.event(AgentEventPayload::ToolCallStarted {
@@ -169,6 +189,13 @@ impl Mapper {
                         images: Vec::new(),
                     },
                 }));
+                let edits = raw_output.as_ref().map(file_edits).unwrap_or_default();
+                if !edits.is_empty() {
+                    out.push(self.event(AgentEventPayload::FileEdits {
+                        call_id: Some(tool_call_id.clone()),
+                        edits,
+                    }));
+                }
                 if let Some((summary, outcome)) = report {
                     out.push(self.subagent_event(
                         &tool_call_id,
@@ -456,6 +483,34 @@ fn tool_input(raw: Option<Value>) -> Value {
     Value::Object(map)
 }
 
+/// OpenCode 2's `patch` result names each file it touched with a unified diff
+/// (`metadata.files[].{file, patch, status}`), the only place its diff is, the
+/// input being patch text. The diff opens on an `Index:` banner the row would
+/// draw as two stray lines, so it starts at the first hunk.
+fn file_edits(raw: &RawOutput) -> Vec<FileEdit> {
+    let Some(files) = raw.metadata.as_ref().and_then(|m| m.get("files")).and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    files
+        .iter()
+        .filter_map(|file| {
+            let path = file.get("file").and_then(Value::as_str)?;
+            let diff = file.get("patch").and_then(Value::as_str).map(|patch| {
+                patch.find("\n@@").map_or(patch, |at| &patch[at + 1..]).trim_end().to_string()
+            });
+            Some(FileEdit {
+                path: path.to_string(),
+                change: match file.get("status").and_then(Value::as_str) {
+                    Some("added") => FileChange::Add,
+                    Some("deleted") => FileChange::Delete,
+                    _ => FileChange::Update,
+                },
+                unified_diff: diff,
+            })
+        })
+        .collect()
+}
+
 /// What a finished call reports: the text the model was handed, or nothing
 /// for an edit, whose diff is what the row draws and whose sentence ("Edit
 /// applied successfully.") restates the row.
@@ -594,6 +649,36 @@ mod tests {
         let window = usage.as_ref().and_then(|u| u.context_window).expect("the ring's reading");
         assert_eq!(window.max_tokens, 1_000_000);
         assert!(window.used_tokens > 0);
+    }
+
+    /// OpenCode 2.4.1 names its tools `shell` and `patch`, and a patch's input
+    /// is patch text: the file comes off `locations` and the diff off the
+    /// result's metadata.
+    #[test]
+    fn an_opencode_2_turn_draws_its_patch() {
+        let events = replay(include_str!("fixtures/live_turn_v2.jsonl"));
+
+        let starts = tool_starts(&events);
+        let names: Vec<(&str, ToolType)> = starts.iter().map(|(n, t, _)| (*n, *t)).collect();
+        assert_eq!(
+            names,
+            [("shell", ToolType::Shell), ("read", ToolType::FileRead), ("patch", ToolType::FileEdit)]
+        );
+        assert_eq!(starts[0].2["command"], "ls");
+        assert_eq!(starts[2].2["file_path"], "/tmp/opencode-probe/notes.txt");
+
+        let edits = events
+            .iter()
+            .find_map(|e| match &e.payload {
+                P::FileEdits { edits, .. } => Some(edits),
+                _ => None,
+            })
+            .expect("the patch's diff");
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].change, FileChange::Update);
+        assert_eq!(edits[0].unified_diff.as_deref(), Some("@@ -1,2 +1,2 @@\n one\n-two\n+three"));
+
+        assert!(matches!(events.last().unwrap().payload, P::TurnCompleted { status: TurnStatus::Success, .. }));
     }
 
     /// Stop answers `cancelled`, a success, and the killed shell closes on its

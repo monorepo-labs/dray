@@ -104,7 +104,15 @@ pub async fn init(
     let rules = write_rules(session_id, session_cwd).await?;
 
     let bin = crate::binpath::opencode().await;
-    let agents = agents_refusing_edits(&bin, permission_mode, cwd, session_cwd).await;
+    let v2 = crate::binpath::opencode_v2().await;
+    let agents = agents_refusing_edits(&bin, v2, permission_mode, cwd, session_cwd).await;
+    let global = global_rules(permission_mode, agents.as_deref());
+    let mut config = stance_config(&rules, permission_mode, agents.as_deref());
+    // OpenCode 2 no longer reads `OPENCODE_PERMISSION`; the config's own
+    // `permission` is the same global list, appended after each agent's.
+    if v2 {
+        config["permission"] = global.clone();
+    }
     let mut command = Command::new(&bin);
     if let Some(endpoint) = crate::orchestration::child_endpoint() {
         command.env("DRAY_ENDPOINT", endpoint);
@@ -115,11 +123,8 @@ pub async fn init(
         .current_dir(cwd)
         .env("DRAY_SESSION_ID", session_id)
         .env("PATH", crate::harness::agent_path(&bin))
-        .env("OPENCODE_PERMISSION", global_rules(permission_mode, agents.as_deref()).to_string())
-        .env(
-            "OPENCODE_CONFIG_CONTENT",
-            stance_config(&rules, permission_mode, agents.as_deref()).to_string(),
-        )
+        .env("OPENCODE_PERMISSION", global.to_string())
+        .env("OPENCODE_CONFIG_CONTENT", config.to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -297,13 +302,15 @@ fn stance_config(rules_path: &str, mode: ApprovalPolicy, agents: Option<&[String
 /// Every agent OpenCode will run here, when the stance asks before edits:
 /// those are the agents whose edits must be refused by name.
 ///
-/// Read from `opencode agent list`, which names the built-ins, the reader's
-/// own from `opencode.json` and `.opencode/agent/`, and any a plugin adds.
-/// Empty where nothing needs refusing, so Auto and Bypass skip the call, about
-/// a second; `None` where OpenCode could not answer, which [`global_rules`]
-/// covers.
+/// Read from `opencode agent list`, or 2's `opencode debug agents`, which name
+/// the built-ins, the reader's own from `opencode.json` and `.opencode/agent/`,
+/// and any a plugin adds. 2 answers `agent list` with its help and a clean
+/// exit, so the two are never tried in turn. Empty where nothing needs
+/// refusing, so Auto and Bypass skip the call, about a second; `None` where
+/// OpenCode could not answer, which [`global_rules`] covers.
 async fn agents_refusing_edits(
     bin: &std::path::Path,
+    v2: bool,
     mode: ApprovalPolicy,
     cwd: &str,
     session_cwd: &str,
@@ -314,10 +321,15 @@ async fn agents_refusing_edits(
     // The folder OpenCode opens the session in decides which project config
     // it reads; a worktree not made yet falls back to where the child starts.
     let dir = if std::path::Path::new(session_cwd).is_dir() { session_cwd } else { cwd };
+    let (args, parse): (&[&str], fn(&str) -> Option<Vec<String>>) = if v2 {
+        (&["debug", "agents"], parse_agents_json)
+    } else {
+        (&["agent", "list"], |out| Some(parse_agent_list(out)))
+    };
     let listed = tokio::time::timeout(
         std::time::Duration::from_secs(15),
         Command::new(bin)
-            .args(["agent", "list"])
+            .args(args)
             .current_dir(dir)
             .env("PATH", crate::harness::agent_path(bin))
             // Null, never a pipe: an OpenCode command with an open stdin and
@@ -328,7 +340,10 @@ async fn agents_refusing_edits(
     )
     .await;
     let reason = match listed {
-        Ok(Ok(out)) if out.status.success() => return Some(parse_agent_list(&String::from_utf8_lossy(&out.stdout))),
+        Ok(Ok(out)) if out.status.success() => match parse(&String::from_utf8_lossy(&out.stdout)) {
+            Some(agents) => return Some(agents),
+            None => "the agent list did not parse".to_string(),
+        },
         Ok(Ok(out)) => format!("{}: {}", out.status, String::from_utf8_lossy(&out.stderr).trim()),
         Ok(Err(err)) => err.to_string(),
         Err(_) => "timed out".to_string(),
@@ -346,6 +361,20 @@ fn parse_agent_list(out: &str) -> Vec<String> {
         .filter(|name| !name.is_empty() && !name.contains(char::is_whitespace))
         .map(str::to_string)
         .collect()
+}
+
+/// Reads `opencode debug agents`: a JSON array of agents, each with its `id`.
+/// `None` for anything else, so a changed answer refuses edits globally rather
+/// than naming no agent at all.
+fn parse_agents_json(out: &str) -> Option<Vec<String>> {
+    let agents: Vec<Value> = serde_json::from_str(out).ok()?;
+    Some(
+        agents
+            .iter()
+            .filter_map(|agent| agent.get("id").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 /// The agent a stance runs as: `plan` for Plan, `build` for the rest. Always
@@ -973,6 +1002,17 @@ mod tests {
                    explore (subagent)\n  [\n]\nmdhelper (subagent)\n  [\n]\nscribe (all)\n  [\n]\n";
         assert_eq!(parse_agent_list(out), ["build", "explore", "mdhelper", "scribe"]);
         assert!(parse_agent_list("").is_empty());
+    }
+
+    /// `opencode debug agents` as 2.4.1 prints it, trimmed to the fields read.
+    /// Its help text, which 2 prints for `agent list`, is no list at all.
+    #[test]
+    fn opencode_2s_agent_list_names_every_agent() {
+        let out = r#"[{"id":"build","name":"build","mode":"primary","permissions":[]},
+                      {"id":"explore","name":"explore","mode":"subagent"},
+                      {"id":"reviewer","name":"reviewer","mode":"subagent"}]"#;
+        assert_eq!(parse_agents_json(out).unwrap(), ["build", "explore", "reviewer"]);
+        assert_eq!(parse_agents_json("DESCRIPTION\n  OpenCode command line interface\n"), None);
     }
 
     /// OpenCode's ask for a `.env` read carries `rawInput: {}`, so the card

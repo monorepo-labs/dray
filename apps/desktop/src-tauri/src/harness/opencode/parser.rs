@@ -67,6 +67,10 @@ pub enum OpenCodeUpdate {
         kind: Option<ToolKind>,
         #[serde(default)]
         raw_input: Option<Value>,
+        /// The files the call touches. OpenCode 2's `patch` names its file
+        /// here alone, its input being the patch text.
+        #[serde(default, deserialize_with = "null_as_default")]
+        locations: Vec<Location>,
         #[serde(default, deserialize_with = "null_as_default")]
         content: Vec<ToolContent>,
         #[serde(default)]
@@ -96,6 +100,12 @@ pub enum OpenCodeUpdate {
     Plan,
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct Location {
+    #[serde(default)]
+    pub path: String,
 }
 
 /// A finished call's result. `output` is the text the model was handed;

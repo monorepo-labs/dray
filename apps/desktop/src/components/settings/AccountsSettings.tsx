@@ -54,14 +54,15 @@ const STATE_LABELS: Record<AccountState, string> = {
 
 /// Which harnesses have something to *add* rather than only something to change.
 ///
-/// pi alone, and it is about whether the providers can be *listed* rather than
-/// how many credentials the CLI holds. Claude and Codex hold one each: signing
-/// in again replaces it, which is the ⋯ menu's "change sign-in method" and not
-/// an addition. fx holds three and every one of them is already a row, signed
-/// in or not — so Add opened a form to reach a provider the reader could sign
-/// into from the row in front of them. pi publishes no provider list at all,
-/// which is what leaves a name only the reader can supply.
-const MULTI_ACCOUNT: Harness[] = ["pi"];
+/// pi and OpenCode, and it is about whether there are providers beyond the rows
+/// rather than how many credentials the CLI holds. Claude and Codex hold one
+/// each: signing in again replaces it, which is the ⋯ menu's "change sign-in
+/// method" and not an addition. fx holds three and every one of them is already
+/// a row, signed in or not — so Add opened a form to reach a provider the reader
+/// could sign into from the row in front of them. pi publishes no provider list
+/// at all, which is what leaves a name only the reader can supply; OpenCode
+/// lists hundreds, and only the signed-in ones are rows.
+const MULTI_ACCOUNT: Harness[] = ["pi", "opencode"];
 
 /// The picker row that swaps the list for a text field. Not a provider id, and
 /// it never reaches Rust: `effectiveProvider` resolves it to whatever was typed.

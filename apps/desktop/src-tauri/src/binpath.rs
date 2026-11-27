@@ -256,10 +256,73 @@ pub async fn grok() -> PathBuf {
 
 static OPENCODE_PATH: Slot = Slot::new();
 
+/// The major version of the `opencode` [`opencode`] chose, `0` where unread.
+static OPENCODE_MAJOR: AtomicU64 = AtomicU64::new(0);
+
 /// Where `opencode` is, or the bare name as a last resort — [`claude`]'s shape.
-/// Its installer puts it in `~/.opencode/bin`, one of the known dirs.
+/// Its installers put it in `~/.opencode/bin`, one of the known dirs.
 pub async fn opencode() -> PathBuf {
-    cached(&OPENCODE_PATH, or_bare("opencode")).await
+    cached(&OPENCODE_PATH, resolve_opencode()).await
+}
+
+/// Whether the `opencode` Dray runs is OpenCode 2, whose CLI, credential store
+/// and config reading differ from 1's.
+pub async fn opencode_v2() -> bool {
+    opencode().await;
+    OPENCODE_MAJOR.load(Ordering::Acquire) >= 2
+}
+
+/// The newest `opencode` here, not the first.
+///
+/// OpenCode 2 installs beside 1 rather than over it — brew's `opencode-v2`
+/// next to curl's `~/.opencode/bin` — and the old one usually comes first on
+/// `PATH`. Run, it shares 2's data dir with 2's background server: `opencode
+/// models` failed on "database is locked", and the two copies of each OAuth
+/// login refreshed over each other until the provider refused both. So every
+/// copy found is asked its version, once, and the newest wins; a tie keeps the
+/// search order.
+async fn resolve_opencode() -> PathBuf {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let mut found: Vec<PathBuf> = Vec::new();
+    for candidate in std::env::split_paths(&path)
+        .chain(known_dirs())
+        .flat_map(|dir| spellings(dir.join("opencode")))
+        .filter(|candidate| is_executable(candidate))
+    {
+        let real = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+        if !found.iter().any(|seen| std::fs::canonicalize(seen).unwrap_or_else(|_| seen.clone()) == real) {
+            found.push(candidate);
+        }
+    }
+    if found.is_empty() {
+        found.extend(login_shell_which("opencode").await);
+    }
+
+    let mut best: Option<(PathBuf, (u64, u64, u64))> = None;
+    for candidate in found {
+        let version = opencode_version(&candidate).await.unwrap_or_default();
+        if best.as_ref().is_none_or(|(_, held)| version > *held) {
+            best = Some((candidate, version));
+        }
+    }
+    let Some((bin, version)) = best else {
+        OPENCODE_MAJOR.store(0, Ordering::Release);
+        return PathBuf::from("opencode");
+    };
+    OPENCODE_MAJOR.store(version.0, Ordering::Release);
+    bin
+}
+
+async fn opencode_version(bin: &Path) -> Option<(u64, u64, u64)> {
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        command(bin).arg("--version").stdin(Stdio::null()).kill_on_drop(true).output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    crate::agent_updates::parse(&crate::agent_updates::version_in(&text)?)
 }
 
 #[cfg(test)]

@@ -919,8 +919,9 @@ impl Harness {
             // Vercel's own installer, off fx.sh/docs/getting-started/installation.
             Harness::Fx => "curl -fsSL https://fx.sh/setup.sh | bash",
             Harness::Grok => "curl -fsSL https://x.ai/cli/install.sh | bash",
-            // Installs to `~/.opencode/bin`, which `binpath` knows.
-            Harness::OpenCode => "curl -fsSL https://opencode.ai/install | bash",
+            // OpenCode 2's. `/install` is OpenCode 1's and stays 1's. Both
+            // install to `~/.opencode/bin`, which `binpath` knows.
+            Harness::OpenCode => "curl -fsSL https://opencode.ai/v2/install | bash",
             // Empty, because there is nothing to install: the CLI is not what
             // is missing, this build is. A command guessed from the name would
             // be the one thing worse than no command.

@@ -1,0 +1,287 @@
+{
+ "location": {
+  "directory": "/tmp/opencode-probe"
+ },
+ "data": [
+  {
+   "id": "claude-sonnet-5-5",
+   "modelID": "claude-sonnet-5-5",
+   "providerID": "anthropic",
+   "type": "chat",
+   "family": "claude-sonnet",
+   "name": "Claude Sonnet 5.5",
+   "package": "@opencode/ai/providers/anthropic",
+   "settings": {
+    "baseURL": "https://api.anthropic.com/v1"
+   },
+   "capabilities": {
+    "tools": true,
+    "input": [
+     "text",
+     "image",
+     "pdf"
+    ],
+    "output": [
+     "text"
+    ],
+    "temperature": false
+   },
+   "variants": [
+    {
+     "id": "low",
+     "settings": {
+      "thinking": {
+       "type": "adaptive",
+       "display": "summarized"
+      },
+      "effort": "low"
+     }
+    },
+    {
+     "id": "medium",
+     "settings": {
+      "thinking": {
+       "type": "adaptive",
+       "display": "summarized"
+      },
+      "effort": "medium"
+     }
+    },
+    {
+     "id": "high",
+     "settings": {
+      "thinking": {
+       "type": "adaptive",
+       "display": "summarized"
+      },
+      "effort": "high"
+     }
+    },
+    {
+     "id": "xhigh",
+     "settings": {
+      "thinking": {
+       "type": "adaptive",
+       "display": "summarized"
+      },
+      "effort": "xhigh"
+     }
+    },
+    {
+     "id": "max",
+     "settings": {
+      "thinking": {
+       "type": "adaptive",
+       "display": "summarized"
+      },
+      "effort": "max"
+     }
+    }
+   ],
+   "time": {
+    "released": 1790553600000
+   },
+   "cost": [
+    {
+     "input": 2,
+     "output": 10,
+     "cache": {
+      "read": 0.1,
+      "write": 2.5
+     }
+    }
+   ],
+   "status": "active",
+   "enabled": true,
+   "limit": {
+    "context": 1000000,
+    "output": 128000
+   }
+  },
+  {
+   "id": "seaglass-alpha-free",
+   "modelID": "seaglass-alpha-free",
+   "providerID": "opencode",
+   "type": "chat",
+   "name": "Seaglass Alpha Free",
+   "compatibility": {
+    "reasoningField": "reasoning_content"
+   },
+   "package": "@opencode/ai/providers/openai-compatible",
+   "settings": {
+    "baseURL": "https://opencode.ai/inference/openai/v1",
+    "provider": "opencode"
+   },
+   "capabilities": {
+    "tools": true,
+    "input": [
+     "text"
+    ],
+    "output": [
+     "text"
+    ],
+    "temperature": true
+   },
+   "variants": [
+    {
+     "id": "minimal",
+     "settings": {
+      "reasoningEffort": "minimal"
+     }
+    },
+    {
+     "id": "low",
+     "settings": {
+      "reasoningEffort": "low"
+     }
+    },
+    {
+     "id": "medium",
+     "settings": {
+      "reasoningEffort": "medium"
+     }
+    },
+    {
+     "id": "high",
+     "settings": {
+      "reasoningEffort": "high"
+     }
+    },
+    {
+     "id": "xhigh",
+     "settings": {
+      "reasoningEffort": "xhigh"
+     }
+    },
+    {
+     "id": "max",
+     "settings": {
+      "reasoningEffort": "max"
+     }
+    }
+   ],
+   "time": {
+    "released": 1795651200000
+   },
+   "cost": [
+    {
+     "input": 0,
+     "output": 0,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   ],
+   "status": "active",
+   "enabled": true,
+   "limit": {
+    "context": 1048576,
+    "output": 131072
+   }
+  },
+  {
+   "id": "upstage/solar-mini-4-5",
+   "modelID": "upstage/solar-mini-4-5",
+   "providerID": "openrouter",
+   "type": "chat",
+   "family": "solar-mini",
+   "name": "Solar Mini 4.5 (Preview)",
+   "package": "@opencode/ai/providers/openrouter",
+   "settings": {
+    "baseURL": "https://openrouter.ai/api/v1"
+   },
+   "headers": {
+    "HTTP-Referer": "https://opencode.ai/",
+    "X-Title": "opencode"
+   },
+   "capabilities": {
+    "tools": true,
+    "input": [
+     "text"
+    ],
+    "output": [
+     "text"
+    ],
+    "temperature": true
+   },
+   "variants": [
+    {
+     "id": "none",
+     "settings": {
+      "reasoning": {
+       "effort": "none"
+      }
+     }
+    },
+    {
+     "id": "minimal",
+     "settings": {
+      "reasoning": {
+       "effort": "minimal"
+      }
+     }
+    },
+    {
+     "id": "low",
+     "settings": {
+      "reasoning": {
+       "effort": "low"
+      }
+     }
+    },
+    {
+     "id": "medium",
+     "settings": {
+      "reasoning": {
+       "effort": "medium"
+      }
+     }
+    },
+    {
+     "id": "high",
+     "settings": {
+      "reasoning": {
+       "effort": "high"
+      }
+     }
+    },
+    {
+     "id": "xhigh",
+     "settings": {
+      "reasoning": {
+       "effort": "xhigh"
+      }
+     }
+    },
+    {
+     "id": "max",
+     "settings": {
+      "reasoning": {
+       "effort": "max"
+      }
+     }
+    }
+   ],
+   "time": {
+    "released": 1795478400000
+   },
+   "cost": [
+    {
+     "input": 0.01,
+     "output": 0.04,
+     "cache": {
+      "read": 0.001,
+      "write": 0
+     }
+    }
+   ],
+   "status": "active",
+   "enabled": true,
+   "limit": {
+    "context": 524288,
+    "output": 131072
+   }
+  }
+ ]
+}
