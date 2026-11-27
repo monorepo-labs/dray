@@ -2008,6 +2008,9 @@ wrap_load_handler! {
             }
             update_tab(self.tab, |t| t.committed = true);
             disarm_picker(self.tab);
+            // Every cross-document commit lands here, a back/forward out of
+            // the page cache and a reload included; same-document ones don't.
+            automation::navigated(self.tab);
         }
 
         /// Chromium draws its own error page; this only records the reason
