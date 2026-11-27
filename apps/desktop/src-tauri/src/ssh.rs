@@ -226,6 +226,9 @@ impl Tunnel {
 const SCRIPT: &str = concat!(
     "PATH=\"$HOME/.local/bin:$PATH\"; echo DRAY-SSH hello; ",
     "command -v dray >/dev/null 2>&1 || { echo DRAY-SSH missing; exit 0; }; ",
+    // A login with no logind session names no runtime dir, and systemctl then
+    // cannot see the user manager linger keeps running.
+    "[ -n \"$XDG_RUNTIME_DIR\" ] || [ ! -d /run/systemd/system ] || export XDG_RUNTIME_DIR=/run/user/$(id -u); ",
     "if ! systemctl --user is-active --quiet dray 2>/dev/null && systemctl --user show-environment >/dev/null 2>&1; then ",
     "echo DRAY-SSH starting; if ! out=$(dray service start 2>&1); then echo DRAY-SSH failed; echo \"$out\"; exit 0; fi; fi; ",
     "[ -r \"$HOME/.dray/serve-token\" ] || { echo DRAY-SSH notoken; exit 0; }; ",
@@ -792,7 +795,7 @@ pub async fn survey(target: &Target) -> Result<Survey, Failure> {
 /// install line with its own setup skipped, since there is no terminal for it
 /// to ask in, and `dray setup --install` with the answers instead. Each line of
 /// output goes to `line`.
-pub async fn install(target: &Target, picks: &[String], line: impl FnMut(&str)) -> Result<(), Failure> {
+pub async fn install(target: &Target, picks: &[String], mut line: impl FnMut(&str)) -> Result<(), Failure> {
     let tools = setup_tools();
     // These reach a shell.
     if let Some(bad) = picks.iter().find(|p| !tools.iter().any(|t| t.0 == p.as_str())) {
@@ -805,11 +808,28 @@ pub async fn install(target: &Target, picks: &[String], line: impl FnMut(&str)) 
          || {{ echo Could not download {INSTALLER}; exit 1; }}; \
          DRAY_UPDATING=1 sh -c \"$s\" && \"$HOME/.local/bin/dray\" setup{install}"
     );
-    if run(target, &script, INSTALLING, line).await? {
-        Ok(())
-    } else {
-        Err(Failure::new(format!("The install on {} did not finish.", target.host()), None, false))
+    let mut why = None;
+    let ok = run(target, &script, INSTALLING, |text| {
+        if let Some(said) = cli_error(text) {
+            why = Some(said);
+        }
+        line(text);
+    })
+    .await?;
+    if ok {
+        return Ok(());
     }
+    let message = why.unwrap_or_else(|| format!("The install on {} did not finish.", target.host()));
+    Err(Failure::new(message, None, false))
+}
+
+/// The sentence a failing `dray` ends on, `dray: <why>`, as the reader reads
+/// it: what `dray setup` says to do about a server it could not start.
+fn cli_error(line: &str) -> Option<String> {
+    let why = line.strip_prefix("dray: ")?.trim();
+    let mut chars = why.chars();
+    let first = chars.next()?;
+    Some(first.to_uppercase().chain(chars).collect())
 }
 
 /// Runs `script` over a login with no forward and answers whether it exited 0.
@@ -906,6 +926,16 @@ pub fn terminal_line(target: &Target, command: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_install_reads_as_the_cli_says_it() {
+        assert_eq!(
+            cli_error("dray: systemd runs your services only while you are logged in"),
+            Some("Systemd runs your services only while you are logged in".into())
+        );
+        assert_eq!(cli_error("│  dray server status"), None);
+        assert_eq!(cli_error("dray: "), None);
+    }
 
     /// Against a real server: `DRAY_SSH_TEST=user@host` and something listening
     /// on `DRAY_SSH_TEST_PORT` there.

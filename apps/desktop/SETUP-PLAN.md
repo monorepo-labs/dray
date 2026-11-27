@@ -71,8 +71,11 @@ so no protocol bump.
 - **`dray service start | status | uninstall`**: a systemd user unit
   `dray.service` plus `loginctl enable-linger`, so it survives logout and
   reboot. `PATH` is captured at start into the unit, with `dray`'s own dir
-  first, so agents find what the reader's shell finds. No systemd: say so and
-  name `dray serve` under tmux as the fallback.
+  first, so agents find what the reader's shell finds. An SSH login with no
+  logind session gets `XDG_RUNTIME_DIR` filled in and linger turned on before
+  the unit, since linger is what starts the user manager (#1623). No systemd
+  as PID 1: `dray-serve` started detached, found by the pid in `serve-port`,
+  restarting itself for an update (`DRAY_SELF_RESTART`), gone after a reboot.
 
 ## Not here
 

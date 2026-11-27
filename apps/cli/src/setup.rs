@@ -511,11 +511,17 @@ pub fn setup(args: Install) -> Result<(), String> {
     }
     match service_start() {
         Ok(note) => done("Server running in the background", &note),
-        // No line to paste: it would point the app at a server that is not there.
-        Err(why) => {
+        // No line to paste: it would point the app at a server that is not
+        // there. The reason is the error itself, `dray: …` being the line the
+        // app's install dialog shows the reader.
+        Err(why) if MAC => {
             warn(&why);
             println!("\x1b[90m└\x1b[0m");
             return Err("the server is not running".into());
+        }
+        Err(why) => {
+            println!("\x1b[90m└\x1b[0m");
+            return Err(why);
         }
     }
     println!("\x1b[90m└\x1b[0m  In the Dray app, Add server and paste:\n\n   {}\n{}", ssh_line(), private_note());
@@ -761,6 +767,12 @@ pub fn service(command: ServiceCommand) -> Result<(), String> {
     if cfg!(windows) {
         return windows_service(command);
     }
+    if cfg!(target_os = "linux") {
+        if !systemd_booted() {
+            return detached_service(command);
+        }
+        find_user_manager();
+    }
     match command {
         ServiceCommand::Start => {
             let note = service_start()?;
@@ -966,10 +978,30 @@ fn service_start() -> Result<String, String> {
     if MAC {
         return agent_start();
     }
-    if !systemctl(true, &["show-environment"]) {
+    // Windows reaches here from `tunnel on`, which never had a systemd to
+    // find; the fallbacks below are Linux's alone.
+    if !cfg!(target_os = "linux") {
         return Err("No systemd user session here, so nothing can keep the server running. \
                     Start it yourself under tmux or nohup: dray server run"
             .into());
+    }
+    if !systemd_booted() {
+        return detached_start();
+    }
+    find_user_manager();
+    // Before the unit, not after: linger is what starts the user manager for
+    // a login that came without one.
+    let lingering = linger();
+    if !wait_for_user_manager() {
+        let user = output("id", &["-un"]).unwrap_or_default();
+        return Err(if lingering {
+            format!("systemd did not start your user services. See why: systemctl status user@{}", uid())
+        } else {
+            format!(
+                "systemd runs your services only while you are logged in, and this login may not change that. \
+                 Run sudo loginctl enable-linger {user} there, then try again."
+            )
+        });
     }
     let serve = beside("dray-serve")?;
     // Agents run in the server's cgroup, being its children, so under the
@@ -995,7 +1027,7 @@ fn service_start() -> Result<String, String> {
     }
 
     let mut note = String::from("dray server status");
-    if !linger() {
+    if !lingering {
         let user = output("id", &["-un"]).unwrap_or_default();
         note += &format!(
             "\n{BAR}  It stops when you log out. To keep it running: sudo loginctl enable-linger {user}"
@@ -1361,6 +1393,131 @@ fn linger() -> bool {
     let quiet = |cmd: &mut Command| cmd.stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
     on() || quiet(Command::new("loginctl").args(["enable-linger", &user]))
         || quiet(Command::new("sudo").args(["-n", "loginctl", "enable-linger", &user]))
+}
+
+fn uid() -> String {
+    output("id", &["-u"]).unwrap_or_default()
+}
+
+/// Whether systemd is PID 1, asked the way `sd_booted` asks.
+fn systemd_booted() -> bool {
+    Path::new("/run/systemd/system").is_dir()
+}
+
+/// Points `systemctl --user` at this user's manager where the login did not
+/// say where it is. A non-interactive SSH login can arrive with no logind
+/// session (a Pi on Ubuntu 25.10 did), so no `XDG_RUNTIME_DIR`, and systemctl
+/// failed there as if the machine had no systemd at all.
+fn find_user_manager() {
+    let runtime = match std::env::var_os("XDG_RUNTIME_DIR").filter(|d| !d.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => {
+            let dir = PathBuf::from(format!("/run/user/{}", uid()));
+            std::env::set_var("XDG_RUNTIME_DIR", &dir);
+            dir
+        }
+    };
+    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none_or(|a| a.is_empty()) {
+        std::env::set_var("DBUS_SESSION_BUS_ADDRESS", format!("unix:path={}", runtime.join("bus").display()));
+    }
+}
+
+/// Whether the user manager answers, given the few seconds one that linger
+/// just started takes to come up.
+fn wait_for_user_manager() -> bool {
+    for _ in 0..40 {
+        if systemctl(true, &["show-environment"]) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    false
+}
+
+/// The background server where systemd is not there to run one: started
+/// detached, writing to `server.log`, with nothing to bring it back after a
+/// reboot. Never restarts a running server — that would kill its agents.
+fn detached_start() -> Result<String, String> {
+    let serve = beside("dray-serve")?;
+    let home = dray_home()?;
+    std::fs::create_dir_all(&home).map_err(|e| format!("could not create {}: {e}", home.display()))?;
+    let log = home.join("server.log");
+    let again = format!("\n{BAR}  No systemd here, so it will not come back after a reboot. Start it again then: dray server start");
+    if let Some(pid) = detached_pid() {
+        return Ok(format!("dray server status{again}\n{BAR}  It was already running, as pid {pid}."));
+    }
+    let open = || OpenOptions::new().create(true).append(true).open(&log);
+    let (out, err) = open()
+        .and_then(|f| Ok((f.try_clone()?, f)))
+        .map_err(|e| format!("could not open {}: {e}", log.display()))?;
+    let mut command = Command::new(&serve);
+    command
+        .env("PATH", unit_env_path(&serve)?)
+        .env(dray_proto::SELF_RESTART_ENV, "1")
+        .stdin(Stdio::null())
+        .stdout(out)
+        .stderr(err);
+    // Its own process group, so neither a terminal hanging up nor Ctrl-C in
+    // the shell that ran this reaches it.
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().map_err(|e| format!("could not start {}: {e}", serve.display()))?;
+    // Up once it writes its pid under its port, after binding; a server that
+    // cannot bind exits first.
+    for _ in 0..60 {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        if detached_pid() == Some(child.id()) {
+            return Ok(format!("dray server status{again}"));
+        }
+        if child.try_wait().is_ok_and(|s| s.is_some()) {
+            break;
+        }
+    }
+    Err(format!("The server did not stay up. See why: tail -n 20 {}", sh_quote(&log.display().to_string())))
+}
+
+/// The pid `serve-port` names, while a `dray-serve` still runs under it: the
+/// file outlives a server that died, and its pid can be anything's by now.
+fn detached_pid() -> Option<u32> {
+    let written = std::fs::read_to_string(dray_home().ok()?.join("serve-port")).ok()?;
+    let pid: u32 = written.lines().nth(2)?.trim().parse().ok()?;
+    let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    (name.trim() == "dray-serve").then_some(pid)
+}
+
+/// `dray server` on a Linux with no systemd: a detached server, found by its
+/// pid, since nothing else keeps track of it.
+fn detached_service(command: ServiceCommand) -> Result<(), String> {
+    match command {
+        ServiceCommand::Start => {
+            let note = detached_start()?;
+            println!("The server is running in the background.\n{note}");
+        }
+        ServiceCommand::Status => {
+            let pid = detached_pid().ok_or("the server is not running")?;
+            println!("The server is running, as pid {pid}. No systemd here, so it will not come back after a reboot.");
+            if let Some(url) = tunnel_address()? {
+                println!("\n{}", connect_text(&url)?);
+            }
+        }
+        ServiceCommand::Tunnel { state: OnOff::On } => tunnel_on()?,
+        ServiceCommand::Tunnel { state: OnOff::Off } => {
+            tunnel_off()?;
+            println!("The tunnel is down; the server is reachable over SSH alone.");
+        }
+        ServiceCommand::Uninstall => {
+            let Some(pid) = detached_pid() else {
+                println!("No background server is running.");
+                return Ok(());
+            };
+            let stopped = Command::new("kill").args(["-TERM", &pid.to_string()]).status().is_ok_and(|s| s.success());
+            if !stopped {
+                return Err(format!("could not stop the server, pid {pid}"));
+            }
+            println!("Stopped the background server.");
+        }
+    }
+    Ok(())
 }
 
 /// The terminal itself, apart from stdin, which under `curl | sh` is the
