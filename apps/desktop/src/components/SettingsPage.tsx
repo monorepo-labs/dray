@@ -92,6 +92,9 @@ import type {
 /// the next person with the same bug can find; a direct message is beside it for
 /// what an issue is too heavy for.
 const CONTACT_URL = "https://x.com/yogesharc";
+
+/// The privacy page's list of every analytics event, error reports included.
+const TRACKED_URL = "https://www.drayhq.com/docs/reference/privacy#what-is-sent";
 const REPO_URL = "https://github.com/monorepo-labs/dray";
 const ISSUES_URL = `${REPO_URL}/issues/new`;
 // The landing page's own link, so both ask through one door.
@@ -773,9 +776,20 @@ function AnalyticsRow() {
       id={id}
       label="Share usage analytics"
       description={
-        setting?.locked
-          ? "Turned off by DRAY_NO_ANALYTICS."
-          : "Anonymous counts of what gets used. Never your prompts or code."
+        setting?.locked ? (
+          "Turned off by DRAY_NO_ANALYTICS."
+        ) : (
+          <>
+            Anonymous counts of what gets used. Never your prompts or code.{" "}
+            <button
+              type="button"
+              onClick={() => void openUrl(TRACKED_URL)}
+              className="cursor-pointer text-foreground underline-offset-4 hover:underline"
+            >
+              See what's tracked
+            </button>
+          </>
+        )
       }
     >
       <Switch
