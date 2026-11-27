@@ -172,6 +172,11 @@ pub async fn run(port: u16) -> Result<()> {
     if let Ok(exe) = std::env::current_exe() {
         let _ = STARTED_FROM.set((exe.clone(), stamp_of(&exe)));
     }
+    // Taken off the environment so no agent inherits it.
+    if std::env::var_os(dray_proto::SELF_RESTART_ENV).is_some() {
+        std::env::remove_var(dray_proto::SELF_RESTART_ENV);
+        RESTARTS_ITSELF.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let sink = Sink::new(|event, payload| HUB.publish(event, &payload));
     let home = start_core(sink.clone()).await?;
     // A login shell, which a heavy profile makes slow, so not before the bind.
@@ -498,8 +503,8 @@ async fn shut_down(code: i32) -> ! {
     for pid in tree.into_iter().filter(|&p| p != me) {
         crate::platform::kill(pid);
     }
-    #[cfg(all(windows, not(feature = "desktop")))]
-    if code == RESTART_CODE {
+    #[cfg(not(feature = "desktop"))]
+    if code == RESTART_CODE && (cfg!(windows) || RESTARTS_ITSELF.load(std::sync::atomic::Ordering::Relaxed)) {
         respawn();
     }
     // `_exit`, not `process::exit`: once a phone's dictation has loaded a
@@ -510,31 +515,45 @@ async fn shut_down(code: i32) -> ! {
 
 /// Named to the server [`respawn`] starts: the pid it waits out before taking
 /// `serve.lock`, which the old one holds until it is gone.
-#[cfg(windows)]
 const RESTART_AFTER: &str = "DRAY_RESTART_AFTER";
 
-/// Windows has no systemd to bring back a server that exits [`RESTART_CODE`],
-/// so it starts its own successor, with the arguments it was given — a login
-/// `Run` command's `--log` and `--env` among them — and no window. Started
-/// after the tree is killed, or it would be killed with it.
-#[cfg(all(windows, not(feature = "desktop")))]
+/// A server [`dray_proto::SELF_RESTART_ENV`] marked: Linux with no systemd.
+static RESTARTS_ITSELF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Where nothing brings back a server that exits [`RESTART_CODE`] — Windows,
+/// and Linux with no systemd — it starts its own successor, with the arguments
+/// it was given (a login `Run` command's `--log` and `--env` among them), its
+/// output where this one's went, and no window. Started after the tree is
+/// killed, or it would be killed with it.
+#[cfg(not(feature = "desktop"))]
 fn respawn() {
-    use std::os::windows::process::CommandExt;
-    let Ok(exe) = std::env::current_exe() else { return };
-    let started = std::process::Command::new(exe)
+    let mut command = match STARTED_FROM.get() {
+        // The path taken at start: once an update renamed a new binary over
+        // it, Linux's `current_exe` names the deleted old one.
+        Some((exe, _)) => std::process::Command::new(exe),
+        None => return,
+    };
+    command
         .args(std::env::args_os().skip(1))
         .env(RESTART_AFTER, std::process::id().to_string())
-        .stdin(std::process::Stdio::null())
-        .creation_flags(crate::platform::CREATE_NO_WINDOW | 0x0000_0200) // CREATE_NEW_PROCESS_GROUP
-        .spawn();
-    if let Err(e) = started {
+        .stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(crate::platform::CREATE_NO_WINDOW | 0x0000_0200); // CREATE_NEW_PROCESS_GROUP
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.env(dray_proto::SELF_RESTART_ENV, "1").process_group(0);
+    }
+    if let Err(e) = command.spawn() {
         eprintln!("[serve] could not start the next server: {e}");
     }
 }
 
 /// Waits for the server this one replaces to exit, up to 30s, then forgets
 /// its pid so no agent inherits the variable.
-#[cfg(windows)]
 async fn wait_for_predecessor() {
     let Some(pid) = std::env::var(RESTART_AFTER).ok().and_then(|p| p.parse::<u32>().ok()) else { return };
     std::env::remove_var(RESTART_AFTER);
@@ -578,7 +597,6 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     // each other's socket and rewrite one index whole, each over the other.
     // A socket that answers is a Dray already living here.
     let home = store::get_home_app_dir().await?;
-    #[cfg(windows)]
     wait_for_predecessor().await;
     // Held for the life of the process. The socket check below alone lets
     // two servers starting at once both pass it, since neither has bound yet.

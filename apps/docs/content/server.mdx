@@ -26,7 +26,7 @@ All you need is a Linux server you can reach over SSH with a key. The Mac app do
       <img src="./images/server-install.png" alt="The install dialog, listing what is already on the server and what to add" width="400" className="hidden dark:block" />
     </Frame>
 
-    Dray runs as a systemd user service, so it keeps running after you log out and comes back after a reboot. That needs linger on your user; if setup cannot turn it on, it says so, and `sudo loginctl enable-linger <user>` fixes it. If Dray is installed but stopped, the app starts it. If the server crashes, systemd starts it again. If the machine runs out of memory and kills one process, such as an agent's compiler, only that process goes; the server and its other sessions keep running.
+    Dray runs as a systemd user service, so it keeps running after you log out and comes back after a reboot. That needs linger on your user, which setup turns on. If it may not, and nothing else keeps your services running, the install stops and says to run `sudo loginctl enable-linger <user>` on the server; then Try again. A machine with no systemd at all runs the server in the background too, but it does not come back after a reboot until you run `dray server start` there. If Dray is installed but stopped, the app starts it. If the server crashes, systemd starts it again. If the machine runs out of memory and kills one process, such as an agent's compiler, only that process goes; the server and its other sessions keep running.
   </Step>
   <Step title="Sign in">
     Each agent needs its own login on the server, and so does `gh`. Once Dray is running there, the app shows that server's accounts, the same list as Settings → Agents. Sign in opens Terminal on the server, running that login.
