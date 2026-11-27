@@ -764,6 +764,13 @@ fn dispatch(session: &str, message: &Value) {
                 }
             }
         }
+        // A main-frame document committing, a page-cache restore included;
+        // same-document moves are `navigatedWithinDocument`. See `navigated`.
+        "Page.frameNavigated" => {
+            if let Some(tab) = tab.filter(|_| params["frame"]["parentId"].is_null()) {
+                automation::navigated(tab);
+            }
+        }
         "Runtime.consoleAPICalled" => {
             let Some(tab) = tab else { return };
             let text = params["args"]

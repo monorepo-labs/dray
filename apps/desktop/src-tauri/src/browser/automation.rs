@@ -36,7 +36,16 @@ type Answer = Result<(String, Value), String>;
 static NEXT_ID: AtomicI32 = AtomicI32::new(1);
 /// Replies land on the UI thread keyed by (browser, message id); the caller
 /// waits on the other end of its channel.
-static PENDING: Mutex<Option<HashMap<(i32, i32), oneshot::Sender<Reply>>>> = Mutex::new(None);
+static PENDING: Mutex<Option<HashMap<(i32, i32), Waiting>>> = Mutex::new(None);
+
+/// When each tab's main frame last committed a new document (`navigated`).
+static COMMITTED: Mutex<Option<HashMap<i32, Instant>>> = Mutex::new(None);
+
+struct Waiting {
+    tx: oneshot::Sender<Reply>,
+    /// A `Page.captureScreenshot`, which a navigation can swallow (`navigated`).
+    capture: bool,
+}
 /// What each tab's page logged since `console`/`errors` last drained it.
 static CONSOLE: Mutex<Option<HashMap<i32, Vec<(bool, String)>>>> = Mutex::new(None);
 /// The size `set viewport`/`set device` asked for, per session. Only
@@ -132,8 +141,28 @@ const DEVICES: &[(&str, u32, u32)] = &[
 /// A CDP reply arriving from the backend's channel, handed to the call that
 /// is waiting on it. A failure carries the protocol's own message.
 pub(super) fn answer(tab: i32, id: i32, reply: Reply) {
-    if let Some(tx) = PENDING.lock().unwrap().as_mut().and_then(|m| m.remove(&(tab, id))) {
-        let _ = tx.send(reply);
+    if let Some(waiting) = PENDING.lock().unwrap().as_mut().and_then(|m| m.remove(&(tab, id))) {
+        let _ = waiting.tx.send(reply);
+    }
+}
+
+/// Fails every capture in flight on `tab`, for its main frame committing a
+/// new document. Chromium swaps the renderer on every cross-document
+/// navigation, same origin included, and a `Page.captureScreenshot` the old
+/// one was holding is never answered, by CEF or headless: `film` sat out the
+/// whole `TIMEOUT` on it, so a recording stopped within 30s of a navigation
+/// kept nothing after it. A capture sent just after the commit may be failed
+/// too, which costs one frame.
+pub(super) fn navigated(tab: i32) {
+    COMMITTED.lock().unwrap().get_or_insert_with(HashMap::new).insert(tab, Instant::now());
+    let lost: Vec<Waiting> = {
+        let mut guard = PENDING.lock().unwrap();
+        let Some(m) = guard.as_mut() else { return };
+        let keys: Vec<(i32, i32)> = m.iter().filter(|(k, w)| k.0 == tab && w.capture).map(|(k, _)| *k).collect();
+        keys.iter().filter_map(|k| m.remove(k)).collect()
+    };
+    for waiting in lost {
+        let _ = waiting.tx.send(Err("the page navigated mid-capture".into()));
     }
 }
 
@@ -214,6 +243,12 @@ fn film(session: String, tab: i32, shot: u64, mut last: u64) {
             tick.tick().await;
             let Some(state) = state() else { return };
             let Some(layout) = state else { continue };
+            // A new renderer's first frame can come before it has taken the
+            // recording's metrics, and draws the page as tiles: measured on
+            // the capture asked within ~10ms of a commit, 2 navigations in 15.
+            if COMMITTED.lock().unwrap().as_ref().and_then(|m| m.get(&tab)).is_some_and(|at| at.elapsed() < SETTLE) {
+                continue;
+            }
             let Ok(data) = grab(tab).await else { continue };
             let at = Instant::now();
             // A frame identical to the last is dropped, so a still page leaves
@@ -237,9 +272,16 @@ fn film(session: String, tab: i32, shot: u64, mut last: u64) {
     });
 }
 
+/// How long one frame may take before it is given up as lost and asked for
+/// again. A 4K page at 2x answers in ~300ms; a frame swallowed by a
+/// navigation `navigated` did not catch would otherwise hold `film` for the
+/// whole `TIMEOUT`.
+const FRAME_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// One frame of a recorded tab, as base64 JPEG.
 async fn grab(tab: i32) -> Result<String, String> {
-    let mut reply = cdp(tab, "Page.captureScreenshot", json!({ "format": "jpeg", "quality": 90 })).await?;
+    let params = json!({ "format": "jpeg", "quality": 90 });
+    let mut reply = cdp_within(tab, "Page.captureScreenshot", params, FRAME_TIMEOUT).await?;
     match reply["data"].take() {
         Value::String(data) => Ok(data),
         _ => Err("no image came back".into()),
@@ -331,6 +373,9 @@ pub(super) fn forget(tab: i32) {
     if let Some(m) = CONSOLE.lock().unwrap().as_mut() {
         m.remove(&tab);
     }
+    if let Some(m) = COMMITTED.lock().unwrap().as_mut() {
+        m.remove(&tab);
+    }
     // Dropping a call's sender is what answers it "the tab closed": left in the
     // map, a verb in flight sat out the whole timeout, a screenshot holding the
     // capture lock with it.
@@ -353,9 +398,15 @@ pub(super) fn forget(tab: i32) {
 /// One CDP call on one tab. The backend carries the message and answers
 /// through `answer`, failing it there for a tab that is gone.
 pub(super) async fn cdp(tab: i32, method: &str, params: Value) -> Reply {
+    cdp_within(tab, method, params, TIMEOUT).await
+}
+
+/// `cdp`, failing once `limit` passes without an answer.
+async fn cdp_within(tab: i32, method: &str, params: Value, limit: Duration) -> Reply {
     let id = NEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
     let (tx, rx) = oneshot::channel();
-    PENDING.lock().unwrap().get_or_insert_with(HashMap::new).insert((tab, id), tx);
+    let capture = method == "Page.captureScreenshot";
+    PENDING.lock().unwrap().get_or_insert_with(HashMap::new).insert((tab, id), Waiting { tx, capture });
     let message = json!({ "id": id, "method": method, "params": params });
     if let Err(e) = send_cdp(tab, id, message) {
         if let Some(m) = PENDING.lock().unwrap().as_mut() {
@@ -363,14 +414,14 @@ pub(super) async fn cdp(tab: i32, method: &str, params: Value) -> Reply {
         }
         return Err(e);
     }
-    match tokio::time::timeout(TIMEOUT, rx).await {
+    match tokio::time::timeout(limit, rx).await {
         Ok(Ok(reply)) => reply,
         Ok(Err(_)) => Err("the tab closed before answering".into()),
         Err(_) => {
             if let Some(m) = PENDING.lock().unwrap().as_mut() {
                 m.remove(&(tab, id));
             }
-            Err(format!("{method} timed out after {}s", TIMEOUT.as_secs()))
+            Err(format!("{method} timed out after {}s", limit.as_secs()))
         }
     }
 }
@@ -1179,7 +1230,15 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 tokio::time::sleep(SETTLE).await;
                 // One frame before answering, so a `record stop` straight after
                 // still has a clip to hand back rather than racing `film`'s first.
-                grab(tab).await
+                // Asked again where a navigation swallowed it.
+                let mut first = grab(tab).await;
+                for _ in 0..2 {
+                    if first.is_ok() {
+                        break;
+                    }
+                    first = grab(tab).await;
+                }
+                first
             }
             .await;
             let first = match started {
