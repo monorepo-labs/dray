@@ -1406,6 +1406,11 @@ pub const SERVE_PORT: u16 = 7317;
 /// server lets through besides its own.
 pub const TUNNEL_URL_FILE: &str = "tunnel-url";
 
+/// Set on a `dray-serve` that `dray server start` ran detached, where no
+/// systemd runs: nothing brings it back after a restart for an update, so it
+/// starts its own successor, as a Windows one does.
+pub const SELF_RESTART_ENV: &str = "DRAY_SELF_RESTART";
+
 /// What a pairing QR encodes, for the phone to add this server by: the
 /// address, the token and a name, as `dray://connect?…`. The iOS app
 /// registers the scheme, so the system Camera opens it too.
