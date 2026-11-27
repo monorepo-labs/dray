@@ -23,8 +23,8 @@ use ts_rs::TS;
 /// The CEF version the `cef` crate in Cargo.toml binds. Framework and
 /// bindings have to agree, so bumping the crate means re-pinning [`ARM64`]
 /// and [`X64`] below from `cef-builds.spotifycdn.com/index.json` as well.
-pub const VERSION: &str = "156.0.31";
-const BUILD: &str = "156.0.31+ge603d97+chromium-156.0.8078.100";
+pub const VERSION: &str = "158.0.6";
+const BUILD: &str = "158.0.6+g23f1736+chromium-158.0.8127.89";
 const CDN: &str = "https://cef-builds.spotifycdn.com";
 #[cfg(target_os = "macos")]
 pub const FRAMEWORK: &str = "Chromium Embedded Framework.framework";
@@ -51,43 +51,43 @@ struct Tarball {
 #[cfg(target_os = "macos")]
 const ARM64: Tarball = Tarball {
     platform: "macosarm64",
-    size: 134_916_866,
-    sha256: "1bd39ff38db20baa5b52768919d6599aafb4aacbc7fd192458496749a0630ee8",
+    size: 140_851_604,
+    sha256: "53f687e1a662820c352ceb884e342ddcf5ff1610bc166c4ae09f1e0cbb278d9d",
 };
 
 #[cfg(target_os = "macos")]
 const X64: Tarball = Tarball {
     platform: "macosx64",
-    size: 141_698_452,
-    sha256: "58ffeec9beff9f0f57cca19fa950674f9756c1b28ba595129ba613806633b6fa",
+    size: 149_303_893,
+    sha256: "8452a95fd8d90fdcd70450efc10ad46a6dc34b19bbebd6f294d6a7d8c475edf6",
 };
 
 #[cfg(target_os = "linux")]
 const ARM64: Tarball = Tarball {
     platform: "linuxarm64",
-    size: 431_212_107,
-    sha256: "6c6898a58a11733ba097b5b850aff38287d0df17e4d9b9209ceff47eba087cd3",
+    size: 435_458_439,
+    sha256: "e5f8178a4fa59355a0fb6e7309e6e7028352ac4653cc9eb7886a947941e043c1",
 };
 
 #[cfg(target_os = "linux")]
 const X64: Tarball = Tarball {
     platform: "linux64",
-    size: 333_321_290,
-    sha256: "a6c3452c47f344f9f125c71dfc9d8965149bac7c8df1e23ffd80442a28ce1b62",
+    size: 339_902_305,
+    sha256: "c0bac72cf0bc15e49940d5e59768c6c83f5a0b883e7ae01b025bf3bb6963db07",
 };
 
 #[cfg(windows)]
 const ARM64: Tarball = Tarball {
     platform: "windowsarm64",
-    size: 170_159_472,
-    sha256: "2aa778651c3720e9ee1a53e568540d65cabfe94cc371a5cb6b64f5c3ec5b51bc",
+    size: 174_232_721,
+    sha256: "d4d72a2e7a49f1937769c363e81f44fd9a5794bd1ad05fee778311198c0768b7",
 };
 
 #[cfg(windows)]
 const X64: Tarball = Tarball {
     platform: "windows64",
-    size: 175_156_160,
-    sha256: "c691636862b5f6bab05e76d77bd1b57799659552a25a5bc8b7eaa365de6e63fd",
+    size: 180_965_986,
+    sha256: "1da0b9fe0e915bd41448939f944003d848f8d9e4d15c7d85d7a17cce656b1a9a",
 };
 
 fn tarball() -> Option<&'static Tarball> {
@@ -473,13 +473,13 @@ mod tests {
     fn tarball_names_match_the_cdn_index() {
         assert_eq!(
             ARM64.name(),
-            "cef_binary_156.0.31+ge603d97+chromium-156.0.8078.100_macosarm64_minimal.tar.bz2"
+            "cef_binary_158.0.6+g23f1736+chromium-158.0.8127.89_macosarm64_minimal.tar.bz2"
         );
         assert_eq!(
             X64.name(),
-            "cef_binary_156.0.31+ge603d97+chromium-156.0.8078.100_macosx64_minimal.tar.bz2"
+            "cef_binary_158.0.6+g23f1736+chromium-158.0.8127.89_macosx64_minimal.tar.bz2"
         );
-        assert!(ARM64.url().starts_with("https://cef-builds.spotifycdn.com/cef_binary_156.0.31%2B"));
+        assert!(ARM64.url().starts_with("https://cef-builds.spotifycdn.com/cef_binary_158.0.6%2B"));
         assert!(!ARM64.url().contains('+'));
     }
 
@@ -488,9 +488,9 @@ mod tests {
     fn tarball_names_match_the_cdn_index() {
         assert_eq!(
             ARM64.name(),
-            "cef_binary_156.0.31+ge603d97+chromium-156.0.8078.100_linuxarm64_minimal.tar.bz2"
+            "cef_binary_158.0.6+g23f1736+chromium-158.0.8127.89_linuxarm64_minimal.tar.bz2"
         );
-        assert_eq!(X64.name(), "cef_binary_156.0.31+ge603d97+chromium-156.0.8078.100_linux64_minimal.tar.bz2");
+        assert_eq!(X64.name(), "cef_binary_158.0.6+g23f1736+chromium-158.0.8127.89_linux64_minimal.tar.bz2");
     }
 
     #[cfg(windows)]
@@ -498,9 +498,9 @@ mod tests {
     fn tarball_names_match_the_cdn_index() {
         assert_eq!(
             ARM64.name(),
-            "cef_binary_156.0.31+ge603d97+chromium-156.0.8078.100_windowsarm64_minimal.tar.bz2"
+            "cef_binary_158.0.6+g23f1736+chromium-158.0.8127.89_windowsarm64_minimal.tar.bz2"
         );
-        assert_eq!(X64.name(), "cef_binary_156.0.31+ge603d97+chromium-156.0.8078.100_windows64_minimal.tar.bz2");
+        assert_eq!(X64.name(), "cef_binary_158.0.6+g23f1736+chromium-158.0.8127.89_windows64_minimal.tar.bz2");
     }
 
     #[cfg(not(target_os = "macos"))]
