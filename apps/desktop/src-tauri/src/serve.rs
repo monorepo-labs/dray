@@ -892,8 +892,7 @@ struct HostOffer {
     browser: bool,
 }
 
-/// The app connected to its own server, and the calls waiting on it. One at a
-/// time: a second app on one home replaces the first.
+/// The app connected to its own server, and the calls waiting on it.
 struct Host {
     connection: u64,
     browser: bool,
@@ -901,24 +900,66 @@ struct Host {
     waiting: HashMap<u64, tokio::sync::oneshot::Sender<Result<Value, Value>>>,
 }
 
-static HOST: Mutex<Option<Host>> = Mutex::new(None);
+/// Every connection that offered to host, oldest first; the newest answers.
+///
+/// A list, not one slot, because connections can close out of order: an app
+/// relaunching, or a stalled connect finishing after its retry. With one slot
+/// the last to close emptied it while an app was still connected, so for the
+/// rest of that app's run `dray machine` edits landed in `servers.json` and its
+/// reload reached nobody: machines added never showed, nor their tasks (#1629).
+#[derive(Default)]
+struct Hosts(Vec<Host>);
+
+impl Hosts {
+    fn current(&mut self) -> Option<&mut Host> {
+        self.0.last_mut()
+    }
+
+    fn offer(&mut self, host: Host) {
+        self.0.push(host);
+    }
+
+    /// Drops `connection`'s offer, answering every call waiting on it.
+    fn leave(&mut self, connection: u64) -> Left {
+        let Some(at) = self.0.iter().position(|h| h.connection == connection) else { return Left::Unseen };
+        let was_current = at + 1 == self.0.len();
+        self.0.remove(at);
+        match (was_current, self.0.is_empty()) {
+            (false, _) => Left::Unseen,
+            (true, false) => Left::HandedOn,
+            (true, true) => Left::NoHost,
+        }
+    }
+}
+
+/// What a connection closing did to who hosts.
+#[derive(Debug, PartialEq)]
+enum Left {
+    /// Nothing anyone sees: it was not answering.
+    Unseen,
+    /// An earlier connection, still open, answers now.
+    HandedOn,
+    NoHost,
+}
+
+static HOSTS: Mutex<Hosts> = Mutex::new(Hosts(Vec::new()));
 static NEXT_CALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-fn host() -> std::sync::MutexGuard<'static, Option<Host>> {
-    HOST.lock().unwrap_or_else(|e| e.into_inner())
+fn host_list() -> std::sync::MutexGuard<'static, Hosts> {
+    HOSTS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Whether the connected app runs browser steps itself.
 pub fn host_browser() -> bool {
-    host().as_ref().is_some_and(|h| h.browser)
+    host_list().current().is_some_and(|h| h.browser)
 }
 
 /// Asks the app connected as host. `None` where no app is connected; an app
 /// that leaves mid-call answers an error, since the step may have half run.
 pub async fn host_call(cmd: &str, args: Value) -> Option<Result<Value, Value>> {
     let answer = {
-        let mut host = host();
-        let host = host.as_mut()?;
+        let mut hosts = host_list();
+        let host = hosts.current()?;
         let call = NEXT_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (tx, rx) = tokio::sync::oneshot::channel();
         host.waiting.insert(call, tx);
@@ -1758,7 +1799,7 @@ async fn connection(
     let island = hello.as_ref().is_some_and(|h| h.client.as_deref() == Some("island"));
     let offer = hello.and_then(|h| h.host);
     if let Some(offer) = offer {
-        *host() = Some(Host { connection, browser: offer.browser, frames: replies.clone(), waiting: HashMap::new() });
+        host_list().offer(Host { connection, browser: offer.browser, frames: replies.clone(), waiting: HashMap::new() });
         let _ = sink.emit("host_changed", Value::Null);
         // This server writes the machine list itself while no app is
         // connected, so the copy the app read at launch may be stale (#760).
@@ -1832,19 +1873,23 @@ async fn connection(
     }
 
     // Dropping its waiters answers every call still out on it.
-    let mut host = host();
-    let left = host.as_ref().is_some_and(|h| h.connection == connection);
-    if left {
-        *host = None;
-    }
-    drop(host);
-    if left {
+    let left = host_list().leave(connection);
+    if left != Left::Unseen {
         // The island follows the app's links, so it drops them with the app.
         let _ = sink.emit("host_changed", Value::Null);
+    }
+    match left {
+        Left::Unseen => {}
+        // Edits made while the one leaving answered went to it, not this one.
+        Left::HandedOn => drop(tokio::spawn(host_call("reload_servers", Value::Null))),
         // Only the app reads boat timers, so its warnings go with it rather than
         // counting down on the island past a stop nobody is watching for.
         #[cfg(feature = "desktop")]
-        let _ = sink.emit("boat_alerts", json!({ "alerts": [] }));
+        Left::NoHost => {
+            let _ = sink.emit("boat_alerts", json!({ "alerts": [] }));
+        }
+        #[cfg(not(feature = "desktop"))]
+        Left::NoHost => {}
     }
     drop(replies);
     writer.abort();
@@ -1907,7 +1952,7 @@ fn answered(connection: u64, frame: Value) {
         None => Ok(frame.get("ok").cloned().unwrap_or(Value::Null)),
     };
     let waiter = frame["reply"].as_u64().and_then(|call| {
-        host().as_mut().filter(|h| h.connection == connection).and_then(|h| h.waiting.remove(&call))
+        host_list().0.iter_mut().find(|h| h.connection == connection).and_then(|h| h.waiting.remove(&call))
     });
     if let Some(waiter) = waiter {
         let _ = waiter.send(reply);
@@ -2334,6 +2379,31 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
 
 #[cfg(test)]
 mod tests {
+    fn host(connection: u64) -> super::Host {
+        let (frames, _) = tokio::sync::mpsc::unbounded_channel();
+        super::Host { connection, browser: false, frames, waiting: Default::default() }
+    }
+
+    /// #1629: an older host connection closing last must hand host back to the
+    /// app still connected, never leave no host behind it.
+    #[test]
+    fn a_host_leaving_hands_on_to_the_one_still_open() {
+        use super::{Hosts, Left};
+        let mut hosts = Hosts::default();
+        hosts.offer(host(1));
+        hosts.offer(host(2));
+        assert_eq!(hosts.current().map(|h| h.connection), Some(2), "the newest answers");
+        assert_eq!(hosts.leave(2), Left::HandedOn);
+        assert_eq!(hosts.current().map(|h| h.connection), Some(1));
+
+        hosts.offer(host(3));
+        assert_eq!(hosts.leave(1), Left::Unseen, "an older one leaving changes nothing seen");
+        assert_eq!(hosts.current().map(|h| h.connection), Some(3));
+        assert_eq!(hosts.leave(9), Left::Unseen, "a connection that never hosted");
+        assert_eq!(hosts.leave(3), Left::NoHost);
+        assert!(hosts.current().is_none());
+    }
+
     #[test]
     fn a_range_is_read_as_http_writes_it() {
         use super::{byte_span, ByteSpan::*};

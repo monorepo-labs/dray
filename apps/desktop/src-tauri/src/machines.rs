@@ -122,6 +122,10 @@ pub async fn save(list: &[Saved]) -> Result<(), String> {
     write(list).await
 }
 
+/// What every client hears after this server rewrites `servers.json` itself.
+/// The Mac app reloads its list on it from its own server.
+pub const SERVERS_WRITTEN: &str = "servers_written";
+
 /// The server's own write, made only while no app is connected to it. One
 /// that connected meanwhile read its list before this landed, so it is told
 /// to read again; [`crate::serve`] tells every app that connects the same.
@@ -130,6 +134,9 @@ async fn write(list: &[Saved]) -> Result<(), String> {
     let body = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
     store::write_atomic(&path, body).await.map_err(|e| format!("{e:#}"))?;
     tokio::spawn(crate::serve::host_call("reload_servers", Value::Null));
+    // Broadcast too: an app still connected but not answering as host — one
+    // whose host turn was taken by a connection now gone — hears this alone.
+    crate::serve::HUB.publish(SERVERS_WRITTEN, &Value::Null);
     tokio::spawn(announce_sharing());
     Ok(())
 }
