@@ -2668,7 +2668,8 @@ async fn start_session(
 ///
 /// A branch — here, or only on the remote — is worked on by its own name, by
 /// the same rules as the new-task composer's branch picker
-/// ([`crate::git::create_worktree_from_branch`]). Any other ref is forked.
+/// ([`crate::git::create_worktree_from_branch`]). Any other ref is forked,
+/// `origin/<branch>` fetched first so one this clone never saw still starts.
 ///
 /// The session's branch comes from [`store::session_branch`], the one reading
 /// of that question, so this cannot start a reviewer on one branch while the
@@ -2715,6 +2716,9 @@ pub(crate) async fn resolve_base(from: &str, project_path: &str) -> Result<Base>
 
     if crate::git::is_branch(project_path, from).await {
         return Ok(Base::Branch(from.to_string()));
+    }
+    if crate::git::fetch_remote_branch(project_path, from).await {
+        return Ok(Base::Fork(from.to_string()));
     }
     if crate::git::resolve_commit(project_path, from).await.is_some() {
         return Ok(Base::Fork(from.to_string()));
