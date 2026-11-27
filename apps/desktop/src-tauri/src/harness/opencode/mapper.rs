@@ -109,6 +109,13 @@ impl Mapper {
         self.running.get(call_id)
     }
 
+    /// A turn is open and nothing in it is mid-step: no call opening or
+    /// running. What a turn OpenCode opened on its own must be before it is
+    /// closed for going quiet.
+    pub fn between_steps(&self) -> bool {
+        self.turn_open && self.opening.is_empty() && self.running.is_empty()
+    }
+
     pub fn map(&mut self, event: OpenCodeEvent) -> Vec<AgentEvent> {
         match event {
             OpenCodeEvent::Update(update) => self.update(update),
