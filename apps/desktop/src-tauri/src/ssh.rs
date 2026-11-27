@@ -228,7 +228,7 @@ const SCRIPT: &str = concat!(
     "command -v dray >/dev/null 2>&1 || { echo DRAY-SSH missing; exit 0; }; ",
     // A login with no logind session names no runtime dir, and systemctl then
     // cannot see the user manager linger keeps running.
-    "[ -n \"$XDG_RUNTIME_DIR\" ] || export XDG_RUNTIME_DIR=/run/user/$(id -u); ",
+    "[ -n \"$XDG_RUNTIME_DIR\" ] || [ ! -d /run/systemd/system ] || export XDG_RUNTIME_DIR=/run/user/$(id -u); ",
     "if ! systemctl --user is-active --quiet dray 2>/dev/null && systemctl --user show-environment >/dev/null 2>&1; then ",
     "echo DRAY-SSH starting; if ! out=$(dray service start 2>&1); then echo DRAY-SSH failed; echo \"$out\"; exit 0; fi; fi; ",
     "[ -r \"$HOME/.dray/serve-token\" ] || { echo DRAY-SSH notoken; exit 0; }; ",

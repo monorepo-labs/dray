@@ -514,6 +514,11 @@ pub fn setup(args: Install) -> Result<(), String> {
         // No line to paste: it would point the app at a server that is not
         // there. The reason is the error itself, `dray: …` being the line the
         // app's install dialog shows the reader.
+        Err(why) if MAC => {
+            warn(&why);
+            println!("\x1b[90m└\x1b[0m");
+            return Err("the server is not running".into());
+        }
         Err(why) => {
             println!("\x1b[90m└\x1b[0m");
             return Err(why);
@@ -762,10 +767,12 @@ pub fn service(command: ServiceCommand) -> Result<(), String> {
     if cfg!(windows) {
         return windows_service(command);
     }
-    if !systemd_booted() {
-        return detached_service(command);
+    if cfg!(target_os = "linux") {
+        if !systemd_booted() {
+            return detached_service(command);
+        }
+        find_user_manager();
     }
-    find_user_manager();
     match command {
         ServiceCommand::Start => {
             let note = service_start()?;
@@ -970,6 +977,13 @@ fn systemctl(quiet: bool, args: &[&str]) -> bool {
 fn service_start() -> Result<String, String> {
     if MAC {
         return agent_start();
+    }
+    // Windows reaches here from `tunnel on`, which never had a systemd to
+    // find; the fallbacks below are Linux's alone.
+    if !cfg!(target_os = "linux") {
+        return Err("No systemd user session here, so nothing can keep the server running. \
+                    Start it yourself under tmux or nohup: dray server run"
+            .into());
     }
     if !systemd_booted() {
         return detached_start();
