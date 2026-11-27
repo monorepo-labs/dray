@@ -7,7 +7,7 @@ sidebar:
 
 This is Dray's privacy policy. It covers the Dray desktop app, the Dray app for iPhone and iPad, Dray accounts, and drayhq.com with these docs. "We" and "us" here mean Dray.
 
-Last updated: 26 November 2026.
+Last updated: 27 November 2026.
 
 In short:
 
@@ -19,17 +19,19 @@ In short:
 
 ## Analytics in the desktop app
 
-Dray sends a small set of anonymous usage events, so we can see which builds are in use, which features get used and where the app breaks. Your prompts, code, conversations, file paths, session titles and error messages never leave your machine through analytics. Analytics is on, and Settings has no switch for it.
+Dray sends a small set of anonymous usage events, so we can see which builds are in use, which features get used and where the app breaks. Your prompts, code, conversations, file paths, session titles and error messages never leave your machine through analytics. Analytics is on until you turn it off.
 
 ## Turn analytics off
 
-Set `DRAY_NO_ANALYTICS` to any value in the environment Dray starts from. Dray then sends nothing, from the app or from the background server on your Mac, since the app passes the variable on to it. See [Environment variables](/reference/data#environment-variables) for how to start the app with one.
+Turn off **Share usage analytics** in Settings › About. Dray then sends nothing, from the app or from the background server on your Mac, and loads no surveys. It takes effect at once and stays off across restarts. Turn it back on to resume.
 
-Older versions had a **Share basic analytics** switch in Settings. A choice saved there is no longer read.
+You can also set `DRAY_NO_ANALYTICS` to any value in the environment Dray starts from. That turns analytics off whatever the switch says, and the switch shows as off. The app passes the variable on to its background server. See [Environment variables](/reference/data#environment-variables) for how to start the app with one.
+
+If you turned off **Share basic analytics** in an older version, that choice counts again.
 
 ## The install id
 
-Events are tied to a random id for this install, not to you. It is created with the first event and stored in `~/.dray/settings.json`.
+Events are tied to a random id for this install, not to you. It is created with the first event and stored in `~/.dray/settings.json`. Turning analytics off keeps the id on your machine and sends nothing with it.
 
 ## What is sent
 
@@ -61,7 +63,7 @@ Then each event adds its own:
 | `feature_used` | A feature works | Which feature, from a fixed list (below). |
 | `error` | Something breaks | Where it broke, never what it said (below). |
 
-`feature_used` names one of: `dictation` (with the dictation model's id, and where you dictated: `app`, `island` or `phone`), `island_open` (you opened Dray Island), `island_send` (you sent a message from it), `island_card` (you answered a permission or question card from it), `bot_message` (you sent a message in a bot's chat, from the app, Dray Island or your phone; a bot's messages, task reports and routines don't count), `routine_run` (a routine started a run), `fork`, `pr_merged`, `linear_connected`, `space_created`, `worktree_deleted`, `settle`, `unsettle`, `pin`, `unpin`, `set_aside`, `unset_aside`, `handoff_commit`, `handoff_pr`, `handoff_runServer`, `handoff_custom` (you pressed a button of your own, never its label or prompt), `browser_open` (you opened a page in the browser, with `localhost` or `site` and never the address), `boat_resumed`, `boat_extended` (with how many minutes), `github_starred`, `github_star_dismissed` and `github_star_fallback_opened` (how you answered the card asking you to star Dray on GitHub), `remote_access`, `share`, `server_added` and `server_connected`. The last three add how: `app` or `cli` for a share, `ssh` or `address` for a server. Never the port, the address or the server's name. `server_connected` is sent at most once a day per kind.
+`feature_used` names one of: `dictation` (with the dictation model's id, and where you dictated: `app`, `island` or `phone`), `island_open` (you opened Dray Island), `island_send` (you sent a message from it), `island_card` (you answered a permission or question card from it), `bot_message` (you sent a message in a bot's chat, from the app, Dray Island or your phone; a bot's messages, task reports and routines don't count), `routine_run` (a routine started a run), `fork`, `pr_merged`, `linear_connected`, `space_created`, `worktree_deleted`, `settle`, `unsettle`, `pin`, `unpin`, `set_aside`, `unset_aside`, `handoff_commit`, `handoff_pr`, `handoff_runServer`, `handoff_custom` (you pressed a button of your own, never its label or prompt), `browser_open` (you opened a page in the browser, with `localhost` or `site` and never the address), `boat_resumed`, `boat_extended` (with how many minutes), `cloud_machine_started`, `cloud_machine_dropped` and `cloud_resumed` (you started, deleted or woke a Dray Cloud machine), `github_starred`, `github_star_dismissed` and `github_star_fallback_opened` (how you answered the card asking you to star Dray on GitHub), `remote_access`, `share`, `server_added` and `server_connected`. The last three add how: `app` or `cli` for a share, `ssh` or `address` for a server. Never the port, the address or the server's name. `server_connected` is sent at most once a day per kind.
 
 ## What is never sent
 
@@ -87,7 +89,7 @@ Other errors in the app's interface are not reported.
 
 ## Surveys
 
-Now and then Dray may show a short survey card from PostHog, the analytics service it uses. With `DRAY_NO_ANALYTICS` set, no survey is loaded. A survey can be aimed at installs by the facts above and by how many sessions this install has. Answering is optional, and your answer goes to PostHog. Dismiss the card to skip it.
+Now and then Dray may show a short survey card from PostHog, the analytics service it uses. With analytics off, no survey is loaded or shown. A survey can be aimed at installs by the facts above and by how many sessions this install has. Answering is optional, and your answer goes to PostHog. Dismiss the card to skip it.
 
 ## Linux servers
 
@@ -180,6 +182,6 @@ Email [support@drayhq.com](mailto:support@drayhq.com). For other help, see [Help
 
 ## Limits
 
-- There is no switch in Settings. `DRAY_NO_ANALYTICS` is the only way to turn analytics off.
+- The switch covers the machine it is on. A Dray app on another Mac has its own.
 - Surveys are drawn by PostHog and look like PostHog's, not like Dray.
 - There is no button to delete your account yet. Email us instead.

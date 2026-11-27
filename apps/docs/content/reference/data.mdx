@@ -24,7 +24,7 @@ The folder is readable by your user alone, and Dray does not upload it. For what
 | `account.json` | Your Dray sign-in: who you are signed in as, and the credential that proves it to drayhq.com (`0600`). Signing out deletes it. See [Sign in](/get-started/install#sign-in). |
 | `org-link.json` | This machine's link to your org at drayhq.com, with its own credential (`0600`). See [Link to an org](/cli/servers#link-to-an-org). |
 | `push.json` | The iPhones that asked this server for alerts, by a sealed handle, and which kinds each turned off. |
-| `settings.json` | The analytics install id, your dictation model and microphone, the Linear account name, and whether Remote access and **Share these servers** are on. |
+| `settings.json` | Whether analytics is on, the analytics install id, your dictation model and microphone, the Linear account name, and whether Remote access and **Share these servers** are on. |
 | `credentials.json` | Your Linear API key and the tokens for servers you added by address. Readable by your user alone (`0600`). |
 | `servers.json` | The remote servers in Settings → Servers, or the machines `dray machine` added on a server with no app: name, address, channel. Tokens are in `credentials.json`, not here. |
 | `server-cache/` | What the app last saw of each remote server's sessions, so they stay in the sidebar while it is offline. |
@@ -79,7 +79,7 @@ The app passes `DRAY_HOME` and `DRAY_NO_ANALYTICS` on to the background server i
 | Variable | Read by | What it does |
 |---|---|---|
 | `DRAY_HOME` | App, server, `dray` | Uses another folder instead of `~/.dray`, with its own sessions, settings and socket. Two Dray servers must never share one folder: each overwrites the other's session list. On a Mac, the browser profiles and Chromium stay in `~/.dray` either way. |
-| `DRAY_NO_ANALYTICS` | App, server | Turns analytics off for that run, and is the only way to. Any value counts, even `0`. See [Privacy](/reference/privacy). |
+| `DRAY_NO_ANALYTICS` | App, server | Turns analytics off for that run, whatever **Share usage analytics** in Settings says. Any value counts, even `0`. See [Privacy](/reference/privacy). |
 | `DRAY_ENDPOINT` | `dray` | Which Dray the CLI talks to: a socket path. Dray sets it for every agent it runs, so an agent's `dray` calls reach the right app. |
 | `DRAY_SESSION_ID` | `dray` | The session the CLI acts for. Dray sets it for every agent it runs. |
 | `DRAY_CHANNEL` | `install.sh` | `stable` (default) or `beta`. Which releases the installer picks. |
