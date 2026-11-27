@@ -1391,7 +1391,7 @@ pub const AGENTS: [Agent; 6] = [
         id: "opencode",
         name: "OpenCode",
         bin: "opencode",
-        install: "curl -fsSL https://opencode.ai/install | bash",
+        install: "curl -fsSL https://opencode.ai/v2/install | bash",
         install_windows: "",
         docs: "https://opencode.ai/docs/",
         login: "opencode auth login",

@@ -18,6 +18,9 @@ pub use crate::harness::acp::{ContentBlock, PermissionChoice, ToolContent, ToolK
 pub enum OpenCodeEvent {
     /// An update belonging to **this** session — the read loop checks that.
     Update(OpenCodeUpdate),
+    /// OpenCode 2 relays a background subagent's updates on the parent's own
+    /// session, tagged with the child's id in `_meta`. Never main-thread text.
+    ChildUpdate { child: String, update: OpenCodeUpdate },
     /// The answer to `session/prompt`, which is how a turn ends.
     PromptDone(Box<PromptResponse>),
     /// `session/prompt` answered with a JSON-RPC error — a provider key that
@@ -34,6 +37,11 @@ pub struct UpdateNotification {
     #[serde(default)]
     pub session_id: String,
     pub update: OpenCodeUpdate,
+    /// `update._meta["opencode/child-session"].id`, read by
+    /// [`parse_notification`]: OpenCode 2's subagent updates arrive on the
+    /// parent's session id, so this is the only thing telling them apart.
+    #[serde(skip)]
+    pub child: Option<String>,
 }
 
 /// One streamed update, tagged on `sessionUpdate`. The unit variants are kinds
@@ -41,11 +49,19 @@ pub struct UpdateNotification {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "sessionUpdate", rename_all = "snake_case")]
 pub enum OpenCodeUpdate {
+    /// `messageId` is OpenCode 2's alone; a new one is a new message, which
+    /// must not run on into the last one's text.
+    #[serde(rename_all = "camelCase")]
     AgentMessageChunk {
         content: ContentBlock,
+        #[serde(default)]
+        message_id: Option<String>,
     },
+    #[serde(rename_all = "camelCase")]
     AgentThoughtChunk {
         content: ContentBlock,
+        #[serde(default)]
+        message_id: Option<String>,
     },
     /// A call opening while the model still streams its arguments: `title` is
     /// the bare tool name (`bash`, `edit`) and `rawInput` is `{}` or `{cwd}`.
@@ -67,6 +83,10 @@ pub enum OpenCodeUpdate {
         kind: Option<ToolKind>,
         #[serde(default)]
         raw_input: Option<Value>,
+        /// The files the call touches. OpenCode 2's `patch` names its file
+        /// here alone, its input being the patch text.
+        #[serde(default, deserialize_with = "null_as_default")]
+        locations: Vec<Location>,
         #[serde(default, deserialize_with = "null_as_default")]
         content: Vec<ToolContent>,
         #[serde(default)]
@@ -92,10 +112,21 @@ pub enum OpenCodeUpdate {
     ConfigOptionUpdate,
     CurrentModeUpdate,
     UserMessageChunk,
-    SessionInfoUpdate,
+    /// OpenCode 2 rides compaction (`opencode/compaction`) and retry
+    /// (`opencode/retry`) on this kind's `_meta`; a title change is the rest.
+    SessionInfoUpdate {
+        #[serde(rename = "_meta", default)]
+        meta: Option<Value>,
+    },
     Plan,
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct Location {
+    #[serde(default)]
+    pub path: String,
 }
 
 /// A finished call's result. `output` is the text the model was handed;
@@ -185,7 +216,15 @@ pub enum ParseOutcome {
 /// Types one notification off the connection.
 pub fn parse_notification(method: &str, params: Value) -> Result<UpdateNotification, ParseOutcome> {
     match method {
-        "session/update" => serde_json::from_value(params).map_err(ParseOutcome::Malformed),
+        "session/update" => {
+            let child = params
+                .pointer("/update/_meta/opencode~1child-session/id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let mut note: UpdateNotification = serde_json::from_value(params).map_err(ParseOutcome::Malformed)?;
+            note.child = child;
+            Ok(note)
+        }
         _ => Err(ParseOutcome::Unknown),
     }
 }

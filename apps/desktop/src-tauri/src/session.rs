@@ -1791,7 +1791,7 @@ impl SessionManager {
                 // drain it at the next boundary inside the run, so there is
                 // nothing for Dray's queue to do here and no boundary for it to
                 // race for — whether or not a tool happens to be running now.
-                if matches!(s.stdin, Transport::Pi(_) | Transport::Grok(_)) {
+                if s.stdin.steers() {
                     s.steer(prompt, attachment_paths, issues, from, origin, app).await?;
                     return Ok(SendOutcome {
                         issues: linked,
@@ -2671,9 +2671,19 @@ impl Transport {
     /// transport rather than a flag on the session.
     ///
     /// OpenCode is here for fx's reason: a second `session/prompt` is refused,
-    /// and it has no interject.
+    /// and 1 has no interject. 2's `_session/steering` is [`Self::steers`].
     pub fn one_prompt_per_turn(&self) -> bool {
         matches!(self, Transport::Fx(_) | Transport::OpenCode(_))
+    }
+
+    /// Whether a prompt sent mid-turn goes into the running turn rather than
+    /// Dray's queue: pi and grok always, OpenCode from 2.
+    pub fn steers(&self) -> bool {
+        match self {
+            Transport::Pi(_) | Transport::Grok(_) => true,
+            Transport::OpenCode(session) => session.steers,
+            _ => false,
+        }
     }
 
     /// Opens a turn with one prompt, for the transports that take it as a
@@ -3615,6 +3625,12 @@ impl Session {
                 let result = crate::harness::grok::permissions::question_answer(&answers);
                 session.client.respond(*rpc_id, result)?;
             }
+            // OpenCode 2's `elicitation/create`: answers go back on the form's
+            // own field keys, held on the entry when the card was raised.
+            (Transport::OpenCode(session), Reply::Rpc(rpc_id)) => {
+                let result = crate::harness::opencode::questions::answer(&pending.input, &answers);
+                session.client.respond(*rpc_id, result)?;
+            }
             _ => {
                 write_line(
                     self.stdin.lines()?,
@@ -4012,6 +4028,23 @@ async fn deliver_prompt(
         crate::harness::grok::interject(session, &given, &prepared.images)
             .await
             .context(Undelivered)?;
+        handover.sent();
+        return Ok((given, true));
+    }
+    // OpenCode 2 takes a prompt into the running turn through
+    // `_session/steering`. A turn that ended under the caller's check answers
+    // "promptRequired", and the prompt opens the next turn instead: written
+    // before the last turn's answer was read, it takes over the id that
+    // closes the turn, so the two read as one.
+    if let (Transport::OpenCode(session), crate::harness::pi::Delivery::Steer) = (transport, delivery) {
+        let injected = crate::harness::opencode::steer(session, &given, &prepared.images)
+            .await
+            .context(Undelivered)?;
+        if !injected {
+            crate::harness::opencode::start_turn(session, &given, &prepared.images)
+                .await
+                .context(Undelivered)?;
+        }
         handover.sent();
         return Ok((given, true));
     }

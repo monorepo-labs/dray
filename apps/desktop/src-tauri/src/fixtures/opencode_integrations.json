@@ -1,0 +1,210 @@
+{
+ "location": {
+  "directory": "/tmp/opencode-probe"
+ },
+ "data": [
+  {
+   "id": "302ai",
+   "name": "302.AI",
+   "methods": [
+    {
+     "type": "key"
+    },
+    {
+     "type": "env",
+     "names": [
+      "302AI_API_KEY"
+     ]
+    }
+   ],
+   "connections": []
+  },
+  {
+   "id": "anthropic",
+   "name": "Anthropic",
+   "methods": [
+    {
+     "type": "key"
+    },
+    {
+     "type": "env",
+     "names": [
+      "ANTHROPIC_API_KEY"
+     ]
+    }
+   ],
+   "connections": [
+    {
+     "type": "credential",
+     "id": "cred_test1",
+     "label": "OAuth",
+     "method": "oauth"
+    }
+   ]
+  },
+  {
+   "id": "azure",
+   "name": "Azure",
+   "methods": [
+    {
+     "type": "key",
+     "label": "API key",
+     "form": [
+      {
+       "key": "resourceName",
+       "title": "Enter Azure Resource Name",
+       "required": true,
+       "type": "string",
+       "placeholder": "e.g. my-models"
+      }
+     ]
+    },
+    {
+     "type": "env",
+     "names": [
+      "AZURE_API_KEY",
+      "AZURE_COGNITIVE_SERVICES_API_KEY"
+     ]
+    },
+    {
+     "id": "azure-cli",
+     "type": "external",
+     "label": "Microsoft Entra ID (Azure CLI)",
+     "form": [
+      {
+       "key": "resourceName",
+       "title": "Azure resource",
+       "description": "Enter the name of your Azure OpenAI or AI Services resource.",
+       "required": true,
+       "type": "string",
+       "pattern": "^[a-zA-Z0-9][a-zA-Z0-9-]*$",
+       "placeholder": "e.g. my-models"
+      }
+     ]
+    }
+   ],
+   "connections": []
+  },
+  {
+   "id": "claude-agent",
+   "name": "Claude Agent",
+   "methods": [
+    {
+     "id": "claude-login",
+     "type": "external",
+     "label": "Claude Code login (claude auth login)"
+    }
+   ],
+   "connections": []
+  },
+  {
+   "id": "openai",
+   "name": "OpenAI",
+   "methods": [
+    {
+     "type": "key"
+    },
+    {
+     "type": "env",
+     "names": [
+      "OPENAI_API_KEY"
+     ]
+    },
+    {
+     "id": "chatgpt-token-sharing",
+     "type": "oauth",
+     "label": "Sign in with ChatGPT"
+    },
+    {
+     "id": "chatgpt-browser",
+     "type": "oauth",
+     "label": "Codex browser (legacy)"
+    },
+    {
+     "id": "chatgpt-headless",
+     "type": "oauth",
+     "label": "Codex device code (legacy)"
+    }
+   ],
+   "connections": [
+    {
+     "type": "credential",
+     "id": "cred_test4",
+     "label": "OAuth",
+     "method": "oauth"
+    }
+   ]
+  },
+  {
+   "id": "opencode",
+   "name": "OpenCode",
+   "methods": [
+    {
+     "type": "key",
+     "label": "API key (service account)"
+    },
+    {
+     "type": "env",
+     "names": [
+      "OPENCODE_API_KEY"
+     ]
+    },
+    {
+     "id": "device",
+     "type": "oauth",
+     "label": "OpenCode account",
+     "form": [
+      {
+       "key": "server",
+       "hidden": true,
+       "type": "string",
+       "format": "uri",
+       "default": "https://opencode.ai/console"
+      }
+     ]
+    }
+   ],
+   "connections": [
+    {
+     "type": "credential",
+     "id": "cred_test5",
+     "label": "API key",
+     "method": "key",
+     "status": {
+      "status": "needs_auth",
+      "message": "Reconnect OpenCode Console to continue"
+     }
+    }
+   ]
+  },
+  {
+   "id": "xai",
+   "name": "xAI",
+   "methods": [
+    {
+     "type": "key",
+     "label": "Manually enter API Key"
+    },
+    {
+     "type": "env",
+     "names": [
+      "XAI_API_KEY"
+     ]
+    },
+    {
+     "id": "device",
+     "type": "oauth",
+     "label": "SuperGrok Subscription"
+    }
+   ],
+   "connections": [
+    {
+     "type": "credential",
+     "id": "cred_test6",
+     "label": "OAuth",
+     "method": "oauth"
+    }
+   ]
+  }
+ ]
+}

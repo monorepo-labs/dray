@@ -114,8 +114,10 @@ pub async fn update_agent(harness: Harness) -> Result<Option<AgentUpdate>, Strin
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        let said = text.lines().map(str::trim).filter(|line| !line.is_empty()).last();
-        return Err(said.map_or_else(|| format!("{} update failed", harness.label()), String::from));
+        // Colour codes out first: OpenCode ends on a bare `ESC[0m`, which was
+        // the whole message.
+        let said = text.lines().map(crate::title::readable).filter(|line| !line.is_empty()).last();
+        return Err(said.unwrap_or_else(|| format!("{} update failed", harness.label())));
     }
     // "Updated" is read back, never assumed, so a recheck that cannot answer
     // is a failure rather than the success its silence would look like.
@@ -278,7 +280,12 @@ async fn versions(harness: Harness, bin: &std::path::Path) -> Option<(String, St
         Harness::Codex => json_version("https://registry.npmjs.org/@openai/codex/latest").await?,
         Harness::Pi => json_version("https://pi.dev/api/latest-version").await?,
         Harness::Fx => get("https://releases.fx.sh/latest.txt").await?,
-        Harness::OpenCode => json_version("https://registry.npmjs.org/opencode-ai/latest").await?,
+        // `opencode-ai` is OpenCode 1 alone; 2 ships as `@opencode/cli`. Read
+        // off the one running, so 2 is never told to "update" to 1.19.
+        Harness::OpenCode if parse(&current).is_some_and(|(major, _, _)| major < 2) => {
+            json_version("https://registry.npmjs.org/opencode-ai/latest").await?
+        }
+        Harness::OpenCode => json_version("https://registry.npmjs.org/@opencode/cli/latest").await?,
         _ => return None,
     };
     Some((current, version_in(&latest)?))

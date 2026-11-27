@@ -7,8 +7,8 @@
 //! one block runs until an update of another kind arrives.
 
 use crate::events::{
-    usage::ContextWindow, AgentEvent, AgentEventPayload, BlockType, DeltaEvent, SessionInfo, Subagent, ToolResult,
-    ToolType, TurnStatus, Usage,
+    usage::ContextWindow, AgentEvent, AgentEventPayload, BlockType, DeltaEvent, FileChange, FileEdit, SessionInfo,
+    Subagent, ToolResult, ToolType, TurnStatus, Usage,
 };
 use crate::harness::acp::{self, block_ref, OpenBlock};
 use crate::harness::{mentions_any, Harness};
@@ -21,8 +21,37 @@ use super::parser::{OpenCodeEvent, OpenCodeUpdate, PromptResponse, RawOutput, To
 
 /// What a refused prompt says when the provider credential is the problem.
 /// Written to under-match for [`mentions_any`]'s reason; read off the live
-/// refusal, which named a reset API key.
-const LOGIN_NEEDLES: &[&str] = &["api key", "unauthorized", "authentication", "auth login"];
+/// refusal, which named a reset API key, and the dead logins on a real
+/// machine: "Invalid credential", "OAuth access token is invalid", "xAI token
+/// refresh failed", "Reconnect OpenCode Console to continue".
+const LOGIN_NEEDLES: &[&str] = &[
+    "api key",
+    "unauthorized",
+    "authentication",
+    "auth login",
+    "invalid credential",
+    "access token",
+    "refresh token",
+    "reconnect opencode",
+];
+
+/// A background subagent whose call has answered and whose child still runs.
+struct Background {
+    call_id: String,
+    /// What the call answered — OpenCode's "working in the background" note,
+    /// the row's result if the child never says anything.
+    note: String,
+    message: Option<String>,
+    report: String,
+}
+
+/// The child session a `subagent` answer says is running in the background:
+/// "The subagent is working in the background (sessionID: ses_…)."
+fn background_child(text: &str) -> Option<String> {
+    let (_, rest) = text.split_once("working in the background (sessionID: ")?;
+    let (id, _) = rest.split_once(')')?;
+    Some(id.to_string())
+}
 
 /// A call seen opening and not yet drawn: the row waits for its arguments.
 struct OpeningCall {
@@ -44,6 +73,12 @@ pub struct Mapper {
     opening: HashMap<String, OpeningCall>,
     /// `task` calls whose run is open in the panel, by call id.
     runs: HashSet<String>,
+    /// OpenCode 2's `subagent` runs in the background: its call answers at
+    /// once, and the child's own updates follow. Keyed by the child's session
+    /// id; the call's row is held open until the turn ends.
+    background: HashMap<String, Background>,
+    /// The `messageId` of the open block, so a new message opens a new block.
+    message: Option<String>,
     /// The input of every drawn call still running, for a permission ask
     /// that names none of its own — see [`Mapper::running_input`].
     running: HashMap<String, Value>,
@@ -61,6 +96,8 @@ impl Mapper {
             opening: HashMap::new(),
             runs: HashSet::new(),
             running: HashMap::new(),
+            background: HashMap::new(),
+            message: None,
         }
     }
 
@@ -72,9 +109,20 @@ impl Mapper {
         self.running.get(call_id)
     }
 
+    /// A turn is open and nothing in it is mid-step: no call opening or
+    /// running. What a turn OpenCode opened on its own must be before it is
+    /// closed for going quiet.
+    pub fn between_steps(&self) -> bool {
+        self.turn_open && self.opening.is_empty() && self.running.is_empty()
+    }
+
     pub fn map(&mut self, event: OpenCodeEvent) -> Vec<AgentEvent> {
         match event {
             OpenCodeEvent::Update(update) => self.update(update),
+            OpenCodeEvent::ChildUpdate { child, update } => {
+                self.child_update(&child, update);
+                Vec::new()
+            }
             OpenCodeEvent::PromptDone(response) => self.prompt_done(*response),
             OpenCodeEvent::PromptFailed { message } => self.prompt_failed(message),
         }
@@ -82,8 +130,12 @@ impl Mapper {
 
     fn update(&mut self, update: OpenCodeUpdate) -> Vec<AgentEvent> {
         match update {
-            OpenCodeUpdate::AgentMessageChunk { content } => self.chunk(BlockType::Text, content.text()),
-            OpenCodeUpdate::AgentThoughtChunk { content } => self.chunk(BlockType::Thinking, content.text()),
+            OpenCodeUpdate::AgentMessageChunk { content, message_id } => {
+                self.chunk(BlockType::Text, content.text(), message_id)
+            }
+            OpenCodeUpdate::AgentThoughtChunk { content, message_id } => {
+                self.chunk(BlockType::Thinking, content.text(), message_id)
+            }
 
             // Held rather than drawn: the opening line carries the tool's name
             // and no arguments, and a row drawn now has no subject beside it.
@@ -104,6 +156,7 @@ impl Mapper {
                 status,
                 kind,
                 raw_input,
+                locations,
                 content,
                 raw_output,
             } => {
@@ -116,8 +169,23 @@ impl Mapper {
                         out.extend(self.ensure_turn());
                         out.extend(self.close_open());
                         let kind = kind.unwrap_or(call.kind);
-                        let input = tool_input(raw_input);
+                        let mut input = tool_input(raw_input);
                         let tool_type = tool_type(&call.name, kind);
+                        // OpenCode 2's `patch` carries patch text, its file
+                        // only in `locations`; the row titles itself off
+                        // `file_path`.
+                        if let ([one], ToolType::FileEdit, None) =
+                            (locations.as_slice(), &tool_type, input.get("file_path"))
+                        {
+                            input["file_path"] = json!(one.path);
+                        }
+                        // 2's file tools spell it `path`, which on a search
+                        // is the folder searched, so only file rows take it.
+                        if matches!(tool_type, ToolType::FileRead | ToolType::FileEdit) && input.get("file_path").is_none() {
+                            if let Some(path) = input.get("path").cloned() {
+                                input["file_path"] = path;
+                            }
+                        }
                         let run = (tool_type == ToolType::SubagentSpawn).then(|| started_run(&input));
                         self.running.insert(tool_call_id.clone(), input.clone());
                         out.push(self.event(AgentEventPayload::ToolCallStarted {
@@ -153,6 +221,20 @@ impl Mapper {
                 let mut text = result_text(raw_output.as_ref(), closing, has_diff);
                 // A subagent answers in `<task …><task_result>…`; the report
                 // inside is the result, and it closes the run.
+                if let Some(child) = self.runs.contains(&tool_call_id).then(|| background_child(&text)).flatten() {
+                    self.runs.remove(&tool_call_id);
+                    self.background.insert(
+                        child,
+                        Background {
+                            call_id: tool_call_id,
+                            note: text,
+                            message: None,
+                            report: String::new(),
+                        },
+                    );
+                    out.push(self.event(AgentEventPayload::ModelRequestStarted));
+                    return out;
+                }
                 let report = self.runs.remove(&tool_call_id).then(|| task_report(&text, status));
                 if let Some((report, _)) = &report {
                     text = report.clone();
@@ -169,6 +251,13 @@ impl Mapper {
                         images: Vec::new(),
                     },
                 }));
+                let edits = raw_output.as_ref().map(file_edits).unwrap_or_default();
+                if !edits.is_empty() {
+                    out.push(self.event(AgentEventPayload::FileEdits {
+                        call_id: Some(tool_call_id.clone()),
+                        edits,
+                    }));
+                }
                 if let Some((summary, outcome)) = report {
                     out.push(self.subagent_event(
                         &tool_call_id,
@@ -184,6 +273,8 @@ impl Mapper {
                 out.push(self.event(AgentEventPayload::ModelRequestStarted));
                 out
             }
+
+            OpenCodeUpdate::SessionInfoUpdate { meta } => self.session_info(meta.unwrap_or_default()),
 
             OpenCodeUpdate::UsageUpdate { used, size } => {
                 if used > 0 && size > 0 {
@@ -201,23 +292,120 @@ impl Mapper {
             | OpenCodeUpdate::ConfigOptionUpdate
             | OpenCodeUpdate::CurrentModeUpdate
             | OpenCodeUpdate::UserMessageChunk
-            | OpenCodeUpdate::SessionInfoUpdate
             | OpenCodeUpdate::Plan
             | OpenCodeUpdate::Unknown => Vec::new(),
         }
     }
 
-    fn chunk(&mut self, kind: BlockType, text: Option<&str>) -> Vec<AgentEvent> {
+    fn chunk(&mut self, kind: BlockType, text: Option<&str>, message_id: Option<String>) -> Vec<AgentEvent> {
         let Some(text) = text else {
             return Vec::new();
         };
         let mut out = self.ensure_turn();
+        if message_id.is_some() && message_id != self.message {
+            out.extend(self.close_open());
+        }
+        self.message = message_id;
         out.extend(self.stream(kind, text));
+        out
+    }
+
+    /// OpenCode 2's compaction and retry markers. A retry's `null` marker
+    /// (the retry starting) draws nothing: the next event retires the row.
+    fn session_info(&mut self, meta: Value) -> Vec<AgentEvent> {
+        if let Some(compaction) = meta.get("opencode/compaction") {
+            let mut out = self.ensure_turn();
+            out.extend(self.close_open());
+            let field = |key: &str| compaction.get(key).and_then(Value::as_str);
+            let payload = match field("status") {
+                Some("started") => AgentEventPayload::ContextCompactionStarted,
+                Some("completed") => AgentEventPayload::ContextCompacted {
+                    trigger: field("reason").map(str::to_string),
+                    pre_tokens: None,
+                    post_tokens: None,
+                    duration_ms: None,
+                },
+                _ => AgentEventPayload::Error {
+                    source: crate::events::ErrorSource::Harness,
+                    message: compaction
+                        .pointer("/error/message")
+                        .and_then(Value::as_str)
+                        .filter(|m| !m.contains('\n'))
+                        .unwrap_or("Compaction failed")
+                        .to_string(),
+                    fatal: false,
+                },
+            };
+            out.push(self.event(payload));
+            return out;
+        }
+        match meta.get("opencode/retry") {
+            Some(retry) if retry.is_object() => {
+                let mut out = self.ensure_turn();
+                out.push(self.event(AgentEventPayload::ApiRetry {
+                    attempt: retry.get("attempt").and_then(Value::as_u64).unwrap_or(0) as u32,
+                    // OpenCode names no ceiling; zero reads as uncounted.
+                    max_retries: 0,
+                    status: retry.pointer("/error/status").and_then(Value::as_u64).map(|s| s as u32),
+                    reason: None,
+                    message: retry.pointer("/error/message").and_then(Value::as_str).map(str::to_string),
+                }));
+                out
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Keeps a background child's newest message as its report; everything
+    /// else it says belongs to its own transcript, which Dray does not draw.
+    fn child_update(&mut self, child: &str, update: OpenCodeUpdate) {
+        let Some(run) = self.background.get_mut(child) else {
+            return;
+        };
+        if let OpenCodeUpdate::AgentMessageChunk { content, message_id } = update {
+            if message_id != run.message {
+                run.report.clear();
+                run.message = message_id;
+            }
+            run.report.push_str(content.text().unwrap_or_default());
+        }
+    }
+
+    /// Closes every background run at the turn's end, which OpenCode holds
+    /// open until its children are idle: the call's row answers with the
+    /// child's last message, as a `task` row answers with its report.
+    fn settle_background(&mut self) -> Vec<AgentEvent> {
+        let mut out = Vec::new();
+        for (_, run) in std::mem::take(&mut self.background) {
+            let report = run.report.trim().to_string();
+            let text = if report.is_empty() { run.note } else { report.clone() };
+            out.push(self.event(AgentEventPayload::ToolCallCompleted {
+                call_id: run.call_id.clone(),
+                result: ToolResult {
+                    text,
+                    is_error: false,
+                    structured: None,
+                    exit_code: None,
+                    duration_ms: None,
+                    images: Vec::new(),
+                },
+            }));
+            out.push(self.subagent_event(
+                &run.call_id,
+                AgentEventPayload::SubagentCompleted {
+                    agent_id: String::new(),
+                    status: "completed".to_string(),
+                    summary: (!report.is_empty()).then_some(report),
+                    usage: None,
+                },
+            ));
+        }
         out
     }
 
     fn prompt_done(&mut self, response: PromptResponse) -> Vec<AgentEvent> {
         let mut out = self.close_open();
+        out.extend(self.settle_background());
 
         let (status, final_text) = match response.stop_reason.as_str() {
             "refusal" => (TurnStatus::Error, Some("The model refused this prompt.".to_string())),
@@ -255,6 +443,7 @@ impl Mapper {
     /// `session/prompt` refused outright. The sentence is OpenCode's own.
     fn prompt_failed(&mut self, message: String) -> Vec<AgentEvent> {
         let mut out = self.close_open();
+        out.extend(self.settle_background());
         let auth_failed = mentions_any(&message, LOGIN_NEEDLES);
         out.push(self.turn_completed(TurnStatus::Error, None, Some(message), auth_failed, None));
         out
@@ -389,7 +578,7 @@ fn tool_type(name: &str, kind: ToolKind) -> ToolType {
         "edit" | "write" | "patch" | "multiedit" => ToolType::FileEdit,
         "glob" | "grep" | "list" => ToolType::Search,
         "webfetch" | "websearch" => ToolType::Web,
-        "task" => ToolType::SubagentSpawn,
+        "task" | "subagent" => ToolType::SubagentSpawn,
         _ => kind.tool_type(),
     }
 }
@@ -403,7 +592,11 @@ fn started_run(input: &Value) -> AgentEventPayload {
     let field = |key: &str| input.get(key).and_then(Value::as_str).map(str::to_string);
     AgentEventPayload::SubagentStarted {
         agent_id: String::new(),
-        label: field("subagent_type").filter(|t| !t.is_empty()).unwrap_or_else(|| SUBAGENT_LABEL.to_string()),
+        // `subagent_type` on 1's `task`, `agent` on 2's `subagent`.
+        label: field("subagent_type")
+            .or_else(|| field("agent"))
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| SUBAGENT_LABEL.to_string()),
         description: field("description"),
         prompt: field("prompt"),
     }
@@ -454,6 +647,34 @@ fn tool_input(raw: Option<Value>) -> Value {
         }
     }
     Value::Object(map)
+}
+
+/// OpenCode 2's `patch` result names each file it touched with a unified diff
+/// (`metadata.files[].{file, patch, status}`), the only place its diff is, the
+/// input being patch text. The diff opens on an `Index:` banner the row would
+/// draw as two stray lines, so it starts at the first hunk.
+fn file_edits(raw: &RawOutput) -> Vec<FileEdit> {
+    let Some(files) = raw.metadata.as_ref().and_then(|m| m.get("files")).and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    files
+        .iter()
+        .filter_map(|file| {
+            let path = file.get("file").and_then(Value::as_str)?;
+            let diff = file.get("patch").and_then(Value::as_str).map(|patch| {
+                patch.find("\n@@").map_or(patch, |at| &patch[at + 1..]).trim_end().to_string()
+            });
+            Some(FileEdit {
+                path: path.to_string(),
+                change: match file.get("status").and_then(Value::as_str) {
+                    Some("added") => FileChange::Add,
+                    Some("deleted") => FileChange::Delete,
+                    _ => FileChange::Update,
+                },
+                unified_diff: diff,
+            })
+        })
+        .collect()
 }
 
 /// What a finished call reports: the text the model was handed, or nothing
@@ -515,7 +736,10 @@ mod tests {
                 if Some(&note.session_id) != session.as_ref() {
                     continue;
                 }
-                out.extend(mapper.map(OpenCodeEvent::Update(note.update)));
+                out.extend(mapper.map(match note.child {
+                    Some(child) => OpenCodeEvent::ChildUpdate { child, update: note.update },
+                    None => OpenCodeEvent::Update(note.update),
+                }));
             } else if prompt_ids.contains(&value["id"]) {
                 if let Some(error) = value.get("error") {
                     let message = error["message"].as_str().unwrap_or_default().to_string();
@@ -594,6 +818,119 @@ mod tests {
         let window = usage.as_ref().and_then(|u| u.context_window).expect("the ring's reading");
         assert_eq!(window.max_tokens, 1_000_000);
         assert!(window.used_tokens > 0);
+    }
+
+    /// OpenCode 2.4.1 names its tools `shell` and `patch`, and a patch's input
+    /// is patch text: the file comes off `locations` and the diff off the
+    /// result's metadata.
+    #[test]
+    fn an_opencode_2_turn_draws_its_patch() {
+        let events = replay(include_str!("fixtures/live_turn_v2.jsonl"));
+
+        let starts = tool_starts(&events);
+        let names: Vec<(&str, ToolType)> = starts.iter().map(|(n, t, _)| (*n, *t)).collect();
+        assert_eq!(
+            names,
+            [("shell", ToolType::Shell), ("read", ToolType::FileRead), ("patch", ToolType::FileEdit)]
+        );
+        assert_eq!(starts[0].2["command"], "ls");
+        assert_eq!(starts[1].2["file_path"], "/tmp/opencode-probe/notes.txt", "2's read says `path`");
+        assert_eq!(starts[2].2["file_path"], "/tmp/opencode-probe/notes.txt");
+
+        let edits = events
+            .iter()
+            .find_map(|e| match &e.payload {
+                P::FileEdits { edits, .. } => Some(edits),
+                _ => None,
+            })
+            .expect("the patch's diff");
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].change, FileChange::Update);
+        assert_eq!(edits[0].unified_diff.as_deref(), Some("@@ -1,2 +1,2 @@\n one\n-two\n+three"));
+
+        assert!(matches!(events.last().unwrap().payload, P::TurnCompleted { status: TurnStatus::Success, .. }));
+    }
+
+    /// OpenCode 2's `subagent` answers at once and runs in the background. Its
+    /// row stays open until the turn ends and answers with the child's reply;
+    /// the child's text, tagged in `_meta`, never joins the main thread, and
+    /// each `messageId` is its own block.
+    #[test]
+    fn an_opencode_2_subagent_reports_its_child_and_keeps_messages_apart() {
+        let events = replay(include_str!("fixtures/subagent_v2.jsonl"));
+
+        let starts = tool_starts(&events);
+        assert_eq!(starts.len(), 1);
+        assert_eq!((starts[0].0, starts[0].1), ("subagent", ToolType::SubagentSpawn));
+        let started = events.iter().find_map(|e| match &e.payload {
+            P::SubagentStarted { label, .. } => Some(label.as_str()),
+            _ => None,
+        });
+        assert_eq!(started, Some("general"));
+
+        let result = events
+            .iter()
+            .find_map(|e| match &e.payload {
+                P::ToolCallCompleted { result, .. } => Some(result.text.as_str()),
+                _ => None,
+            })
+            .expect("the call answers");
+        assert_eq!(result, "pong");
+        let completed = events.iter().find_map(|e| match &e.payload {
+            P::SubagentCompleted { summary, .. } => Some(summary.clone()),
+            _ => None,
+        });
+        assert_eq!(completed, Some(Some("pong".to_string())));
+
+        let texts: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                P::AssistantText { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["Started the subagent; I\u{2019}ll report its reply once it responds.", "It said: **pong**"]);
+        assert!(matches!(events.last().unwrap().payload, P::TurnCompleted { status: TurnStatus::Success, .. }));
+    }
+
+    /// OpenCode 2's compaction and retry markers ride `session_info_update`'s
+    /// `_meta`. The two compaction lines are a live 2.4.2 `/compact` on a fresh
+    /// session; the retry is the shape its `translate.ts` sends.
+    #[test]
+    fn opencode_2_compaction_and_retry_markers_draw() {
+        let mut mapper = Mapper::new("s".into(), Arc::new(AtomicU64::new(0)));
+        let mut map = |update: Value| {
+            let note = super::super::parser::parse_notification(
+                "session/update",
+                json!({"sessionId": "ses_1", "update": update}),
+            )
+            .ok()
+            .unwrap();
+            mapper.map(OpenCodeEvent::Update(note.update))
+        };
+        let marker = |status: &str, extra: Value| {
+            let mut m = json!({"status": status, "messageId": "msg_1", "reason": "manual"});
+            m.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            json!({"sessionUpdate": "session_info_update", "_meta": {"opencode/compaction": m}})
+        };
+
+        let started = map(marker("started", json!({})));
+        assert!(started.iter().any(|e| matches!(e.payload, P::ContextCompactionStarted)));
+        let failed = map(marker(
+            "failed",
+            json!({"error": {"type": "compaction.unavailable", "message": "Nothing to compact yet"}}),
+        ));
+        assert!(matches!(&failed[0].payload, P::Error { message, .. } if message == "Nothing to compact yet"));
+        let done = map(marker("completed", json!({})));
+        assert!(matches!(&done[0].payload, P::ContextCompacted { trigger: Some(t), .. } if t == "manual"));
+
+        let retry = map(json!({"sessionUpdate": "session_info_update", "_meta": {"opencode/retry": {
+            "attempt": 2, "nextRetryAt": "2026-11-27T10:00:00.000Z",
+            "error": {"type": "api", "message": "Overloaded", "status": 529}}}}));
+        assert!(matches!(&retry[0].payload,
+            P::ApiRetry { attempt: 2, status: Some(529), message: Some(m), .. } if m == "Overloaded"));
+        let cleared = map(json!({"sessionUpdate": "session_info_update", "_meta": {"opencode/retry": null}}));
+        assert!(cleared.is_empty());
     }
 
     /// Stop answers `cancelled`, a success, and the killed shell closes on its

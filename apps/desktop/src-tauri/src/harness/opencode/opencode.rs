@@ -29,11 +29,12 @@ pub mod commands;
 pub mod mapper;
 pub mod models;
 pub mod parser;
+pub mod questions;
 
 use crate::attachments::PreparedImage;
 use crate::events::{AgentEventPayload, ApprovalPolicy};
 use crate::harness::acp::{self, PermissionChoice};
-use crate::harness::claude_code::permissions::{rpc_request_id, PendingPermissions};
+use crate::harness::claude_code::permissions::{rpc_request_id, PendingPermissions, PendingRequest, Reply};
 use crate::harness::codex::rpc::{Incoming, RpcClient};
 use crate::harness::{read_stderr, record_failure, Harness::OpenCode};
 use crate::models::{Effort, Model};
@@ -42,6 +43,7 @@ use crate::sink::Sink;
 use crate::store::{self, next_seq_by_session_id};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -64,6 +66,10 @@ pub struct OpenCodeSession {
     pub id: String,
     /// The JSON-RPC id of the `session/prompt` now running, or `None`.
     prompt_id: Arc<std::sync::Mutex<Option<i64>>>,
+    /// Whether a prompt sent mid-turn joins the running turn through
+    /// `_session/steering`, which OpenCode 2 advertises on `initialize`. 1
+    /// does not, and queues to the turn's end.
+    pub steers: bool,
 }
 
 /// Spawns a session's `opencode acp`, handshakes it, opens or resumes its
@@ -104,7 +110,18 @@ pub async fn init(
     let rules = write_rules(session_id, session_cwd).await?;
 
     let bin = crate::binpath::opencode().await;
-    let agents = agents_refusing_edits(&bin, permission_mode, cwd, session_cwd).await;
+    let v2 = crate::binpath::opencode_v2().await;
+    let agents = agents_refusing_edits(&bin, v2, permission_mode, cwd, session_cwd).await;
+    let global = global_rules(permission_mode, agents.as_deref());
+    let mut config = stance_config(&rules, permission_mode, agents.as_deref());
+    // OpenCode 2 no longer reads `OPENCODE_PERMISSION`; the config's own
+    // `permission` is the global list, appended after each agent's.
+    if v2 {
+        config["permission"] = children_ask(permission_mode, agents.as_deref(), &mut config);
+        // 2 ships `todowrite` off; it is what fills Dray's task list, as 1's
+        // did by default.
+        config["experimental"] = json!({"todo": true});
+    }
     let mut command = Command::new(&bin);
     if let Some(endpoint) = crate::orchestration::child_endpoint() {
         command.env("DRAY_ENDPOINT", endpoint);
@@ -115,11 +132,8 @@ pub async fn init(
         .current_dir(cwd)
         .env("DRAY_SESSION_ID", session_id)
         .env("PATH", crate::harness::agent_path(&bin))
-        .env("OPENCODE_PERMISSION", global_rules(permission_mode, agents.as_deref()).to_string())
-        .env(
-            "OPENCODE_CONFIG_CONTENT",
-            stance_config(&rules, permission_mode, agents.as_deref()).to_string(),
-        )
+        .env("OPENCODE_PERMISSION", global.to_string())
+        .env("OPENCODE_CONFIG_CONTENT", config.to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -159,7 +173,7 @@ pub async fn init(
     });
 
     let opened = open_session(&client, session_id, session_cwd, open, model, effort, permission_mode).await;
-    let (id, effort) = match opened {
+    let (id, effort, steers) = match opened {
         Ok(opened) => opened,
         Err(error) => {
             // OpenCode starts the reader's MCP servers and language servers
@@ -173,6 +187,7 @@ pub async fn init(
         client,
         id,
         prompt_id: Arc::new(std::sync::Mutex::new(None)),
+        steers,
     };
     let _ = ready_tx.send(session.clone());
 
@@ -245,6 +260,36 @@ fn refusing(rules: &Value) -> Value {
     }
 }
 
+/// OpenCode 2's global rules: the stance itself, not [`refusing`] it.
+///
+/// 2 forwards a subagent's ask over ACP (measured on 2.4.2: a `general`
+/// child's `ls -1` arrived as `session/request_permission` on the parent's id,
+/// tagged `_meta["opencode/child-session"]`), so a child asks where 1's could
+/// only be refused. Edits stay off the global list for [`global_rules`]'
+/// reason, and the per-agent refusals [`stance_config`] wrote become asks under
+/// Manual; under Plan nothing edits, children included.
+fn children_ask(mode: ApprovalPolicy, agents: Option<&[String]>, config: &mut Value) -> Value {
+    let plan = matches!(mode, ApprovalPolicy::Plan);
+    let mut rules = permission_rules(mode);
+    if let Some(map) = rules.as_object_mut() {
+        if agents.is_some() || !asks_for_edits(mode) {
+            map.remove("edit");
+        } else if plan {
+            map.insert("edit".into(), json!("deny"));
+        }
+    }
+    if !plan {
+        if let Some(listed) = config["agent"].as_object_mut() {
+            for (name, agent) in listed.iter_mut() {
+                if !matches!(name.as_str(), "build" | "plan") && agent["permission"]["edit"] == "deny" {
+                    agent["permission"]["edit"] = json!("ask");
+                }
+            }
+        }
+    }
+    rules
+}
+
 /// Whether this stance asks before an edit, which no subagent can do.
 fn asks_for_edits(mode: ApprovalPolicy) -> bool {
     permission_rules(mode)["edit"] == "ask"
@@ -297,13 +342,15 @@ fn stance_config(rules_path: &str, mode: ApprovalPolicy, agents: Option<&[String
 /// Every agent OpenCode will run here, when the stance asks before edits:
 /// those are the agents whose edits must be refused by name.
 ///
-/// Read from `opencode agent list`, which names the built-ins, the reader's
-/// own from `opencode.json` and `.opencode/agent/`, and any a plugin adds.
-/// Empty where nothing needs refusing, so Auto and Bypass skip the call, about
-/// a second; `None` where OpenCode could not answer, which [`global_rules`]
-/// covers.
+/// Read from `opencode agent list`, or 2's `opencode debug agents`, which name
+/// the built-ins, the reader's own from `opencode.json` and `.opencode/agent/`,
+/// and any a plugin adds. 2 answers `agent list` with its help and a clean
+/// exit, so the two are never tried in turn. Empty where nothing needs
+/// refusing, so Auto and Bypass skip the call, about a second; `None` where
+/// OpenCode could not answer, which [`global_rules`] covers.
 async fn agents_refusing_edits(
     bin: &std::path::Path,
+    v2: bool,
     mode: ApprovalPolicy,
     cwd: &str,
     session_cwd: &str,
@@ -314,10 +361,15 @@ async fn agents_refusing_edits(
     // The folder OpenCode opens the session in decides which project config
     // it reads; a worktree not made yet falls back to where the child starts.
     let dir = if std::path::Path::new(session_cwd).is_dir() { session_cwd } else { cwd };
+    let (args, parse): (&[&str], fn(&str) -> Option<Vec<String>>) = if v2 {
+        (&["debug", "agents"], parse_agents_json)
+    } else {
+        (&["agent", "list"], |out| Some(parse_agent_list(out)))
+    };
     let listed = tokio::time::timeout(
         std::time::Duration::from_secs(15),
         Command::new(bin)
-            .args(["agent", "list"])
+            .args(args)
             .current_dir(dir)
             .env("PATH", crate::harness::agent_path(bin))
             // Null, never a pipe: an OpenCode command with an open stdin and
@@ -328,7 +380,10 @@ async fn agents_refusing_edits(
     )
     .await;
     let reason = match listed {
-        Ok(Ok(out)) if out.status.success() => return Some(parse_agent_list(&String::from_utf8_lossy(&out.stdout))),
+        Ok(Ok(out)) if out.status.success() => match parse(&String::from_utf8_lossy(&out.stdout)) {
+            Some(agents) => return Some(agents),
+            None => "the agent list did not parse".to_string(),
+        },
         Ok(Ok(out)) => format!("{}: {}", out.status, String::from_utf8_lossy(&out.stderr).trim()),
         Ok(Err(err)) => err.to_string(),
         Err(_) => "timed out".to_string(),
@@ -346,6 +401,20 @@ fn parse_agent_list(out: &str) -> Vec<String> {
         .filter(|name| !name.is_empty() && !name.contains(char::is_whitespace))
         .map(str::to_string)
         .collect()
+}
+
+/// Reads `opencode debug agents`: a JSON array of agents, each with its `id`.
+/// `None` for anything else, so a changed answer refuses edits globally rather
+/// than naming no agent at all.
+fn parse_agents_json(out: &str) -> Option<Vec<String>> {
+    let agents: Vec<Value> = serde_json::from_str(out).ok()?;
+    Some(
+        agents
+            .iter()
+            .filter_map(|agent| agent.get("id").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 /// The agent a stance runs as: `plan` for Plan, `build` for the rest. Always
@@ -377,15 +446,16 @@ async fn open_session(
     model: Option<&Model>,
     effort: Option<Effort>,
     mode: ApprovalPolicy,
-) -> Result<(String, Option<Effort>)> {
-    client
+) -> Result<(String, Option<Effort>, bool)> {
+    let hello = client
         .request(
             "initialize",
             json!({
                 "protocolVersion": 1,
                 // No `fs` and no `terminal`: OpenCode reads and writes through
-                // its own tools.
-                "clientCapabilities": {},
+                // its own tools. `elicitation.form` is what lets OpenCode 2's
+                // `question` tool reach the reader; 1 ignores it.
+                "clientCapabilities": {"elicitation": {"form": {}}},
                 "clientInfo": {"name": "dray", "title": "Dray", "version": env!("CARGO_PKG_VERSION")},
             }),
         )
@@ -444,7 +514,8 @@ async fn open_session(
     if let Some(agent) = stance_agent(mode, current(&config, "mode")) {
         set_config(client, &id, "mode", agent).await?;
     }
-    Ok((id, effort))
+    let steers = hello.pointer("/_meta/steering/supported").and_then(Value::as_bool) == Some(true);
+    Ok((id, effort, steers))
 }
 
 /// The `currentValue` of one config option in a reply that lists them.
@@ -504,12 +575,7 @@ pub async fn set_effort(session: &OpenCodeSession, effort: Effort) -> Result<()>
 /// Opens a turn with one prompt. Sent with no waiter: the answer is the turn's
 /// end, and the read loop settles it on the id kept here.
 pub async fn start_turn(session: &OpenCodeSession, text: &str, images: &[PreparedImage]) -> Result<()> {
-    let mut prompt = vec![json!({"type": "text", "text": text})];
-    prompt.extend(
-        images
-            .iter()
-            .map(|image| json!({"type": "image", "mimeType": image.mime_type, "data": image.data})),
-    );
+    let prompt = prompt_blocks(text, images);
 
     // Held across the send: a refusal can answer before this returns, and the
     // reader takes this same lock.
@@ -519,6 +585,28 @@ pub async fn start_turn(session: &OpenCodeSession, text: &str, images: &[Prepare
         .request_detached("session/prompt", json!({"sessionId": session.id, "prompt": prompt}))?;
     *running = Some(id);
     Ok(())
+}
+
+fn prompt_blocks(text: &str, images: &[PreparedImage]) -> Vec<Value> {
+    let mut prompt = vec![json!({"type": "text", "text": text})];
+    prompt.extend(
+        images
+            .iter()
+            .map(|image| json!({"type": "image", "mimeType": image.mime_type, "data": image.data})),
+    );
+    prompt
+}
+
+/// Hands a prompt to the running turn through OpenCode 2's `_session/steering`,
+/// which it reads at the turn's next step. `false` where the turn had already
+/// ended — "promptRequired" — which leaves the prompt for the caller to open a
+/// turn with.
+pub async fn steer(session: &OpenCodeSession, text: &str, images: &[PreparedImage]) -> Result<bool> {
+    let answer = session
+        .client
+        .request("_session/steering", json!({"sessionId": session.id, "prompt": prompt_blocks(text, images)}))
+        .await?;
+    Ok(answer.get("outcome").and_then(Value::as_str) == Some("injected"))
 }
 
 /// Stops the running turn. OpenCode aborts the running tool and answers the
@@ -544,6 +632,9 @@ struct ReaderHandles {
     app: Sink,
 }
 
+/// How long a turn OpenCode woke on its own may go quiet before it is closed.
+const WAKE_QUIET: std::time::Duration = std::time::Duration::from_secs(10);
+
 async fn read_stdout(
     stdout: ChildStdout,
     handles: ReaderHandles,
@@ -561,7 +652,49 @@ async fn read_stdout(
     let titled = Arc::new(AtomicBool::new(false));
 
     loop {
-        let line = match lines.next_line().await {
+        // OpenCode 2 wakes the parent on its own when a background subagent
+        // reports after the turn, and that turn has no `session/prompt` whose
+        // answer would close it. Nothing on the wire ends it, so it is closed
+        // once it goes quiet between steps with no card waiting.
+        // ponytail: a quiet timer; a slow first token past it splits the
+        // wake-up into two turns. An end marker from OpenCode would replace it.
+        let promptless = match &transport {
+            Some(Transport::OpenCode(session)) => {
+                mapper.between_steps()
+                    && session.prompt_id.lock().expect("opencode prompt id poisoned").is_none()
+                    && handles.pending.lock().expect("pending permissions mutex poisoned").is_empty()
+            }
+            _ => false,
+        };
+        let next = if promptless {
+            match tokio::time::timeout(WAKE_QUIET, lines.next_line()).await {
+                Ok(next) => next,
+                Err(_) => {
+                    let done = parser::OpenCodeEvent::PromptDone(Box::new(parser::PromptResponse {
+                        stop_reason: "end_turn".into(),
+                        ..Default::default()
+                    }));
+                    if let Some(transport) = transport.as_ref() {
+                        let ingest = crate::session::Ingest {
+                            session_id: &handles.session_id,
+                            harness: OpenCode,
+                            session_cwd: &handles.session_cwd,
+                            status: &status,
+                            queued: &queued,
+                            flush_seq: &seq,
+                            flush_transport: transport,
+                        };
+                        for agent_event in mapper.map(done) {
+                            crate::session::ingest(&ingest, agent_event, &handles.app).await;
+                        }
+                    }
+                    continue;
+                }
+            }
+        } else {
+            lines.next_line().await
+        };
+        let line = match next {
             Ok(Some(line)) => line,
             Ok(None) => break,
             Err(err) => {
@@ -619,7 +752,10 @@ async fn read_stdout(
                                 record_failure(OpenCode, &handles.session_id, "unknown_subtype", &kind, &line).await;
                                 continue;
                             }
-                            update => parser::OpenCodeEvent::Update(update),
+                            update => match note.child {
+                                Some(child) => parser::OpenCodeEvent::ChildUpdate { child, update },
+                                None => parser::OpenCodeEvent::Update(update),
+                            },
                         }
                     }
                     Err(parser::ParseOutcome::Unknown) => {
@@ -804,6 +940,13 @@ async fn answer_request(
                 let _ = handles.client.respond(rpc_id, json!({"outcome": {"outcome": "cancelled"}}));
             }
         }
+        "elicitation/create" => {
+            if let Err(err) = raise_question(handles, mapper, rpc_id, &params) {
+                record_failure(OpenCode, &handles.session_id, "unsupported_request", &err.to_string(), line).await;
+                // `cancel` ends the form and the turn moves on.
+                let _ = handles.client.respond(rpc_id, json!({"action": "cancel"}));
+            }
+        }
         // OpenCode writes the file itself, then asks the client to write it
         // too — unadvertised, so an editor client can refresh its buffer.
         // Refused quietly: measured, the edit has already landed.
@@ -822,6 +965,12 @@ async fn answer_request(
 /// Holds a permission request and draws its card. Registered before it is
 /// emitted, so a button pressed the instant the card draws finds it waiting.
 fn raise_permission(handles: &ReaderHandles, mapper: &mapper::Mapper, rpc_id: i64, params: Value) -> Result<()> {
+    // OpenCode 2 tags a subagent's ask with the child it came from; the card
+    // names it, since the call it asks about is drawn nowhere else.
+    let child = params
+        .pointer("/toolCall/_meta/opencode~1child-session/title")
+        .and_then(Value::as_str)
+        .map(|title| format!("Subagent · {title}"));
     let request: parser::PermissionRequest = serde_json::from_value(params)?;
     let call = &request.tool_call;
     let choices: Vec<PermissionChoice> = request.options.clone();
@@ -846,7 +995,7 @@ fn raise_permission(handles: &ReaderHandles, mapper: &mapper::Mapper, rpc_id: i6
         display_name: None,
         // OpenCode's title is the command or the path, the card's subject.
         title: call.title.clone(),
-        description: None,
+        description: child,
         input,
         blocked_path: path,
         decision_reason: None,
@@ -855,6 +1004,31 @@ fn raise_permission(handles: &ReaderHandles, mapper: &mapper::Mapper, rpc_id: i6
         options,
     });
     // Emitted, never logged — only the child that asked can answer.
+    handles.app.emit("agent_event", &event)?;
+    Ok(())
+}
+
+/// Holds an OpenCode 2 question form and draws the question card. The pending
+/// entry's `input` is what [`questions::answer`] maps the answers back with.
+fn raise_question(handles: &ReaderHandles, mapper: &mapper::Mapper, rpc_id: i64, params: &Value) -> Result<()> {
+    let (questions, lookup) = questions::read(params).context("a form the question card cannot draw")?;
+    let tool_use_id = params.get("toolCallId").and_then(Value::as_str).unwrap_or_default().to_string();
+    let request_id = rpc_request_id();
+    handles.pending.lock().expect("pending permissions mutex poisoned").insert(
+        request_id.clone(),
+        PendingRequest {
+            tool_use_id: tool_use_id.clone(),
+            tool_name: "question".to_string(),
+            input: lookup,
+            options: HashMap::new(),
+            reply: Reply::Rpc(rpc_id),
+        },
+    );
+    let event = mapper.synthesize(AgentEventPayload::QuestionsAsked {
+        request_id,
+        tool_use_id,
+        questions,
+    });
     handles.app.emit("agent_event", &event)?;
     Ok(())
 }
@@ -889,6 +1063,32 @@ mod tests {
         assert_eq!(permission_rules(ApprovalPolicy::Auto)["edit"], "allow");
         assert_eq!(permission_rules(ApprovalPolicy::Auto)["bash"], "ask");
         assert_eq!(permission_rules(ApprovalPolicy::BypassPermissions)["bash"], "allow");
+    }
+
+    /// On OpenCode 2 a child's ask reaches Dray, so children ask under the
+    /// stance: Manual's per-agent edit refusals become asks, Plan keeps them.
+    /// The capture is a live 2.4.2 child asking for `ls -1`.
+    #[test]
+    fn opencode_2_children_ask_instead_of_being_refused() {
+        let agents = vec!["build".to_string(), "plan".to_string(), "general".to_string()];
+        let mut manual = stance_config("/r.md", ApprovalPolicy::Manual, Some(&agents));
+        let global = children_ask(ApprovalPolicy::Manual, Some(&agents), &mut manual);
+        assert_eq!(global["bash"], "ask");
+        assert!(global.get("edit").is_none());
+        assert_eq!(manual["agent"]["general"]["permission"]["edit"], "ask");
+
+        let mut plan = stance_config("/r.md", ApprovalPolicy::Plan, Some(&agents));
+        children_ask(ApprovalPolicy::Plan, Some(&agents), &mut plan);
+        assert_eq!(plan["agent"]["general"]["permission"]["edit"], "deny");
+        assert_eq!(children_ask(ApprovalPolicy::Plan, None, &mut json!({}))["edit"], "deny");
+
+        let line = include_str!("fixtures/child_permission_v2.jsonl")
+            .lines()
+            .find(|l| l.contains("session/request_permission"))
+            .unwrap();
+        let ask: Value = serde_json::from_str(&line[3..]).unwrap();
+        let title = ask.pointer("/params/toolCall/_meta/opencode~1child-session/title").and_then(Value::as_str);
+        assert_eq!(title, Some("List directory contents"));
     }
 
     /// What would ask is refused for every agent but the two Dray runs, which
@@ -973,6 +1173,17 @@ mod tests {
                    explore (subagent)\n  [\n]\nmdhelper (subagent)\n  [\n]\nscribe (all)\n  [\n]\n";
         assert_eq!(parse_agent_list(out), ["build", "explore", "mdhelper", "scribe"]);
         assert!(parse_agent_list("").is_empty());
+    }
+
+    /// `opencode debug agents` as 2.4.1 prints it, trimmed to the fields read.
+    /// Its help text, which 2 prints for `agent list`, is no list at all.
+    #[test]
+    fn opencode_2s_agent_list_names_every_agent() {
+        let out = r#"[{"id":"build","name":"build","mode":"primary","permissions":[]},
+                      {"id":"explore","name":"explore","mode":"subagent"},
+                      {"id":"reviewer","name":"reviewer","mode":"subagent"}]"#;
+        assert_eq!(parse_agents_json(out).unwrap(), ["build", "explore", "reviewer"]);
+        assert_eq!(parse_agents_json("DESCRIPTION\n  OpenCode command line interface\n"), None);
     }
 
     /// OpenCode's ask for a `.env` read carries `rawInput: {}`, so the card

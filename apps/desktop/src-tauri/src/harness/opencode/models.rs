@@ -1,10 +1,12 @@
 //! Which models OpenCode can run here, asked of OpenCode.
 //!
 //! Multi-provider, like pi: the list is whatever the reader's providers serve,
-//! so it comes from `opencode models --verbose` rather than a table. That
-//! prints each model as its `provider/model` id on a line of its own followed
-//! by a pretty-printed JSON object, which carries the name, the context limit,
-//! whether it takes images, and its `variants` — OpenCode's effort ladder.
+//! so it is asked rather than tabled. OpenCode 1 answers `opencode models
+//! --verbose`: each model as its `provider/model` id on a line of its own
+//! followed by a pretty-printed JSON object, which carries the name, the
+//! context limit, whether it takes images, and its `variants` — OpenCode's
+//! effort ladder. OpenCode 2 refuses `--verbose` (#1617) and answers the same
+//! facts as JSON from its background server, `opencode api GET /api/model`.
 
 use crate::harness::ProbeCache;
 use crate::models::{Effort, Model, ModelId};
@@ -51,11 +53,40 @@ pub fn forget() {
 }
 
 async fn probe() -> Result<Vec<Model>> {
+    if crate::binpath::opencode_v2().await {
+        return probe_v2().await;
+    }
+    Ok(parse_verbose(&opencode(&["models", "--verbose"]).await?))
+}
+
+/// OpenCode 2's list. Its server loads a folder's models after answering that
+/// folder's first ask, so an empty list is asked again for a few seconds
+/// before plain `opencode models`, which waits for the load but carries ids
+/// alone, stands in for it.
+async fn probe_v2() -> Result<Vec<Model>> {
+    for _ in 0..10 {
+        let models = parse_api(&opencode(&["api", "GET", "/api/model"]).await?);
+        if !models.is_empty() {
+            return Ok(models);
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    let ids = opencode(&["models"]).await?;
+    Ok(ids
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.contains('/'))
+        .map(|id| unlisted(&ModelId::new(id)))
+        .collect())
+}
+
+/// One `opencode` run's stdout, or why it failed.
+async fn opencode(args: &[&str]) -> Result<String> {
     let bin = crate::binpath::opencode().await;
     let output = tokio::time::timeout(
         PROBE_TIMEOUT,
-        tokio::process::Command::new(&bin)
-            .args(["models", "--verbose"])
+        crate::binpath::command(&bin)
+            .args(args)
             .env("PATH", crate::harness::agent_path(&bin))
             // Null, never a pipe: an OpenCode command with an open stdin and
             // no TTY can wait on it for good.
@@ -69,10 +100,52 @@ async fn probe() -> Result<Vec<Model>> {
 
     anyhow::ensure!(
         output.status.success(),
-        "opencode models failed: {}",
+        "opencode {} failed: {}",
+        args.join(" "),
         String::from_utf8_lossy(&output.stderr).trim()
     );
-    Ok(parse_verbose(&String::from_utf8_lossy(&output.stdout)))
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Reads `opencode api GET /api/model`: `{"data": [row, …]}`, each row naming
+/// its `providerID` and `id`, `capabilities.input` as a list of kinds and
+/// `variants` as a list of `{id}`.
+fn parse_api(out: &str) -> Vec<Model> {
+    let Ok(body) = serde_json::from_str::<Value>(out) else {
+        return Vec::new();
+    };
+    let Some(rows) = body.get("data").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    rows.iter()
+        .filter(|row| row.get("enabled").and_then(Value::as_bool) != Some(false))
+        .filter_map(|row| {
+            let provider = row.get("providerID").and_then(Value::as_str)?;
+            let model = row.get("id").and_then(Value::as_str)?;
+            let id = format!("{provider}/{model}");
+            let variants: Vec<&str> = row
+                .get("variants")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.get("id").and_then(Value::as_str))
+                .collect();
+            Some(Model {
+                id: ModelId::new(id.clone()),
+                label: row.get("name").and_then(Value::as_str).unwrap_or(model).to_string(),
+                efforts: ladder(|level| variants.contains(&level)),
+                default_effort: None,
+                arg: id,
+                provider: provider.to_string(),
+                accepts_images: row
+                    .pointer("/capabilities/input")
+                    .and_then(Value::as_array)
+                    .is_none_or(|kinds| kinds.iter().any(|k| k == "image")),
+                secondary: false,
+                supports_fast: false,
+            })
+        })
+        .collect()
 }
 
 /// Reads `opencode models --verbose`: an id line, then one JSON object, over
@@ -130,14 +203,16 @@ fn row_to_model(header: &str, row: &Value) -> Option<Model> {
 /// alone has (`none`, `minimal`); those are dropped rather than added to
 /// [`Effort`], which an older build must still be able to read.
 fn efforts(variants: Option<&Value>) -> Vec<Effort> {
-    const LADDER: [Effort; 6] = [Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh, Effort::Max, Effort::Ultra];
     let Some(variants) = variants.and_then(Value::as_object) else {
         return Vec::new();
     };
-    LADDER
-        .into_iter()
-        .filter(|level| variants.contains_key(level.as_arg()))
-        .collect()
+    ladder(|level| variants.contains_key(level))
+}
+
+/// Dray's levels that `has` names, in Dray's order.
+fn ladder(has: impl Fn(&str) -> bool) -> Vec<Effort> {
+    const LADDER: [Effort; 6] = [Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh, Effort::Max, Effort::Ultra];
+    LADDER.into_iter().filter(|level| has(level.as_arg())).collect()
 }
 
 /// A model nothing listed, carried as its own argument.
@@ -187,6 +262,37 @@ mod tests {
         assert_eq!(models[2].id.as_str(), "orcarouter/obsidian/Qwen3.8-27B");
         assert_eq!(models[2].provider, "orcarouter");
         assert!(models[2].efforts.is_empty());
+    }
+
+    #[test]
+    fn opencode_2s_listing_reads_into_rows() {
+        let models = parse_api(include_str!("fixtures/models_api.json"));
+        assert_eq!(models.len(), 3);
+
+        let sonnet = &models[0];
+        assert_eq!(sonnet.id.as_str(), "anthropic/claude-sonnet-5-5");
+        assert_eq!(sonnet.arg, "anthropic/claude-sonnet-5-5");
+        assert_eq!(sonnet.label, "Claude Sonnet 5.5");
+        assert_eq!(sonnet.provider, "anthropic");
+        assert!(sonnet.accepts_images);
+        assert_eq!(
+            sonnet.efforts,
+            [Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh, Effort::Max]
+        );
+
+        // `minimal` and `none` are OpenCode's alone.
+        assert!(!models[1].accepts_images);
+        assert_eq!(models[1].efforts.first(), Some(&Effort::Low));
+
+        // A model id holding a slash of its own stays whole after the provider.
+        assert_eq!(models[2].id.as_str(), "openrouter/upstage/solar-mini-4-5");
+        assert_eq!(models[2].provider, "openrouter");
+    }
+
+    #[test]
+    fn a_server_still_loading_answers_no_rows() {
+        assert!(parse_api(r#"{"location":{"directory":"/tmp"},"data":[]}"#).is_empty());
+        assert!(parse_api("HTTP 503").is_empty());
     }
 
     #[test]
