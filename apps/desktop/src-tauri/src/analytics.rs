@@ -8,10 +8,11 @@
 //! uses, and whether the build is failing under them in a way nothing else
 //! would ever tell us.
 //!
-//! **`DRAY_NO_ANALYTICS` is the only opt-out.** Settings has no switch, and a
-//! stored `analytics_enabled: false` from a build that had one is ignored. The
-//! install id is minted on first use by [`settings::ensure_install_id`] and
-//! never cleared. A uuid v4 rather than the v7 used for session ids elsewhere:
+//! **Two opt-outs, one answer** ([`enabled`]): Settings' switch, stored as
+//! `analytics_enabled`, and `DRAY_NO_ANALYTICS`, which wins. Both are read on
+//! every send, so the switch takes hold without a restart. The install id is
+//! minted on first use by [`settings::ensure_install_id`] and never cleared, so
+//! turning the switch back on is the same person resuming. A uuid v4 rather than the v7 used for session ids elsewhere:
 //! v7 embeds the moment it was minted, which for an identifier meant to say
 //! nothing is one more thing it says.
 //!
@@ -79,10 +80,43 @@ fn api_key() -> Option<&'static str> {
 /// is a task outliving the thing it was reporting about.
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Whether the environment has turned reporting off for this run — the only
-/// opt-out there is.
+/// Whether the environment has turned reporting off for this run, whatever
+/// the switch says.
 fn env_opt_out() -> bool {
     std::env::var_os("DRAY_NO_ANALYTICS").is_some()
+}
+
+/// Whether this run reports at all. Read from disk on every ask, since the
+/// app and its server are two processes sharing the one file.
+async fn enabled() -> bool {
+    !env_opt_out() && settings::read().await.analytics_enabled
+}
+
+/// What Settings' analytics switch draws: the effective state, not the stored
+/// one, so a run `DRAY_NO_ANALYTICS` turned off never shows a switch sitting on.
+#[derive(Debug, Clone, Copy, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyticsSetting {
+    pub enabled: bool,
+    /// `DRAY_NO_ANALYTICS` is set, so the switch cannot move.
+    pub locked: bool,
+}
+
+/// The switch's state, for Settings.
+pub async fn analytics_setting() -> AnalyticsSetting {
+    AnalyticsSetting {
+        enabled: enabled().await,
+        locked: env_opt_out(),
+    }
+}
+
+/// Turns reporting on or off, answering the state as it now stands.
+pub async fn set_analytics_enabled(on: bool) -> Result<AnalyticsSetting, String> {
+    settings::update(|s| s.analytics_enabled = on)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    Ok(analytics_setting().await)
 }
 
 /// What the webview needs to speak to PostHog for itself.
@@ -114,8 +148,8 @@ pub struct SurveyIdentity {
 /// The SDK on the other side exists for **surveys**, which are drawn by
 /// `posthog-js` and by nothing else — there is no way to render one from here.
 /// It captures no events of its own. `None` on exactly the grounds [`send`]
-/// refuses on — no key compiled in, or `DRAY_NO_ANALYTICS` — plus an install id
-/// that could not be persisted.
+/// refuses on — no key compiled in, or reporting turned off — plus an install
+/// id that could not be persisted.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn analytics_identity() -> Option<SurveyIdentity> {
     // Same order as `send`: no key compiled in is the ordinary case for a local
@@ -123,7 +157,7 @@ pub async fn analytics_identity() -> Option<SurveyIdentity> {
     // reading the settings file to find that out.
     let key = api_key()?;
 
-    if env_opt_out() {
+    if !enabled().await {
         return None;
     }
 
@@ -151,7 +185,7 @@ pub async fn analytics_identity() -> Option<SurveyIdentity> {
     })
 }
 
-/// Enqueues one event, or drops it under `DRAY_NO_ANALYTICS`.
+/// Enqueues one event, or drops it where reporting is off.
 ///
 /// Deliberately **not** `async` and takes no `AppHandle`: an event is
 /// fire-and-forget, and a call that had to be awaited would put a file read and
@@ -552,13 +586,13 @@ fn trim_source_path(file: &str) -> &str {
 async fn send(event: &'static str, daily_key: Option<String>, properties: Value) {
     let Some(key) = api_key() else {
         // A dev build has no key, so this is the only way to see what it would send.
-        if cfg!(debug_assertions) && !env_opt_out() {
+        if cfg!(debug_assertions) && enabled().await {
             eprintln!("[analytics] would send {event} {}", with_sign_in(event, properties).await);
         }
         return;
     };
 
-    if env_opt_out() {
+    if !enabled().await {
         return;
     }
 
