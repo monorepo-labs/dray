@@ -1,0 +1,192 @@
+{
+ "location": {
+  "directory": "/tmp/opencode-probe"
+ },
+ "data": [
+  {
+   "id": "hungerg-free",
+   "modelID": "hungerg-free",
+   "providerID": "opencode-go",
+   "type": "chat",
+   "name": "HungerG Free",
+   "package": "@opencode/ai/providers/openai-compatible",
+   "settings": {
+    "baseURL": "https://opencode.ai/inference/go/openai/v1",
+    "provider": "opencode-go"
+   },
+   "capabilities": {
+    "tools": true,
+    "input": [
+     "text",
+     "image",
+     "video"
+    ],
+    "output": [
+     "text"
+    ]
+   },
+   "variants": [],
+   "time": {
+    "released": 1795478400000
+   },
+   "cost": [
+    {
+     "input": 0,
+     "output": 0,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   ],
+   "status": "active",
+   "enabled": true,
+   "limit": {
+    "context": 1000000,
+    "input": 1000000,
+    "output": 65536
+   }
+  },
+  {
+   "id": "qwen4-max",
+   "modelID": "qwen4-max",
+   "providerID": "opencode-go",
+   "type": "chat",
+   "family": "qwen-max",
+   "name": "Qwen4 Max",
+   "package": "@opencode/ai/providers/anthropic",
+   "settings": {
+    "baseURL": "https://opencode.ai/inference/go/anthropic/v1"
+   },
+   "capabilities": {
+    "tools": true,
+    "input": [
+     "text",
+     "image",
+     "video"
+    ],
+    "output": [
+     "text"
+    ],
+    "temperature": true
+   },
+   "variants": [
+    {
+     "id": "none",
+     "settings": {
+      "thinking": {
+       "type": "disabled"
+      }
+     }
+    },
+    {
+     "id": "low",
+     "settings": {
+      "thinking": {
+       "type": "adaptive",
+       "display": "summarized"
+      },
+      "effort": "low"
+     }
+    },
+    {
+     "id": "high",
+     "settings": {
+      "thinking": {
+       "type": "adaptive",
+       "display": "summarized"
+      },
+      "effort": "high"
+     }
+    },
+    {
+     "id": "xhigh",
+     "settings": {
+      "thinking": {
+       "type": "adaptive",
+       "display": "summarized"
+      },
+      "effort": "xhigh"
+     }
+    }
+   ],
+   "time": {
+    "released": 1794787200000
+   },
+   "cost": [
+    {
+     "input": 1.5,
+     "output": 4.5,
+     "cache": {
+      "read": 0.075,
+      "write": 1.875
+     }
+    }
+   ],
+   "status": "active",
+   "enabled": true,
+   "limit": {
+    "context": 1000000,
+    "output": 262144
+   }
+  },
+  {
+   "id": "hy4-flash-free",
+   "modelID": "hy4-flash-free",
+   "providerID": "opencode-go",
+   "type": "chat",
+   "family": "hy-flash-free",
+   "name": "Hy4 flash Free",
+   "package": "@opencode/ai/providers/openai-compatible",
+   "settings": {
+    "baseURL": "https://opencode.ai/inference/go/openai/v1",
+    "provider": "opencode-go"
+   },
+   "capabilities": {
+    "tools": true,
+    "input": [
+     "text",
+     "image"
+    ],
+    "output": [
+     "text"
+    ],
+    "temperature": true
+   },
+   "variants": [
+    {
+     "id": "none",
+     "settings": {
+      "reasoningEffort": "none"
+     }
+    },
+    {
+     "id": "high",
+     "settings": {
+      "reasoningEffort": "high"
+     }
+    }
+   ],
+   "time": {
+    "released": 1794787200000
+   },
+   "cost": [
+    {
+     "input": 0,
+     "output": 0,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   ],
+   "status": "active",
+   "enabled": true,
+   "limit": {
+    "context": 1048576,
+    "input": 983040,
+    "output": 65536
+   }
+  }
+ ]
+}

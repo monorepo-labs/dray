@@ -1,0 +1,6 @@
+opencode-go/hungerg-free
+opencode-go/hy4-flash-free
+opencode-go/qwen4-max
+opencode/beam-free
+opencode/big-pickle
+opencode/deepseek-v4.1-flash-free

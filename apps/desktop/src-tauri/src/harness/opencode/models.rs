@@ -6,7 +6,8 @@
 //! followed by a pretty-printed JSON object, which carries the name, the
 //! context limit, whether it takes images, and its `variants` — OpenCode's
 //! effort ladder. OpenCode 2 refuses `--verbose` (#1617) and answers the same
-//! facts as JSON from its background server, `opencode api GET /api/model`.
+//! facts as JSON from its background server, `opencode api GET /api/model`,
+//! checked against the ids plain `opencode models` prints.
 
 use crate::harness::ProbeCache;
 use crate::models::{Effort, Model, ModelId};
@@ -59,25 +60,59 @@ async fn probe() -> Result<Vec<Model>> {
     Ok(parse_verbose(&opencode(&["models", "--verbose"]).await?))
 }
 
-/// OpenCode 2's list. Its server loads a folder's models after answering that
-/// folder's first ask, so an empty list is asked again for a few seconds
-/// before plain `opencode models`, which waits for the load but carries ids
-/// alone, stands in for it.
+/// OpenCode 2's list: every id `opencode models` prints, each with the facts
+/// `api GET /api/model` holds for it.
+///
+/// The server fills `/api/model` a provider at a time while it loads, so a
+/// cold one answers `[]`, then one provider's rows, then the rest. Taking the
+/// first non-empty answer kept whichever provider loaded first and dropped the
+/// others — Go's whole set on a reader's machine — until the picker read again.
+/// `opencode models` waits for the load before it lists, so its ids are the
+/// set to fill; an id the API never names is still drawn, bare.
 async fn probe_v2() -> Result<Vec<Model>> {
+    let ids = opencode(&["models"])
+        .await
+        .map(|out| parse_ids(&out))
+        .unwrap_or_else(|err| {
+            eprintln!("[opencode models] {err:#}");
+            Vec::new()
+        });
+    let mut rows = Vec::new();
     for _ in 0..10 {
-        let models = parse_api(&opencode(&["api", "GET", "/api/model"]).await?);
-        if !models.is_empty() {
-            return Ok(models);
+        match opencode(&["api", "GET", "/api/model"]).await {
+            Ok(out) => rows = parse_api(&out),
+            Err(err) if !ids.is_empty() => {
+                eprintln!("[opencode models] {err:#}");
+                break;
+            }
+            Err(err) => return Err(err),
+        }
+        if !rows.is_empty() && ids.iter().all(|id| rows.iter().any(|m| &m.id == id)) {
+            break;
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
-    let ids = opencode(&["models"]).await?;
-    Ok(ids
-        .lines()
+    Ok(merge(rows, &ids))
+}
+
+/// `opencode models`: one `provider/model` id a line.
+fn parse_ids(out: &str) -> Vec<ModelId> {
+    out.lines()
         .map(str::trim)
         .filter(|line| line.contains('/'))
-        .map(|id| unlisted(&ModelId::new(id)))
-        .collect())
+        .map(ModelId::new)
+        .collect()
+}
+
+/// The API's rows, then every listed id they miss.
+fn merge(mut rows: Vec<Model>, ids: &[ModelId]) -> Vec<Model> {
+    let missing: Vec<Model> = ids
+        .iter()
+        .filter(|id| !rows.iter().any(|m| &m.id == *id))
+        .map(unlisted)
+        .collect();
+    rows.extend(missing);
+    rows
 }
 
 /// One `opencode` run's stdout, or why it failed.
@@ -287,6 +322,56 @@ mod tests {
         // A model id holding a slash of its own stays whole after the provider.
         assert_eq!(models[2].id.as_str(), "openrouter/upstage/solar-mini-4-5");
         assert_eq!(models[2].provider, "openrouter");
+    }
+
+    /// The reader's bug: a server mid-load had served one provider's rows, and
+    /// the list stopped there. Every id `opencode models` prints is kept,
+    /// under its own provider.
+    #[test]
+    fn a_half_loaded_list_is_filled_from_opencode_models() {
+        let ids = parse_ids(include_str!("fixtures/models_v2.txt"));
+        let models = merge(parse_api(include_str!("fixtures/models_api_loading.json")), &ids);
+        let got: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        for id in &ids {
+            assert!(got.contains(&id.as_str()), "{id} missing from {got:?}");
+        }
+        assert_eq!(models.len(), ids.len());
+
+        // The API's rows keep its facts.
+        let qwen = models.iter().find(|m| m.id.as_str() == "opencode-go/qwen4-max").unwrap();
+        assert_eq!(qwen.label, "Qwen4 Max");
+        assert_eq!(qwen.provider, "opencode-go");
+        assert_eq!(qwen.efforts, [Effort::Low, Effort::High, Effort::Xhigh]);
+
+        // The provider that had not loaded yet is still drawn, bare.
+        let pickle = models.iter().find(|m| m.id.as_str() == "opencode/big-pickle").unwrap();
+        assert_eq!(pickle.provider, "opencode");
+        assert_eq!(pickle.label, "big-pickle");
+    }
+
+    #[test]
+    fn go_models_the_api_never_named_are_still_listed() {
+        let ids = parse_ids(include_str!("fixtures/models_v2.txt"));
+        let models = merge(Vec::new(), &ids);
+        let go: Vec<&str> = models
+            .iter()
+            .filter(|m| m.provider == "opencode-go")
+            .map(|m| m.arg.as_str())
+            .collect();
+        assert_eq!(go, ["opencode-go/hungerg-free", "opencode-go/hy4-flash-free", "opencode-go/qwen4-max"]);
+    }
+
+    /// Prints how many models each provider got from the `opencode` on this
+    /// machine. Run it straight after `opencode service restart` to read a cold
+    /// server. Ignored: the answer depends on whoever runs it.
+    #[tokio::test]
+    #[ignore]
+    async fn what_this_machine_lists() {
+        let mut counts = std::collections::BTreeMap::<String, usize>::new();
+        for model in list().await {
+            *counts.entry(model.provider).or_default() += 1;
+        }
+        println!("opencode models by provider: {counts:?}");
     }
 
     #[test]
