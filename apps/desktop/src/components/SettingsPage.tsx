@@ -76,10 +76,12 @@ import { SETTINGS_TABS as SETTINGS_TAB_IDS, type SettingsTab } from "@/lib/setti
 import { applyIsland, ISLAND_ENABLED, ISLAND_KEY, ISLAND_KEYS, type IslandKey } from "@/lib/island";
 import { captureCaps, captureFrom, decodeCapture, DEFAULT_CAPTURE, encodeCapture } from "@/lib/islandCapture";
 import { useWindowFocused } from "@/lib/focus";
-import { invoke } from "@/lib/transport";
+import { startSurveys } from "@/lib/surveys";
+import { invoke, LOCAL } from "@/lib/transport";
 import { hasLightMode, modeFor, type ThemeMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import type {
+  AnalyticsSetting,
   ExternalApp,
   Project,
   UpdateChannel,
@@ -90,6 +92,9 @@ import type {
 /// the next person with the same bug can find; a direct message is beside it for
 /// what an issue is too heavy for.
 const CONTACT_URL = "https://x.com/yogesharc";
+
+/// The privacy page's list of every analytics event, error reports included.
+const TRACKED_URL = "https://www.drayhq.com/docs/reference/privacy#what-is-sent";
 const REPO_URL = "https://github.com/monorepo-labs/dray";
 const ISSUES_URL = `${REPO_URL}/issues/new`;
 // The landing page's own link, so both ask through one door.
@@ -282,6 +287,7 @@ export default function SettingsPage({
                   View changelog
                 </Button>
               </SettingRow>
+              <AnalyticsRow />
             </Section>
             {/* The two blocks here with no label of their own, so they are the
                 ones that still want a heading over them. */}
@@ -732,6 +738,66 @@ function UpdatesRow({
       ) : (
         button
       )}
+    </SettingRow>
+  );
+}
+
+/// The analytics opt-out. This Mac's server owns the setting, since it and
+/// the app both read it before any webview exists.
+function AnalyticsRow() {
+  const id = useId();
+  /// `null` until the first read lands; the switch stays disabled rather than
+  /// guessing, since either guess is wrong for somebody.
+  const [setting, setSetting] = useState<AnalyticsSetting | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    invoke<AnalyticsSetting>("analytics_setting", {}, LOCAL)
+      .then((now) => live && setSetting(now))
+      .catch((e) => console.error("[analytics setting]", e));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  /// Drawn from the server's answer, not optimistically, so a failed write
+  /// leaves the switch where the truth is.
+  const toggle = (on: boolean) => {
+    invoke<AnalyticsSetting>("set_analytics_enabled", { on }, LOCAL)
+      .then((now) => {
+        setSetting(now);
+        void startSurveys();
+      })
+      .catch((e) => console.error("[analytics setting]", e));
+  };
+
+  return (
+    <SettingRow
+      id={id}
+      label="Share usage analytics"
+      description={
+        setting?.locked ? (
+          "Turned off by DRAY_NO_ANALYTICS."
+        ) : (
+          <>
+            Anonymous counts of what gets used. Never your prompts or code.{" "}
+            <button
+              type="button"
+              onClick={() => void openUrl(TRACKED_URL)}
+              className="cursor-pointer text-foreground underline-offset-4 hover:underline"
+            >
+              See what's tracked
+            </button>
+          </>
+        )
+      }
+    >
+      <Switch
+        id={id}
+        disabled={!setting || setting.locked}
+        checked={setting?.enabled ?? false}
+        onCheckedChange={toggle}
+      />
     </SettingRow>
   );
 }

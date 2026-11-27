@@ -473,14 +473,23 @@ trigger: string | null, preTokens: number | null, postTokens: number | null, dur
 export type AgentUpdate = { harness: Harness, label: string, current: string, latest: string, };
 
 /**
+ * What Settings' analytics switch draws: the effective state, not the stored
+ * one, so a run `DRAY_NO_ANALYTICS` turned off never shows a switch sitting on.
+ */
+export type AnalyticsSetting = { enabled: boolean, 
+/**
+ * `DRAY_NO_ANALYTICS` is set, so the switch cannot move.
+ */
+locked: boolean, };
+
+/**
  * What is on disk.
  */
 export type AppSettings = { 
 /**
- * The old in-app analytics switch, **read by nothing**: Settings offers no
- * opt-out any more, so a stored `false` is ignored and `DRAY_NO_ANALYTICS`
- * is the only way off. Kept so an older build sharing `~/.dray` still finds
- * the field it reads, and so a rewrite here carries its value through.
+ * Settings' "Share usage analytics" switch. Here because the server and
+ * `app_started` read it before any webview exists. A `false` stored
+ * before #658 took the switch away counts again.
  */
 analyticsEnabled: boolean, 
 /**

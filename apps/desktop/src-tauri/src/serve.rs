@@ -2216,6 +2216,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         move_project(path: String, delta: isize) => crate::projects::move_project(&path, delta).await;
         retag_space(from: String, to: Option<String>) => crate::projects::retag_space(&from, to).await;
         analytics_identity() => ok(crate::analytics::analytics_identity().await);
+        analytics_setting() => ok(crate::analytics::analytics_setting().await);
+        set_analytics_enabled(on: bool) => crate::analytics::set_analytics_enabled(on).await;
         track_feature(feature: String, target: Option<crate::BrowserTarget>) => ok(crate::track_feature(feature, target));
         track_render_error(code: Option<u32>, frames: Vec<String>) => ok(crate::track_render_error(code, frames));
         track_active_day() => ok(crate::analytics::track_active_day());
