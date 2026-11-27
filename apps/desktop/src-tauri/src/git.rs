@@ -1854,6 +1854,39 @@ pub async fn is_branch(cwd: &str, name: &str) -> bool {
     matches!(tokio::time::timeout(FETCH_LIMIT, ask).await, Ok(Ok(_)))
 }
 
+/// `<remote>/<branch>` — `origin/x` — fetched into its remote-tracking ref,
+/// answered `true` once that ref names a commit.
+///
+/// Fetched even when the ref is already here: a branch pushed from another
+/// machine moments ago is what a reviewer is pointed at, and a stale copy
+/// reviews work that is not the work asked about. A fetch that fails leaves
+/// the copy as last fetched, if any. `false` for anything not shaped like a
+/// remote's branch, without touching the network.
+pub async fn fetch_remote_branch(cwd: &str, name: &str) -> bool {
+    let remotes = git(cwd, &["remote"]).await.unwrap_or_default();
+    // A remote's name may itself hold a slash, so match every one as a prefix.
+    let Some((remote, branch)) = remotes
+        .lines()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .find_map(|r| name.strip_prefix(r)?.strip_prefix('/').map(|b| (r, b)))
+    else {
+        return false;
+    };
+    if branch.starts_with('-') || git(cwd, &["check-ref-format", "--branch", branch]).await.is_none() {
+        return false;
+    }
+    let refspec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
+    let args = ["fetch", "-q", "--no-tags", remote, &refspec];
+    let fetch = exec(cwd, &[("GIT_TERMINAL_PROMPT", "0")], &args);
+    match tokio::time::timeout(FETCH_LIMIT, fetch).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => eprintln!("[fetch] {name} in {cwd}: {e:#}"),
+        Err(_) => eprintln!("[fetch] {name} in {cwd} timed out"),
+    }
+    resolve_commit(cwd, &format!("refs/remotes/{remote}/{branch}")).await.is_some()
+}
+
 /// A worktree on a branch the reader picked, by the branch's own name, so the
 /// agent's commits land on it — the new-task composer's branch picker and
 /// `dray session new --base <branch>` alike:
@@ -3658,6 +3691,40 @@ mod tests {
         assert!(create_worktree_from_branch(at, "t-none", "no-such-branch").await.is_err());
         assert!(create_worktree_from_branch(at, "t-flag", "--force").await.is_err());
         assert!(!is_branch(at, "origin/main").await, "a remote-tracking ref is a ref to fork");
+
+        fs::remove_dir_all(&dir).await.ok();
+        fs::remove_dir_all(&bare).await.ok();
+    }
+
+    /// `origin/<branch>` for a branch pushed from another clone, never
+    /// fetched here: fetched, and moved up when it is here but stale.
+    #[tokio::test]
+    async fn a_remote_branch_never_fetched_is_fetched() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+        let bare = std::env::temp_dir().join(format!("dray-origin-{}", Uuid::now_v7()));
+        fs::create_dir_all(&bare).await.unwrap();
+        run(bare.to_str().unwrap(), &["init", "-q", "--bare", "."]).await.unwrap();
+        run(at, &["remote", "add", "origin", bare.to_str().unwrap()]).await.unwrap();
+        run(at, &["push", "-q", "origin", "HEAD:refs/heads/main"]).await.unwrap();
+
+        run(bare.to_str().unwrap(), &["branch", "pushed-elsewhere", "main"]).await.unwrap();
+        assert!(resolve_commit(at, "origin/pushed-elsewhere").await.is_none());
+        assert!(fetch_remote_branch(at, "origin/pushed-elsewhere").await);
+        assert!(resolve_commit(at, "origin/pushed-elsewhere").await.is_some());
+
+        let tree = git_line(at, &["rev-parse", "HEAD^{tree}"]).await.unwrap();
+        let head = git_line(at, &["rev-parse", "HEAD"]).await.unwrap();
+        let newer = git_line(at, &["commit-tree", &tree, "-p", &head, "-m", "newer"]).await.unwrap();
+        run(at, &["push", "-q", "origin", &format!("{newer}:refs/heads/pushed-elsewhere")]).await.unwrap();
+        run(at, &["update-ref", "refs/remotes/origin/pushed-elsewhere", &head]).await.unwrap();
+        assert!(fetch_remote_branch(at, "origin/pushed-elsewhere").await);
+        assert_eq!(resolve_commit(at, "origin/pushed-elsewhere").await, Some(newer));
+
+        assert!(!fetch_remote_branch(at, "origin/no-such-branch").await);
+        assert!(!fetch_remote_branch(at, "elsewhere/main").await, "no such remote");
+        assert!(!fetch_remote_branch(at, "origin/--force").await);
+        assert!(!fetch_remote_branch(at, "main").await);
 
         fs::remove_dir_all(&dir).await.ok();
         fs::remove_dir_all(&bare).await.ok();
