@@ -268,7 +268,7 @@ fun BotUserBubble(text: String, images: List<ImageRef> = emptyList(), reaction: 
     Column(Modifier.fillMaxWidth().padding(start = 48.dp), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         // A message of pictures alone has no bubble, so the badge sits on the first one's corner.
         if (images.isNotEmpty()) BoxWithConstraints {
-            Thumbnails(images, end = true)
+            Thumbnails(images, end = true, sent = true)
             val wide = minOf(maxWidth, 72.dp * images.size + 4.dp * (images.size - 1))
             if (text.isEmpty()) reaction?.let { Box(Modifier.align(Alignment.TopEnd).hung(x = -wide - 32.dp)) { ReactionBadge(it) } }
         }

@@ -56,7 +56,7 @@ export function mergeMissed(current: AgentEvent[], held: AgentEvent[], fresh: Ag
   for (const e of fresh) {
     // One that arrived live already retired its own provisional prompt.
     const retire = e.payload.type === "user_message" && !have.has(e.id);
-    events = [...(retire ? retireOldestProvisional(events) : events), e];
+    events = [...(retire ? retireOldestProvisional(events, e) : events), e];
   }
   return [...events, ...arrived];
 }
@@ -73,5 +73,5 @@ export function appendLive(events: AgentEvent[], event: AgentEvent): AgentEvent[
   if (event.payload.type === "api_retry" && events.at(-1)?.payload.type === "api_retry") {
     return [...events.slice(0, -1), event];
   }
-  return [...(event.payload.type === "user_message" ? retireOldestProvisional(events) : events), event];
+  return [...(event.payload.type === "user_message" ? retireOldestProvisional(events, event) : events), event];
 }

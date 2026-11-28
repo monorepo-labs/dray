@@ -33,7 +33,7 @@ import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
 import { drawnSegments, earlierTurns, lastTurns } from "@/lib/botTranscript";
 import { readerMessagesAfter } from "@/lib/mergeCard";
-import { isProvisional } from "@/lib/provisional";
+import { isProvisional, rowId } from "@/lib/provisional";
 import { dropOlder, loadOlder } from "@/lib/olderPages";
 import { readerReactions } from "@/lib/reactions";
 import { issueStarts, startsKey } from "@/lib/issueCard";
@@ -485,10 +485,10 @@ export default function Chat({
   }, [session?.sessionId, events.length, streamingKind, sent]);
 
   // The turns from the window's first event on. A cut is always a prompt, and
-  // a prompt always opens a turn keyed on its own id.
+  // a prompt always opens a turn keyed on its row id.
   const shownTurns = useMemo(() => {
     if (drawFrom === 0 || !session) return turns;
-    const first = session.events[drawFrom].id;
+    const first = rowId(session.events[drawFrom]);
     return turns.slice(Math.max(0, turns.findIndex((turn) => turn.key === first)));
   }, [turns, drawFrom, session?.events]);
 

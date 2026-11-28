@@ -2,6 +2,7 @@ import { invoke } from "@/lib/transport";
 
 import type { NoticeKind } from "@/hooks/useNotices";
 import { IS_LINUX } from "@/lib/platform";
+import { viewedElsewhere } from "@/lib/presence";
 import { playNotification } from "@/lib/sound";
 
 /// Post a desktop notification that clicks back into its session.
@@ -19,7 +20,15 @@ import { playNotification } from "@/lib/sound";
 /// On Linux the banner is posted silent and the window plays the app's own
 /// clip: a server's sound is whatever that desktop chose, often nothing, and
 /// the Mac's banner sound has no Linux twin to name.
+///
+/// Held while another client, such as the reader's phone, shows the chat
+/// (`viewedElsewhere`): the Mac on the desk should not chime about it.
 export function notifyOS(sessionId: string, kind: NoticeKind, title: string, body: string) {
+  void viewedElsewhere(sessionId).then((held) => held || postOS(sessionId, kind, title, body));
+}
+
+/// [`notifyOS`] for a caller that already asked `viewedElsewhere`.
+export function postOS(sessionId: string, kind: NoticeKind, title: string, body: string) {
   if (IS_LINUX) playNotification();
   void invoke("notify_session", { sessionId, kind, title, body }).catch(() => {});
 }

@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  carriedPreview,
+  carryImages,
+  carryPreviews,
   isProvisional,
   nextMainSeq,
   provisionalId,
   retireOldestProvisional,
+  rowId,
 } from "@/lib/provisional";
-import type { AgentEvent, Subagent } from "@/types/events";
+import type { AgentEvent, ImageRef, Subagent } from "@/types/events";
 
 /// Only the fields these rules read are filled — `seq`, `subagent` and the id.
 /// The payload has no bearing on any of them.
@@ -66,6 +70,13 @@ describe("retireOldestProvisional", () => {
     ]);
   });
 
+  it("hands the real prompt the provisional one's row", () => {
+    const real = event("real-row", 4);
+    retireOldestProvisional([event("provisional:row", 4)], real);
+    expect(rowId(real)).toBe("provisional:row");
+    expect(rowId(event("other", 5))).toBe("other");
+  });
+
   it("returns the list untouched where there is none", () => {
     const events = [event("real", 1)];
     expect(retireOldestProvisional(events)).toBe(events);
@@ -79,5 +90,39 @@ describe("provisionalId", () => {
     expect(a).not.toBe(b);
     expect(isProvisional(event(a, 0))).toBe(true);
     expect(isProvisional(event("real", 0))).toBe(false);
+  });
+});
+
+/// A prompt carrying these pictures.
+function withImages(id: string, images: ImageRef[]): AgentEvent {
+  const e = event(id, 1);
+  return { ...e, payload: { ...e.payload, images } } as AgentEvent;
+}
+
+const preview = (n: number): ImageRef => ({ path: null, url: `data:image/png;base64,${n}`, mimeType: "image/png" });
+const archived = (name: string): ImageRef => ({ path: `/home/u/.dray/attachments/s/${name}`, url: null, mimeType: "image/png" });
+
+describe("carryPreviews", () => {
+  it("gives each archived picture the preview drawn at the same place", () => {
+    const real = withImages("real", [archived("a.png"), archived("b.png")]);
+    retireOldestProvisional([withImages("provisional:x", [preview(1), preview(2)])], real);
+    expect(carriedPreview("/home/u/.dray/attachments/s/a.png")).toBe("data:image/png;base64,1");
+    expect(carriedPreview("/home/u/.dray/attachments/s/b.png")).toBe("data:image/png;base64,2");
+  });
+
+  it("carries nothing where the counts say the two are not one send", () => {
+    carryPreviews(withImages("provisional:x", [preview(3)]), withImages("real", [archived("c.png"), archived("d.png")]));
+    expect(carriedPreview("/home/u/.dray/attachments/s/c.png")).toBeUndefined();
+  });
+
+  it("carries only a `data:` preview, never another URL", () => {
+    carryImages([{ path: null, url: "https://example.com/e.png", mimeType: null }], withImages("real", [archived("e.png")]));
+    expect(carriedPreview("/home/u/.dray/attachments/s/e.png")).toBeUndefined();
+  });
+
+  it("keeps a dozen, dropping the oldest", () => {
+    for (let n = 0; n < 13; n++) carryImages([preview(n)], withImages("real", [archived(`cap${n}.png`)]));
+    expect(carriedPreview("/home/u/.dray/attachments/s/cap0.png")).toBeUndefined();
+    expect(carriedPreview("/home/u/.dray/attachments/s/cap12.png")).toBe("data:image/png;base64,12");
   });
 });

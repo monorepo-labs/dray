@@ -5,7 +5,8 @@ import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import type { CrewRow } from "@/lib/crew";
 import { isWindowFocused } from "@/lib/focus";
 import { islandOn } from "@/lib/island";
-import { notifyOS } from "@/lib/notify";
+import { postOS } from "@/lib/notify";
+import { viewedElsewhere } from "@/lib/presence";
 import {
   botCrews,
   cardRows,
@@ -193,7 +194,7 @@ export function useStalledTasks({
       if (first || fresh.length === 0 || isWindowFocused()) continue;
       const { chatId } = entry;
       const body = `${shown.length} ${shown.length === 1 ? "task" : "tasks"} waiting on you`;
-      const banner = () => notifyOS(chatId, "asking", bot.name, body);
+      const banner = () => postOS(chatId, "asking", bot.name, body);
       // The card's rows, which the island's pill grows into under the pointer
       // (`WaitingTask` in the island).
       const rows = shown.map((s) => ({
@@ -207,9 +208,13 @@ export function useStalledTasks({
         ready: s.kind === "ready",
         pr: s.pr ?? null,
       }));
-      void islandOn("done", chatId).then((on) =>
-        on ? invoke("island_done", { sessionId: chatId, note: body, rows }).catch(banner) : banner(),
-      );
+      // A bot chat the reader's phone shows is read there.
+      void viewedElsewhere(chatId).then(async (held) => {
+        if (held) return;
+        const on = await islandOn("done", chatId);
+        if (on) invoke("island_done", { sessionId: chatId, note: body, rows }).catch(banner);
+        else banner();
+      });
     }
   }, [bots, byBot]);
 

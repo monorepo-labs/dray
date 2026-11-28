@@ -1,6 +1,8 @@
 import { X } from "lucide-react";
+import { useState } from "react";
 
 import FileIcon from "@/components/FileIcon";
+import ImageLightbox from "@/components/chat/ImageLightbox";
 import { LOCAL, type ServerId } from "@/lib/transport";
 import { useUpload } from "@/lib/uploads";
 import { cn } from "@/lib/utils";
@@ -11,9 +13,9 @@ import type { Attachment } from "@/types/events";
 /// Two presentations for two things that travel differently. An image goes down
 /// the wire as pixels, so it is shown as pixels — a thumbnail is the only label
 /// a screenshot has. Anything else is handed to the model as a path, so it gets
-/// the row a path deserves: the type glyph and the name. Neither is a
-/// "file preview" — a tile says *this is attached*, and opening it is the job of
-/// the editor the user already has.
+/// the row a path deserves: the type glyph and the name. An image opens in the
+/// chat's own viewer, as it will once sent; a file does not, since opening it is
+/// the job of the editor the user already has.
 ///
 /// Both tiles are the same height so a mixed tray still reads as one row.
 export default function AttachmentTray({
@@ -21,6 +23,7 @@ export default function AttachmentTray({
   server,
   onRemove,
   modelTakesImages,
+  onViewerClosed,
 }: {
   attachments: Attachment[];
   /// Where the composer sends. A remote one is uploaded to as tiles are
@@ -30,6 +33,10 @@ export default function AttachmentTray({
   /// Whether the picked model can be handed an image at all. Some pi models
   /// report `input: ["text"]` and mean it.
   modelTakesImages: boolean;
+  /// Hands focus back to the text as the viewer closes. Left to Radix it
+  /// returns to the tile once the close has faded, a beat after the reader has
+  /// gone back to typing, and takes the next keys with it.
+  onViewerClosed: () => void;
 }) {
   // Said, not enforced. The image is still sent, because the harness's own
   // refusal names what was wrong where a guess made here could not — and Dray's
@@ -38,12 +45,22 @@ export default function AttachmentTray({
   // on that guess.
   const warn = !modelTakesImages && attachments.some((a) => a.preview);
 
+  // The viewer steps through the images alone, so its index counts those.
+  const images = attachments.flatMap((a) => (a.preview ? [{ src: a.preview, name: a.name }] : []));
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+
   return (
     // Spacing from the composer is the caller's, which is the only side that
     // knows what sits below it.
     <ul className="flex flex-wrap gap-2">
       {attachments.map((attachment) => (
-        <Tile key={attachment.path} attachment={attachment} server={server} onRemove={onRemove} />
+        <Tile
+          key={attachment.path}
+          attachment={attachment}
+          server={server}
+          onRemove={onRemove}
+          onOpen={() => setOpenIndex(images.findIndex((image) => image.src === attachment.preview))}
+        />
       ))}
       {server !== LOCAL &&
         attachments.map((a) => <UploadError key={a.path} attachment={a} server={server} />)}
@@ -56,6 +73,20 @@ export default function AttachmentTray({
           may refuse it.
         </li>
       )}
+
+      {/* A tile taken off while open can leave the index past the end. */}
+      <ImageLightbox
+        images={images}
+        index={openIndex !== null && openIndex < images.length ? openIndex : null}
+        onIndex={setOpenIndex}
+        onClose={() => {
+          setOpenIndex(null);
+          // A frame on, once the dialog has let go of its focus trap: taken in
+          // this tick, the trap pulls focus straight back.
+          requestAnimationFrame(onViewerClosed);
+        }}
+        onCloseAutoFocus={(e) => e.preventDefault()}
+      />
     </ul>
   );
 }
@@ -64,10 +95,12 @@ function Tile({
   attachment,
   server,
   onRemove,
+  onOpen,
 }: {
   attachment: Attachment;
   server: ServerId;
   onRemove: (path: string) => void;
+  onOpen: () => void;
 }) {
   const sending = useUpload(server, attachment.path);
   const pending = server !== LOCAL && !sending?.path && !sending?.error;
@@ -82,14 +115,16 @@ function Tile({
       className="group relative"
     >
       {attachment.preview ? (
-        <img
-          src={attachment.preview}
-          alt={attachment.name}
-          className={cn(
-            "size-14 rounded-lg border border-hairline-strong bg-card object-cover",
-            failed && "border-destructive",
-          )}
-        />
+        <button type="button" onClick={onOpen} aria-label={`Open ${attachment.name}`} className="block cursor-zoom-in">
+          <img
+            src={attachment.preview}
+            alt={attachment.name}
+            className={cn(
+              "size-14 rounded-lg border border-hairline-strong bg-card object-cover",
+              failed && "border-destructive",
+            )}
+          />
+        </button>
       ) : (
         <div
           className={cn(

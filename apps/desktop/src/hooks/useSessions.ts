@@ -32,16 +32,16 @@ import { dropHeld, dropHeldAsks, heldFor, holdEarlyEvent, isAsk } from "@/lib/ea
 import { flushHeld, heldFlagFor, holdFlags, noteFlagWrite, onLanded, overlayHeld, settleAfterSend, unholdFlags, useHeldFlags } from "@/lib/heldFlags";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
-import { setShownChats } from "@/lib/presence";
+import { setShownChats, viewedElsewhere } from "@/lib/presence";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { AGENT_LABELS, DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
 import { islandOn } from "@/lib/island";
-import { notifyOS } from "@/lib/notify";
+import { postOS } from "@/lib/notify";
 import { DEVICE, localNow } from "@/lib/platform";
 import { setCallReader, setOlderDropper, setOlderLoader } from "@/lib/olderPages";
 import { EMPTY_TASKS } from "@/lib/transcript";
 import { botStance, stanceFor, taskStance } from "@/lib/permission";
-import { isProvisional, nextMainSeq, provisionalId } from "@/lib/provisional";
+import { carryImages, isProvisional, takeOver, nextMainSeq, provisionalId } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
 import { appendLive, mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
 import { forgetTranscript, keepTranscript, takeTranscript } from "@/lib/keptTranscripts";
@@ -795,7 +795,14 @@ const selectedSession = selectedSessionId ? sessions.find((s) => s.sessionId ===
 const mergeEvents = (into: SessionSnapshot, from: AgentEvent[]): SessionSnapshot => {
   const seen = new Set(into.events.map((e) => e.id));
   // A snapshot is read back from the log after the prompt landed, so it always
-  // carries the real prompt and the provisional one is retired here.
+  // carries the real prompt and the provisional one is retired here. Its real
+  // prompt is the first one numbered at or past it, since the provisional was
+  // numbered past everything already held.
+  for (const p of from) {
+    if (!isProvisional(p)) continue;
+    const real = into.events.find((e) => e.payload.type === "user_message" && !e.subagent && e.seq >= p.seq);
+    if (real) takeOver(p, real);
+  }
   const missing = from.filter((e) => !seen.has(e.id) && !isProvisional(e));
   if (!missing.length) return into;
 
@@ -2585,6 +2592,8 @@ useEffect(() => {
               setQueuedBySession((prev) => {
                 const cur = prev[agentEvent.sessionId];
                 if (!cur?.length) return prev;
+                // Idempotent, so React invoking this twice carries nothing twice.
+                carryImages(imagesOf(cur[0].attachments), agentEvent);
                 return { ...prev, [agentEvent.sessionId]: cur.slice(1) };
               });
             }
@@ -3573,6 +3582,34 @@ const canAnnounce = (sessionId: string, kind?: NoticeKind): boolean => {
   return allowedInSpace(projectsRef.current, space, item?.projectPath ?? null);
 };
 
+/// The away half of `announce`: Dray Island where it takes this kind, the
+/// desktop banner otherwise.
+const raiseAway = (sessionId: string, kind: NoticeKind, label: string, title: string) => {
+  // A card is the island's to raise while it runs: its pill counts what waits
+  // and answers it in place, so a banner beside it says the same thing twice.
+  // Every machine: the island follows this app's connections.
+  if (kind === "asking") {
+    void islandOn("asks", sessionId).then((on) => on || postOS(sessionId, kind, label, title));
+    return;
+  }
+  // A finished turn is the island's done pill, which names the session and
+  // offers Open in app, so the banner would say it twice. A failed hand-off
+  // falls back to the banner rather than saying nothing.
+  if (kind === "completed") {
+    void islandOn("done", sessionId).then((on) =>
+      on
+        ? invoke("island_done", { sessionId }).catch(() => postOS(sessionId, kind, label, title))
+        : postOS(sessionId, kind, label, title),
+    );
+    return;
+  }
+  // Same order as the card: the verb first, because *what is wanted* is the
+  // one thing not on screen anywhere else. The session title follows as the
+  // body — a banner lands in a stack beside every other app's, so it has to
+  // say which session, where the card can lean on the sidebar rail for that.
+  postOS(sessionId, kind, label, title);
+};
+
 /// Tell the reader about something that happened in a session, on exactly one
 /// channel, chosen by where they are. Returns whether they were already looking
 /// at it — the one case nothing is raised, since the transcript itself is the
@@ -3601,29 +3638,9 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
   if (!canAnnounce(sessionId, kind)) return leftToParent(item, kind);
 
   if (!isWindowFocused()) {
-    // A card is the island's to raise while it runs: its pill counts what waits
-    // and answers it in place, so a banner beside it says the same thing twice.
-    // Every machine: the island follows this app's connections.
-    if (kind === "asking") {
-      void islandOn("asks", sessionId).then((on) => on || notifyOS(sessionId, kind, label, item?.title ?? ""));
-      return false;
-    }
-    // A finished turn is the island's done pill, which names the session and
-    // offers Open in app, so the banner would say it twice. A failed hand-off
-    // falls back to the banner rather than saying nothing.
-    if (kind === "completed") {
-      void islandOn("done", sessionId).then((on) =>
-        on
-          ? invoke("island_done", { sessionId }).catch(() => notifyOS(sessionId, kind, label, item?.title ?? ""))
-          : notifyOS(sessionId, kind, label, item?.title ?? ""),
-      );
-      return false;
-    }
-    // Same order as the card: the verb first, because *what is wanted* is the
-    // one thing not on screen anywhere else. The session title follows as the
-    // body — a banner lands in a stack beside every other app's, so it has to
-    // say which session, where the card can lean on the sidebar rail for that.
-    notifyOS(sessionId, kind, label, item?.title ?? "");
+    // A chat another client shows, the reader's phone say, is read there: the
+    // desk should not chime about it.
+    void viewedElsewhere(sessionId).then((held) => held || raiseAway(sessionId, kind, label, item?.title ?? ""));
     return false;
   }
   if (onScreen(sessionId)) return true;
@@ -3631,7 +3648,7 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
   // The sound is the signal; the card is a thing to click. Fired side by side
   // rather than one from the other, so dropping either leaves the other
   // working.
-  playNotification();
+  void viewedElsewhere(sessionId).then((held) => held || playNotification());
 
   // A crew strip draws its own card, so an ask raised for a session the crew is
   // showing is already in front of the reader and gets the sound alone — and

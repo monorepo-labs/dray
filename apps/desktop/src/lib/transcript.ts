@@ -1,3 +1,4 @@
+import { rowId } from "@/lib/provisional";
 import { subagentBrief, toolSummary } from "@/lib/tools";
 import type { AgentEvent, FileEdit, ImageRef, ToolResult, Usage } from "@/types/events";
 
@@ -676,7 +677,7 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
 
     if (event.payload.type === "user_message" && !inlineQueued) {
       if (current) close(current);
-      current = open(event, event.id);
+      current = open(event, rowId(event));
       continue;
     }
     // Draws nothing: the reader just picked the agent (#1414). Kept out of

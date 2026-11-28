@@ -166,6 +166,10 @@ fn fast_retired(resolved: &str) -> bool {
 struct Row {
     value: String,
     display_name: String,
+    /// "Opus 5.5 · Best for everyday, complex tasks" — the version's only home
+    /// where `display_name` is the bare family.
+    #[serde(default)]
+    description: Option<String>,
     #[serde(default)]
     supports_effort: bool,
     #[serde(default)]
@@ -180,6 +184,43 @@ struct Row {
     /// `false` reads as disabled.
     #[serde(default)]
     disabled: Value,
+}
+
+/// The row's name with its version.
+///
+/// A CLI that does not know the account's plan — `claude setup-token`'s
+/// `CLAUDE_CODE_OAUTH_TOKEN` in a home with no login cached — names the
+/// aliases by family alone ("Opus") and moves the version into `description`
+/// ("Opus 5.5 · Best for everyday, complex tasks"), so the picker read "Opus"
+/// on a server where the Mac read "Opus 5.5". Taken from the description where
+/// it leads with the name, else built from `resolvedModel`.
+fn label(row: &Row) -> String {
+    let name = row.display_name.trim();
+    if name.chars().any(|c| c.is_ascii_digit()) {
+        return name.to_string();
+    }
+    let head = row.description.as_deref().and_then(|d| d.split(" · ").next()).map(str::trim);
+    if let Some(head) = head.filter(|h| h.starts_with(name) && h.chars().any(|c| c.is_ascii_digit())) {
+        return head.to_string();
+    }
+    row.resolved_model
+        .as_deref()
+        .and_then(|resolved| versioned_name(name, resolved))
+        .unwrap_or_else(|| name.to_string())
+}
+
+/// "Opus 5.5" out of `claude-opus-5-5`, for a row named "Opus". A date stamp
+/// is no part of the name, and an id that is not this family's answers `None`.
+fn versioned_name(name: &str, resolved: &str) -> Option<String> {
+    let (family, version) = resolved.strip_prefix("claude-")?.split_once('-')?;
+    if !family.eq_ignore_ascii_case(name) {
+        return None;
+    }
+    let parts: Vec<&str> = version
+        .split('-')
+        .take_while(|p| !p.is_empty() && p.len() < 8 && p.bytes().all(|b| b.is_ascii_digit()))
+        .collect();
+    (!parts.is_empty()).then(|| format!("{name} {}", parts.join(".")))
 }
 
 /// The reply's `models` folded into the picker's list.
@@ -206,7 +247,7 @@ fn read(reply: &Value) -> Vec<Model> {
             };
             Model {
                 id: ModelId::new(&row.value),
-                label: row.display_name,
+                label: label(&row),
                 default_effort: efforts
                     .contains(&Effort::High)
                     .then_some(Effort::High)
@@ -274,6 +315,42 @@ mod tests {
         assert_eq!(fast, ["opus", "claude-opus-5"]);
         assert!(!claude_models().iter().any(|m| m.supports_fast && fast_retired(m.id.as_str())));
         assert_eq!(row("opus").label, "Opus 5.5");
+    }
+
+    /// v2.1.332 under a `setup-token` token in a fresh home names the aliases
+    /// by family alone and keeps the version in `description`. The picker
+    /// still says which generation it runs.
+    #[test]
+    fn a_token_logins_bare_names_keep_their_version() {
+        let reply: Value =
+            serde_json::from_str(include_str!("fixtures/initialize_models_token.json")).unwrap();
+        let labels: Vec<(String, String)> =
+            read(&reply).into_iter().map(|m| (m.id.to_string(), m.label)).collect();
+
+        assert_eq!(
+            labels,
+            [
+                ("fable".into(), "Fable 5.2".into()),
+                ("opus".into(), "Opus 5.5".into()),
+                ("sonnet".into(), "Sonnet 5.5".into()),
+                ("haiku".into(), "Haiku 5.5".into()),
+            ]
+        );
+    }
+
+    /// With no description to read, the version comes off `resolvedModel`; a
+    /// date stamp is dropped and another family's id is not borrowed.
+    #[test]
+    fn a_bare_name_reads_its_version_off_the_resolved_id() {
+        let reply = serde_json::json!({"models": [
+            {"value": "opus", "displayName": "Opus", "resolvedModel": "claude-opus-5-5"},
+            {"value": "haiku", "displayName": "Haiku", "resolvedModel": "claude-haiku-4-5-20251001"},
+            {"value": "sonnet", "displayName": "Sonnet", "resolvedModel": "claude-opus-5-5"},
+            {"value": "claude-opus-4-6", "displayName": "Opus 4.6", "description": "Opus 9 · wrong"},
+        ]});
+        let labels: Vec<String> = read(&reply).into_iter().map(|m| m.label).collect();
+
+        assert_eq!(labels, ["Opus 5.5", "Sonnet", "Haiku 4.5", "Opus 4.6"]);
     }
 
     /// An alias resolving to Opus 4.8 loses fast mode the way the pinned id

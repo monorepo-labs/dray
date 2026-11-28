@@ -7,9 +7,10 @@
 //! `Command::new("claude")` resolves under `pnpm tauri dev` and fails from the
 //! bundle, which is the same binary behaving differently by how it was started.
 //!
-//! Resolved once and reused: the login-shell probe below costs real time (a
-//! shell reading the user's whole rc chain). Only Dray's own installs and the
-//! `gh` recheck throw an answer away.
+//! A found path is reused for the life of the process: the login-shell probe
+//! below costs real time (a shell reading the user's whole rc chain). A miss is
+//! looked for again after a few seconds, since an agent installed while Dray
+//! runs is exactly the one the reader is about to pick.
 
 use crate::harness::Harness;
 use std::ffi::OsString;
@@ -18,25 +19,34 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{OnceLock, RwLock};
+use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
-/// One agent's resolved path. Not a `OnceCell`, so [`forget_agent`] can empty it
-/// once Dray has installed that agent itself. The answer sits behind a std lock
-/// that never waits on a resolve, so [`resolved_bin_dirs`] always sees it; the
-/// async mutex only keeps two resolves of one agent from running at once.
+/// One agent's resolved path. Not a `OnceCell`, so a miss can be looked for
+/// again: an agent installed while the server runs is the one the reader is
+/// about to pick (#745). The answer sits behind a std lock that never waits on
+/// a resolve, so [`resolved_bin_dirs`] always sees it; the async mutex only
+/// keeps two resolves of one agent from running at once.
 struct Slot {
-    path: RwLock<Option<PathBuf>>,
+    path: RwLock<Option<(PathBuf, Instant)>>,
     resolving: Mutex<()>,
 }
+
+/// How long a miss stands before the next ask looks again. A found path is
+/// kept for good; a miss ends in a login shell, so it is not redone per call.
+const MISS_RECHECK: Duration = Duration::from_secs(10);
 
 impl Slot {
     const fn new() -> Self {
         Slot { path: RwLock::new(None), resolving: Mutex::const_new(()) }
     }
 
+    /// The held answer, unless it is a miss old enough to look for again.
     fn get(&self) -> Option<PathBuf> {
-        self.path.read().unwrap().clone()
+        let held = self.path.read().unwrap();
+        let (path, at) = held.as_ref()?;
+        (path.is_absolute() || at.elapsed() < MISS_RECHECK).then(|| path.clone())
     }
 }
 
@@ -68,7 +78,8 @@ pub async fn claude() -> PathBuf {
     cached(&CLAUDE_PATH, or_bare("claude")).await
 }
 
-/// The slot's answer, or `resolve`'s, kept for the life of the process.
+/// The slot's answer, or `resolve`'s: a found path for the life of the
+/// process, a miss for [`MISS_RECHECK`].
 ///
 /// A caller arriving mid-resolve waits on it rather than starting its own:
 /// launch asks for every agent from several places at once, and a miss ends in
@@ -81,14 +92,19 @@ async fn cached(slot: &'static Slot, resolve: impl Future<Output = PathBuf>) -> 
     if let Some(hit) = slot.get() {
         return hit;
     }
+    // A miss looked for again: the install may have put its directory on
+    // `PATH` from an rc file, which only a fresh login shell reads.
+    if slot.path.read().unwrap().is_some() {
+        LOGIN_PATH_STALE.store(true, Ordering::Release);
+    }
     let found = resolve.await;
-    *slot.path.write().unwrap() = Some(found.clone());
+    *slot.path.write().unwrap() = Some((found.clone(), Instant::now()));
     found
 }
 
 /// Forgets where `harness` is, so the next ask resolves it again. Called after
-/// Dray installed it, or the miss cached before the install would stand until
-/// the server restarts.
+/// Dray installed or updated it, which should read as found at once rather
+/// than after [`MISS_RECHECK`].
 pub async fn forget_agent(harness: Harness) {
     let slot = match harness {
         Harness::ClaudeCode => &CLAUDE_PATH,
@@ -344,8 +360,8 @@ mod pi_resolution_tests {
 /// Whether the agent's CLI is installed and usable.
 ///
 /// Read off the resolver's own answer rather than probing again: each caches
-/// in its slot, absence included, so this costs nothing after the first
-/// call — which matters, since a failed resolution is the expensive one (it
+/// in its slot, so this costs nothing after the first call. A miss is held for
+/// [`MISS_RECHECK`] alone, since a failed resolution is the expensive one (it
 /// ends in a login shell reading the whole rc chain).
 ///
 /// **The test is `is_absolute`.** A successful resolution is always an absolute
@@ -355,8 +371,8 @@ mod pi_resolution_tests {
 /// falls through to the bare name exactly like an absent one — and "installed
 /// but cannot be driven" is the same answer to the reader as "not installed".
 ///
-/// A CLI the reader installs by hand while the app runs still reads as missing
-/// until restart; one Dray installs is forgotten by [`forget_agent`].
+/// A CLI the reader installs by hand is found on the first ask past
+/// [`MISS_RECHECK`]; one Dray installs is forgotten by [`forget_agent`] at once.
 pub async fn agent_available(harness: Harness) -> bool {
     harness.names_a_cli() && agent_installed(harness).await
 }
@@ -921,6 +937,27 @@ mod tests {
     #[tokio::test]
     async fn a_missing_binary_resolves_to_none() {
         assert!(resolve("dray-definitely-not-a-real-binary").await.is_none());
+    }
+
+    /// A miss is looked for again once [`MISS_RECHECK`] has passed, and a found
+    /// path is never looked for again (#745).
+    #[tokio::test]
+    async fn a_miss_is_looked_for_again_and_a_hit_is_kept() {
+        static SLOT: Slot = Slot::new();
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        let resolve = |answer: &'static str| {
+            asked.fetch_add(1, Ordering::SeqCst);
+            async move { PathBuf::from(answer) }
+        };
+
+        assert_eq!(cached(&SLOT, resolve("pi")).await, PathBuf::from("pi"));
+        assert_eq!(cached(&SLOT, resolve("/bin/pi")).await, PathBuf::from("pi"), "a fresh miss stands");
+
+        SLOT.path.write().unwrap().as_mut().unwrap().1 = Instant::now() - MISS_RECHECK;
+        assert_eq!(cached(&SLOT, resolve("/bin/pi")).await, PathBuf::from("/bin/pi"));
+
+        SLOT.path.write().unwrap().as_mut().unwrap().1 = Instant::now() - MISS_RECHECK * 100;
+        assert_eq!(cached(&SLOT, resolve("pi")).await, PathBuf::from("/bin/pi"), "a hit is kept");
     }
 
     /// The marker is what separates the `PATH` from anything an rc file

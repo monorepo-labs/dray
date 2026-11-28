@@ -4,6 +4,7 @@ import { useState } from "react";
 import ImageLightbox from "@/components/chat/ImageLightbox";
 import { basename } from "@/lib/format";
 import { useSessionPath } from "@/hooks/useChatSession";
+import { carriedPreview } from "@/lib/provisional";
 import { cn } from "@/lib/utils";
 import type { ImageRef } from "@/types/events";
 
@@ -39,7 +40,9 @@ type Variant = "sent" | "returned";
 /// `~/.dray/attachments`, so a screenshot taken in `/tmp` and swept away still
 /// draws — and falls back to the `url` an unarchived one carries. One that
 /// resolves to neither is dropped here; a caller that can say something useful
-/// about a missing picture says it itself.
+/// about a missing picture says it itself. A picture just sent draws from the
+/// bytes the composer held instead, while those are still kept — see
+/// `carryPreviews`.
 export default function ImageRow({
   images,
   variant = "returned",
@@ -52,11 +55,15 @@ export default function ImageRow({
   // same list in the same order — an index that means one picture in the row and
   // another in the lightbox is the bug this shape rules out.
   const viewable = images
-    .map((image) => ({
-      src: image.path ? fileSrc(onServer(image.path)) : image.url,
-      name: image.path ? basename(image.path) : "image",
-    }))
-    .filter((image): image is { src: string; name: string } => Boolean(image.src));
+    .map((image) => {
+      const held = image.path ? carriedPreview(image.path) : undefined;
+      return {
+        src: held ?? (image.path ? fileSrc(onServer(image.path)) : image.url),
+        name: image.path ? basename(image.path) : "image",
+        held: Boolean(held),
+      };
+    })
+    .filter((image): image is { src: string; name: string; held: boolean } => Boolean(image.src));
 
   // `null` is closed. The index is the viewer's whole state, so opening at a
   // given picture and stepping to the next are the same operation.
@@ -95,19 +102,23 @@ export default function ImageRow({
                 full resolution — 10–20MB each as a bitmap, kept by WebKit's
                 image cache until memory pressure — for a row drawn 320px tall.
                 Switching between two screenshot-heavy sessions was measured at
-                ~800MB in 90s; only what nears the viewport should decode. */}
+                ~800MB in 90s; only what nears the viewport should decode.
+                A picture just sent is the exception: it is on screen, already
+                decoded once, and either deferral blanked it for a few frames
+                as its row remounted. */}
             <img
               src={image.src}
               alt=""
-              loading="lazy"
-              decoding="async"
+              loading={image.held ? "eager" : "lazy"}
+              decoding={image.held ? "sync" : "async"}
               className={cn(
                 "rounded-md transition-opacity hover:opacity-90",
                 sent
                   // Square, so a row of mixed aspect ratios is a grid rather
                   // than a ragged strip. `object-cover` crops to hold that; the
                   // whole picture is one click away and that view contains it.
-                  ? "sent-image size-20 object-cover"
+                  // The hairline keeps a white screenshot off the white page.
+                  ? "sent-image size-20 border-[0.5px] border-border object-cover"
                   // Capped on both axes and cropped on neither: with both
                   // dimensions left `auto`, the caps scale the picture rather
                   // than trim it, so a wide screenshot and a tall one each land

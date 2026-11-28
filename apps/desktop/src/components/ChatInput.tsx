@@ -1073,6 +1073,7 @@ export default function ChatInput({
                     forget(server, [path]);
                   }}
                   modelTakesImages={modelTakesImages}
+                  onViewerClosed={() => editorRef.current?.focus()}
                 />
               </div>
             )}
