@@ -18,7 +18,6 @@ import type { ServerId } from "@/lib/transport";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { onCloud, useCloud } from "@/lib/cloud";
 import { lockedMidTurn } from "@/lib/liveControls";
-import { botPicksStance } from "@/lib/permission";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type {
   ApprovalPolicy,
@@ -253,9 +252,9 @@ export default function ComposerToolbar({
       )}
 
       {/* Last of the pickers: it is the one control here most sessions set once
-          and never touch, so it sits furthest from where the eye lands. */}
-      {/* A bot chat runs on Auto, so it offers no stance unless its agent has none. */}
-      {offersPermissionModes(harness) && (!(bot || agentSwitch) || botPicksStance(harness)) && (
+          and never touch, so it sits furthest from where the eye lands. A bot
+          chat picks its stance here too, exactly as a thread does. */}
+      {offersPermissionModes(harness) && (
         <PermissionSelector
           harness={harness}
           value={permissionMode}

@@ -40,7 +40,7 @@ import { postOS } from "@/lib/notify";
 import { DEVICE, localNow } from "@/lib/platform";
 import { setCallReader, setOlderDropper, setOlderLoader } from "@/lib/olderPages";
 import { EMPTY_TASKS } from "@/lib/transcript";
-import { botStance, stanceFor, taskStance } from "@/lib/permission";
+import { stanceFor, taskStance } from "@/lib/permission";
 import { carryImages, isProvisional, takeOver, nextMainSeq, provisionalId } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
 import { appendLive, mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
@@ -1000,9 +1000,7 @@ const handleSendMsg = async (
   // A bot's folder is no project, and its chat runs in the folder itself. A
   // cloud task always gets a worktree, whatever the saved toggle says.
   const worktree = (useWorktree || placed !== null) && !isBotPath(cwd);
-  const stance = isBotPath(cwd)
-    ? botStance(harness, permissionMode)
-    : (isNewSession ? stanceFor : taskStance)(harness, permissionMode);
+  const stance = (isNewSession ? stanceFor : taskStance)(harness, permissionMode);
   if (!sessionId) {
     sessionId = crypto.randomUUID();
     // Before the selection moves, so the composer reads this server's models
@@ -3897,6 +3895,30 @@ followModelPickRef.current = (item: SessionIndexItem) => {
 useEffect(() => {
   const listenerPromise = listen<SessionIndexItem>("session_model_changed", (event) => {
     followModelPickRef.current(event.payload);
+  });
+  return () => {
+    listenerPromise.then((unlisten) => unlisten());
+  };
+}, []);
+
+// An Edit bot stance change records the pick on the chat's index entry. Sync
+// the composer's own pick to it, or that chat's next send carries the old
+// stance back and quietly undoes the edit. Its own event for the same reason
+// `session_model_changed` has one: a `session_changed` row can lag a send.
+const followPermissionRef = useRef((_: SessionIndexItem) => {});
+followPermissionRef.current = (item: SessionIndexItem) => {
+  const pick = unsentPicks.current.get(item.sessionId);
+  if (pick?.permissionMode !== undefined) {
+    const { permissionMode: _permissionMode, ...rest } = pick;
+    unsentPicks.current.set(item.sessionId, rest);
+  }
+  if (item.sessionId === selectedSessionIdRef.current) {
+    setPermissionModeState(item.permissionMode);
+  }
+};
+useEffect(() => {
+  const listenerPromise = listen<SessionIndexItem>("bot_permission_changed", (event) => {
+    followPermissionRef.current(event.payload);
   });
   return () => {
     listenerPromise.then((unlisten) => unlisten());

@@ -1605,6 +1605,19 @@ pub async fn set_session_model(
     .await
 }
 
+/// Records a stance picked outside the composer — Edit bot — for the next send
+/// to carry out, leaving every other field as it was.
+pub async fn set_session_stance(
+    session_id: &str,
+    permission_mode: ApprovalPolicy,
+) -> Result<Option<SessionIndexItem>> {
+    update_item(session_id, |item| {
+        item.permission_mode = permission_mode;
+        item.clone()
+    })
+    .await
+}
+
 /// Records a model and effort picked from outside the composer — `dray session
 /// model` — for the session's next send to carry out, as a picker's pick is.
 pub async fn set_session_pick(
