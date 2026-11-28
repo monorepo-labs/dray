@@ -1128,6 +1128,7 @@ pub enum Response {
         base_ref: Option<String>,
         /// Said to a bot's task starting in a project where another bot has
         /// open tasks: who, and which, so the bot checks before it overlaps.
+        /// Also a `permission_mode` the caller's own stance lowered.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         warning: Option<String>,
     },
@@ -1140,7 +1141,13 @@ pub enum Response {
     },
     /// A draft written, or one taken off the list — the answer to
     /// `CreateDraft` and `RemoveDraft` alike.
-    Draft { draft: DraftSummary },
+    Draft {
+        draft: DraftSummary,
+        /// A `permission_mode` the caller's own stance lowered, said so the
+        /// agent does not believe the draft runs on what it asked for.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        warning: Option<String>,
+    },
     Drafts { drafts: Vec<DraftSummary> },
     /// Every issue the session carries *after* the change, so the caller sees
     /// the result rather than a diff it has to apply to what it believed.

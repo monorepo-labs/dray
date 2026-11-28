@@ -90,9 +90,12 @@ pub fn run(command: DraftCommand) -> Result<(), String> {
                 permission_mode: args.permission_mode,
             });
             match send(request)? {
-                Response::Draft { draft } => {
+                Response::Draft { draft, warning } => {
                     println!("{}", draft.id);
                     eprintln!("Saved a draft. It shows in the user's sidebar until started.");
+                    if let Some(warning) = warning {
+                        eprintln!("{warning}");
+                    }
                     Ok(())
                 }
                 Response::Error { message } => Err(message),
@@ -118,7 +121,7 @@ pub fn run(command: DraftCommand) -> Result<(), String> {
             }
         }
         DraftCommand::Rm(args) => match send(Request::RemoveDraft(DraftId { id: args.id }))? {
-            Response::Draft { draft } => {
+            Response::Draft { draft, .. } => {
                 eprintln!("Removed \"{}\".", first_line(&draft.prompt));
                 Ok(())
             }
