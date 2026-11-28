@@ -127,8 +127,9 @@ export default function AttachmentList({ logs }: { logs: HeldLog[] }) {
         )}
       </div>
 
-      {/* Inset like the routine cards below, each row holding its thumbnail
-          the same 4px from every edge, its corner that far from the thumb's. */}
+      {/* Each row holds its thumbnail 4px from every edge, and its corner is
+          the thumb's 4px plus that inset, so the two curves run parallel.
+          Pixels, not the radius scale, which would break that sum. */}
       <div className="flex flex-col gap-0.5 px-2 pb-2">
         {visible.length === 0 && (
           // With older history unread, "none" would be a claim about the whole
@@ -143,9 +144,9 @@ export default function AttachmentList({ logs }: { logs: HeldLog[] }) {
             type="button"
             onClick={() => setOpenSrc(item.src)}
             aria-label={item.video ? `Play ${item.name}` : `Open ${item.name}`}
-            className="flex cursor-default items-center gap-2 rounded-lg p-1 text-left transition-colors hover:bg-sidebar-accent/50"
+            className="flex cursor-default items-center gap-2 rounded-[8px] p-1 text-left transition-colors hover:bg-sidebar-accent/50"
           >
-            <Thumb item={item} small className="size-6 shrink-0 overflow-hidden rounded ring-[0.5px] ring-border" />
+            <Thumb item={item} small className="size-6 shrink-0 overflow-hidden rounded-[4px] ring-[0.5px] ring-border" />
             <span className="min-w-0 flex-1 truncate text-ui text-sidebar-foreground">{item.name}</span>
             <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
               {/* Only the reader's own are marked: most are the agent's, and a tag on every row says nothing. */}
@@ -158,10 +159,10 @@ export default function AttachmentList({ logs }: { logs: HeldLog[] }) {
             type="button"
             onClick={() => void loadMore()}
             disabled={loading}
-            className="flex cursor-default items-center gap-2 rounded-lg p-1 text-left text-ui text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:hover:bg-transparent"
+            className="flex cursor-default items-center gap-2 rounded-[8px] p-1 text-left text-ui text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:hover:bg-transparent"
           >
             {/* A tile where a row's thumbnail sits, so its words line up with the names above. */}
-            <span className="flex size-6 shrink-0 items-center justify-center rounded ring-[0.5px] ring-border dark:bg-card">
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-[4px] ring-[0.5px] ring-border dark:bg-card">
               {loading ? <Spinner className="size-3.5" /> : <Plus className="size-3.5" />}
             </span>
             {failed ? "Couldn't load more. Try again" : "Load more"}
