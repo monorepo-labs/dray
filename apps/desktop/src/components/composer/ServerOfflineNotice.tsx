@@ -2,13 +2,15 @@ import { SignalSlashIcon } from "@heroicons/react/16/solid";
 
 import Orb from "@/components/Orb";
 import { Button } from "@/components/ui/button";
-import { offlineReason } from "@/lib/servers";
+import { useNetworkOffline } from "@/lib/network";
+import { offlineReason, offlineSubject } from "@/lib/servers";
 import { invoke, LOCAL } from "@/lib/transport";
 import type { ServerInfo } from "@/types/events";
 
 /// The open session's server is not connected. Rust reconnects on its own with
 /// backoff, so this says that much and offers Try again, which skips the wait.
 export default function ServerOfflineNotice({ server }: { server: ServerInfo }) {
+  useNetworkOffline();
   const connecting = server.on && server.status === "connecting";
   const reason = offlineReason(server);
 
@@ -23,7 +25,7 @@ export default function ServerOfflineNotice({ server }: { server: ServerInfo }) 
         )}
       </span>
       <p className="min-w-0 flex-1 truncate text-ui text-foreground">
-        {server.name} is offline
+        {offlineSubject(server)}
         {reason && <span className="text-muted-foreground"> · {reason}</span>}
       </p>
       {!connecting && (
