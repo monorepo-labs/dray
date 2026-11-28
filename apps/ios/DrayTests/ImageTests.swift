@@ -35,4 +35,12 @@ final class ImageTests: XCTestCase {
         // Inside a sentence it stays prose.
         guard case .prose? = markdownBlocks("see ![a](b.png) here").first else { return XCTFail("not prose") }
     }
+
+    /// A reply's viewer pages in the order `MarkdownText` draws: image lines, then named paths, once each.
+    func testMessageShotsOrder() {
+        let text = "Saved /tmp/c.png and /tmp/d.png\n\n![one](/tmp/a.png)\n\nthen\n\n![two](https://x.test/b.png)\n\n![again](/tmp/a.png)"
+        XCTAssertEqual(messageShots(text).map { $0.ref.path ?? $0.ref.url }, ["/tmp/a.png", "https://x.test/b.png", "/tmp/c.png", "/tmp/d.png"])
+        XCTAssertEqual(messageShots(text).first?.target, "one")
+        XCTAssertTrue(messageShots("no pictures").isEmpty)
+    }
 }

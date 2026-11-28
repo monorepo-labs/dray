@@ -137,34 +137,40 @@ extension Turn {
                 call.images.map { Shot(ref: $0, verb: toolLabel(call.name, pending: false), target: call.summary) }
             }
         }
-        func shown(_ text: String) -> [Shot] {
-            let images: [Shot] = markdownBlocks(text).compactMap {
-                guard case .image(let alt, let url) = $0 else { return nil }
-                let ref = ImageRef(path: nil, url: url, mimeType: nil)
-                return Shot(ref: ref, verb: "Image", target: alt.isEmpty ? fileName(ref) : alt)
-            }
-            // `MarkdownText` draws these after the blocks, so they page in that order too.
-            let named = imagePaths(in: text).map { path in
-                let ref = ImageRef(path: path, url: nil, mimeType: nil)
-                return Shot(ref: ref, verb: "Image", target: fileName(ref))
-            }
-            return images + named
-        }
         var out = attached(prompt?.images ?? [])
         for item in work {
             switch item {
             case .tool(let call): out += calls([call])
             case .group(_, _, let c, _, _): out += calls(c)
             case .prompt(_, _, _, let images): out += attached(images)
-            case .text(_, let text): out += shown(text)
+            case .text(_, let text): out += messageShots(text)
             case .failure: break
             }
         }
-        if finalLifted, let finalText { out += shown(finalText) }
-        // One page per picture: a tap finds it by ref, so a repeat would open on the first.
-        var seen = Set<ImageRef>()
-        return out.filter { seen.insert($0.ref).inserted }
+        if finalLifted, let finalText { out += messageShots(finalText) }
+        return unique(out)
     }
+}
+
+/// The pictures one message draws, in its order: what a bot reply's viewer pages through.
+func messageShots(_ text: String) -> [Shot] {
+    let images: [Shot] = markdownBlocks(text).compactMap {
+        guard case .image(let alt, let url) = $0 else { return nil }
+        let ref = ImageRef(path: nil, url: url, mimeType: nil)
+        return Shot(ref: ref, verb: "Image", target: alt.isEmpty ? fileName(ref) : alt)
+    }
+    // `MarkdownText` draws these after the blocks, so they page in that order too.
+    let named = imagePaths(in: text).map { path in
+        let ref = ImageRef(path: path, url: nil, mimeType: nil)
+        return Shot(ref: ref, verb: "Image", target: fileName(ref))
+    }
+    return unique(images + named)
+}
+
+/// One page per picture: a tap finds it by ref, so a repeat would open on the first.
+private func unique(_ shots: [Shot]) -> [Shot] {
+    var seen = Set<ImageRef>()
+    return shots.filter { seen.insert($0.ref).inserted }
 }
 
 private func fileName(_ ref: ImageRef) -> String? {
