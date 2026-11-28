@@ -560,6 +560,13 @@ struct ToolResult: Decodable {
     }
 }
 
+/// Who relayed a `user_message`: the fields the transcripts read, each optional.
+private struct Sender: Decodable {
+    let title: String?
+    let sessionId: String?
+    let botId: String?
+}
+
 enum Payload: Decodable {
     case turnCompleted(failed: Bool, finalText: String?)
     /// `queued` is a prompt typed into a running turn, which answers it inside that turn.
@@ -611,17 +618,17 @@ enum Payload: Decodable {
                     failed: try c.decode(String.self, forKey: "status") == "error" && !stop.hasPrefix("aborted"),
                     finalText: try c.decodeIfPresent(String.self, forKey: "finalText"))
             case "user_message":
-                // Optional values, and never a throw: a relay from this
-                // machine carries `"machine": null`, which `[String: String]`
-                // refuses — and a throw here costs the prompt, not its label.
-                let from = (try? c.decodeIfPresent([String: String?].self, forKey: "from")) ?? nil
+                // Only the fields read, and never a throw: a sender also carries
+                // Bools and a number (`routine`, `ask`, `hop`), which a string map
+                // refused whole, drawing a routine's report as the reader's own.
+                let from = try? c.decodeIfPresent(Sender.self, forKey: "from")
                 self = .userMessage(
                     text: try c.decode(String.self, forKey: "text"),
-                    fromTitle: from?["title"] ?? nil, fromId: from?["sessionId"] ?? nil,
+                    fromTitle: from?.title, fromId: from?.sessionId,
                     queued: (try? c.decode(Bool.self, forKey: "queued")) ?? false,
                     images: decodeImages(c),
                     kickoff: (try? c.decode(Bool.self, forKey: "kickoff")) ?? false,
-                    fromBot: from?["botId"] ?? nil)
+                    fromBot: from?.botId)
             case "assistant_text":
                 self = .assistantText(try c.decode(String.self, forKey: "text"))
             case "tool_call_started":
