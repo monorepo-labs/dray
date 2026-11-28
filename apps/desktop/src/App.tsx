@@ -122,7 +122,7 @@ import {
 } from "@/lib/groups";
 import ComposerToolbar from "@/components/composer/ComposerToolbar";
 import DictateControl from "@/components/composer/DictateControl";
-import { DEVICE, HAS_DICTATION, IS_MAC, localNow } from "@/lib/platform";
+import { DEVICE, HAS_DICTATION, IS_MAC, IS_WINDOWS, localNow } from "@/lib/platform";
 import AppShell from "@/components/layout/AppShell";
 import WindowControls from "@/components/layout/WindowControls";
 import { offersFast } from "@/lib/fastMode";
@@ -709,15 +709,16 @@ function App() {
   } = useUpdater();
   const { request: installUpdate, dialog: serverUpdateDialog } = useInstallWithServers(updateChannel, installAppUpdate);
 
-  // Every session the app has started this run, not the open one: the install
-  // relaunches the app, so any live child is one this would kill mid-turn. A
-  // session from a previous run cannot still be running — no child survives a
-  // restart — so the live map answers this on its own.
+  // Only Windows waits for a turn to finish before installing: its installer
+  // cannot replace an exe still running, so `install_update` stops the server
+  // and every agent under it first. On a Mac and Linux the agents live in the
+  // server, which the bundle swap and the window's relaunch leave running; the
+  // relaunched app finds it older than its binary and has it restart once idle.
   //
   // The turn alone, never outstanding background tasks: a `local_bash` task
   // never ends, so a session running a dev server blocked the update for the
   // rest of its life with nothing saying why. Same reading Stop and fork take.
-  const anyRunning = Object.values(statusBySession).some((s) => s === "in_progress");
+  const updateBlocked = IS_WINDOWS && Object.values(statusBySession).some((s) => s === "in_progress");
 
   const [selectedSubagentId, setSelectedSubagentId] = useState<string | null>(null);
   // Subagents open as tabs in a session's row, by the spawning call's id, and
@@ -4320,7 +4321,7 @@ function App() {
             setDraftsShown(!draftsShown);
           }}
           updateStatus={updateStatus}
-          updateBlocked={anyRunning}
+          updateBlocked={updateBlocked}
           updateManual={updateManual}
           onInstallUpdate={() => void installUpdate()}
           onOpenSettings={() => setSettingsOpen(true)}
@@ -5251,7 +5252,7 @@ function App() {
       integrations={integrations}
       updateStatus={updateStatus}
       updateManual={updateManual}
-      updateBlocked={anyRunning}
+      updateBlocked={updateBlocked}
       onCheckUpdates={checkForUpdates}
       onInstallUpdate={installUpdate}
       updateChannel={updateChannel}
