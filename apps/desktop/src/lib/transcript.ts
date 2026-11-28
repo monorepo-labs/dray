@@ -263,7 +263,9 @@ export function segmentMedia(
 }
 
 /// `byYou` is the reader's own attachment, against anything the agent produced.
-export type SessionMedia = Media & { byYou: boolean };
+/// `at` is the event's timestamp, empty where the harness sent none. `name` is
+/// the file a tool read the picture from: the copy kept is named by an id.
+export type SessionMedia = Media & { byYou: boolean; at?: string; name?: string };
 
 /// Every picture and recording in a session, newest first, for the More tab's
 /// attachment grid: what the reader attached and what the agent produced.
@@ -276,25 +278,31 @@ export function sessionMedia(events: AgentEvent[]): SessionMedia[] {
     seen.add(key);
     media.push(m);
   };
-  const scan = (text: string) => {
-    for (const [, path] of text.matchAll(RECORDING_IN_TEXT)) add(path, { video: path, byYou: false });
+  const scan = (text: string, at: string) => {
+    for (const [, path] of text.matchAll(RECORDING_IN_TEXT)) add(path, { video: path, byYou: false, at });
   };
-  const images = (list: ImageRef[], byYou: boolean) => {
+  const images = (list: ImageRef[], byYou: boolean, at: string, name?: string) => {
     for (const image of list) {
       const key = image.path ?? image.url;
-      if (key) add(key, { image, byYou });
+      if (key) add(key, { image, byYou, at, name });
     }
   };
   const stops = new Set(events.map(recordStopId));
-  for (const { subagent, payload } of events) {
+  const readFrom = new Map<string, string>();
+  for (const { subagent, payload, ts } of events) {
     if (subagent) continue;
     // A relayed `dray send` arrives as a user message too, but another
     // session sent it, so it counts as the agent's.
-    if (payload.type === "user_message") images(payload.images, payload.from === null);
-    else if (payload.type === "tool_call_completed") {
-      images(payload.result.images, false);
-      if (stops.has(payload.callId)) scan(payload.result.text);
-    } else if (payload.type === "assistant_text") scan(payload.text);
+    if (payload.type === "user_message") images(payload.images, payload.from === null, ts);
+    else if (payload.type === "tool_call_started") {
+      const input = payload.input as Record<string, unknown> | null;
+      const path = input?.file_path ?? input?.path;
+      if (typeof path === "string") readFrom.set(payload.callId, path.split("/").pop() ?? path);
+    } else if (payload.type === "tool_call_completed") {
+      const from = readFrom.get(payload.callId);
+      images(payload.result.images, false, ts, payload.result.images.length === 1 ? from : undefined);
+      if (stops.has(payload.callId)) scan(payload.result.text, ts);
+    } else if (payload.type === "assistant_text") scan(payload.text, ts);
   }
   return media.reverse();
 }
