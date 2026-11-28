@@ -155,13 +155,11 @@ export default function AttachmentList({ logs }: { logs: HeldLog[] }) {
             type="button"
             onClick={() => void loadMore()}
             disabled={loading}
-            className="flex cursor-default items-center gap-2 rounded-lg px-2 py-1 text-left text-ui text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:hover:bg-transparent"
+            // A routine card's frame, so the More tab's two lists end alike.
+            className="mx-1 mt-1 flex cursor-default items-center justify-center gap-1.5 rounded-xl border-[0.5px] border-border px-3 py-2 text-ui text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground disabled:hover:bg-transparent dark:bg-card dark:hover:bg-accent/50"
           >
-            {/* In a thumb-sized box, so its words line up with the names above. */}
-            <span className="flex size-6 shrink-0 items-center justify-center">
-              {loading ? <Spinner className="size-3.5" /> : <Plus className="size-3.5" />}
-            </span>
             {failed ? "Couldn't load more. Try again" : "Load more"}
+            {loading ? <Spinner className="size-3.5" /> : <Plus className="size-3.5" />}
           </button>
         )}
       </div>
