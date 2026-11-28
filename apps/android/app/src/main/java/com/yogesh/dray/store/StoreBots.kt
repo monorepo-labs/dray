@@ -15,12 +15,14 @@ import com.yogesh.dray.wire.DrayError
 import com.yogesh.dray.wire.Payload
 import com.yogesh.dray.wire.PrMark
 import com.yogesh.dray.wire.Queued
+import com.yogesh.dray.wire.Routine
 import com.yogesh.dray.wire.SessionItem
 import com.yogesh.dray.wire.Snapshot
 import com.yogesh.dray.wire.StallRow
 import com.yogesh.dray.wire.StatusEvent
 import com.yogesh.dray.wire.arr
 import com.yogesh.dray.wire.bool
+import com.yogesh.dray.wire.decodeList
 import com.yogesh.dray.wire.decodeOrNull
 import com.yogesh.dray.wire.get
 import com.yogesh.dray.wire.int
@@ -48,6 +50,33 @@ class BotState {
     val unsent = mutableStateMapOf<SessionKey, AgentPick>()
     /** The session an agent switch goes to, minted once and kept until it lands. */
     internal val switches = mutableMapOf<SessionKey, SessionKey>()
+    /** Per server, moves on each `routines_changed`: an open routines list reads again. */
+    val routinesRevision = mutableStateMapOf<String, Int>()
+}
+
+/** A bot's routines; null where the read failed, which keeps what is on screen. */
+suspend fun Store.routines(server: String, botId: String): List<Routine>? =
+    runCatching { decodeList<Routine>(call(server, "list_routines", jsonOf("botId" to botId))) }.getOrNull()
+
+/** Turns a routine off or on. Throws why it could not. */
+suspend fun Store.setRoutinePaused(server: String, id: String, paused: Boolean) {
+    call(server, "set_routine_paused", jsonOf("id" to id, "paused" to paused))
+}
+
+/** Deletes a routine. Throws why it could not. */
+suspend fun Store.deleteRoutine(server: String, id: String) {
+    call(server, "delete_routine", jsonOf("id" to id))
+}
+
+/**
+ * Renames a routine and rewrites its instructions, keeping its id, schedule and paused state. The
+ * server trims both and refuses an empty one or a name the bot already uses; one from before
+ * `update_routine` answers `unknown command`. Throws why, else answers the routine as saved.
+ */
+suspend fun Store.updateRoutine(server: String, id: String, name: String, prompt: String): Routine? = try {
+    decodeOrNull<Routine>(call(server, "update_routine", jsonOf("id" to id, "name" to name, "prompt" to prompt)))
+} catch (e: Exception) {
+    throw if (e.message.orEmpty().contains("unknown command")) DrayError("Update ${name(server)} to edit routines.") else e
 }
 
 /** A bot's task that waits on the reader: a PR ready to merge, or a task gone quiet. */
@@ -276,6 +305,7 @@ internal fun Store.botFrame(server: String, name: String, payload: JsonElement?)
             if (list == null) botState.stallCards.remove(server)
             else botState.stallCards[server] = list.arr.mapNotNull { BotStalls.decode(it) }.associateBy { it.botId }
         }
+        "routines_changed" -> botState.routinesRevision[server] = (botState.routinesRevision[server] ?: 0) + 1
         // Only from a server that judges stalls, whose `live_state` already said so.
         "bot_stalls_changed" -> BotStalls.decode(payload)?.let { card ->
             botState.stallCards[server] = botState.stallCards[server].orEmpty() + (card.botId to card)
