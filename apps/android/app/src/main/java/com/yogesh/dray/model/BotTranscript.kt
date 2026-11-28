@@ -50,6 +50,22 @@ sealed interface BotItem {
     data class Secret(override val id: String, val answer: SecretAnswer, override val ts: String?) : BotItem
 }
 
+/**
+ * What the viewer pages through when [ref] is tapped in a bot's chat: every picture in the reply
+ * holding it, as the desktop's `MessageMedia` does, or every picture the reader sent. `null` where
+ * neither holds it, and the picture opens alone.
+ */
+fun botShots(items: List<BotItem>, ref: ImageRef): List<Shot>? {
+    for (item in items) if (item is BotItem.Assistant) {
+        // One page per picture: a tap finds it by ref, so a repeat would open on the first.
+        val seen = mutableSetOf<ImageRef>()
+        val shots = messageShots(item.text).filter { seen.add(it.ref) }
+        if (shots.any { it.ref == ref }) return shots
+    }
+    val sent = items.filterIsInstance<BotItem.User>().flatMap { it.images }.map { Shot(it, "Image", it.path ?: it.url) }
+    return sent.takeIf { s -> s.any { it.ref == ref } }
+}
+
 /** A drawn row: an item, or a run of sends folded into one "Messaged" line. */
 sealed interface BotRow {
     val id: String
