@@ -602,6 +602,43 @@ only they can answer. Say so rather than retrying.
 they cause. A local dev server is the usual page — start it in the background
 first, then open it. `--json` on any verb answers as JSON for scripting.
 
+## The design canvas
+
+The task's Canvas tab, beside Chat and Diff, shows live frames from the
+project's own dev server on pages, like a design tool: whole routes, and single
+components rendered alone. The user designs there with you. React on Vite for
+now.
+
+```bash
+dray canvas setup                       # once per project: writes the dev-only Vite plugin, says how to wire it
+dray canvas add --route /pricing        # a route of the dev server
+dray canvas add --component src/components/PricingCard.tsx#PricingCard --page Explorations
+dray canvas add --component src/canvas/PricingCardBold.tsx#PricingCardBold --props '{"popular":true}' --page Explorations --name "Bold"
+dray canvas ls                          # pages and frames, with ids
+dray canvas page new "Explorations"     # also: page rename <page> <name>, page move <page> <position>
+dray canvas move <frame> --page Final   # also: rename <frame> <name>, rm <frame>
+dray canvas url http://localhost:5173   # only where the app cannot find the dev server itself
+```
+
+State lives in `.dray/canvas.json` in the checkout; commit it with the work.
+Frames need the dev server running: start it in the background from the
+checkout, and the tab finds it. `setup` prints the one import to add to
+`vite.config`; do it once, before the first frame.
+
+**Variations are new components, never edits to the original.** Asked for
+"3 variations of the pricing card", write three components in `src/canvas/`,
+each importing the project's own components and tokens, and add one frame per
+variation, on the page the user named (`--page` makes it if missing). Name
+each frame for what sets it apart. Delete nothing unless the user asks, and
+take nothing off the canvas on your own.
+
+A message can carry an element the user picked on the canvas: its frame, its
+source as `file:line`, its component chain and its computed styles. Change the
+code at that line, or the component it names; the frame reloads on its own.
+When the user calls a frame final, apply it where they say: usually replacing
+the original component's body, keeping the variation file until they ask to
+remove it.
+
 ## Sharing a dev server
 
 ```bash

@@ -1,6 +1,7 @@
 import {
   ChatBubbleOvalLeftIcon,
   DocumentPlusIcon,
+  SwatchIcon,
 } from "@heroicons/react/16/solid";
 import { Folder, Plus, Server, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
@@ -103,7 +104,7 @@ import {
 import { cn } from "@/lib/utils";
 
 /// Which view fills the main column.
-export const VIEW_TABS = ["chat", "browser", "changes", "files"] as const;
+export const VIEW_TABS = ["chat", "browser", "changes", "files", "canvas"] as const;
 
 /// `pick` is a bot row's Diff or Files tab on a session it picked (#892);
 /// `subagent` a subagent's conversation opened from the chat.
@@ -166,8 +167,8 @@ export function useTurnNewTab(browserId: string): { kinds: TurnKind[]; turn: (ki
 
 /// Which of Diff and Files the reader has put in a session's row. Both start
 /// out, unlike the browser: + adds them, their cross takes them away again.
-type Added = { changes: boolean; files: boolean };
-const NONE: Added = { changes: false, files: false };
+type Added = { changes: boolean; files: boolean; canvas: boolean };
+const NONE: Added = { changes: false, files: false, canvas: false };
 // ponytail: same bargain as `orders`.
 const added = new Map<string, Added>();
 
@@ -330,6 +331,7 @@ export default function ViewTabs({
   const shown: Added = {
     changes: (added.get(sessionId) ?? NONE).changes || own === "changes",
     files: (added.get(sessionId) ?? NONE).files || own === "files",
+    canvas: (added.get(sessionId) ?? NONE).canvas || own === "canvas",
   };
   added.set(sessionId, shown);
   const setShown = (kind: keyof Added, on: boolean) => {
@@ -369,6 +371,19 @@ export default function ViewTabs({
             active: own === "changes",
             pick: () => onChange("changes"),
             close: () => setShown("changes", false),
+            fixed: true,
+          },
+        ]
+      : []),
+    ...(shown.canvas
+      ? [
+          {
+            key: "canvas",
+            icon: <SwatchIcon className={MARK} />,
+            label: "Canvas",
+            active: own === "canvas",
+            pick: () => onChange("canvas"),
+            close: () => setShown("canvas", false),
             fixed: true,
           },
         ]
@@ -630,7 +645,7 @@ export default function ViewTabs({
   // clicks belong to the main view; a group stays whole.
   const splittable = (item: Item) =>
     !item.group &&
-    /^(page:|changes$|file:|task:|pick:|pickfile:)/.test(item.key) &&
+    /^(page:|changes$|canvas$|file:|task:|pick:|pickfile:)/.test(item.key) &&
     (SPLITS_PAGES || !item.key.startsWith("page:"));
 
   const drag = useDragReorder(
@@ -761,7 +776,7 @@ export default function ViewTabs({
       const store = entry.file.store;
       if (!picks?.items.some((p) => p.filesKey === store)) return;
       reopenFile(store, entry.file.path);
-    } else if (key === "changes" || key === "files") setShown(key, true);
+    } else if (key === "changes" || key === "files" || key === "canvas") setShown(key, true);
     else if (key.startsWith("file:")) reopenFile(sessionId, key.slice("file:".length));
     else if (key.startsWith("task:")) tasks?.onReopen(key.slice("task:".length));
     else if (key.startsWith("subagent:")) subagents?.onReopen(key.slice("subagent:".length));
@@ -873,6 +888,16 @@ export default function ViewTabs({
         },
         disabled: false,
       },
+    !shown.canvas && {
+      key: "canvas",
+      icon: <SwatchIcon className={MARK} />,
+      label: "Canvas",
+      add: () => {
+        setShown("canvas", true);
+        onChange("canvas");
+      },
+      disabled: false,
+    },
   ].filter((o) => !!o);
   const plusClass =
     "flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground disabled:opacity-50";

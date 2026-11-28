@@ -27,6 +27,7 @@ import PlanPanel from "@/components/PlanPanel";
 const ChangesPanel = lazy(() => import("@/components/ChangesPanel"));
 const ChangesView = lazy(() => import("@/components/changes/ChangesView"));
 const FilesView = lazy(() => import("@/components/files/FilesView"));
+const CanvasView = lazy(() => import("@/components/canvas/CanvasView"));
 const DocsPanel = lazy(() => import("@/components/DocsPanel"));
 const SettingsPage = lazy(() => import("@/components/SettingsPage"));
 const IssuePanel = lazy(() => import("@/components/IssuePanel"));
@@ -4150,6 +4151,9 @@ function App() {
         />
       );
     }
+    if (key === "canvas") {
+      return <CanvasView sessionId={rowSession.sessionId} cwd={rowSession.cwd} active={!pageOpen && shown} />;
+    }
     if (key.startsWith("file:")) {
       return <SplitFile sessionId={rowSession.sessionId} path={key.slice("file:".length)} />;
     }
@@ -5124,6 +5128,20 @@ function App() {
             writeRevision={writeRevision}
             busy={busy}
           />
+          </MountOnce>
+        </TabBody>
+      )}
+
+      {selectedSession && (
+        // Keyed by session, so pages, camera and selection belong to the task.
+        <TabBody active={!pageOpen && viewTab === "canvas"}>
+          <MountOnce when={!pageOpen && viewTab === "canvas"}>
+            <CanvasView
+              key={selectedSession.sessionId}
+              sessionId={selectedSession.sessionId}
+              cwd={selectedSession.cwd}
+              active={!pageOpen && viewTab === "canvas"}
+            />
           </MountOnce>
         </TabBody>
       )}
