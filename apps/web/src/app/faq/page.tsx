@@ -113,6 +113,11 @@ const GROUPS: { title: string; entries: FaqEntry[] }[] = [
         link: { label: "Set up a server", href: "/docs/server" },
       },
       {
+        q: "Why don't I see my bot's tasks on my phone?",
+        a: "Your phone likely reaches the bot's server through your Mac's Share these servers. Dray forwards a connection one step only, so a task the bot starts on that server's own machines, such as a Boat sandbox, is two steps away and doesn't show. To see it, pair your phone with the bot's server directly: turn on its remote access (dray server tunnel on on a Linux server), show its pairing code (dray server pair), and scan it from Add server in the Dray app on your phone.",
+        link: { label: "Pair your phone", href: "/docs/reference/remote-access#pair-your-iphone" },
+      },
+      {
         q: "Does Dray run on Linux?",
         a: "Yes. The Linux app is in beta: a .deb for Debian and Ubuntu, or an AppImage for other distros with glibc 2.35 or newer, on x64 and arm64. Dray also runs as a server on a Linux box, driven from the app on another machine.",
         link: { label: "Download for Linux", href: "/download" },
