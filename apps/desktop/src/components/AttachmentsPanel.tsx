@@ -19,7 +19,9 @@ const MEDIA_FILTERS: { id: MediaFilter; label: string }[] = [
   { id: "ai", label: "AI" },
 ];
 
-type Item = LightboxImage & { byYou: boolean; at?: string };
+/// `titled` where the file had a real name: a row shows none otherwise, and
+/// `name` falls back to "Image" or "Recording" for the viewer and screen readers.
+type Item = LightboxImage & { byYou: boolean; at?: string; titled: boolean };
 
 const ARCHIVED = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(-\d+)?\.\w+$/i;
 
@@ -63,8 +65,10 @@ export default function AttachmentList({ logs }: { logs: HeldLog[] }) {
       if (!src) return null;
       const file = m.name ?? ("video" in m ? basename(m.video) : m.image.path ? basename(m.image.path) : "");
       // A kept copy is named by its id, which says nothing on a row.
-      const name = !file || ARCHIVED.test(file) ? ("video" in m ? "Recording" : "Image") : file;
-      return { src, name, video: "video" in m, byYou: m.byYou, at: m.at };
+      const titled = !!file && !ARCHIVED.test(file);
+      // Without its extension, which the thumbnail already says. A leading dot is the name.
+      const name = titled ? file.replace(/(.)\.[^.]+$/, "$1") : "video" in m ? "Recording" : "Image";
+      return { src, name, titled, video: "video" in m, byYou: m.byYou, at: m.at };
     })
     .filter((item): item is Item => item !== null);
   const visible = items.slice(0, shown);
@@ -144,7 +148,7 @@ export default function AttachmentList({ logs }: { logs: HeldLog[] }) {
             className="flex cursor-default items-center gap-2 rounded-[10px] p-1.5 text-left transition-colors hover:bg-sidebar-accent/50"
           >
             <Thumb item={item} small className="size-6 shrink-0 overflow-hidden rounded ring-[0.5px] ring-border" />
-            <span className="min-w-0 flex-1 truncate text-ui text-sidebar-foreground">{item.name}</span>
+            <span className="min-w-0 flex-1 truncate text-ui text-sidebar-foreground">{item.titled && item.name}</span>
             <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
               {/* The filters' own words, so a row says which one it falls under. */}
               {item.byYou ? "You" : "AI"}
