@@ -103,6 +103,22 @@ impl Processes {
     }
 }
 
+/// Every process as `(pid, parent, command line)`, for a caller judging
+/// processes by what they run.
+#[cfg(unix)]
+pub(crate) fn command_lines() -> Vec<(u32, u32, String)> {
+    let p = processes();
+    let parent: HashMap<u32, u32> = p
+        .children
+        .iter()
+        .flat_map(|(ppid, kids)| kids.iter().map(move |kid| (*kid, *ppid)))
+        .collect();
+    p.args
+        .into_iter()
+        .map(|(pid, args)| (pid, parent.get(&pid).copied().unwrap_or(0), args))
+        .collect()
+}
+
 #[cfg(unix)]
 fn processes() -> Processes {
     // `ww`, or a long command line is cut to the terminal's width.

@@ -659,6 +659,7 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     tokio::spawn(crate::stalls::run(sink.clone()));
     tokio::spawn(crate::held_flags::run(sink.clone()));
     tokio::spawn(crate::routines::run(sink.clone()));
+    tokio::spawn(crate::harness::opencode::service::run());
     // Agents this server spawns reach it through `dray`, so it serves the
     // socket the desktop app does — under `DRAY_HOME` where that is set.
     tokio::spawn(async move {

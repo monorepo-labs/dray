@@ -560,6 +560,9 @@ impl Said {
 /// reader of stdout alone gets a correct yes/no from Codex and no identity at
 /// all, which is the half of the row worth having.
 async fn run(harness: Harness, args: &[&str], cwd: &str) -> anyhow::Result<Said> {
+    if harness == Harness::OpenCode {
+        crate::harness::opencode::service::touch();
+    }
     let bin = binpath::agent_binary(harness).await;
     let mut command = binpath::command(&bin);
     command

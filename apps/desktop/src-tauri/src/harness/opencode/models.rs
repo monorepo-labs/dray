@@ -117,6 +117,7 @@ fn merge(mut rows: Vec<Model>, ids: &[ModelId]) -> Vec<Model> {
 
 /// One `opencode` run's stdout, or why it failed.
 async fn opencode(args: &[&str]) -> Result<String> {
+    super::service::touch();
     let bin = crate::binpath::opencode().await;
     let output = tokio::time::timeout(
         PROBE_TIMEOUT,
