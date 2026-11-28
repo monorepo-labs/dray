@@ -16,8 +16,23 @@ final class Push: NSObject, UNUserNotificationCenterDelegate {
 
     /// A chat a tapped alert asks to open, taken by the root view.
     var opening: SessionKey?
-    /// The chat on screen, which raises no banner of its own.
-    @ObservationIgnored var viewing: SessionKey?
+    /// The chat on screen, which raises no banner of its own, and whose server holds its push.
+    @ObservationIgnored var viewing: SessionKey? { didSet { if viewing != oldValue { report() } } }
+    /// The app in front: only then is the chat on screen one the reader sees.
+    @ObservationIgnored var active = false {
+        didSet {
+            guard active != oldValue else { return }
+            renewing?.cancel()
+            report()
+            // Inside the server's 60s lease, so a chat held while read never lapses.
+            if active { renewing = Task { while !Task.isCancelled { try? await Task.sleep(for: .seconds(20)); report() } } }
+        }
+    }
+    /// The chat its server was last told is on screen, so a move or the background can take it back.
+    @ObservationIgnored private var told: SessionKey?
+    /// Servers from before `set_viewing`, asked again only once they reconnect, so renewals stay quiet.
+    @ObservationIgnored private var unsupported: Set<UUID> = []
+    @ObservationIgnored private var renewing: Task<Void, Never>?
     @ObservationIgnored private weak var store: Store?
 
     static var enabled: Bool { UserDefaults.standard.object(forKey: allowKey) as? Bool ?? true }
@@ -81,8 +96,32 @@ final class Push: NSObject, UNUserNotificationCenterDelegate {
 
     /// A server came up: it gets the handle, or the first one starts the asking.
     private func connected(_ server: UUID) {
+        // A fresh socket holds nothing the old one said, and may be a server updated since.
+        unsupported.remove(server)
+        if told?.server == server, let told { say([told.id], to: server) }
         guard Self.enabled else { return }
         if let handle { give(handle, to: server) } else { Task { await ask() } }
+    }
+
+    /// Tells the chat on screen to its server, so it pushes no phone for it (#1688, the desktop's
+    /// presence.ts): `[]` to the one told before where the chat moved off it or the app went away.
+    private func report() {
+        let now = active ? viewing : nil
+        if let told, told.server != now?.server { say([], to: told.server) }
+        told = now
+        if let now { say([now.id], to: now.server) }
+    }
+
+    private func say(_ sessions: [String], to server: UUID) {
+        guard !unsupported.contains(server) else { return }
+        Task {
+            do {
+                _ = try await store?.call(server, "set_viewing", ["sessions": .array(sessions.map(JSON.string))], as: JSON.self)
+            } catch {
+                // Anything else, a socket down most likely, is said again on its reconnect.
+                if error.localizedDescription.contains("unknown command") { unsupported.insert(server) }
+            }
+        }
     }
 
     private func give(_ handle: String, to server: UUID) {
