@@ -307,7 +307,13 @@ turn runs, gyro for a subagent, spiral for background tasks.
 
 Opens on the newest turns (`turns: 8`), pages older ones in on scroll to top.
 A reconnect re-reads the open session's tail and appends what it does not hold,
-matched on event id, never `seq`.
+matched on event id, never `seq`. **A socket reading connected is not trusted**
+(#1635): one the server dropped while the phone slept stays open here and
+silent, failing no ping, so coming back to the front pings it and reconnects
+where no pong comes in 5s, and the 25s ping reconnects past 15s with neither a
+pong nor a frame. `StaleSocketTests` runs it behind `scripts/freeze_proxy.py`.
+A chat's first read since launch draws "Checking new messages…" at its foot;
+later opens read quietly (`serverRead`).
 
 The view holds the end only while the reader is within 40pt of it, the
 desktop's pin: a scroll up leaves them where they are, coming back or sending

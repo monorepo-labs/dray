@@ -48,13 +48,16 @@ struct TranscriptView: View {
         let chat = bot == nil ? [] : chatItems(segments)
         let complete = store.transcripts[segments[0]]?.olderBefore == nil && hidden(bot, segments) == nil
         let chatMark = "\(chat.count)|\(chat.first?.id ?? "")|\(complete)|\(store.serverRead.contains(key))"
+        // The first read since launch, once per chat: a later open lays its read over what is held unsaid.
+        let reading = !store.serverRead.contains(key) && store.transcriptErrors[key] == nil
+            && store.serverState[key.server] == .connected
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
                     // Never a run of sends: one folds into the run above it once that page lands, under a new id.
                     if !complete { older(bot, segments, first: bot == nil ? turns.first?.id : botRows(chat).first { if case .item = $0 { true } else { false } }?.id) }
                     if transcript == nil {
-                        placeholder
+                        if !reading { placeholder }
                     } else if bot == nil && turns.isEmpty && !busy && (store.queued[key] ?? []).isEmpty {
                         // A session made elsewhere can have no turns yet; blank would read as still loading.
                         EmptyState(title: "No messages yet", message: "Send one to start this session.") {
@@ -78,7 +81,9 @@ struct TranscriptView: View {
                         }
                         .font(Theme.Font.footnote)
                     }
-                    if busy, bot != nil {
+                    if reading {
+                        Text("Checking new messages…").font(Theme.Font.subhead).foregroundStyle(Theme.secondary).shimmer()
+                    } else if busy, bot != nil {
                         // A review's turn draws nothing, its orb included.
                         if !inReviewTurn(transcript?.events ?? []) {
                             OrbLine(activity: .working, label: currentTool(transcript?.events ?? []) ?? "Working")
