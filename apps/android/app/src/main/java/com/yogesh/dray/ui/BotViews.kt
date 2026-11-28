@@ -1,6 +1,7 @@
 package com.yogesh.dray.ui
 
 import android.content.Context
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -34,6 +36,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -44,6 +47,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -716,7 +720,7 @@ fun BotReplySheet(chat: SessionKey, task: SessionKey, title: String, text: Strin
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BotTasksSheet(server: String, tasks: List<SessionKey>, open: (SessionKey) -> Unit, dismiss: () -> Unit) {
+fun BotTasksSheet(server: String, bot: Bot, tasks: List<SessionKey>, open: (SessionKey) -> Unit, dismiss: () -> Unit) {
     val store = LocalStore.current
     LaunchedEffect(Unit) {
         tasks.mapNotNull { k -> store.items[k]?.let { k.server to it.projectPath } }.toSet().forEach { (s, p) -> store.ensureMarks(s, p) }
@@ -756,7 +760,24 @@ fun BotTasksSheet(server: String, tasks: List<SessionKey>, open: (SessionKey) ->
     }
     if (aside.isNotEmpty()) runs += aside
 
-    ModalBottomSheet(dismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false), containerColor = Dray.card) {
+    val routines = rememberBotRoutines(server, bot.id)
+    var openRoutine by rememberSaveable { mutableStateOf<String?>(null) }
+    // Read again without it, the routine was deleted or its bot's server dropped it: back to the list.
+    val routine = openRoutine?.let { id -> routines.list.firstOrNull { it.id == id } }
+    LaunchedEffect(openRoutine, routine == null) { if (routine == null) openRoutine = null }
+
+    ModalBottomSheet(
+        dismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false), containerColor = Dray.card,
+        // The details take Back for themselves, to step out to the list.
+        properties = ModalBottomSheetProperties(shouldDismissOnBackPress = routine == null),
+    ) {
+        BackHandler(routine != null) { openRoutine = null }
+        if (routine != null) {
+            Column(Modifier.imePadding().padding(horizontal = 8.dp).padding(bottom = 24.dp).verticalScroll(rememberScrollState())) {
+                RoutineDetails(routines, routine) { openRoutine = null }
+            }
+            return@ModalBottomSheet
+        }
         Column(Modifier.padding(horizontal = 8.dp).padding(bottom = 24.dp).verticalScroll(rememberScrollState())) {
             // Set-aside tasks are listed but not counted, as the desktop's Tasks tab counts.
             CountTitle("Tasks", tasks.count { store.items[it]?.aside != true }, Modifier.padding(start = 12.dp, bottom = 12.dp))
@@ -773,6 +794,7 @@ fun BotTasksSheet(server: String, tasks: List<SessionKey>, open: (SessionKey) ->
                 if (i > 0 || pinned.isNotEmpty()) Spacer(Modifier.height(16.dp))
                 for (k in run) TaskRow(server, k) { dismiss(); open(k) }
             }
+            BotRoutines(routines) { openRoutine = it.id }
         }
     }
 }

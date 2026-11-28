@@ -254,6 +254,6 @@ fun BotChatScreen(opened: SessionKey, bot: Bot, back: () -> Unit, openTask: (Ses
         }
     }
 
-    if (showingTasks) BotTasksSheet(key.server, tasks, openTask) { showingTasks = false }
+    if (showingTasks) BotTasksSheet(key.server, bot, tasks, openTask) { showingTasks = false }
     if (editing) BotSheet(editing = key.server to bot, close = { editing = false })
 }

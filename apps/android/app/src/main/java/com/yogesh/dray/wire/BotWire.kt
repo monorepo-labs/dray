@@ -104,3 +104,20 @@ data class StallRow(
     /** `owner/name`, for merging through the bot's server a task the phone cannot reach. */
     val repo: String? = null,
 )
+
+/** A bot's scheduled check, as `list_routines` answers it. Read leniently: a field missing or null costs itself, never the list. */
+@Serializable
+data class Routine(
+    val id: String,
+    val botId: String = "",
+    val name: String = "",
+    val prompt: String = "",
+    val schedule: RoutineSchedule = RoutineSchedule(),
+    val paused: Boolean = false,
+    /** RFC3339; none while paused. */
+    val nextRun: String? = null,
+)
+
+/** Every `everyMinutes`, or at `at` ("09:00") on `days`, 0 being Monday; no days is every day. */
+@Serializable
+data class RoutineSchedule(val everyMinutes: Int? = null, val at: String? = null, val days: List<Int> = emptyList())
