@@ -135,7 +135,7 @@ function Required({
   return (
     <article className="col-span-2 grid grid-cols-2 bg-white max-lg:grid-cols-1">
       <div className="flex flex-col items-start gap-4 p-6">
-        <span className="bg-[#0A0A0A] px-2 py-1 font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white uppercase">
+        <span className="bg-[#0A0A0A] px-2 py-1 text-[11px] leading-[14px] tracking-[0.06em] text-white uppercase">
           Action needed
         </span>
         <h2 className="line-clamp-3 text-[24px] leading-8 tracking-[-0.01em] text-balance text-[#0A0A0A]">
@@ -148,7 +148,7 @@ function Required({
               onClose();
               run();
             }}
-            className="mt-auto inline-flex cursor-pointer items-center gap-2 bg-[#0A0A0A] px-3 py-2 font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white uppercase outline-none hover:bg-[#262626] focus-visible:ring-2 focus-visible:ring-[#0A0A0A]/40"
+            className="mt-auto inline-flex cursor-pointer items-center gap-2 bg-[#0A0A0A] px-3 py-2 text-[11px] leading-[14px] tracking-[0.06em] text-white uppercase outline-none hover:bg-[#262626] focus-visible:ring-2 focus-visible:ring-[#0A0A0A]/40"
           >
             {action.label}
             <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden>

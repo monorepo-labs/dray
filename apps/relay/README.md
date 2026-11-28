@@ -125,18 +125,20 @@ the file until then, since the site publishes whatever is there):
   Each server has a new address. Scan its pairing code again on your phone,
   and add it again on your other Macs.
   ![](changelog/relay-reconnect.png)
-  <!-- highlight: desktop · required if remote-access · otherwise: Remote access is now more reliable and faster · action: Open Servers settings → settings/servers -->
+  <!-- highlight: desktop · required if remote-access · otherwise: Remote access is now more reliable and faster · otherwise image: changelog/relay-faster.png · action: Open Servers settings → settings/servers -->
 ```
 
 A reader whose machine has Remote access on gets it first on What's New,
 across the page, marked Action needed, so it reads as something to do before a
 word is read. Anyone else, with nothing to reconnect, gets a plain card titled
-"Remote access is now more reliable and faster" and no action. The app reads
-that off its own server's switch as the page opens (`settle` in
-apps/desktop/src/lib/changelog.ts). Copy
-`apps/desktop/demo/whats-new/relay-link-white.png`, drawn in
-[whatsNewIllustrations.tsx](../desktop/src/demo/whatsNewIllustrations.tsx)
-(`?art=relay-link&tile=white`), to `apps/web/public/changelog/relay-reconnect.png`.
+"Remote access is now more reliable and faster", its own picture, and no
+action. The app reads that off its own server's switch as the page opens
+(`settle` in apps/desktop/src/lib/changelog.ts). The pictures are drawn in
+[whatsNewIllustrations.tsx](../desktop/src/demo/whatsNewIllustrations.tsx);
+copy them from `apps/desktop/demo/whats-new/` to `apps/web/public/changelog/`:
+`relay-link-white.png` as `relay-reconnect.png`, and the off card's take, not
+yet picked (`relay-path-white.png` or `relay-comeback-white.png`), as
+`relay-faster.png`.
 
 ## Deploy on Railway
 

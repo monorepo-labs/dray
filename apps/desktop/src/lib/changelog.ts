@@ -15,8 +15,10 @@ export type ChangelogHighlight = {
   /// The reader must act on it: listed first and drawn apart. A condition
   /// name makes it so only where [`settle`] finds the condition holds.
   required?: boolean | ChangelogCondition;
-  /// The plain title shown where a conditional `required` does not hold.
+  /// The plain title, and picture, shown where a conditional `required` does
+  /// not hold.
   otherwise?: string;
+  otherwiseMedia?: ChangelogMedia;
 };
 /// What the app can find out about its reader. A name this build does not
 /// know reads as not holding.
@@ -152,7 +154,12 @@ export function settle(h: Highlight, facts: ReaderFacts): Highlight {
   if (holds) return { ...h, item: { ...h.item, highlight: { ...hl, required: true } } };
   return {
     ...h,
-    item: { ...h.item, title: hl.otherwise ?? h.item.title, highlight: { ...hl, required: false, action: null } },
+    item: {
+      ...h.item,
+      title: hl.otherwise ?? h.item.title,
+      media: hl.otherwiseMedia ? [hl.otherwiseMedia] : h.item.media,
+      highlight: { ...hl, required: false, action: null },
+    },
   };
 }
 

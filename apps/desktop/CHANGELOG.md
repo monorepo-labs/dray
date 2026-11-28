@@ -29,7 +29,8 @@ reads:
   out of the heading's count. `· required if remote-access · otherwise: Title`
   asks it only of a reader whose machine has Remote access on, read off its
   own server as the page opens; anyone else gets a plain card under that
-  title, with no action. Keep the text
+  title, with no action, and `· otherwise image: changelog/<file>` gives that
+  card a picture of its own. Keep the text
   to a line or two. A release with no highlights for an app gets the small
   card there instead, when it carries `notify`.
 

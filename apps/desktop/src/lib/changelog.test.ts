@@ -115,12 +115,13 @@ describe("highlights", () => {
     const relay: ChangelogItem = {
       title: "Reconnect your phone and other Macs. Remote access is now more reliable and faster",
       body: "",
-      media: [],
+      media: [{ kind: "image", url: "link.png", alt: "" }],
       highlight: {
         apps: ["desktop"],
         action: { label: "Open Servers settings", target: "settings/servers" },
         required: "remote-access",
         otherwise: "Remote access is now more reliable and faster",
+        otherwiseMedia: { kind: "image", url: "path.png", alt: "" },
       },
     };
     const withRelay = [withItems("0.30.0", true, [item("Big", ["desktop"]), relay])];
@@ -128,10 +129,12 @@ describe("highlights", () => {
     const on = announcement(withRelay, "0.30.0", "0.29.0", { remoteAccess: true }).highlights;
     expect(on.map((h) => h.item.title?.slice(0, 9))).toEqual(["Reconnect", "Big"]);
     expect(on[0].item.highlight).toMatchObject({ required: true, action: { target: "settings/servers" } });
+    expect(on[0].item.media[0].url).toBe("link.png");
 
     const off = announcement(withRelay, "0.30.0", "0.29.0", { remoteAccess: false }).highlights;
     expect(off.map((h) => h.item.title)).toEqual(["Big", "Remote access is now more reliable and faster"]);
     expect(off[1].item.highlight).toMatchObject({ required: false, action: null });
+    expect(off[1].item.media[0].url).toBe("path.png");
   });
 
   it("reads a condition this build does not know as not holding", () => {
