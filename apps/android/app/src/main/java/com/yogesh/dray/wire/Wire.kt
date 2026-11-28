@@ -100,6 +100,8 @@ data class Bot(
     val avatar: JsonElement? = null,
     val welcome: String? = null,
     val greeting: List<String>? = null,
+    /** Its place in the bot list, set by dragging on the desktop. None on a new bot or an older server. */
+    val order: Long? = null,
 )
 
 /** One branch's pull request, as `pr_marks` answers it. `checksState` is `RUNNING`, `FAILING` or `CLEAR`. */

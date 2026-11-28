@@ -100,8 +100,11 @@ data class Stall(
 /** How long a task sits before it counts as waiting (`STALL_MS`), for a server too old to judge. */
 private const val STALL_AFTER_MS = 5 * 60_000L
 
-/** Every live server's bots, in its own order, servers in the list's. */
-val Store.allBots: List<Pair<String, Bot>> get() = live.flatMap { s -> bots[s.id].orEmpty().map { s.id to it } }
+/** Every live server's bots, placed ones by `order`, then the rest as listed: servers in turn, each in its own order. */
+val Store.allBots: List<Pair<String, Bot>> get() = orderBots(live.flatMap { s -> bots[s.id].orEmpty().map { s.id to it } })
+
+/** Sorts by `order`, unplaced last; `sortedBy` is stable, so ties keep the listed order. */
+fun orderBots(bots: List<Pair<String, Bot>>): List<Pair<String, Bot>> = bots.sortedBy { it.second.order ?: Long.MAX_VALUE }
 
 /** A bot's chat: every unsettled session in its folder, oldest first. The newest is the one a reply goes to. */
 fun Store.botChat(server: String, bot: Bot): List<SessionKey> =
