@@ -109,21 +109,10 @@ const STARTS_SESSION = /\bdray\s+(session\s+new|new)\b/;
 const TASK_ID = new RegExp(`^\\s*(${UUID.source})\\s*$`, "im");
 /// A session id, or a prefix of one long enough to name it, as `taskOf` takes.
 const SESSION_ID = /^[0-9a-f][0-9a-f-]{7,}$/i;
-const SENDS = /\bdray\s+(?:(session|bot)\s+)?send\b/g;
+/// Where a `dray` command may start; the words after it say whether it sends.
+const DRAY = /\bdray(?=[ \t])/g;
 /// What `dray bot send` prints, in `apps/cli/src/bot.rs`.
 const BOT_SENT = new RegExp(`^(?:Sent to|Queued for) bot ".*" \\((${UUID.source})\\)\\.$`, "gim");
-
-/// The first shell word of `text` and its length: quoted, which a bot's name
-/// with a space needs, or bare.
-function firstWord(text: string): { word: string; length: number } | null {
-  const quote = text[0];
-  if (quote === "'" || quote === '"') {
-    const end = text.indexOf(quote, 1);
-    return end > 0 ? { word: text.slice(1, end), length: end + 1 } : null;
-  }
-  const word = text.match(/^\S+/)?.[0];
-  return word ? { word, length: word.length } : null;
-}
 
 /// The message a shell word carries: a heredoc fed through `$(cat <<EOF …)`,
 /// a single- or double-quoted string, or a bare word. Best effort, since it is
@@ -163,7 +152,8 @@ function shellWord(text: string): { value: string; length: number } {
     }
     return { value: out, length: text.length };
   }
-  const bare = text.match(/^\S*/)![0];
+  // Quotes inside a bare word stay in it, so `--machine="my vps"` is one word.
+  const bare = text.match(/^(?:[^\s'";&|]|'[^']*'|"(?:\\[\s\S]|[^"\\])*")*/)![0];
   return { value: bare, length: bare.length };
 }
 
@@ -228,6 +218,35 @@ function unquoted(cmd: string): string {
   return out;
 }
 
+/// The words of the one `dray` command whose arguments start at `at`, with the
+/// send commands' options taken out wherever clap lets them sit: the global
+/// `--machine <name>` or `--machine=<name>` (apps/cli/src/main.rs), `bot
+/// send`'s `--ask` (apps/cli/src/bot.rs), and a `--` ending them. Stops at the
+/// command's end or once it holds a send's target and message, never reading
+/// past the message; `null` for `--help`, which sends nothing.
+function drayWords(cmd: string, at: number): string[] | null {
+  const words: string[] = [];
+  let options = true;
+  let machine = false;
+  // `send <target> <message>`, or `session send …` and `bot send …`.
+  while (words.length < (words[0] === "send" ? 3 : 4)) {
+    // A `\` line continuation is space to the shell.
+    while (cmd[at] === " " || cmd[at] === "\t" || cmd.startsWith("\\\n", at)) at += cmd[at] === "\\" ? 2 : 1;
+    if (at >= cmd.length || ";&|\n".includes(cmd[at])) break;
+    const word = shellWord(cmd.slice(at));
+    if (word.length === 0) break;
+    at += word.length;
+    const v = word.value;
+    if (machine) machine = false;
+    else if (!options) words.push(v);
+    else if (v === "--") options = false;
+    else if (v === "--machine") machine = true;
+    else if (v === "-h" || v === "--help") return null;
+    else if (v !== "--ask" && !v.startsWith("--machine=")) words.push(v);
+  }
+  return words;
+}
+
 /// Every `dray session send` and `dray bot send` in one command the bot ran —
 /// one command often carries several, joined by `&&` — each with who to, what
 /// it said, and whether it went to a bot. A task is named by its id or an id
@@ -235,26 +254,15 @@ function unquoted(cmd: string): string {
 /// misread — is skipped rather than drawn as a task that opens nothing.
 export function sentMessages(cmd: string): { target: string; text: string; bot?: true }[] {
   const out: { target: string; text: string; bot?: true }[] = [];
-  for (const m of unquoted(cmd).matchAll(SENDS)) {
-    let at = m.index + m[0].length;
-    const skipSpace = () => {
-      while (at < cmd.length && /\s/.test(cmd[at])) at++;
-    };
-    // `--ask` may sit before the target or between it and the message.
-    const skipAsk = () => {
-      skipSpace();
-      if (/^--ask(?=\s)/.test(cmd.slice(at))) at += "--ask".length;
-      skipSpace();
-    };
-    skipAsk();
-    const target = firstWord(cmd.slice(at));
-    if (!target || (m[1] !== "bot" && !SESSION_ID.test(target.word))) continue;
-    at += target.length;
-    skipAsk();
-    const message = shellWord(cmd.slice(at));
-    if (message.length === 0) continue;
-    const sent = { target: target.word, text: message.value };
-    out.push(m[1] === "bot" ? { ...sent, bot: true as const } : sent);
+  for (const m of unquoted(cmd).matchAll(DRAY)) {
+    const words = drayWords(cmd, m.index + m[0].length);
+    if (!words) continue;
+    // `dray send` is `dray session send` spelled short.
+    const bot = words[0] === "bot";
+    const path = words[0] === "send" ? 1 : (bot || words[0] === "session") && words[1] === "send" ? 2 : 0;
+    const [target, text] = words.slice(path);
+    if (!path || text === undefined || (!bot && !SESSION_ID.test(target))) continue;
+    out.push(bot ? { target, text, bot: true } : { target, text });
   }
   return out;
 }

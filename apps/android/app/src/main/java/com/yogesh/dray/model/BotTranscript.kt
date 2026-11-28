@@ -305,7 +305,8 @@ private val taskIdLine = Regex("(?im)^\\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[
 private val botSentLine = Regex("(?im)^(?:Sent to|Queued for) bot \".*\" \\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\\)\\.$")
 /** A session id, or a prefix of one long enough to name it. */
 private val sessionIdLike = Regex("(?i)^[0-9a-f][0-9a-f-]{7,}$")
-private val sendsRe = Regex("\\bdray\\s+(?:(session|bot)\\s+)?send\\b")
+/** Where a `dray` command may start; the words after it say whether it sends. */
+private val drayRe = Regex("\\bdray(?=[ \\t])")
 private val heredocRe = Regex("<<-?[ \\t]*(['\"]?)(\\w+)\\1[^\\n]*\\n[\\s\\S]*?\\n[ \\t]*\\2(?=[ \\t]*(?:\\n|\\)|$))")
 private val subshellRe = Regex("\\$\\(\\s*\\w+\\s+")
 private val openerRe = Regex("(?<!<)<<(?!<)-?[ \\t]*(?:'([^'\\n]+)'|\"([^\"\\n]+)\"|([^\\s'\"<>;&|()]+))")
@@ -378,33 +379,87 @@ fun unquoted(cmd: String): String {
  * anything but an id — a loop's `"$id"` — is skipped rather than drawn as a task that opens nothing.
  */
 fun sentMessages(cmd: String, plain: String): List<SentTo> {
-    val n = cmd.length
     val out = mutableListOf<SentTo>()
-    for (m in sendsRe.findAll(plain)) {
-        val bot = m.groups[1]?.value == "bot"
-        var at = m.range.last + 1
-        fun skipSpace() { while (at < n && cmd[at].isWhitespace()) at++ }
-        skipSpace()
-        if (at >= n) continue
-        val rest = cmd.substring(at)
-        val q = rest[0]
-        val word: String
-        val length: Int
-        if (q == '\'' || q == '"') {
-            val end = rest.indexOf(q, 1)
-            if (end < 0) continue
-            word = rest.substring(1, end)
-            length = word.length + 2
-        } else {
-            word = rest.takeWhile { !it.isWhitespace() }
-            length = word.length
+    for (m in drayRe.findAll(plain)) {
+        val words = drayWords(cmd, m.range.last + 1) ?: continue
+        // `dray send` is `dray session send` spelled short.
+        val bot = words.firstOrNull() == "bot"
+        val path = when {
+            words.firstOrNull() == "send" -> 1
+            (bot || words.firstOrNull() == "session") && words.getOrNull(1) == "send" -> 2
+            else -> continue
         }
-        if (!bot && !sessionIdLike.matches(word)) continue
-        at += length
-        skipSpace()
+        val target = words.getOrNull(path) ?: continue
         // No message after the target is no send.
-        if (at >= n) continue
-        out += SentTo(word, bot)
+        if (words.size < path + 2) continue
+        if (!bot && !sessionIdLike.matches(target)) continue
+        out += SentTo(target, bot)
     }
     return out
+}
+
+/**
+ * The words of the one `dray` command whose arguments start at [start], with the send commands'
+ * options taken out wherever clap lets them sit: the global `--machine <name>` or
+ * `--machine=<name>` (apps/cli/src/main.rs), `bot send`'s `--ask` (apps/cli/src/bot.rs), and a
+ * `--` ending them. Stops at the command's end or once it holds a send's target and message;
+ * `null` for `--help`, which sends nothing.
+ */
+private fun drayWords(cmd: String, start: Int): List<String>? {
+    val n = cmd.length
+    var at = start
+    val words = mutableListOf<String>()
+    var options = true
+    var machine = false
+    // `send <target> <message>`, or `session send …` and `bot send …`.
+    while (words.size < if (words.firstOrNull() == "send") 3 else 4) {
+        // A `\` line continuation is space to the shell.
+        while (at < n && (cmd[at] == ' ' || cmd[at] == '\t' || cmd.startsWith("\\\n", at))) at += if (cmd[at] == '\\') 2 else 1
+        if (at >= n || cmd[at] in ";&|\n") break
+        val (v, length) = shellWord(cmd, at)
+        if (length == 0) break
+        at += length
+        when {
+            machine -> machine = false
+            !options -> words += v
+            v == "--" -> options = false
+            v == "--machine" -> machine = true
+            v == "-h" || v == "--help" -> return null
+            v != "--ask" && !v.startsWith("--machine=") -> words += v
+        }
+    }
+    return words
+}
+
+/**
+ * The shell word at [at] in [cmd], unquoted, and how much of [cmd] it took. Only the target and
+ * the options are read for their value, so a message whose quoting this misreads costs nothing.
+ */
+private fun shellWord(cmd: String, at: Int): Pair<String, Int> {
+    val n = cmd.length
+    val out = StringBuilder()
+    var i = at
+    while (i < n && !cmd[i].isWhitespace() && cmd[i] !in ";&|") {
+        when (cmd[i]) {
+            '\'' -> {
+                val end = cmd.indexOf('\'', i + 1).let { if (it < 0) n else it }
+                out.append(cmd, i + 1, end)
+                i = minOf(end + 1, n)
+            }
+            '"' -> {
+                i++
+                while (i < n && cmd[i] != '"') {
+                    if (cmd[i] == '\\' && i + 1 < n) i++
+                    out.append(cmd[i++])
+                }
+                i = minOf(i + 1, n)
+            }
+            '\\' -> {
+                if (i + 1 < n) out.append(cmd[i + 1])
+                i = minOf(i + 2, n)
+            }
+            else -> out.append(cmd[i++])
+        }
+    }
+    return out.toString() to (i - at)
 }

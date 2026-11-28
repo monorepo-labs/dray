@@ -176,6 +176,46 @@ class BotTest {
     }
 
     @Test
+    fun readsASendPastItsOptionsWhereverTheySit() {
+        fun sends(cmd: String) = sentMessages(cmd, unquoted(cmd))
+        val task = listOf(SentTo("abc12345", false))
+        // A task on another machine is reached with `--machine`, before or after the target.
+        assertEquals(task, sends("dray session send --machine vps abc12345 \"hi there\""))
+        assertEquals(task, sends("dray session send --machine=vps abc12345 \"hi there\""))
+        assertEquals(task, sends("dray session send abc12345 --machine vps \"hi there\""))
+        assertEquals(task, sends("dray session send abc12345 \"hi there\" --machine vps"))
+        assertEquals(task, sends("dray --machine vps session send abc12345 \"hi there\""))
+        assertEquals(task, sends("dray session --machine=vps send abc12345 \"hi there\""))
+        assertEquals(task, sends("dray --machine \"my vps\" send abc12345 \"hi there\""))
+        assertEquals(task, sends("dray session send --machine=\"my vps\" abc12345 \"hi there\""))
+        assertEquals(task, sends("dray session send --machine vps \\\n  abc12345 \"hi there\""))
+        assertEquals(task, sends("dray session send -- abc12345 \"hi there\""))
+        assertEquals(task, sends("dray session send abc12345 -- --ask"))
+        val bot = listOf(SentTo("Ops", true))
+        assertEquals(bot, sends("dray bot send --ask Ops \"is CI green?\""))
+        assertEquals(bot, sends("dray bot send Ops --ask \"is CI green?\""))
+        assertEquals(bot, sends("dray bot send --machine vps --ask Ops \"is CI green?\""))
+        assertEquals(bot, sends("dray --machine vps bot send Ops --ask \"is CI green?\""))
+        // The flag's value is no target, and `--help` sends nothing.
+        assertEquals(emptyList<SentTo>(), sends("dray session send --machine vps"))
+        assertEquals(emptyList<SentTo>(), sends("dray session send --machine abc12345 \"hi\""))
+        assertEquals(emptyList<SentTo>(), sends("dray session send --help abc12345 \"hi\""))
+        // A command ends at its line, so the next one is no message.
+        assertEquals(emptyList<SentTo>(), sends("dray session send abc12345\nls"))
+        assertEquals(
+            listOf(SentTo("abc12345", false), SentTo("bbbb2222", false)),
+            sends("dray session send --machine vps abc12345 hi; dray session send --machine vps bbbb2222 yo"),
+        )
+    }
+
+    @Test
+    fun drawsASendToATaskOnAnotherMachine() {
+        val id = "01a1d052-e620-74d4-8ef2-aa9965929e13"
+        val items = botItems(listOf(bash("t", "c", "dray session send --machine vps $id \"ship it\""), done("d", "c", "Delivered.")))
+        assertEquals(listOf(id), items.filterIsInstance<BotItem.Sent>().map { it.target })
+    }
+
+    @Test
     fun theNewDividerWaitsForTheReadersLastMessage() {
         val items = listOf(
             BotItem.User("u", "hi", emptyList(), null, null),
