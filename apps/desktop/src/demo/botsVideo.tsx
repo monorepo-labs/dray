@@ -178,6 +178,7 @@ const SANDBOX_INFO: ServerInfo = {
   restarting: false,
   boat: null,
   cloud: false,
+  via: null,
 };
 
 // ── the chat ──────────────────────────────────────────────────────────────────

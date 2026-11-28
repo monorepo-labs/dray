@@ -142,14 +142,30 @@ async fn write(list: &[Saved]) -> Result<(), String> {
 }
 
 /// What `share_machines` answers and `machines_shared` carries: whether this
-/// server shares its machines (#847), and which, by id and name. None while off.
+/// server shares its machines (#847), and which a client holding its token
+/// reaches through it, by id and name. Off, those are the machines holding a
+/// task of one of this server's bots (#1660): the bot reaches them already,
+/// so its reader gains no reach, and a client following this list is how the
+/// bot's Tasks tab finds a task one hop further away.
 pub async fn sharing() -> Value {
     let on = crate::settings::read().await.share_machines;
-    let machines: Vec<Value> = match on {
-        true => load().await.iter().filter(|s| !s.off).map(|s| json!({ "id": s.id, "name": s.name })).collect(),
-        false => Vec::new(),
-    };
+    let machines: Vec<Value> = relayed(on).await.iter().map(|s| json!({ "id": s.id, "name": s.name })).collect();
     json!({ "on": on, "machines": machines })
+}
+
+/// The machines a client reaches through this server, with sharing `on` or off.
+async fn relayed(on: bool) -> Vec<Saved> {
+    let tasks = match on {
+        true => Default::default(),
+        false => crate::remote_reports::tracked_machines().await,
+    };
+    relayable(load().await, on, &tasks)
+}
+
+/// [`relayed`]'s rule on a list in hand: every machine on with sharing on,
+/// else the ones in `tasks`, and never one turned off.
+fn relayable(list: Vec<Saved>, on: bool, tasks: &std::collections::HashSet<String>) -> Vec<Saved> {
+    list.into_iter().filter(|s| !s.off && (on || tasks.contains(&s.id))).collect()
 }
 
 /// The switch on Settings → Servers and `dray machine share`.
@@ -159,9 +175,10 @@ pub async fn set_sharing(on: bool) -> Result<Value, String> {
     Ok(sharing().await)
 }
 
-/// Tells every client what is shared now. The Mac app's own list writes have
-/// no hub to tell, so a phone catches those up on its next connect.
-async fn announce_sharing() {
+/// Tells every client what is shared now: after the switch, a list write, or a
+/// bot's task landing on a machine or leaving its last one. The Mac app's own
+/// list writes have no hub to tell, so a phone catches those up on its next connect.
+pub async fn announce_sharing() {
     crate::serve::HUB.publish("machines_shared", &sharing().await);
     SHARING_MOVED.notify_waiters();
 }
@@ -169,17 +186,18 @@ async fn announce_sharing() {
 /// Woken on every change to what is shared, so a live relay can stop at once.
 pub static SHARING_MOVED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
-/// Whether `id` is shared still: sharing on, and the machine listed and on.
+/// Whether `id` is shared still: [`sharing`] lists it.
 pub async fn still_shared(id: &str) -> bool {
     shared(id).await.is_ok()
 }
 
-/// A shared machine by id, refusing everything while sharing is off.
+/// A machine [`sharing`] lists, by id.
 async fn shared(id: &str) -> Result<Saved, String> {
-    if !crate::settings::read().await.share_machines {
-        return Err("this server does not share its machines".into());
-    }
-    load().await.into_iter().find(|s| s.id == id && !s.off).ok_or_else(|| "this server shares no such machine".into())
+    let on = crate::settings::read().await.share_machines;
+    relayed(on).await.into_iter().find(|s| s.id == id).ok_or_else(|| match on {
+        true => "this server shares no such machine".into(),
+        false => "this server does not share its machines".into(),
+    })
 }
 
 /// A socket to shared machine `id` that has said `hello` under that machine's
@@ -270,6 +288,10 @@ pub struct Welcome {
     pub dictation: bool,
     #[serde(default)]
     pub dev: bool,
+    /// [`crate::serve::server_id`] of the token that admitted it, the same
+    /// through a relay as reached directly.
+    #[serde(default)]
+    pub identity: Option<String>,
 }
 
 impl Welcome {
@@ -749,6 +771,29 @@ pub async fn set_on(name: &str, on: bool) -> Result<Row, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sharing off still relays a machine holding a bot's task (#1660), or
+    /// that bot's Tasks tab reads empty on every client one hop away.
+    #[test]
+    fn sharing_off_relays_the_machines_holding_a_bots_task_alone() {
+        let saved = |id: &str, off: bool| Saved {
+            id: id.into(),
+            name: id.into(),
+            url: String::new(),
+            ssh: None,
+            off,
+            beta: false,
+            ignored: None,
+            boat: None,
+            cloud: None,
+            unknown: Default::default(),
+        };
+        let list = || vec![saved("task", false), saved("idle", false), saved("off-task", true)];
+        let tasks = ["task".to_string(), "off-task".to_string()].into_iter().collect();
+        let ids = |l: Vec<Saved>| l.into_iter().map(|s| s.id).collect::<Vec<_>>();
+        assert_eq!(ids(relayable(list(), false, &tasks)), ["task"]);
+        assert_eq!(ids(relayable(list(), true, &Default::default())), ["task", "idle"]);
+    }
 
     /// A kept login whose forward went dead — a dropped link, a restart there —
     /// heals inside the call that finds it, rather than failing that call and

@@ -1119,7 +1119,13 @@ pub enum Response {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         warning: Option<String>,
     },
-    Listed { sessions: Vec<SessionSummary> },
+    Listed {
+        sessions: Vec<SessionSummary>,
+        /// `--machine all`'s machines that listed nothing, each as "name: why",
+        /// since one missing is otherwise read as holding no sessions.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        unanswered: Vec<String>,
+    },
     /// A draft written, or one taken off the list — the answer to
     /// `CreateDraft` and `RemoveDraft` alike.
     Draft { draft: DraftSummary },

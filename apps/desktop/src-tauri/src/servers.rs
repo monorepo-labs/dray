@@ -112,6 +112,9 @@ pub struct ServerInfo {
     /// A Dray Cloud machine (#857): drawn as no row of its own, and read as
     /// "Cloud" wherever a machine is named.
     pub cloud: bool,
+    /// The server this machine is reached through (#1660), which lists it:
+    /// no row in Settings, since it is that server's to add and remove.
+    pub via: Option<String>,
 }
 
 type Reply = Result<Value, Value>;
@@ -160,6 +163,29 @@ struct Conn {
     /// still says what it last knew. `None` until it first connects.
     met: Option<Welcome>,
     boat: Option<BoatRow>,
+    /// Reached through another server's relay rather than saved here.
+    via: Option<Via>,
+    /// A relayed copy of a server this app reaches directly, kept off the list.
+    twin: bool,
+}
+
+/// A machine a remote server relays to this app (#1660): one it shares, or
+/// one holding a task of its bots. Never written to `servers.json`, which the
+/// Mac's own server reads as its machines, and gone with its parent.
+#[derive(Debug, Clone, PartialEq)]
+struct Via {
+    /// The connection it is reached through.
+    parent: String,
+    /// Its id in the parent's `servers.json`, which the hello names.
+    machine: String,
+}
+
+/// The same every run for the pair, so a relayed machine's kept rows and
+/// qualified paths survive a restart, and safe as a file name and a path segment.
+fn relayed_id(parent: &str, machine: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(format!("dray-relayed\0{parent}\0{machine}"));
+    format!("via-{}", hash[..8].iter().map(|b| format!("{b:02x}")).collect::<String>())
 }
 
 /// What this run of the app last heard from boat about a server.
@@ -209,9 +235,38 @@ impl Conn {
             forwards: HashMap::new(),
             met: None,
             boat: None,
+            via: None,
+            twin: false,
         };
         conn.restart();
         conn
+    }
+
+    /// A connection to machine `machine` of `parent`, through `parent`.
+    fn relayed(parent: &str, machine: &str, name: &str) -> Self {
+        let saved = Saved {
+            id: relayed_id(parent, machine),
+            name: name.into(),
+            url: String::new(),
+            ssh: None,
+            off: false,
+            beta: false,
+            ignored: None,
+            boat: None,
+            cloud: None,
+            unknown: Default::default(),
+        };
+        let mut conn = Conn::new(Saved { off: true, ..saved });
+        conn.saved.off = false;
+        conn.via = Some(Via { parent: parent.into(), machine: machine.into() });
+        conn.restart();
+        conn
+    }
+
+    /// Whether the frontend hears of it. A relayed one waits for its first
+    /// welcome, which is what tells a copy of a server already listed.
+    fn shown(&self) -> bool {
+        self.via.is_none() || (self.met.is_some() && !self.twin)
     }
 
     /// Stops the loop and, unless off, starts it again from scratch.
@@ -259,7 +314,8 @@ fn info(conn: &Conn) -> ServerInfo {
         fix: conn.fix.clone(),
         release: conn.met.as_ref().and_then(|w| w.release.clone()),
         beta: conn.saved.beta,
-        latest: latest(conn),
+        // Its own server's reader updates it, not this one.
+        latest: conn.via.is_none().then(|| latest(conn)).flatten(),
         app: conn.met.as_ref().is_some_and(Welcome::is_mac_app),
         restarting: conn.met.as_ref().is_some_and(|w| w.stale),
         boat: conn.boat.as_ref().filter(|row| !row.lost).map(|row| BoatStatus {
@@ -269,6 +325,7 @@ fn info(conn: &Conn) -> ServerInfo {
             note: row.note.clone(),
         }),
         cloud: conn.saved.cloud.is_some(),
+        via: conn.via.as_ref().map(|v| v.parent.clone()),
     }
 }
 
@@ -395,7 +452,7 @@ pub const LOCAL: &str = "local";
 
 /// The remote servers, in `servers.json` order.
 fn snapshot() -> Vec<ServerInfo> {
-    conns().iter().filter(|c| c.saved.id != LOCAL).map(info).collect()
+    conns().iter().filter(|c| c.saved.id != LOCAL && c.shown()).map(info).collect()
 }
 
 /// Every change — status, add, remove — goes out as the whole list, so the
@@ -423,7 +480,8 @@ pub struct IslandLink {
 pub fn island_links() -> Vec<IslandLink> {
     conns()
         .iter()
-        .filter(|c| c.saved.id != LOCAL && c.status == ServerStatus::Connected)
+        // A relayed one's address is its parent's, which the island would reach instead.
+        .filter(|c| c.saved.id != LOCAL && c.via.is_none() && c.status == ServerStatus::Connected)
         .filter_map(|c| {
             let (url, token) = c.live.clone()?;
             Some(IslandLink { id: c.saved.id.clone(), name: c.saved.name.clone(), url, token })
@@ -468,7 +526,7 @@ async fn local_address() -> Result<(String, String, bool), String> {
 }
 
 async fn save() -> Result<(), String> {
-    let list: Vec<Saved> = conns().iter().filter(|c| c.saved.id != LOCAL).map(|c| c.saved.clone()).collect();
+    let list: Vec<Saved> = conns().iter().filter(|c| c.saved.id != LOCAL && c.via.is_none()).map(|c| c.saved.clone()).collect();
     crate::machines::save(&list).await
 }
 
@@ -489,7 +547,7 @@ pub async fn reload() {
     {
         let mut list = conns();
         list.retain_mut(|conn| {
-            let kept = conn.saved.id == LOCAL || saved.iter().any(|s| s.id == conn.saved.id);
+            let kept = conn.saved.id == LOCAL || conn.via.is_some() || saved.iter().any(|s| s.id == conn.saved.id);
             if !kept {
                 if let Some(task) = conn.task.take() {
                     task.abort();
@@ -510,11 +568,83 @@ pub async fn reload() {
                 None => list.push(Conn::new(saved)),
             }
         }
+        dropped.extend(prune(&mut list));
+        // A server removed since may have been what a twin stood aside for.
+        for conn in list.iter_mut().filter(|c| c.twin) {
+            conn.twin = false;
+            conn.restart();
+        }
     }
     for id in dropped {
         forget_cache(&id).await;
     }
     announce();
+}
+
+/// Drops the relayed machines whose parent left the list or was turned off,
+/// answering their ids.
+fn prune(list: &mut Vec<Conn>) -> Vec<String> {
+    let parents: Vec<String> = list.iter().filter(|c| c.via.is_none() && !c.saved.off).map(|c| c.saved.id.clone()).collect();
+    let mut dropped = Vec::new();
+    list.retain_mut(|conn| {
+        let kept = conn.via.as_ref().is_none_or(|v| parents.contains(&v.parent));
+        if !kept {
+            if let Some(task) = conn.task.take() {
+                task.abort();
+            }
+            dropped.push(conn.saved.id.clone());
+        }
+        kept
+    });
+    dropped
+}
+
+/// Brings `parent`'s relayed machines in line with what it lists (#1660), as
+/// `share_machines` answers and `machines_shared` carries: `{on, machines:
+/// [{id, name}]}`. A machine the list no longer names goes, kept rows and all.
+fn follow(parent: &str, sharing: &Value) {
+    let listed: Vec<(&str, &str)> = sharing["machines"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| Some((m["id"].as_str()?, m["name"].as_str().unwrap_or_default())))
+        .collect();
+    let mut dropped = Vec::new();
+    {
+        let mut list = conns();
+        list.retain_mut(|conn| {
+            let gone = conn.via.as_ref().is_some_and(|v| v.parent == parent && !listed.iter().any(|(m, _)| *m == v.machine));
+            if gone {
+                if let Some(task) = conn.task.take() {
+                    task.abort();
+                }
+                dropped.push(conn.saved.id.clone());
+            }
+            !gone
+        });
+        for (machine, name) in listed {
+            let id = relayed_id(parent, machine);
+            match list.iter_mut().find(|c| c.saved.id == id) {
+                Some(conn) => conn.saved.name = name.to_string(),
+                None => list.push(Conn::relayed(parent, machine, name)),
+            }
+        }
+    }
+    tokio::spawn(async move {
+        for id in dropped {
+            forget_cache(&id).await;
+        }
+    });
+    announce();
+}
+
+/// Asks a remote server what it relays, once its socket is up.
+async fn read_shares(parent: String) {
+    // A server from before sharing answers `unknown command`, and relays
+    // nothing; a dropped call is no news, and the next connect asks again.
+    if let Ok(sharing) = server_invoke(parent.clone(), "share_machines".into(), json!({}), None).await {
+        follow(&parent, &sharing);
+    }
 }
 
 /// Reads `servers.json` and opens a connection to each. Called once, at setup.
@@ -605,6 +735,10 @@ fn set(id: &str, status: ServerStatus, stage: Option<ssh::Stage>, error: Option<
 /// a tunnel address is saved: then only that is retried, [`wait_for_address`].
 async fn run(id: String) {
     let mut backoff = Duration::from_secs(1);
+    let via = conns().iter().find(|c| c.saved.id == id).and_then(|c| c.via.clone());
+    if let Some(via) = via {
+        return run_relayed(id, via).await;
+    }
     loop {
         let Some(saved) = conns().iter().find(|c| c.saved.id == id).map(|c| c.saved.clone()) else {
             return;
@@ -755,6 +889,103 @@ async fn run(id: String) {
         drop(tunnel);
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(MAX_BACKOFF);
+    }
+}
+
+/// A relayed machine's connection: its parent's address and token, the hello
+/// naming the machine. The relay lives inside the parent's server, so while
+/// the parent is down this waits for it rather than retrying.
+async fn run_relayed(id: String, via: Via) {
+    let mut backoff = Duration::from_secs(1);
+    loop {
+        let parent = {
+            let list = conns();
+            if !list.iter().any(|c| c.saved.id == id) {
+                return;
+            }
+            list.iter().find(|c| c.saved.id == via.parent).and_then(|c| c.live.clone())
+        };
+        let Some((url, token)) = parent else {
+            if conns().iter().find(|c| c.saved.id == id).is_some_and(|c| c.status != ServerStatus::Disconnected) {
+                set_status(&id, ServerStatus::Disconnected, Some("Its server is not connected.".into()));
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue;
+        };
+        set(&id, ServerStatus::Connecting, None, None, None);
+        let hello = json!({ "v": PROTOCOL, "token": token, "counts": true, "deflate": true, "via": via.machine });
+        match admit_with(&url, hello).await {
+            Ok((ws, welcome)) => {
+                if is_twin(&welcome).await {
+                    drop(ws);
+                    if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
+                        conn.twin = true;
+                        conn.met = Some(welcome);
+                        conn.task = None;
+                    }
+                    set_status(&id, ServerStatus::Disconnected, None);
+                    return;
+                }
+                backoff = Duration::from_secs(1);
+                if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
+                    conn.live = Some((url, token));
+                    conn.met = Some(welcome);
+                }
+                serve(&id, ws).await;
+                set_status(&id, ServerStatus::Disconnected, Some("connection lost".into()));
+            }
+            Err(e) => set_status(&id, ServerStatus::Disconnected, Some(e)),
+        }
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(MAX_BACKOFF);
+    }
+}
+
+/// Whether `welcome` is from a server this app reaches directly too — This
+/// Mac included — told by the hash of the token each was admitted with.
+async fn is_twin(welcome: &Welcome) -> bool {
+    let Some(identity) = welcome.identity.as_deref() else { return false };
+    let direct: Vec<(String, Option<String>, Option<String>)> = conns()
+        .iter()
+        .filter(|c| c.via.is_none())
+        .map(|c| {
+            let met = c.met.as_ref().and_then(|w| w.identity.clone());
+            (c.saved.id.clone(), met, c.live.as_ref().map(|(_, token)| token.clone()))
+        })
+        .collect();
+    for (id, met, live) in direct {
+        // A server not connected yet still has the token it was saved with.
+        let kept = match id == LOCAL {
+            true => local_address().await.ok().map(|(_, token, _)| token),
+            false => crate::issues::credential(&credential_name(&id)).await,
+        };
+        let hashed = [live, kept].into_iter().flatten().map(|t| crate::serve::server_id(&t));
+        if met.into_iter().chain(hashed).any(|i| i == identity) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Puts away the relayed copies of a server just added directly with `token`.
+/// `run_relayed` asks [`is_twin`] only as it connects, so one already shown
+/// would stay beside its twin, every task listed twice, until its socket dropped.
+fn retire_twins(list: &mut [Conn], token: &str) {
+    let identity = crate::serve::server_id(token);
+    let copies = list
+        .iter_mut()
+        .filter(|c| c.via.is_some() && c.met.as_ref().and_then(|w| w.identity.as_deref()) == Some(identity.as_str()));
+    for conn in copies {
+        if let Some(task) = conn.task.take() {
+            task.abort();
+        }
+        for (_, call) in conn.pending.drain() {
+            let _ = call.send(Err(json!(format!("lost the connection to {}", conn.saved.name))));
+        }
+        conn.outgoing = None;
+        conn.live = None;
+        conn.status = ServerStatus::Disconnected;
+        conn.twin = true;
     }
 }
 
@@ -1663,6 +1894,12 @@ async fn serve(id: &str, ws: Socket) {
         conn.fix = None;
     }
     announce();
+    // This Mac's server relays the list this app already connects to, and a
+    // relayed machine's own list is two hops away.
+    let follows = id != LOCAL && conns().iter().any(|c| c.saved.id == id && c.via.is_none());
+    if follows {
+        tokio::spawn(read_shares(id.to_string()));
+    }
     // This Mac's server is loopback, which cannot die silently.
     let remote = id != LOCAL;
     let writer = tokio::spawn(async move {
@@ -1730,6 +1967,9 @@ async fn serve(id: &str, ws: Socket) {
                 tokio::spawn(reload());
             }
             let payload = frame.get("payload").cloned().unwrap_or(Value::Null);
+            if follows && event == "machines_shared" {
+                follow(id, &payload);
+            }
             let _ = sink.emit("server_event", json!({ "server": id, "event": event, "payload": payload }));
         }
     }
@@ -1840,6 +2080,7 @@ pub async fn add_server(url: String, token: String, name: Option<String>, ticket
             } else {
                 list.push(Conn::new(Saved { id: id.clone(), name, url, ssh: None, off: false, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() }));
             }
+            retire_twins(&mut list, &token);
         })
     };
     if let Err(e) = placed {
@@ -1884,7 +2125,9 @@ pub async fn set_server_address(id: String, url: String) -> Result<(), String> {
 /// share it. `except` is the server being renamed or re-added, which may keep
 /// its own.
 fn refuse_taken(list: &[Conn], name: &str, except: Option<&str>) -> Result<(), String> {
-    match list.iter().any(|c| c.saved.id != LOCAL && Some(c.saved.id.as_str()) != except && c.saved.name == name) {
+    // A relayed machine is named by its own server, and drawn in no list here.
+    let taken = |c: &Conn| c.saved.id != LOCAL && c.via.is_none() && Some(c.saved.id.as_str()) != except && c.saved.name == name;
+    match list.iter().any(taken) {
         true => Err(format!("another server is already named {name} — pick another name")),
         false => Ok(()),
     }
@@ -1894,10 +2137,11 @@ fn refuse_taken(list: &[Conn], name: &str, except: Option<&str>) -> Result<(), S
 /// app stops listening.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remove_server(id: String) -> Result<(), String> {
-    let removed = {
+    let (removed, relayed) = {
         let mut list = conns();
-        let at = list.iter().position(|c| c.saved.id == id);
-        at.map(|at| list.remove(at))
+        let at = list.iter().position(|c| c.saved.id == id && c.via.is_none());
+        let removed = at.map(|at| list.remove(at));
+        (removed, prune(&mut list))
     };
     let Some(conn) = removed else {
         return Ok(());
@@ -1907,7 +2151,9 @@ pub async fn remove_server(id: String) -> Result<(), String> {
     }
     save().await?;
     crate::issues::set_credential(&credential_name(&id), None).await?;
-    forget_cache(&id).await;
+    for gone in std::iter::once(id.clone()).chain(relayed) {
+        forget_cache(&gone).await;
+    }
     announce();
     Ok(())
 }
@@ -2009,19 +2255,19 @@ pub async fn add_ssh_server(line: String, name: Option<String>, ticket: Option<S
             Ok((mut ws, _)) => drop(ws.close(None).await),
             Err(e) => return Err(failed(tunnel.said().unwrap_or(e))),
         }
-        Ok(())
+        Ok(tunnel.token.clone())
     };
-    tokio::select! {
+    let token = tokio::select! {
         connected = connect => connected?,
         _ = cancel.woken.notified() => return Err(failed(CANCELLED.into())),
-    }
+    };
 
     let id = {
         let mut list = conns();
         // Again under the lock, for the token form's reason.
         let existing = list.iter().find(|c| c.saved.ssh.as_ref() == Some(&target)).map(|c| c.saved.id.clone());
         refuse_taken(&list, &name, existing.as_deref()).map_err(failed)?;
-        if let Some(conn) = list.iter_mut().find(|c| c.saved.ssh.as_ref() == Some(&target)) {
+        let id = if let Some(conn) = list.iter_mut().find(|c| c.saved.ssh.as_ref() == Some(&target)) {
             conn.saved.name = name;
             conn.saved.off = false;
             conn.restart();
@@ -2030,7 +2276,9 @@ pub async fn add_ssh_server(line: String, name: Option<String>, ticket: Option<S
             let id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
             list.push(Conn::new(Saved { id: id.clone(), name, url: String::new(), ssh: Some(target), off: false, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() }));
             id
-        }
+        };
+        retire_twins(&mut list, &token);
+        id
     };
     save().await.map_err(failed)?;
     announce();
@@ -2083,9 +2331,11 @@ pub async fn rename_server(id: String, name: String) -> Result<(), String> {
 pub async fn set_server_on(id: String, on: bool) -> Result<(), String> {
     {
         let mut list = conns();
-        let conn = list.iter_mut().find(|c| c.saved.id == id).ok_or("no such server")?;
+        let conn = list.iter_mut().find(|c| c.saved.id == id && c.via.is_none()).ok_or("no such server")?;
         conn.saved.off = !on;
         conn.restart();
+        // Turned back on, it lists its machines again once connected.
+        prune(&mut list);
     }
     // The row moves now; the file can follow.
     announce();
@@ -2405,7 +2655,7 @@ pub async fn servers_behind(beta: bool) -> Vec<String> {
     let _ = refresh_releases(Duration::from_secs(60)).await;
     conns()
         .iter()
-        .filter(|c| c.saved.id != LOCAL && c.status == ServerStatus::Connected && (c.saved.beta || !beta))
+        .filter(|c| c.saved.id != LOCAL && c.via.is_none() && c.status == ServerStatus::Connected && (c.saved.beta || !beta))
         .filter(|c| c.met.as_ref().is_some_and(|w| w.version.is_some() && !w.is_mac_app()) && latest(c).is_some())
         .map(|c| c.saved.id.clone())
         .collect()
@@ -2466,6 +2716,10 @@ pub async fn forward_port(server: String, port: u16) -> Result<u16, String> {
         }
         if conn.status != ServerStatus::Connected {
             return Err(format!("{} is not connected", conn.saved.name));
+        }
+        // A pipe is opened on the server it reaches, which is the parent.
+        if conn.via.is_some() {
+            return Err(format!("{} is reached through another server, so its dev servers don't open here yet.", conn.saved.name));
         }
         (conn.saved.ssh.clone(), conn.live.clone(), conn.saved.name.clone())
     };
@@ -2795,8 +3049,8 @@ pub struct FetchedFile {
 }
 
 async fn download_file(server: &str, path: &str, range: Option<&str>) -> Result<FetchedFile, String> {
-    let (base, token) = http_base(server)?;
-    let mut request = crate::http().get(format!("{base}/file")).query(&[("path", path)]).bearer_auth(token);
+    let (base, token, via) = http_base(server)?;
+    let mut request = crate::http().get(format!("{base}/file")).query(&[("path", path)]).query(&via).bearer_auth(token);
     if let Some(range) = range {
         request = request.header(reqwest::header::RANGE, range);
     }
@@ -2814,19 +3068,18 @@ async fn download_file(server: &str, path: &str, range: Option<&str>) -> Result<
 
 /// The `http(s)://` address and token of a connected server, for the routes
 /// it serves beside its socket.
-fn http_base(server: &str) -> Result<(String, String), String> {
-    let (url, token) = conns()
-        .iter()
-        .find(|c| c.saved.id == server)
-        .ok_or("no such server")?
-        .live
-        .clone()
-        .ok_or("the server is not connected")?;
+/// Where `server` serves `/file` and `/upload`, its token, and the `via` query
+/// a relayed machine's parent passes them on by.
+fn http_base(server: &str) -> Result<(String, String, Vec<(&'static str, String)>), String> {
+    let list = conns();
+    let conn = list.iter().find(|c| c.saved.id == server).ok_or("no such server")?;
+    let (url, token) = conn.live.clone().ok_or("the server is not connected")?;
+    let via = conn.via.iter().map(|v| ("via", v.machine.clone())).collect();
     let base = match url.strip_prefix("wss://") {
         Some(rest) => format!("https://{rest}"),
         None => url.replacen("ws://", "http://", 1),
     };
-    Ok((base, token))
+    Ok((base, token, via))
 }
 
 /// Copies a file on this Mac to `server` and answers where it landed there —
@@ -2847,7 +3100,7 @@ pub async fn upload_attachment(server: String, path: String, id: String) -> Resu
     if total > crate::attachments::MAX_UPLOAD_BYTES {
         return Err(format!("{name} is over 100MB, the most a remote server takes."));
     }
-    let (base, token) = http_base(&server)?;
+    let (base, token, via) = http_base(&server)?;
 
     let chunks = futures_util::stream::unfold((file, 0u64), move |(mut file, sent)| {
         let id = id.clone();
@@ -2870,6 +3123,7 @@ pub async fn upload_attachment(server: String, path: String, id: String) -> Resu
     let response = crate::http()
         .post(format!("{base}/upload"))
         .query(&[("name", name.as_str())])
+        .query(&via)
         .bearer_auth(&token)
         // The route reads exactly this many bytes and refuses a chunked body.
         .header(reqwest::header::CONTENT_LENGTH, total)
@@ -2891,6 +3145,32 @@ pub async fn upload_attachment(server: String, path: String, id: String) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A relayed machine's id keys its kept rows on disk and its paths as
+    /// `dray://<id>/…`, so it must be the same every run and safe in both.
+    #[test]
+    fn a_relayed_id_is_stable_and_safe_as_a_file_and_path() {
+        let id = relayed_id("4f2a", "3c749e49");
+        assert_eq!(id, relayed_id("4f2a", "3c749e49"));
+        assert_ne!(id, relayed_id("4f2b", "3c749e49"));
+        assert!(file_safe(&id) && !id.contains('/'));
+    }
+
+    /// A relayed machine is drawn in no list here, so it must not refuse a
+    /// name; and once its server is added directly, the copy goes at once.
+    #[tokio::test]
+    async fn a_relayed_machine_takes_no_name_and_gives_way_to_its_direct_twin() {
+        let mut relayed = Conn::relayed("parent", "machine", "vps");
+        relayed.met = Some(Welcome { identity: Some(crate::serve::server_id("its-token")), ..Default::default() });
+        relayed.status = ServerStatus::Connected;
+        let mut list = vec![relayed];
+        assert!(refuse_taken(&list, "vps", None).is_ok());
+        retire_twins(&mut list, "another-token");
+        assert!(list[0].shown());
+        retire_twins(&mut list, "its-token");
+        assert!(!list[0].shown());
+        assert_eq!(list[0].status, ServerStatus::Disconnected);
+    }
 
     /// A listing parks and wakes rows, but never closes a resume: the waiter on
     /// it reads any other phase as the resume having failed.

@@ -853,7 +853,7 @@ fn same_token(given: &str, token: &str) -> bool {
 /// directly and reaching it through a Mac that shares it (#1404) holds the
 /// token itself, so hashing that matches the two. One-way, so the welcome
 /// that carries it through a relay gives the token to no one.
-fn server_id(token: &str) -> String {
+pub fn server_id(token: &str) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(format!("dray-server\0{token}"))[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
