@@ -160,13 +160,9 @@ export function RoutineDetails({
         </Tooltip>
         <span className="text-ui text-muted-foreground">Routines</span>
       </div>
-      <form
-        className="flex flex-col gap-4 px-3 pt-2 pb-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void save();
-        }}
-      >
+      {/* Not a `<form>`: WebKit submits one on Ctrl+Enter in the textarea, and
+          saving is the button's alone. */}
+      <div className="flex flex-col gap-4 px-3 pt-2 pb-3">
         <div className="flex flex-col gap-1.5">
           <label htmlFor={nameId} className="text-ui text-muted-foreground">
             Name
@@ -188,12 +184,6 @@ export function RoutineDetails({
             id={promptId}
             value={shownPrompt}
             onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                void save();
-              }
-            }}
             className={cn(
               inputClassName,
               "field-sizing-content h-auto max-h-[60vh] min-h-28 resize-none py-1.5 text-ui md:text-ui",
@@ -207,7 +197,10 @@ export function RoutineDetails({
           </span>
         </div>
         {error && <p className="text-ui text-destructive/80">{error}</p>}
-        <div className="flex justify-end gap-2">
+        <div className="flex gap-2">
+          <Button type="button" size="sm" disabled={!changed || !valid || saving} onClick={() => void save()}>
+            Save changes
+          </Button>
           {changed && (
             <Button
               type="button"
@@ -222,11 +215,8 @@ export function RoutineDetails({
               Discard
             </Button>
           )}
-          <Button type="submit" size="sm" disabled={!changed || !valid || saving}>
-            Save
-          </Button>
         </div>
-      </form>
+      </div>
     </div>
   );
 }
