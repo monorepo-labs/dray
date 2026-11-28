@@ -2950,7 +2950,7 @@ languages: string,
  * **relative to each other**, so the pair answers "which of these two"
  * and nothing about seconds or word error rate.
  */
-speed: number, accuracy: number, };
+speed: number | null, accuracy: number | null, desktopOnlyLicense: string | null, };
 
 /**
  * The transcription picks. Model and device mean "not chosen" when absent.

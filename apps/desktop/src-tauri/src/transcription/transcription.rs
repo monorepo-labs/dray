@@ -142,6 +142,48 @@ async fn take_interrupted(state: &TranscriptionState, host: bool) -> Option<Tran
     }))
 }
 
+/// The local recorder calls Tauri directly; the other paths accept server requests.
+#[derive(Clone, Copy)]
+enum DictationSource {
+    Desktop,
+    Server,
+    Island,
+    Phone,
+}
+
+impl DictationSource {
+    fn check(self, model: &TranscriptionModel) -> Result<(), String> {
+        if !matches!(self, Self::Desktop) && model.desktop_only_license.is_some() {
+            return Err(format!("{} is for local desktop dictation only. Choose another model for server dictation.", model.name));
+        }
+        Ok(())
+    }
+
+    fn analytics_label(self) -> &'static str {
+        match self {
+            Self::Desktop | Self::Server => "app",
+            Self::Island => "island",
+            Self::Phone => "phone",
+        }
+    }
+}
+
+#[cfg(test)]
+mod model_use_tests {
+    use super::*;
+
+    #[test]
+    fn restricts_fourier_to_the_desktop_without_changing_existing_routes() {
+        let fourier = catalog::find("oruk-fourier-2b").unwrap();
+        let other = catalog::find("whisper-small").unwrap();
+        assert!(DictationSource::Desktop.check(fourier).is_ok());
+        for source in [DictationSource::Server, DictationSource::Island, DictationSource::Phone] {
+            assert!(source.check(fourier).is_err());
+            assert!(source.check(other).is_ok());
+        }
+    }
+}
+
 /// The selected model, if one is picked *and* still on disk.
 ///
 /// Both halves matter: a model deleted after being selected leaves the
@@ -339,21 +381,26 @@ pub async fn start_transcription(
     if HOST_OWNS.load(std::sync::atomic::Ordering::SeqCst) && state.recording.lock().await.is_some() {
         return Err("The Island is dictating. Stop it there first.".into());
     }
-    open_recorder(&state, false).await
+    open_recorder(&state, DictationSource::Desktop).await
 }
 
-/// Opens the microphone for the window, or for the Island where `host`.
+/// Opens the microphone for the desktop window or a forwarded request.
 async fn open_recorder(
     state: &TranscriptionState,
-    host: bool,
+    source: DictationSource,
 ) -> Result<Option<StartRefusal>, String> {
     use std::sync::atomic::Ordering::SeqCst;
+    let host = !matches!(source, DictationSource::Desktop);
     let sleeps = SLEEPS.load(SeqCst);
+    let model = ready_model().await;
+    if let Some(model) = model {
+        source.check(model)?;
+    }
     // Whoever starts last owns the recorder; `answer_host` claims it back after this.
     HOST_OWNS.store(false, SeqCst);
     // A sleep this client never stopped for is not its answer to a new recording.
     *state.interrupted[host as usize].lock().await = None;
-    let Some(model) = ready_model().await else {
+    let Some(model) = model else {
         return Ok(Some(StartRefusal::NeedsModel));
     };
 
@@ -444,6 +491,8 @@ pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<s
     }
     let Some(app) = APP.get() else { return Some(Err("Dictation is not ready yet.".into())) };
     let state = app.state::<TranscriptionState>();
+    // The server sets the Island tag from the connection; every call here is forwarded.
+    let source = if args["via"] == "island" { DictationSource::Island } else { DictationSource::Server };
     if cmd == "start_transcription" {
         // Held across the check and the open; see `start_transcription`.
         let _starting = state.starting.lock().await;
@@ -453,15 +502,13 @@ pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<s
         if !owns && state.recording.lock().await.is_some() {
             return Some(Err("Dray is already dictating.".into()));
         }
-        let started = open_recorder(&state, true).await;
+        let started = open_recorder(&state, source).await;
         // A refused start replaced nothing, so a lost recording it found is
         // still the Island's to stop.
         HOST_OWNS.store(owns || matches!(started, Ok(None)), SeqCst);
         return Some(started.and_then(json));
     }
     let owns = HOST_OWNS.load(SeqCst);
-    // Set by the server off the connection that asked, never by the caller.
-    let via = if args["via"] == "island" { "island" } else { "app" };
     Some(match cmd {
         // Ahead of the ownership check: the window may have started since the
         // sleep, and the Island's interrupted words are still the Island's.
@@ -470,11 +517,11 @@ pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<s
             None if !owns => Err("Dictation moved to Dray's window.".into()),
             None => {
                 HOST_OWNS.store(false, SeqCst);
-                finish_recording(&state, true, via).await.and_then(json)
+                finish_recording(&state, true, source).await.and_then(json)
             }
         },
         "cut_transcription" if !owns => Err("Dictation moved to Dray's window.".into()),
-        "cut_transcription" => cut_transcription(&state, via).await.and_then(json),
+        "cut_transcription" => cut_transcription(&state, source).await.and_then(json),
         "transcription_level" if !owns => json(0.0),
         "transcription_level" => transcription_level(state).await.and_then(json),
         "cancel_transcription" if !owns => json(()),
@@ -483,7 +530,7 @@ pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<s
             cancel_transcription(state).await.and_then(json)
         }
         _ => match args["path"].as_str() {
-            Some(path) => retry(&state, path.to_string(), via).await.and_then(json),
+            Some(path) => retry(&state, path.to_string(), source).await.and_then(json),
             None => Err("retry_transcription wants a path".into()),
         },
     })
@@ -496,14 +543,14 @@ pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<s
 /// one thing standing between a failed run and a lost recording.
 ///
 /// `heard` is what the live decode made of the same audio, used where the
-/// model that heard it is still the one selected. `via` is who dictated —
-/// `app`, `island` or `phone` — for the report alone.
+/// model that heard it is still the one selected. Check the source again because
+/// the selected model can change between opening the microphone and retrying.
 async fn transcribe_audio(
     state: &TranscriptionState,
     audio: Vec<f32>,
     saved: Option<PathBuf>,
     heard: Option<Heard>,
-    via: &'static str,
+    source: DictationSource,
 ) -> TranscribeOutcome {
     let kept = || saved.as_ref().map(|p| p.to_string_lossy().into_owned());
 
@@ -514,6 +561,7 @@ async fn transcribe_audio(
     };
 
     let run = async {
+        source.check(model).map_err(anyhow::Error::msg)?;
         if let Some(heard) = heard.filter(|h| h.model_id == model.id) {
             return heard.text;
         }
@@ -542,7 +590,7 @@ async fn transcribe_audio(
                 // carrying.
                 crate::analytics::track(
                     "feature_used",
-                    serde_json::json!({ "feature": "dictation", "model": model.id, "via": via }),
+                    serde_json::json!({ "feature": "dictation", "model": model.id, "via": source.analytics_label() }),
                 );
                 TranscribeOutcome::Text(text)
             }
@@ -562,7 +610,7 @@ async fn transcribe_audio(
 pub async fn stop_transcription(
     state: State<'_, TranscriptionState>,
 ) -> Result<TranscribeOutcome, String> {
-    finish_recording(&state, false, "app").await
+    finish_recording(&state, false, DictationSource::Desktop).await
 }
 
 /// The stop, for the window or for the Island where `host`. A recording the
@@ -570,7 +618,7 @@ pub async fn stop_transcription(
 async fn finish_recording(
     state: &TranscriptionState,
     host: bool,
-    via: &'static str,
+    source: DictationSource,
 ) -> Result<TranscribeOutcome, String> {
     if let Some(outcome) = take_interrupted(state, host).await {
         return Ok(outcome);
@@ -623,7 +671,7 @@ async fn finish_recording(
         None => None,
     };
 
-    Ok(transcribe_audio(&state, audio, saved, heard, via).await)
+    Ok(transcribe_audio(&state, audio, saved, heard, source).await)
 }
 
 /// Transcribes what has been said so far and leaves the microphone open: the
@@ -631,7 +679,7 @@ async fn finish_recording(
 /// and the words after. A stop and a start would lose what was said between
 /// the two. Nothing recording, or only silence, answers `Empty` — a cut with no
 /// words before it is ordinary, not a microphone fault.
-async fn cut_transcription(state: &TranscriptionState, via: &'static str) -> Result<TranscribeOutcome, String> {
+async fn cut_transcription(state: &TranscriptionState, source: DictationSource) -> Result<TranscribeOutcome, String> {
     let (captured, pending) = {
         let recording = state.recording.lock().await;
         let Some(recording) = recording.as_ref() else {
@@ -660,7 +708,7 @@ async fn cut_transcription(state: &TranscriptionState, via: &'static str) -> Res
         None => None,
     };
 
-    Ok(transcribe_audio(state, audio, saved, heard, via).await)
+    Ok(transcribe_audio(state, audio, saved, heard, source).await)
 }
 
 /// Runs a kept recording through the model again.
@@ -674,15 +722,15 @@ pub async fn retry_transcription(
     state: State<'_, TranscriptionState>,
     path: String,
 ) -> Result<TranscribeOutcome, String> {
-    retry(&state, path, "app").await
+    retry(&state, path, DictationSource::Desktop).await
 }
 
 /// [`retry_transcription`] for the window or, through the server, the island.
-async fn retry(state: &TranscriptionState, path: String, via: &'static str) -> Result<TranscribeOutcome, String> {
+async fn retry(state: &TranscriptionState, path: String, source: DictationSource) -> Result<TranscribeOutcome, String> {
     let path = PathBuf::from(path);
     let audio = recordings::read(&path).await.map_err(|e| format!("{e:#}"))?;
 
-    Ok(transcribe_audio(state, audio, Some(path), None, via).await)
+    Ok(transcribe_audio(state, audio, Some(path), None, source).await)
 }
 
 /// Transcribes a WAV another machine uploaded through `/upload` — a phone's
@@ -698,7 +746,7 @@ pub async fn transcribe_upload(path: String) -> Result<TranscribeOutcome, String
     let path = PathBuf::from(path);
     let audio = recordings::read(&path).await.map_err(|e| format!("{e:#}"))?;
 
-    Ok(transcribe_audio(&SERVER, audio, Some(path), None, "phone").await)
+    Ok(transcribe_audio(&SERVER, audio, Some(path), None, DictationSource::Phone).await)
 }
 
 /// The loudest sample since this was last asked, 0.0–1.0.

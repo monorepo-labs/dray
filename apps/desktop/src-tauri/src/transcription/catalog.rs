@@ -5,12 +5,8 @@
 //! catalog is a network dependency on a screen whose whole point is that the
 //! feature works offline once a model is down.
 //!
-//! Weights come from Hugging Face rather than `blob.handy.computer`, which is
-//! the CDN [Handy](https://github.com/cjpais/Handy) publishes them through. The
-//! files are the same — these are the `handy-computer` org's own repos — but
-//! leaning on someone else's bandwidth for every Dray install is not ours to
-//! spend. Pinned to a revision, so the URL keeps naming the bytes `sha256`
-//! describes even if the repo moves on.
+//! Each download points at its publisher's Hugging Face repository. Pinning the
+//! revision keeps the URL on the bytes described by `sha256` as the repo changes.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -50,8 +46,10 @@ pub struct TranscriptionModel {
     /// numbers that look like one would be worse than having none. They are
     /// **relative to each other**, so the pair answers "which of these two"
     /// and nothing about seconds or word error rate.
-    pub speed: u8,
-    pub accuracy: u8,
+    pub speed: Option<u8>,
+    pub accuracy: Option<u8>,
+    // A restricted model may run only through the local desktop recorder.
+    pub desktop_only_license: Option<&'static str>,
 }
 
 impl TranscriptionModel {
@@ -78,8 +76,8 @@ impl TranscriptionModel {
 ///
 /// Ordered by what most readers should pick, best first: English-only Parakeet,
 /// then Nemotron as the multilingual answer, then Canary for hardware that
-/// cannot carry either. The two Whispers sit together at the end, where the
-/// choice between them is the ordinary size-against-accuracy one.
+/// cannot carry either. The two Whispers sit together for comparison. Fourier
+/// follows as an opt-in English model for noncommercial desktop use.
 ///
 /// Nemotron above Canary despite being three times the download: a reader
 /// scanning for a second language is reading for the *count*, and stopping at
@@ -96,8 +94,9 @@ pub const MODELS: &[TranscriptionModel] = &[
         size_bytes: 731_357_568,
         sha256: "4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795",
         languages: "English",
-        speed: 79,
-        accuracy: 90,
+        speed: Some(79),
+        accuracy: Some(90),
+        desktop_only_license: None,
     },
     TranscriptionModel {
         id: "nemotron-3.5-asr-streaming-0.6b",
@@ -109,8 +108,9 @@ pub const MODELS: &[TranscriptionModel] = &[
         size_bytes: 751_094_240,
         sha256: "b94545b313b3223fda7b2857a52681da813935c2127643d1e9ff0c23d988089c",
         languages: "28 languages",
-        speed: 84,
-        accuracy: 82,
+        speed: Some(84),
+        accuracy: Some(82),
+        desktop_only_license: None,
     },
     TranscriptionModel {
         id: "canary-180m-flash",
@@ -122,8 +122,9 @@ pub const MODELS: &[TranscriptionModel] = &[
         size_bytes: 218_447_552,
         sha256: "e13c7f5d0952b056a027cfffec13e3a3a134d1608babed24f983568f141e297c",
         languages: "English, German, Spanish, French",
-        speed: 98,
-        accuracy: 88,
+        speed: Some(98),
+        accuracy: Some(88),
+        desktop_only_license: None,
     },
     TranscriptionModel {
         id: "whisper-small",
@@ -135,8 +136,9 @@ pub const MODELS: &[TranscriptionModel] = &[
         size_bytes: 269_751_136,
         sha256: "9b9c8811bbcc82a7766f0fb0925614bdacb0923b2cc630daeac17108b655b860",
         languages: "99 languages",
-        speed: 78,
-        accuracy: 80,
+        speed: Some(78),
+        accuracy: Some(80),
+        desktop_only_license: None,
     },
     TranscriptionModel {
         id: "whisper-large-v3-turbo",
@@ -148,8 +150,23 @@ pub const MODELS: &[TranscriptionModel] = &[
         size_bytes: 886_381_760,
         sha256: "b2e30cc286bc9f3aba4db9099fc7403543497c05ce7100d0d83091ddfd25a183",
         languages: "100 languages",
-        speed: 35,
-        accuracy: 88,
+        speed: Some(35),
+        accuracy: Some(88),
+        desktop_only_license: None,
+    },
+    TranscriptionModel {
+        id: "oruk-fourier-2b",
+        name: "Fourier 2B",
+        description: "Oruk's English model. Q8 word error rate: 1.40% on LibriSpeech test-clean and 3.58% on FLEURS US English.",
+        repo: "oruk/oruk-fourier-2b",
+        revision: "8bcce21695e4ba13569c48de6cedffcb8a7576f5",
+        filename: "Fourier-2B-Q8_0.gguf",
+        size_bytes: 2_185_030_848,
+        sha256: "6a7c419bd571f7b0e21da2d5ab1e3a1a3938a83470d622be57427af98f322981",
+        languages: "English",
+        speed: None,
+        accuracy: None,
+        desktop_only_license: Some("CC BY-NC 4.0"),
     },
 ];
 
@@ -254,18 +271,9 @@ mod tests {
     #[test]
     fn scores_are_percentages() {
         for m in MODELS {
-            assert!(
-                (1..=100).contains(&m.speed),
-                "{}: speed {} is not 1–100",
-                m.id,
-                m.speed
-            );
-            assert!(
-                (1..=100).contains(&m.accuracy),
-                "{}: accuracy {} is not 1–100",
-                m.id,
-                m.accuracy
-            );
+            for score in [m.speed, m.accuracy].into_iter().flatten() {
+                assert!((1..=100).contains(&score), "{}: score {score} is not 1–100", m.id);
+            }
         }
     }
 
