@@ -177,8 +177,8 @@ class Store(private val context: Context) {
     val pulls by lazy { PullsModel(this, cache) }
     val issues by lazy { IssuesModel(this, cache) }
 
-    /** A server came up: push hands it this phone's handle. */
-    var onConnected: (String) -> Unit = {}
+    /** A server came up: push hands it this phone's handle, and presence says again what is on screen. */
+    val onConnected = mutableListOf<(String) -> Unit>()
     /** A server is about to be removed, while its token can still be read. */
     var onRemoving: (Server) -> Unit = {}
 
@@ -503,7 +503,7 @@ class Store(private val context: Context) {
         forget(s.id)
         standIns[s.id] = twin
         standIns.remove(twin)
-        if (wasUp && serverState[twin] == ConnState.Connected) onConnected(twin)
+        if (wasUp && serverState[twin] == ConnState.Connected) onConnected.forEach { it(twin) }
     }
 
     private suspend fun loadShared(server: String) {
@@ -579,7 +579,7 @@ class Store(private val context: Context) {
         if (servers.none { it.id == server }) return
         scope.launch { loadBots(server) }
         scope.launch { loadShared(server) }
-        onConnected(server)
+        onConnected.forEach { it(server) }
         // Heard on the old socket, so older than the read below; a read never moves `modified`, so a stale `completed` would win.
         statuses.keys.removeAll { it.server == server }
         loadIndex(server)

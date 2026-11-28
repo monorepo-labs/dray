@@ -33,6 +33,7 @@ import com.yogesh.dray.model.SessionKey
 import com.yogesh.dray.net.PairLink
 import com.yogesh.dray.store.NewTask
 import com.yogesh.dray.store.Store
+import com.yogesh.dray.push.Presence
 import com.yogesh.dray.push.Push
 
 /** Where the app is: the list at the bottom of a stack, everything else pushed over it. */
@@ -129,7 +130,10 @@ fun App(incoming: PairLink?, consumed: () -> Unit) {
         // Tagged with a copy through a Mac held back since, or the reverse (#1404).
         push(Route.Session(SessionKey(store.shownAs(key.server), key.id)))
     }
-    LaunchedEffect(stack.last()) { Push.viewing = (stack.last() as? Route.Session)?.key }
+    LaunchedEffect(stack.last()) {
+        Push.viewing = (stack.last() as? Route.Session)?.key
+        Presence.show(Push.viewing)
+    }
     // With no cached list to open from (a first launch), the bot opens once its server answers instead.
     // Anything that leaves the list first — an alert, a link, the reader's own tap — spends it, as does a slow server.
     var launchSpent by rememberSaveable { mutableStateOf(stack.size > 1) }

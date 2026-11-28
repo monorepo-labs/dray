@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.yogesh.dray.push.Presence
 import com.yogesh.dray.push.Push
 import com.yogesh.dray.store.OpenIntoBot
 import com.yogesh.dray.store.Store
@@ -20,6 +21,7 @@ class DrayApplication : Application() {
         super.onCreate()
         store = Store(this)
         Push.start(this, store)
+        Presence.start(store)
         Dictations.start(this)
         OpenIntoBot.start(this)
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {

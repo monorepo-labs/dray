@@ -77,6 +77,10 @@ reads and drives it over the same WebSocket the desktop and iOS use
   none and the tap opens the app) and Reply, answered on the store's socket or
   one of its own, with no app coming forward. A tap opens the chat (`open`
   where a bot's task alerts). Settings → Notifications holds the switches.
+  The chat open while the app is in front is told to its server
+  (`set_viewing`, Presence.kt, #1661), which then pushes no phone for it;
+  the background says `[]`, a reconnect says it again, and an older server's
+  `unknown command` is asked again only after it reconnects.
 
 - **Pull requests and Issues pages** (Pulls.swift, PullDetail.swift,
   Issues.swift): beside Settings on the list. Each draws its last read at

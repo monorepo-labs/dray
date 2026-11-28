@@ -101,7 +101,7 @@ object Push {
             override fun onStart(owner: LifecycleOwner) { foreground = true }
             override fun onStop(owner: LifecycleOwner) { foreground = false }
         })
-        store.onConnected = ::connected
+        store.onConnected += ::connected
         store.onRemoving = ::leave
         if (!available) Log.i(TAG, "no Firebase project in this build: push is off")
         // Every launch: a restored phone or a cleared app gets a new token, and a new relay secret wants a new seal.
