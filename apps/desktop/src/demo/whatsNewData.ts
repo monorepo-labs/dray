@@ -26,11 +26,10 @@ export const NEXT_RELEASE: Highlight[] = [
         action: { label: "Open Servers settings", target: "settings/servers" },
         required: "remote-access",
         otherwise: "Remote access is now more reliable and faster",
-        // One of two takes, not yet picked: relay-path or relay-comeback.
         otherwiseMedia: {
           kind: "image",
-          url: "/demo/whats-new/relay-path-white.png",
-          alt: "An iPhone reaching a MacBook through Dray's relay, the path in blue",
+          url: "/demo/whats-new/relay-comeback-white.png",
+          alt: "Back online after a network drop: about 12 seconds before, about 4 now",
         },
       },
     },

@@ -136,9 +136,10 @@ action. The app reads that off its own server's switch as the page opens
 (`settle` in apps/desktop/src/lib/changelog.ts). The pictures are drawn in
 [whatsNewIllustrations.tsx](../desktop/src/demo/whatsNewIllustrations.tsx);
 copy them from `apps/desktop/demo/whats-new/` to `apps/web/public/changelog/`:
-`relay-link-white.png` as `relay-reconnect.png`, and the off card's take, not
-yet picked (`relay-path-white.png` or `relay-comeback-white.png`), as
-`relay-faster.png`.
+`relay-link-white.png` as `relay-reconnect.png`, and `relay-comeback-white.png`
+as `relay-faster.png`. The off card's times are the silent-drop test above,
+11.8s and 4.0s rounded; measure again on the deployed relay before the release
+and redraw if they moved.
 
 ## Deploy on Railway
 

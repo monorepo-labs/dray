@@ -555,10 +555,10 @@ function relayInk() {
 }
 
 /// A device as a square block: a glyph drawn in two rectangles, its name.
-function DeviceBlock({ name, kind, width = 92 }: { name: string; kind: "laptop" | "phone"; width?: number }) {
+function DeviceBlock({ name, kind }: { name: string; kind: "laptop" | "phone" }) {
   const { card, ink, line } = relayInk();
   return (
-    <div className={cn("flex shrink-0 flex-col items-center gap-2.5 py-4", card)} style={{ width }}>
+    <div className={cn("flex w-[92px] shrink-0 flex-col items-center gap-2.5 py-4", card)}>
       {kind === "laptop" ? (
         <svg width="40" height="28" viewBox="0 0 40 28" aria-hidden>
           <rect x="6" y="2" width="28" height="19" fill="none" stroke={line} strokeWidth="2.5" />
@@ -604,47 +604,46 @@ function RelayLink() {
   );
 }
 
-/// For a reader with nothing to reconnect: the phone reaching the server
-/// through Dray's own relay, one unbroken blue path through the middle block.
-function RelayPath() {
-  const { light, card, ink, line } = relayInk();
-  const segment = <div className="h-[3px] min-w-3 flex-1" style={{ background: BLUE }} />;
-  return (
-    <div aria-hidden className={cn("flex w-[352px] items-center gap-[2px] p-2", PANEL(light))}>
-      <DeviceBlock name="iPhone" kind="phone" width={76} />
-      {segment}
-      <div className={cn("flex w-[76px] shrink-0 flex-col items-center gap-2.5 py-4", card)}>
-        <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden>
-          <rect x="1.5" y="1.5" width="25" height="25" fill="none" stroke={line} strokeWidth="2.5" />
-          <rect x="10" y="10" width="8" height="8" fill={line} />
-        </svg>
-        <span className={cn(MONO, "text-[10px] leading-3", ink)}>Dray relay</span>
-      </div>
-      {segment}
-      <DeviceBlock name="MacBook" kind="laptop" width={76} />
-    </div>
-  );
-}
+/// The page's own stripes (`Stripes`: 2px every 6px on screen), at the scale
+/// a 400-wide tile is drawn on What's New's cards.
+const stripes = (ink: string) => `repeating-linear-gradient(90deg, ${ink} 0 1.5px, transparent 1.5px 4.5px)`;
 
 /// For a reader with nothing to reconnect: how long the link takes to come
-/// back after a drop, before and now, the short blue bar the news. No figures,
-/// since real-world times are not measured yet.
+/// back once the network returns, opentunnel against the relay, the short
+/// blue bar the news. The times are #1669's silent-drop test, one run each on
+/// one box: 11.8s and 4.0s, shown as about 12 and 4.
 function RelayComeback() {
   const { light, card, dim, ink, line } = relayInk();
-  const bar = (label: string, width: string, now: boolean) => (
+  const bar = (label: string, seconds: number, now: boolean) => (
     <div className="flex items-center gap-3">
-      <span className={cn(MONO, "w-12 shrink-0 text-[10px] leading-3", now ? ink : dim)}>{label}</span>
-      <div className="h-4" style={{ width, background: now ? BLUE : line }} />
+      <span className={cn(MONO, "w-11 shrink-0 text-[10px] leading-3", now ? ink : dim)}>{label}</span>
+      <div className="relative h-6 flex-1">
+        <div
+          className="absolute inset-y-0 left-0"
+          style={{
+            width: `${(seconds / 12) * 100}%`,
+            background: `${stripes(now ? "#0000001F" : "#0000000F")}, ${now ? BLUE : line}`,
+          }}
+        />
+      </div>
+      <span className={cn(MONO, "w-8 shrink-0 text-right text-[11px] leading-[14px]", now ? ink : dim)}>~{seconds}s</span>
     </div>
   );
   return (
-    <div aria-hidden className={cn("flex w-[300px] flex-col gap-[2px] p-2", PANEL(light))}>
+    <div aria-hidden className={cn("flex w-[320px] flex-col gap-[2px] p-2", PANEL(light))}>
       <div className={cn("flex items-center justify-between px-3 py-2.5", card)}>
-        <span className={cn(MONO, "text-[11px] leading-[14px]", ink)}>Back online after a drop</span>
+        <span className={cn(MONO, "text-[11px] leading-[14px]", ink)}>Back online after a network drop</span>
       </div>
-      <div className={cn("flex flex-col gap-3 px-3 py-4", card)}>
-        {bar("Before", "100%", false)}
-        {bar("Now", "18%", true)}
+      <div className={cn("flex flex-col gap-3 px-3 pt-4 pb-3", card)}>
+        {bar("Before", 12, false)}
+        {bar("Now", 4, true)}
+        <div className="ml-14 mr-11 flex justify-between">
+          {["0s", "4s", "8s", "12s"].map((t) => (
+            <span key={t} className={cn(MONO, "text-[8px] leading-[10px]", dim)}>
+              {t}
+            </span>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -655,8 +654,7 @@ const ROWS: { title: string; takes: Record<string, { name: string; Art: () => Re
     title: "Reconnect your servers (the relay)",
     takes: {
       "relay-link": { name: "Remote access on: the link, broken and made again", Art: RelayLink },
-      "relay-path": { name: "Remote access off, A: the path through the relay", Art: RelayPath },
-      "relay-comeback": { name: "Remote access off, B: back online after a drop", Art: RelayComeback },
+      "relay-comeback": { name: "Remote access off: back online after a drop", Art: RelayComeback },
     },
   },
   {
