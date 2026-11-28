@@ -82,7 +82,7 @@ struct TranscriptView: View {
                         .font(Theme.Font.footnote)
                     }
                     if reading {
-                        Text("Checking new messages").font(Theme.Font.subhead).foregroundStyle(Theme.secondary).shimmer()
+                        Text("Checking new messages…").font(Theme.Font.subhead).foregroundStyle(Theme.secondary).shimmer()
                     } else if busy, bot != nil {
                         // A review's turn draws nothing, its orb included.
                         if !inReviewTurn(transcript?.events ?? []) {

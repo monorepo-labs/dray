@@ -312,7 +312,7 @@ matched on event id, never `seq`. **A socket reading connected is not trusted**
 silent, failing no ping, so coming back to the front pings it and reconnects
 where no pong comes in 5s, and the 25s ping reconnects past 15s with neither a
 pong nor a frame. `StaleSocketTests` runs it behind `scripts/freeze_proxy.py`.
-A chat's first read since launch draws "Checking new messages" at its foot;
+A chat's first read since launch draws "Checking new messages…" at its foot;
 later opens read quietly (`serverRead`).
 
 The view holds the end only while the reader is within 40pt of it, the

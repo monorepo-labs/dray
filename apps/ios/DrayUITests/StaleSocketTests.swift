@@ -36,7 +36,7 @@ final class StaleSocketTests: XCTestCase {
         try control("slow?ms=1500")
         defer { try? control("slow?ms=0") }
         bot.tap()
-        let reading = app.staticTexts["Checking new messages"]
+        let reading = app.staticTexts["Checking new messages…"]
         XCTAssertTrue(reading.waitForExistence(timeout: 10), "no reading line on the first open")
         snap(app, "first-open-reading")
         XCTAssertTrue(reading.waitForNonExistence(timeout: 40), "the reading line never went")
