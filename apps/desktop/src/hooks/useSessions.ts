@@ -2,6 +2,7 @@ import { CANCELLED, invoke, listen, LOCAL, noteSession, qualify, serverOfPath, s
 import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
 import { botsOf, isBotPath, keepBots, refreshBots, useBots } from "@/lib/bots";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
+import { networkOffline, offlineFailure, subscribeNetwork } from "@/lib/network";
 import { indexRow, keptRow, loadServerCaches, saveServerCache, unreachable, withKept } from "@/lib/serverCache";
 import { loginOf, seedLogin, useMergeAccess } from "@/lib/mergeAccess";
 import { keptPrMark, prMarksChanged } from "@/hooks/usePrMarks";
@@ -9,7 +10,7 @@ import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
 import { CloudError, cloudIo, isCloud, onCloud, placeTask, setCloudFailure, setPlacing } from "@/lib/cloud";
 import { keepCloudTranscript, keptCloudTranscript } from "@/lib/cloudTranscripts";
 import { readDraft, writeDraft } from "@/hooks/useDraft";
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { flushSync } from "react-dom";
 import { restoreAttachments } from "@/hooks/useAttachments";
 import { appendStreamingText, peekStreamingBlock, retireStreamingBlock, startStreamingBlock, type StreamingBlock } from "@/hooks/useStreamingBlock";
@@ -447,7 +448,18 @@ export function useSessions() {
     // the turn and the child, and close only on their own `secret_answered`,
     // so no turn ending or task draining may strand them.
     const [secretAsks, setSecretAsks] = useState<Record<string, string[]>>({});
-    const [error, setError] = useState<string | null>(null);
+    const [error, setShownError] = useState<string | null>(null);
+    // A failure being offline explains is said by the offline line already.
+    const setError = useCallback((next: string | null) => {
+      if (!next || !offlineFailure(next)) setShownError(next);
+    }, []);
+    useEffect(
+      () =>
+        subscribeNetwork(() => {
+          if (networkOffline()) setShownError((now) => (now && offlineFailure(now) ? null : now));
+        }),
+      [],
+    );
     // Bumped by every navigation, so an action started before it and rejecting
     // after it can be told from one the reader is still standing next to.
     // Clearing the slot on the way in is only half of keeping it to its

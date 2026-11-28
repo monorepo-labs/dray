@@ -649,6 +649,7 @@ async fn read_shares(parent: String) {
 
 /// Reads `servers.json` and opens a connection to each. Called once, at setup.
 pub async fn start(sink: Sink) {
+    crate::network::start(sink.clone());
     let _ = SINK.set(sink);
     let saved = crate::machines::load().await;
     {
@@ -713,6 +714,10 @@ fn set(id: &str, status: ServerStatus, stage: Option<ssh::Stage>, error: Option<
         conn.stage = stage;
         conn.error = error;
         conn.fix = fix;
+        // A remote that failed may be this machine's network, not the server.
+        if status == ServerStatus::Disconnected && conn.saved.id != LOCAL && conn.error.is_some() {
+            crate::network::suspect();
+        }
         if status != ServerStatus::Connected {
             conn.outgoing = None;
             conn.live = None;
@@ -735,6 +740,7 @@ fn set(id: &str, status: ServerStatus, stage: Option<ssh::Stage>, error: Option<
 /// a tunnel address is saved: then only that is retried, [`wait_for_address`].
 async fn run(id: String) {
     let mut backoff = Duration::from_secs(1);
+    let mut back = crate::network::back();
     let via = conns().iter().find(|c| c.saved.id == id).and_then(|c| c.via.clone());
     if let Some(via) = via {
         return run_relayed(id, via).await;
@@ -817,15 +823,14 @@ async fn run(id: String) {
                         // accepted here; only the reader can settle that.
                         let waiting = format!("Waiting for its tunnel address to answer. {}", failure.message);
                         set(&id, ServerStatus::Disconnected, None, Some(waiting), failure.fix);
-                        let ws = wait_for_address(&saved.url, &kept_token, &mut backoff).await;
+                        let ws = wait_for_address(&saved.url, &kept_token, &mut backoff, &mut back).await;
                         (saved.url, kept_token, None, Some(ws))
                     } else {
                         set(&id, ServerStatus::Disconnected, None, Some(failure.message), failure.fix);
                         if failure.permanent {
                             return;
                         }
-                        tokio::time::sleep(backoff).await;
-                        backoff = (backoff * 2).min(MAX_BACKOFF);
+                        pause(&mut backoff, &mut back).await;
                         continue;
                     }
                 }
@@ -887,8 +892,17 @@ async fn run(id: String) {
             }
         }
         drop(tunnel);
-        tokio::time::sleep(backoff).await;
-        backoff = (backoff * 2).min(MAX_BACKOFF);
+        pause(&mut backoff, &mut back).await;
+    }
+}
+
+/// Waits out `backoff` and doubles it, or ends at once with it reset when the
+/// network comes back meanwhile — including during the attempt just failed,
+/// since `back` keeps an unseen tick.
+async fn pause(backoff: &mut Duration, back: &mut tokio::sync::watch::Receiver<u64>) {
+    tokio::select! {
+        _ = tokio::time::sleep(*backoff) => *backoff = (*backoff * 2).min(MAX_BACKOFF),
+        _ = back.changed() => *backoff = Duration::from_secs(1),
     }
 }
 
@@ -897,6 +911,7 @@ async fn run(id: String) {
 /// the parent is down this waits for it rather than retrying.
 async fn run_relayed(id: String, via: Via) {
     let mut backoff = Duration::from_secs(1);
+    let mut back = crate::network::back();
     loop {
         let parent = {
             let list = conns();
@@ -936,8 +951,7 @@ async fn run_relayed(id: String, via: Via) {
             }
             Err(e) => set_status(&id, ServerStatus::Disconnected, Some(e)),
         }
-        tokio::time::sleep(backoff).await;
-        backoff = (backoff * 2).min(MAX_BACKOFF);
+        pause(&mut backoff, &mut back).await;
     }
 }
 
@@ -1812,10 +1826,14 @@ pub async fn cloud_transcript(server: String, session_id: String) -> Option<Valu
 /// back attaches its tunnel well after it starts — measured at 7s from a clean
 /// stop, 66s to 183s where the old machine vanished with its session open —
 /// so one failed try says little.
-async fn wait_for_address(url: &str, token: &str, backoff: &mut Duration) -> (Socket, Welcome) {
+async fn wait_for_address(
+    url: &str,
+    token: &str,
+    backoff: &mut Duration,
+    back: &mut tokio::sync::watch::Receiver<u64>,
+) -> (Socket, Welcome) {
     loop {
-        tokio::time::sleep(*backoff).await;
-        *backoff = (*backoff * 2).min(MAX_BACKOFF);
+        pause(backoff, back).await;
         if let Ok(admitted) = admit(url, token).await {
             return admitted;
         }
@@ -3408,13 +3426,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn network_back_cuts_the_backoff_short() {
+        let mut back = crate::network::back();
+        let mut backoff = Duration::from_secs(60);
+        // Ticked before the wait, as when it lands mid-attempt.
+        crate::network::came_back();
+        tokio::time::timeout(Duration::from_secs(1), pause(&mut backoff, &mut back)).await.unwrap();
+        assert_eq!(backoff, Duration::from_secs(1));
+    }
+
+    #[tokio::test]
     async fn waits_for_a_tunnel_address_to_come_back() {
         let free = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = free.local_addr().unwrap();
         drop(free);
         let mut backoff = Duration::from_millis(5);
         let waiting = tokio::spawn(async move {
-            let admitted = wait_for_address(&format!("ws://{addr}"), "t", &mut backoff).await;
+            let mut back = crate::network::back();
+            let admitted = wait_for_address(&format!("ws://{addr}"), "t", &mut backoff, &mut back).await;
             (admitted.1.version, backoff)
         });
         tokio::time::sleep(Duration::from_millis(60)).await;
