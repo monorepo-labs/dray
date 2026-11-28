@@ -1,55 +1,55 @@
 {
-  "version": "0.36.4",
-  "notes": "### Improved\n\n- Click a routine in a bot's More tab to see it, and edit its name and\n  instructions there.\n\n### Fixed\n\n- A bot's chat shows the Messaged row for a message to a task on\n  another machine.",
-  "pub_date": "2026-11-28T05:04:42.209Z",
+  "version": "0.36.5",
+  "notes": "### New\n\n- **Reorder your bots.** Hold a bot in the sidebar and drag it to a new\n  place. The order syncs to your other devices.\n\n### Improved\n\n- A bot's chat panel switches views with dots at its foot and has no\n  title strip. Attachments are a compact list with their file names, and\n  routines are tidier: active ones first, paused ones looking like the\n  rest.\n- Sent images have a hairline border and square thumbnails, and no\n  longer flash blank or jump on send. Click an attachment in the\n  composer to open it full screen.\n- A bot's tasks on its server's machines show in the app and open there.\n- Servers logged in to Claude with a token list versioned Claude model\n  names.\n- An agent installed while Dray runs shows up without a restart.\n- OpenCode's background server stops once nothing uses it.\n- Dray checks for updates every hour and when its window regains focus.\n\n### Fixed\n\n- Your phone no longer gets a push for a chat you're reading on the\n  desktop.\n- No desktop banner for a chat you have open on another device.\n- On Linux, clicks in the in-app browser land where you aim while it\n  records.",
+  "pub_date": "2026-11-28T13:06:07.353Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWo5L0kxNGtUWU1ZcXpWTit2a2RxUnE3NFFvc3I5RS9MeHdUbzl1RmVjUElpWVRLallsTlFueWhHNzY2TEpSak5yTVRHeldjWUdBcmx4NjlwR0NKQWc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODQyMjc5CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zNi40CnkxOWRnemVPc1A0Nmt2MU11NXFVQ3dPa1ZUT2tvN1BxK3JzZkRtZmc4cC9BQi9Db2hNeUZ0VnFSM05ORUN6bnZCVVZYankralBZempIa0xWdFhJUEFRPT0K",
-      "url": "https://downloads.drayhq.com/v0.36.4/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXNKS0VJRVF1SmpSR1RJcnNxTGM0Q3VzMENGNUs4bEIyWGpYSmx2UDBQcVRMYmI3QjhDS0wweHlzbWxPbk5YWjRhM01lZDdMUkNxTGRNWE1uMnJvQVFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODcxMTYxCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zNi41ClVIN3MvOXBKOC9HTVFOTmF3RUpaWDB5U0N6b01LK3FmUGhUdlZLRjRNT1JnWmpmZmZ6TnhmOGR5YUZmSUVnSUpmaVJxbUNhdDZ3RG0vRFdsVUVRa0JRPT0K",
+      "url": "https://downloads.drayhq.com/v0.36.5/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWo5L0kxNGtUWU1ZcXpWTit2a2RxUnE3NFFvc3I5RS9MeHdUbzl1RmVjUElpWVRLallsTlFueWhHNzY2TEpSak5yTVRHeldjWUdBcmx4NjlwR0NKQWc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODQyMjc5CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zNi40CnkxOWRnemVPc1A0Nmt2MU11NXFVQ3dPa1ZUT2tvN1BxK3JzZkRtZmc4cC9BQi9Db2hNeUZ0VnFSM05ORUN6bnZCVVZYankralBZempIa0xWdFhJUEFRPT0K",
-      "url": "https://downloads.drayhq.com/v0.36.4/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXNKS0VJRVF1SmpSR1RJcnNxTGM0Q3VzMENGNUs4bEIyWGpYSmx2UDBQcVRMYmI3QjhDS0wweHlzbWxPbk5YWjRhM01lZDdMUkNxTGRNWE1uMnJvQVFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODcxMTYxCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zNi41ClVIN3MvOXBKOC9HTVFOTmF3RUpaWDB5U0N6b01LK3FmUGhUdlZLRjRNT1JnWmpmZmZ6TnhmOGR5YUZmSUVnSUpmaVJxbUNhdDZ3RG0vRFdsVUVRa0JRPT0K",
+      "url": "https://downloads.drayhq.com/v0.36.5/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWo5L0kxNGtUWU1ZcXpWTit2a2RxUnE3NFFvc3I5RS9MeHdUbzl1RmVjUElpWVRLallsTlFueWhHNzY2TEpSak5yTVRHeldjWUdBcmx4NjlwR0NKQWc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODQyMjc5CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zNi40CnkxOWRnemVPc1A0Nmt2MU11NXFVQ3dPa1ZUT2tvN1BxK3JzZkRtZmc4cC9BQi9Db2hNeUZ0VnFSM05ORUN6bnZCVVZYankralBZempIa0xWdFhJUEFRPT0K",
-      "url": "https://downloads.drayhq.com/v0.36.4/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXNKS0VJRVF1SmpSR1RJcnNxTGM0Q3VzMENGNUs4bEIyWGpYSmx2UDBQcVRMYmI3QjhDS0wweHlzbWxPbk5YWjRhM01lZDdMUkNxTGRNWE1uMnJvQVFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODcxMTYxCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zNi41ClVIN3MvOXBKOC9HTVFOTmF3RUpaWDB5U0N6b01LK3FmUGhUdlZLRjRNT1JnWmpmZmZ6TnhmOGR5YUZmSUVnSUpmaVJxbUNhdDZ3RG0vRFdsVUVRa0JRPT0K",
+      "url": "https://downloads.drayhq.com/v0.36.5/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWo5L0kxNGtUWU1ZcXpWTit2a2RxUnE3NFFvc3I5RS9MeHdUbzl1RmVjUElpWVRLallsTlFueWhHNzY2TEpSak5yTVRHeldjWUdBcmx4NjlwR0NKQWc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODQyMjc5CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zNi40CnkxOWRnemVPc1A0Nmt2MU11NXFVQ3dPa1ZUT2tvN1BxK3JzZkRtZmc4cC9BQi9Db2hNeUZ0VnFSM05ORUN6bnZCVVZYankralBZempIa0xWdFhJUEFRPT0K",
-      "url": "https://downloads.drayhq.com/v0.36.4/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXNKS0VJRVF1SmpSR1RJcnNxTGM0Q3VzMENGNUs4bEIyWGpYSmx2UDBQcVRMYmI3QjhDS0wweHlzbWxPbk5YWjRhM01lZDdMUkNxTGRNWE1uMnJvQVFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODcxMTYxCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zNi41ClVIN3MvOXBKOC9HTVFOTmF3RUpaWDB5U0N6b01LK3FmUGhUdlZLRjRNT1JnWmpmZmZ6TnhmOGR5YUZmSUVnSUpmaVJxbUNhdDZ3RG0vRFdsVUVRa0JRPT0K",
+      "url": "https://downloads.drayhq.com/v0.36.5/Dray_universal.app.tar.gz"
     },
     "linux-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWl1ZmZDaDV1bENSUER4ZWljbkdieG1mN2NmUzBTbXlIcmJCcG52aDgzYWpVNjdXWWUvUUQ5REZrUkFmUS9OWkdweGJXZlBOam5zNmE0OWFVZEZSRWdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODQyNzAxCWZpbGU6RHJheV8wLjM2LjRfYWFyY2g2NC5BcHBJbWFnZQl2ZXJzaW9uOjAuMzYuNApOU0xtcC9hWGxabHpPZThwKzY1QmoxNU1BcitWdm5BK3gzQVVPWkJEQ1VDamMxZzBWc0Y3SVJlZHBENzVsYU1yS1IrRWxjdCtPc0R4bDl5ZEsyV2JCZz09Cg==",
-      "url": "https://downloads.drayhq.com/v0.36.4/Dray_0.36.4_aarch64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXNyc0VudkFteFRoZ2V1SkpiS1RHcHc0YnhZWmtRVGtwb0srWmMzV0NUNFN2Q1JmZ3cyL2QrQ1dSa1dmUHdXQmw4RkJWa3NZQ0dkV0kwN2Q5RkFEcGc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODcwMjIzCWZpbGU6RHJheV8wLjM2LjVfYWFyY2g2NC5BcHBJbWFnZQl2ZXJzaW9uOjAuMzYuNQpwYVMva01tQ1A4UE80L1BCQk9pa0dzbFRjaDhTU2FDaFVUNEI4L3Q5UkQxSHlibjNheXVXbEVhS3k2U0NLWDhtdi9hSEhrWTR5bTNTUG84bGJtRU9BQT09Cg==",
+      "url": "https://downloads.drayhq.com/v0.36.5/Dray_0.36.5_aarch64.AppImage"
     },
     "linux-aarch64-appimage": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWl1ZmZDaDV1bENSUER4ZWljbkdieG1mN2NmUzBTbXlIcmJCcG52aDgzYWpVNjdXWWUvUUQ5REZrUkFmUS9OWkdweGJXZlBOam5zNmE0OWFVZEZSRWdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODQyNzAxCWZpbGU6RHJheV8wLjM2LjRfYWFyY2g2NC5BcHBJbWFnZQl2ZXJzaW9uOjAuMzYuNApOU0xtcC9hWGxabHpPZThwKzY1QmoxNU1BcitWdm5BK3gzQVVPWkJEQ1VDamMxZzBWc0Y3SVJlZHBENzVsYU1yS1IrRWxjdCtPc0R4bDl5ZEsyV2JCZz09Cg==",
-      "url": "https://downloads.drayhq.com/v0.36.4/Dray_0.36.4_aarch64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXNyc0VudkFteFRoZ2V1SkpiS1RHcHc0YnhZWmtRVGtwb0srWmMzV0NUNFN2Q1JmZ3cyL2QrQ1dSa1dmUHdXQmw4RkJWa3NZQ0dkV0kwN2Q5RkFEcGc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODcwMjIzCWZpbGU6RHJheV8wLjM2LjVfYWFyY2g2NC5BcHBJbWFnZQl2ZXJzaW9uOjAuMzYuNQpwYVMva01tQ1A4UE80L1BCQk9pa0dzbFRjaDhTU2FDaFVUNEI4L3Q5UkQxSHlibjNheXVXbEVhS3k2U0NLWDhtdi9hSEhrWTR5bTNTUG84bGJtRU9BQT09Cg==",
+      "url": "https://downloads.drayhq.com/v0.36.5/Dray_0.36.5_aarch64.AppImage"
     },
     "linux-aarch64-deb": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXVOMlFEdVFncElYMzlSNmIwa3RpMFdLRW5qeUI0VXZ6MGtIblcweHY3bEZ1eWhHbGVvTlpPdFhrV1dXcWoxbXBmMGJ0WWRVaDV2a3BwMWxteXJibWdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODQyNzAyCWZpbGU6RHJheV8wLjM2LjRfYXJtNjQuZGViCXZlcnNpb246MC4zNi40ClBFRlJNMDRKbDBvZ1d6NnRhcUgxZEo2bU1vSEJ3RGFiRU11QTVFVzBSeFh4YTgzWHl1aEo4QjM4dWlYNDVhaXpxVVNXZE1uTDRFcFB1enVYaTZRZ0JRPT0K",
-      "url": "https://downloads.drayhq.com/v0.36.4/Dray_0.36.4_arm64.deb"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWlkL0pFZnBBOUVLaTFVR0xNT29WS29iSGhxQzZZbXBVbmR6TExWMG44Um5mbW8zZ2I2ZTByUTRMM0xTaWtUZGtLdWl2b3NaQklUVjh2VWsxNXpudVFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODcwMjIzCWZpbGU6RHJheV8wLjM2LjVfYXJtNjQuZGViCXZlcnNpb246MC4zNi41CmhOemh4bkFjNERHRUJRa0p4bWFremJOM2VqS2pDUjBzVzgyUFZIMXF5UExvRVQxbi9Qb3FsVWtzS0NQdVExMFJLRndZKzhWWkM4Rm1XSnh6Z1ZZd0RRPT0K",
+      "url": "https://downloads.drayhq.com/v0.36.5/Dray_0.36.5_arm64.deb"
     },
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdSTm1nenR2WXp0c2pyTjlOZ09ySlprWVVyM1Q2KzlIZDUwSFFkU3dYQ1NWaXBCMVN5VDhHWlIvWlQrZHZPYitJMEorVHVQWmZjYk90dDBJUjNFeGdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODQyNjcxCWZpbGU6RHJheV8wLjM2LjRfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjM2LjQKNHNDR3FZRTBiRlE1Ym45bmpwOGFPaG5qbnZXM2tpQ2xWODVGV3BGUnNBUkxvYmJ6UXoyZ1h3c2ZrWWdtU1pyMUlOaExXTFdmbjhiWXJOSVRCcUNJQlE9PQo=",
-      "url": "https://downloads.drayhq.com/v0.36.4/Dray_0.36.4_amd64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWg1cXBPMDVjN3l6RDVwdmw3bGl0b3dYZ21uLy9LeHdrWU9LRk9BcDFyRHpKWnJyZFBnYlFmQTNWNUZSNnQwN0h2cjgyNlpaWTJWSmlIRmxCajcwRFFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODcwODMxCWZpbGU6RHJheV8wLjM2LjVfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjM2LjUKbWV0L1djTFpQOGFOWG9Id0NCQ1NOZDQ2cUpwbWNnTWxKUGY3QThGQUZGZHdnb3RDTHNDdGErelRDbExrZXJ3aGNRYnF2YlEyR3lncW5vLytMaG9TQ1E9PQo=",
+      "url": "https://downloads.drayhq.com/v0.36.5/Dray_0.36.5_amd64.AppImage"
     },
     "linux-x86_64-appimage": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdSTm1nenR2WXp0c2pyTjlOZ09ySlprWVVyM1Q2KzlIZDUwSFFkU3dYQ1NWaXBCMVN5VDhHWlIvWlQrZHZPYitJMEorVHVQWmZjYk90dDBJUjNFeGdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODQyNjcxCWZpbGU6RHJheV8wLjM2LjRfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjM2LjQKNHNDR3FZRTBiRlE1Ym45bmpwOGFPaG5qbnZXM2tpQ2xWODVGV3BGUnNBUkxvYmJ6UXoyZ1h3c2ZrWWdtU1pyMUlOaExXTFdmbjhiWXJOSVRCcUNJQlE9PQo=",
-      "url": "https://downloads.drayhq.com/v0.36.4/Dray_0.36.4_amd64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWg1cXBPMDVjN3l6RDVwdmw3bGl0b3dYZ21uLy9LeHdrWU9LRk9BcDFyRHpKWnJyZFBnYlFmQTNWNUZSNnQwN0h2cjgyNlpaWTJWSmlIRmxCajcwRFFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODcwODMxCWZpbGU6RHJheV8wLjM2LjVfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjM2LjUKbWV0L1djTFpQOGFOWG9Id0NCQ1NOZDQ2cUpwbWNnTWxKUGY3QThGQUZGZHdnb3RDTHNDdGErelRDbExrZXJ3aGNRYnF2YlEyR3lncW5vLytMaG9TQ1E9PQo=",
+      "url": "https://downloads.drayhq.com/v0.36.5/Dray_0.36.5_amd64.AppImage"
     },
     "linux-x86_64-deb": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXN5OHFjZjdPNXhtTWNpNUNBd2ZhaUYwaHNYOHVwN0pHeWZmaVpUU3N4c3ZXVC9GcUdDM3EyMVRxSk1Lbkl6cHR3QnZEbXUyODZLc2ZseDJUZVhsK1E0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODQyNjcxCWZpbGU6RHJheV8wLjM2LjRfYW1kNjQuZGViCXZlcnNpb246MC4zNi40CjBuOGFDKzBoVGlweGxHaThPWFZHSldxZzRSQzB1LzJzM05JZXdocnZSaEc5TTZKZU5uV05KeVcycEgvSzloNjVRMXpXWWRaZ0h1V0NqYk04NERNYUNRPT0K",
-      "url": "https://downloads.drayhq.com/v0.36.4/Dray_0.36.4_amd64.deb"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXM1cWFBczhrNGVOYUgzNjN5Ny9PNGVRTUJOaThWY0tTZElTcjNjRGo2MnhsYm56KzZlNldPOHljN01mclQxVDlqdktvZDRYL0c3OTZycDE4VkQvZkE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODcwODMxCWZpbGU6RHJheV8wLjM2LjVfYW1kNjQuZGViCXZlcnNpb246MC4zNi41Cjd3UEhOcDhtMjFHWEErL2dkNWlaOHhTSklHZEZtcDdUd2tYZDl0T3d6VFhBcDh0R0xwdjdqZ0tqb1dhRXFCK2xDa1dEeitmTmcrUHNlR2c4eFFtd0NRPT0K",
+      "url": "https://downloads.drayhq.com/v0.36.5/Dray_0.36.5_amd64.deb"
     },
     "windows-x86_64-msi": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWx6c09nQUM3MjRRUGc5SE8yS3ZBUzdxWDlrL2xBeDVTaHRoVWswM2pEL0xQRWlPVHZRY05rT3VaSXNONldwMjI5RUIyZWg0YndkWk15MDlJVHV4N2djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODQzMDM2CWZpbGU6RHJheV8wLjM2LjRfeDY0X2VuLVVTLm1zaQl2ZXJzaW9uOjAuMzYuNAorNzJuc3RKbTQyd0FSS3NXbzFFeHdnSXlBVUJsTllsN3ptMmo1WExJUXFhQlNaejRxVUIzbmNtQnpJTjlIaStqZWtESGQ4dVcySmNVbWhJMzVOTW9Ddz09Cg==",
-      "url": "https://downloads.drayhq.com/v0.36.4/Dray_0.36.4_x64_en-US.msi"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJmMFE2eU8vaU1WUWdHbVJsa0ZyOHRUcUkxcnJiWWJXa2YvOGpFMVVSMG13WGlhOGoyNXQzQmFvOHJtd0pRODhiR25TSVRvOHkzSVVGUmRLWU1FMkFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODcwNzQ3CWZpbGU6RHJheV8wLjM2LjVfeDY0X2VuLVVTLm1zaQl2ZXJzaW9uOjAuMzYuNQp5aXIvMnFkWXF5Wkc1Vnh5MW12NU5nMGtaVkRkSkswdjJ1dXByeGx2NXhkeDlUKzdWazhkdEhGNk56NTFoU3VRRXFra0JubnpkVHhGd3dRREpMUTBDQT09Cg==",
+      "url": "https://downloads.drayhq.com/v0.36.5/Dray_0.36.5_x64_en-US.msi"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXJvaWVEWmNIdjBzNXZKN016NDlRem5LZVFqdWxkbXEwNWhQVmFBVU5EeFh2bGM5ZEppWldTT3Q5SXZmVkFlREZCMWtCMGdGNWozSEttWHFaa0l4RWdzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODQzMDM2CWZpbGU6RHJheV8wLjM2LjRfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMzYuNApicEVkd1VLWUlhcDJQM0lHVDRTYm43ZGFTbDUzOWwvanJzUnMrZi8yampWcE9FRGxKUTY2bHJiVDdtdTcxSjJTMG5rQ3Z6QTNBZEZyWU1ad0d2OHZDQT09Cg==",
-      "url": "https://downloads.drayhq.com/v0.36.4/Dray_0.36.4_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWhlYVRldGtrK0YwWlh6OXg1NmtGMHlVWGFyMDJBNldLY2t1c3lISk1mdGF6VWdFdHB0dndVTytFRzM5QVhHQ1o3ZTZFUWlZZUNtTUtuOExaaEgwNWdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODcwNzQ3CWZpbGU6RHJheV8wLjM2LjVfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMzYuNQo5dHJDRks4TXF5WGhWYnNaUnlzUmlnOGtWYUttK1lJWGxhd0VnY2tIaytWaG0rVHRFSzlYZzcyZS9JZlRtUnpydnE0Rzgxb3lYcG1sNEhmamJSOENBdz09Cg==",
+      "url": "https://downloads.drayhq.com/v0.36.5/Dray_0.36.5_x64-setup.exe"
     }
   }
 }
