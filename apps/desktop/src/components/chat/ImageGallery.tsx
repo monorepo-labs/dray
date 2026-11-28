@@ -1,13 +1,14 @@
 import {
-  Children,
   createContext,
-  isValidElement,
   useCallback,
   useContext,
   useEffect,
+  useId,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
+  type RefCallback,
 } from "react";
 
 import ImageLightbox, { type LightboxImage } from "@/components/chat/ImageLightbox";
@@ -19,95 +20,156 @@ import ImageLightbox, { type LightboxImage } from "@/components/chat/ImageLightb
 export const GALLERY_IMAGE_CLASS =
   "block max-h-72 max-w-[min(100%,36rem)] rounded-lg border border-border object-contain";
 
-type Slot = {
-  index: number;
-  report: (index: number, item: LightboxImage | null) => void;
-  open: (index: number) => void;
+type Entry = { el: { current: HTMLElement | null }; item: LightboxImage };
+
+type Media = {
+  register: (id: string, entry: Entry | null) => void;
+  open: (id: string, focusTo: HTMLElement | null) => void;
+  count: () => number;
 };
 
-const SlotContext = createContext<Slot | null>(null);
+const MediaContext = createContext<Media | null>(null);
+const RowContext = createContext(false);
 
-/// Puts this picture in the gallery around it, under its resolved `src`, and
-/// answers how to open it there: `null` outside a gallery, where the picture
-/// draws its own way.
+/// What a picture or recording inside a `MessageMedia` gets back: where it sits
+/// in the message, and how to open the message's viewer on it.
+export type MessageMediaSlot = {
+  /// On the element drawn in the message. Its place in the page is the item's
+  /// place in the viewer.
+  ref: RefCallback<HTMLElement>;
+  /// `focusTo` is where focus lands once the viewer closes.
+  open: (focusTo: HTMLElement | null) => void;
+  /// How many items the message holds right now.
+  count: () => number;
+};
+
+/// Puts this item in the viewer of the message around it, under its resolved
+/// `src`; `null` outside one, where the item opens its own way.
 ///
-/// Reported rather than read off the children, because a local file only knows
+/// Reported rather than read off the markdown, because a local file only knows
 /// its `src` once it has loaded or fallen back to `read_file`'s data URL.
-export function useGallerySlot(item: LightboxImage | null): (() => void) | null {
-  const slot = useContext(SlotContext);
-  const report = slot?.report;
-  const index = slot?.index ?? 0;
+export function useMessageMedia(item: LightboxImage | null): MessageMediaSlot | null {
+  const media = useContext(MediaContext);
+  const id = useId();
+  const el = useRef<HTMLElement | null>(null);
+  const register = media?.register;
   const src = item?.src;
   const name = item?.name ?? "image";
+  const video = item?.video ?? false;
   useEffect(() => {
-    if (!report) return;
-    report(index, src ? { src, name } : null);
-    return () => report(index, null);
-  }, [report, index, src, name]);
-  return useMemo(() => (slot ? () => slot.open(slot.index) : null), [slot]);
+    if (!register) return;
+    register(id, src ? { el, item: { src, name, video } } : null);
+    return () => register(id, null);
+  }, [register, id, src, name, video]);
+  const ref = useCallback((node: HTMLElement | null) => {
+    el.current = node;
+  }, []);
+  return useMemo(
+    () => (media ? { ref, open: (focusTo) => media.open(id, focusTo), count: media.count } : null),
+    [media, ref, id],
+  );
 }
 
-/// A run of pictures from a message's markdown, side by side and wrapping,
-/// opening one viewer that steps through them all.
+/// True inside a row of pictures, where an item draws as a gallery tile.
+export function useInImageRow(): boolean {
+  return useContext(RowContext);
+}
+
+/// One agent message's pictures and recordings, opening one viewer that steps
+/// through them all.
+///
+/// The message, not the row: an agent puts a screenshot under each paragraph
+/// that describes it, and a viewer holding only the one clicked is a close and
+/// reopen per picture. Ordered by where each sits in the page, since items
+/// register as they load and a file read through `read_file` lands late.
+export function MessageMedia({ children }: { children: ReactNode }) {
+  const entries = useRef(new Map<string, Entry>());
+  // The list is a snapshot taken on open and kept through the close, so the
+  // fade-out draws the picture it was showing.
+  const [view, setView] = useState<{ items: LightboxImage[]; index: number | null }>({
+    items: [],
+    index: null,
+  });
+  const focusTo = useRef<HTMLElement | null>(null);
+
+  const media = useMemo<Media>(() => {
+    const placed = () =>
+      [...entries.current.entries()]
+        .filter(([, entry]) => entry.el.current?.isConnected)
+        .sort(([, a], [, b]) =>
+          a.el.current!.compareDocumentPosition(b.el.current!) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+        );
+    return {
+      register: (id, entry) => {
+        if (entry) entries.current.set(id, entry);
+        else entries.current.delete(id);
+      },
+      open: (id, to) => {
+        const list = placed();
+        const index = list.findIndex(([key]) => key === id);
+        if (index === -1) return;
+        focusTo.current = to;
+        setView({ items: list.map(([, entry]) => entry.item), index });
+      },
+      count: () => placed().length,
+    };
+  }, []);
+
+  return (
+    <MediaContext.Provider value={media}>
+      {children}
+      {/* The viewer's own player must not join the message it is showing. */}
+      <MediaContext.Provider value={null}>
+        <ImageLightbox
+          images={view.items}
+          index={view.index}
+          onIndex={(index) => setView((v) => ({ ...v, index }))}
+          onClose={() => setView((v) => ({ ...v, index: null }))}
+          // WebKit never focuses a clicked button, so Radix's own return lands
+          // on the body and the next Tab starts from the top of the window.
+          onCloseAutoFocus={(e) => {
+            const to = focusTo.current;
+            if (!to?.isConnected) return;
+            e.preventDefault();
+            to.focus({ preventScroll: true });
+          }}
+        />
+      </MediaContext.Provider>
+    </MediaContext.Provider>
+  );
+}
+
+/// A run of pictures from a message's markdown, side by side and wrapping.
 ///
 /// Stacked, four phone screenshots are four screens of scroll; in a row they
 /// read as the set they usually are.
 export default function ImageGallery({ children }: { children: ReactNode }) {
-  const [items, setItems] = useState<(LightboxImage | null)[]>([]);
-  const [openAt, setOpenAt] = useState<number | null>(null);
-
-  const report = useCallback((index: number, item: LightboxImage | null) => {
-    setItems((prev) => {
-      const cur = prev[index] ?? null;
-      if (cur?.src === item?.src && cur?.name === item?.name) return prev;
-      const next = prev.slice();
-      next[index] = item;
-      return next;
-    });
-  }, []);
-
-  const pictures = Children.toArray(children).filter(isValidElement);
-  const slots = useMemo(
-    () => pictures.map((_, index) => ({ index, report, open: setOpenAt })),
-    [pictures.length, report],
-  );
-
-  // The viewer holds only what loaded, so its index is a position in that list
-  // and not the picture's place in the row.
-  const viewable = items.flatMap((item, at) => (item ? [{ item, at }] : []));
-  const shown = openAt === null ? -1 : viewable.findIndex((v) => v.at === openAt);
-
   return (
     <div className="my-3 flex max-w-full flex-wrap items-start gap-1.5">
-      {pictures.map((picture, i) => (
-        <SlotContext.Provider key={i} value={slots[i]}>
-          {picture}
-        </SlotContext.Provider>
-      ))}
-      <ImageLightbox
-        images={viewable.map((v) => v.item)}
-        index={shown === -1 ? null : shown}
-        onIndex={(n) => setOpenAt(viewable[n]?.at ?? null)}
-        onClose={() => setOpenAt(null)}
-      />
+      <RowContext.Provider value>{children}</RowContext.Provider>
     </div>
   );
 }
 
-/// One picture in a gallery row, opening the row's viewer on click.
+/// One picture in a gallery row, opening the message's viewer on click.
 export function GalleryPicture({
   src,
   alt = "",
-  onOpen,
+  slot,
   onError,
 }: {
   src: string;
   alt?: string;
-  onOpen: () => void;
+  slot: MessageMediaSlot;
   onError?: () => void;
 }) {
   return (
-    <button type="button" onClick={onOpen} className="min-w-0 max-w-full cursor-zoom-in">
+    <button
+      ref={slot.ref}
+      type="button"
+      onClick={(e) => slot.open(e.currentTarget)}
+      className="min-w-0 max-w-full cursor-zoom-in"
+    >
       {/* Lazy, or every screenshot in a long chat decodes on mount at full size. */}
       <img
         src={src}

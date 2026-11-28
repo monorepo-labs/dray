@@ -1,6 +1,7 @@
 import { Maximize, Pause, Play } from "lucide-react";
 import { useRef, useState } from "react";
 
+import { useMessageMedia } from "@/components/chat/ImageGallery";
 import { useFirstFrame } from "@/hooks/useFirstFrame";
 import { cn } from "@/lib/utils";
 
@@ -8,7 +9,16 @@ import { cn } from "@/lib/utils";
 /// WebKit's washes the whole frame grey on hover, from a shadow root nothing
 /// here can style, and a video being checked for what changed on screen is
 /// the last thing to draw over. Controls carry their own backing instead.
-export default function VideoPlayer({ src, className }: { src: string; className?: string }) {
+export default function VideoPlayer({
+  src,
+  name = "video",
+  className,
+}: {
+  src: string;
+  /// The file's name, which the viewer announces it by.
+  name?: string;
+  className?: string;
+}) {
   const video = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
@@ -36,6 +46,14 @@ export default function VideoPlayer({ src, className }: { src: string; className
     const v = video.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
     v?.requestFullscreen().catch(() => v.webkitEnterFullscreen?.());
   };
+  // In a message holding other pictures, full screen is the message's viewer,
+  // so the recording is looked at beside them rather than on its own.
+  const slot = useMessageMedia(failed === src ? null : { src, name, video: true });
+  const expand = (e: React.MouseEvent<HTMLButtonElement>) => {
+    if (!slot || slot.count() < 2) return fullscreen();
+    video.current?.pause();
+    slot.open(e.currentTarget);
+  };
 
   if (failed === src) return null;
 
@@ -43,7 +61,7 @@ export default function VideoPlayer({ src, className }: { src: string; className
     // A span, since it sits inside the paragraph that names the path.
     // `isolate`, or WebKit composites the video on a layer the radius does
     // not clip.
-    <span className="group/video relative isolate mt-1.5 block w-fit max-w-full overflow-hidden rounded-xl border border-border">
+    <span ref={slot?.ref} className="group/video relative isolate mt-1.5 block w-fit max-w-full overflow-hidden rounded-xl border border-border">
       <video
         ref={video}
         // `auto` would download every recording in the transcript, so the
@@ -97,7 +115,7 @@ export default function VideoPlayer({ src, className }: { src: string; className
         <span className="text-xs tabular-nums">
           {clock(time)} / {clock(duration)}
         </span>
-        <button type="button" aria-label="Full screen" onClick={fullscreen}>
+        <button type="button" aria-label="Full screen" onClick={expand}>
           <Maximize className="size-4" />
         </button>
       </span>

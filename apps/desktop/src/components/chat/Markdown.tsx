@@ -3,7 +3,12 @@ import { memo, useMemo, useState } from "react";
 import { Streamdown, defaultComponents, type Components, type ThemeInput } from "streamdown";
 
 import FileLink from "@/components/chat/FileLink";
-import ImageGallery, { GalleryPicture, useGallerySlot } from "@/components/chat/ImageGallery";
+import ImageGallery, {
+  GalleryPicture,
+  MessageMedia,
+  useInImageRow,
+  useMessageMedia,
+} from "@/components/chat/ImageGallery";
 import { MarkdownTable } from "@/components/chat/MarkdownTable";
 import ProofImage from "@/components/chat/ProofImage";
 import VideoPlayer from "@/components/chat/VideoPlayer";
@@ -143,7 +148,7 @@ function MarkdownImpl({
     [linkFilePaths, components],
   );
 
-  return (
+  const rendered = (
     <Streamdown
       mode={streaming ? "streaming" : "static"}
       isAnimating={streaming}
@@ -253,6 +258,8 @@ function MarkdownImpl({
       {children}
     </Streamdown>
   );
+  // An agent's own message, whose pictures and recordings are one set to look through.
+  return linkFilePaths === true ? <MessageMedia>{rendered}</MessageMedia> : rendered;
 }
 
 /// Where `dray browser record` and `dray video add` write, the one place the
@@ -350,7 +357,7 @@ function FilePathSpan({
       return (
         <>
           {link}
-          <VideoPlayer src={fileSrc(qualified)} />
+          <VideoPlayer src={fileSrc(qualified)} name={name} />
         </>
       );
     }
@@ -390,10 +397,11 @@ function MarkdownImage(props: React.ComponentProps<"img"> & { node?: unknown }) 
   // Streamdown's stand-in for an image still streaming in; its own img draws it.
   const ready = typeof src === "string" && src !== "streamdown:incomplete-image";
   const [failed, setFailed] = useState(false);
-  const open = useGallerySlot(ready && !failed ? { src, name: alt || "image" } : null);
+  const inRow = useInImageRow();
+  const slot = useMessageMedia(inRow && ready && !failed ? { src, name: alt || "image" } : null);
   // A failed load goes back to Streamdown too, which says the image is unavailable.
-  if (!open || !ready || failed) return <DefaultImage {...props} />;
-  return <GalleryPicture src={src} alt={alt} onOpen={open} onError={() => setFailed(true)} />;
+  if (!slot || !inRow || !ready || failed) return <DefaultImage {...props} />;
+  return <GalleryPicture src={src} alt={alt} slot={slot} onError={() => setFailed(true)} />;
 }
 
 function DocPathSpan(props: React.ComponentProps<typeof FilePathSpan>) {
