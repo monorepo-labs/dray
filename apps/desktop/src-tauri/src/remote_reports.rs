@@ -507,6 +507,7 @@ mod collect {
                 crate::secrets::relay(saved, ask.clone(), to, app).await;
             }
         }
+        crate::secrets::withdraw_relayed(saved, &taken.secrets, app).await;
         untrack(&closed).await;
         // Only this machine's own tasks: an answer naming another
         // machine's is not its to close.

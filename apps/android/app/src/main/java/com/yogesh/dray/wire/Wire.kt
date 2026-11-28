@@ -235,7 +235,7 @@ data class SecretRequest(
     val task: SecretTask? = null,
 )
 
-/** How a secret card closed, never the value. `replaced` draws nothing: the newer card is the row. */
+/** How a secret card closed, never the value. `replaced` and `withdrawn` draw nothing: the newer card is the row, or the agent took it back. */
 @Serializable
 data class SecretAnswer(
     val requestId: String,

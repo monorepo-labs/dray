@@ -931,7 +931,8 @@ describe("a pending ask", () => {
 describe("a secret card", () => {
   const asked = (seq: number, requestId: string) =>
     event(seq, { type: "secret_requested", requestId, name: "GH_TOKEN", reason: "gh login" });
-  const answered = (seq: number, requestId: string, outcome: "saved" | "declined" | "replaced" | "used") =>
+  type Outcome = "saved" | "declined" | "replaced" | "used" | "withdrawn";
+  const answered = (seq: number, requestId: string, outcome: Outcome) =>
     event(seq, { type: "secret_answered", requestId, name: "GH_TOKEN", outcome });
   const pending = (events: AgentEvent[], live: boolean) =>
     buildTranscript(events, live).pendingAsks.map((a) => a.requestId);
@@ -941,16 +942,15 @@ describe("a secret card", () => {
   });
 
   it("closes on its own answer, whatever the outcome", () => {
-    for (const outcome of ["saved", "declined", "replaced", "used"] as const) {
+    for (const outcome of ["saved", "declined", "replaced", "used", "withdrawn"] as const) {
       expect(pending([asked(0, "r"), answered(1, "r", outcome)], true)).toEqual([]);
     }
   });
 
-  it("draws a row for a saved or declined answer, none for a replaced one or the ask", () => {
-    const draws = (outcome: "saved" | "declined" | "replaced" | "used") => rendersRow(answered(0, "r", outcome));
-    expect([draws("saved"), draws("declined"), draws("used"), draws("replaced"), rendersRow(asked(0, "r"))]).toEqual([
-      true, true, true, false, false,
-    ]);
+  it("draws a row for a saved or declined answer, none for a replaced or withdrawn one or the ask", () => {
+    const draws = (outcome: Outcome) => rendersRow(answered(0, "r", outcome));
+    const rows = [draws("saved"), draws("declined"), draws("used"), draws("replaced"), draws("withdrawn")];
+    expect([...rows, rendersRow(asked(0, "r"))]).toEqual([true, true, true, false, false, false]);
   });
 });
 

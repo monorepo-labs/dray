@@ -722,6 +722,9 @@ pub enum SecretOutcome {
     Replaced,
     /// The secret already saved under `name` was handed over.
     Used,
+    /// The agent took the card back with `dray secret cancel`. Draws no
+    /// row, like `Replaced`: the agent says why in its own words.
+    Withdrawn,
     #[serde(other)]
     Other,
 }

@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{bail, Context, Result};
-use dray_proto::{RequestSecret, Response, SecretSummary};
+use dray_proto::{CancelSecret, RequestSecret, Response, SecretSummary};
 use serde::{Deserialize, Serialize};
 
 use crate::events::{AgentEvent, AgentEventPayload, SecretOutcome};
@@ -322,6 +322,20 @@ pub fn asking() -> impl Iterator<Item = String> {
     open_cards().into_iter().map(|e| e.session_id)
 }
 
+/// A card closed by Dray or the agent rather than answered: nothing kept.
+fn closed(request_id: &str, name: &str, outcome: SecretOutcome, task: Option<crate::events::SecretTask>) -> AgentEventPayload {
+    AgentEventPayload::SecretAnswered {
+        request_id: request_id.to_string(),
+        name: name.to_string(),
+        outcome,
+        kept: false,
+        always: false,
+        auto: false,
+        task,
+        from: None,
+    }
+}
+
 fn card_of(event: &AgentEvent) -> Option<(&str, &str)> {
     match &event.payload {
         AgentEventPayload::SecretRequested { request_id, name, .. } => Some((request_id, name)),
@@ -378,16 +392,7 @@ pub async fn request(ask: RequestSecret, app: &Sink) -> Result<Response> {
     for old in open.iter().filter(|e| e.session_id == chat.session_id) {
         if let Some((request_id, old_name)) = card_of(old) {
             if old_name == name {
-                let payload = AgentEventPayload::SecretAnswered {
-                    request_id: request_id.to_string(),
-                    name: name.clone(),
-                    outcome: SecretOutcome::Replaced,
-                    kept: false,
-                    always: false,
-                    auto: false,
-                    task: None,
-                    from: None,
-                };
+                let payload = closed(request_id, &name, SecretOutcome::Replaced, None);
                 manager().log_event(&chat.session_id, chat.harness, payload, app).await?;
                 replaced = true;
             }
@@ -411,6 +416,40 @@ pub async fn request(ask: RequestSecret, app: &Sink) -> Result<Response> {
     open.push(event);
     write_pending(open).await?;
     Ok(Response::SecretRequested { request_id, name, replaced, path: None, bot: false })
+}
+
+/// `dray secret cancel`: the agent takes back its own open card for `name`,
+/// and is sent no answer. A card relayed into a bot's chat from a task is that
+/// task's, never the bot's to take back.
+pub async fn cancel(cancel: CancelSecret, app: &Sink) -> Result<Response> {
+    let name = cancel.name.trim().to_string();
+    check_name(&name)?;
+    let chat = store::get_session_index_item(&cancel.session_id)
+        .await?
+        .with_context(|| format!("no session {}", cancel.session_id))?;
+    let _held = LOCK.lock().await;
+    let mut open = read_pending().await?;
+    let Some(at) = open.iter().position(|e| own_card(e, &chat.session_id, &name)) else {
+        return Ok(Response::SecretCancelled { name, withdrawn: false });
+    };
+    let request_id = card_of(&open[at]).map(|(id, _)| id.to_string()).unwrap_or_default();
+    let payload = closed(&request_id, &name, SecretOutcome::Withdrawn, None);
+    manager().log_event(&chat.session_id, chat.harness, payload, app).await?;
+    open.remove(at);
+    write_pending(open).await?;
+    Ok(Response::SecretCancelled { name, withdrawn: true })
+}
+
+/// `session_id`'s own open card for `name`: never a card relayed into it.
+fn own_card(event: &AgentEvent, session_id: &str, name: &str) -> bool {
+    event.session_id == session_id
+        && matches!(&event.payload, AgentEventPayload::SecretRequested { name: n, task: None, .. } if n == name)
+}
+
+/// A card relayed from a task on `machine_id` whose ask that machine no longer lists.
+fn relay_withdrawn(event: &AgentEvent, machine_id: &str, asks: &[BotAsk]) -> bool {
+    matches!(&event.payload, AgentEventPayload::SecretRequested { task: Some(t), .. }
+        if t.machine_id == machine_id && !asks.iter().any(|a| a.request_id == t.request_id))
 }
 
 /// What the agent is told once the user saved it. Hidden, like an issue
@@ -666,16 +705,7 @@ async fn ask_bot(
     for old in open.iter().filter(|e| e.session_id == chat.session_id) {
         if let Some((request_id, old_name)) = card_of(old) {
             if old_name == name {
-                let payload = AgentEventPayload::SecretAnswered {
-                    request_id: request_id.to_string(),
-                    name: name.clone(),
-                    outcome: SecretOutcome::Replaced,
-                    kept: false,
-                    always: false,
-                    auto: false,
-                    task: None,
-                    from: None,
-                };
+                let payload = closed(request_id, &name, SecretOutcome::Replaced, None);
                 manager().log_event(&chat.session_id, chat.harness, payload, app).await?;
                 replaced = true;
             }
@@ -877,6 +907,33 @@ async fn relay_one(saved: &crate::machines::Saved, ask: BotAsk, chat: &str, app:
     Ok(())
 }
 
+/// Closes the cards relayed here from tasks on `saved` that no longer ask,
+/// each withdrawn there with `dray secret cancel`. `asks` is that machine's
+/// whole answer to this round's collect, so an ask missing from it is gone.
+/// One answered from here closes under this lock, which it holds from sending
+/// its answer to the task until the card is dropped.
+#[cfg(any(feature = "serve", feature = "desktop"))]
+pub async fn withdraw_relayed(saved: &crate::machines::Saved, asks: &[BotAsk], app: &Sink) {
+    let _held = LOCK.lock().await;
+    let Ok(mut open) = read_pending().await else { return };
+    let stale = |e: &AgentEvent| relay_withdrawn(e, &saved.id, asks);
+    if !open.iter().any(stale) {
+        return;
+    }
+    let (gone, kept): (Vec<AgentEvent>, Vec<AgentEvent>) = open.drain(..).partition(stale);
+    for card in gone {
+        let AgentEventPayload::SecretRequested { request_id, name, task, .. } = card.payload else { continue };
+        let Ok(Some(chat)) = store::get_session_index_item(&card.session_id).await else { continue };
+        let payload = closed(&request_id, &name, SecretOutcome::Withdrawn, task);
+        if let Err(e) = manager().log_event(&chat.session_id, chat.harness, payload, app).await {
+            eprintln!("[secrets] could not close {name}'s card from {}: {e:#}", saved.name);
+        }
+    }
+    if let Err(e) = write_pending(kept).await {
+        eprintln!("[secrets] could not drop withdrawn cards from {}: {e:#}", saved.name);
+    }
+}
+
 /// Sends a relayed card's answer to the task's machine, encrypted in transit.
 #[cfg(any(feature = "serve", feature = "desktop"))]
 async fn send_to_task(task: &crate::events::SecretTask, value: Option<String>) -> Result<(), String> {
@@ -980,6 +1037,70 @@ mod tests {
         assert_eq!(closest_name("OPENAI_KEY", &saved).as_deref(), Some("OPENAI_API_KEY"));
         assert_eq!(closest_name("CARGO_TOKEN", &saved), None, "TOKEN alone is no match");
         assert_eq!(closest_name("STRIPE_KEY", &[]), None);
+    }
+
+    fn card(session_id: &str, name: &str, task: Option<crate::events::SecretTask>) -> AgentEvent {
+        AgentEvent {
+            id: uuid::Uuid::new_v4().to_string(),
+            session_id: session_id.into(),
+            harness: crate::harness::Harness::ClaudeCode,
+            seq: 1,
+            ts: String::new(),
+            turn_id: None,
+            subagent: None,
+            payload: AgentEventPayload::SecretRequested {
+                request_id: "r1".into(),
+                name: name.into(),
+                label: None,
+                reason: "why".into(),
+                url: None,
+                saved: false,
+                saved_names: Vec::new(),
+                closest: None,
+                bot: false,
+                task,
+            },
+        }
+    }
+
+    fn task(machine_id: &str, request_id: &str) -> crate::events::SecretTask {
+        crate::events::SecretTask {
+            session_id: "task".into(),
+            title: "Task".into(),
+            machine: "vps".into(),
+            machine_id: machine_id.into(),
+            request_id: request_id.into(),
+        }
+    }
+
+    #[test]
+    fn a_session_takes_back_only_its_own_card() {
+        let mine = card("a", "GH_TOKEN", None);
+        assert!(own_card(&mine, "a", "GH_TOKEN"));
+        assert!(!own_card(&mine, "b", "GH_TOKEN"), "another session's card");
+        assert!(!own_card(&mine, "a", "NPM_TOKEN"), "another name");
+        let relayed = card("a", "GH_TOKEN", Some(task("m1", "t1")));
+        assert!(!own_card(&relayed, "a", "GH_TOKEN"), "a task's card in the bot's chat is the task's");
+    }
+
+    #[test]
+    fn a_relayed_card_closes_once_its_ask_is_gone() {
+        let ask = |request_id: &str| BotAsk {
+            request_id: request_id.into(),
+            session_id: "task".into(),
+            child: "task".into(),
+            title: "Task".into(),
+            name: "GH_TOKEN".into(),
+            label: None,
+            reason: "why".into(),
+            url: None,
+        };
+        let relayed = card("bot", "GH_TOKEN", Some(task("m1", "t1")));
+        assert!(!relay_withdrawn(&relayed, "m1", &[ask("t1")]), "still asking");
+        assert!(relay_withdrawn(&relayed, "m1", &[ask("t2")]));
+        assert!(relay_withdrawn(&relayed, "m1", &[]));
+        assert!(!relay_withdrawn(&relayed, "m2", &[]), "another machine's answer says nothing of it");
+        assert!(!relay_withdrawn(&card("bot", "GH_TOKEN", None), "m1", &[]), "the bot's own card");
     }
 
     #[test]

@@ -514,7 +514,7 @@ struct SecretTask: Decodable, Hashable {
     let machine: String
 }
 
-/// How a secret card closed: `saved`, `declined`, `replaced` or `used`. Never the value.
+/// How a secret card closed: `saved`, `declined`, `replaced`, `used` or `withdrawn`. Never the value.
 struct SecretAnswer: Decodable, Hashable {
     let requestId: String
     let name: String
@@ -523,7 +523,7 @@ struct SecretAnswer: Decodable, Hashable {
     let auto: Bool?
     let task: SecretTask?
 
-    /// A card a newer one replaced closes silently: the newer card is the row.
+    /// A card a newer one replaced, or the agent took back, closes silently.
     var draws: Bool { ["saved", "declined", "used"].contains(outcome) }
 }
 

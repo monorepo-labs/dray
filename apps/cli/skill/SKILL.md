@@ -405,6 +405,7 @@ your turn without writing anything after it.
 ```bash
 dray secret ls                    # names saved on this machine, and which agents use without asking
 dray secret request GITHUB_TOKEN --reason "Sign gh in" --url https://github.com/settings/tokens
+dray secret cancel GITHUB_TOKEN   # take that card back: you no longer need it
 ```
 
 Whenever you need a token, API key or password, ask this way. Run `dray secret
@@ -428,9 +429,16 @@ user lets agents use a saved name without asking, the request posts no card and
 prints the file's path at once: use it and carry on. Asking again for a name
 whose card is still open replaces that card.
 
+**Take back a card you no longer need** with `dray secret cancel NAME`: you
+found another way in, the user switched login method, the work moved on. The
+card closes in every client and no answer comes. Never leave one open for the
+user to decline by hand. It finds only this chat's own cards, and says so when
+none was open for that name.
+
 A bot's task on another machine asks the same way. Its bot's machine keeps the
 secrets, the card shows in the bot's chat, and the value arrives as a one-time
-file on the task's own machine.
+file on the task's own machine. Its `cancel` closes the card in the bot's chat
+too, within seconds.
 
 ## Saving work for later
 
