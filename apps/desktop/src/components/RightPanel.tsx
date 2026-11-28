@@ -268,10 +268,12 @@ export default function RightPanel({
 
   // Not for one view, which a switcher would only offer back to itself.
   const switches = switcher && tabs.length > 1;
-  // No top strip at all: each view's sections name themselves, so the strip
-  // held nothing but an Open in for the bot's own folder, and its empty band
-  // pushed every view down.
-  const bare = !heading && (switcher || (tabs.length === 1 && tabs[0] === "tasks"));
+  // No view names in the strip, and no Open in, which lives in the Files view
+  // alone: each view's sections name themselves. With nothing else to hold —
+  // a Refresh, on a doc or issue view — the strip goes too, or its empty band
+  // pushes every view down.
+  const quiet = !heading && (switcher || (tabs.length === 1 && tabs[0] === "tasks"));
+  const bare = quiet && !refresh && !actions;
   // Wraps, as the sidebar's does: a tap has no direction, so a dead end at the
   // last view would just look broken.
   const step = (delta: -1 | 1) => {
@@ -307,7 +309,7 @@ export default function RightPanel({
             // Padded to sit where a tab's label would, so the pane's first line
             // lands on the same baseline whichever frame it is wearing.
             <span className="px-2 py-1 text-ui font-medium">{heading}</span>
-          ) : (
+          ) : quiet ? null : (
             // A wrapping row clipped to one line, which sheds the keycaps when
             // they stop fitting and never a tab sooner — the CSS answer to a
             // question a resize observer would otherwise have to measure.
@@ -370,7 +372,7 @@ export default function RightPanel({
           )}
 
           <div className="ml-auto flex shrink-0 items-center gap-1">
-            <PanelActions actions={actions} cwd={cwd} refresh={refresh} />
+            <PanelActions actions={actions} cwd={quiet ? undefined : cwd} refresh={refresh} />
           </div>
         </div>
       )}
