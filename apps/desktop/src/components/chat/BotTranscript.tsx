@@ -31,6 +31,7 @@ import { isModClick } from "@/lib/platform";
 import { stripSenderPrefix } from "@/lib/relay";
 import { streamingCall } from "@/lib/streaming";
 import { streamingLabel, toolArgument, toolLabel } from "@/lib/tools";
+import { rowId } from "@/lib/provisional";
 import { invoke } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { AgentEvent, Bot, LearnedDiff, LearnedFile, ToolResult } from "@/types/events";
@@ -172,7 +173,7 @@ export default function BotTranscript({
   );
 }
 
-const rowKey = (row: BotRow): string => ("key" in row ? row.key : row.event.id);
+const rowKey = (row: BotRow): string => ("key" in row ? row.key : rowId(row.event));
 
 type ChatRowProps = {
   item: BotRow;

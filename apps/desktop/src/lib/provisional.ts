@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@/types/events";
+import type { AgentEvent, ImageRef } from "@/types/events";
 
 /// The user's own prompt, drawn before the backend has answered for the session.
 ///
@@ -39,7 +39,67 @@ export const nextMainSeq = (events: AgentEvent[]) =>
 /// delivered in the order they were sent, so the head of the line is the one
 /// this event is the answer to. Taking them all would blank a prompt still
 /// waiting on a send of its own.
-export const retireOldestProvisional = (events: AgentEvent[]) => {
+///
+/// `by` is the real prompt doing the retiring, which takes over the row and
+/// the pictures the provisional one drew — see [rowId] and [carryPreviews].
+export const retireOldestProvisional = (events: AgentEvent[], by?: AgentEvent) => {
   const i = events.findIndex(isProvisional);
-  return i < 0 ? events : [...events.slice(0, i), ...events.slice(i + 1)];
+  if (i < 0) return events;
+  if (by) takeOver(events[i], by);
+  return [...events.slice(0, i), ...events.slice(i + 1)];
 };
+
+/// Real prompt's id → the provisional one it replaced.
+const tookOver = new Map<string, string>();
+
+/// The key a prompt's row is drawn under: the provisional one's, once the real
+/// prompt has replaced it. Keyed on its own id, the row remounted at that
+/// moment, and every picture in it was a new element painting from nothing.
+export const rowId = (e: AgentEvent) => tookOver.get(e.id) ?? e.id;
+
+/// The real prompt `to` taking over the provisional `from`'s row and pictures.
+export function takeOver(from: AgentEvent, to: AgentEvent) {
+  tookOver.set(to.id, from.id);
+  carryPreviews(from, to);
+}
+
+/// Archived path → the `data:` URL the composer already drew that picture from.
+/// Oldest first, so the cap drops the picture sent longest ago.
+const carried = new Map<string, string>();
+/// Each entry can be megabytes, and only a just-sent row gains from one: past
+/// the first draw, the archived file is already in the image cache.
+const CARRIED_MAX = 12;
+
+/// Lets the real prompt's pictures draw from the bytes the provisional one held.
+///
+/// The real `user_message` names archived copies, which load through the server
+/// and only once the new row has mounted — so for a moment every picture sent
+/// was blank, and in a bot chat, where a picture takes its own size, the row
+/// grew under the reader when it landed. The same `data:` URL is one the
+/// document has already decoded, so the new row draws at once and at its size.
+///
+/// Paired by position, which holds because both lists are the attachments that
+/// travel as images, in the order they were pinned. A count that differs says
+/// the two are not one send, and nothing is carried.
+export function carryPreviews(from: AgentEvent, to: AgentEvent) {
+  carryImages(from.payload.type === "user_message" ? from.payload.images : [], to);
+}
+
+/// [carryPreviews] from a list of pictures rather than an event — a queued
+/// prompt's row, which holds its attachments rather than a provisional event.
+export function carryImages(from: ImageRef[], to: AgentEvent) {
+  if (to.payload.type !== "user_message" || from.length !== to.payload.images.length) return;
+  to.payload.images.forEach((image, i) => {
+    const url = from[i].url;
+    if (!image.path || !url?.startsWith("data:")) return;
+    carried.delete(image.path);
+    carried.set(image.path, url);
+  });
+  for (const path of carried.keys()) {
+    if (carried.size <= CARRIED_MAX) break;
+    carried.delete(path);
+  }
+}
+
+/// The picture already held for an archived attachment, or `undefined`.
+export const carriedPreview = (path: string) => carried.get(path);
