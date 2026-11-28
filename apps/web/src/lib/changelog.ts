@@ -16,8 +16,10 @@ export type App = "desktop" | "ios" | "android";
 /// An item that gets a page of its own, in the apps it names, after an update.
 /// `target` is the app's to read — `new-task`, `settings/<tab>`, an `https:`
 /// URL — and one an app does not know draws no button there, so a newer
-/// target never breaks an older build.
-export type Highlight = { apps: App[]; action: { label: string; target: string } | null };
+/// target never breaks an older build. `required` is a highlight the reader
+/// must act on, drawn first and set apart; absent rather than false, so the
+/// feed only grows where it is used.
+export type Highlight = { apps: App[]; action: { label: string; target: string } | null; required?: true };
 export type SectionKind = "new" | "improved" | "fixed";
 export type Section = { kind: SectionKind; items: Item[] };
 export type Release = {
@@ -47,8 +49,8 @@ const HIGHLIGHT_LINE = /^\s*<!--\s*highlight\b(.*?)-->\s*$/;
 const APPS: readonly string[] = ["desktop", "ios", "android"];
 const TARGET = /^(https:\/\/\S+|[a-z][a-z0-9-]*(\/[a-z0-9-]+)*)$/;
 
-/// What follows `highlight` in `<!-- highlight: desktop, ios · action: Label →
-/// target -->`. Throws on anything it cannot read, which fails the site's
+/// What follows `highlight` in `<!-- highlight: desktop, ios · required ·
+/// action: Label → target -->`. Throws on anything it cannot read, which fails the site's
 /// build: a highlight dropped quietly is an announcement nobody sees.
 export function parseHighlight(spec: string, where: string): Highlight {
   const fail = (why: string): never => {
@@ -56,7 +58,12 @@ export function parseHighlight(spec: string, where: string): Highlight {
   };
   const apps: App[] = [];
   let action: Highlight["action"] = null;
+  let required = false;
   for (const part of spec.replace(/^\s*:/, "").split("·").map((p) => p.trim())) {
+    if (part === "required") {
+      required = true;
+      continue;
+    }
     if (/^action\b/.test(part)) {
       const act = /^action\s*:\s*(.+?)\s*(?:→|->)\s*(\S+)$/.exec(part);
       if (!act) fail("an action reads `action: Label → target`");
@@ -70,7 +77,7 @@ export function parseHighlight(spec: string, where: string): Highlight {
     }
   }
   if (apps.length === 0) fail("no app named");
-  return { apps, action };
+  return required ? { apps, action, required: true } : { apps, action };
 }
 
 function toItem(lines: string[], media: Media[], highlight: Highlight | null): Item {

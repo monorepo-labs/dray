@@ -609,11 +609,145 @@ function RelayPair() {
   );
 }
 
+/// The colours every relay take shares: a white card on the pale panel, or
+/// a dark one on the black.
+function relayInk() {
+  const light = WHITE;
+  return {
+    light,
+    card: light ? "bg-white shadow-[0_0_0_1px_#0000001A]" : "bg-[#141414]",
+    dim: light ? "text-[#71717A]" : "text-[#8A8A8A]",
+    ink: light ? "text-[#0A0A0A]" : "text-white",
+    line: light ? "#D4D4D8" : "#3F3F46",
+  };
+}
+
+/// A device as a square block: a glyph drawn in two rectangles, its name.
+function DeviceBlock({ name, kind }: { name: string; kind: "laptop" | "phone" }) {
+  const { card, ink, line } = relayInk();
+  return (
+    <div className={cn("flex w-[92px] shrink-0 flex-col items-center gap-2.5 py-4", card)}>
+      {kind === "laptop" ? (
+        <svg width="40" height="28" viewBox="0 0 40 28" aria-hidden>
+          <rect x="6" y="2" width="28" height="19" fill="none" stroke={line} strokeWidth="2.5" />
+          <rect x="1" y="23" width="38" height="3" fill={line} />
+        </svg>
+      ) : (
+        <svg width="20" height="32" viewBox="0 0 20 32" aria-hidden>
+          <rect x="1.5" y="1.5" width="17" height="29" fill="none" stroke={line} strokeWidth="2.5" />
+          <rect x="7" y="25" width="6" height="2" fill={line} />
+        </svg>
+      )}
+      <span className={cn(MONO, "text-[10px] leading-3", ink)}>{name}</span>
+    </div>
+  );
+}
+
+/// A: the link itself. The server and the phone, the old link broken in
+/// grey and the new one, through the relay, in blue: the one thing that
+/// changed, and what reconnecting makes.
+function RelayLink() {
+  const { light, dim, line } = relayInk();
+  return (
+    <div aria-hidden className={cn("flex w-[320px] items-stretch gap-[2px] p-2", PANEL(light))}>
+      <DeviceBlock name="MacBook" kind="laptop" />
+      <div className="flex min-w-0 flex-1 flex-col justify-center gap-5 px-3">
+        <div className="flex flex-col gap-1.5">
+          <svg width="100%" height="10" aria-hidden>
+            <line x1="0" y1="5" x2="40%" y2="5" stroke={line} strokeWidth="2" strokeDasharray="4 3" />
+            <line x1="60%" y1="5" x2="100%" y2="5" stroke={line} strokeWidth="2" strokeDasharray="4 3" />
+            <svg x="50%" y="0" width="10" height="10" viewBox="0 0 10 10" overflow="visible">
+              <path d="M-4 1 4 9M4 1-4 9" stroke={WHITE ? "#71717A" : "#8A8A8A"} strokeWidth="1.8" />
+            </svg>
+          </svg>
+          <span className={cn(MONO, "text-center text-[9px] leading-3", dim)}>Old address</span>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <div className="h-[3px] w-full" style={{ background: BLUE }} />
+          <span className={cn(MONO, "text-center text-[9px] leading-3", light ? "text-[#0A0A0A]" : "text-white")}>Reconnected</span>
+        </div>
+      </div>
+      <DeviceBlock name="iPhone" kind="phone" />
+    </div>
+  );
+}
+
+/// B: the server's devices after the switch, each disconnected, the first
+/// with Reconnect in blue: a list the reader recognises as theirs to fix.
+function RelayDevices() {
+  const { light, card, dim, ink, line } = relayInk();
+  const rows = ["iPhone 16 Pro", "Mac mini", "iPad"];
+  return (
+    <div aria-hidden className={cn("flex w-[300px] flex-col gap-[2px] p-2", PANEL(light))}>
+      <div className={cn("flex items-center justify-between px-3 py-2.5", card)}>
+        <span className={cn(MONO, "text-[11px] leading-[14px]", ink)}>MacBook Pro</span>
+        <span className={cn(MONO, "text-[9px] leading-3", dim)}>New address</span>
+      </div>
+      {rows.map((name, i) => (
+        <div key={name} className={cn("flex h-[38px] items-center gap-2.5 px-3", card)}>
+          <span className="size-1.5 shrink-0" style={{ background: line }} />
+          <span className={cn(MONO, "text-[11px] leading-[14px]", ink)}>{name}</span>
+          <span className={cn(MONO, "text-[9px] leading-3", dim)}>Disconnected</span>
+          {i === 0 ? (
+            <span className={`${MONO} ml-auto flex h-5 items-center px-2 text-[9px] leading-3 text-white`} style={{ background: BLUE }}>
+              Reconnect
+            </span>
+          ) : (
+            <span className={cn(MONO, "ml-auto flex h-5 items-center border px-2 text-[9px] leading-3", dim)} style={{ borderColor: line }}>
+              Reconnect
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/// C: the whole job in three squares, 2px apart: open Servers, scan the
+/// code, connected, the last in blue as where it ends.
+function RelaySteps() {
+  const { light, card, dim, ink } = relayInk();
+  const step = (n: number, label: string, body: ReactNode, done = false) => (
+    <div className={cn("flex w-[94px] shrink-0 flex-col gap-2 p-2.5", done ? "text-white" : card)} style={done ? { background: BLUE } : undefined}>
+      <span className={cn(MONO, "text-[9px] leading-3", done ? "text-white/70" : dim)}>{n}</span>
+      <div className="flex h-[62px] items-center justify-center">{body}</div>
+      <span className={cn(MONO, "text-[10px] leading-3", done ? "text-white" : ink)}>{label}</span>
+    </div>
+  );
+  return (
+    <div aria-hidden className={cn("flex gap-[2px] p-2", PANEL(light))}>
+      {step(
+        1,
+        "Open Servers",
+        <div className="flex w-full flex-col gap-1">
+          {["Servers", "This Mac", "Pair"].map((t, i) => (
+            <span key={t} className={cn(MONO, "px-1.5 py-0.5 text-[8px] leading-[10px]", i === 0 ? cn(ink, light ? "bg-[#F4F4F5]" : "bg-[#262626]") : dim)}>
+              {t}
+            </span>
+          ))}
+        </div>,
+      )}
+      {step(2, "Scan the code", <PairBlock size={58} />)}
+      {step(
+        3,
+        "Connected",
+        <svg width="34" height="34" viewBox="0 0 24 24" aria-hidden>
+          <path d="M4 12.5 9.5 18 20 6.5" fill="none" stroke="#FFFFFF" strokeWidth="2.5" strokeLinecap="square" />
+        </svg>,
+        true,
+      )}
+    </div>
+  );
+}
+
 const ROWS: { title: string; takes: Record<string, { name: string; Art: () => ReactNode }> }[] = [
   {
     title: "Reconnect your servers (the relay)",
     takes: {
-      "relay-pair": { name: "A · The server and its code", Art: RelayPair },
+      "relay-link": { name: "A · The link, broken and made again", Art: RelayLink },
+      "relay-devices": { name: "B · Devices to reconnect", Art: RelayDevices },
+      "relay-steps": { name: "C · Three steps", Art: RelaySteps },
+      "relay-pair": { name: "D · The server and its code (first take)", Art: RelayPair },
     },
   },
   {

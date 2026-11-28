@@ -103,6 +103,13 @@ describe("highlights", () => {
     expect(announcement(feed, "0.30.0", null).highlights.map((h) => h.item.title)).toEqual(["Big"]);
   });
 
+  it("puts a required highlight first, from whichever release it came", () => {
+    const must = { ...item("Pair again", ["desktop"]), highlight: { apps: ["desktop" as const], action: null, required: true } };
+    const withMust = [feed[0], withItems("0.29.0", true, [item("Older", ["desktop"]), must]), feed[2]];
+    const titles = announcement(withMust, "0.30.0", "0.28.0").highlights.map((h) => h.item.title);
+    expect(titles).toEqual(["Pair again", "Big", "Older"]);
+  });
+
   it("reads a feed built before highlights existed", () => {
     const old = withItems("0.30.0", true, [{ title: "X", body: "", media: [] }]);
     expect(desktopHighlights(old)).toEqual([]);

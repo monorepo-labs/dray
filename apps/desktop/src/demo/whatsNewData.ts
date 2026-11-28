@@ -5,9 +5,10 @@ const page = (
   body: string,
   media: ChangelogItem["media"],
   action?: { label: string; target: string },
+  required?: boolean,
 ): Highlight => ({
   version: "0.33.0",
-  item: { title, body, media, highlight: { apps: ["desktop"], action: action ?? null } },
+  item: { title, body, media, highlight: { apps: ["desktop"], action: action ?? null, required } },
 });
 
 /// The next release's highlights, on the picked take of each. Their
@@ -32,11 +33,14 @@ export const NEXT_RELEASE: Highlight[] = [
   ),
   // For the release that turns Dray's own relay on for every server (#1669):
   // each server's Remote access address changes, so phones and other Macs
-  // must pair again. WhatsNewPage draws the title alone, so it says both.
+  // must pair again. Required, so WhatsNewPage puts it first and marks it
+  // Action needed. The picture is one of three takes, not yet picked
+  // (whatsNewIllustrations.tsx, relay-link, relay-devices, relay-steps).
   page(
-    "Remote access is faster. Pair your phone and other Macs again.",
-    "Your servers now reach your phone through Dray's own relay, which reconnects faster after a drop. Each server has a new address, so scan its pairing code again on your phone, and add it again on your other Macs.",
-    [{ kind: "image", url: "/demo/whats-new/relay-pair.png", alt: "A server's card with Remote access on and a new relay address, beside its pairing code: Scan to reconnect" }],
+    "Reconnect your phone and other Macs. Remote access is now more reliable and faster.",
+    "Each server has a new address. Scan its pairing code again on your phone, and add it again on your other Macs.",
+    [{ kind: "image", url: "/demo/whats-new/relay-devices-white.png", alt: "A server's devices, each disconnected, the first with Reconnect" }],
     { label: "Open Servers settings", target: "settings/servers" },
+    true,
   ),
 ];

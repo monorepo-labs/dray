@@ -23,7 +23,9 @@ reads:
   its text. Mark it with a comment under the item, which GitHub and the site
   hide: `<!-- highlight: desktop, ios, android -->`, naming the apps it is for.
   Add `· action: Label → target` for a button on its page, where target is
-  `new-task`, `new-bot`, `settings/<tab>` or an `https://` link. Keep the text
+  `new-task`, `new-bot`, `settings/<tab>` or an `https://` link. Add
+  `· required` for something the reader must do, such as pairing again: the
+  desktop draws it first, across the page, marked Action needed. Keep the text
   to a line or two. A release with no highlights for an app gets the small
   card there instead, when it carries `notify`.
 

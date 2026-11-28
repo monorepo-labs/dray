@@ -121,20 +121,21 @@ CHANGELOG.md, under that release's `### New`, ready to paste (it stays out of
 the file until then, since the site publishes whatever is there):
 
 ```markdown
-- **Remote access is faster. Pair your phone and other Macs again.** Your
-  servers now reach your phone through Dray's own relay, which reconnects
-  faster after a drop. Each server has a new address, so scan its pairing
-  code again on your phone, and add it again on your other Macs.
-  ![](changelog/relay-pair.png)
-  <!-- highlight: desktop · action: Open Servers settings → settings/servers -->
+- **Reconnect your phone and other Macs. Remote access is now more reliable and faster.**
+  Each server has a new address. Scan its pairing code again on your phone,
+  and add it again on your other Macs.
+  ![](changelog/relay-reconnect.png)
+  <!-- highlight: desktop · required · action: Open Servers settings → settings/servers -->
 ```
 
-Copy `apps/desktop/demo/whats-new/relay-pair-white.png` to
-`apps/web/public/changelog/relay-pair.png`: What's New draws white cards. The
-page shows the title and the action alone, so the title carries the whole
-message. The picture is drawn in
+`required` puts it first on What's New, across the page, marked Action
+needed, so it reads as something to do before a word is read. The title leads
+with the action, since the page shows the title and the action alone. The
+picture is one of three takes in
 [whatsNewIllustrations.tsx](../desktop/src/demo/whatsNewIllustrations.tsx)
-(`?art=relay-pair`) in the brand look, its QR a block that pairs with nothing.
+(`?art=relay-link`, `relay-devices`, `relay-steps`, with `&tile=white`), not yet
+picked: copy the picked `apps/desktop/demo/whats-new/<take>-white.png` to
+`apps/web/public/changelog/relay-reconnect.png`.
 
 ## Deploy on Railway
 

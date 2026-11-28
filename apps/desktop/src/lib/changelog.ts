@@ -11,6 +11,8 @@ export type ChangelogApp = "desktop" | "ios" | "android";
 export type ChangelogHighlight = {
   apps: ChangelogApp[];
   action: { label: string; target: string } | null;
+  /// The reader must act on it: listed first and drawn apart.
+  required?: boolean;
 };
 /// `highlight` is absent in a feed built before highlights existed.
 export type ChangelogItem = {
@@ -118,7 +120,9 @@ export function announcement(
   if (!newest) return { release: null, highlights: [], seen };
   const fresh = runnable.filter((r) => compareVersions(r.version, seen ?? "0.0.0") > 0);
   const release = fresh.find((r) => r.notify) ?? null;
-  const highlights = (seen ? fresh : fresh.slice(0, 1)).flatMap(desktopHighlights);
+  const all = (seen ? fresh : fresh.slice(0, 1)).flatMap(desktopHighlights);
+  // Stable: required ones lead, each group keeping its newest-first order.
+  const highlights = [...all.filter((h) => h.item.highlight?.required), ...all.filter((h) => !h.item.highlight?.required)];
   return {
     release: highlights.length ? null : release,
     highlights,

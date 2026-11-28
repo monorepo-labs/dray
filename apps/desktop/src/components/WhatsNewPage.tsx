@@ -54,10 +54,15 @@ export default function WhatsNewPage({
           <div className="mx-auto flex w-full max-w-[1120px] flex-col pt-6">
             <GateHeading>{heading}</GateHeading>
             <div className="grid grid-cols-2 gap-4">
-              {highlights.map((h, i) => (
-                <Card key={i} h={h} actionFor={actionFor} onClose={onClose} />
-              ))}
-              <Continue row={count % 2 === 0} onClose={onClose} />
+              {highlights.map((h, i) =>
+                h.item.highlight?.required ? (
+                  <Required key={i} h={h} actionFor={actionFor} onClose={onClose} />
+                ) : (
+                  <Card key={i} h={h} actionFor={actionFor} onClose={onClose} />
+                ),
+              )}
+              {/* A required card spans the row, so only feature cards decide where Continue falls. */}
+              <Continue row={highlights.filter((h) => !h.item.highlight?.required).length % 2 === 0} onClose={onClose} />
             </div>
           </div>
         </main>
@@ -100,6 +105,52 @@ function Card({
             {action.label}
             <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden>
               <path d="M7 17 17 7M7 7h10v10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
+      </div>
+      {media && <Media media={media} />}
+    </article>
+  );
+}
+
+/// Something the reader must do, not a feature to scan past: the whole row,
+/// a black "Action needed" block ahead of the title, the action as a filled
+/// button rather than a quiet link, and the picture beside the words. Read at
+/// a glance before any word of it is. `announcement` lists these first.
+function Required({
+  h,
+  actionFor,
+  onClose,
+}: {
+  h: Highlight;
+  actionFor: (target: string) => (() => void) | null;
+  onClose: () => void;
+}) {
+  const media = h.item.media[0];
+  const action = h.item.highlight?.action ?? null;
+  const run = action && actionFor(action.target);
+  return (
+    <article className="col-span-2 grid grid-cols-2 bg-white max-lg:grid-cols-1">
+      <div className="flex flex-col items-start gap-4 p-6">
+        <span className="bg-[#0A0A0A] px-2 py-1 font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white uppercase">
+          Action needed
+        </span>
+        <h2 className="line-clamp-3 text-[24px] leading-8 tracking-[-0.01em] text-balance text-[#0A0A0A]">
+          {changelogPlain(h.item.title ?? h.item.body)}
+        </h2>
+        {action && run && (
+          <button
+            type="button"
+            onClick={() => {
+              onClose();
+              run();
+            }}
+            className="mt-auto inline-flex cursor-pointer items-center gap-2 bg-[#0A0A0A] px-3 py-2 font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white uppercase outline-none hover:bg-[#262626] focus-visible:ring-2 focus-visible:ring-[#0A0A0A]/40"
+          >
+            {action.label}
+            <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden>
+              <path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" />
             </svg>
           </button>
         )}
