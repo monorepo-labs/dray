@@ -186,8 +186,8 @@ type RightPanelProps = {
   /// So the row keeps its height, loses its controls, and says what the pane is.
   heading?: string;
   /// Switches the tabs with the sidebar's dot track at the foot of the pane, a
-  /// tap or a swipe, rather than a row of words at its top, which then stays
-  /// empty: each view's own section headings already say what it is. A bot's
+  /// tap or a swipe, rather than a row of words at its top, which then goes:
+  /// each view's own section headings already say what it is. A bot's
   /// pane: its views are few and stable, and words at the top read as a second
   /// tab row over a chat that already has one.
   switcher?: boolean;
@@ -268,6 +268,10 @@ export default function RightPanel({
 
   // Not for one view, which a switcher would only offer back to itself.
   const switches = switcher && tabs.length > 1;
+  // No top strip at all: each view's sections name themselves, so the strip
+  // held nothing but an Open in for the bot's own folder, and its empty band
+  // pushed every view down.
+  const bare = !heading && (switcher || (tabs.length === 1 && tabs[0] === "tasks"));
   // Wraps, as the sidebar's does: a tap has no direction, so a dead end at the
   // last view would just look broken.
   const step = (delta: -1 | 1) => {
@@ -291,83 +295,85 @@ export default function RightPanel({
       )}
     >
       {handle}
-      <div
-        // `overflow-hidden` for the reason the app header carries it: this
-        // pane can be dragged narrow, and what runs out of room has to clip
-        // at its own edge rather than draw over the transcript beside it.
-        className="flex h-[34px] shrink-0 items-center gap-0.5 overflow-hidden px-2 pt-1.5"
-        data-tauri-drag-region="deep"
-      >
-        {heading ? (
-          // Padded to sit where a tab's label would, so the pane's first line
-          // lands on the same baseline whichever frame it is wearing.
-          <span className="px-2 py-1 text-ui font-medium">{heading}</span>
-        ) : switcher || (tabs.length === 1 && tabs[0] === "tasks") ? null : (
-          // A wrapping row clipped to one line, which sheds the keycaps when
-          // they stop fitting and never a tab sooner — the CSS answer to a
-          // question a resize observer would otherwise have to measure.
-          //
-          // Flex breaks a line between items, never through one, so the caps go
-          // whole where `overflow-hidden` alone would leave half of one on
-          // screen. `h-full` on **both** items is what holds the line open: a
-          // line is only as tall as what is left on it, so caps carrying the
-          // height alone took it with them when they wrapped and the second
-          // line surfaced in the slack. `content-start` pins the first line to
-          // the top, or two lines would centre and clip the tabs.
-          <div className="flex h-full min-w-0 flex-wrap content-start items-center gap-0.5 overflow-hidden">
-            {/* Their own scroll, so a row still too long after the caps have
-                gone gives way here rather than pushing Open and Refresh past
-                the edge: those are reached for by position, where a tab can
-                still be scrolled to. */}
-            <div className="flex h-full min-w-0 items-center gap-0.5 overflow-x-auto">
-              {tabs.map((value) => (
-                <TabButton
-                  key={value}
-                  active={tab === value}
-                  onClick={() => onTabChange(value)}
-                >
-                  {PANEL_LABELS[value]}
-                  <TabCount n={counts?.[value]} />
-                </TabButton>
-              ))}
+      {!bare && (
+        <div
+          // `overflow-hidden` for the reason the app header carries it: this
+          // pane can be dragged narrow, and what runs out of room has to clip
+          // at its own edge rather than draw over the transcript beside it.
+          className="flex h-[34px] shrink-0 items-center gap-0.5 overflow-hidden px-2 pt-1.5"
+          data-tauri-drag-region="deep"
+        >
+          {heading ? (
+            // Padded to sit where a tab's label would, so the pane's first line
+            // lands on the same baseline whichever frame it is wearing.
+            <span className="px-2 py-1 text-ui font-medium">{heading}</span>
+          ) : (
+            // A wrapping row clipped to one line, which sheds the keycaps when
+            // they stop fitting and never a tab sooner — the CSS answer to a
+            // question a resize observer would otherwise have to measure.
+            //
+            // Flex breaks a line between items, never through one, so the caps go
+            // whole where `overflow-hidden` alone would leave half of one on
+            // screen. `h-full` on **both** items is what holds the line open: a
+            // line is only as tall as what is left on it, so caps carrying the
+            // height alone took it with them when they wrapped and the second
+            // line surfaced in the slack. `content-start` pins the first line to
+            // the top, or two lines would centre and clip the tabs.
+            <div className="flex h-full min-w-0 flex-wrap content-start items-center gap-0.5 overflow-hidden">
+              {/* Their own scroll, so a row still too long after the caps have
+                  gone gives way here rather than pushing Open and Refresh past
+                  the edge: those are reached for by position, where a tab can
+                  still be scrolled to. */}
+              <div className="flex h-full min-w-0 items-center gap-0.5 overflow-x-auto">
+                {tabs.map((value) => (
+                  <TabButton
+                    key={value}
+                    active={tab === value}
+                    onClick={() => onTabChange(value)}
+                  >
+                    {PANEL_LABELS[value]}
+                    <TabCount n={counts?.[value]} />
+                  </TabButton>
+                ))}
+              </div>
+
+              {/* Beside the tabs rather than at the far end, and with no label:
+                  next to the thing it acts on, the caps read as belonging to the
+                  row without a word saying so. Drawn at all — rather than hidden
+                  in a tooltip the way the rest of the app's shortcuts are —
+                  because a chord for a row of two or three tabs is one nobody
+                  goes looking for.
+
+                  Last in the row and the only thing allowed to wrap: the hint is
+                  the one element here that does nothing, so it is the one to give
+                  up — but only when the row cannot afford it, never at a tab
+                  count guessed in advance.
+
+                  Three caps, not four: `[ ]` is one key with two ends rather than
+                  two alternatives, so splitting it reads as a chord wanting
+                  both. */}
+              {/* `dark:` on the opacity, because holding a keycap back means
+                  different things in the two modes. Opacity fades the group toward
+                  the page, and a cap's fill is a veil running the page's opposite
+                  way: in dark it moves from white toward black and the box softens,
+                  which is what was wanted. In light it moves from black toward
+                  white and the glyphs wash out while the box stays — a hint that is
+                  somehow both faint and still the loudest thing in the row. So
+                  light takes no opacity at all; the caps there are already quieter
+                  than their dark twins, `--muted` being a black veil on a near-white
+                  page rather than a white one on near-black. */}
+              {/* Not for one tab, which the chord would step onto itself. */}
+              {tabs.length > 1 && (
+                <ShortcutKeys ids={["panel.tab.prev", "panel.tab.next"]} className="ml-1.5 h-full shrink-0 dark:opacity-50" />
+              )}
             </div>
+          )}
 
-            {/* Beside the tabs rather than at the far end, and with no label:
-                next to the thing it acts on, the caps read as belonging to the
-                row without a word saying so. Drawn at all — rather than hidden
-                in a tooltip the way the rest of the app's shortcuts are —
-                because a chord for a row of two or three tabs is one nobody
-                goes looking for.
-
-                Last in the row and the only thing allowed to wrap: the hint is
-                the one element here that does nothing, so it is the one to give
-                up — but only when the row cannot afford it, never at a tab
-                count guessed in advance.
-
-                Three caps, not four: `[ ]` is one key with two ends rather than
-                two alternatives, so splitting it reads as a chord wanting
-                both. */}
-            {/* `dark:` on the opacity, because holding a keycap back means
-                different things in the two modes. Opacity fades the group toward
-                the page, and a cap's fill is a veil running the page's opposite
-                way: in dark it moves from white toward black and the box softens,
-                which is what was wanted. In light it moves from black toward
-                white and the glyphs wash out while the box stays — a hint that is
-                somehow both faint and still the loudest thing in the row. So
-                light takes no opacity at all; the caps there are already quieter
-                than their dark twins, `--muted` being a black veil on a near-white
-                page rather than a white one on near-black. */}
-            {/* Not for one tab, which the chord would step onto itself. */}
-            {tabs.length > 1 && (
-              <ShortcutKeys ids={["panel.tab.prev", "panel.tab.next"]} className="ml-1.5 h-full shrink-0 dark:opacity-50" />
-            )}
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <PanelActions actions={actions} cwd={cwd} refresh={refresh} />
           </div>
-        )}
-
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          <PanelActions actions={actions} cwd={cwd} refresh={refresh} />
         </div>
-      </div>
+      )}
 
       {children}
 

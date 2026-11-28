@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Plus } from "lucide-react";
 
 import ImageLightbox, { Thumb, type LightboxImage } from "@/components/chat/ImageLightbox";
 import Spinner from "@/components/ui/spinner";
@@ -154,9 +155,12 @@ export default function AttachmentList({ logs }: { logs: HeldLog[] }) {
             type="button"
             onClick={() => void loadMore()}
             disabled={loading}
-            className="flex cursor-default items-center gap-2 rounded-lg px-2 py-1.5 text-left text-ui text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:hover:bg-transparent"
+            className="flex cursor-default items-center gap-2 rounded-lg px-2 py-1 text-left text-ui text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:hover:bg-transparent"
           >
-            {loading && <Spinner className="size-3.5" />}
+            {/* In a thumb-sized box, so its words line up with the names above. */}
+            <span className="flex size-6 shrink-0 items-center justify-center">
+              {loading ? <Spinner className="size-3.5" /> : <Plus className="size-3.5" />}
+            </span>
             {failed ? "Couldn't load more. Try again" : "Load more"}
           </button>
         )}

@@ -35,13 +35,21 @@ export default function RoutinesSection({
   routines: Routine[];
   onOpen: (id: string) => void;
 }) {
+  // Active above paused, ranked once per mount: re-sorting on every toggle
+  // moved the row out from under the switch just pressed. A routine added
+  // since lands after the ranked ones, active before paused.
+  const [rank] = useState(
+    () => new Map([...routines].sort((a, b) => Number(a.paused) - Number(b.paused)).map((r, i) => [r.id, i])),
+  );
+  const pos = (r: Routine) => rank.get(r.id) ?? rank.size + Number(r.paused);
+  const ordered = [...routines].sort((a, b) => pos(a) - pos(b));
   return (
     <div className="shrink-0">
       {/* The heading `RunHeading` draws over Background tasks and Subagents. */}
       <div className="px-3 pt-4 pb-2 text-ui text-muted-foreground">Routines</div>
       {error && <p className="px-3 pb-2 text-ui text-destructive/80">{error}</p>}
       <div className="flex flex-col gap-1 px-2 pb-3">
-        {routines.map((r) => (
+        {ordered.map((r) => (
           <RoutineCard
             key={r.id}
             routine={r}
@@ -86,9 +94,10 @@ function RoutineCard({
           }}
           className="flex cursor-pointer items-center gap-3 rounded-xl border-[0.5px] border-border px-3 py-2.5 text-ui transition-colors outline-none hover:bg-accent/50 dark:bg-card dark:hover:bg-accent/50 focus-visible:ring-3 focus-visible:ring-ring/50"
         >
-          <Clock className={cn("size-4 shrink-0 text-muted-foreground", paused && "opacity-50")} />
+          {/* Drawn the same on or off: the switch alone says which. */}
+          <Clock className="size-4 shrink-0 text-muted-foreground" />
           <div className="flex min-w-0 flex-1 flex-col">
-            <span className={cn("truncate", paused ? "text-muted-foreground" : "text-foreground")}>{routine.name}</span>
+            <span className="truncate text-foreground">{routine.name}</span>
             <span className="truncate text-foreground/60">
               {scheduleLabel(routine)} · {nextRunLabel(routine, now)}
             </span>
