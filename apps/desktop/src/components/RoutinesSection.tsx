@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Input, inputClassName } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { nextRunLabel, scheduleLabel } from "@/lib/routines";
 import { cn } from "@/lib/utils";
 import type { Routine } from "@/types/events";
@@ -41,7 +40,7 @@ export default function RoutinesSection({
       {/* The heading `RunHeading` draws over Background tasks and Subagents. */}
       <div className="px-3 pt-4 pb-2 text-ui text-muted-foreground">Routines</div>
       {error && <p className="px-3 pb-2 text-ui text-destructive/80">{error}</p>}
-      <div className="flex flex-col gap-2 px-2 pb-3">
+      <div className="flex flex-col gap-1 px-2 pb-3">
         {routines.map((r) => (
           <RoutineCard
             key={r.id}
@@ -85,7 +84,7 @@ function RoutineCard({
               onOpen();
             }
           }}
-          className="flex cursor-pointer items-center gap-3 rounded-xl border-[0.5px] border-border bg-card px-3 py-2.5 text-ui transition-colors outline-none hover:bg-accent/50 focus-visible:ring-3 focus-visible:ring-ring/50"
+          className="flex cursor-pointer items-center gap-3 rounded-xl border-[0.5px] border-border px-3 py-2.5 text-ui transition-colors outline-none hover:bg-accent/50 dark:bg-card dark:hover:bg-accent/50 focus-visible:ring-3 focus-visible:ring-ring/50"
         >
           <Clock className={cn("size-4 shrink-0 text-muted-foreground", paused && "opacity-50")} />
           <div className="flex min-w-0 flex-1 flex-col">
@@ -150,14 +149,9 @@ export function RoutineDetails({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <div className="flex shrink-0 items-center gap-1 px-2 pt-2.5 pb-1">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon-sm" aria-label="Back" onClick={onBack}>
-              <ArrowLeft className="size-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Back</TooltipContent>
-        </Tooltip>
+        <Button variant="ghost" size="icon-sm" aria-label="Back" onClick={onBack}>
+          <ArrowLeft className="size-4" />
+        </Button>
         <span className="text-ui text-muted-foreground">Routines</span>
       </div>
       {/* Not a `<form>`: WebKit submits one on Ctrl+Enter in the textarea, and

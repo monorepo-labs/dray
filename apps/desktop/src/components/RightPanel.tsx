@@ -186,9 +186,10 @@ type RightPanelProps = {
   /// So the row keeps its height, loses its controls, and says what the pane is.
   heading?: string;
   /// Switches the tabs with the sidebar's dot track at the foot of the pane, a
-  /// tap or a swipe, rather than a row of words at its top, which then names
-  /// the open one. A bot's pane: its views are few and stable, and words at the
-  /// top read as a second tab row over a chat that already has one.
+  /// tap or a swipe, rather than a row of words at its top, which then stays
+  /// empty: each view's own section headings already say what it is. A bot's
+  /// pane: its views are few and stable, and words at the top read as a second
+  /// tab row over a chat that already has one.
   switcher?: boolean;
   /// Which side of the chat column the pane stands on — the reader's pick in
   /// Settings › Appearance. The border and the drag strip face the chat.
@@ -301,16 +302,7 @@ export default function RightPanel({
           // Padded to sit where a tab's label would, so the pane's first line
           // lands on the same baseline whichever frame it is wearing.
           <span className="px-2 py-1 text-ui font-medium">{heading}</span>
-        ) : switcher || (tabs.length === 1 && tabs[0] === "tasks") ? (
-          // The open view's words with nothing to press, so no fill and no
-          // weight over its count: the switching is done at the foot. Inset to
-          // the faces' drawn edge below rather than a tab's padding, so the
-          // label lines up with the list it heads.
-          <span className="py-1 pr-2 pl-1.5 text-ui text-muted-foreground">
-            {PANEL_LABELS[tab]}
-            <TabCount n={counts?.[tab]} />
-          </span>
-        ) : (
+        ) : switcher || (tabs.length === 1 && tabs[0] === "tasks") ? null : (
           // A wrapping row clipped to one line, which sheds the keycaps when
           // they stop fitting and never a tab sooner — the CSS answer to a
           // question a resize observer would otherwise have to measure.

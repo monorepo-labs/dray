@@ -138,22 +138,15 @@ export default function AttachmentList({ logs }: { logs: HeldLog[] }) {
             type="button"
             onClick={() => setOpenSrc(item.src)}
             aria-label={item.video ? `Play ${item.name}` : `Open ${item.name}`}
-            className="flex cursor-default items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent/50"
+            className="flex cursor-default items-center gap-2 rounded-lg px-2 py-1 text-left transition-colors hover:bg-sidebar-accent/50"
           >
-            <Thumb item={item} small className="size-9 shrink-0 overflow-hidden rounded-md ring-[0.5px] ring-border" />
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate text-ui text-sidebar-foreground">{item.name}</span>
-              <span className="truncate text-xs text-muted-foreground">
-                {/* The filters' own words, so a row says which one it falls under. */}
-                {item.byYou ? "You" : "AI"}
-                {item.video && " · Recording"}
-              </span>
+            <Thumb item={item} small className="size-6 shrink-0 overflow-hidden rounded ring-[0.5px] ring-border" />
+            <span className="min-w-0 flex-1 truncate text-ui text-sidebar-foreground">{item.name}</span>
+            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+              {/* The filters' own words, so a row says which one it falls under. */}
+              {item.byYou ? "You" : "AI"}
+              {item.at && ` · ${relativeTime(item.at)}`}
             </span>
-            {item.at && (
-              <span className="shrink-0 self-start pt-0.5 text-xs text-muted-foreground tabular-nums">
-                {relativeTime(item.at)}
-              </span>
-            )}
           </button>
         ))}
         {hasMore && (
