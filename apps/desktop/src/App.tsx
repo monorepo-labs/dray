@@ -4743,6 +4743,7 @@ function App() {
                         now: stalled.now,
                         onPause: routines.setPaused,
                         onDelete: routines.remove,
+                        onSave: routines.save,
                         error: routines.error,
                       }
                     : undefined

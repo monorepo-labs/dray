@@ -6,8 +6,9 @@ import type { Bot, Routine } from "@/types/events";
 
 /// A bot's routines, read from its server and again on every
 /// `routines_changed` it sends, plus once a minute as a reconnect's catch-up.
-/// Pause, resume, run and delete go to that same server, and one that fails
-/// leaves its reason in `error` until the next succeeds.
+/// Pause, resume, edit and delete go to that same server, each answering
+/// whether it went through, and one that fails leaves its reason in `error`
+/// until the next succeeds.
 export function useRoutines(bot: Bot | null | undefined) {
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -40,14 +41,17 @@ export function useRoutines(bot: Bot | null | undefined) {
 
   const act = useCallback(
     async (cmd: string, args: Record<string, unknown>, failed: string) => {
-      if (!server) return;
+      if (!server) return false;
+      let ok = true;
       try {
         await invoke(cmd, args, server);
         if (current.current === key) setError(null);
       } catch (e) {
+        ok = false;
         if (current.current === key) setError(`${failed}: ${e instanceof Error ? e.message : String(e)}`);
       }
       await read();
+      return ok;
     },
     [key, read, server],
   );
@@ -58,5 +62,7 @@ export function useRoutines(bot: Bot | null | undefined) {
     setPaused: (routineId: string, paused: boolean) =>
       act("set_routine_paused", { id: routineId, paused }, paused ? "Couldn't pause it" : "Couldn't resume it"),
     remove: (routineId: string) => act("delete_routine", { id: routineId }, "Couldn't delete it"),
+    save: (routineId: string, name: string, prompt: string) =>
+      act("update_routine", { id: routineId, name, prompt }, "Couldn't save it"),
   };
 }
