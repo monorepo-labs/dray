@@ -319,8 +319,14 @@ mod collect {
     pub async fn track(machine: &str, child: &str, parent: &str) -> anyhow::Result<()> {
         let _guard = TRACKED.lock().await;
         let mut list = load().await;
+        let first = !list.iter().any(|r| r.machine == machine);
         list.push(Remote { machine: machine.into(), child: child.into(), parent: parent.into() });
-        store::write_atomic(&tracked_path().await?, serde_json::to_string_pretty(&list)?).await
+        store::write_atomic(&tracked_path().await?, serde_json::to_string_pretty(&list)?).await?;
+        // A machine holding a bot's task is relayed to clients (#1660).
+        if first {
+            tokio::spawn(machines::announce_sharing());
+        }
+        Ok(())
     }
 
     /// Moves the tasks tracked under `from`, a bot's task about to be deleted,
@@ -373,10 +379,14 @@ mod collect {
         }
         let _guard = TRACKED.lock().await;
         let mut list = load().await;
+        let before: std::collections::HashSet<String> = list.iter().map(|r| r.machine.clone()).collect();
         list.retain(|r| !children.contains(&r.child));
         let Ok(path) = tracked_path().await else { return };
         if let Err(e) = store::write_atomic(&path, serde_json::to_string_pretty(&list).unwrap_or_default()).await {
             eprintln!("[remote reports err] {e:#}");
+        }
+        if list.iter().map(|r| &r.machine).collect::<std::collections::HashSet<_>>().len() != before.len() {
+            tokio::spawn(machines::announce_sharing());
         }
     }
 

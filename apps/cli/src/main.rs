@@ -1196,7 +1196,10 @@ fn ls(args: Ls) -> Result<(), String> {
     });
 
     match send(request)? {
-        Response::Listed { sessions } => {
+        Response::Listed { sessions, unanswered } => {
+            for missing in &unanswered {
+                eprintln!("Not listed: {missing}");
+            }
             if args.json {
                 println!(
                     "{}",

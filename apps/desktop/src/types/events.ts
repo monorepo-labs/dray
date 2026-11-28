@@ -2257,7 +2257,12 @@ boat: BoatStatus | null,
  * A Dray Cloud machine (#857): drawn as no row of its own, and read as
  * "Cloud" wherever a machine is named.
  */
-cloud: boolean, };
+cloud: boolean, 
+/**
+ * The server this machine is reached through (#1660), which lists it:
+ * no row in Settings, since it is that server's to add and remove.
+ */
+via: string | null, };
 
 export type ServerStatus = "connecting" | "connected" | "disconnected";
 

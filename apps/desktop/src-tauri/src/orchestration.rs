@@ -1044,7 +1044,7 @@ pub(crate) mod elsewhere {
             Response::Created { session, .. } | Response::Session { session } | Response::Model { session, .. } => {
                 vec![session]
             }
-            Response::Listed { sessions } => sessions.iter_mut().collect(),
+            Response::Listed { sessions, .. } => sessions.iter_mut().collect(),
             _ => vec![],
         };
         for row in rows {
@@ -1194,19 +1194,22 @@ pub(crate) mod elsewhere {
     /// connected one's, every row naming where it runs.
     pub async fn list_everywhere(list: ListSessions) -> Result<Response> {
         let forward = prepare(Request::ListSessions(list.clone())).await?;
-        let Response::Listed { mut sessions } = list_sessions(list).await? else {
+        let Response::Listed { mut sessions, .. } = list_sessions(list).await? else {
             bail!("listing this machine's sessions answered something else");
         };
         let list: Vec<_> = machines::load().await.into_iter().filter(|m| !m.off).collect();
         let asks = list.iter().map(|m| tokio::time::timeout(machines::SWEEP, self::forward(&m.id, &forward)));
-        // ponytail: a machine that fails to answer is skipped unsaid; give
-        // `Listed` a warnings field if agents start missing rows.
-        for answer in futures_util::future::join_all(asks).await {
-            if let Ok(Ok(Response::Listed { sessions: theirs })) = answer {
-                sessions.extend(theirs);
+        let mut unanswered = Vec::new();
+        for (machine, answer) in list.iter().zip(futures_util::future::join_all(asks).await) {
+            match answer {
+                Ok(Ok(Response::Listed { sessions: theirs, .. })) => sessions.extend(theirs),
+                Ok(Ok(Response::Error { message })) => unanswered.push(format!("{}: {message}", machine.name)),
+                Ok(Ok(_)) => unanswered.push(format!("{}: answered something else", machine.name)),
+                Ok(Err(e)) => unanswered.push(format!("{}: {e:#}", machine.name)),
+                Err(_) => unanswered.push(format!("{}: did not answer in time", machine.name)),
             }
         }
-        Ok(Response::Listed { sessions })
+        Ok(Response::Listed { sessions, unanswered })
     }
 }
 
@@ -2746,7 +2749,7 @@ async fn list_sessions(list: ListSessions) -> Result<Response> {
         .map(summarize)
         .collect();
 
-    Ok(Response::Listed { sessions })
+    Ok(Response::Listed { sessions, unanswered: Vec::new() })
 }
 
 /// Refuses a create from a caller already [`MAX_DEPTH`] deep.
