@@ -1996,10 +1996,6 @@ function cutout(width: number, height: number, face = 40, gap = 2): string {
 const DOT_CUTOUT = cutout(10, 10, 32);
 const COUNT_CUTOUT = cutout(16, 16, 32);
 
-/// How long a bot row is pressed before it can be dragged: a press that moves
-/// sooner is a click, the way the row has always opened its chat.
-const BOT_HOLD_MS = 250;
-
 /// The bots, in the order the reader dragged them into.
 function BotList({
   bots,
@@ -2030,7 +2026,7 @@ function BotList({
     (b, _delta, to) => moveBot(b.bot, to),
     "y",
     undefined,
-    BOT_HOLD_MS,
+    true,
   );
   return (
     <div ref={list} data-rail-keep className="mt-4 flex flex-col gap-px px-2">
@@ -2081,7 +2077,7 @@ function BotRow({
   bot: Bot;
   /// The rail: the face alone, the name in a tooltip.
   iconOnly?: boolean;
-  /// The list's reorder: a press held in place, then dragged.
+  /// The list's reorder: a press dragged past the dead zone.
   onDragStart?: (e: React.PointerEvent<HTMLElement>) => void;
   transform?: string;
   /// The row in hand, lifted over the rest.

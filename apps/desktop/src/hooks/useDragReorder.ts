@@ -41,10 +41,9 @@ export function useDragReorder<T>(
   onMove: (item: T, delta: number, to: number) => Promise<unknown> | void,
   axis: "x" | "y" = "y",
   leave?: Leave<T>,
-  /// Milliseconds a press must stay put before it can drag, for items whose
-  /// press is also a click: the sidebar's bot rows. Moving sooner leaves it a
-  /// click, and a drag once held swallows the click its release would fire.
-  hold?: number,
+  /// For items whose press is also a click, the sidebar's bot rows: a drag
+  /// swallows the click its release would fire, so dropping a bot opens none.
+  clicks?: boolean,
 ) {
   // The order after a drop, held until the write answers so the items do not
   // snap back for the frame it takes.
@@ -106,20 +105,7 @@ export function useDragReorder<T>(
     let out = false;
     const dragged = shown[from];
     const { pointerId } = e;
-    // A held item takes the pointer only once the hold is up: captured from
-    // the press, a release over another row still clicked this one. Until
-    // then the window hears the press, wherever it ends.
-    const host: Window | HTMLElement = hold ? window : el;
-    let armed = !hold;
-    if (armed) el.setPointerCapture(pointerId);
-    // Lifted in place once the hold is up, so the reader sees it can move.
-    const timer = hold
-      ? setTimeout(() => {
-          armed = true;
-          el.setPointerCapture(pointerId);
-          setDrag({ from, to: from, d: 0, step });
-        }, hold)
-      : undefined;
+    el.setPointerCapture(pointerId);
 
     const tick = () => {
       const v = pointer < edges[lo] + EDGE ? -SPEED : pointer > edges[hi] - EDGE ? SPEED : 0;
@@ -144,10 +130,6 @@ export function useDragReorder<T>(
         }
       }
       if (!moved && Math.abs(pointer - origin) < DEAD_ZONE) return;
-      if (!armed) {
-        detach();
-        return;
-      }
       if (!moved) {
         document.body.classList.add("session-drag");
         if (scrollable) frame = requestAnimationFrame(tick);
@@ -170,20 +152,15 @@ export function useDragReorder<T>(
       setDrag({ from, to, d, step });
     };
 
-    const detach = () => {
-      clearTimeout(timer);
-      host.removeEventListener("pointermove", move as EventListener);
-      host.removeEventListener("pointerup", end as EventListener);
-      host.removeEventListener("pointercancel", end as EventListener);
-    };
-
     const end = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
-      detach();
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", end);
+      el.removeEventListener("pointercancel", end);
       cancelAnimationFrame(frame);
       document.body.classList.remove("session-drag");
       setDrag(null);
-      if (hold && moved) {
+      if (clicks && moved) {
         // Retired on the next task, so a later real click is not eaten.
         const swallow = (c: Event) => c.stopPropagation();
         el.addEventListener("click", swallow, { capture: true });
@@ -203,9 +180,9 @@ export function useDragReorder<T>(
       commit(from, to);
     };
 
-    host.addEventListener("pointermove", move as EventListener);
-    host.addEventListener("pointerup", end as EventListener);
-    host.addEventListener("pointercancel", end as EventListener);
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
   };
 
   /// Draws the move at once and writes it. Both the drag and the keyboard come
