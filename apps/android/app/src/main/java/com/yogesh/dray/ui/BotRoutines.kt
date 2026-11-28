@@ -39,7 +39,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -50,6 +49,8 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.yogesh.dray.model.nextRunLabel
+import com.yogesh.dray.model.orderRoutines
+import com.yogesh.dray.model.rankRoutines
 import com.yogesh.dray.model.scheduleLabel
 import com.yogesh.dray.net.ConnState
 import com.yogesh.dray.store.Store
@@ -79,8 +80,14 @@ class BotRoutinesModel(private val store: Store, val server: String, val botId: 
     var now by mutableLongStateOf(System.currentTimeMillis())
         internal set
 
+    /** Active above paused, ranked on the first read: re-sorting on a toggle moved the row out from under the switch. */
+    private var rank: Map<String, Int>? = null
+
     suspend fun read() {
-        store.routines(server, botId)?.let { list = it }
+        store.routines(server, botId)?.let { read ->
+            val ranked = rank ?: rankRoutines(read).also { rank = it }
+            list = orderRoutines(read, ranked)
+        }
     }
 
     /** The switch moves at once and goes back where the server refused, or never answered. */
@@ -182,10 +189,11 @@ private fun RoutineRow(r: Routine, now: Long, onOpen: () -> Unit, onPause: (Bool
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Icon(Icons.Outlined.Schedule, null, Modifier.size(20.dp).alpha(if (r.paused) 0.5f else 1f), tint = Dray.secondary)
+            // Drawn the same on or off: the switch alone says which.
+            Icon(Icons.Outlined.Schedule, null, Modifier.size(20.dp), tint = Dray.secondary)
             Column(Modifier.weight(1f)) {
                 Text(
-                    r.name, style = Dray.Font.body.copy(color = if (r.paused) Dray.secondary else Dray.text),
+                    r.name, style = Dray.Font.body,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 Text(
