@@ -8,8 +8,8 @@ import type { UpdateStatus } from "@/types/events";
 
 type UpdateRowProps = {
   status: UpdateStatus | null;
-  /// A turn is in flight somewhere. Installing swaps the bundle and relaunches,
-  /// which kills the child mid-turn, so the button waits rather than warning.
+  /// A turn is in flight and installing would stop it: Windows alone, where the
+  /// installer needs the server stopped first. The button waits rather than warning.
   blocked: boolean;
   /// Where something the user asked for has got to. The check verdicts are only
   /// drawn when there is no `status` — a real update outranks any verdict about
