@@ -48,6 +48,7 @@ import com.yogesh.dray.model.BotItem
 import com.yogesh.dray.model.SessionKey
 import com.yogesh.dray.model.Shot
 import com.yogesh.dray.model.botItems
+import com.yogesh.dray.model.botShots
 import com.yogesh.dray.model.botRows
 import com.yogesh.dray.model.currentTool
 import com.yogesh.dray.model.inReviewTurn
@@ -146,8 +147,7 @@ fun BotChatScreen(opened: SessionKey, bot: Bot, back: () -> Unit, openTask: (Ses
         LocalCallSession provides key,
         LocalChatList provides list,
         LocalOpenImage provides { ref: ImageRef ->
-            val shots = items.filterIsInstance<BotItem.User>().flatMap { it.images }.map { Shot(it, "Image", it.path ?: it.url) }
-                .ifEmpty { listOf(Shot(ref, "Image", ref.path ?: ref.url)) }
+            val shots = botShots(items, ref) ?: listOf(Shot(ref, "Image", ref.path ?: ref.url))
             gallery = shots to shots.indexOfFirst { it.ref == ref }.coerceAtLeast(0)
         },
     ) {

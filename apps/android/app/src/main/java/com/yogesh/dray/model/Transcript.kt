@@ -118,13 +118,7 @@ data class Turn(
         get() {
             fun attached(images: List<ImageRef>) = images.map { Shot(it, "Attached", fileName(it)) }
             fun calls(calls: List<ToolCall>) = calls.flatMap { c -> c.images.map { Shot(it, toolLabel(c.name, false), c.summary) } }
-            fun shown(text: String): List<Shot> {
-                val blocks = markdownBlocks(text).mapNotNull { b ->
-                    (b as? MdBlock.Image)?.let { val ref = ImageRef(url = it.url); Shot(ref, "Image", it.alt.ifEmpty { fileName(ref) }) }
-                }
-                val named = imagePaths(text).map { val ref = ImageRef(path = it); Shot(ref, "Image", fileName(ref)) }
-                return blocks + named
-            }
+            fun shown(text: String) = messageShots(text)
             val out = attached(prompt?.images.orEmpty()).toMutableList()
             for (item in work) when (item) {
                 is Item.Tool -> out += calls(listOf(item.call))
@@ -145,6 +139,15 @@ data class Segment(val items: List<Item>, val prompt: Item.Prompt?, val cards: L
 
 /** One picture in a turn's gallery, and the line naming where it came from: "Read /tmp/hero.png". */
 data class Shot(val ref: ImageRef, val verb: String, val target: String?)
+
+/** The pictures one message draws, in the order `MarkdownText` draws them: markdown image blocks, then paths it names. */
+fun messageShots(text: String): List<Shot> {
+    val blocks = markdownBlocks(text).mapNotNull { b ->
+        (b as? MdBlock.Image)?.let { val ref = ImageRef(url = it.url); Shot(ref, "Image", it.alt.ifEmpty { fileName(ref) }) }
+    }
+    val named = imagePaths(text).map { val ref = ImageRef(path = it); Shot(ref, "Image", fileName(ref)) }
+    return blocks + named
+}
 
 private fun fileName(ref: ImageRef): String? {
     // A `data:` URL has no name, only bytes.

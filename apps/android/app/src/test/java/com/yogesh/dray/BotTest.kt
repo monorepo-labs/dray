@@ -6,6 +6,7 @@ import com.yogesh.dray.model.BotRow
 import com.yogesh.dray.model.SentTo
 import com.yogesh.dray.model.Unread
 import com.yogesh.dray.model.botItems
+import com.yogesh.dray.model.botShots
 import com.yogesh.dray.model.botRows
 import com.yogesh.dray.model.chatTime
 import com.yogesh.dray.model.currentTool
@@ -19,6 +20,7 @@ import com.yogesh.dray.model.unreadStart
 import com.yogesh.dray.store.orderBots
 import com.yogesh.dray.wire.AgentEvent
 import com.yogesh.dray.wire.Bot
+import com.yogesh.dray.wire.ImageRef
 import com.yogesh.dray.wire.BotAvatar
 import com.yogesh.dray.wire.Lesson
 import com.yogesh.dray.wire.PrMark
@@ -294,5 +296,24 @@ class BotTest {
 
         val old = orderBots(list("""[{"id":"x","name":"X","path":"/x"},{"id":"y","name":"Y","path":"/y"}]""").map { "old" to it })
         assertEquals(listOf("x", "y"), old.map { it.second.id })
+    }
+
+    @Test
+    fun aRepliesPicturesPageTogetherOnTheTappedOne() {
+        val reply = "First\n\n![a](https://x.test/a.png)\n\nThen /tmp/b.png and /tmp/c.png\n\n![d](https://x.test/d.png)"
+        val items = listOf(
+            BotItem.User("u", "look", listOf(ImageRef(path = "/att/mine.png")), null, null),
+            BotItem.Assistant("r", reply, null),
+            BotItem.Assistant("lone", "Just /tmp/solo.png", null),
+        )
+        val shots = botShots(items, ImageRef(path = "/tmp/c.png"))!!
+        assertEquals(
+            listOf(ImageRef(url = "https://x.test/a.png"), ImageRef(url = "https://x.test/d.png"), ImageRef(path = "/tmp/b.png"), ImageRef(path = "/tmp/c.png")),
+            shots.map { it.ref },
+        )
+        assertEquals(listOf(ImageRef(path = "/tmp/solo.png")), botShots(items, ImageRef(path = "/tmp/solo.png"))!!.map { it.ref })
+        // The reader's own pictures still page among themselves, and nothing else.
+        assertEquals(listOf(ImageRef(path = "/att/mine.png")), botShots(items, ImageRef(path = "/att/mine.png"))!!.map { it.ref })
+        assertNull(botShots(items, ImageRef(path = "/tmp/elsewhere.png")))
     }
 }
