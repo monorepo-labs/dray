@@ -309,6 +309,11 @@ struct New {
     #[arg(long)]
     fast: bool,
 
+    /// auto, manual (ask every time), plan or bypassPermissions. Defaults to
+    /// the calling session's, or auto when a bot or its task is calling.
+    #[arg(long, value_name = "MODE")]
+    permission_mode: Option<String>,
+
     /// Keep the session out of the sidebar. It shows only in the calling
     /// session's crew, where the user can still open it or show it in the
     /// sidebar. Needs a calling session.
@@ -672,6 +677,7 @@ fn new(args: New) -> Result<(), String> {
         fast: args.fast.then_some(true),
         hidden: args.hidden,
         no_worktree: args.no_worktree,
+        permission_mode: args.permission_mode,
     });
 
     match send(request)? {

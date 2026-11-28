@@ -1405,38 +1405,41 @@ pub async fn rename_bot(key: &str, name: &str, sink: &Sink) -> Result<Bot> {
 }
 
 /// Edit in the sidebar: the New bot dialog's name, face and stance, on a bot
-/// already made.
+/// already made. `permission_mode` comes only when the reader changed it, so a
+/// phone, which has no picker, renames without touching the stance.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn edit_bot(
     id: String,
     name: String,
     avatar: BotAvatar,
-    permission_mode: ApprovalPolicy,
+    permission_mode: Option<ApprovalPolicy>,
     sink: Sink,
 ) -> Result<Bot, Fail> {
     let bot = update_bot(&id, &name, Some(avatar), &sink).await?;
-    // A bot's stance is its chat's, recorded on the index like any thread's.
-    // Write it here rather than waiting for a send, so an Edit with no message
-    // still survives a restart and reaches a phone reading the same session.
-    // The running child takes it on the next send, as a thread does.
-    if let Some(chat) = chat_of(&bot).await {
-        if chat.permission_mode != permission_mode {
-            if let Some(item) = crate::store::touch_session_index_item(
-                &chat.session_id,
-                chat.model.clone(),
-                chat.effort,
-                permission_mode,
-                chat.fast,
-            )
-            .await?
-            {
-                sink.emit(crate::orchestration::SESSION_CHANGED, &item).ok();
-                sink.emit(BOT_PERMISSION_CHANGED, &item).ok();
-            }
-        }
-    }
     sink.emit(BOTS_CHANGED, ()).ok();
+    if let Some(mode) = permission_mode {
+        // Written now rather than on the next send, so it survives a restart
+        // and reaches a phone reading the same chat; the child takes it on
+        // that send, as a thread's does.
+        set_chat_stance(&bot, mode, &sink)
+            .await
+            .map_err(|e| anyhow::anyhow!("saved the name and face, but not the permission: {e:#}"))?;
+    }
     Ok(bot)
+}
+
+/// Records `mode` on `bot`'s chat, and nothing else: the composer's touch
+/// would also clear a scheduled continue and bring a set-aside chat back.
+async fn set_chat_stance(bot: &Bot, mode: ApprovalPolicy, sink: &Sink) -> anyhow::Result<()> {
+    let Some(chat) = chat_of(bot).await else { return Ok(()) };
+    if chat.permission_mode == mode {
+        return Ok(());
+    }
+    if let Some(item) = crate::store::set_session_stance(&chat.session_id, mode).await? {
+        sink.emit(crate::orchestration::SESSION_CHANGED, &item).ok();
+        sink.emit(BOT_PERMISSION_CHANGED, &item).ok();
+    }
+    Ok(())
 }
 
 /// The sidebar's drag: each named bot's place in the reader's whole list. A

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
 import ServerFilledIcon from "@/components/icons/ServerFilledIcon";
@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import PermissionSelector, { offersPermissionModes } from "@/components/composer/PermissionSelector";
 import { DEFAULT_AVATAR, HUES, SHAPES, swatch } from "@/lib/botAvatar";
 import { refreshBots, serverOfBot } from "@/lib/bots";
+import { stanceFor } from "@/lib/permission";
 import { serverName, useServers } from "@/lib/servers";
 import { invoke, LOCAL, type ServerId } from "@/lib/transport";
 import { cn } from "@/lib/utils";
@@ -61,8 +62,9 @@ export default function NewBotDialog({
   /// Where the bot is made and runs: its folder, its chat and its tasks.
   server: ServerId;
   onServerChange: (server: ServerId) => void;
-  /// The agent the stance picker filters its modes by.
-  harness: Harness;
+  /// The agent the stance picker filters its modes by. Absent for an edit of
+  /// a bot with no chat, whose stance has nowhere to be kept yet.
+  harness?: Harness;
   /// The stance the dialog opens on: Auto for a new bot, the chat's for an edit.
   defaultPermissionMode: ApprovalPolicy;
   /// The composer's own agent and model picker, bound to `pick`.
@@ -79,11 +81,21 @@ export default function NewBotDialog({
   // again rather than making a second bot beside it.
   const [made, setMade] = useState<Bot | null>(null);
 
-  // Refilled each time it opens: an edit takes the bot's name and face, both
-  // dialogs take the stance they are to start on. One made before there was a
-  // pick starts from the default face, since its seeded one has no shape name.
+  // The stance it opened on, so Save sends one only when the reader moved it:
+  // a rename must not write back a stance it merely read.
+  const seeded = useRef<ApprovalPolicy | null>(null);
+
+  // Filled in once per opening: refilled on every change, an index update
+  // landing mid-edit would put the reader's pick back. One made before there
+  // was a pick starts from the default face, since its seeded one has no
+  // shape name.
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      seeded.current = null;
+      return;
+    }
+    if (seeded.current !== null) return;
+    seeded.current = defaultPermissionMode;
     if (editing) {
       setName(editing.name);
       setAvatar(editing.avatar ?? DEFAULT_AVATAR);
@@ -108,7 +120,9 @@ export default function NewBotDialog({
 
   const save = async (bot: Bot) => {
     const at = serverOfBot(bot);
-    await invoke<Bot>("edit_bot", { id: bot.id, name: name.trim(), avatar, permissionMode }, at);
+    const stance = harness && stanceFor(harness, permissionMode);
+    const moved = stance && seeded.current !== null && stance !== stanceFor(harness, seeded.current);
+    await invoke<Bot>("edit_bot", { id: bot.id, name: name.trim(), avatar, ...(moved && { permissionMode: stance }) }, at);
     await refreshBots(at);
   };
 
@@ -119,7 +133,11 @@ export default function NewBotDialog({
       setMade(bot);
       await refreshBots(server);
     }
-    return invoke<SessionIndexItem>("start_bot", { id: bot.id, ...pick, permissionMode }, serverOfBot(bot));
+    return invoke<SessionIndexItem>(
+      "start_bot",
+      { id: bot.id, ...pick, permissionMode: stanceFor(pick.harness, permissionMode) },
+      serverOfBot(bot),
+    );
   };
 
   const submit = async () => {
@@ -201,7 +219,7 @@ export default function NewBotDialog({
           ))}
         </div>
 
-        {(!editing || offersPermissionModes(harness)) && (
+        {(!editing || (harness && offersPermissionModes(harness))) && (
           <div className="flex flex-wrap items-center justify-center gap-1">
             {!editing && (
               <>
@@ -211,7 +229,7 @@ export default function NewBotDialog({
                 {picker}
               </>
             )}
-            {offersPermissionModes(harness) && (
+            {harness && offersPermissionModes(harness) && (
               <PermissionSelector harness={harness} value={permissionMode} onChange={setPermissionMode} />
             )}
           </div>

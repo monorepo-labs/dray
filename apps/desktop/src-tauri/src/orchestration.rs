@@ -2373,7 +2373,8 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
         bail!("--hidden needs a calling session: a hidden session shows only beside its parent");
     }
 
-    let hidden = create.hidden || under_bot(parent.as_ref(), caller).await;
+    let by_bot = under_bot(parent.as_ref(), caller).await;
+    let hidden = create.hidden || by_bot;
 
     let project_path = resolve_project(&create, parent.as_ref())?;
     refuse_bot_folder(&project_path).await?;
@@ -2395,10 +2396,7 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
     let model = resolve_model(create.model.as_deref(), parent.as_ref(), harness).await?;
 
     let effort = resolve_effort(create.effort.as_deref(), parent.as_ref(), harness)?;
-    let permission_mode = parent
-        .as_ref()
-        .map(|p| p.permission_mode)
-        .unwrap_or_else(ApprovalPolicy::default);
+    let permission_mode = resolve_stance(create.permission_mode.as_deref(), parent.as_ref(), by_bot, harness)?;
     let fast = resolve_fast(create.fast, parent.as_ref(), harness);
 
     // Resolved before anything is written, so a `--base` naming a session or a
@@ -2497,6 +2495,12 @@ async fn create_draft(create: CreateDraft, caller: Option<&Caller>, app: &Sink) 
     if let Some(base) = create.base.as_deref() {
         resolve_base(base, &project_path).await?;
     }
+    let permission_mode = resolve_stance(
+        create.permission_mode.as_deref(),
+        parent.as_ref(),
+        under_bot(parent.as_ref(), caller).await,
+        harness,
+    )?;
     let draft = StoredDraft {
         id: uuid::Uuid::now_v7().to_string(),
         prompt: create.prompt,
@@ -2504,7 +2508,7 @@ async fn create_draft(create: CreateDraft, caller: Option<&Caller>, app: &Sink) 
         harness,
         model: resolve_model(create.model.as_deref(), parent.as_ref(), harness).await?,
         effort: resolve_effort(create.effort.as_deref(), parent.as_ref(), harness)?,
-        permission_mode: parent.as_ref().map(|p| p.permission_mode).unwrap_or_default(),
+        permission_mode,
         fast: resolve_fast(create.fast, parent.as_ref(), harness),
         use_worktree: true,
         base: create.base,
@@ -2857,6 +2861,26 @@ fn resolve_effort(
     Ok(parent.filter(|p| p.harness == harness).and_then(|p| p.effort))
 }
 
+/// The new session's stance: the flag if given, else Auto under a bot, else
+/// the parent's. A bot's chat stance is the reader's pick for talking to it,
+/// and a Plan or Ask every time chat handing that to every task it starts
+/// would leave work stalled where nobody is watching.
+fn resolve_stance(
+    requested: Option<&str>,
+    parent: Option<&SessionIndexItem>,
+    by_bot: bool,
+    harness: Harness,
+) -> Result<ApprovalPolicy> {
+    let mode = match requested {
+        Some(arg) => serde_json::from_value(serde_json::Value::String(arg.to_string())).ok().with_context(|| {
+            format!("unknown permission mode {arg:?} — try auto, manual, plan or bypassPermissions")
+        })?,
+        None if by_bot => ApprovalPolicy::Auto,
+        None => return Ok(parent.map_or_else(ApprovalPolicy::default, |p| p.permission_mode)),
+    };
+    Ok(stance_on(harness, mode))
+}
+
 /// The new session's fast mode: the flag if given, else the parent's, else off.
 ///
 /// Inherited **within one harness only**, the boundary `model` and `effort`
@@ -3088,9 +3112,8 @@ pub(crate) async fn open_bot_chat(
     let harness = like.as_ref().map_or(Harness::ClaudeCode, |l| l.harness);
     let model = resolve_model(None, like.as_ref(), harness).await?;
     let effort = resolve_effort(None, like.as_ref(), harness)?;
-    // The bot's own stance, never the sender's: a bot chat runs on Auto and
-    // its toolbar has no picker, so a Plan or bypass sender would leave it
-    // on a stance nobody could see.
+    // The bot's own stance, never the sender's: a Plan or bypass sender would
+    // put the bot on a stance the reader never picked for it.
     let permission_mode = own.map_or(ApprovalPolicy::Auto, |o| o.permission_mode);
     let fast = resolve_fast(None, like.as_ref(), harness);
     let session_id = uuid::Uuid::now_v7().to_string();
@@ -3409,7 +3432,8 @@ async fn routine_summary(r: crate::routines::Routine) -> dray_proto::RoutineSumm
 }
 
 /// Starts one run of a routine (#972): a hidden session in the bot's folder on
-/// its chat's agent, model, effort and stance, with no worktree, whose parent
+/// its chat's agent, model and effort but always Auto, since a run has nobody
+/// watching to answer a card or leave a plan by, with no worktree, whose parent
 /// is the chat, so it reports back like a task. Not through `create_session`,
 /// which refuses a bot's folder as a project; `session_id` was minted by the
 /// caller and is stamped a run by `routines::pending_run`.
@@ -3430,7 +3454,7 @@ pub async fn start_routine_run(
             chat.harness,
             chat.model.clone(),
             chat.effort,
-            chat.permission_mode,
+            stance_on(chat.harness, ApprovalPolicy::Auto),
             chat.fast,
             &bot.path,
             None,
@@ -3800,6 +3824,24 @@ mod tests {
         assert!(!resolve_fast(Some(false), Some(&parent), Harness::ClaudeCode));
         // No parent at all is the ordinary terminal call: off.
         assert!(!resolve_fast(None, None, Harness::ClaudeCode));
+    }
+
+    /// A bot's chat on Plan or Ask every time must not hand that to its tasks,
+    /// which run with nobody watching; an explicit flag still wins.
+    #[test]
+    fn a_bots_tasks_start_on_auto_unless_asked() {
+        use ApprovalPolicy as A;
+        let mut parent = item("a", None);
+        parent.permission_mode = A::Manual;
+        let cc = Harness::ClaudeCode;
+
+        assert_eq!(resolve_stance(None, Some(&parent), true, cc).unwrap(), A::Auto);
+        assert_eq!(resolve_stance(None, Some(&parent), false, cc).unwrap(), A::Manual);
+        assert_eq!(resolve_stance(Some("plan"), Some(&parent), true, cc).unwrap(), A::Plan);
+        assert_eq!(resolve_stance(Some("bypassPermissions"), None, false, cc).unwrap(), A::BypassPermissions);
+        // Named a stance the agent has none of, it gets the nearest one.
+        assert_eq!(resolve_stance(Some("plan"), None, true, Harness::Codex).unwrap(), A::Manual);
+        assert!(resolve_stance(Some("yolo"), None, true, cc).is_err());
     }
 
     /// A task on another machine finds no bot on its own server, and was

@@ -41,6 +41,10 @@ pub struct NewDraft {
     /// branch, or any git ref. Committed work only.
     #[arg(long, value_name = "SESSION|REF")]
     base: Option<String>,
+    /// auto, manual (ask every time), plan or bypassPermissions. Defaults to
+    /// the calling session's, or auto when a bot or its task is calling.
+    #[arg(long, value_name = "MODE")]
+    permission_mode: Option<String>,
 }
 
 #[derive(Args)]
@@ -83,6 +87,7 @@ pub fn run(command: DraftCommand) -> Result<(), String> {
                 fast: args.fast.then_some(true),
                 base: args.base,
                 base_as_branch: false,
+                permission_mode: args.permission_mode,
             });
             match send(request)? {
                 Response::Draft { draft } => {

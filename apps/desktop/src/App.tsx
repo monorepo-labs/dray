@@ -5283,8 +5283,10 @@ function App() {
       }}
       server={botServer ?? LOCAL}
       onServerChange={setBotServer}
-      harness={botToEdit ? (editChat?.harness ?? harness) : harness}
-      defaultPermissionMode={botToEdit ? (editChat?.permissionMode ?? "auto") : permissionMode}
+      harness={botToEdit ? editChat?.harness : harness}
+      // A new bot opens on Auto whatever the composer holds: a Plan thread
+      // open behind the dialog says nothing about how the bot should run.
+      defaultPermissionMode={botToEdit ? (editChat?.permissionMode ?? "auto") : "auto"}
       picker={
         <ModelSelector
           server={activeServer}
