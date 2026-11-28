@@ -165,7 +165,7 @@ fun UserBubble(prompt: TurnPrompt, queued: Boolean = false) {
                 Text("From $it", style = Dray.Font.footnote.copy(color = Dray.tertiary))
             }
         }
-        Thumbnails(prompt.images, end = true)
+        Thumbnails(prompt.images, end = true, sent = true)
         if (prompt.text.isNotBlank()) {
             ClampedText(
                 prompt.text,

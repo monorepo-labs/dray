@@ -5,6 +5,7 @@ import android.util.Base64
 import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -199,11 +200,15 @@ fun InlineImage(ref: ImageRef, fallback: String? = null) {
     )
 }
 
-/** A row of 72pt squares: a prompt's attachments, or a folded stretch's pictures. */
+/**
+ * A row of 72pt squares: a prompt's attachments, or a folded stretch's pictures. [sent] gives each
+ * the desktop's hairline, which keeps a picture with a dark edge from melting into the page.
+ */
 @Composable
-fun Thumbnails(refs: List<ImageRef>, end: Boolean = false, size: Dp = 72.dp) {
+fun Thumbnails(refs: List<ImageRef>, end: Boolean = false, size: Dp = 72.dp, sent: Boolean = false) {
     if (refs.isEmpty()) return
     val open = LocalOpenImage.current
+    val shape = RoundedCornerShape(Dray.Radius.md)
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(4.dp, if (end) Alignment.End else Alignment.Start),
@@ -211,7 +216,7 @@ fun Thumbnails(refs: List<ImageRef>, end: Boolean = false, size: Dp = 72.dp) {
         for (ref in refs) {
             RemoteImage(
                 ref,
-                Modifier.size(size).clip(RoundedCornerShape(Dray.Radius.md)).clickable { open(ref) },
+                Modifier.size(size).clip(shape).then(if (sent) Modifier.border(0.5.dp, Dray.border, shape) else Modifier).clickable { open(ref) },
                 contentScale = ContentScale.Crop,
             )
         }
