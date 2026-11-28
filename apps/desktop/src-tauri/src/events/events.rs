@@ -1003,6 +1003,12 @@ pub struct MessageSender {
     #[serde(skip)]
     #[ts(skip)]
     pub ask_id: Option<String>,
+    /// The id of the report from a task on another machine that this message
+    /// delivers (#958). Logged, so the bot's server finds it here before it
+    /// acks the report, which is what makes delivery exactly once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub report: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

@@ -20,7 +20,7 @@ import {
 import Orb from "@/components/Orb";
 import BotAvatar from "@/components/BotAvatar";
 import { TypingDots } from "@/components/chat/BotTranscript";
-import { botAt, greetingOf, previewLine, type BotEntry } from "@/lib/bots";
+import { botAt, greetingOf, moveBot, previewLine, type BotEntry } from "@/lib/bots";
 
 import PrStateIcon, { ChecksRunningIcon, prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
@@ -46,6 +46,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ShortcutKeys, { DigitKeys } from "@/components/ShortcutKeys";
+import DotTrack from "@/components/DotTrack";
 import { HAS_SWIPE, useSwipe } from "@/lib/swipe";
 import { playSwipeTick } from "@/lib/tick";
 import { Kbd } from "@/components/ui/kbd";
@@ -58,6 +59,7 @@ import { draftTitle, type Draft } from "@/hooks/useDrafts";
 import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
 import { burstConfetti } from "@/lib/confetti";
 import type { ManualCheck } from "@/hooks/useUpdater";
+import { useDragReorder } from "@/hooks/useDragReorder";
 import { startSessionDrag, type DropTarget } from "@/lib/dragSession";
 import { basename, isToday, relativeTime } from "@/lib/format";
 import { groupName, members, type SplitGroup } from "@/lib/groups";
@@ -1492,26 +1494,18 @@ export default function Sidebar({
       {/* Above the project filter: a bot belongs to no project, it hands work
           to any of them. No heading — the face on a row is what says it is a
           bot. New bot sits in the strip above, beside the other ways in. */}
-      {bots.length > 0 && <div data-rail-keep className="mt-4 flex flex-col gap-px px-2">
-        {bots.map(({ bot, session, preview }) => {
-          const status = session ? (statusBySession[session.sessionId] ?? session.status) : "idle";
-          return <BotRow
-            key={bot.id}
-            bot={bot}
-            preview={preview}
-            sessionId={session?.sessionId}
-            modified={session?.modified}
-            status={status}
-            unread={status === "completed" || (!!session && unreadWorking.has(session.sessionId))}
-            asking={!!session && askingSessions.has(session.sessionId)}
-            active={(!!session && session.sessionId === selectedSessionId) || bot.id === newBotId}
-            onOpen={() => onOpenBot?.(bot)}
-            onDelete={() => onDeleteBot?.(bot)}
-            onEdit={() => onEditBot?.(bot)}
-            iconOnly={iconOnly}
-          />;
-        })}
-      </div>}
+      {bots.length > 0 && <BotList
+        bots={bots}
+        statusBySession={statusBySession}
+        unreadWorking={unreadWorking}
+        askingSessions={askingSessions}
+        selectedSessionId={selectedSessionId}
+        newBotId={newBotId}
+        onOpenBot={onOpenBot}
+        onDeleteBot={onDeleteBot}
+        onEditBot={onEditBot}
+        iconOnly={iconOnly}
+      />}
 
       {/* The rail draws the same runs as the list, one icon per row: no
           headings and no lineage, the break between runs is the grouping. */}
@@ -1981,76 +1975,6 @@ const PROJECT_MENU_FROM = 3;
 /// stepping through three is still a pick.
 const SPACE_MENU_FROM = 4;
 
-// Dot geometry, in px, kept here because the track's offset is computed from it
-// rather than measured: `size-1` plus `gap-1`.
-const DOT = 4;
-const DOT_GAP = 4;
-const DOT_PITCH = DOT + DOT_GAP;
-// Five slots. Odd, so there is a real middle for the active dot to sit in.
-const DOT_TRACK_W = DOT_PITCH * 5 - DOT_GAP;
-
-/// The map under a switcher's label: one dot per entry, **the active one always
-/// in the middle**, so the row slides under a fixed centre rather than a marker
-/// travelling along a fixed row. That is what keeps the indicator readable once
-/// there are more entries than dots that fit.
-///
-/// The track holds its width whatever the count, and the row always slides.
-/// Hugging the dots to centre the *group* while they fit was tried and is why
-/// this comment exists: with the group centred there is nothing left to move,
-/// so a switch became a colour change and the whole control stopped feeling
-/// like anything. The sliding row **is** the smoothness.
-///
-/// Shared by the two controls that scope the session list, since a reader
-/// meeting the same shape twice should not have to learn it twice.
-function DotTrack({
-  count,
-  activeIndex,
-  className,
-}: {
-  count: number;
-  activeIndex: number;
-  className?: string;
-}) {
-  // Reserved height, so revealing the track never shifts what is under it. One
-  // entry is the whole story already — a lone dot would offer a step that
-  // can't go anywhere.
-  return (
-    <div className="h-1.5">
-      {count > 1 && (
-        <div
-          className={cn("flex h-full items-center overflow-hidden", className)}
-          style={{
-            width: DOT_TRACK_W,
-            // Faded at both ends, so a dot leaving the track reads as sliding
-            // out rather than as being cut off.
-            maskImage:
-              "linear-gradient(to right, transparent, black 30%, black 70%, transparent)",
-          }}
-        >
-          <div
-            className="flex items-center transition-transform duration-200 ease-out"
-            style={{
-              gap: DOT_GAP,
-              // Puts the active dot's centre on the track's centre.
-              transform: `translateX(${DOT_TRACK_W / 2 - DOT / 2 - activeIndex * DOT_PITCH}px)`,
-            }}
-          >
-            {Array.from({ length: count }, (_, i) => (
-              <span
-                key={i}
-                className={cn(
-                  "size-1 shrink-0 rounded-full transition-colors",
-                  i === activeIndex ? "bg-foreground/80" : "bg-muted-foreground/30",
-                )}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 /// A group heading, and where the group is a project, the button that starts a
 /// task in it. The plus only appears under the cursor: the row is a label first
 /// and every heading carrying one at rest would draw more chrome than the
@@ -2072,6 +1996,66 @@ function cutout(width: number, height: number, face = 40, gap = 2): string {
 const DOT_CUTOUT = cutout(10, 10, 32);
 const COUNT_CUTOUT = cutout(16, 16, 32);
 
+/// The bots, in the order the reader dragged them into.
+function BotList({
+  bots,
+  statusBySession,
+  unreadWorking,
+  askingSessions,
+  selectedSessionId,
+  newBotId,
+  onOpenBot,
+  onDeleteBot,
+  onEditBot,
+  iconOnly,
+}: {
+  bots: BotEntry[];
+  statusBySession: Record<string, SessionStatus>;
+  unreadWorking: ReadonlySet<string>;
+  askingSessions: ReadonlySet<string>;
+  selectedSessionId: string | null | undefined;
+  newBotId?: string | null;
+  onOpenBot?: (bot: Bot) => void;
+  onDeleteBot?: (bot: Bot) => void;
+  onEditBot?: (bot: Bot) => void;
+  iconOnly: boolean;
+}) {
+  const { list, shown, drag, start, offset } = useDragReorder(
+    bots,
+    (b) => b.bot.id,
+    (b, _delta, to) => moveBot(b.bot, to),
+    "y",
+    undefined,
+    true,
+  );
+  return (
+    <div ref={list} data-rail-keep className="mt-4 flex flex-col gap-px px-2">
+      {shown.map(({ bot, session, preview }, i) => {
+        const status = session ? (statusBySession[session.sessionId] ?? session.status) : "idle";
+        return <BotRow
+          key={bot.id}
+          bot={bot}
+          preview={preview}
+          sessionId={session?.sessionId}
+          modified={session?.modified}
+          status={status}
+          unread={status === "completed" || (!!session && unreadWorking.has(session.sessionId))}
+          asking={!!session && askingSessions.has(session.sessionId)}
+          active={(!!session && session.sessionId === selectedSessionId) || bot.id === newBotId}
+          onOpen={() => onOpenBot?.(bot)}
+          onDelete={() => onDeleteBot?.(bot)}
+          onEdit={() => onEditBot?.(bot)}
+          iconOnly={iconOnly}
+          onDragStart={(e) => start(e, i)}
+          transform={offset(i)}
+          held={drag?.from === i}
+          gliding={!!drag && drag.from !== i}
+        />;
+      })}
+    </div>
+  );
+}
+
 function BotRow({
   bot,
   preview,
@@ -2085,10 +2069,21 @@ function BotRow({
   onDelete,
   onEdit,
   iconOnly = false,
+  onDragStart,
+  transform,
+  held = false,
+  gliding = false,
 }: {
   bot: Bot;
   /// The rail: the face alone, the name in a tooltip.
   iconOnly?: boolean;
+  /// The list's reorder: a press dragged past the dead zone.
+  onDragStart?: (e: React.PointerEvent<HTMLElement>) => void;
+  transform?: string;
+  /// The row in hand, lifted over the rest.
+  held?: boolean;
+  /// A row sliding aside for the one in hand.
+  gliding?: boolean;
   /// The chat's newest line — the reader's own, the bot's reaction, or its
   /// reply — and the replies since the reader last wrote.
   preview?: BotPreview;
@@ -2135,10 +2130,14 @@ function BotRow({
             setHovered(false);
             prefetch.onPointerLeave();
           }}
-          onPointerDown={prefetch.onPointerDown}
+          onPointerDown={(e) => {
+            prefetch.onPointerDown();
+            onDragStart?.(e);
+          }}
+          style={transform ? { transform } : undefined}
           aria-label={iconOnly ? bot.name : undefined}
           className={cn(
-            "group relative flex w-full cursor-pointer items-center gap-2 rounded-md text-left",
+            "group relative flex w-full cursor-pointer touch-none items-center gap-2 rounded-md text-left",
             // One height both ways, so a snap never moves the rows under it.
             "h-11", iconOnly ? "justify-center px-1" : "pr-[5px] pl-1",
             "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
@@ -2146,6 +2145,10 @@ function BotRow({
               ? "bg-sidebar-accent text-sidebar-accent-foreground"
               : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
             offline && "opacity-50",
+            // Only the rows making room glide; the one in hand tracks the pointer.
+            gliding && "transition-[color,background-color,transform] duration-150 ease-out",
+            // Filled while held, or it draws its text over the rows it passes.
+            held && "z-10 cursor-grabbing bg-sidebar-accent shadow-(--shadow-button) hover:bg-sidebar-accent",
           )}
         >
           <span className="relative shrink-0">

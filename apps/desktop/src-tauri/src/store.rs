@@ -1605,6 +1605,19 @@ pub async fn set_session_model(
     .await
 }
 
+/// Records a stance picked outside the composer — Edit bot — for the next send
+/// to carry out, leaving every other field as it was.
+pub async fn set_session_stance(
+    session_id: &str,
+    permission_mode: ApprovalPolicy,
+) -> Result<Option<SessionIndexItem>> {
+    update_item(session_id, |item| {
+        item.permission_mode = permission_mode;
+        item.clone()
+    })
+    .await
+}
+
 /// Records a model and effort picked from outside the composer — `dray session
 /// model` — for the session's next send to carry out, as a picker's pick is.
 pub async fn set_session_pick(
@@ -2615,7 +2628,8 @@ pub struct SessionPage {
 /// Reads backwards in chunks and stops once it has `limit`, so a page costs
 /// what it shows rather than a scan of the log. Only lines that can carry
 /// media are parsed and sent, found by a substring check, plus the calls that
-/// print a recording's path, since the client reads a recording off its call.
+/// print a recording's path, since the client reads a recording off its call,
+/// and the call behind each pictured result, which names the file it read.
 /// A page always opens on a turn, so such a call and its result never land in
 /// two different pages.
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -2650,12 +2664,27 @@ async fn read_attachments(
     let Some((buf, begins)) = read_back_bytes(file, end, chunk, cut).await? else {
         return Ok(SessionPage { events: Vec::new(), older_before: None });
     };
-    let events = buf
+    // Every call's opening line is parsed too, so a pictured result can bring
+    // its call: the client names the picture by the file that call read.
+    let parsed: Vec<(bool, AgentEvent)> = buf
         .split(|&b| b == b'\n')
-        .filter(|line| carries_media(line) || prints_recording(line))
-        .filter_map(parse_line::<AgentEvent>)
-        .filter(|event| event.subagent.is_none())
+        .filter_map(|line| {
+            let keep = carries_media(line) || prints_recording(line);
+            (keep || starts_call(line)).then(|| parse_line::<AgentEvent>(line)).flatten().map(|e| (keep, e))
+        })
+        .filter(|(_, event)| event.subagent.is_none())
         .collect();
+    let pictured: HashSet<String> = parsed
+        .iter()
+        .filter_map(|(_, e)| match &e.payload {
+            AgentEventPayload::ToolCallCompleted { call_id, result } if !result.images.is_empty() => Some(call_id.clone()),
+            _ => None,
+        })
+        .collect();
+    let named = |e: &AgentEvent| {
+        matches!(&e.payload, AgentEventPayload::ToolCallStarted { call_id, .. } if pictured.contains(call_id))
+    };
+    let events = parsed.into_iter().filter(|(keep, e)| *keep || named(e)).map(|(_, e)| e).collect();
     Ok(SessionPage { events, older_before: (begins > 0).then_some(begins) })
 }
 
@@ -2664,6 +2693,12 @@ async fn read_attachments(
 fn carries_media(line: &[u8]) -> bool {
     let has = |needle: &[u8]| line.windows(needle.len()).any(|w| w == needle);
     has(br#""images":[{"#) || (has(b"/recordings/") && has(b".mp4"))
+}
+
+/// Any call's opening line, parsed so a pictured result can bring its call.
+fn starts_call(line: &[u8]) -> bool {
+    let needle = br#""tool_call_started""#;
+    line.windows(needle.len()).any(|w| w == needle)
 }
 
 /// A call that may be `dray browser record stop` or `dray video add`, whose
@@ -4721,6 +4756,37 @@ mod page_tests {
         assert_eq!(paths(&first), [4, 8]);
         let second = read_attachments(&mut file, first.older_before.unwrap(), 2, 7).await.unwrap();
         assert_eq!((paths(&second), second.older_before), (vec![0], None));
+    }
+
+    /// A pictured result's page carries its call, which names the file the
+    /// picture came from, and no other call.
+    #[tokio::test]
+    async fn an_attachment_page_brings_the_call_that_read_it() {
+        let call = |seq: u64, id: &str, file: &str| {
+            line(seq, false, serde_json::json!({
+                "type": "tool_call_started", "callId": id, "name": "Read", "toolType": "file_read",
+                "input": { "file_path": file }, "rawInput": null, "title": null,
+            }))
+        };
+        let done = |seq: u64, id: &str, images: serde_json::Value| {
+            line(seq, false, serde_json::json!({
+                "type": "tool_call_completed", "callId": id,
+                "result": { "text": "", "isError": false, "structured": null, "exitCode": null, "durationMs": 1, "images": images },
+            }))
+        };
+        let shot = serde_json::json!([{ "path": "/att/a.png", "url": null, "mimeType": "image/png" }]);
+        let log = [
+            prompt(0, false),
+            call(1, "a", "/tmp/dashboard.png"),
+            done(2, "a", shot),
+            call(3, "b", "/tmp/notes.md"),
+            done(4, "b", serde_json::json!([])),
+            text(5, false),
+        ]
+        .concat();
+        let mut file = std::io::Cursor::new(log.clone().into_bytes());
+        let page = read_attachments(&mut file, log.len() as u64, 10, 64).await.unwrap();
+        assert_eq!(page.events.iter().map(|e| e.seq).collect::<Vec<_>>(), [1, 2]);
     }
 
     /// Pages walked back from the end, through chunks far smaller than a line,

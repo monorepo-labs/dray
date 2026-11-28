@@ -11,8 +11,7 @@ import { cn } from "@/lib/utils";
 /// stripes, the heading counting what is new, and a white card per highlight,
 /// its title first and its picture or video under it. Nothing opens; the
 /// reader scans the cards and leaves by Continue, the grid's last slot, or
-/// Escape. Picked over the paged dialog it replaced from the takes in
-/// demo/whats-new-pages.html (F).
+/// Escape. Picked over the paged dialog it replaced.
 ///
 /// The app raised it rather than the reader, so every way out is the same
 /// answer: seen, all of it. An action ends it as well, since the reader just

@@ -229,7 +229,6 @@ import { botAt, botBrowser, botChat, botEntries, botOf, botSession, greetingOf, 
 import NewBotDialog from "@/components/NewBotDialog";
 import AgentIcon from "@/components/AgentIcon";
 import ModelSelector from "@/components/composer/ModelSelector";
-import { botStance } from "@/lib/permission";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -1380,6 +1379,9 @@ function App() {
   const [newBotOpen, setNewBotOpen] = useState(false);
   const [botToDelete, setBotToDelete] = useState<Bot | null>(null);
   const [botToEdit, setBotToEdit] = useState<Bot | null>(null);
+  // What Edit bot shows as the bot's current stance and agent: its chat's, not
+  // the composer's, which may be pointed at some other session.
+  const editChat = botToEdit ? botSession(sessionIndexItems, botToEdit) : undefined;
   // A bot clicked while the settled list was up, opened once the active side lands.
   const [botWaiting, setBotWaiting] = useState<Bot | null>(null);
   const openBot = (bot: Bot) => {
@@ -2337,6 +2339,9 @@ function App() {
     // moving; ⌘E is what shuts it again.
     if (!panelShown) return pageOpen || !shownSession ? undefined : showPanel(tabs[0]);
     const from = tabs.indexOf(activeTab);
+    // A bot's pane switches like the sidebar's project filter, which ticks on
+    // the chord as on the tap and the swipe.
+    if (selectedBot && tabs.length > 1) playSwipeTick();
     setPanelTab(tabs[(from + delta + tabs.length) % tabs.length]);
   };
 
@@ -4677,6 +4682,7 @@ function App() {
             tab={activeTab}
             onTabChange={setPanelTab}
             tabs={tabs}
+            switcher={!!selectedBot}
             counts={selectedBot ? { tasks: crew.filter((r) => !r.item.aside).length } : undefined}
             widthKey={shownSession.sessionId}
             refresh={panelRefresh}
@@ -5277,6 +5283,10 @@ function App() {
       }}
       server={botServer ?? LOCAL}
       onServerChange={setBotServer}
+      harness={botToEdit ? editChat?.harness : harness}
+      // A new bot opens on Auto whatever the composer holds: a Plan thread
+      // open behind the dialog says nothing about how the bot should run.
+      defaultPermissionMode={botToEdit ? (editChat?.permissionMode ?? "auto") : "auto"}
       picker={
         <ModelSelector
           server={activeServer}
@@ -5301,7 +5311,6 @@ function App() {
         harness,
         model: modelId,
         effort,
-        permissionMode: botStance(harness, permissionMode),
         fast,
       }}
       onStarted={(chat) => goToSession(() => void handleSelectSessionIndexItem(chat.sessionId))}

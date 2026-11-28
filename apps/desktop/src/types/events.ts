@@ -701,7 +701,14 @@ welcome?: string | null,
  * and never saved: the welcome in today's words, then the question for
  * the user's name while no bot knows it. Empty with no welcome.
  */
-greeting?: Array<string>, };
+greeting?: Array<string>, 
+/**
+ * Where the reader dragged it in their bot list, which spans servers, so
+ * every client sorts all its servers' bots by this. Kept on the bot's own
+ * server so a phone reads the order the desktop wrote (#1670). `None`
+ * sorts after every placed bot, in the order it was listed.
+ */
+order?: number | null, };
 
 /**
  * A Blobatar face: which silhouette and which hue. Strings and degrees rather
@@ -1552,7 +1559,13 @@ ask?: boolean,
 /**
  * The answer to an `--ask`, passed back by Dray. Needs no answer itself.
  */
-reply?: boolean, };
+reply?: boolean, 
+/**
+ * The id of the report from a task on another machine that this message
+ * delivers (#958). Logged, so the bot's server finds it here before it
+ * acks the report, which is what makes delivery exactly once.
+ */
+report?: string, };
 
 export type Model = { 
 /**
@@ -2257,7 +2270,12 @@ boat: BoatStatus | null,
  * A Dray Cloud machine (#857): drawn as no row of its own, and read as
  * "Cloud" wherever a machine is named.
  */
-cloud: boolean, };
+cloud: boolean, 
+/**
+ * The server this machine is reached through (#1660), which lists it:
+ * no row in Settings, since it is that server's to add and remove.
+ */
+via: string | null, };
 
 export type ServerStatus = "connecting" | "connected" | "disconnected";
 

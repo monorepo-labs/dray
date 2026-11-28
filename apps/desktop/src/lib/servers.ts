@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 import { channel } from "@/lib/channel";
+import { networkOffline, subscribeNetwork } from "@/lib/network";
 import { MACHINE } from "@/lib/platform";
 import { invoke, listen, LOCAL, serverOfPath, type ServerId } from "@/lib/transport";
 import type { ServerInfo } from "@/types/events";
@@ -33,6 +34,11 @@ function start() {
   }).catch(() => {}));
   // Listen first, so a change landing during the read is not lost under it —
   // and once one has landed, the read's older answer is not wanted at all.
+  // A fresh list, so every reader of the lines below draws again.
+  subscribeNetwork(() => {
+    servers = servers.slice();
+    changed.emit();
+  });
   let heard = false;
   void listen<ServerInfo[]>("servers_changed", ({ payload, server }) => {
     if (server !== LOCAL) return;
@@ -107,11 +113,23 @@ export const shownOffline = (id: ServerId): boolean => !serverConnected(id) && !
 /// longer listed.
 export const serverStatus = (id: ServerId) => servers.find((s) => s.id === id)?.status;
 
+/// Whether a remote that is not connected is down because this machine is
+/// offline, which no server is to blame for. One turned off is its own reason.
+const awayFrom = (server: ServerInfo): boolean => server.on && networkOffline();
+
+/// The first half of a not-connected server's line: the server, or this
+/// machine when it is the one without a network — the same words for every
+/// server then.
+export const offlineSubject = (server: ServerInfo): string =>
+  awayFrom(server) ? "You're offline" : `${server.name} is offline`;
+
 /// Why a remote that is not connected is not: its own words where it gave
-/// any, a stopped sandbox's note before them. `null` where nothing was said.
+/// any, a stopped sandbox's note before them. `null` where nothing was said,
+/// and while offline, when its words are only the network failing.
 export function offlineReason(server: ServerInfo): string | null {
   if (!server.on) return "turned off";
   if (server.status === "connecting") return "Reconnecting…";
+  if (awayFrom(server)) return null;
   return server.boat?.note ?? server.error;
 }
 
@@ -121,7 +139,7 @@ export function offlineLine(id: ServerId): string | null {
   const server = servers.find((s) => s.id === id);
   if (!server || server.status === "connected" || server.cloud) return null;
   const reason = offlineReason(server);
-  return reason ? `${server.name} is offline · ${reason}` : `${server.name} is offline`;
+  return reason ? `${offlineSubject(server)} · ${reason}` : offlineSubject(server);
 }
 
 /// `prev` with `server`'s share replaced by `next`, which is how a list merged

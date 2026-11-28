@@ -53,8 +53,10 @@ pub mod login;
 /// routine verbs. v24 added `ask` on a bot send: an older app delivers the
 /// message and passes no answer back, so the asking bot waits on nothing.
 /// v25 added `detach_session`, which an older app reads as a broken CLI, and
-/// v26 `attach_session`, v27 `issue_card`, v28 the secret verbs.
-pub const PROTOCOL_VERSION: u32 = 28;
+/// v26 `attach_session`, v27 `issue_card`, v28 the secret verbs. v29 added
+/// `permission_mode` on a create or a draft: an older app ignores it and runs
+/// the session on its parent's stance, which answers like success.
+pub const PROTOCOL_VERSION: u32 = 29;
 
 /// Remote MCP (#863), held out of release builds until Dray accounts (#874)
 /// land (#900). Gates `/mcp`, the assistant commands and the CLI's `assistant`
@@ -105,6 +107,8 @@ impl Request {
     pub fn version(&self) -> u32 {
         match self {
             Request::SendToBot(send) if send.ask => 24,
+            Request::CreateSession(create) if create.permission_mode.is_some() => 29,
+            Request::CreateDraft(draft) if draft.permission_mode.is_some() => 29,
             Request::CreateSession(create) if create.base.is_some() => 10,
             Request::CreateDraft(draft) if draft.base.is_some() => 10,
             Request::CreateSession(_)
@@ -718,6 +722,9 @@ pub struct CreateDraft {
     /// checked out by name would take commits onto the author's work.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub base_as_branch: bool,
+    /// The stance it starts on, as [`CreateSession::permission_mode`] reads it.
+    #[serde(default)]
+    pub permission_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1024,6 +1031,11 @@ pub struct CreateSession {
     /// worktree, which [`SessionSummary::worktree_name`] shows the CLI.
     #[serde(default)]
     pub no_worktree: bool,
+    /// `auto`, `manual`, `plan` or `bypassPermissions`. `None` inherits the
+    /// parent's stance, except under a bot, whose tasks start on Auto whatever
+    /// its chat runs on. A string, since the CLI has no use for the enum.
+    #[serde(default)]
+    pub permission_mode: Option<String>,
 }
 
 /// Tagging a session that already exists — or untagging it.
@@ -1116,13 +1128,26 @@ pub enum Response {
         base_ref: Option<String>,
         /// Said to a bot's task starting in a project where another bot has
         /// open tasks: who, and which, so the bot checks before it overlaps.
+        /// Also a `permission_mode` the caller's own stance lowered.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         warning: Option<String>,
     },
-    Listed { sessions: Vec<SessionSummary> },
+    Listed {
+        sessions: Vec<SessionSummary>,
+        /// `--machine all`'s machines that listed nothing, each as "name: why",
+        /// since one missing is otherwise read as holding no sessions.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        unanswered: Vec<String>,
+    },
     /// A draft written, or one taken off the list — the answer to
     /// `CreateDraft` and `RemoveDraft` alike.
-    Draft { draft: DraftSummary },
+    Draft {
+        draft: DraftSummary,
+        /// A `permission_mode` the caller's own stance lowered, said so the
+        /// agent does not believe the draft runs on what it asked for.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        warning: Option<String>,
+    },
     Drafts { drafts: Vec<DraftSummary> },
     /// Every issue the session carries *after* the change, so the caller sees
     /// the result rather than a diff it has to apply to what it believed.
@@ -1542,6 +1567,13 @@ mod tests {
         for request in &servers {
             assert_eq!(Envelope::new(request.clone()).v, 9, "{request:?}");
         }
+        let stanced = [
+            Request::CreateSession(CreateSession { permission_mode: Some("plan".into()), ..Default::default() }),
+            Request::CreateDraft(CreateDraft { permission_mode: Some("plan".into()), ..Default::default() }),
+        ];
+        for request in &stanced {
+            assert_eq!(Envelope::new(request.clone()).v, 29, "{request:?}");
+        }
         let based = [
             Request::CreateSession(CreateSession { base: Some("main".into()), ..Default::default() }),
             Request::CreateDraft(CreateDraft { base: Some("main".into()), ..Default::default() }),
@@ -1640,6 +1672,7 @@ mod tests {
             .chain(&routines)
             .chain([&ask, &detach, &attach, &issues])
             .chain(&secrets)
+            .chain(&stanced)
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));

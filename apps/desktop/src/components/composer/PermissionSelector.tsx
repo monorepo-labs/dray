@@ -37,6 +37,19 @@ const MODES: { id: ApprovalPolicy; label: string }[] = [
 /// which reads as broken. Zero is pi, which honours none: its gate is an
 /// extension the reader installs and configures on disk, so there is nothing
 /// here for a picker to set.
+/// The tint each risky stance carries under the pointer: red for no checks at
+/// all, the app's yellow — "this is for you" — for one that stops and waits on
+/// the reader. Menu rows highlight by focus, which Radix moves with the pointer;
+/// the trigger by hover alone, or it stays tinted once the menu hands focus back.
+const ROW_TINT: Partial<Record<ApprovalPolicy, string>> = {
+  bypassPermissions: "focus:bg-destructive/10 dark:focus:bg-destructive/20",
+  manual: "focus:bg-accent-command/15 dark:focus:bg-accent-command/20",
+};
+const TRIGGER_TINT: Partial<Record<ApprovalPolicy, string>> = {
+  bypassPermissions: "hover:bg-destructive/10 dark:hover:bg-destructive/20",
+  manual: "hover:bg-accent-command/15 dark:hover:bg-accent-command/20",
+};
+
 export function offersPermissionModes(harness: Harness): boolean {
   return MODES.filter((m) => honoursMode(harness, m.id)).length > 1;
 }
@@ -84,7 +97,7 @@ export default function PermissionSelector({
               size="sm"
               // `aria-disabled` so the tooltip saying why can still open.
               aria-disabled={locked}
-              className="px-1.5 text-ui text-muted-foreground aria-disabled:opacity-50"
+              className={cn("px-1.5 text-ui text-muted-foreground aria-disabled:opacity-50", TRIGGER_TINT[stance])}
               aria-label="Switch permission"
             >
               {selected?.label ?? "Permissions"}
@@ -112,7 +125,8 @@ export default function PermissionSelector({
                 "text-ui",
                 // It turns off every permission check; the picker should say so
                 // before the click, not after.
-                mode.id === "bypassPermissions" && "text-destructive",
+                mode.id === "bypassPermissions" && "text-destructive focus:text-destructive",
+                ROW_TINT[mode.id],
               )}
             >
               {mode.label}

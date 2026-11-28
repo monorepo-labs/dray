@@ -31,6 +31,7 @@ const server = (name: string): ServerInfo => ({
   restarting: false,
   boat: { phase: "running", stopsAt: null, warning: true, note: null },
   cloud: false,
+  via: null,
 });
 
 const CASES: { title: string; name: string; seconds: number; refused?: string }[] = [

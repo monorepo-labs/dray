@@ -16,7 +16,9 @@ import com.yogesh.dray.model.prStatus
 import com.yogesh.dray.model.sentMessages
 import com.yogesh.dray.model.unquoted
 import com.yogesh.dray.model.unreadStart
+import com.yogesh.dray.store.orderBots
 import com.yogesh.dray.wire.AgentEvent
+import com.yogesh.dray.wire.Bot
 import com.yogesh.dray.wire.BotAvatar
 import com.yogesh.dray.wire.Lesson
 import com.yogesh.dray.wire.PrMark
@@ -24,6 +26,7 @@ import com.yogesh.dray.wire.arr
 import com.yogesh.dray.wire.double
 import com.yogesh.dray.wire.get
 import com.yogesh.dray.wire.str
+import com.yogesh.dray.wire.decodeList
 import com.yogesh.dray.wire.wireJson
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -278,5 +281,18 @@ class BotTest {
     fun seededFacesAreStable() {
         assertEquals(Blobatar.seededAvatar("abc"), Blobatar.seededAvatar("abc"))
         assertTrue(Blobatar.shapes.any { it.first == Blobatar.seededAvatar("3f0c2a9e").shape })
+    }
+
+    @Test
+    fun botsFollowTheirOrderAndUnplacedOnesKeepTheListedOrder() {
+        fun list(json: String) = decodeList<Bot>(wireJson.parseToJsonElement(json))
+        val mac = list("""[{"id":"a","name":"A","path":"/a"},{"id":"b","name":"B","path":"/b","order":2},{"id":"c","name":"C","path":"/c","order":null}]""")
+        val box = list("""[{"id":"d","name":"D","path":"/d","order":0},{"id":"e","name":"E","path":"/e"}]""")
+        assertEquals(listOf(null, 2L, null), mac.map { it.order })
+        val all = orderBots(mac.map { "mac" to it } + box.map { "box" to it })
+        assertEquals(listOf("d", "b", "a", "c", "e"), all.map { it.second.id })
+
+        val old = orderBots(list("""[{"id":"x","name":"X","path":"/x"},{"id":"y","name":"Y","path":"/y"}]""").map { "old" to it })
+        assertEquals(listOf("x", "y"), old.map { it.second.id })
     }
 }

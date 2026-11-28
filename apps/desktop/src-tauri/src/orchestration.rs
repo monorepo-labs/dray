@@ -1044,7 +1044,7 @@ pub(crate) mod elsewhere {
             Response::Created { session, .. } | Response::Session { session } | Response::Model { session, .. } => {
                 vec![session]
             }
-            Response::Listed { sessions } => sessions.iter_mut().collect(),
+            Response::Listed { sessions, .. } => sessions.iter_mut().collect(),
             _ => vec![],
         };
         for row in rows {
@@ -1194,19 +1194,22 @@ pub(crate) mod elsewhere {
     /// connected one's, every row naming where it runs.
     pub async fn list_everywhere(list: ListSessions) -> Result<Response> {
         let forward = prepare(Request::ListSessions(list.clone())).await?;
-        let Response::Listed { mut sessions } = list_sessions(list).await? else {
+        let Response::Listed { mut sessions, .. } = list_sessions(list).await? else {
             bail!("listing this machine's sessions answered something else");
         };
         let list: Vec<_> = machines::load().await.into_iter().filter(|m| !m.off).collect();
         let asks = list.iter().map(|m| tokio::time::timeout(machines::SWEEP, self::forward(&m.id, &forward)));
-        // ponytail: a machine that fails to answer is skipped unsaid; give
-        // `Listed` a warnings field if agents start missing rows.
-        for answer in futures_util::future::join_all(asks).await {
-            if let Ok(Ok(Response::Listed { sessions: theirs })) = answer {
-                sessions.extend(theirs);
+        let mut unanswered = Vec::new();
+        for (machine, answer) in list.iter().zip(futures_util::future::join_all(asks).await) {
+            match answer {
+                Ok(Ok(Response::Listed { sessions: theirs, .. })) => sessions.extend(theirs),
+                Ok(Ok(Response::Error { message })) => unanswered.push(format!("{}: {message}", machine.name)),
+                Ok(Ok(_)) => unanswered.push(format!("{}: answered something else", machine.name)),
+                Ok(Err(e)) => unanswered.push(format!("{}: {e:#}", machine.name)),
+                Err(_) => unanswered.push(format!("{}: did not answer in time", machine.name)),
             }
         }
-        Ok(Response::Listed { sessions })
+        Ok(Response::Listed { sessions, unanswered })
     }
 }
 
@@ -2370,7 +2373,8 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
         bail!("--hidden needs a calling session: a hidden session shows only beside its parent");
     }
 
-    let hidden = create.hidden || under_bot(parent.as_ref(), caller).await;
+    let by_bot = under_bot(parent.as_ref(), caller).await;
+    let hidden = create.hidden || by_bot;
 
     let project_path = resolve_project(&create, parent.as_ref())?;
     refuse_bot_folder(&project_path).await?;
@@ -2392,10 +2396,8 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
     let model = resolve_model(create.model.as_deref(), parent.as_ref(), harness).await?;
 
     let effort = resolve_effort(create.effort.as_deref(), parent.as_ref(), harness)?;
-    let permission_mode = parent
-        .as_ref()
-        .map(|p| p.permission_mode)
-        .unwrap_or_else(ApprovalPolicy::default);
+    let (permission_mode, lowered) =
+        resolve_stance(create.permission_mode.as_deref(), parent.as_ref(), by_bot, harness)?;
     let fast = resolve_fast(create.fast, parent.as_ref(), harness);
 
     // Resolved before anything is written, so a `--base` naming a session or a
@@ -2416,6 +2418,10 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
             None => None,
         },
         None => None,
+    };
+    let warning = match (lowered, warning) {
+        (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
+        (a, b) => a.or(b),
     };
 
     let session_id = uuid::Uuid::now_v7().to_string();
@@ -2494,6 +2500,12 @@ async fn create_draft(create: CreateDraft, caller: Option<&Caller>, app: &Sink) 
     if let Some(base) = create.base.as_deref() {
         resolve_base(base, &project_path).await?;
     }
+    let (permission_mode, warning) = resolve_stance(
+        create.permission_mode.as_deref(),
+        parent.as_ref(),
+        under_bot(parent.as_ref(), caller).await,
+        harness,
+    )?;
     let draft = StoredDraft {
         id: uuid::Uuid::now_v7().to_string(),
         prompt: create.prompt,
@@ -2501,7 +2513,7 @@ async fn create_draft(create: CreateDraft, caller: Option<&Caller>, app: &Sink) 
         harness,
         model: resolve_model(create.model.as_deref(), parent.as_ref(), harness).await?,
         effort: resolve_effort(create.effort.as_deref(), parent.as_ref(), harness)?,
-        permission_mode: parent.as_ref().map(|p| p.permission_mode).unwrap_or_default(),
+        permission_mode,
         fast: resolve_fast(create.fast, parent.as_ref(), harness),
         use_worktree: true,
         base: create.base,
@@ -2509,7 +2521,7 @@ async fn create_draft(create: CreateDraft, caller: Option<&Caller>, app: &Sink) 
     };
     drafts::save_draft(serde_json::to_value(&draft)?).await?;
     app.emit(DRAFTS_CHANGED, ()).ok();
-    Ok(Response::Draft { draft: summarize_draft(draft) })
+    Ok(Response::Draft { draft: summarize_draft(draft), warning })
 }
 
 /// Every draft `start` can start, newest first, or those of the project
@@ -2561,7 +2573,7 @@ async fn remove_draft(id: &str, app: &Sink) -> Result<Response> {
     let draft = find_draft(id).await?;
     drafts::take(id).await?.with_context(|| format!("no draft {id}"))?;
     app.emit(DRAFTS_CHANGED, ()).ok();
-    Ok(Response::Draft { draft: summarize_draft(draft) })
+    Ok(Response::Draft { draft: summarize_draft(draft), warning: None })
 }
 
 async fn find_draft(id: &str) -> Result<StoredDraft> {
@@ -2746,7 +2758,7 @@ async fn list_sessions(list: ListSessions) -> Result<Response> {
         .map(summarize)
         .collect();
 
-    Ok(Response::Listed { sessions })
+    Ok(Response::Listed { sessions, unanswered: Vec::new() })
 }
 
 /// Refuses a create from a caller already [`MAX_DEPTH`] deep.
@@ -2852,6 +2864,59 @@ fn resolve_effort(
     }
 
     Ok(parent.filter(|p| p.harness == harness).and_then(|p| p.effort))
+}
+
+/// The new session's stance, and a note when the flag asked for more than it
+/// got: the flag if given, else Auto under a bot, else the parent's. A bot's
+/// chat stance is the reader's pick for talking to it, and a Plan or Ask every
+/// time chat handing that to every task it starts would leave work stalled
+/// where nobody is watching.
+///
+/// The flag is capped by the caller, or a prompt-injected agent could start a
+/// task freer than itself: its own stance, or what it would get unasked where
+/// that is looser — a Plan bot's tasks already start on Auto. Only a Bypass
+/// caller starts a Bypass task. A terminal call has no caller and no cap.
+fn resolve_stance(
+    requested: Option<&str>,
+    parent: Option<&SessionIndexItem>,
+    by_bot: bool,
+    harness: Harness,
+) -> Result<(ApprovalPolicy, Option<String>)> {
+    let unasked = if by_bot {
+        ApprovalPolicy::Auto
+    } else {
+        parent.map_or_else(ApprovalPolicy::default, |p| p.permission_mode)
+    };
+    let Some(arg) = requested else {
+        return Ok((if by_bot { stance_on(harness, unasked) } else { unasked }, None));
+    };
+    let asked: ApprovalPolicy = serde_json::from_value(serde_json::Value::String(arg.to_string()))
+        .ok()
+        .with_context(|| format!("unknown permission mode {arg:?} — try auto, manual, plan or bypassPermissions"))?;
+    let cap = parent.map(|p| if latitude(p.permission_mode) >= latitude(unasked) { p.permission_mode } else { unasked });
+    let (mode, note) = match cap {
+        Some(cap) if latitude(asked) > latitude(cap) => (
+            cap,
+            Some(format!(
+                "Asked for {}, got {}: a task cannot run looser than the session that starts it.",
+                asked.as_arg(),
+                cap.as_arg()
+            )),
+        ),
+        _ => (asked, None),
+    };
+    Ok((stance_on(harness, mode), note))
+}
+
+/// How much a stance lets an agent do unasked, for capping one against another.
+/// `dontAsk` sits with Auto, which most harnesses run it as.
+fn latitude(mode: ApprovalPolicy) -> u8 {
+    match mode {
+        ApprovalPolicy::Plan => 0,
+        ApprovalPolicy::Manual => 1,
+        ApprovalPolicy::Auto | ApprovalPolicy::DontAsk => 2,
+        ApprovalPolicy::BypassPermissions => 3,
+    }
 }
 
 /// The new session's fast mode: the flag if given, else the parent's, else off.
@@ -3085,9 +3150,8 @@ pub(crate) async fn open_bot_chat(
     let harness = like.as_ref().map_or(Harness::ClaudeCode, |l| l.harness);
     let model = resolve_model(None, like.as_ref(), harness).await?;
     let effort = resolve_effort(None, like.as_ref(), harness)?;
-    // The bot's own stance, never the sender's: a bot chat runs on Auto and
-    // its toolbar has no picker, so a Plan or bypass sender would leave it
-    // on a stance nobody could see.
+    // The bot's own stance, never the sender's: a Plan or bypass sender would
+    // put the bot on a stance the reader never picked for it.
     let permission_mode = own.map_or(ApprovalPolicy::Auto, |o| o.permission_mode);
     let fast = resolve_fast(None, like.as_ref(), harness);
     let session_id = uuid::Uuid::now_v7().to_string();
@@ -3406,7 +3470,8 @@ async fn routine_summary(r: crate::routines::Routine) -> dray_proto::RoutineSumm
 }
 
 /// Starts one run of a routine (#972): a hidden session in the bot's folder on
-/// its chat's agent, model, effort and stance, with no worktree, whose parent
+/// its chat's agent, model and effort but always Auto, since a run has nobody
+/// watching to answer a card or leave a plan by, with no worktree, whose parent
 /// is the chat, so it reports back like a task. Not through `create_session`,
 /// which refuses a bot's folder as a project; `session_id` was minted by the
 /// caller and is stamped a run by `routines::pending_run`.
@@ -3427,7 +3492,7 @@ pub async fn start_routine_run(
             chat.harness,
             chat.model.clone(),
             chat.effort,
-            chat.permission_mode,
+            stance_on(chat.harness, ApprovalPolicy::Auto),
             chat.fast,
             &bot.path,
             None,
@@ -3797,6 +3862,59 @@ mod tests {
         assert!(!resolve_fast(Some(false), Some(&parent), Harness::ClaudeCode));
         // No parent at all is the ordinary terminal call: off.
         assert!(!resolve_fast(None, None, Harness::ClaudeCode));
+    }
+
+    /// A bot's chat on Plan or Ask every time must not hand that to its tasks,
+    /// which run with nobody watching; an explicit flag still wins.
+    #[test]
+    fn a_bots_tasks_start_on_auto_unless_asked() {
+        use ApprovalPolicy as A;
+        let mut parent = item("a", None);
+        parent.permission_mode = A::Manual;
+        let cc = Harness::ClaudeCode;
+        let stance = |asked, parent, bot, harness| resolve_stance(asked, parent, bot, harness).unwrap().0;
+
+        assert_eq!(stance(None, Some(&parent), true, cc), A::Auto);
+        assert_eq!(stance(None, Some(&parent), false, cc), A::Manual);
+        assert_eq!(stance(Some("plan"), Some(&parent), true, cc), A::Plan);
+        assert_eq!(stance(Some("bypassPermissions"), None, false, cc), A::BypassPermissions);
+        // Named a stance the agent has none of, it gets the nearest one.
+        assert_eq!(stance(Some("plan"), None, true, Harness::Codex), A::Manual);
+        assert!(resolve_stance(Some("yolo"), None, true, cc).is_err());
+    }
+
+    /// A prompt-injected agent must not start a task freer than itself, so the
+    /// flag is capped at the caller's stance, or at a bot's Auto where that is
+    /// looser, and the lowering is said.
+    #[test]
+    fn a_requested_stance_never_beats_the_callers() {
+        use ApprovalPolicy as A;
+        let cc = Harness::ClaudeCode;
+        let on = |mode| {
+            let mut p = item("a", None);
+            p.permission_mode = mode;
+            p
+        };
+
+        for caller in [A::Plan, A::Manual, A::Auto] {
+            let (got, note) = resolve_stance(Some("bypassPermissions"), Some(&on(caller)), false, cc).unwrap();
+            assert_eq!(got, caller, "{caller:?}");
+            assert!(note.unwrap().contains("bypassPermissions"));
+        }
+        let (got, note) = resolve_stance(Some("auto"), Some(&on(A::Plan)), false, cc).unwrap();
+        assert_eq!((got, note.is_some()), (A::Plan, true));
+        // A Plan bot's tasks start on Auto anyway, so asking for it is no escalation.
+        let (got, note) = resolve_stance(Some("auto"), Some(&on(A::Plan)), true, cc).unwrap();
+        assert_eq!((got, note), (A::Auto, None));
+        let (got, _) = resolve_stance(Some("bypassPermissions"), Some(&on(A::Plan)), true, cc).unwrap();
+        assert_eq!(got, A::Auto);
+        // Asking for less than the caller has is always taken as asked.
+        let (got, note) = resolve_stance(Some("plan"), Some(&on(A::Auto)), false, cc).unwrap();
+        assert_eq!((got, note), (A::Plan, None));
+        // Only a Bypass caller starts a Bypass task.
+        let bypass = on(A::BypassPermissions);
+        let (got, note) = resolve_stance(Some("bypassPermissions"), Some(&bypass), true, cc).unwrap();
+        assert_eq!((got, note), (A::BypassPermissions, None));
     }
 
     /// A task on another machine finds no bot on its own server, and was

@@ -106,6 +106,8 @@ pub mod boat;
 #[cfg(feature = "desktop")]
 pub mod cloud;
 #[cfg(feature = "desktop")]
+pub mod network;
+#[cfg(feature = "desktop")]
 pub mod servers;
 pub mod session;
 pub mod share;
@@ -1233,6 +1235,8 @@ pub fn run() {
             servers::add_ssh_server,
             servers::cancel_add_server,
             servers::set_server_on,
+            network::network_offline,
+            network::network_hint,
             servers::rename_server,
             servers::set_server_address,
             servers::trust_host_key,

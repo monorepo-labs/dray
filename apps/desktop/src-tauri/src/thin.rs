@@ -105,6 +105,11 @@ const RECEIPT: usize = 4 * 1024;
 /// what the bot is doing now, and a chat opened mid-turn would otherwise say
 /// nothing until the next event.
 ///
+/// A call whose result carries pictures is kept as their bare references, its
+/// input cut to the file it read and its output to nothing: the chat hides a
+/// tool's screenshots, so the side panel's attachment list is their only home,
+/// and it reads them off these events.
+///
 /// Whatever is not one of those is kept, so an event a later build adds
 /// reaches a chat that draws it.
 pub fn chat(events: Vec<AgentEvent>) -> Vec<AgentEvent> {
@@ -112,6 +117,15 @@ pub fn chat(events: Vec<AgentEvent>) -> Vec<AgentEvent> {
         .iter()
         .filter_map(|e| match &e.payload {
             AgentEventPayload::ToolCallCompleted { call_id, .. } => Some(call_id.clone()),
+            _ => None,
+        })
+        .collect();
+    let pictured: std::collections::HashSet<String> = events
+        .iter()
+        .filter_map(|e| match &e.payload {
+            AgentEventPayload::ToolCallCompleted { call_id, result } if !result.images.is_empty() => {
+                Some(call_id.clone())
+            }
             _ => None,
         })
         .collect();
@@ -128,10 +142,23 @@ pub fn chat(events: Vec<AgentEvent>) -> Vec<AgentEvent> {
                     let ours = said.contains("dray") && (said.contains("new") || said.contains("send"));
                     if ours {
                         read.insert(call_id.clone());
+                    } else if pictured.contains(call_id.as_str()) {
+                        // The panel names a picture by the file it was read from.
+                        let mut file = serde_json::Map::new();
+                        if let Some((k, v)) = ["file_path", "path"].iter().find_map(|k| Some((*k, input.get(*k)?.clone()))) {
+                            file.insert(k.to_string(), v);
+                        }
+                        *input = Value::Object(file);
+                        return Some(event);
                     }
                     (ours || !done.contains(call_id.as_str())).then_some(event)
                 }
                 AgentEventPayload::ToolCallCompleted { call_id, result } => {
+                    if pictured.contains(call_id.as_str()) && !read.contains(call_id.as_str()) {
+                        result.text.clear();
+                        result.structured = None;
+                        return Some(event);
+                    }
                     if !read.contains(call_id.as_str()) {
                         return None;
                     }
@@ -367,6 +394,22 @@ mod tests {
         assert!(result.text.starts_with("01a1edc2"));
         let AgentEventPayload::ToolCallCompleted { result, .. } = &kept[4].payload else { panic!() };
         assert_eq!(result.text.len(), RECEIPT);
+    }
+
+    #[test]
+    fn a_bots_chat_keeps_a_calls_pictures_and_the_file_they_came_from() {
+        let log = vec![
+            prompt(0),
+            event(1, json!({ "type": "tool_call_started", "callId": "r", "name": "Read", "toolType": "file_read", "input": { "file_path": "/tmp/shot.png", "limit": 9 }, "rawInput": null, "title": null })),
+            event(2, json!({ "type": "tool_call_completed", "callId": "r", "result": { "text": "x".repeat(5000), "isError": false, "structured": { "a": 1 }, "exitCode": null, "durationMs": 1, "images": [{ "path": "/att/r.png", "url": null, "mimeType": "image/png" }] } })),
+        ];
+        let kept = chat(log);
+        assert_eq!(kept.len(), 3);
+        let AgentEventPayload::ToolCallStarted { input, .. } = &kept[1].payload else { panic!() };
+        assert_eq!(*input, json!({ "file_path": "/tmp/shot.png" }));
+        let AgentEventPayload::ToolCallCompleted { result, .. } = &kept[2].payload else { panic!() };
+        assert!(result.text.is_empty() && result.structured.is_none());
+        assert_eq!(result.images[0].path.as_deref(), Some("/att/r.png"));
     }
 
     #[test]

@@ -42,6 +42,8 @@
 
 **The two failures are tagged, never told apart by their message.** `InstallError` carry `stage`, because the cures are opposite: a swap that did not complete leave nothing to open, so the button beside the sentence is the answer, where a *relaunch* that failed left the new bundle on disk and only opening it finish the job. Telling a reader to quit and reopen for a swap that never landed send them to do nothing. **Not "changed nothing"** — the plugin move the old bundle to a temp backup before unpacking and a final rename that fail return `Err` without putting it back, so the weaker claim is the true one. An unshaped rejection read as `install`, the safe half. The sentence itself is `updateFailure` and both surfaces call it — the sidebar row **and** the Settings row, since Settings cover the sidebar and a reader who pressed the button there would otherwise get no answer at all.
 
+**The app checks on launch, every hour, and on the window regaining focus once 15 minutes have passed since the last check** ([useUpdater](../src/hooks/useUpdater.ts), #1674). A failed check counts as one, so offline focus switches don't retry each time, and every path shares one in-flight guard, since a check runs the download too. These checks stay silent unless they find something.
+
 **Except when the user asks.** "Check for Updates…" is a question, so it is answered either way and both answers retire after 4s. The menu item **emit to the frontend** rather than checking in Rust, because the channel lives in frontend local storage; that also mean a manual check reuse the scheduled path and its in-flight guard. The verdict is read off `check_update` resolving with no `update_status` having arrived.
 
 # Changelog

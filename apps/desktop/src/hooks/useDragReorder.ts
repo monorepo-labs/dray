@@ -20,9 +20,9 @@ export type Leave<T> = {
   drop: (item: T) => void;
 };
 
-/// Drag-to-reorder for one list: the Spaces settings rows, and the browser and
-/// Files tab strips. The item follows the pointer and the ones it passes slide
-/// aside by transform, so nothing re-lays out mid-drag and the drop point is
+/// Drag-to-reorder for one list: the Spaces settings rows, the browser and
+/// Files tab strips, and the sidebar's bots. The item follows the pointer and
+/// the ones it passes slide aside by transform, so nothing re-lays out mid-drag and the drop point is
 /// judged against where items sat when the drag began. One move is written on
 /// release, however far the item travelled.
 ///
@@ -41,6 +41,9 @@ export function useDragReorder<T>(
   onMove: (item: T, delta: number, to: number) => Promise<unknown> | void,
   axis: "x" | "y" = "y",
   leave?: Leave<T>,
+  /// For items whose press is also a click, the sidebar's bot rows: a drag
+  /// swallows the click its release would fire, so dropping a bot opens none.
+  clicks?: boolean,
 ) {
   // The order after a drop, held until the write answers so the items do not
   // snap back for the frame it takes.
@@ -62,8 +65,10 @@ export function useDragReorder<T>(
     // delta, so one measured against an unconfirmed order lands wrong if that
     // write fails.
     if (e.button !== 0 || !list.current || pending.current) return;
-    // The item's own controls and fields answer their own presses.
-    if ((e.target as Element).closest("button:not([data-grip]), input, textarea")) return;
+    // The item's own controls and fields answer their own presses. An item
+    // that is itself a button is the thing being dragged.
+    const control = (e.target as Element).closest("button:not([data-grip]), input, textarea");
+    if (control && control !== e.currentTarget) return;
     // Keeps the press from starting a text selection across the items.
     e.preventDefault();
     const el = e.currentTarget;
@@ -99,7 +104,8 @@ export function useDragReorder<T>(
     // Whether a release now would drop the item off the list.
     let out = false;
     const dragged = shown[from];
-    el.setPointerCapture(e.pointerId);
+    const { pointerId } = e;
+    el.setPointerCapture(pointerId);
 
     const tick = () => {
       const v = pointer < edges[lo] + EDGE ? -SPEED : pointer > edges[hi] - EDGE ? SPEED : 0;
@@ -111,6 +117,7 @@ export function useDragReorder<T>(
     };
 
     const move = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
       pointer = at(ev);
       if (leave) {
         const past = axis === "x" ? ev.clientY > edges.bottom + LEAVE : ev.clientX > edges.right + LEAVE;
@@ -146,12 +153,19 @@ export function useDragReorder<T>(
     };
 
     const end = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
       el.removeEventListener("pointermove", move);
       el.removeEventListener("pointerup", end);
       el.removeEventListener("pointercancel", end);
       cancelAnimationFrame(frame);
       document.body.classList.remove("session-drag");
       setDrag(null);
+      if (clicks && moved) {
+        // Retired on the next task, so a later real click is not eaten.
+        const swallow = (c: Event) => c.stopPropagation();
+        el.addEventListener("click", swallow, { capture: true });
+        setTimeout(() => el.removeEventListener("click", swallow, { capture: true }), 0);
+      }
       if (leave) {
         leave.over(dragged, null);
         if (out && ev.type === "pointerup") {

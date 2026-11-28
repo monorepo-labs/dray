@@ -148,7 +148,8 @@ function LinkError({ link }: { link: OrgLink }) {
 /// dimmed, while it is not — its agents keep running there either way.
 export default function ServersSettings() {
   const all = useServers();
-  const servers = all.filter((s) => !s.cloud);
+  // A relayed machine is its own server's to add and remove.
+  const servers = all.filter((s) => !s.cloud && !s.via);
   const [adding, setAdding] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
   // Per server, its tasks last seen unfinished, read as Remove is asked.

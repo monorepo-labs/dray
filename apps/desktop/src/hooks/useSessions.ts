@@ -2,6 +2,7 @@ import { CANCELLED, invoke, listen, LOCAL, noteSession, qualify, serverOfPath, s
 import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
 import { botsOf, isBotPath, keepBots, refreshBots, useBots } from "@/lib/bots";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
+import { networkOffline, offlineFailure, subscribeNetwork } from "@/lib/network";
 import { indexRow, keptRow, loadServerCaches, saveServerCache, unreachable, withKept } from "@/lib/serverCache";
 import { loginOf, seedLogin, useMergeAccess } from "@/lib/mergeAccess";
 import { keptPrMark, prMarksChanged } from "@/hooks/usePrMarks";
@@ -9,7 +10,7 @@ import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
 import { CloudError, cloudIo, isCloud, onCloud, placeTask, setCloudFailure, setPlacing } from "@/lib/cloud";
 import { keepCloudTranscript, keptCloudTranscript } from "@/lib/cloudTranscripts";
 import { readDraft, writeDraft } from "@/hooks/useDraft";
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { flushSync } from "react-dom";
 import { restoreAttachments } from "@/hooks/useAttachments";
 import { appendStreamingText, peekStreamingBlock, retireStreamingBlock, startStreamingBlock, type StreamingBlock } from "@/hooks/useStreamingBlock";
@@ -40,7 +41,7 @@ import { postOS } from "@/lib/notify";
 import { DEVICE, localNow } from "@/lib/platform";
 import { setCallReader, setOlderDropper, setOlderLoader } from "@/lib/olderPages";
 import { EMPTY_TASKS } from "@/lib/transcript";
-import { botStance, stanceFor, taskStance } from "@/lib/permission";
+import { stanceFor, taskStance } from "@/lib/permission";
 import { carryImages, isProvisional, takeOver, nextMainSeq, provisionalId } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
 import { appendLive, mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
@@ -447,7 +448,18 @@ export function useSessions() {
     // the turn and the child, and close only on their own `secret_answered`,
     // so no turn ending or task draining may strand them.
     const [secretAsks, setSecretAsks] = useState<Record<string, string[]>>({});
-    const [error, setError] = useState<string | null>(null);
+    const [error, setShownError] = useState<string | null>(null);
+    // A failure being offline explains is said by the offline line already.
+    const setError = useCallback((next: string | null) => {
+      if (!next || !offlineFailure(next)) setShownError(next);
+    }, []);
+    useEffect(
+      () =>
+        subscribeNetwork(() => {
+          if (networkOffline()) setShownError((now) => (now && offlineFailure(now) ? null : now));
+        }),
+      [],
+    );
     // Bumped by every navigation, so an action started before it and rejecting
     // after it can be told from one the reader is still standing next to.
     // Clearing the slot on the way in is only half of keeping it to its
@@ -1000,9 +1012,7 @@ const handleSendMsg = async (
   // A bot's folder is no project, and its chat runs in the folder itself. A
   // cloud task always gets a worktree, whatever the saved toggle says.
   const worktree = (useWorktree || placed !== null) && !isBotPath(cwd);
-  const stance = isBotPath(cwd)
-    ? botStance(harness, permissionMode)
-    : (isNewSession ? stanceFor : taskStance)(harness, permissionMode);
+  const stance = (isNewSession ? stanceFor : taskStance)(harness, permissionMode);
   if (!sessionId) {
     sessionId = crypto.randomUUID();
     // Before the selection moves, so the composer reads this server's models
@@ -3897,6 +3907,30 @@ followModelPickRef.current = (item: SessionIndexItem) => {
 useEffect(() => {
   const listenerPromise = listen<SessionIndexItem>("session_model_changed", (event) => {
     followModelPickRef.current(event.payload);
+  });
+  return () => {
+    listenerPromise.then((unlisten) => unlisten());
+  };
+}, []);
+
+// An Edit bot stance change records the pick on the chat's index entry. Sync
+// the composer's own pick to it, or that chat's next send carries the old
+// stance back and quietly undoes the edit. Its own event for the same reason
+// `session_model_changed` has one: a `session_changed` row can lag a send.
+const followPermissionRef = useRef((_: SessionIndexItem) => {});
+followPermissionRef.current = (item: SessionIndexItem) => {
+  const pick = unsentPicks.current.get(item.sessionId);
+  if (pick?.permissionMode !== undefined) {
+    const { permissionMode: _permissionMode, ...rest } = pick;
+    unsentPicks.current.set(item.sessionId, rest);
+  }
+  if (item.sessionId === selectedSessionIdRef.current) {
+    setPermissionModeState(item.permissionMode);
+  }
+};
+useEffect(() => {
+  const listenerPromise = listen<SessionIndexItem>("bot_permission_changed", (event) => {
+    followPermissionRef.current(event.payload);
   });
   return () => {
     listenerPromise.then((unlisten) => unlisten());

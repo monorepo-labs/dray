@@ -1127,6 +1127,13 @@ describe("segmentMedia", () => {
     ]);
   });
 
+  it("sessionMedia names a picture by the file its tool read and keeps the time", () => {
+    const media = sessionMedia([callStarted(1, "a", { file_path: "/tmp/proj/dashboard.png" }), result(2, "a", "", 1)]);
+    expect(media).toEqual([
+      { image: expect.objectContaining({ path: "/archived/a-0.png" }), byYou: false, at: "2026-08-13T00:00:00Z", name: "dashboard.png" },
+    ]);
+  });
+
   it("hiddenInBotChat keeps only media a bot's chat does not draw", () => {
     const named = "/Users/me/.dray/browser/recordings/s1/named.mp4";
     const unnamed = "/Users/me/.dray/browser/recordings/s1/unnamed.mp4";

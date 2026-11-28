@@ -226,6 +226,8 @@ struct Bot: Codable, Hashable {
     /// That greeting as the server words it now: the welcome, then the
     /// question for the user's name while no bot knows it. Absent from an older server.
     var greeting: [String]? = nil
+    /// Its place in the list, set by dragging in the desktop sidebar (#1670); absent while unplaced.
+    var order: Int? = nil
 }
 
 /// `bot_previews`' answer per chat: its row's line, worded by the server ("You: …", "Reacted 👍 to …", or the newest reply), and how many replies came since the reader last wrote.

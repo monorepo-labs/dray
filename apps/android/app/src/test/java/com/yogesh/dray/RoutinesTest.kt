@@ -1,6 +1,8 @@
 package com.yogesh.dray
 
 import com.yogesh.dray.model.nextRunLabel
+import com.yogesh.dray.model.orderRoutines
+import com.yogesh.dray.model.rankRoutines
 import com.yogesh.dray.model.scheduleLabel
 import com.yogesh.dray.wire.Routine
 import com.yogesh.dray.wire.RoutineSchedule
@@ -55,5 +57,15 @@ class RoutinesTest {
         assertEquals(emptyList<Int>(), list[0].schedule.days)
         assertEquals(false, list[0].paused)
         assertEquals("Mon, Tue at 09:00", scheduleLabel(list[1]))
+    }
+
+    @Test fun activeRankAbovePausedAndAToggleKeepsItsPlace() {
+        fun p(id: String, paused: Boolean) = Routine(id = id, paused = paused)
+        val first = listOf(p("a", true), p("b", false), p("c", true), p("d", false))
+        val rank = rankRoutines(first)
+        assertEquals(listOf("b", "d", "a", "c"), orderRoutines(first, rank).map { it.id })
+        // Pausing b leaves it on top; a new active one lands before a new paused one, after the rest.
+        val later = listOf(p("e", true), p("a", true), p("b", true), p("c", true), p("d", false), p("f", false))
+        assertEquals(listOf("b", "d", "a", "c", "f", "e"), orderRoutines(later, rank).map { it.id })
     }
 }

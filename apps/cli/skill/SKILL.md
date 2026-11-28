@@ -53,6 +53,7 @@ Options:
 | `--title <title>` | The session's title. Without it one is generated from the prompt; pass one when you already know the right name, like the issue's title. |
 | `--issue <ID>` | The issue this work is against, like `DRA-53`. Repeat for several. |
 | `--fast` | Run at the agent's faster tier, which spends more usage. Inherits this session's when the harness is the same — see *Fast mode*. |
+| `--permission-mode <mode>` | `auto`, `manual` (ask every time), `plan` or `bypassPermissions`. Defaults to the current session's; a bot's tasks start on `auto`. Never looser than your own stance: a looser ask is lowered, and the output says so. Pass it only when the user asked for a stance. |
 | `--hidden` | Keep the session out of the sidebar — see *Hidden sessions*. |
 
 ### Fast mode
@@ -448,8 +449,8 @@ Reach for it when the user asks you to note work down rather than begin it —
 "park this", "save that for later", "queue up a task". Write the prompt for
 someone who has not read your conversation, the same as for `dray session new`.
 
-`draft new` takes `--project`, `--model`, `--effort`, `--harness`, `--fast` and
-`--base`, inheriting from your session exactly as `dray session new` does. `draft start` starts
+`draft new` takes `--project`, `--model`, `--effort`, `--harness`, `--fast`,
+`--permission-mode` and `--base`, inheriting from your session exactly as `dray session new` does. `draft start` starts
 it as a session spawned by yours, so the depth limit and `dray session ls`'s
 `spawned by` apply as usual. A draft the user saved with the worktree off
 starts in the project checkout, and the line `start` prints says so.

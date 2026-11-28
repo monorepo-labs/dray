@@ -186,6 +186,8 @@ export const APP_COMMANDS = new Set([
   "add_ssh_server",
   "cancel_add_server",
   "set_server_on",
+  "network_offline",
+  "network_hint",
   "rename_server",
   "set_server_address",
   "trust_host_key",

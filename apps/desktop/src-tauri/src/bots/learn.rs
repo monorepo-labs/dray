@@ -551,6 +551,7 @@ mod tests {
             avatar: None,
             welcome: None,
             greeting: Vec::new(),
+            order: None,
         };
         (bot, dir)
     }

@@ -5,11 +5,10 @@ import IssueStateIcon, { IssuePriorityIcon } from "@/components/IssueStateIcon";
 import IssueTrackerChips from "@/components/IssueTrackerChips";
 import PrStateIcon from "@/components/PrStateIcon";
 import Segmented from "@/components/Segmented";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import MentionRepoPicker from "@/components/composer/MentionRepoPicker";
 import PickerMenu from "@/components/composer/PickerMenu";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { shortIdentifier } from "@/lib/issue";
-import { IS_MAC } from "@/lib/platform";
 import { setMentionKind, type MentionKind } from "@/lib/issueTracker";
 import type { Issue, IssueTracker, PrMark } from "@/types/events";
 
@@ -83,16 +82,10 @@ export default function IssueMentionMenu({
   const header = (
     <div className="flex items-center gap-1.5">
       <Segmented value={kind} options={KINDS} onPick={setMentionKind} label="List" />
+      <ShortcutKeys ids={["mention.kind"]} className="shrink-0" />
       {showRepo && <MentionRepoPicker {...repoPick} />}
       {kind === "issues" && canSwitch && <IssueTrackerChips tracker={tracker} className="ml-auto" />}
     </div>
-  );
-  const hint = (
-    <KbdGroup>
-      <Kbd>{IS_MAC ? "⇧" : "Shift"}</Kbd>
-      <Kbd>{IS_MAC ? "⇥" : "Tab"}</Kbd>
-      <span className="ml-0.5">{kind === "issues" ? "PRs" : "issues"}</span>
-    </KbdGroup>
   );
   const common = {
     activeIndex,
@@ -102,7 +95,6 @@ export default function IssueMentionMenu({
     emptyNote,
     keepOpenHint: true,
     header,
-    extraHint: hint,
   };
   const check = (identifier: string): ReactNode =>
     // The slot is held on every row once anything is tagged, so the trailing

@@ -1,13 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { onFocusChange } from "@/lib/focus";
 import { invoke, listen } from "@/lib/transport";
 
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import type { InstallError, UpdateChannel, UpdateStatus } from "@/types/events";
 
-// Long enough that a session left open for a week still finds an update, short
-// enough that it isn't only ever the launch check doing the work.
-const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// A release should reach a window left open within the hour, and a check that
+// finds nothing is one small manifest read.
+const CHECK_INTERVAL_MS = 60 * 60 * 1000;
+
+// Coming back to the window is when an update is most worth finding, but
+// flicking between apps must not turn into a check per switch.
+const FOCUS_GAP_MS = 15 * 60 * 1000;
+
+/// Whether regaining focus should check again, given when the last check
+/// started. `null` is no check yet, which only the launch check can leave.
+export function dueOnFocus(lastCheckAt: number | null, now: number): boolean {
+  return lastCheckAt === null || now - lastCheckAt > FOCUS_GAP_MS;
+}
 
 // Long enough to read, short enough that an answer to a question already asked
 // doesn't settle in as a second permanent row.
@@ -49,8 +60,8 @@ export function updateFailure(manual: ManualCheck): string | null {
   return null;
 }
 
-/// Checks for an update on launch and on an interval, and holds what the
-/// backend reports back.
+/// Checks for an update on launch, hourly, and on the window regaining focus
+/// after 15 minutes without one, and holds what the backend reports back.
 ///
 /// `null` is the resting state and covers every failure: a check that can't
 /// reach the manifest emits nothing, so no network is silent rather than an
@@ -81,6 +92,10 @@ export function useUpdater() {
   // normal case in dev rather than a race worth waving at.
   const inFlight = useRef(false);
 
+  // When the last check started, failed ones included: offline, a focus check
+  // per window switch would only fail again sooner.
+  const lastCheckAt = useRef<number | null>(null);
+
   // Read at invoke time rather than closed over: a check's `finally` may fire
   // under a later effect generation, and it needs the channel picked *now* to
   // know whether the one it just asked about has gone stale.
@@ -105,6 +120,7 @@ export function useUpdater() {
     const check = (byHand = false) => {
       if (inFlight.current) return;
       inFlight.current = true;
+      lastCheckAt.current = Date.now();
       const used = channelRef.current;
       if (byHand) setManual("checking");
       void invoke("check_update", { channel: used })
@@ -136,10 +152,14 @@ export function useUpdater() {
     check();
     const timer = setInterval(() => check(), CHECK_INTERVAL_MS);
     const unlistenMenu = listen("check_update_requested", () => check(true));
+    const unlistenFocus = onFocusChange((focused) => {
+      if (focused && dueOnFocus(lastCheckAt.current, Date.now())) check();
+    });
 
     return () => {
       void unlisten.then((f) => f());
       void unlistenMenu.then((f) => f());
+      unlistenFocus();
       clearInterval(timer);
     };
   }, [channel]);

@@ -27,6 +27,37 @@ reads:
   to a line or two. A release with no highlights for an app gets the small
   card there instead, when it carries `notify`.
 
+## 0.36.5 · 2026-11-28
+
+### New
+
+- **Reorder your bots.** Hold a bot in the sidebar and drag it to a new
+  place. The order syncs to your other devices.
+
+### Improved
+
+- A bot's chat panel switches views with dots at its foot and has no
+  title strip. Attachments are a compact list with their file names, and
+  routines are tidier: active ones first, paused ones looking like the
+  rest.
+- Sent images have a hairline border and square thumbnails, and no
+  longer flash blank or jump on send. Click an attachment in the
+  composer to open it full screen.
+- A bot's tasks on its server's machines show in the app and open there.
+- Servers logged in to Claude with a token list versioned Claude model
+  names.
+- An agent installed while Dray runs shows up without a restart.
+- OpenCode's background server stops once nothing uses it.
+- Dray checks for updates every hour and when its window regains focus.
+
+### Fixed
+
+- Your phone no longer gets a push for a chat you're reading on the
+  desktop.
+- No desktop banner for a chat you have open on another device.
+- On Linux, clicks in the in-app browser land where you aim while it
+  records.
+
 ## 0.36.4 · 2026-11-28
 
 ### Improved

@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import AttachmentGrid from "@/components/AttachmentsPanel";
+import AttachmentList from "@/components/AttachmentsPanel";
 import RoutinesSection, { RoutineDetails } from "@/components/RoutinesSection";
 import SubagentPanel from "@/components/SubagentPanel";
 import TodoList from "@/components/chat/TodoList";
@@ -22,7 +22,7 @@ export default function MorePanel({
   routines,
 }: {
   todos: Todo[] | null;
-  /// The logs the attachment grid reads, newest first — see `AttachmentGrid`.
+  /// The logs the attachment list reads, newest first — see `AttachmentList`.
   /// `null` where none holds a picture or recording.
   attachments: HeldLog[] | null;
   /// Whether the session is mid-turn. The checklist's running item shimmers on
@@ -67,10 +67,9 @@ export default function MorePanel({
       {/* Titles its own two sections, Background tasks and Subagents. */}
       {subagents.runs.length > 0 && <SubagentPanel {...subagents} />}
 
-      {/* Untitled: a grid of pictures names itself. */}
-      {attachments && <AttachmentGrid logs={attachments} />}
+      {attachments && <AttachmentList logs={attachments} />}
 
-      {/* Under the pictures, so Load more pushes it down; kept below on purpose. */}
+      {/* Under the attachments, so Load more pushes it down; kept below on purpose. */}
       {routines && routines.routines.length > 0 && <RoutinesSection {...routines} onOpen={setOpenRoutineId} />}
     </div>
   );

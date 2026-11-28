@@ -659,6 +659,7 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     tokio::spawn(crate::stalls::run(sink.clone()));
     tokio::spawn(crate::held_flags::run(sink.clone()));
     tokio::spawn(crate::routines::run(sink.clone()));
+    tokio::spawn(crate::harness::opencode::service::run());
     // Agents this server spawns reach it through `dray`, so it serves the
     // socket the desktop app does — under `DRAY_HOME` where that is set.
     tokio::spawn(async move {
@@ -853,7 +854,7 @@ fn same_token(given: &str, token: &str) -> bool {
 /// directly and reaching it through a Mac that shares it (#1404) holds the
 /// token itself, so hashing that matches the two. One-way, so the welcome
 /// that carries it through a relay gives the token to no one.
-fn server_id(token: &str) -> String {
+pub fn server_id(token: &str) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(format!("dray-server\0{token}"))[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -2358,7 +2359,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         start_bot(id: String, harness: crate::session::Harness, model: crate::models::ModelId, effort: Option<crate::models::Effort>, permission_mode: crate::events::ApprovalPolicy, fast: bool) =>
             crate::bots::start_bot(id, harness, model, effort, permission_mode, fast, sink).await;
         delete_bot(id: String) => crate::bots::delete_bot(id, sink).await;
-        edit_bot(id: String, name: String, avatar: crate::bots::BotAvatar) => crate::bots::edit_bot(id, name, avatar, sink).await;
+        edit_bot(id: String, name: String, avatar: crate::bots::BotAvatar, permission_mode: Option<crate::events::ApprovalPolicy>) => crate::bots::edit_bot(id, name, avatar, permission_mode, sink).await;
+        set_bot_order(places: std::collections::HashMap<String, i64>) => crate::bots::set_bot_order(places, sink).await;
         bot_learned_diff(session_id: String, commit: String, path: String) => crate::bots::bot_learned_diff(session_id, commit, path).await;
         bot_undo_learned(session_id: String, commit: String, path: String) => crate::bots::bot_undo_learned(session_id, commit, path, sink).await;
         list_routines(bot_id: String) => crate::routines::list_routines(bot_id).await;
