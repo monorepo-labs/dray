@@ -31,8 +31,7 @@ import java.util.concurrent.TimeUnit
 val http: OkHttpClient = OkHttpClient.Builder()
     .connectTimeout(12, TimeUnit.SECONDS)
     .readTimeout(0, TimeUnit.SECONDS)
-    // Keeps a tunnel from idling the socket out, and finds a dead one: a missed pong fails the socket.
-    .pingInterval(25, TimeUnit.SECONDS)
+    // No pingInterval: each Connection probes its own socket, since a relay answers pings for the machine behind it.
     .build()
 
 /** Why a server is not connected, in the terms its cure needs. */
@@ -110,15 +109,26 @@ class Connection(
     private var retry = 1.0
     private var nextId = 1
     private val waiting = mutableMapOf<Int, CompletableDeferred<Reply>>()
+    /** Probes sent, the newest one answered, and the newest one a frame came in after. */
+    private var pinged = 0
+    private var ponged = 0
+    private var framed = 0
+    /** Each probe's call id, to its number. */
+    private val probes = mutableMapOf<Int, Int>()
 
-    /** Reconnects unless already connected: on launch and whenever the app comes back to the front. */
+    /**
+     * Reconnects unless already connected: on launch and whenever the app comes back to the front.
+     * One that reads connected is probed: the server can have dropped it while the phone slept,
+     * leaving this side open and silent, and the reconnect is what re-reads the index and every
+     * open transcript.
+     */
     fun resume() {
-        if (!connected && !stopped) connect()
+        if (connected) probe(5_000, frames = false) else if (!stopped) connect()
     }
 
     /** Connects now, whatever it was waiting on. */
     fun retryNow() {
-        if (!connected) connect()
+        if (connected) probe(5_000, frames = false) else connect()
     }
 
     /** For a refused token: the next connect sends this one. */
@@ -177,8 +187,10 @@ class Connection(
                     retry = 1.0
                     attempt = 0
                     onState(ConnState.Connected)
+                    keepAlive(gen)
                     return@launch
                 }
+                framed = pinged
                 route(frame, text)
             }
         }
@@ -219,8 +231,42 @@ class Connection(
         }
     }
 
+    /** Keeps a tunnel from idling the socket out, and finds a dead one. */
+    private fun keepAlive(gen: Int) = scope.launch {
+        while (gen == generation) {
+            delay(25_000)
+            if (gen == generation) probe(15_000, frames = true)
+        }
+    }
+
+    /**
+     * Asks for `live_state` and cancels the socket where no reply comes in time, which fails it and
+     * reconnects. A socket whose far end is gone without a close fails nothing: its answers just
+     * never come. A command rather than a WebSocket ping, which OkHttp cannot send on demand and a
+     * relay answers itself for the machine behind it. `frames` lets any frame answer instead, for a
+     * reply queued behind a long tail on a slow link; never back from the background, where frames
+     * held while away arrive first.
+     */
+    private fun probe(withinMs: Long, frames: Boolean) {
+        val ws = socket ?: return
+        if (!connected) return
+        val gen = generation
+        val n = ++pinged
+        val id = nextId++
+        probes[id] = n
+        // A refused send means the socket is already closing, and its failure reconnects.
+        if (!ws.send(jsonOf("id" to id, "cmd" to "live_state", "args" to JsonObject(emptyMap())).toString())) return
+        scope.launch {
+            delay(withinMs)
+            probes.remove(id)
+            if (gen == generation && connected && maxOf(ponged, if (frames) framed else 0) < n) ws.cancel()
+        }
+    }
+
     private fun route(frame: JsonObject, raw: String) {
         val id = frame["id"].int
+        // Any reply answers a probe, an error included: a server that does not know the command still heard it.
+        id?.let(probes::remove)?.let { ponged = maxOf(ponged, it); return }
         if (id != null) {
             waiting.remove(id)?.complete(Reply(frame["ok"] ?: JsonNull, raw, frame["err"]))
             return
@@ -231,6 +277,7 @@ class Connection(
     /** Fails every call waiting on a socket that is gone, so nothing hangs. */
     private fun drop(reason: String) {
         connected = false
+        probes.clear()
         val pending = waiting.values.toList()
         waiting.clear()
         pending.forEach { it.completeExceptionally(DrayError(reason)) }

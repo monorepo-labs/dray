@@ -129,6 +129,7 @@ fun TranscriptScreen(key: SessionKey, back: () -> Unit, openChanges: () -> Unit 
                         item("status") {
                             MaxWidth {
                                 when {
+                                    store.checking(key) -> CheckingLine()
                                     busy -> WorkingLine()
                                     tasks.isNotEmpty() -> OrbLine(OrbKind.Background, "${plural(tasks.size, "background task")} running",
                                         Modifier.clickable { runs = null; showingRuns = true })
@@ -140,7 +141,7 @@ fun TranscriptScreen(key: SessionKey, back: () -> Unit, openChanges: () -> Unit 
                         }
                         queued.reversed().forEach { q -> item("queued-${q.id}") { MaxWidth { UserBubble(TurnPrompt(q.text, null, emptyList()), queued = true) } } }
                         turns.reversed().forEach { t -> item(t.id) { MaxWidth { TurnView(t) } } }
-                        placeholder(key, transcript == null, turns.isEmpty() && !busy && queued.isEmpty())
+                        if (!store.checking(key)) placeholder(key, transcript == null, turns.isEmpty() && !busy && queued.isEmpty())
                         if (transcript?.olderBefore != null) item("older") { MaxWidth { Older(key) } }
                     }
                 }

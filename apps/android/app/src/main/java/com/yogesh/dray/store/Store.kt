@@ -137,6 +137,9 @@ class Store(private val context: Context) {
     val loadErrors = mutableStateMapOf<String, String>()
     /** A transcript that could not be read with nothing of it held yet. */
     val transcriptErrors = mutableStateMapOf<SessionKey, String>()
+    /** Transcripts a server read has landed for since launch. */
+    var serverRead by mutableStateOf(setOf<SessionKey>())
+        private set
     /** An older page that could not be read; the newer turns stay on screen. */
     val olderErrors = mutableStateMapOf<SessionKey, String>()
     var olderLoading by mutableStateOf(setOf<SessionKey>())
@@ -379,7 +382,10 @@ class Store(private val context: Context) {
         shared.remove(id)
     }
 
-    /** Coming back to the front reconnects; `now` also asks servers that stopped, as a Retry does. */
+    /**
+     * Coming back to the front reconnects, and probes a socket still reading connected, which may be
+     * dead without knowing it. `now` also asks servers that stopped, as a Retry does.
+     */
     fun resume(now: Boolean = false) {
         for ((id, state) in serverState.toMap()) {
             if (state == ConnState.Connected || state is ConnState.Failed) continue
@@ -766,6 +772,9 @@ class Store(private val context: Context) {
 
     fun isLoading(key: SessionKey) = transcripts[key] == null && transcriptErrors[key] == null
 
+    /** A chat's first read since launch is out: said once per chat, later opens read quietly. */
+    fun checking(key: SessionKey) = key !in serverRead && transcriptErrors[key] == null && serverState[key.server] == ConnState.Connected
+
     fun retryLoad(key: SessionKey) {
         if (serverState[key.server] == ConnState.Connected) scope.launch { reload(key) } else connections[key.server]?.retryNow()
     }
@@ -800,6 +809,7 @@ class Store(private val context: Context) {
             val olderBefore = if (i >= 0) transcripts[key]?.olderBefore else snap.olderBefore
             transcripts[key] = Transcript.of(older + snap.events.map { heldById[it.id] ?: it } + live, olderBefore)
             transcriptErrors.remove(key)
+            serverRead = serverRead + key
         } catch (e: Exception) {
             transcriptErrors[key] = e.message ?: "Couldn't load"
         }

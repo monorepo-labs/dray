@@ -34,6 +34,17 @@ reads and drives it over the same WebSocket the desktop and iOS use
   reads with a call's body read whole on demand (`get_session_calls`);
   pictures inline and full screen (pager, pinch, double-tap, drag down);
   browser recordings play in place (Media3, token in `/file`'s query).
+  A chat's first read since launch draws "Checking new messages…" at its
+  foot; later opens read quietly (`serverRead`).
+- **A socket reading connected is not trusted** (iOS's #1635). One the server
+  dropped while the phone slept stays open here and silent, and the app is
+  frozen in the background, so no ping runs to find it. Coming back to the
+  front probes it and reconnects where nothing answers in 5s; every 25s a probe
+  reconnects past 15s with neither its answer nor any frame. The probe is a
+  `live_state` call, not a WebSocket ping: OkHttp sends none on demand, and a
+  relay answers pings itself for the machine behind it. The reconnect re-reads
+  the index and every open transcript. Test it behind iOS's
+  `scripts/freeze_proxy.py` with `adb reverse` to the proxy's port.
 - **Reply dock**: a message field (text first, as Android chat is, with
   Dray's own dictation on the mic), the session's model and effort under it
   opening **This task** (model, effort, fast mode, stance, each locked mid-turn
