@@ -275,6 +275,7 @@ struct Routine: Decodable, Identifiable {
     }
     let id: String
     let name: String
+    let prompt: String
     let schedule: Schedule
     var paused: Bool
     let nextRun: String?
@@ -312,14 +313,16 @@ struct Routine: Decodable, Identifiable {
 }
 
 /// A bot's routines, as on desktop: each with its schedule and next run.
-/// The switch turns one off and on; Delete is in the long-press menu. Anything else —
-/// running it now, changing it — the reader asks the bot for. Drawn only with one in it.
+/// The switch turns one off and on; Delete is in the long-press menu; a tap opens it to
+/// edit its name and instructions (#1637). Schedule and running it now are asked of the bot.
+/// Drawn only with one in it.
 struct BotRoutines: View {
     @Environment(Store.self) private var store
     let server: UUID
     let botId: String
     @State private var routines: [Routine] = []
     @State private var error: String?
+    @State private var opened: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -343,17 +346,40 @@ struct BotRoutines: View {
                 try? await Task.sleep(for: .seconds(60))
             }
         }
+        // Read off the live list, so a routine deleted meanwhile goes back to it. The push
+        // takes the list off screen, which cancels its `.task`, so the details read it themselves.
+        .navigationDestination(item: $opened) { id in
+            Group {
+                if let r = routines.first(where: { $0.id == id }) {
+                    TimelineView(.everyMinute) { tick in
+                        RoutineDetails(routine: r, now: tick.date, error: error) { name, prompt in
+                            await act("update_routine", ["id": .string(r.id), "name": .string(name), "prompt": .string(prompt)], "Couldn't save it")
+                        }
+                    }
+                } else {
+                    Color.clear.onAppear { opened = nil }
+                }
+            }
+            .task(id: store.routinesRevision) { await read() }
+        }
     }
 
     private func row(_ r: Routine, now: Date) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: "clock").font(.system(size: 15)).foregroundStyle(Theme.secondary)
-                .opacity(r.paused ? 0.5 : 1).frame(width: 22, height: 22)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(r.name).font(Theme.Font.body).foregroundStyle(r.paused ? Theme.secondary : Theme.text).lineLimit(1)
-                Text("\(r.scheduleLabel) · \(r.nextLabel(now))").font(Theme.Font.footnote).foregroundStyle(Theme.secondary).lineLimit(1)
+            // The switch sits outside this button, so a tap on it never opens the routine.
+            Button { opened = r.id } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "clock").font(.system(size: 15)).foregroundStyle(Theme.secondary)
+                        .opacity(r.paused ? 0.5 : 1).frame(width: 22, height: 22)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(r.name).font(Theme.Font.body).foregroundStyle(r.paused ? Theme.secondary : Theme.text).lineLimit(1)
+                        Text("\(r.scheduleLabel) · \(r.nextLabel(now))").font(Theme.Font.footnote).foregroundStyle(Theme.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
             }
-            Spacer(minLength: 0)
+            .buttonStyle(RowButtonStyle())
+            .accessibilityLabel("Open \(r.name)")
             Toggle("", isOn: Binding(get: { !r.paused }, set: { on in Task { await setPaused(r, !on) } }))
                 .toggleStyle(SwitchStyle())
                 .fixedSize()
@@ -396,10 +422,94 @@ struct BotRoutines: View {
             await read()
             return true
         } catch {
-            self.error = "\(failed): \(sentence(error.localizedDescription))"
+            let said = error.localizedDescription
+            // A server from before `update_routine` answers `unknown command`.
+            self.error = said.contains("unknown command")
+                ? "\(failed): update \(store.name(of: server)) to edit routines." : "\(failed): \(sentence(said))"
             Haptic.error()
             await read()
             return false
+        }
+    }
+}
+
+/// One routine, pushed over the Tasks sheet: name and instructions to edit, the
+/// schedule to read. Edits are held here until Save, so a list read meanwhile shows
+/// through only on a field the reader has not touched.
+private struct RoutineDetails: View {
+    let routine: Routine
+    let now: Date
+    let error: String?
+    /// Answers whether the server took it; a refusal leaves the edit in place.
+    let save: (String, String) async -> Bool
+    @State private var name: String?
+    @State private var prompt: String?
+    @State private var saving = false
+
+    var body: some View {
+        let shownName = name ?? routine.name
+        let shownPrompt = prompt ?? routine.prompt
+        let trim = { (s: String) in s.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let changed = trim(shownName) != routine.name || trim(shownPrompt) != routine.prompt
+        let valid = !trim(shownName).isEmpty && !trim(shownPrompt).isEmpty
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Space.l) {
+                field("Name") {
+                    // The getters read state live: a value captured at render time is stale
+                    // by the next keystroke, and handing it back resets the text under the caret.
+                    TextField("Name", text: Binding(get: { name ?? routine.name }, set: { name = $0 }))
+                        .submitLabel(.done)
+                        .padding(.horizontal, Theme.Space.m)
+                        .frame(minHeight: 44)
+                }
+                field("Instructions") {
+                    TextEditor(text: Binding(get: { prompt ?? routine.prompt }, set: { prompt = $0 }))
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: 160)
+                        .padding(.horizontal, Theme.Space.s)
+                        .padding(.vertical, Theme.Space.xs)
+                }
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    Text("Schedule").font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
+                    Text("\(routine.scheduleLabel) · \(routine.nextLabel(now))").font(Theme.Font.body).foregroundStyle(Theme.text)
+                }
+                if let error {
+                    Text(error).font(Theme.Font.footnote).foregroundStyle(Theme.destructive)
+                }
+                HStack(spacing: Theme.Space.s) {
+                    Button("Save changes") {
+                        Task {
+                            saving = true
+                            if await save(shownName, shownPrompt) { name = nil; prompt = nil }
+                            saving = false
+                        }
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(!changed || !valid || saving)
+                    if changed {
+                        Button("Discard") { name = nil; prompt = nil }
+                            .buttonStyle(SecondaryButtonStyle())
+                            .disabled(saving)
+                    }
+                }
+            }
+            .padding(Theme.Space.l)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .navigationTitle(routine.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .background(Theme.card.ignoresSafeArea())
+    }
+
+    private func field(_ label: String, @ViewBuilder _ content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            Text(label).font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
+            content()
+                .font(Theme.Font.body)
+                .foregroundStyle(Theme.text)
+                .tint(Theme.accent)
+                .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.lg, style: .continuous))
+                .accessibilityLabel(label)
         }
     }
 }
