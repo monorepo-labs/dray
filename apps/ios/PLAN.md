@@ -220,7 +220,9 @@ Rationale and the screens it was judged on are in #631.
   either direction, a list that failed to load. Each carries Retry or Fix, and
   none holds up another server. In the list it is a card at the top and that
   server's tasks dim; in a session it floats under the title bar and the dock
-  dims, still usable. Offline is one banner, not one per server.
+  dims, still usable. Offline is one banner, not one per server, and an HTTPS
+  probe to drayhq.com and github.com decides it, so a captive portal or a link
+  carrying nothing counts (#1715). Toasts it explains are dropped.
 - **A failure stays where it happened.** A failed send keeps the draft and
   offers Retry under it; a failed transcript read is the screen's own empty
   state with Try again; an action with nowhere of its own is a toast, never an

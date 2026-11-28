@@ -316,3 +316,11 @@ func parseConnectLine(_ text: String) -> (url: String, token: String)? {
     guard parts.count == 2, parts[1].count == 64, parts[1].allSatisfy(\.isHexDigit) else { return nil }
     return (parts[0], parts[1])
 }
+
+/// Whether `message` is a failure being offline explains: `Connection`'s own words
+/// and URLSession's under them.
+func offlineFailure(_ message: String) -> Bool {
+    message.range(of: "not connected|disconnected|reconnecting|took too long to answer|timed out|offline|"
+        + "could not connect|could not be found|connection was lost|cancelled|ssl error|data connection",
+        options: [.regularExpression, .caseInsensitive]) != nil
+}

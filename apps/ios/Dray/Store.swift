@@ -96,9 +96,14 @@ final class Store {
     /// their own answer, so no turn ending or task draining may strand them. Not
     /// in `asks` either because the Island, which shares this store, has no card for them.
     private(set) var secretAsks: [SessionKey: [AgentEvent]] = [:]
-    var lastError: String?
-    /// False while the device has no network at all, which every server shares.
-    private(set) var online = true
+    /// A failure being offline explains is dropped: the offline line says it already.
+    var lastError: String? {
+        didSet { if !online, let e = lastError, offlineFailure(e) { lastError = nil } }
+    }
+    /// False while the device reaches no network, which every server shares.
+    private(set) var online = true {
+        didSet { if !online, let e = lastError, offlineFailure(e) { lastError = nil } }
+    }
     /// A server that connected and then failed to read its sessions, by server.
     private(set) var loadErrors: [UUID: String] = [:]
     /// A transcript that could not be read with nothing of it held yet.
@@ -152,6 +157,10 @@ final class Store {
     /// The phone's: a server is about to be removed, so it stops alerting this phone.
     @ObservationIgnored var onRemoving: (Server) -> Void = { _ in }
     @ObservationIgnored private let path = NWPathMonitor()
+    @ObservationIgnored private var routed = true
+    @ObservationIgnored private var pathSeen = false
+    @ObservationIgnored private var checking: Task<Void, Never>?
+    @ObservationIgnored private var upAt = Date.distantPast
     @ObservationIgnored private var reading: Set<UUID> = []
     /// Sessions this phone deleted. A read or event already on its way when the delete
     /// landed still names one, and must not draw it back as a row nothing can open.
@@ -206,12 +215,79 @@ final class Store {
         path.pathUpdateHandler = { [weak self] p in
             Task { @MainActor in
                 guard let self else { return }
-                let now = p.status == .satisfied
-                if now && !self.online { self.resume(now: true) }
-                self.online = now
+                self.routed = p.status == .satisfied
+                // Starting reports the path already there; only a later one is news.
+                self.check(fresh: self.pathSeen)
+                self.pathSeen = true
             }
         }
         path.start(queue: .main)
+    }
+
+    /// Probes now, and while that fails keeps probing until it passes (#1715): a
+    /// captive portal or a link carrying nothing still reads as a path. `fresh` is
+    /// the path moving: it skips the 30s a good probe is trusted for, restarts one
+    /// under way, and wakes every server once the network answers, since a move
+    /// can leave a socket dead under a good network.
+    private func check(fresh: Bool) {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-offline") { return }
+        #endif
+        if !fresh, checking != nil || online && upAt.timeIntervalSinceNow > -30 { return }
+        checking?.cancel()
+        checking = Task {
+            var wake = fresh
+            while true {
+                let up = routed ? await Self.probe() : false
+                if Task.isCancelled { return }
+                if up { upAt = .now }
+                let was = online
+                online = up
+                if up && (wake || !was) { resume(now: true) }
+                // With no path at all, the system's next word is what to wait for.
+                if up || !routed { break }
+                wake = false
+                // Not backed off: a portal signed into moves no path, and this is all that notices.
+                // Only runs in the foreground, while a path is up and carries nothing.
+                try? await Task.sleep(for: .seconds(2))
+            }
+            checking = nil
+        }
+    }
+
+    /// Over HTTPS, so a portal's own page fails the certificate rather than passing
+    /// for an answer. Two hosts, so one down is not the network down.
+    private nonisolated static var probes: [URL] {
+        #if DEBUG
+        // The simulator shares the Mac's network, so a test points this at a host it can cut.
+        if let url = UserDefaults.standard.string(forKey: "probe").flatMap(URL.init(string:)) { return [url] }
+        #endif
+        return [URL(string: "https://drayhq.com/")!, URL(string: "https://github.com/")!]
+    }
+
+    private nonisolated static let probing: URLSession = {
+        let c = URLSessionConfiguration.ephemeral
+        c.timeoutIntervalForRequest = 3
+        c.timeoutIntervalForResource = 3
+        return URLSession(configuration: c)
+    }()
+
+    /// Any answer from any host is a network.
+    private nonisolated static func probe() async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            for url in probes {
+                group.addTask {
+                    var r = URLRequest(url: url)
+                    r.httpMethod = "HEAD"
+                    return (try? await probing.data(for: r)) != nil
+                }
+            }
+            for await up in group where up {
+                group.cancelAll()
+                return true
+            }
+            return false
+        }
     }
 
     // MARK: Servers
@@ -548,6 +624,8 @@ final class Store {
             guard let self else { return }
             serverState[s.id] = state
             track(s.id, state)
+            // A server not answering may be the network not answering.
+            switch state { case .connecting, .waiting: check(fresh: false); default: break }
             if state == .connected { Task { await self.connected(s.id) } }
         }
         c.onEvent = { [weak self] name, data in self?.handle(s.id, name, data) }
