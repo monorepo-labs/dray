@@ -106,6 +106,25 @@ const SWEEP_EVERY: Duration = Duration::from_secs(60);
 static WARM: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
 const WARM_TABS: usize = 4;
 
+/// The size each recorded tab's view had before a recording parked it at its
+/// own, put back once the recording ends. Left at the recording's, the page
+/// took 1440×900 again at its next relayout — a zoom, a resize — long after
+/// `record stop` (#1632). In the platform's own units.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+static UNPARKED: Mutex<BTreeMap<i32, (f64, f64)>> = Mutex::new(BTreeMap::new());
+
+/// Notes `id`'s size before its first park for a recording; later parks keep
+/// the first, which is the size the reader left it at.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn note_unparked(id: i32, size: impl FnOnce() -> Option<(f64, f64)>) {
+    let mut sizes = UNPARKED.lock().unwrap();
+    if !sizes.contains_key(&id) {
+        if let Some(size) = size() {
+            sizes.insert(id, size);
+        }
+    }
+}
+
 struct Tab {
     id: i32,
     session: String,
@@ -265,9 +284,6 @@ fn load_framework(framework: &Path) -> Result<(), String> {
 fn dev_framework() -> Option<PathBuf> {
     paths().filter(|p| p.framework.starts_with(&p.helpers)).map(|p| p.framework)
 }
-
-/// See the headless module's: this Chromium reads CSS pixels under a recording's override.
-const INPUT_IN_DEVICE_PIXELS: bool = false;
 
 /// The profile root is in the build's own home, as its socket is: Chromium
 /// holds a singleton lock on the root, so a dev build sharing the release
@@ -1047,7 +1063,12 @@ fn apply_layout() {
         if !show && !hidden {
             x11::refocus_webview(view);
         }
+        let unparked = if parked.is_none() { UNPARKED.lock().unwrap().remove(&id) } else { None };
+        if let (Some((w, h)), false) = (unparked, show) {
+            x11::park(view, Some((w as u32, h as u32)));
+        }
         if let Some((w, h)) = parked {
+            note_unparked(id, || x11::size(view).map(|(w, h)| (f64::from(w), f64::from(h))));
             x11::park(view, Some((w, h)));
             x11::set_hidden(view, false);
         } else if !show && warm.contains(&id) {
@@ -1111,7 +1132,15 @@ fn apply_layout() {
         if !show && !view.isHidden() {
             refocus_webview(view);
         }
+        let unparked = if parked.is_none() { UNPARKED.lock().unwrap().remove(&id) } else { None };
+        if let (Some((w, h)), false) = (unparked, show) {
+            view.setFrame(NSRect::new(NSPoint::new(-20000.0, 0.0), NSSize::new(w, h)));
+        }
         if let Some((w, h)) = parked {
+            note_unparked(id, || {
+                let size = view.frame().size;
+                Some((size.width, size.height))
+            });
             view.setFrame(NSRect::new(NSPoint::new(-20000.0, 0.0), NSSize::new(w as f64, h as f64)));
             view.setHidden(false);
         } else if !show && warm.contains(&id) {
